@@ -8,7 +8,7 @@ _Avoid_: putting provider polling, webhooks, or long connections in Core
 
 **Core**:
 The process that owns the shared AgentRuntime session, OpenViking session, inbox pipeline, and the outbound ActionService with its outbox.
-_Avoid_: Lark daemon when discussing provider-neutral behavior
+_Avoid_: naming Core after one provider (a Lark or Weixin bot) when discussing provider-neutral behavior
 
 ## Language
 
@@ -34,6 +34,6 @@ _Avoid_: meeting stack
 **Agent tools**:
 The one tool surface every runtime uses for messaging and chat reads, served by
 the Core's ActionService over `<dataDir>/actions.sock`. The MCP adapter (Codex,
-TraeX, Claude, Pi) only relays; every outbound action is checked there and
+TraeX, Claude, Pi, OpenCode) only relays; every outbound action is checked there and
 recorded in the single `outbox` table before a Connector executes it.
 _Avoid_: Lark tools, sidecar, delivery CLI per connector

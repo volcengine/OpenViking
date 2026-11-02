@@ -197,6 +197,27 @@ test('falls back to a secrets file for daemon-wide secrets missing from the envi
   });
 });
 
+test('the secrets file can carry a durable runtime provider key', () => {
+  withManifest(validManifest(), (manifestPath) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));
+    const secretsPath = path.join(directory, 'secrets.env');
+    fs.writeFileSync(secretsPath, 'OPENAI_API_KEY=sk-test\nANTHROPIC_API_KEY=ak-test\n');
+    try {
+      const env = {
+        HOME: '/Users/test',
+        VIKA_CONFIG: manifestPath,
+        VIKA_SECRETS_FILE: secretsPath,
+      };
+      const deployment = loadDeploymentManifest(env);
+      applyDeploymentDaemonEnv(env, deployment);
+      assert.equal(env.OPENAI_API_KEY, 'sk-test');
+      assert.equal(env.ANTHROPIC_API_KEY, 'ak-test');
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 test('the environment still wins over the secrets file', () => {
   withManifest(validManifest(), (manifestPath) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));
@@ -466,6 +487,37 @@ test('staged replies are opt-in per instance and always pinned in the daemon env
   broken.agents[0].stagedReplies = 1;
   withManifest(broken, (manifestPath) => {
     assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.stagedReplies must be a boolean/);
+  });
+});
+
+test('meeting notes are opt-in for one Feishu/Lark instance at most, and always pinned in the daemon env', () => {
+  const manifest = validManifest();
+  manifest.agents[1].meetingNotes = true;
+  withManifest(manifest, (manifestPath) => {
+    const env = { VIKA_CONFIG: manifestPath, VIKA_MEETING_NOTES: 'true' };
+    const deployment = loadDeploymentManifest(env);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').meetingNotes, false);
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.VIKA_MEETING_NOTES, 'false');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.VIKA_MEETING_NOTES, 'true');
+  });
+  const two = validManifest();
+  two.agents[0].meetingNotes = true;
+  two.agents[2].meetingNotes = true;
+  withManifest(two, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /only one instance can store meeting notes; alpha and gamma both do/);
+  });
+  const weixin = validManifest();
+  Object.assign(weixin.agents[1], { channel: 'weixin', connectors: ['weixin'], meetingNotes: true });
+  delete weixin.agents[1].profile;
+  withManifest(weixin, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[1\]\.meetingNotes requires the lark connector/);
+  });
+  const broken = validManifest();
+  broken.agents[0].meetingNotes = 'yes';
+  withManifest(broken, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.meetingNotes must be a boolean/);
   });
 });
 

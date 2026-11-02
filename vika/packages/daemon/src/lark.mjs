@@ -12,10 +12,15 @@ import { prepareLarkMediaDirectory } from './lark-media.mjs';
 import { MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, replaceCardImages, validImageKey } from './card-images.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 import { LarkImageCache } from './lark-image-cache.mjs';
+import {
+  DOC_COMMENT_EVENT, WHOLE_COMMENT_TYPES, commentContent, commentMessageId, commentPeople, docChatId, isDocChatId,
+  normalizeDocComment, parseCommentMessageId, parseCommentNotice,
+} from './lark-doc-comments.mjs';
 
 export const SUBSCRIBED_EVENT_TYPES = Object.freeze([
   'im.message.receive_v1',
   'card.action.trigger',
+  DOC_COMMENT_EVENT,
   ...MEETING_EVENT_TYPES,
 ]);
 
@@ -24,6 +29,14 @@ const IMAGE_TYPES = {
   '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
 };
 const MAX_CHAT_PAGES = 10;
+// Reading one comment: each lark-cli call, the reply pages read when the
+// comment's own page lacks the reply, and how long a looked-up name is kept.
+const COMMENT_READ_MS = 10_000;
+const MAX_REPLY_PAGES = 5;
+const NAME_TTL_MS = 24 * 60 * 60 * 1_000;
+const MAX_NAMES = 500;
+// The IM working indicator has no comment twin; Typing says the same there.
+const COMMENT_EMOJI = { OnIt: 'Typing' };
 
 function findField(value, field, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 8) return null;
@@ -101,6 +114,15 @@ function findChatName(value, depth = 0) {
   return null;
 }
 
+// A comment's document as the drive shortcuts take it: a bare token and type.
+function commentTarget({ fileToken, fileType }) {
+  return ['--token', fileToken, '--type', fileType];
+}
+
+function commentItems(data) {
+  return Array.isArray(data?.items) ? data.items : Array.isArray(data?.comments) ? data.comments : [];
+}
+
 export class LarkClient {
   constructor(config, registry, logger) {
     this.config = config;
@@ -111,6 +133,11 @@ export class LarkClient {
     this.profile = config.profile || null;
     this.imageCache = null;
     this.imageUploads = new Map();
+    // The bot as check found it: whose comments are its own, and its name
+    // where a comment mentions it.
+    this.selfId = null;
+    this.selfName = null;
+    this.names = new Map(); // open_id -> { name, atMs }
   }
 
   async preflight() {
@@ -167,12 +194,15 @@ export class LarkClient {
     const info = await this.registry.run(this.config.larkCliBin, [
       ...prefix, 'api', 'GET', '/open-apis/bot/v3/info', '--as', 'bot', '--json',
     ], { timeoutMs: 10_000 });
-    let openId = null;
-    try { openId = JSON.parse(info.stdout)?.data?.open_id ?? null; } catch {}
+    let bot = null;
+    try { bot = JSON.parse(info.stdout)?.data ?? null; } catch {}
+    const openId = bot?.open_id ?? null;
     if (info.code !== 0 || typeof openId !== 'string' || !/^ou_[A-Za-z0-9_-]+$/.test(openId)) {
       this.logger.warn('lark_self_unknown', { reason: info.code !== 0 ? 'bot_info_failed' : 'no_open_id' });
       return null;
     }
+    this.selfId = openId;
+    this.selfName = typeof bot.app_name === 'string' && bot.app_name.trim() ? oneLineLabel(bot.app_name, 100) : null;
     return { id: openId };
   }
 
@@ -257,8 +287,12 @@ export class LarkClient {
 
   // IM operations behind the Core action routes. The Core has already checked
   // authority, freshness, idempotency and content; these only speak lark-cli.
-  async im(args, label, { cwd = this.config.projectDir, timeoutMs = this.config.sendTimeoutMs } = {}) {
-    const result = await this.registry.run(this.config.larkCliBin, ['--profile', this.profile, 'im', ...args], {
+  im(args, label, options) {
+    return this.cli(['im', ...args], label, options);
+  }
+
+  async cli(args, label, { cwd = this.config.projectDir, timeoutMs = this.config.sendTimeoutMs } = {}) {
+    const result = await this.registry.run(this.config.larkCliBin, ['--profile', this.profile, ...args], {
       cwd, timeoutMs,
     });
     if (result.timedOut) throw new Error(`lark-cli ${label} timed out after ${timeoutMs}ms`);
@@ -339,11 +373,14 @@ export class LarkClient {
 
   // A chat, or one user's direct chat with the bot (the owner, for a notice).
   sendMessage({ chat_id: chatId, user_id: userId, content, idempotency_key: idempotencyKey }) {
+    if (isDocChatId(chatId)) throw new Error('a document takes no new message; reply to one of its comments');
     const target = userId ? ['--user-id', userId] : ['--chat-id', chatId];
     return this.deliver(['+messages-send', '--as', 'bot', ...target], content, idempotencyKey);
   }
 
   async replyMessage({ message_id: messageId, content, reply_in_thread: inThread = false, idempotency_key: idempotencyKey }) {
+    const comment = parseCommentMessageId(messageId);
+    if (comment) return this.replyToComment(comment, content);
     const delivered = await this.deliver([
       '+messages-reply', '--as', 'bot', '--message-id', messageId, ...(inThread ? ['--reply-in-thread'] : []),
     ], content, idempotencyKey);
@@ -365,6 +402,13 @@ export class LarkClient {
   }
 
   async reactMessage({ message_id: messageId, emoji_type: emojiType }) {
+    const comment = parseCommentMessageId(messageId);
+    if (comment) {
+      const emoji = COMMENT_EMOJI[emojiType] ?? emojiType;
+      await this.reactToComment(comment, emoji, 'add');
+      // A comment reaction has no id of its own: the emoji names it.
+      return { reaction_id: emoji };
+    }
     const data = await this.im([
       'reactions', 'create', '--as', 'bot',
       '--params', JSON.stringify({ message_id: messageId }),
@@ -375,6 +419,11 @@ export class LarkClient {
   }
 
   async deleteReaction({ message_id: messageId, reaction_id: reactionId }) {
+    const comment = parseCommentMessageId(messageId);
+    if (comment) {
+      await this.reactToComment(comment, reactionId, 'delete');
+      return { deleted: true };
+    }
     await this.im([
       'reactions', 'delete', '--as', 'bot', '--message-id', messageId, '--reaction-id', reactionId, '--format', 'json',
     ], 'delete reaction');
@@ -384,6 +433,12 @@ export class LarkClient {
   async retractMessage({ message_id: messageId }) {
     // lark-cli marks message deletion high-risk; the agent tool contract
     // already requires an explicit user request, so confirm here.
+    const comment = parseCommentMessageId(messageId);
+    if (comment) {
+      await this.cli(['drive', '+delete-reply', '--as', 'bot', ...commentTarget(comment),
+        '--comment-id', comment.commentId, '--reply-id', comment.replyId, '--yes', '--format', 'json'], 'delete comment reply');
+      return { retracted: true };
+    }
     await this.im([
       'messages', 'delete', '--as', 'bot', '--params', JSON.stringify({ message_id: messageId }), '--format', 'json', '--yes',
     ], 'retract message');
@@ -458,6 +513,124 @@ export class LarkClient {
       mime_type: IMAGE_TYPES[path.extname(name).toLowerCase()] ?? (kind === 'image' ? 'image/jpeg' : 'application/octet-stream'),
       size: fs.statSync(saved).size,
     }] };
+  }
+
+  // A document comment as a chat message: read the comment, its thread, the
+  // document's title and the people's names as the bot, then normalize. A
+  // comment of the bot's own is dropped. A failed read still wakes the bot,
+  // told it could not read the comment; it never throws for that.
+  async docCommentEvent(raw) {
+    const notice = parseCommentNotice(raw);
+    if (this.selfId && notice.fromId === this.selfId) return null;
+    const [comment, meta] = await Promise.allSettled([this.readComment(notice), this.readDocumentMeta(notice)]);
+    const context = comment.status === 'fulfilled' ? comment.value : { error: true };
+    if (comment.status === 'rejected') {
+      this.logger.warn('lark_doc_comment_unreadable', { error: redactSensitive(String(comment.reason?.message ?? comment.reason)).slice(-500) });
+    }
+    if (meta.status === 'fulfilled') Object.assign(context, meta.value);
+    context.names = await this.lookupNames(commentPeople(notice, context, this.selfId));
+    return normalizeDocComment(notice, context, { selfId: this.selfId, selfName: this.selfName });
+  }
+
+  // The comment card (quote, whole/solved flags) and its replies up to the
+  // one the notice is about.
+  async readComment(notice) {
+    const card = await this.queryComment(notice);
+    let replies = Array.isArray(card.reply_list?.replies) ? card.reply_list.replies : [];
+    const found = () => !notice.replyId || replies.some((reply) => String(reply?.reply_id) === notice.replyId);
+    if (!found() && (card.has_more || card.reply_list?.has_more)) {
+      replies = [];
+      let pageToken = '';
+      for (let page = 0; page < MAX_REPLY_PAGES && !found(); page += 1) {
+        const data = await this.cli(['drive', '+list-replies', '--as', 'bot', ...commentTarget(notice),
+          '--comment-id', notice.commentId, '--page-size', '100', ...(pageToken ? ['--page-token', pageToken] : []),
+          '--format', 'json'], 'list comment replies', { timeoutMs: COMMENT_READ_MS });
+        replies.push(...(Array.isArray(data.items) ? data.items : []));
+        const next = typeof data.page_token === 'string' ? data.page_token : '';
+        if (!data.has_more || !next || next === pageToken) break;
+        pageToken = next;
+      }
+    }
+    return { comment: card, replies };
+  }
+
+  async queryComment({ fileToken, fileType, commentId }) {
+    const data = await this.cli(['drive', '+batch-query-comments', '--as', 'bot', ...commentTarget({ fileToken, fileType }),
+      '--comment-ids', commentId, '--format', 'json'], 'read comment', { timeoutMs: COMMENT_READ_MS });
+    const card = commentItems(data).find((item) => String(item?.comment_id) === commentId);
+    if (!card) throw new Error('lark-cli read comment found no such comment');
+    return card;
+  }
+
+  async readDocumentMeta({ fileToken, fileType }) {
+    const data = await this.cli(['drive', 'metas', 'batch_query', '--as', 'bot', '--data', JSON.stringify({
+      request_docs: [{ doc_token: fileToken, doc_type: fileType }], with_url: true,
+    }), '--format', 'json'], 'read document title', { timeoutMs: COMMENT_READ_MS });
+    const meta = (Array.isArray(data.metas) ? data.metas : []).find((item) => item?.doc_token === fileToken) ?? {};
+    return {
+      title: typeof meta.title === 'string' ? meta.title : null,
+      url: typeof meta.url === 'string' && /^https:\/\//.test(meta.url) ? meta.url : null,
+    };
+  }
+
+  // Display names by open_id, kept a day. A failed lookup leaves the name
+  // unknown (the line shows a shortened id); it is tried again next time.
+  async lookupNames(ids) {
+    const now = Date.now();
+    const names = new Map();
+    await Promise.all(ids.slice(0, 10).map(async (id) => {
+      const cached = this.names.get(id);
+      if (cached && now - cached.atMs < NAME_TTL_MS) {
+        names.set(id, cached.name);
+        return;
+      }
+      try {
+        const data = await this.cli(['contact', '+get-user', '--as', 'bot', '--user-id', id, '--format', 'json'],
+          'user lookup', { timeoutMs: COMMENT_READ_MS });
+        const name = oneLineLabel(data?.user?.name ?? data?.name, 100);
+        if (!name) return;
+        names.set(id, name);
+        this.names.delete(id);
+        this.names.set(id, { name, atMs: now });
+        while (this.names.size > MAX_NAMES) this.names.delete(this.names.keys().next().value);
+      } catch {}
+    }));
+    return names;
+  }
+
+  // A reply to a comment, in its thread. A whole-document comment takes no
+  // reply, nor does a resolved one: the answer then opens a new
+  // whole-document comment that mentions whom it answers. The comment API
+  // has no idempotency key, so the Core never retries an uncertain one.
+  async replyToComment(target, content) {
+    if (content.type !== 'markdown') throw new Error('a document comment takes text only');
+    const card = await this.queryComment(target);
+    const delivered = (commentId, replyId) => ({
+      ...(commentId && replyId ? { message_id: commentMessageId({ ...target, commentId, replyId }) } : {}),
+      chat_id: docChatId(target.fileType, target.fileToken),
+      ...(commentId ? { thread_id: commentId } : {}),
+    });
+    if (!card.is_whole && !card.is_solved) {
+      const data = await this.cli(['drive', '+add-reply', '--as', 'bot', ...commentTarget(target),
+        '--comment-id', target.commentId, '--content', JSON.stringify(commentContent(content.text)), '--format', 'json'],
+      'reply to comment');
+      return delivered(target.commentId, findField(data, 'reply_id'));
+    }
+    if (!WHOLE_COMMENT_TYPES.has(target.fileType)) {
+      throw new Error('this comment is resolved, and this kind of document takes no new whole-document comment to answer in');
+    }
+    const replies = Array.isArray(card.reply_list?.replies) ? card.reply_list.replies : [];
+    const author = replies.find((reply) => String(reply?.reply_id) === target.replyId)?.user_id;
+    const mention = typeof author === 'string' && /^ou_/.test(author) && author !== this.selfId ? [author] : [];
+    const data = await this.cli(['drive', '+add-comment', '--as', 'bot', '--doc', target.fileToken, '--type', target.fileType,
+      '--full-comment', '--content', JSON.stringify(commentContent(content.text, mention)), '--format', 'json'],
+    'add whole-document comment');
+    return delivered(findField(data, 'comment_id'), findField(data, 'reply_id'));
+  }
+
+  reactToComment(target, emoji, action) {
+    return this.cli(['drive', '+react-reply', '--as', 'bot', ...commentTarget(target), '--reply-id', target.replyId,
+      '--emoji', emoji, '--action', action, '--format', 'json'], `${action === 'add' ? 'react to' : 'remove reaction from'} comment`);
   }
 
   // Reflect a settled choice without depending on the short-lived callback token.

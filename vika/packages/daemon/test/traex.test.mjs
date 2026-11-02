@@ -118,6 +118,7 @@ describe('TraexAgent app-server backend', () => {
       ...baseConfig,
       projectDir: '/release',
       larkCliBin: '/fake/lark-cli',
+      slackCliBin: '/fake-slack/slack',
       actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
       actionSocketPath: '/tmp/traex-actions.sock',
       sendTimeoutMs: 5_000,
@@ -144,6 +145,7 @@ describe('TraexAgent app-server backend', () => {
     assert.doesNotMatch(rendered, /features\.apps=false/);
     assert.doesNotMatch(rendered, /--effort/);
     assert.equal(spawnCalls[0].options.env.LARKSUITE_CLI_PROFILE, 'test-profile');
+    assert.ok(spawnCalls[0].options.env.PATH.startsWith('/fake:/fake-slack:'));
     assert.equal(spawnCalls[0].options.env.PERSONAL_AGENT_SOCKET, '/tmp/traex-actions.sock');
     assert.equal(spawnCalls[0].options.env.PERSONAL_AGENT_AUTHORITY, 'traex-token');
   });

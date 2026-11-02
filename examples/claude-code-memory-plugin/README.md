@@ -439,7 +439,7 @@ OV · 14 sources · … · 1 read in full  [Collapse]
   ⚙ openviking-release · auto-recalled
   …
 Claude's own lookups
-  ⌕ Searched “lark-daemon release” · 6 results
+  ⌕ Searched “vika release” · 6 results
   ▤ Read 10/3 发版检查清单补充
 ```
 

@@ -1,6 +1,5 @@
+import { NewCompile } from '#/features/workbench/compile/new'
 import { createFileRoute } from '@tanstack/react-router'
-import { useAppConnection } from '#/hooks/use-app-connection'
-import { CompileForm } from './-components/compile-form'
 
 export const Route = createFileRoute('/compile/new')({
   validateSearch: (
@@ -14,14 +13,3 @@ export const Route = createFileRoute('/compile/new')({
   }),
   component: NewCompile,
 })
-function NewCompile() {
-  const { identityScopeKey } = useAppConnection()
-  const { fromTask, from } = Route.useSearch()
-  return (
-    <CompileForm
-      key={`${identityScopeKey}:${fromTask || ''}:${from || ''}`}
-      fromTask={fromTask}
-      sourceUri={from}
-    />
-  )
-}

@@ -18,9 +18,10 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "setup": "npm ci --no-audit --no-fund && node scripts/install-lark-cli.mjs && node scripts/install-slack-cli.mjs && npm run check:pi",
+    "setup": "npm ci --no-audit --no-fund && node scripts/install-lark-cli.mjs && node scripts/install-slack-cli.mjs && npm run check:pi && npm run check:durable",
     "pi": "pi",
     "check:pi": "node packages/daemon/scripts/check-pi.mjs",
+    "check:durable": "node packages/daemon/scripts/check-durable.mjs",
     "release:build": "node scripts/build-release.mjs",
     "start": "node packages/daemon/src/main.mjs",
     "start:daemon": "node packages/daemon/src/main.mjs",

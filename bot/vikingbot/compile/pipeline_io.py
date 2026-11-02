@@ -18,9 +18,11 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from openviking.models.model_error import ModelError
+from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking_cli.exceptions import NotFoundError
+from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.compile.hashing import digest
-from vikingbot.compile.models import COMPILE_STAGING_ROOT
+from vikingbot.compile.models import COMPILE_STAGING_ROOT, CompileFailure
 from vikingbot.compile.results import FileResponse, RouteBatchResponse
 from vikingbot.compile.schemas import result_schema
 from vikingbot.compile.skill_resources import EvidenceReader
@@ -30,7 +32,7 @@ T = TypeVar("T")
 R = TypeVar("R", bound=BaseModel)
 ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
 # Cache identity for the processing rules used by model calls.
-PROCESSING_VERSION = "compile-pipeline-36"
+PROCESSING_VERSION = "compile-pipeline-37"
 # Output-token fallback when the configured VLM provides no value.
 DEFAULT_MAX_TOKENS = 32_000
 # Total attempts per operator job or routing record, including the initial execution.
@@ -270,6 +272,17 @@ class JsonModel:
         Diagnostics contain budgets, usage and failure categories, never reasoning.
         A cancelled or timed-out request cannot be accepted as a partial response.
         """
+        from vikingbot.agent.loop import _inline_media_bytes
+
+        media_bytes = _inline_media_bytes(messages)
+        if media_bytes and not self.provider.supports_tool_result_media(self.model):
+            raise CompileFailure(
+                "UNSUPPORTED_MEDIA", "Compile provider cannot deliver image evidence", stage=stage
+            )
+        if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:
+            raise CompileFailure(
+                "MEDIA_LIMIT", "Compile image request exceeds the inline media budget", stage=stage
+            )
         self.metrics[f"{stage}_calls"] += 1
         number = self.metrics[f"{stage}_calls"]
         started = time.monotonic()
@@ -439,7 +452,7 @@ class JsonModel:
             }
         ]
         readers = dict(readers or {})
-        if stage not in {"plan", "combine"}:
+        if stage != "plan":
             evidence = EvidenceReader(self.files, data)
             if evidence.allowed - evidence.delivered:
                 readers["read_evidence"] = evidence
@@ -520,6 +533,9 @@ class JsonModel:
                             value = "Error: " + str(exc)[:800]
                         else:
                             retries.pop(f"read:{call.name}", None)
+                        multimodal = value if isinstance(value, MultimodalToolResult) else None
+                        if multimodal:
+                            value = multimodal.text
                         try:
                             content = json.loads(
                                 value, object_hook=lambda v: v.get("text", v.get("excerpts", v))
@@ -530,8 +546,15 @@ class JsonModel:
                         progress = progress or fingerprint not in seen_results
                         if fingerprint in seen_results:
                             value = "Unchanged: same tool result. Use previous results or submit."
+                            multimodal = None
                         seen_results.add(fingerprint)
-                        messages.append({"role": "tool", "tool_call_id": call.id, "content": value})
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": multimodal.content if multimodal else value,
+                            }
+                        )
                     stalled_rounds = 0 if progress else stalled_rounds + 1
                     if stalled_rounds >= 3:
                         raise ModelCallLimitError(f"{stage}: tool calls made no progress")

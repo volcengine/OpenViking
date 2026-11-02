@@ -187,6 +187,7 @@ class _ResourceSourceInfo:
     source_name: Optional[str] = None
     source_path: Optional[str] = None
     source_format: Optional[str] = None
+    head_sha: Optional[str] = None
 
 
 @dataclass
@@ -310,6 +311,7 @@ class ResourceService:
         status: str,
         execution_task_id: Optional[str] = None,
         error: Optional[str] = None,
+        source_checkpoint: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record a pre-created Watch's first round and release its scheduler hold."""
         sanitized_error = (
@@ -326,6 +328,11 @@ class ResourceService:
                     execution_task_id=execution_task_id,
                     error=error,
                 )
+                if status == "completed" and source_checkpoint is not None:
+                    await watch_manager.update_source_checkpoint(
+                        task_id,
+                        source_checkpoint,
+                    )
                 logger.info(
                     "[ResourceService] Watch first round recorded: watch_task_id=%s status=%s "
                     "execution_task_id=%s%s",
@@ -351,6 +358,7 @@ class ResourceService:
                 "understanding_response_id",
                 "understanding_file_id",
                 "temp_file_id",
+                "git_head_sha_hint",
             }:
                 continue
             try:
@@ -404,6 +412,30 @@ class ResourceService:
     ) -> None:
         if (to or "").strip() and (parent or "").strip():
             raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
+
+    @staticmethod
+    def _initial_source_checkpoint(
+        meta: Any,
+        *,
+        instruction: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Build the watch source checkpoint from the imported revision meta.
+
+        The accessor records ``resolved_head_sha`` for the exact imported
+        revision: a resolved branch tip or the supplied commit-only pin. The
+        tracked branch or commit selection itself lives in processor_kwargs.
+        The instruction is included so changing it forces one refresh even
+        when the source revision is unchanged. Failed branch probes leave the
+        checkpoint unset (fail open).
+        """
+        head_sha = meta.get("resolved_head_sha") if isinstance(meta, dict) else None
+        if head_sha:
+            return {
+                "kind": "git",
+                "head_sha": head_sha,
+                "instruction": instruction,
+            }
+        return None
 
     async def _manage_watch_if_needed(
         self,
@@ -869,6 +901,11 @@ class ResourceService:
                 internal_kwargs["create_parent"] = True
             if msg.source_name is not None:
                 internal_kwargs["source_name"] = msg.source_name
+            if msg.git_head_sha_hint:
+                # One-shot SHA resolved by the add_resource preflight; lets
+                # the accessor download an immutable revision without a second
+                # ls-remote. Transient: never persisted into watch kwargs.
+                internal_kwargs["git_head_sha_hint"] = msg.git_head_sha_hint
             if feishu_prepared:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -1140,6 +1177,8 @@ class ResourceService:
             source_info = await self._preflight_git_source(
                 path,
                 auth_config=preflight_git_auth,
+                branch=processor_kwargs.get("branch") or processor_kwargs.get("ref"),
+                commit=processor_kwargs.get("commit"),
             )
             source_name = source_name or source_info.source_name
             source_info.source_name = source_name
@@ -1425,6 +1464,7 @@ class ResourceService:
                 source_name=plan.source_identity.source_name,
                 to_is_directory=planned_to_is_directory,
                 args=plan.processor_args,
+                git_head_sha_hint=plan.source_identity.head_sha,
                 defer_target_resolution=defer_target_resolution,
                 cleanup_empty_target_on_failure=cleanup_empty_target_on_failure,
                 understanding_response_id=plan.understanding_response_id,
@@ -1565,19 +1605,44 @@ class ResourceService:
         source: str,
         *,
         auth_config: Optional[GitHttpAuthConfig] = None,
+        branch: Optional[str] = None,
+        commit: Optional[str] = None,
     ) -> _ResourceSourceInfo:
+        # Normalize browser/tree URLs to the clone URL and resolve the tracked
+        # ref with the same logic the accessor/watch probe uses.
+        from openviking.parse.accessors.git_accessor import GitAccessor
+
+        repo_url, tracked_branch, tracked_commit = GitAccessor._resolve_probe_target(
+            source, branch=branch, commit=commit
+        ) or (source, branch, commit)
+
+        # Target the exact tracked ref so the advertised SHA can be reused by
+        # the accessor as an immutable download hint. A pinned commit cannot be
+        # proven reachable by ls-remote, so HEAD only verifies repository
+        # access there; the fetch/checkout validates the exact SHA.
+        if tracked_commit:
+            ref = "HEAD"
+            ls_remote_args = ["git", "ls-remote", repo_url, "HEAD"]
+        elif tracked_branch:
+            ref = (
+                tracked_branch
+                if tracked_branch.startswith("refs/")
+                else f"refs/heads/{tracked_branch}"
+            )
+            ls_remote_args = ["git", "ls-remote", "--heads", repo_url, ref]
+        else:
+            ref = "HEAD"
+            ls_remote_args = ["git", "ls-remote", repo_url, "HEAD"]
+
         proc = None
         try:
-            env = build_git_http_auth_env(auth_config, source) if auth_config is not None else None
+            env = build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
             env = overlay_parser_subprocess_env(
-                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, source),
+                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
                 env,
             )
             proc = await asyncio.create_subprocess_exec(
-                "git",
-                "ls-remote",
-                "--heads",
-                source,
+                *ls_remote_args,
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -1606,11 +1671,21 @@ class ResourceService:
         if proc.returncode != 0:
             raise_git_auth_error(stderr)
             raise InvalidArgumentError("Cannot access Git repository; git ls-remote failed.")
+        # Best-effort SHA extraction only: an empty repository or a ref the
+        # server does not advertise still exits 0 and must pass preflight. In
+        # that case the hint stays unset and the clone path performs the
+        # definitive ref/error classification.
+        head_sha = None
+        if not tracked_commit:
+            head_sha = GitAccessor._parse_ls_remote_ref(
+                stdout.decode(errors="replace"), ref
+            )
         repo_name = parse_code_hosting_url(source)
         return _ResourceSourceInfo(
             source_name=repo_name.rsplit("/", 1)[-1] if repo_name else None,
             source_path=source,
             source_format="repository",
+            head_sha=head_sha,
         )
 
     async def add_resource(
@@ -2525,6 +2600,7 @@ class ResourceService:
                 user_id=ctx.user.user_id,
                 role=str(ctx.role),
                 is_active=False,
+                invalidate_source_checkpoint=True,
             )
             logger.info(
                 f"[ResourceService] Deactivated watch task {existing_task.task_id} for {to_uri}"
@@ -2574,7 +2650,7 @@ class ResourceService:
         telemetry_cleanup_scheduled = False
 
         async def record_package(skill_uri: str, lease_ref: Any) -> None:
-            """Preserve standalone ordinary packages under their lease for Compile rollback."""
+            """Record an ordinary Skill package operation under its content lease."""
             if (
                 self.compile_versions is not None
                 and owner_lease_ref is None
@@ -2587,9 +2663,7 @@ class ResourceService:
                     ctx,
                     "agent_revise",
                     {},
-                    lambda: self.compile_versions.register_transfer(
-                        skill_uri, skill_uri, ctx, lease_ref=lease_ref
-                    ),
+                    lambda: self.compile_versions.register_transfer(ctx),
                 )
 
         try:

@@ -67,7 +67,7 @@ The server adds memberships to `RequestContext.group_ids` for each request. Addi
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add members from a JSON body `{"user_ids": [...]}` (1–1000 existing users) atomically; users who are already members are skipped, and the result is `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
 
 ```bash

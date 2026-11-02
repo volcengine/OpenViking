@@ -177,7 +177,8 @@ export class Harness {
       // Bounded roster warm-up so formatInboundLine can resolve from= to a
       // display name. warm() never rejects and races an internal timeout, so a
       // slow or failing lark-cli only degrades the label back to the id stub.
-      if (event.source === 'lark' && event.chatId) await this.roster?.warm(event.chatId);
+      // A document has no members to list: its Connector names the commenter.
+      if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
       await this.runtime.prepareInputContext?.();
       this.groupBurst.route(eventDeliveryItem(event, result.inbound.seq, {
         text: formatInboundLine(event, null, {

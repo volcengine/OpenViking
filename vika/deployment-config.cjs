@@ -20,6 +20,7 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'TRAECLI_BIN',
   'CLAUDE_BIN',
   'PI_BIN',
+  'OPENCODE_BIN',
   'VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS',
   'VIKA_LOG_LEVEL',
   'VIKA_TEMP_DIR',
@@ -39,6 +40,9 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'VIKA_CLAUDE_MODEL',
   'VIKA_PI_EFFORT',
   'VIKA_PI_MODEL',
+  'VIKA_DURABLE_EFFORT',
+  'VIKA_DURABLE_MODEL',
+  'VIKA_OPENCODE_MODEL',
   'VIKA_VOLC_SESSION_ID',
   'VIKA_VOLC_ENVIRONMENT_ID',
   'VIKA_VOLC_BASE_URL',
@@ -51,6 +55,18 @@ const DAEMON_ENV_FIELDS = Object.freeze([
 // processes, but are deliberately excluded from the deployment manifest.
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
+  // Providers of the durable runtime (pi-ai) read their key from the child
+  // environment. They may come from the operator environment or ~/.vika/secrets
+  // but never from the deployment manifest.
+  'ANTHROPIC_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_GENERATIVE_AI_API_KEY',
+  'GROQ_API_KEY',
+  'MISTRAL_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'XAI_API_KEY',
 ]);
 const DAEMON_PROCESS_ENV_FIELDS = Object.freeze([
   ...DAEMON_ENV_FIELDS,
@@ -75,6 +91,7 @@ const AGENT_FIELDS = Object.freeze([
   'model',
   'volcSessionId',
   'volcEnvironmentId',
+  'meetingNotes',
   'emailAccounts',
 ]);
 // The roles shipped with the release (packages/daemon/agent/roles/<name>.md).
@@ -273,6 +290,12 @@ function parseAgent(value, index, ignored) {
   if (value.stagedReplies !== undefined && typeof value.stagedReplies !== 'boolean') {
     throw new Error(`${label}.stagedReplies must be a boolean`);
   }
+  if (value.meetingNotes !== undefined && typeof value.meetingNotes !== 'boolean') {
+    throw new Error(`${label}.meetingNotes must be a boolean`);
+  }
+  if (value.meetingNotes && !connectors.includes('lark')) {
+    throw new Error(`${label}.meetingNotes requires the lark connector`);
+  }
   return Object.freeze({
     id,
     displayName: manifestString(value.displayName, `${label}.displayName`, { maxLength: 40 }),
@@ -292,6 +315,7 @@ function parseAgent(value, index, ignored) {
     model,
     volcSessionId,
     volcEnvironmentId,
+    meetingNotes: value.meetingNotes ?? false,
     emailAccounts: Object.freeze(emailAccounts),
   });
 }
@@ -342,6 +366,11 @@ function assertUniqueAgentFields(agents) {
   for (const { config } of agents.flatMap((agent) => agent.emailAccounts)) {
     if (accountFiles.has(config)) throw new Error(`duplicate email account file: ${config}`);
     accountFiles.add(config);
+  }
+  // Each would store every meeting note of the owner again.
+  const storingNotes = agents.filter((agent) => agent.meetingNotes).map((agent) => agent.id);
+  if (storingNotes.length > 1) {
+    throw new Error(`only one instance can store meeting notes; ${storingNotes.join(' and ')} both do`);
   }
 }
 
@@ -484,6 +513,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   env.VIKA_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.VIKA_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.VIKA_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
+  env.VIKA_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
   if (agent.role) env.VIKA_ROLE = agent.role;
   else delete env.VIKA_ROLE;
   env.VIKA_CHANNEL = agent.channel;

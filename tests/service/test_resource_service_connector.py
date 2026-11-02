@@ -1911,6 +1911,43 @@ async def test_native_git_enqueue_rejects_credentials_before_durable_job(
 
 
 @pytest.mark.asyncio
+async def test_native_git_preflight_sha_is_carried_as_transient_msg_hint(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._connector.should_delegate = Mock(return_value=False)
+    head_sha = "e" * 40
+    service._preflight_git_source = AsyncMock(
+        return_value=SimpleNamespace(
+            source_name="private",
+            source_path="https://git.example/org/private.git",
+            source_format="repository",
+            head_sha=head_sha,
+        )
+    )
+    service._plan_source_job_target = AsyncMock(
+        return_value=("viking://resources/private", None, False, False)
+    )
+    service._enqueue_add_resource_job = AsyncMock(
+        return_value=SimpleNamespace(task_id="task-private")
+    )
+
+    await service.add_resource(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+    )
+
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert message.git_head_sha_hint == head_sha
+    # Transient hint survives durable serialization for the worker.
+    assert AddResourceMsg.from_dict(message.to_dict()).git_head_sha_hint == head_sha
+
+
+@pytest.mark.asyncio
 async def test_native_git_nested_auth_is_owned_by_durable_task(
     monkeypatch,
     connector_config,
@@ -1924,6 +1961,7 @@ async def test_native_git_nested_auth_is_owned_by_durable_task(
             source_name="private",
             source_path="https://git.example/org/private.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -1973,6 +2011,7 @@ async def test_native_git_nested_auth_watch_is_copied_from_task_state_by_worker(
             source_name="private",
             source_path="https://git.example/org/private.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -2016,6 +2055,7 @@ async def test_native_git_watch_refresh_queues_with_restored_task_auth(
             source_name="private",
             source_path="https://git.example/org/private.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -2174,6 +2214,7 @@ async def test_add_resource_falls_back_for_shared_source_with_parent(
             source_name="repo",
             source_path="https://git.example/org/repo.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -2231,6 +2272,7 @@ async def test_add_resource_job_executes_frozen_route(ctx, service):
     )
     resource_lock = SimpleNamespace(close=AsyncMock())
     stage_callback = AsyncMock()
+    head_sha = "f" * 40
     msg = AddResourceMsg(
         task_id="task-1",
         path="git://example.com/repo.git",
@@ -2239,6 +2281,7 @@ async def test_add_resource_job_executes_frozen_route(ctx, service):
         user_id=ctx.user.user_id,
         role=str(ctx.role),
         args={"parser_backend": "understanding"},
+        git_head_sha_hint=head_sha,
     )
 
     result = await service.execute_add_resource_job(
@@ -2255,6 +2298,7 @@ async def test_add_resource_job_executes_frozen_route(ctx, service):
     assert call["defer_post_processing"] is False
     assert call["resource_lock"] is resource_lock
     assert call["parser_backend"] == "understanding"
+    assert call["git_head_sha_hint"] == head_sha
 
 
 @pytest.mark.asyncio

@@ -76,8 +76,13 @@ if (process.argv[2] === LAUNCHER) {
   // The profile resolves under DSH_HOME first; an inherited one would escape the scratch home.
   if (process.env.DSH_HOME) fail("DSH_HOME is set; unset it so the desktop profile lands in the scratch HOME");
 
-  const { PROFILE_TEMPLATES, initProfile, resolveProfileDir } = await import(
+  const appBoot = await import(
     pathToFileURL(requireFromDsh.resolve("@deepseek-ai/dsh-app-boot")).href
+  );
+  const { initProfile, resolveProfileDir } = appBoot;
+  // DSH 0.2.2 moved shipped templates out of app-boot; earlier releases still export them there.
+  const { PROFILE_TEMPLATES } = appBoot.PROFILE_TEMPLATES ? appBoot : await import(
+    pathToFileURL(requireFromDsh.resolve("@deepseek-ai/dsh-official-bundles")).href
   );
   const { name } = JSON.parse(execFileSync("tar", ["-xzOf", tarball, "package/package.json"], { encoding: "utf8" }));
   const profileDir = resolveProfileDir("desktop");

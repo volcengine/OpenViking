@@ -211,8 +211,10 @@ class ArchiveStore:
             try:
                 if await self._viking_fs.exists(f"{archive_uri}/{marker}", ctx=self._ctx):
                     return state
-            except Exception:
-                continue
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    continue
+                raise
         return "pending"
 
     async def list_refs(self) -> List[Dict[str, Any]]:
@@ -222,8 +224,10 @@ class ArchiveStore:
 
         try:
             history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self._ctx)
-        except Exception:
-            return []
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return []
+            raise
 
         refs: List[Dict[str, Any]] = []
         for item in history_items:

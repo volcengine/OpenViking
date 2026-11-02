@@ -19,7 +19,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
 
-Once installed, start a new OpenCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [Connect your agent with one prompt](../getting-started/07-agent-onboarding.md).
+Once installed, start a new OpenCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ### Manual npm install
 

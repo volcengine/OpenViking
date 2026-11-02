@@ -180,6 +180,9 @@ export function getConfig() {
   if (daemonProfile && cliProfile && daemonProfile !== cliProfile) {
     throw new Error('VIKA_LARK_PROFILE must match LARKSUITE_CLI_PROFILE');
   }
+  // Connector commands run from projectDir; make relative overrides independent
+  // of the agent workspace too. Bare command names keep their PATH semantics.
+  const cliBin = (value) => value?.includes(path.sep) ? path.resolve(projectDir, value) : value;
   const volcBaseUrl = (process.env.VIKA_VOLC_BASE_URL
     || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/+$/, '');
   let parsedVolcBaseUrl;
@@ -210,8 +213,8 @@ export function getConfig() {
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
     actionSocketPath: path.join(dataDir, 'actions.sock'),
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),
-    larkCliBin: process.env.LARK_CLI_BIN || bundledLarkCli(),
-    slackCliBin: process.env.SLACK_CLI_BIN || undefined,
+    larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
+    slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
     emailAccounts,
     weixinLongPollTimeoutMs: intEnv('VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,
@@ -221,6 +224,7 @@ export function getConfig() {
     traexBin: process.env.TRAEX_BIN || process.env.TRAECLI_BIN || traexCommand(),
     claudeBin: process.env.CLAUDE_BIN || 'claude',
     piBin: process.env.PI_BIN || managedPiBin(),
+    opencodeBin: process.env.OPENCODE_BIN || 'opencode',
     initialModel: process.env.VIKA_MODEL || '',
     codexEffort: enumEnv('VIKA_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('VIKA_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
@@ -232,6 +236,16 @@ export function getConfig() {
       'medium',
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
+    // Durable harness (built-in @earendil-works/pi-durable host). The model is
+    // spoken as provider/modelId; the effort set matches pi-durable thinking
+    // levels.
+    durableModel: process.env.VIKA_DURABLE_MODEL || '',
+    durableEffort: enumEnv(
+      'VIKA_DURABLE_EFFORT',
+      'medium',
+      ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    ),
+    opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
     volcApiKey: process.env.ARK_API_KEY || '',
     volcSessionId: process.env.VIKA_VOLC_SESSION_ID
       || process.env.ARK_SESSION_ID
@@ -275,6 +289,9 @@ export function getConfig() {
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('VIKA_STAGED_REPLIES', false),
+    // Opt-in per instance (agents[].meetingNotes), on one instance at most:
+    // the owner's Feishu/Lark meeting notes are stored in OV.
+    meetingNotes: boolEnv('VIKA_MEETING_NOTES', false) && connectors.includes('lark'),
     historyLimit: intEnv('VIKA_HISTORY_LIMIT', 30, { min: 0, max: 200 }),
     // Replies to bot messages in one chat/thread with no person writing there
     // before the safety fuse holds further ones; 0 turns the fuse off.

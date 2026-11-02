@@ -212,6 +212,8 @@ async def _initialize_runtime_state(
         await _initialize_auth_plugin(app, service, config)
         await _initialize_ttl_adapter(app, service, config)
     manager = getattr(app.state, "api_key_manager", None)
+    if manager is not None:
+        service.compile.lifecycle.resolve_groups = manager.get_user_group_ids
     if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
         account_count = await service.reconcile_system_assets(manager)
         logger.info("Reconciled system assets for %d active accounts", account_count)

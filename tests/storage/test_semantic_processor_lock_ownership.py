@@ -8,11 +8,11 @@ import json
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.storage.errors import InvalidPathLockRequestError
+from openviking.storage.errors import HandoffRecoveryRequired
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -76,19 +76,14 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_semantic_lock_reacquires_unicode_coverage_after_legacy_mapping_error(monkeypatch):
+async def test_semantic_lock_reacquires_unicode_coverage_after_provider_change(monkeypatch):
     covered_path = "/local/default/resources/agent-memory/credit-risk/信贷风险管理_1.md"
     lock_path = (
         "/local/default/resources/agent-memory/credit-risk/.exact.ovlock.1.md.14dd8bad93aaa5b0"
     )
     lease = {"id": "reacquired-lock"}
     pathlock = SimpleNamespace(
-        pathlock_adopt=AsyncMock(
-            side_effect=InvalidPathLockRequestError(
-                f"invalid lock request: handoff coverage '{covered_path}' "
-                f"does not map to lock path '{lock_path}'"
-            )
-        ),
+        pathlock_adopt=AsyncMock(side_effect=HandoffRecoveryRequired("provider_changed")),
         pathlock_acquire_batch=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
     )
@@ -102,12 +97,50 @@ async def test_semantic_lock_reacquires_unicode_coverage_after_legacy_mapping_er
         "covered_paths": [{"path": covered_path, "kind": "tree"}],
     }
 
-    scope = await SemanticLockScope.resolve(handoff)
+    scope = await SemanticLockScope.resolve(handoff, ctx=SimpleNamespace(account_id="default"))
 
     assert scope.lock == lease
-    pathlock.pathlock_acquire_batch.assert_awaited_once_with(handoff["covered_paths"])
+    pathlock.pathlock_acquire_batch.assert_awaited_once_with(
+        handoff["covered_paths"], fs_ctx={"account_id": "default"}
+    )
     await scope.close()
     pathlock.pathlock_release.assert_awaited_once_with(lease)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("historic", [False, True])
+async def test_semantic_file_recovery_preserves_exact_or_uses_conservative_tree(
+    monkeypatch, historic
+):
+    path = "/local/default/resources/file.md"
+    pathlock = SimpleNamespace(
+        pathlock_adopt=AsyncMock(side_effect=HandoffRecoveryRequired("provider_changed")),
+        pathlock_acquire_batch=AsyncMock(return_value={"lease_ref": "new"}),
+        pathlock_release=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_viking_fs",
+        lambda: _FakeVikingFS(pathlock),
+    )
+    warning = Mock()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_lock.logger.warning", warning)
+    handoff = {"lock_paths": ["/local/default/resources/.exact.ovlock.file.md.123"]}
+    if not historic:
+        handoff["covered_paths"] = [{"path": path, "kind": "exact"}]
+    scope = await SemanticLockScope.resolve(
+        handoff, ctx=SimpleNamespace(account_id="default"), fallback_path_factory=lambda: path
+    )
+    pathlock.pathlock_acquire_batch.assert_awaited_once_with(
+        [{"path": path, "kind": "tree" if historic else "exact"}],
+        fs_ctx={"account_id": "default"},
+    )
+    if historic:
+        warning.assert_called_once_with(
+            "Recovering historic semantic handoff with conservative Tree coverage path=%s", path
+        )
+    else:
+        warning.assert_not_called()
+    await scope.close()
 
 
 def test_semantic_tree_stats_aggregate_multiple_plans_for_one_request():
@@ -234,7 +267,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         async def exists(self, uri, ctx=None):
             return True
 
-        async def pathlock_adopt(self, lease):
+        async def pathlock_adopt(self, lease, *, fs_ctx=None):
             return lease
 
         async def pathlock_release(self, lease):

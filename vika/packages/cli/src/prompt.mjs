@@ -27,10 +27,12 @@ export class PromptAborted extends Error {
   }
 }
 
+// `notice`, when given, says why: the caller shows it where it goes back to.
 export class GoBack extends Error {
-  constructor() {
+  constructor(notice = null) {
     super('back');
     this.name = 'GoBack';
+    this.notice = notice;
   }
 }
 

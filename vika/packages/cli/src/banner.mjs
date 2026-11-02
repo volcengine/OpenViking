@@ -194,13 +194,23 @@ export function sceneFrame(t) {
   return toCells(pixels);
 }
 
+// A fixed 12-level RGB grid preserves shading between ANSI-256 colours while
+// limiting new glyph/foreground/background combinations across animation frames.
+// Unrestricted truecolor churn can trigger WebGL glyph-atlas corruption in
+// terminals; keep the palette stable over time, including half-block backgrounds.
+function bannerColor(rgb, depth) {
+  if (!rgb || depth < 24) return rgb;
+  const steps = 11;
+  return rgb.map((channel) => Math.round(Math.round(channel * steps / 255) * 255 / steps));
+}
+
 // Cell rows as strings, a colour change only where the colour changes.
 function render(rows, depth) {
   return rows.map((row) => {
     let line = '';
     let open = '';
     for (const cell of row) {
-      const code = `${cell.rgb ? fgCode(cell.rgb, depth) : ''}${cell.bg ? bgCode(cell.bg, depth) : ''}`;
+      const code = `${fgCode(bannerColor(cell.rgb, depth), depth)}${bgCode(bannerColor(cell.bg, depth), depth)}`;
       if (code !== open) {
         line += `${open ? RESET : ''}${code}`;
         open = code;
@@ -246,7 +256,7 @@ export const BANNER_ROWS = SCENE_HEIGHT;
 const MINI_BOAT = ['...sm....', '..ssmj...', '.sssmjj..', 'hhhhhhhhh'];
 
 export function miniLines(t, { depth = 24, columns = 80 } = {}) {
-  const strip = Math.max(20, Math.min(columns, 72) - 7);
+  const strip = Math.max(20, Math.min(columns - 1, 72) - 7);
   const pixels = canvas(strip, 4);
   [[3, 0], [17, 1], [30, 0], [44, 1], [58, 0]].forEach(([x, y], index) => {
     if (x < strip && Math.sin(t * (1.2 + index * 0.4) + index) > -0.2) dot(pixels, x, y, scale(COLORS.star, 0.7));
@@ -320,7 +330,7 @@ export async function openingBanner({ output = process.stdout, input = process.s
   const idle = { release() {}, resume() {}, top: () => null };
   const depth = colorDepth(output, env);
   const still = env.VIKA_NO_ANIMATION === '1' || Boolean(env.CI);
-  if (depth < 8 || still || (output.columns ?? 0) < SCENE_WIDTH || (output.rows ?? 0) <= SCENE_HEIGHT + 2) {
+  if (depth < 8 || still || (output.columns ?? 0) <= SCENE_WIDTH || (output.rows ?? 0) <= SCENE_HEIGHT + 2) {
     await playBanner({ output, input, env, version });
     return idle;
   }
@@ -337,7 +347,7 @@ export async function openingBanner({ output = process.stdout, input = process.s
     },
     resume() {
       if (pinned?.released) pinned = null;
-      if (pinned || (output.columns ?? 0) < SCENE_WIDTH) return;
+      if (pinned || (output.columns ?? 0) <= SCENE_WIDTH) return;
       const columns = output.columns;
       if (fits(SCENE_HEIGHT)) pinned = pinHeader({ output, frame: (t) => bannerLines(t, { depth, version, columns }) });
       else if (fits(2)) pinned = pinHeader({ output, frame: (t) => miniLines(t, { depth, columns }) });
@@ -361,7 +371,7 @@ export async function playBanner({
 } = {}) {
   const depth = colorDepth(output, env);
   const columns = output.columns ?? 80;
-  const animate = depth >= 8 && columns >= SCENE_WIDTH && (output.rows ?? 24) > SCENE_HEIGHT + 2;
+  const animate = depth >= 8 && columns > SCENE_WIDTH && (output.rows ?? 24) > SCENE_HEIGHT + 2;
   if (!animate) {
     const s = styler(output, env);
     output.write(`\n${s.bold(s.gradient('VIKA', PALETTE.sail))}  ${tagline()}${version ? s.gray(`  v${version}`) : ''}\n\n`);

@@ -62,8 +62,12 @@ function childConfig(config, instance) {
     // Slack shows a mention of the bot as this name, the one the prompt knows.
     agentName: instance.type === 'slack' ? config.agentName ?? null : null,
     emailConfigFile: instance.emailConfigFile ?? null,
-    // A mailbox stores each mail in OV before reporting it.
-    openVikingConfigPath: instance.type === 'email' ? config.openVikingConfigPath || null : null,
+    // The Lark Connector of the instance that stores meeting notes.
+    meetingNotes: instance.type === 'lark' && Boolean(config.meetingNotes),
+    // A mailbox stores each mail in OV before reporting it; so does the Lark
+    // Connector each meeting note.
+    openVikingConfigPath: instance.type === 'email' || (instance.type === 'lark' && config.meetingNotes)
+      ? config.openVikingConfigPath || null : null,
     retentionMs: config.retentionMs,
     maxEventBytes: config.maxEventBytes,
     sendTimeoutMs: config.sendTimeoutMs,
@@ -83,6 +87,7 @@ export class ConnectorProcess {
     this.child = null;
     this.stdoutBuffer = '';
     this.stderrTail = '';
+    this.stderrBuffer = '';
     this.pending = new Map();
     this.manifest = null;
     this.profile = this.type === 'lark' ? config.profile : null;
@@ -109,6 +114,7 @@ export class ConnectorProcess {
     if (this.stopping) throw new Error(`connector ${this.id} is stopping`);
     this.stdoutBuffer = '';
     this.stderrTail = '';
+    this.stderrBuffer = '';
     this.reportedError = null;
     const workerPath = this.config.connectorWorkerPath || defaultWorkerPath;
     const env = sanitizeNonArkChildEnv(process.env);
@@ -127,6 +133,7 @@ export class ConnectorProcess {
     child.stdout?.on('data', (chunk) => this.handleStdout(chunk));
     child.stderr?.on('data', (chunk) => {
       this.stderrTail = appendTail(this.stderrTail, chunk);
+      this.forwardLogs(chunk);
     });
     child.once('error', (error) => this.failPending(error));
     child.once('exit', (code, signal) => {
@@ -148,6 +155,24 @@ export class ConnectorProcess {
         onUnexpectedExit?.({ code, signal, stderr: safeError(error) });
       }
     });
+  }
+
+  // The worker's own log records (JSON lines on stderr) go on in the daemon
+  // log, through its redaction; anything else is only kept for a crash report.
+  forwardLogs(chunk) {
+    this.stderrBuffer += chunk;
+    let newline;
+    while ((newline = this.stderrBuffer.indexOf('\n')) >= 0) {
+      const line = this.stderrBuffer.slice(0, newline);
+      this.stderrBuffer = this.stderrBuffer.slice(newline + 1);
+      let record = null;
+      try { record = JSON.parse(line); } catch {}
+      const { time: _time, level, message, ...fields } = record && typeof record === 'object' ? record : {};
+      if (typeof message === 'string' && ['debug', 'info', 'warn', 'error'].includes(level)) {
+        this.logger[level]?.(message, { ...fields, connector: this.id });
+      }
+    }
+    if (this.stderrBuffer.length > 64_000) this.stderrBuffer = '';
   }
 
   handleStdout(chunk) {

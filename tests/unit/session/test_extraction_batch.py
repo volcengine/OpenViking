@@ -185,6 +185,55 @@ async def test_working_memory_propagates_model_errors(monkeypatch, path, message
 
 
 @pytest.mark.asyncio
+async def test_working_memory_prompt_uses_turn_created_at_in_messages(monkeypatch):
+    prompts = []
+
+    def render_prompt(_prompt_id, variables):
+        prompts.append(dict(variables))
+        return "prompt"
+
+    monkeypatch.setattr("openviking.session.session._load_render_prompt", lambda: render_prompt)
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(output_language_override="en"),
+    )
+    vlm = SimpleNamespace(
+        is_available=lambda: True,
+        get_completion_async=AsyncMock(return_value="wm"),
+    )
+    session = Session(
+        viking_fs=None,
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=vlm)),
+    )
+
+    await session._generate_archive_summary_async(
+        [
+            Message(
+                id="u0",
+                role="user",
+                parts=[TextPart("content")],
+                created_at="2026-10-28T23:59:00Z",
+            )
+        ]
+    )
+    await session._generate_archive_summary_async(
+        [
+            Message(
+                id="u1",
+                role="user",
+                parts=[TextPart("content")],
+                created_at="2026-10-29T08:00:00Z",
+            )
+        ],
+        latest_archive_overview="## Current State\nPrevious work",
+    )
+
+    assert all("created_at" not in prompt for prompt in prompts)
+    assert '<turn created_at="2026-10-28">' in prompts[0]["messages"]
+    assert '<turn created_at="2026-10-29">' in prompts[1]["messages"]
+
+
+@pytest.mark.asyncio
 async def test_long_term_memory_batches_follow_the_planned_limit():
     session = Session(viking_fs=None)
     messages = [_message("u1"), _message("u2"), _message("u3")]

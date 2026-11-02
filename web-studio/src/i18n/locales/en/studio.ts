@@ -1,6 +1,62 @@
 const studio = {
+  credentialStorage: {
+    plaintext:
+      'Encrypted credential storage is unavailable. Connections are saved unencrypted in this browser so they remain available after reload. Use HTTPS and allow browser storage for automatic encryption.',
+    sessionOnly:
+      'Secure credential storage is unavailable. Connections last only for this page; reconfigure after refreshing or closing it. Existing records are preserved. Use HTTPS for automatic encrypted storage.',
+    startError:
+      'Cannot read encrypted local credentials. Use HTTPS or localhost, allow browser storage for this site, and reload. Existing credentials have not been cleared.',
+    saveError:
+      'Credentials have not been saved locally. Keep this page open, check browser storage permissions, and retry saving.',
+  },
+  managementKey: {
+    title: 'Configure management access',
+    description:
+      'Add a Root API Key or Account Admin API Key for this service. Your current User API Key and workbench identity will be preserved.',
+    label: 'Management API Key',
+    scopeHint:
+      'Root manages all Accounts. An Account Admin manages only the Account its key belongs to.',
+    submit: 'Verify and enter management',
+    verifying: 'Verifying…',
+    notAdmin:
+      'This is a regular User API Key. Enter a Root or Account Admin API Key.',
+    identityMissing:
+      'The service did not return the Account this administrator manages.',
+    invalidService:
+      'The address did not return a valid OpenViking service response.',
+  },
+  userKey: {
+    title: 'Configure User API Key',
+    description:
+      'Add a User to the current connection and Account without configuring the service again.',
+    hint: 'User ID is detected automatically. Existing User API Keys remain saved on this device for switching later.',
+    rootKey: 'Enter a User API Key here, not a Root API Key.',
+    accountMismatch:
+      'This API Key belongs to another Account. Configure it under its corresponding connection.',
+    identityMissing:
+      'The service did not return a valid Account and User ID to verify this identity.',
+    saved: 'Saved and switched to {{user}}',
+  },
   duration: { milliseconds: '{{value}}ms', seconds: '{{value}}s' },
   errors: {
+    requestInvalid: 'The request is invalid. Check your input and try again.',
+    authenticationFailed:
+      'The API Key is missing or invalid. Check your connection credentials.',
+    permissionDenied: 'You do not have permission to perform this action.',
+    resourceNotFound:
+      'The requested resource was not found. Refresh and try again.',
+    requestConflict:
+      'The resource has changed or already exists. Refresh and try again.',
+    payloadTooLarge: 'The upload is too large. Reduce its size and try again.',
+    rateLimited: 'Too many requests. Wait a moment and try again.',
+    serviceUnavailable:
+      'The service could not complete the request. Try again later.',
+    requestTimedOut:
+      'The request timed out. Check the connection and try again.',
+    networkFailed:
+      'Cannot connect to the service. Check the service address and network.',
+    details: 'Technical details',
+
     botHealth: 'Bot health check failed ({{status}})',
     botSteer: 'Bot steer failed ({{status}})',
     botInterrupt: 'Bot interrupt failed ({{status}})',
@@ -71,6 +127,13 @@ const studio = {
   oauthClient: 'MCP client',
   localConnection: 'Local OpenViking',
   profiles: {
+    managementHint:
+      'Accepts a Root or Account Admin API Key. Root can manage all Accounts; Account Admin can manage only its own Account.',
+    back: 'Back to connection settings',
+    editorHint:
+      'Configure the service address and credentials. New or changed credentials are verified before saving.',
+    saveActivate: 'Save and activate',
+    notFound: 'This connection configuration no longer exists.',
     connectionChanged:
       'The connection changed. Select the identity again on the active connection.',
     identityPending: 'Identity unconfirmed',
@@ -159,6 +222,11 @@ const studio = {
   directoryError:
     'Unable to open this directory. It may be missing or inaccessible to your identity.',
   states: {
+    trustedCredentialRequired: {
+      title: 'Configure trusted authentication',
+      description:
+        'This service uses trusted authentication. Configure its Root API Key in connection settings, then select an Account and User ID without a User API Key.',
+    },
     gatewayAuthMode: {
       title: 'Gateway requires API key authentication',
       description:

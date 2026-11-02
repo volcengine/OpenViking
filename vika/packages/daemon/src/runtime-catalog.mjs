@@ -110,6 +110,43 @@ export const RUNTIME_CATALOG = Object.freeze({
       agentTools: 'core',
     },
   }),
+  // Durable agent harness on @earendil-works/pi-durable. A host child process
+  // owns one SQLite storage; sessions are durable conversations and the host
+  // resumes a run the previous daemon generation left unfinished.
+  durable: runtimeDefinition({
+    id: 'durable',
+    aliases: ['durable', 'pi-durable', 'pidurable'],
+    directAliases: ['durable', 'pi-durable', 'pidurable'],
+    canonicalDefault: 'durable',
+    efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    capabilities: {
+      modelCatalog: 'dynamic',
+      effortControl: 'selectable',
+      activeInput: 'steer',
+      scopePolicy: 'any',
+      outputOwnership: 'runtime',
+      sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    },
+  }),
+  opencode: runtimeDefinition({
+    id: 'opencode',
+    aliases: ['opencode'],
+    directAliases: ['opencode'],
+    canonicalDefault: 'opencode',
+    // OpenCode 1 ACP exposes no daemon-side reasoning-effort API; reasoning is
+    // selected per model variant. Its session/prompt serializes turns, so
+    // messages arriving mid-turn run on the next one.
+    capabilities: {
+      modelCatalog: 'dynamic',
+      effortControl: 'unsupported',
+      activeInput: 'queue-next-turn',
+      scopePolicy: 'any',
+      outputOwnership: 'runtime',
+      sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    },
+  }),
 });
 
 export const RUNTIME_IDS = frozenStrings(Object.keys(RUNTIME_CATALOG));

@@ -87,7 +87,14 @@ fn render_accepted(
     if matches!(format, OutputFormat::Json) {
         output_success(value, format, compact);
     } else {
-        println!("task_id: {}", value.task_id);
+        if let Some(task_id) = &value.task_id {
+            println!("task_id: {task_id}");
+        } else {
+            println!(
+                "next_run_at: {}",
+                value.next_run_at.as_deref().unwrap_or("null")
+            );
+        }
         println!("status: {}", value.status);
         println!("to: {}", value.to.as_deref().unwrap_or(requested_to));
     }

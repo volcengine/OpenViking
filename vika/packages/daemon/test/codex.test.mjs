@@ -250,6 +250,7 @@ describe('formatting helpers', () => {
       ...baseConfig,
       projectDir: '/release',
       larkCliBin: '/fake/lark-cli',
+      slackCliBin: '/fake-slack/slack',
       actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
       actionSocketPath: '/data/actions.sock',
       sendTimeoutMs: 5_000,
@@ -275,6 +276,7 @@ describe('formatting helpers', () => {
     assert.match(rendered, /features\.tool_suggest=false/);
     assert.match(rendered, /features\.apps=false/);
     assert.equal(spawnOptions[0].env.LARKSUITE_CLI_PROFILE, 'test-profile');
+    assert.ok(spawnOptions[0].env.PATH.startsWith('/fake:/fake-slack:'));
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_SOCKET, '/data/actions.sock');
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
   });

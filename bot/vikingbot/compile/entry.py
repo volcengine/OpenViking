@@ -9,13 +9,15 @@ from pydantic import Field
 
 from openviking.core.namespace import relative_uri_path
 from openviking.models.model_error import ModelErrorKind, model_error_kind
+from vikingbot.agent.tools.base import MultimodalToolResult
+from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.compile import file_ops
 from vikingbot.compile.models import has_directory_plan
 from vikingbot.compile.ops.common import payload
 from vikingbot.compile.pipeline_io import ModelCallError, ModelCallLimitError
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import FileResponse, Group
-from vikingbot.compile.sources import split_source
+from vikingbot.compile.sources import CompileSourceRange, read_source, split_source
 
 
 class EntryResponse(FileResponse):
@@ -133,7 +135,7 @@ async def run(runtime, sources, context):
                         continue
                     validate_relative_file_path(relative_uri_path(runtime.target, uri))
                     target_uris.append(uri)
-                material = {}
+                material, images = {}, []
                 if source_uris:
                     offset, limit = arguments.get("offset", 0), arguments.get("limit", -1)
                     if offset < 0 or (limit != -1 and limit < 1):
@@ -142,25 +144,39 @@ async def run(runtime, sources, context):
                     manifest.update({uri: manifest.get(uri, "pending") for uri in source_uris})
                     await runtime.files.put("inputs", manifest)
                     selected = set()
-                    for uri in dict.fromkeys(source_uris):
-                        text = await runtime.client.read_raw(uri)
-                        lines = text.splitlines(keepends=True)
-                        excerpt = "".join(
-                            lines[offset:] if limit == -1 else lines[offset : offset + limit]
+                    if (
+                        sum(
+                            VikingMultiReadTool._media_kind(uri) == "image"
+                            for uri in dict.fromkeys(source_uris)
                         )
-                        start = len("".join(lines[:offset]))
-                        parts = [
-                            replace(
-                                part,
-                                start_char=part.start_char + start,
-                                end_char=part.end_char + start,
-                                start_line=part.start_line + offset,
-                                end_line=part.end_line + offset,
+                        > VikingMultiReadTool._MAX_INLINE_IMAGES
+                    ):
+                        raise ValueError("Read at most four images at once")
+                    for uri in dict.fromkeys(source_uris):
+                        text = await read_source(runtime.client, uri, runtime.model.provider)
+                        if isinstance(text, CompileSourceRange):
+                            parts = [text]
+                            images.extend(
+                                [{"type": "text", "text": f"Original image: {uri}"}, text.image]
                             )
-                            for part in split_source(
-                                uri, excerpt, runtime.limits.source_batch_chars
+                        else:
+                            lines = text.splitlines(keepends=True)
+                            excerpt = "".join(
+                                lines[offset:] if limit == -1 else lines[offset : offset + limit]
                             )
-                        ]
+                            start = len("".join(lines[:offset]))
+                            parts = [
+                                replace(
+                                    part,
+                                    start_char=part.start_char + start,
+                                    end_char=part.end_char + start,
+                                    start_line=part.start_line + offset,
+                                    end_line=part.end_line + offset,
+                                )
+                                for part in split_source(
+                                    uri, excerpt, runtime.limits.source_batch_chars
+                                )
+                            ]
                         sources.extend(await runtime.seed(batch(parts)))
                         selected.update((uri, part.start_char, part.end_char) for part in parts)
                     material["inputs"] = [
@@ -181,7 +197,12 @@ async def run(runtime, sources, context):
                     if not source_uris:
                         return value
                     material["targets"] = json.loads(value)
-                return json.dumps(material, ensure_ascii=False)
+                result = json.dumps(material, ensure_ascii=False)
+                return (
+                    MultimodalToolResult(result, [{"type": "text", "text": result}, *images])
+                    if images
+                    else result
+                )
 
             readers[read.name] = copy(read)
             readers[read.name].execute = read_target

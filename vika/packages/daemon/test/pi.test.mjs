@@ -27,6 +27,7 @@ const baseConfig = {
   profile: 'test-profile',
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
+  slackCliBin: '/fake-slack/slack',
   actionSocketPath: '/tmp/vika-pi-data/actions.sock',
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
@@ -353,6 +354,7 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.ok(args.includes('--session-id'));
     const env = calls.at(-1).options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
+    assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
     assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/vika-pi-data/actions.sock');
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
     assert.equal(env.LARK_APP_SECRET, undefined);

@@ -3,6 +3,7 @@
 
 """Tests for content write endpoint."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -94,28 +95,52 @@ async def test_write_allows_existing_semantic_sidecar_but_rejects_relations(clie
     assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
-async def test_write_replaces_existing_resource_file(client_with_resource):
+async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
+    client_with_resource,
+):
+    """An explicit resolution stores the edit, retains conflict history, and refreshes tags."""
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
-
+    conflict = {"state": "unfixed", "match_text": "Conflicting content"}
+    original = (
+        "# Original\n\nConflicting content\n\n<!-- CONFLICTS_CONTENT\n"
+        + json.dumps(conflict)
+        + "\n-->"
+    )
+    seeded = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": file_uri,
+            "content": original,
+            "tags": ["has_conflict=true", "num=1", "team=search"],
+            "wait": True,
+        },
+    )
+    assert seeded.status_code == 200, seeded.text
     write_resp = await client.post(
         "/api/v1/content/write",
         json={
             "uri": file_uri,
-            "content": "# Updated\n\nFresh content.",
+            "content": "# Updated\n\nResolved content.",
             "mode": "replace",
             "wait": True,
+            "resolve_conflicts": True,
         },
     )
-    assert write_resp.status_code == 200
+    assert write_resp.status_code == 200, write_resp.text
     body = write_resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"] == file_uri
-    assert body["result"]["mode"] == "replace"
-
+    assert body["result"]["uri"] == file_uri and body["result"]["mode"] == "replace"
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
-    assert read_resp.status_code == 200
-    assert read_resp.json()["result"] == "# Updated\n\nFresh content."
+    stored = read_resp.json()["result"]
+    assert stored.startswith("# Updated\n\nResolved content.")
+    resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
+    assert resolution["state"] == "fixed" and resolution["fix_time"] > 0
+    assert resolution["match_text"] == conflict["match_text"]
+    assert resolution["fix_plan"] == resolution["resolution_basis"]
+    attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
+    assert {"has_conflict=false", "num=0", "team=search"} <= set(
+        attrs.json()["result"]["attrs"]["tags"]
+    )
 
 
 async def test_write_appends_existing_resource_file(client_with_resource):

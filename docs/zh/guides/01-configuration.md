@@ -1130,7 +1130,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
     "mode": "noul",
-    "candidates_visible": true,
+    "candidates_visible": false,
     "timeout": 120,
     "log_payloads": false,
     "threshold": 0.1
@@ -1171,17 +1171,20 @@ Jev 适配器支持两种评分模式：
 - `choice`：用一个问题横向比较所有候选文档，以 `candidate_{index}` 对应输入
   下标，并按原文档顺序读取 `probabilities` 作为分数。
 
-候选可见性由独立开关 `rerank.candidates_visible` 控制：
+Noul 的候选可见性由 `rerank.candidates_visible` 控制：
 
-- `true`（默认）：query 和所有候选文档都放在共享 `state` 中。
-  Noul 独立评分不代表候选互相不可见。
-- `false`（仅限 Noul）：共享 `state` 只保留 query，每个问题通过
+- `false`（默认，仅限 Noul）：共享 `state` 只保留 query，每个问题通过
   `instructions.candidate_document` 携带自己的文档；该问题及共享 state
   不包含其他候选。所有问题仍在一次 HTTP 请求中发送，分数保持原文档顺序。
+- `true`：query 和所有候选文档都放在共享 `state` 中。
+  Noul 独立评分不代表候选互相不可见。
 
-启用隔离时设置 `"mode": "noul", "candidates_visible": false`。
-`"mode": "choice"` 与 `"candidates_visible": false` 的组合会在配置/客户端
-创建时被拒绝，因为 Choice 必须在一个问题中比较多个候选。
+Noul 现在省略 `candidates_visible` 即默认隔离。要保留共享候选上下文，需显式
+设置 `"candidates_visible": true`。
+
+Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 `state` 进行比较。
+配置 `"mode": "choice"` 时，省略 `candidates_visible`、设置为 `false` 或 `true`，
+请求结构和评分行为均相同。
 
 通过 `rerank.mode` 选择模式；未配置或配置为 `null` 时默认使用 `noul`。Choice
 返回候选池内总和为 1 的相对概率，不是绝对相关概率，不适合使用绝对分数阈值。
@@ -1201,7 +1204,7 @@ Jev 适配器支持两种评分模式：
 | `api_base` | str | 完整接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai/v1/systemone`，Vercel 使用 `https://ai-gateway.vercel.sh/typesafe/v1/systemone`；自定义 Jev URL 会原样使用） |
 | `model` | str | 模型名称（用于 OpenAI 兼容、LiteLLM 或 `jev` 提供方） |
 | `mode` | `"noul"`、`"choice"` 或 `null` | Jev Rerank 模式；省略或 `null` 时使用 `"noul"` |
-| `candidates_visible` | bool | 仅用于 Jev；默认 `true`，候选共享 state。`false` 将每个候选隔离到自己的 Noul 问题中；Choice 必须为 `true`。 |
+| `candidates_visible` | bool | 仅用于 Jev Noul；默认 `false`，每个候选隔离到自己的问题中。显式 `true` 可共享候选上下文；Choice 忽略此选项。 |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
 | `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |

@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 import { createLogger } from '../src/logger.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
 import { Harness } from '../src/harness.mjs';
-import { startMockEnv, textMessage } from './mock-env.mjs';
+import { docComment, startMockEnv, textMessage } from './mock-env.mjs';
 import { OVUnavailableError } from '../src/ov-connection.mjs';
 
 describe('daemon event path (mock env)', { concurrency: false }, () => {
@@ -139,6 +139,24 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
+  it('the Lark Connector of the instance that stores meeting notes scans for them as the owner, and nothing reaches the agent', async () => {
+    const env = await startMockEnv({
+      config: { meetingNotes: true },
+      prepare: (dir) => fs.writeFileSync(path.join(dir, 'ov-config.json'), JSON.stringify({ url: 'http://127.0.0.1:9', user: 'e2e-user' })),
+    });
+    try {
+      const searching = (args) => args.includes('+search') && args.includes('vc') && args.includes('user');
+      await env.waitFor(() => env.larkCalls().some(searching));
+      await env.waitFor(() => fs.existsSync(path.join(env.config.dataDir, 'meeting-notes', 'meetings.sqlite3')));
+      const listening = env.larkCalls().find((args) => args.includes('+subscribe') && !args.includes('--help'));
+      assert.doesNotMatch(listening[listening.indexOf('--event-types') + 1], /vc\.note|vc\.meeting\./, 'no meeting event is asked for');
+      assert.ok(!env.larkCalls().some((args) => args.some((arg) => String(arg).includes('subscription'))), 'nothing is subscribed');
+      env.receive(textMessage({ messageId: 'om-after-scan', text: 'after the scan' }));
+      await env.waitForCodexInput(/om-after-scan/);
+      assert.ok(!env.codexInput().some(({ text }) => /meeting/.test(text)), 'the agent hears nothing of it');
+    } finally { await env.stop(); }
+  });
+
   it('batches an idle group burst into a single model turn', async () => {
     const env = await startMockEnv();
     try {
@@ -252,6 +270,28 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
       const turns = env.codexInput();
       assert.match(turns[1].text, /chat=oc-group [^\]]*msg=om-group-undecided [^\]]* undecided=1\] 大家早/);
       assert.deepEqual(env.replies(), []);
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('wakes on an @mention in a document comment and answers in that comment', async () => {
+    const env = await startMockEnv({ codex: { behavior: 'reply' } });
+    try {
+      env.receive(docComment());
+      await env.waitForReply(/^\+add-reply$/);
+      const [turn] = env.codexInput();
+      assert.match(turn.text, new RegExp('^\\[chat=doc:docx:doxE2eToken thread=c-e2e source=lark msg=comment:docx:doxE2eToken:c-e2e:r-e2e '
+        + 'event=evt-c-e2e-r-e2e time=\\S+ from=Commenter mention=me\\] \\[document "E2E 文档" https://example.feishu.cn/docx/doxE2eToken\\] '
+        + '⏎ \\[on the text: "第二季度目标"\\] ⏎ @TestBot 帮我看下这段$', 'm'));
+      const reply = env.replies().find((args) => args.includes('+add-reply'));
+      assert.deepEqual(reply.slice(reply.indexOf('drive')), ['drive', '+add-reply', '--as', 'bot', '--token', 'doxE2eToken', '--type', 'docx',
+        '--comment-id', 'c-e2e', '--content', JSON.stringify([{ type: 'text', text: 'mock reply' }]), '--format', 'json']);
+      assert.ok(!env.larkCalls().some((args) => args.includes('+chat-members-list')), 'a document has no roster to fetch');
+      // lark-cli answered; the Core settles the outbox right after.
+      const outbox = () => env.daemon.store.db.prepare("SELECT status, remote_message_id FROM outbox WHERE action = 'message.reply'").get();
+      await env.waitFor(() => outbox()?.status === 'SENT');
+      assert.equal(outbox().remote_message_id, 'comment:docx:doxE2eToken:c-e2e:r-e2e-out');
     } finally {
       await env.stop();
     }

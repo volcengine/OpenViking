@@ -460,6 +460,9 @@ export class AgentRuntime {
         // prompt injection filesystem/shell authority before a user request.
         syncedThroughSeq: 0,
         sessionReady: session.sessionReady !== false,
+        // The runtime's own handle for the session it just started, published
+        // in this transaction so the switch cannot leave it in a second store.
+        nativeSessionId: session.nativeSessionId ?? null,
         model: target.model,
         effort,
         expectedRuntime: cognition.runtime,
@@ -546,6 +549,9 @@ export class AgentRuntime {
         preserveContext,
         syncedThroughSeq: 0,
         sessionReady: plan.prepared.sessionReady !== false,
+        // Prepared, not yet owned: this transaction is the only place a new
+        // runtime handle becomes the session's handle.
+        nativeSessionId: plan.prepared.nativeSessionId ?? null,
         settings,
       });
     } catch (error) {

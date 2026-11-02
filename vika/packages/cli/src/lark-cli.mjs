@@ -118,6 +118,14 @@ export class LarkCli {
     return parseJson(result.stdout)?.identities?.user?.openId ?? null;
   }
 
+  // The scopes the owner's login carries; null when there is no login or it
+  // cannot be read.
+  async userScopes({ profile }) {
+    const result = await this.run(['--profile', profile, 'auth', 'status', '--json'], { timeoutMs: 30_000 });
+    const scope = parseJson(result.stdout)?.identities?.user?.scope;
+    return typeof scope === 'string' && scope.trim() ? scope.trim().split(/\s+/) : null;
+  }
+
   async sendText({ profile, userId, text }) {
     const result = await this.run(['--profile', profile, 'im', '+messages-send', '--as', 'bot',
       '--user-id', userId, '--text', text], { timeoutMs: 30_000 });

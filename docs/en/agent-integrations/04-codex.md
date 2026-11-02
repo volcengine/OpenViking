@@ -57,7 +57,7 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature e
 
 </details>
 
-Once installed, start a new Codex session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [Connect your agent with one prompt](../getting-started/07-agent-onboarding.md).
+Once installed, start a new Codex session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ## Verify
 

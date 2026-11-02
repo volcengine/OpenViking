@@ -8,7 +8,7 @@ Complete your [first import and retrieval](../getting-started/02-quickstart.md),
 | Reuse memory across sessions | [Session and memory model](../concepts/08-session.md) → [Session API](../api/05-sessions.md) → [Memory API](../api/16-memory.md) | Commit a session, confirm background completion, then inspect the memories and their ownership |
 | Reuse agent skills | [Skills API](../api/04-skills.md) → [Privacy model](../concepts/13-privacy.md) | Inspect the installed skill, its visibility and how it is invoked |
 | Rule validation (Beta) | [Rule concepts](../concepts/17-rule-scenarios.md) → [Compile, recall, and check](./02-rule-validation.md) → [Rules API](../api/26-rules.md) | Check compilation and index tasks and source evidence, then have the Agent verify each rule's conditions, exceptions, and planned actions |
-| Produce a wiki, graph or report from sources | [Context compilation](../context-compilation/01-overview.md) → choose an output tutorial | Check task status, output files and how the output relates to the input sources |
+| Produce a wiki, graph or report from sources | [Context Compilation](../context-compilation/01-overview.md) → [Wiki](../context-compilation/02-llm-wiki.md) / [Knowledge Graph](../context-compilation/03-knowledge-graph.md) / [Daily Report](../context-compilation/04-daily-report.md) | Check task status, output files and how the output relates to the input sources |
 | Sync or migrate existing context | [Project asset sync](../guides/18-openviking-assets.md), [OVPack](../guides/09-ovpack.md) or [version recovery](../guides/15-snapshot.md) | Follow the relevant guide to verify sync state, imported data or restored content |
 
 ## Verify retrieval before wiring it into an application

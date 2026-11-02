@@ -392,6 +392,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 写入多个文件并刷新索引 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
+| POST | `/api/v1/content/ensure_directory_index` | 确保既有目录的索引就绪，仅在两层摘要都缺失时创建 L0 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
 ### [技能](04-skills.md)
@@ -424,6 +425,8 @@ JSON 输出 - 错误：
 | POST | `/api/v1/sessions/{session_id}/messages` | 添加单条消息 |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
 | POST | `/api/v1/search/recall` | 已弃用：search 接口 `mode="context"` 之上的轻量预设 |
+| POST | `/api/v1/rules/compile` | 异步编译用户规则 |
+| POST | `/api/v1/rules/search` | 检索适用于当前任务的完整规则 |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
 
@@ -524,7 +527,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出用户组 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除用户组 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出用户组成员 |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 添加用户组成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 批量添加用户组成员 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除用户组成员 |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/tree` | 树形列出当前目标和字段元数据，不返回值 |
@@ -587,6 +590,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/compile/config/update` | 更新目标配置 |
 | GET | `/api/v1/compile/configs` | 列出可见目标 |
 | GET | `/api/v1/compile/operations` | 列出目标操作记录 |
+| GET | `/api/v1/compile/operations/{operation_id}` | 读取单条操作详情 |
 | GET | `/api/v1/compile/operations/{operation_id}/outputs` | 列出操作产出及版本引用 |
 | POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |

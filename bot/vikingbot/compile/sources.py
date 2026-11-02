@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import re
 from bisect import bisect_right
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Iterable
+from urllib.parse import urlsplit
 
-from vikingbot.compile.models import CompileLimits
+from openviking.parse.parsers.media.utils import get_media_type
+from vikingbot.agent.tools.ov_file import VikingMultiReadTool
+from vikingbot.compile.models import CompileFailure, CompileLimits
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+\S")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -25,6 +29,7 @@ class CompileSourceRange:
     frontmatter, enclosing headings and a table header when they fit the repeat budget.
     Continuation flags identify cuts inside an oversized line or table row;
     these fragments require their adjacent ranges for complete interpretation.
+    Images keep zero offsets and carry their original bytes and hash instead of text.
     """
 
     uri: str
@@ -36,14 +41,46 @@ class CompileSourceRange:
     context: str = ""
     continues_before: bool = False
     continues_after: bool = False
+    image: dict | None = None
+    sha256: str | None = None
+
+    def as_assignment(self) -> dict:
+        """Attach exact text ranges or bounded references to original images."""
+        if self.image:
+            return {"uri": self.uri, "sha256": self.sha256, "media_kind": "image"}
+        return asdict(self)
 
     @property
     def input_chars(self) -> int:
         """Count source text and repeated context against the batch character budget."""
+        if self.image:
+            return len(json.dumps(self.as_assignment(), ensure_ascii=False))
         return len(self.content) + len(self.context)
 
 
-def split_source(uri: str, content: str, max_chars: int) -> list[CompileSourceRange]:
+async def read_source(client, uri, provider) -> str | CompileSourceRange:
+    """Keep text reads intact; consume image sources through multi-read's native reader."""
+    if get_media_type(urlsplit(uri).path, None) != "image":
+        return await client.read_raw(uri)
+    if VikingMultiReadTool._media_kind(uri) != "image":
+        raise CompileFailure(
+            "INVALID_ARGUMENT", f"Unsupported Compile image format: {uri}", stage="pipeline"
+        )
+    if not provider.supports_tool_result_media():
+        raise CompileFailure(
+            "UNSUPPORTED_MEDIA",
+            f"Compile provider cannot deliver image evidence: {uri}",
+            stage="pipeline",
+        )
+    result = await VikingMultiReadTool._read_image(client, uri)
+    if not result["success"]:
+        raise CompileFailure("SOURCE_READ_FAILED", f"{uri}: {result['content']}", stage="pipeline")
+    return CompileSourceRange(uri, 0, 0, 0, 0, "", image=result["image"], sha256=result["sha256"])
+
+
+def split_source(
+    uri: str, content: str | CompileSourceRange, max_chars: int
+) -> list[CompileSourceRange]:
     """Partition original text by characters, preferring headings, paragraphs and whole lines.
 
     Complete table rows fit together with their header whenever the budget permits.
@@ -51,6 +88,12 @@ def split_source(uri: str, content: str, max_chars: int) -> list[CompileSourceRa
     frontmatter/headings/table headers use at most one quarter of the budget; their
     original text remains in the source ranges. Empty files retain one empty range.
     """
+    if isinstance(content, CompileSourceRange):
+        return [content]
+    if get_media_type(urlsplit(uri).path, None) == "image":
+        raise CompileFailure(
+            "INVALID_ARGUMENT", "Image evidence must not be split as text", stage="pipeline"
+        )
     if max_chars < 1:
         raise ValueError("Source character budget must be positive")
     lines = content.splitlines(keepends=True)
@@ -136,9 +179,9 @@ def split_source(uri: str, content: str, max_chars: int) -> list[CompileSourceRa
 
 
 def pack_source_batches(
-    sources: Iterable[tuple[str, str]], limits: CompileLimits
+    sources: Iterable[tuple[str, str | CompileSourceRange]], limits: CompileLimits
 ) -> list[list[CompileSourceRange]]:
-    """Pack exact source ranges in input order, bounded only by characters.
+    """Pack exact source ranges and image references within existing text/media budgets.
 
     Adjacent ranges may share a batch when they fit. Small files share remaining
     capacity; original URIs remain the citation targets for all ranges. Source text
@@ -147,13 +190,33 @@ def pack_source_batches(
     batches: list[list[CompileSourceRange]] = []
     batch: list[CompileSourceRange] = []
     size = 0
+    image_count = media_bytes = 0
     for uri, content in sources:
         for part in split_source(uri, content, limits.source_batch_chars):
-            if batch and size + part.input_chars > limits.source_batch_chars:
+            chars, part_bytes = part.input_chars, 0
+            if part.image:
+                from vikingbot.agent.loop import _inline_media_bytes
+
+                part_bytes = _inline_media_bytes([{"content": [part.image]}])
+                if (
+                    chars > limits.source_batch_chars
+                    or part_bytes > VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+                ):
+                    raise CompileFailure(
+                        "MEDIA_LIMIT", "Image exceeds the source batch budget", stage="pipeline"
+                    )
+            if batch and (
+                size + chars > limits.source_batch_chars
+                or image_count + bool(part.image) > VikingMultiReadTool._MAX_INLINE_IMAGES
+                or media_bytes + part_bytes > VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+            ):
                 batches.append(batch)
                 batch, size = [], 0
+                image_count = media_bytes = 0
             batch.append(part)
-            size += part.input_chars
+            size += chars
+            image_count += bool(part.image)
+            media_bytes += part_bytes
     if batch:
         batches.append(batch)
     return batches

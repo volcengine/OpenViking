@@ -10,10 +10,8 @@ import { askEmail, mailboxesOf, writeEmailAccount } from './email.mjs';
 import { t } from './i18n.mjs';
 import { IM_LABELS, chooseInstance, loadInstances } from './instances.mjs';
 import { LarkCli } from './lark-cli.mjs';
-import { LarkRegistrationError, grantedUserScopes, lacksAny, readApp } from './lark-app.mjs';
-import { showScan } from './qr.mjs';
 import { which } from './runtimes.mjs';
-import { connectWeixin, larkScopes, registerApp, reportApp, weixinFirstMessage } from './setup.mjs';
+import { completeLarkApp, connectWeixin, larkScopes, reauthorizeOwner, weixinFirstMessage } from './setup.mjs';
 
 // `vika login <lark|weixin|email|telegram|slack|qq> [instance]`: authorize again what an
 // instance already has, after a login expired or a password changed. For
@@ -32,51 +30,6 @@ const usage = () => t(
 function larkCliBin(env, deployment) {
   const bundled = bundledLarkCli();
   return env.LARK_CLI_BIN || deployment.env?.LARK_CLI_BIN || (bundled === 'lark-cli' ? which('lark-cli', env) : bundled);
-}
-
-// The app as its bot reads it, then what it lacks; one `update` scan adds
-// that, the platform's confirm page showing the change. Resolves with what
-// was read last, or null when the app's settings cannot be read.
-async function completeApp({ agent, prompter, larkCli, scopes, register }) {
-  const read = async () => {
-    const spinning = prompter.spin(t('核对应用的权限和事件', 'Checking the app\'s permissions and events'));
-    try {
-      const app = await readApp((pathname, query) => larkCli.get({ profile: agent.profile, pathname, query }));
-      spinning.succeed(t(`应用 ${app.appId} 已读取`, `Read the app ${app.appId}`));
-      return app;
-    } catch (error) {
-      spinning.warn(t(`读不到应用的配置，跳过核对：${error.message}`, `The app's settings could not be read, so they are not checked: ${error.message}`));
-      return null;
-    }
-  };
-  const inspected = await read();
-  if (!inspected || !lacksAny(reportApp(prompter, scopes, inspected))) return inspected;
-  // The confirm page withdraws a version under review before publishing its
-  // own, and the approval starts over: not by default.
-  if (inspected.pendingReview) {
-    prompter.warn(t('应用有一个版本正在审核：扫码补齐时，飞书会先撤回它再提交新版本，审批要重新排队。',
-      'A version of the app is under review: adding what is missing withdraws it first and submits a new one, so the approval starts over.'));
-  }
-  if (!await prompter.confirm(t('扫码把缺的补上？要你是这个应用的所有者或管理员', 'Scan to add what is missing? You need to own or administer the app'),
-    !inspected.pendingReview)) {
-    return inspected;
-  }
-  let updated;
-  try {
-    updated = await registerApp({ plan: agent, prompter, scopes, mode: 'update', appId: inspected.appId, ...(register ? { register } : {}) });
-  } catch (error) {
-    if (!(error instanceof LarkRegistrationError)) throw error;
-    prompter.warn(t(`应用没有更新（${error.code}）：${error.message}`, `The app was not updated (${error.code}): ${error.message}`));
-    return inspected;
-  }
-  if (!updated) {
-    prompter.info(t('跳过了，应用没有改动', 'Skipped; the app is unchanged'));
-    return inspected;
-  }
-  prompter.success(t('平台已确认', 'The platform confirmed it'));
-  const after = await read();
-  if (after) reportApp(prompter, scopes, after);
-  return after ?? inspected;
 }
 
 async function restart({ agent, prompter, env, control }) {
@@ -153,17 +106,7 @@ export async function loginCommand([connector, requested, ...extra], {
   if (!bin) throw new Error(t('找不到 lark-cli：这个安装不完整，重新运行安装脚本', 'lark-cli is missing: this install is incomplete, run the installer again'));
   const larkCli = new LarkCli(bin);
   const scopes = larkScopes();
-  const inspected = await completeApp({ agent, prompter, larkCli, scopes, register: connect.register });
-  const login = await larkCli.beginUserLogin({ profile: agent.profile, scopes: grantedUserScopes(scopes, inspected) });
-  const scan = showScan(prompter, {
-    url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
-    title: t(`扫码重新授权 ${agent.displayName}（${agent.profile}）以你的身份读消息`, `Scan to let ${agent.displayName} (${agent.profile}) read messages as you again`),
-  });
-  try {
-    await larkCli.finishUserLogin({ profile: agent.profile, deviceCode: login.deviceCode });
-  } finally {
-    scan.stop();
-  }
-  prompter.success(t(`${agent.profile} 已重新授权；运行中的实例会自动用上新的登录`, `${agent.profile} is authorized again; the running instance picks it up by itself`));
+  const { inspected } = await completeLarkApp({ agent, prompter, larkCli, scopes, register: connect.register });
+  await reauthorizeOwner({ agent, prompter, larkCli, scopes, inspected });
   return 0;
 }

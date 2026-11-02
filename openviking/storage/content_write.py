@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import hashlib
 import os
 import sys
 from collections import defaultdict
@@ -75,6 +74,7 @@ from openviking.storage.context_update_plan import (
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.manual_conflicts import resolve_manual_conflicts
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -101,7 +101,7 @@ from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import normalize_storage_target_uri, validate_safe_viking_uri_path
 from openviking.utils.summarizer import FileRefreshRequest, Summarizer
-from openviking.utils.tags import normalize_search_tags
+from openviking.utils.tags import merge_search_tags, normalize_search_tags
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -314,6 +314,7 @@ class ContentWriteCoordinator:
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
+        resolve_conflicts: bool = False,
     ) -> Dict[str, Any]:
         task = None
         task_id = None
@@ -344,6 +345,7 @@ class ContentWriteCoordinator:
                 tags=tags,
                 tag_mode=tag_mode,
                 acl=acl,
+                resolve_conflicts=resolve_conflicts,
                 root_operation="content_write",
                 root_task_factory=create_root_task,
             )
@@ -502,6 +504,7 @@ class ContentWriteCoordinator:
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
+        resolve_conflicts: bool = False,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> Dict[str, Any]:
@@ -595,6 +598,7 @@ class ContentWriteCoordinator:
             ingest_options=ingest_options,
             root_operation=root_operation,
             root_task_factory=root_task_factory,
+            resolve_conflicts=resolve_conflicts,
         )
 
     async def batch_write(
@@ -727,7 +731,6 @@ class ContentWriteCoordinator:
 
         created: list[str] = []
         updated: list[str] = []
-        unchanged: list[str] = []
         refresh_kinds: dict[str, str] = {}
         file_md5s: dict[str, str] = {}
         file_abstracts: dict[str, str] = {}
@@ -761,24 +764,6 @@ class ContentWriteCoordinator:
                 try:
                     if exists and stat.get("isDir"):
                         raise ConflictError(f"Target is a directory: {uri}")
-                    expected = operation.get("expected_sha256")
-                    if expected is not None:
-                        if not exists:
-                            raise ConflictError(f"Expected content no longer exists: {uri}")
-                        current = await self._viking_fs.read_file_bytes(uri, ctx=ctx)
-                        if hashlib.sha256(current).hexdigest() != expected:
-                            raise ConflictError(f"Content revision changed: {uri}")
-                        desired = operation["content"]
-                        if isinstance(desired, str):
-                            desired = desired.encode("utf-8")
-                        if (
-                            skip_conflicts
-                            and write_mode == "replace"
-                            and current == desired
-                            and operation["ingest_options"] == IngestOptions()
-                        ):
-                            unchanged.append(uri)
-                            continue
                 except ConflictError as exc:
                     if not skip_conflicts:
                         raise
@@ -885,7 +870,7 @@ class ContentWriteCoordinator:
                     "root_uri": normalized_root,
                     "created": created,
                     "updated": updated,
-                    "unchanged": unchanged,
+                    "unchanged": [],
                     "queue_status": None,
                 }
                 if skip_conflicts:
@@ -1093,13 +1078,6 @@ class ContentWriteCoordinator:
                     ) from exc
 
             mode = raw.get("mode", "replace")
-            expected = raw.get("expected_sha256")
-            if expected is not None and (
-                not isinstance(expected, str)
-                or len(expected) != 64
-                or any(c not in "0123456789abcdef" for c in expected)
-            ):
-                raise InvalidArgumentError("expected_sha256 must be a lowercase SHA-256 digest")
             self._validate_batch_mode(mode)
             if has_content_base64 and mode == "append":
                 raise InvalidArgumentError(
@@ -1131,7 +1109,6 @@ class ContentWriteCoordinator:
                     "uri": uri,
                     "content": content,
                     "mode": mode,
-                    "expected_sha256": raw.get("expected_sha256"),
                     "ingest_options": ingest_options,
                 }
             )
@@ -1873,6 +1850,7 @@ class ContentWriteCoordinator:
         ingest_options: IngestOptions | None = None,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
+        resolve_conflicts: bool = False,
     ) -> Dict[str, Any]:
         # ``.abstract.md`` / ``.overview.md`` are generated sidecars whose body is
         # re-embedded in place (no LLM regeneration and no RNFV plan). Keep that
@@ -1902,14 +1880,21 @@ class ContentWriteCoordinator:
                 uri=uri,
             ) from exc
 
-        previous_content: Optional[str] = None
         lock_settled = False
         lock_guard = PathLockGuard(self._viking_fs._async_agfs, lease)
         try:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
             target_preexisting = target_state.preexisting
             is_new_file = target_state.is_new_file
-            if mode == "append" and target_preexisting:
+            previous_content = None
+            resolve_conflicts = (
+                resolve_conflicts
+                and context_type == "resource"
+                and uri.lower().endswith(".md")
+                and mode == "replace"
+                and target_preexisting
+            )
+            if (mode == "append" or resolve_conflicts) and target_preexisting:
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             final_bytes = self._render_final_bytes(
                 uri,
@@ -1918,6 +1903,22 @@ class ContentWriteCoordinator:
                 existing_raw=previous_content,
                 is_new_file=is_new_file,
             )
+            if resolve_conflicts:
+                resolved, conflict_tags = resolve_manual_conflicts(
+                    previous_content, final_bytes.decode("utf-8")
+                )
+                final_bytes = resolved.encode("utf-8")
+                if conflict_tags is not None:
+                    options = ingest_options or IngestOptions()
+                    ingest_options = replace(
+                        options,
+                        search_tags=merge_search_tags(options.search_tags, conflict_tags),
+                        search_tag_mode=(
+                            "append"
+                            if options.search_tags is None
+                            else IngestOptions.vector_search_tag_mode(options.search_tag_mode)
+                        ),
+                    )
             request = RequestIntent.from_ingest_options(
                 target_uri=uri,
                 processing_mode=processing_mode,
@@ -2361,7 +2362,7 @@ class ContentWriteCoordinator:
         *,
         ctx: RequestContext,
     ) -> _LockedWriteTarget:
-        """Read target state exactly once after its exact write lock is held."""
+        """Classify a target under its write lease and reject directories or invalid new files."""
         stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
         preexisting = not stat.get("not_found")
         if preexisting:
@@ -2461,6 +2462,7 @@ class ContentWriteCoordinator:
             context_type_for_uri(uri) == "memory"
             and not is_new_file
             and mode in {"replace", "append"}
+            and existing_raw is None
         ):
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
         elif (
