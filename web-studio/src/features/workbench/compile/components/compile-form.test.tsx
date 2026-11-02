@@ -3,7 +3,14 @@ import { CompileForm } from '#/features/workbench/compile/components/compile-for
 import { prepareCompileHandoff } from '#/features/workbench/compile/lib/handoff'
 import { OvClientError } from '#/shared/api/ov-client/index'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -55,6 +62,14 @@ vi.mock('#/features/workbench/resources/lib/api', () => ({
   fetchFileContent: vi.fn(),
   fetchFsStat: vi.fn(async () => ({ isDir: true })),
 }))
+
+async function choose(trigger: HTMLElement, name: string) {
+  await userEvent.click(trigger)
+  await userEvent.click(await screen.findByRole('option', { name }))
+  await waitFor(() =>
+    expect(trigger.getAttribute('aria-expanded')).toBe('false'),
+  )
+}
 
 const storageKey = 'compile-submission:recovery-test'
 const clients: QueryClient[] = []
@@ -252,18 +267,16 @@ it('saves a weekly plan without navigating to a task or leaving a submission rec
   api.createCompile.mockResolvedValueOnce(configuredTarget)
   const page = mount()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
-  fireEvent.change(page.getByRole('combobox', { name: 'schedule.frequency' }), {
-    target: { value: 'weekly' },
-  })
-  fireEvent.change(page.getByRole('combobox', { name: 'schedule.weekday' }), {
-    target: { value: '3' },
-  })
-  fireEvent.change(page.getByRole('combobox', { name: 'schedule.hour' }), {
-    target: { value: '14' },
-  })
-  fireEvent.change(page.getByRole('combobox', { name: 'schedule.minute' }), {
-    target: { value: '30' },
-  })
+  await choose(
+    page.getByRole('combobox', { name: 'schedule.frequency' }),
+    'schedule.weekly',
+  )
+  await choose(
+    page.getByRole('combobox', { name: 'schedule.weekday' }),
+    'schedule.weekdays.3',
+  )
+  await choose(page.getByRole('combobox', { name: 'schedule.hour' }), '14')
+  await choose(page.getByRole('combobox', { name: 'schedule.minute' }), '30')
   page.submit()
   await waitFor(() =>
     expect(api.navigate).toHaveBeenCalledWith({

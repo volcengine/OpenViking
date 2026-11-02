@@ -13,6 +13,7 @@ import {
   CompileShell,
   CompileStatus,
 } from '#/features/workbench/compile/components/shared'
+import { CompileSelect } from '#/features/workbench/compile/components/compile-select'
 import { CompileScheduleList } from '#/features/workbench/compile/components/schedule-list'
 import { fetchCompileTasks } from '#/features/workbench/compile/lib/api'
 import { Button } from '#/shared/ui/button'
@@ -157,24 +158,24 @@ function CompileTaskList() {
             className="pl-9"
           />
         </div>
-        <select
-          aria-label={t('status')}
-          className="h-9 rounded-md border bg-background px-3 text-sm"
-          value={search.status}
-          onChange={(e) =>
+        <CompileSelect
+          label={t('status')}
+          className="min-w-36"
+          value={search.status || 'all'}
+          onValueChange={(value) =>
             void navigate({
               to: '/compile',
-              search: { ...search, status: e.target.value },
+              search: { ...search, status: value === 'all' ? '' : value },
             })
           }
-        >
-          <option value="">{t('all')}</option>
-          {STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {t(`statuses.${status}`)}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: 'all', label: t('all') },
+            ...STATUSES.map((status) => ({
+              value: status,
+              label: t(`statuses.${status}`),
+            })),
+          ]}
+        />
         <Button
           variant="outline"
           disabled={query.isFetching}

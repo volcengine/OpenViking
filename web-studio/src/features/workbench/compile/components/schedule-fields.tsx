@@ -1,3 +1,4 @@
+import { CompileSelect } from '#/features/workbench/compile/components/compile-select'
 import type { UpdateSchedule } from '#/features/workbench/compile/lib/api'
 import { useTranslation } from 'react-i18next'
 
@@ -14,7 +15,9 @@ export function ScheduleFields({
   schedule,
   onEnabled,
   onChange,
+  showToggle = true,
 }: {
+  showToggle?: boolean
   enabled: boolean
   schedule: UpdateSchedule
   onEnabled: (enabled: boolean) => void
@@ -22,26 +25,33 @@ export function ScheduleFields({
 }) {
   const { t } = useTranslation('compile')
   return (
-    <section className="space-y-3 border-t pt-4">
-      <label className="flex items-center gap-2 text-sm font-medium">
-        <input
-          type="checkbox"
-          className="size-4 accent-primary"
-          checked={enabled}
-          onChange={(event) => onEnabled(event.target.checked)}
-        />
-        {t('schedule.enabled')}
-      </label>
+    <section className={showToggle ? 'space-y-3 border-t pt-4' : 'space-y-3'}>
+      {showToggle && (
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={enabled}
+            onChange={(event) => onEnabled(event.target.checked)}
+          />
+          {t('schedule.enabled')}
+        </label>
+      )}
       {enabled && (
         <div className="flex flex-wrap items-end gap-4">
-          <label className="space-y-1 text-sm">
+          <div className="space-y-1 text-sm">
             <span className="block">{t('schedule.frequency')}</span>
-            <select
-              className="h-9 rounded-md border bg-background px-3"
+            <CompileSelect
+              label={t('schedule.frequency')}
+              className="min-w-28"
               value={schedule.frequency}
-              onChange={(event) =>
+              options={[
+                { value: 'daily', label: t('schedule.daily') },
+                { value: 'weekly', label: t('schedule.weekly') },
+              ]}
+              onValueChange={(value) =>
                 onChange(
-                  event.target.value === 'weekly'
+                  value === 'weekly'
                     ? {
                         frequency: 'weekly',
                         weekday: 1,
@@ -55,54 +65,45 @@ export function ScheduleFields({
                       },
                 )
               }
-            >
-              <option value="daily">{t('schedule.daily')}</option>
-              <option value="weekly">{t('schedule.weekly')}</option>
-            </select>
-          </label>
+            />
+          </div>
           {schedule.frequency === 'weekly' && (
-            <label className="space-y-1 text-sm">
+            <div className="space-y-1 text-sm">
               <span className="block">{t('schedule.weekday')}</span>
-              <select
-                className="h-9 rounded-md border bg-background px-3"
-                value={schedule.weekday}
-                onChange={(event) =>
-                  onChange({ ...schedule, weekday: Number(event.target.value) })
+              <CompileSelect
+                label={t('schedule.weekday')}
+                className="min-w-28"
+                value={String(schedule.weekday)}
+                options={Array.from({ length: 7 }, (_, index) => ({
+                  value: String(index + 1),
+                  label: t(`schedule.weekdays.${index + 1}`),
+                }))}
+                onValueChange={(value) =>
+                  onChange({ ...schedule, weekday: Number(value) })
                 }
-              >
-                {Array.from({ length: 7 }, (_, index) => (
-                  <option key={index + 1} value={index + 1}>
-                    {t(`schedule.weekdays.${index + 1}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
+              />
+            </div>
           )}
           <fieldset className="space-y-1 text-sm">
             <legend>{t('schedule.time')}</legend>
             <div className="flex items-center gap-2">
               {timeParts.map((part) => (
-                <select
+                <CompileSelect
                   key={part}
-                  aria-label={t(`schedule.${part}`)}
-                  className="h-9 rounded-md border bg-background px-3"
-                  value={schedule[part]}
-                  onChange={(event) =>
-                    onChange({
-                      ...schedule,
-                      [part]: Number(event.target.value),
-                    })
-                  }
-                >
-                  {Array.from(
+                  label={t(`schedule.${part}`)}
+                  className="min-w-18 tabular-nums"
+                  value={String(schedule[part])}
+                  options={Array.from(
                     { length: part === 'hour' ? 24 : 60 },
-                    (_, value) => (
-                      <option key={value} value={value}>
-                        {String(value).padStart(2, '0')}
-                      </option>
-                    ),
+                    (_, value) => ({
+                      value: String(value),
+                      label: String(value).padStart(2, '0'),
+                    }),
                   )}
-                </select>
+                  onValueChange={(value) =>
+                    onChange({ ...schedule, [part]: Number(value) })
+                  }
+                />
               ))}
             </div>
           </fieldset>

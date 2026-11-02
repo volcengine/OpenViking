@@ -1,24 +1,20 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { ContextLink } from '#/features/workbench/compile/components/context-link'
+import { CompileSelect } from '#/features/workbench/compile/components/compile-select'
+import { CompileScheduleTarget } from '#/features/workbench/compile/components/schedule-target'
 import {
   CompileError,
   CompileLoading,
 } from '#/features/workbench/compile/components/shared'
 import { fetchCompileConfigs } from '#/features/workbench/compile/lib/api'
-import { Badge } from '#/shared/ui/badge'
 import { Button } from '#/shared/ui/button'
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
 import { CalendarClockIcon, RefreshCwIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-const SCHEDULE_TIME_ZONE = 'Asia/Shanghai'
-
 export function CompileScheduleList() {
-  const { t, i18n } = useTranslation('compile')
+  const { t } = useTranslation('compile')
   const { identityScopeKey } = useAppConnection()
-  const navigate = useNavigate()
   const [filter, setFilter] = useState('all')
   const query = useInfiniteQuery({
     queryKey: ['compile-configs', identityScopeKey],
@@ -43,22 +39,25 @@ export function CompileScheduleList() {
         {t('schedule.listDescription')}
       </p>
       <div className="flex flex-wrap items-center gap-3">
-        <select
-          aria-label={t('schedule.filter')}
-          className="h-9 rounded-md border bg-background px-3 text-sm"
+        <CompileSelect
+          label={t('schedule.filter')}
+          className="min-w-36"
           value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-        >
-          <option value="all">{t('schedule.allTargets')}</option>
-          <option value="active">{t('schedule.active')}</option>
-          <option value="disabled">{t('schedule.disabled')}</option>
-        </select>
+          onValueChange={setFilter}
+          options={[
+            { value: 'all', label: t('schedule.allTargets') },
+            { value: 'active', label: t('schedule.active') },
+            { value: 'disabled', label: t('schedule.disabled') },
+          ]}
+        />
         <Button
           variant="outline"
           disabled={query.isFetching}
           onClick={() => void query.refetch()}
         >
-          <RefreshCwIcon />
+          <RefreshCwIcon
+            className={query.isFetching ? 'animate-spin' : undefined}
+          />
           {t('refresh')}
         </Button>
       </div>
@@ -82,97 +81,17 @@ export function CompileScheduleList() {
       )}
       {!!targets.length && (
         <ul className="overflow-hidden rounded-xl border">
-          {targets.map((target) => {
-            const schedule = target.update_schedule
-            const time = schedule
-              ? `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`
-              : ''
-            const nextRun = target.next_run_at
-              ? new Date(target.next_run_at)
-              : null
-            const validNextRun = nextRun && !Number.isNaN(nextRun.getTime())
-            return (
-              <li
-                key={target.to}
-                className="space-y-4 border-b bg-card/40 p-5 last:border-b-0"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <h2 className="break-words text-sm font-medium [overflow-wrap:anywhere]">
-                      <ContextLink uri={target.to}>{target.to}</ContextLink>
-                    </h2>
-                    <Badge
-                      variant={target.auto_update ? 'default' : 'secondary'}
-                    >
-                      {t(
-                        target.auto_update
-                          ? 'schedule.active'
-                          : 'schedule.disabled',
-                      )}
-                    </Badge>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    aria-label={`${t('schedule.edit')}: ${target.to}`}
-                    onClick={() =>
-                      void navigate({
-                        to: '/compile/new',
-                        search: { target: target.to },
-                      })
-                    }
-                  >
-                    {t('schedule.edit')}
-                  </Button>
-                </div>
-                <dl className="grid gap-4 text-sm sm:grid-cols-3">
-                  <div className="space-y-1">
-                    <dt className="text-xs text-muted-foreground">
-                      {t('schedule.timing')}
-                    </dt>
-                    <dd>
-                      {schedule
-                        ? schedule.frequency === 'daily'
-                          ? t('schedule.dailyAt', { time })
-                          : t('schedule.weeklyAt', {
-                              time,
-                              weekday: t(
-                                `schedule.weekdays.${schedule.weekday}`,
-                              ),
-                            })
-                        : t('schedule.noSchedule')}
-                    </dd>
-                  </div>
-                  <div className="space-y-1">
-                    <dt className="text-xs text-muted-foreground">
-                      {t('schedule.nextRun')}
-                    </dt>
-                    <dd>
-                      {validNextRun ? (
-                        <time dateTime={nextRun.toISOString()}>
-                          {nextRun.toLocaleString(i18n.language, {
-                            timeZone: SCHEDULE_TIME_ZONE,
-                          })}
-                        </time>
-                      ) : (
-                        t('schedule.notScheduled')
-                      )}
-                    </dd>
-                  </div>
-                  <div className="space-y-1">
-                    <dt className="text-xs text-muted-foreground">
-                      {t('schedule.execution')}
-                    </dt>
-                    <dd>
-                      {t(target.running ? 'schedule.running' : 'schedule.idle')}
-                    </dd>
-                  </div>
-                </dl>
-              </li>
-            )
-          })}
+          {targets.map((target) => (
+            <CompileScheduleTarget
+              key={`${identityScopeKey}:${target.to}`}
+              target={target}
+            />
+          ))}
         </ul>
       )}
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {t('schedule.disableHint')}
+      </p>
       {query.hasNextPage && (
         <Button
           variant="outline"

@@ -1,7 +1,15 @@
 export default {
   schedule: {
     listDescription:
-      '管理编译产物目录的自动更新，包括已关闭自动更新的目标。计划统一使用北京时间（Asia/Shanghai）。',
+      '直接开启、关闭自动更新，或调整执行时间。计划统一使用北京时间（Asia/Shanghai）。',
+    autoUpdate: '自动更新',
+    adjust: '调整时间',
+    setUp: '设置时间',
+    turnOn: '开启自动更新',
+    saving: '正在保存…',
+    turnedOff: '自动更新已关闭，后续不再定时执行。',
+    disableHint:
+      '关闭自动更新会清除计划时间，保留编译产物和执行记录；正在运行的编译会继续。',
     filter: '自动更新状态',
     allTargets: '全部目标',
     active: '已开启',
@@ -39,7 +47,7 @@ export default {
       7: '周日',
     },
     save: '保存设置',
-    edit: '编辑更新设置',
+    edit: '编辑编译配置',
     saved: '更新设置已保存',
     saveHint: '保存后将在下次计划时间执行，不会立即开始编译。',
     manualHint:

@@ -1,7 +1,15 @@
 export default {
   schedule: {
     listDescription:
-      'Manage automatic updates for compilation output directories, including targets with automatic updates turned off. Schedules use Beijing time (Asia/Shanghai).',
+      'Turn automatic updates on or off, or adjust the schedule here. Schedules use Beijing time (Asia/Shanghai).',
+    autoUpdate: 'Automatic updates',
+    adjust: 'Adjust time',
+    setUp: 'Set schedule',
+    turnOn: 'Enable automatic updates',
+    saving: 'Saving…',
+    turnedOff: 'Automatic updates turned off. No further scheduled runs.',
+    disableHint:
+      'Turning off clears the schedule and keeps compiled content and execution history. Any running compilation continues.',
     filter: 'Automatic update status',
     allTargets: 'All targets',
     active: 'Enabled',
@@ -40,7 +48,7 @@ export default {
       7: 'Sunday',
     },
     save: 'Save settings',
-    edit: 'Edit update settings',
+    edit: 'Edit compilation settings',
     saved: 'Update settings saved',
     saveHint:
       'Save the plan to run at the next scheduled time. No compilation starts now.',

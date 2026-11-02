@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { CompileList } from '#/features/workbench/compile'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -105,6 +106,27 @@ it('switches tabs through route search and stops observing execution history whi
   await page.findByRole('textbox', { name: 'search' })
   expect(tasksTab.getAttribute('aria-selected')).toBe('true')
   expect(page.queryByText('Schedule list')).toBeNull()
+})
+
+it('filters execution history through the custom select while keeping the search text', async () => {
+  mocks.search = { status: '', q: 'notes' }
+  const page = mount()
+  await userEvent.click(page.getByRole('combobox', { name: 'status' }))
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'statuses.failed' }),
+  )
+  expect(mocks.navigate).toHaveBeenLastCalledWith({
+    to: '/compile',
+    search: { status: 'failed', q: 'notes' },
+  })
+  mocks.search = { status: 'failed', q: 'notes' }
+  page.rerenderRoute()
+  await userEvent.click(page.getByRole('combobox', { name: 'status' }))
+  await userEvent.click(await screen.findByRole('option', { name: 'all' }))
+  expect(mocks.navigate).toHaveBeenLastCalledWith({
+    to: '/compile',
+    search: { status: '', q: 'notes' },
+  })
 })
 
 it('opens schedules from the saved-plan URL and preserves task filters when returning to history', async () => {
