@@ -30,7 +30,6 @@ const arranger = {
     load: '加载',
     loadMore: '加载更多',
     mount: '挂载上下文',
-    move: '移动',
     newDirectory: '新建目录',
     newFile: '新建文档',
     refresh: '刷新',
@@ -139,10 +138,6 @@ const arranger = {
       title: '挂载实时上下文',
       description: '将 MCP 工具绑定为 Markdown 上下文节点。',
     },
-    move: {
-      title: '移动资源',
-      description: '选择当前根目录内的新 URI。',
-    },
   },
   apiResources: {
     filesystemStat: '文件系统状态',
@@ -172,7 +167,7 @@ const arranger = {
     invalidArguments: '请检查工具参数中的必填项和数据格式。',
     invalidTimeout: '超时必须是大于 0 的数字。',
     mountRequired: '请填写名称、工具和标题。',
-    destinationInsideSource: '不能将目录移动到其自身内部。',
+    destinationInsideSource: '目标路径不能与源路径相同或位于源路径内部。',
     destinationOutsideRoot: '目标位置必须位于当前加载的根目录内。',
     noRelativePathSegments: '不允许使用相对路径段。',
     required: '此参数为必填项。',

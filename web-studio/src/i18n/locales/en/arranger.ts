@@ -31,7 +31,6 @@ const arranger = {
     load: 'Load',
     loadMore: 'Load more',
     mount: 'Mount context',
-    move: 'Move',
     newDirectory: 'New directory',
     newFile: 'New document',
     refresh: 'Refresh',
@@ -145,10 +144,6 @@ const arranger = {
       title: 'Mount live context',
       description: 'Bind an MCP tool to a Markdown context node.',
     },
-    move: {
-      title: 'Move resource',
-      description: 'Choose the new URI inside the loaded root.',
-    },
   },
   apiResources: {
     filesystemStat: 'filesystem stat',
@@ -181,7 +176,8 @@ const arranger = {
     invalidArguments: 'Check required tool arguments and their data formats.',
     invalidTimeout: 'Timeout must be a number greater than 0.',
     mountRequired: 'Name, tool, and title are required.',
-    destinationInsideSource: 'A directory cannot be moved into itself.',
+    destinationInsideSource:
+      'The destination cannot be the source or a path inside it.',
     destinationOutsideRoot: 'The destination must stay inside the loaded root.',
     noRelativePathSegments: 'Relative path segments are not allowed.',
     required: 'This argument is required.',

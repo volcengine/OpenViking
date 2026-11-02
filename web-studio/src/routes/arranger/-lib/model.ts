@@ -104,4 +104,4 @@ export type MountInput = {
   tags?: string[]
 }
 
-export type MutationKind = 'copy' | 'delete' | 'move'
+export type MutationKind = 'copy' | 'delete'

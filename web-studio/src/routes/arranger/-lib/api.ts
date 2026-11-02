@@ -10,7 +10,6 @@ import {
   isOvClientError,
   normalizeOvClientError,
   postFsMkdir,
-  postFsMv,
 } from '#/lib/ov-client'
 import {
   fileNameFromUri,
@@ -380,20 +379,6 @@ export async function saveText(
   }
 }
 
-export async function moveResource(
-  source: string,
-  target: string,
-): Promise<void> {
-  await getOvResult(
-    postFsMv({
-      body: {
-        from_uri: normalizeVikingUri(source),
-        to_uri: normalizeVikingUri(target),
-      },
-    }),
-  )
-}
-
 export async function copyResource(
   source: string,
   target: string,
@@ -531,36 +516,6 @@ export type BatchLiveContextResult = {
   not_attempted: string[]
 }
 
-export async function moveLiveContext(
-  mount: LiveContextMount,
-  target: string,
-): Promise<void> {
-  const sourceUri = normalizeVikingUri(mount.node_uri)
-  const targetUri = normalizeVikingUri(target)
-  if (sourceUri === targetUri) return
-
-  const input: MountInput = {
-    arguments: mount.arguments,
-    description: mount.description,
-    node_uri: targetUri,
-    tags: mount.tags,
-    timeout_seconds: mount.timeout_seconds || 60,
-    title: mount.title || fileNameFromUri(sourceUri),
-    tool_uri: mount.tool_uri,
-  }
-  await mountLiveContext(input)
-  try {
-    await unmountLiveContext(sourceUri)
-  } catch (error) {
-    try {
-      await unmountLiveContext(input.node_uri)
-    } catch {
-      // The caller refreshes mounts and presents the actual state.
-    }
-    throw error
-  }
-}
-
 export function isLiveContextDocument(content: string): boolean {
   return parseLiveContextMetadata(content) !== null
 }
@@ -675,9 +630,7 @@ export async function mutateOrdinaryResource(options: {
   await preflightOrdinaryMutation(options)
   if (options.kind === 'delete') {
     await removeResource(options.source.uri, options.source.isDir)
-  } else if (options.kind === 'copy' && options.target) {
+  } else if (options.target) {
     await copyResource(options.source.uri, options.target, options.source.isDir)
-  } else if (options.kind === 'move' && options.target) {
-    await moveResource(options.source.uri, options.target)
   }
 }

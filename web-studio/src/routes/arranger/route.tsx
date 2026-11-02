@@ -89,7 +89,6 @@ import {
   loadMcpCatalog,
   loadLiveMounts,
   mountLiveContext,
-  moveLiveContext,
   mutateOrdinaryResource,
   parseLiveContextMetadata,
   readTextDocument,
@@ -103,7 +102,6 @@ import type {
   LiveMountIndex,
   McpCatalog,
   MountInput,
-  MutationKind,
 } from './-lib/model'
 import { initialSchemaArguments, validateSchemaArguments } from './-lib/schema'
 import type { SchemaFormObject } from './-lib/schema'
@@ -128,7 +126,7 @@ type ArrangerSearch = {
   view?: ArrangerView
 }
 
-type ActionKind = 'copy' | 'file' | 'mkdir' | 'mount' | 'move'
+type ActionKind = 'copy' | 'file' | 'mkdir' | 'mount'
 
 type ActionState = {
   kind: ActionKind
@@ -882,7 +880,7 @@ function ResourceInspector({
   isRoot: boolean
   liveMount?: LiveContextMount
   mountsComplete: boolean
-  onAction: (kind: 'copy' | 'mount' | 'move') => void
+  onAction: (kind: 'copy' | 'mount') => void
   onDelete: () => Promise<void>
   onSaved: () => Promise<void>
 }) {
@@ -914,15 +912,6 @@ function ResourceInspector({
                   {t('actions.editMount')}
                 </Button>
               )}
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!mountsComplete}
-                onClick={() => onAction('move')}
-              >
-                <PencilIcon />
-                {t('actions.move')}
-              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -1274,7 +1263,7 @@ function ActionDialog({
   const { t } = useTranslation('arranger')
   const [name, setName] = useState('')
   const [target, setTarget] = useState(
-    action.kind === 'copy' || action.kind === 'move'
+    action.kind === 'copy'
       ? joinVikingUri(defaultParent, action.source?.name || '')
       : defaultParent,
   )
@@ -1403,23 +1392,19 @@ function ActionDialog({
         const document = await readTextDocument(mount.node_uri)
         const metadata = parseLiveContextMetadata(document.content) || {}
         const completeMount = { ...mount, ...metadata }
-        if (action.kind === 'copy') {
-          await mountLiveContext({
-            arguments: completeMount.arguments,
-            description: completeMount.description,
-            node_uri: normalizeVikingUri(target),
-            tags: completeMount.tags,
-            timeout_seconds: completeMount.timeout_seconds || 60,
-            title:
-              completeMount.title || nameFromVikingUri(completeMount.node_uri),
-            tool_uri: completeMount.tool_uri,
-          })
-        } else {
-          await moveLiveContext(completeMount, normalizeVikingUri(target))
-        }
+        await mountLiveContext({
+          arguments: completeMount.arguments,
+          description: completeMount.description,
+          node_uri: normalizeVikingUri(target),
+          tags: completeMount.tags,
+          timeout_seconds: completeMount.timeout_seconds || 60,
+          title:
+            completeMount.title || nameFromVikingUri(completeMount.node_uri),
+          tool_uri: completeMount.tool_uri,
+        })
       } else {
         await mutateOrdinaryResource({
-          kind: action.kind as MutationKind,
+          kind: action.kind,
           liveIndex,
           rootUri,
           source: action.source,
@@ -1471,7 +1456,7 @@ function ActionDialog({
               />
             </Field>
           )}
-          {(action.kind === 'copy' || action.kind === 'move') && (
+          {action.kind === 'copy' && (
             <Field label={t('fields.targetUri')}>
               <Input
                 value={target}
