@@ -29,7 +29,7 @@ curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 
 Codex、TraeX、Claude、Pi、OpenCode 都要先完成各自 CLI 登录；Durable 不用单独登录，Pi 能用的模型它都能用（见下文）。完整配置字段看 [config.example.json](./config.example.json)。
 
-OpenCode 支持 1.15.7+ 的 1.x；命令名是 `opencode`，setup 通过 `--version` 和 ACP `initialize` 握手检查（不创建会话、不调用模型），并提示先 `opencode auth login`。可用 `OPENCODE_BIN` 指定可执行文件，可用 `VIKA_OPENCODE_MODEL` 或 `/model` 指定 `provider/model`。daemon 用守护进程自有的临时 `OPENCODE_CONFIG` 注入会话策略文件和 `personal_agent` MCP server，不修改用户的 `~/.config/opencode/opencode.json`；OpenCode 串行处理一个会话上的 prompt，轮次进行中到达的消息会在下一轮处理。
+OpenCode 支持 1.15.7+ 的 1.x；命令名是 `opencode`，setup 通过 `--version` 和 ACP `initialize` 握手检查（不创建会话、不调用模型）。模型和登录沿用 opencode 自己的配置：默认就是直接运行 `opencode` 时的模型；也可用 `VIKA_OPENCODE_MODEL` 或 `/model` 指定 `provider/model`。可用 `OPENCODE_BIN` 指定可执行文件。daemon 用守护进程自有的临时 `OPENCODE_CONFIG` 注入会话策略文件和 `personal_agent` MCP server，不修改用户的 `~/.config/opencode/opencode.json`；OpenCode 串行处理一个会话上的 prompt，轮次进行中到达的消息会在下一轮处理。
 
 TraeX 的命令可能叫 `traex`、`traecli` 或 `trae-cli`，装了哪个都行；Vika 用它的 `app-server` 协议，太旧、只有 `acp serve` 的版本不能用。setup 会依次检查 `traex`、`traecli`、`trae-cli`，解析软链接并去重，只有 stdio `initialize` 握手和 `login status` 都通过才提供该选项；探测不会创建会话或调用模型。显式设置 `TRAECLI_BIN`（兼容旧变量 `TRAEX_BIN`，优先级更高）时只检查指定文件，失败不会悄悄换另一个 CLI。setup 保存通过检查的实际路径，不修改用户的命令别名。
 

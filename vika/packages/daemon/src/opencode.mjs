@@ -80,7 +80,6 @@ export class OpencodeAgent {
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
     this.systemPrompt = assembleConversationPolicy(config);
-    this.developerInstructionsText = this.systemPrompt;
     this.model = options.model
       ?? store.getSetting?.('opencode_model')
       ?? options.initialModel
@@ -131,7 +130,7 @@ export class OpencodeAgent {
 
   get policyHash() {
     return createHash('sha256')
-      .update(this.developerInstructionsText).update('\0')
+      .update(this.systemPrompt).update('\0')
       .update(this.config.workspace).update('\0')
       .update('opencode-acp-v1').digest('hex');
   }
@@ -281,8 +280,6 @@ export class OpencodeAgent {
         if (!/opencode/i.test(result?.agentInfo?.name ?? '')) {
           throw new Error('unrecognised ACP agent');
         }
-        this._notifyOn(child, 'notifications/initialized', {});
-        this._notifyOn(child, 'initialized', {});
         if (this.resumeRequested && this.sessionId) {
           try {
             const loaded = await this._requestOn(child, 'session/load', {
@@ -329,7 +326,7 @@ export class OpencodeAgent {
     try { fs.chmodSync(directory, 0o700); } catch {}
     this.runtimeDir = directory;
     this.promptPath = path.join(directory, 'instructions.md');
-    fs.writeFileSync(this.promptPath, this.developerInstructionsText, { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(this.promptPath, this.systemPrompt, { encoding: 'utf8', mode: 0o600 });
     const tools = agentToolServer(this.config, this.authorityToken);
     const config = {
       instructions: [this.promptPath],
@@ -427,21 +424,16 @@ export class OpencodeAgent {
     });
   }
 
+  // Notifications and answers to agent requests: best effort, no reply.
+  _send(frame) {
+    try {
+      this.child?.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...frame })}\n`);
+    } catch {}
+  }
+
   _request(method, params, timeoutMs) {
     if (!this.child?.stdin?.writable) return Promise.reject(new Error('opencode is disconnected'));
     return this._requestOn(this.child, method, params, timeoutMs);
-  }
-
-  _notify(method, params) {
-    try {
-      this.child?.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
-    } catch {}
-  }
-
-  _notifyOn(child, method, params) {
-    try {
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
-    } catch {}
   }
 
   // ---- inbound state machine -------------------------------------------------
@@ -563,7 +555,9 @@ export class OpencodeAgent {
     }, Infinity).then(
       (result) => {
         if (this.activeOwner !== owner) return;
-        const failed = result?.stopReason && !['end_turn', 'tool_use', 'stop'].includes(result.stopReason)
+        // ACP stop reasons: end_turn, max_tokens, max_turn_requests, refusal,
+        // cancelled. Only end_turn is a normal finish.
+        const failed = result?.stopReason && result.stopReason !== 'end_turn'
           ? new Error(`opencode turn ended: ${result.stopReason}`)
           : null;
         this._completeTurn(failed);
@@ -661,22 +655,19 @@ export class OpencodeAgent {
       });
       const options = params?.options ?? [];
       const rejectOption = options.find((option) => String(option.kind ?? '').includes('reject'));
-      const result = rejectOption
-        ? { outcome: { outcome: 'selected', optionId: rejectOption.optionId } }
-        : { outcome: { outcome: 'cancelled' } };
-      try {
-        this.child?.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`);
-      } catch {}
+      this._send({
+        id: message.id,
+        result: rejectOption
+          ? { outcome: { outcome: 'selected', optionId: rejectOption.optionId } }
+          : { outcome: { outcome: 'cancelled' } },
+      });
       return;
     }
     if (message.id !== undefined) {
-      try {
-        this.child?.stdin.write(`${JSON.stringify({
-          jsonrpc: '2.0',
-          id: message.id,
-          error: { code: -32601, message: 'This unattended daemon does not support this request.' },
-        })}\n`);
-      } catch {}
+      this._send({
+        id: message.id,
+        error: { code: -32601, message: 'This unattended daemon does not support this request.' },
+      });
       return;
     }
     if (method !== 'session/update') return;
@@ -711,7 +702,7 @@ export class OpencodeAgent {
       this.modelStartedAtMs = null;
       const toolCallId = String(update.toolCallId ?? randomUUID());
       const started = {
-        name: String(update.name ?? update.title ?? 'unknown tool'),
+        name: String(update.title ?? 'unknown tool'),
         atMs: Date.now(),
         recorded: false,
       };
@@ -1109,9 +1100,7 @@ export class OpencodeAgent {
     }
     this.turnError = null;
     this.deliveredThroughSeq = this.syncedThroughSeq;
-    if (this.sessionId) {
-      try { this._notify('session/cancel', { sessionId: this.sessionId }); } catch {}
-    }
+    if (this.sessionId) this._send({ method: 'session/cancel', params: { sessionId: this.sessionId } });
     this._resolveIdleWaiters();
   }
 
@@ -1131,17 +1120,10 @@ export class OpencodeAgent {
 
   // ---- model settings --------------------------------------------------------
 
+  // Takes effect before the next prompt (see _settingsPending).
   setModel(model, { persist = true } = {}) {
     if (persist) this.store.setSetting?.('opencode_model', model);
     this.model = model;
-    // Apply immediately when idle; the next prompt already carries no model
-    // field, so set_config_option must precede it. While a turn is live the
-    // call would queue server-side, so defer it until completion via _drain.
-    if (!this.turnActive && this.connected && this.sessionId) {
-      this._applyModelOn(this.child, model)
-        .then(() => { this.appliedModel = model; })
-        .catch((error) => this.logger.warn('opencode_model_update_failed', { error: safe(error) }));
-    }
   }
 
   setEffort() {

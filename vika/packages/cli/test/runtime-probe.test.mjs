@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { probeAppServer } from '../src/runtime-probe.mjs';
+import { probeAcp, probeAppServer } from '../src/runtime-probe.mjs';
 
 function fixture(t, script) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-app-server-'));
@@ -95,4 +95,35 @@ test('probe handles a spawn error without an unhandled rejection', async () => {
   const result = await probeAppServer('/not-used', { spawnImpl: () => { throw new Error('missing executable'); } });
   assert.equal(result.compatible, false);
   assert.match(result.reason, /missing executable/);
+});
+
+test('ACP probe sends only initialize to `acp` and accepts an OpenCode answer', async (t) => {
+  const f = fixture(t, `
+    const fs = require('node:fs');
+    const readline = require('node:readline');
+    if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['acp'])) process.exit(2);
+    readline.createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      fs.appendFileSync(process.env.HOME + '/requests', line + '\\n');
+      if (request.method !== 'initialize') process.exit(3);
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1, agentInfo: { name: 'OpenCode' } } }) + '\\n');
+    });
+  `);
+  assert.equal((await probeAcp(f.bin, f.options)).compatible, true);
+  await Promise.all(f.closed);
+  const requests = fs.readFileSync(path.join(f.dir, 'requests'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(requests.map((request) => request.method), ['initialize']);
+  assert.equal(requests[0].jsonrpc, '2.0');
+  assert.equal(requests[0].params.protocolVersion, 1);
+  assert.equal(f.children[0].signalCode, 'SIGKILL');
+});
+
+test('ACP probe rejects an initialize error', async (t) => {
+  const f = fixture(t, `process.stdin.once('data', () => {
+    process.stdout.write('{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}\\n');
+  });`);
+  const result = await probeAcp(f.bin, f.options);
+  assert.equal(result.compatible, false);
+  assert.match(result.reason, /ACP rejected initialize/);
+  await Promise.all(f.closed);
 });

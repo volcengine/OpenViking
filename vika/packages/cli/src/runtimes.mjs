@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
-import { assertSupportedOpencodeVersion, resolveOpencodeBin } from '../../daemon/src/opencode-runtime.mjs';
+import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
 import { t } from './i18n.mjs';
 import { probeAcp, probeAppServer } from './runtime-probe.mjs';
 
@@ -200,9 +200,8 @@ async function detectTraex({ env, execFileImpl, probe }) {
 // plus a supported version is what setup verifies (no session, no model call).
 async function detectOpencode({ env, execFileImpl, probe }) {
   const explicit = env.OPENCODE_BIN?.trim();
-  const located = explicit ? path.resolve(explicit) : which('opencode', env);
-  const bin = located || resolveOpencodeBin(env);
-  if (!located) {
+  const bin = explicit ? path.resolve(explicit) : which('opencode', env);
+  if (!bin) {
     return {
       id: 'opencode', label: 'OpenCode', model: 'opencode', bin: null, binEnv: 'OPENCODE_BIN',
       installed: false, available: false, note: t('未安装', 'not installed'),
@@ -213,19 +212,14 @@ async function detectOpencode({ env, execFileImpl, probe }) {
     installed: true, available: false,
     note: '',
   };
-  let output;
-  try {
-    output = await run(execFileImpl, bin, ['--version'], env);
-  } catch {
-    result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
-    return result;
-  }
+  const output = await run(execFileImpl, bin, ['--version'], env);
   if (!output.ok) {
     result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
     return result;
   }
+  let version;
   try {
-    assertSupportedOpencodeVersion(output.stdout);
+    version = assertSupportedOpencodeVersion(output.stdout);
   } catch (error) {
     result.note = error.message;
     return result;
@@ -235,7 +229,9 @@ async function detectOpencode({ env, execFileImpl, probe }) {
     result.note = t(`ACP 握手失败：${handshake.reason}`, `ACP handshake failed: ${handshake.reason}`);
     return result;
   }
+  // Models and credentials stay OpenCode's own (`opencode auth login`).
   result.available = true;
-  result.note = t('协议兼容；先运行 opencode auth login 配置模型', 'ACP compatible; run opencode auth login to configure a model');
+  result.note = t(`协议兼容（${version.raw}），使用 opencode 自己的模型和登录配置`,
+    `ACP compatible (${version.raw}), uses OpenCode's own model and login`);
   return result;
 }

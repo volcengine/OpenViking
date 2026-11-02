@@ -301,7 +301,6 @@ describe('OpencodeAgent ACP backend', () => {
         update: {
           sessionUpdate: 'tool_call',
           toolCallId: 'tc-1',
-          name: 'shell',
           title: 'shell',
           rawInput: { command: 'ls' },
         },
@@ -381,6 +380,21 @@ describe('OpencodeAgent ACP backend', () => {
     await agent.stop();
   });
 
+  it('fails a turn OpenCode stops for any reason other than end_turn', async () => {
+    const { agent, children, store } = newAgent();
+    const child = await startSession(agent, children);
+    agent.deliver('long answer', 7);
+    await waitFor(() => agent.turnActive);
+    const prompt = requests(child).find((message) => message.method === 'session/prompt');
+    child.feed({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'max_tokens' } });
+    await waitFor(() => !agent.turnActive);
+    const completed = store.activities.filter((activity) => activity.kind === 'agent.turn_completed');
+    assert.deepEqual(completed.map((activity) => [activity.status, activity.summary]), [
+      ['failed', 'opencode turn ended: max_tokens'],
+    ]);
+    await agent.stop();
+  });
+
   it('keeps a long-running prompt open until OpenCode ends the turn', async () => {
     const { agent, children, store } = newAgent();
     const child = await startSession(agent, children);
@@ -399,22 +413,32 @@ describe('OpencodeAgent ACP backend', () => {
   });
 
   it('applies a changed model before the next turn without replacing the session', async () => {
-    const { agent, children } = newAgent();
+    const { agent, children, store } = newAgent();
     const child = await startSession(agent, children, { model: 'opencode/big-pickle' });
     const sessionId = agent.threadId;
-    // The initial startup already applied the configured model.
-    const startupUpdates = requests(child).filter((message) => message.method === 'session/set_config_option');
+    // The initial startup already applied the configured model; selecting it
+    // again sends nothing.
     agent.setModel('anthropic/claude-sonnet-5');
+    agent.deliver('same model', 6);
+    await waitFor(() => requests(child).some((message) => message.method === 'session/prompt'));
+    assert.equal(requests(child).filter((message) => message.method === 'session/set_config_option').length, 1);
+    const first = requests(child).find((message) => message.method === 'session/prompt');
+    child.feed({ jsonrpc: '2.0', id: first.id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    const startupUpdates = requests(child).filter((message) => message.method === 'session/set_config_option');
+    agent.setModel('opencode/big-pickle');
+    assert.equal(store.settings.opencode_model, 'opencode/big-pickle');
+    agent.deliver('next turn', 7);
     await waitFor(() => requests(child).filter((message) => message.method === 'session/set_config_option').length
       === startupUpdates.length + 1);
     const setConfig = requests(child).filter((message) => message.method === 'session/set_config_option').at(-1);
     assert.deepEqual(setConfig.params, {
-      sessionId: 'ses_start1', configId: 'model', value: 'anthropic/claude-sonnet-5',
+      sessionId: 'ses_start1', configId: 'model', value: 'opencode/big-pickle',
     });
     child.feed({ jsonrpc: '2.0', id: setConfig.id, result: {} });
-    await waitFor(() => agent.appliedModel === 'anthropic/claude-sonnet-5');
-    agent.deliver('next turn', 7);
-    await waitFor(() => requests(child).some((message) => message.method === 'session/prompt'));
+    await waitFor(() => requests(child).filter((message) => message.method === 'session/prompt').length === 2);
+    assert.equal(agent.appliedModel, 'opencode/big-pickle');
+    assert.equal(agent.resolvedModel, 'opencode/big-pickle');
     assert.equal(agent.threadId, sessionId);
     assert.equal(children.length, 1);
     await agent.stop();

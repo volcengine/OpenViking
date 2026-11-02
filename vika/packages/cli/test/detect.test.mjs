@@ -309,7 +309,7 @@ test('OpenCode: an installed supported 1.x CLI is offered after an ACP handshake
   assert.equal(runtime.available, true);
   assert.equal(runtime.bin, path.join(bin, 'opencode'));
   assert.equal(runtime.binEnv, 'OPENCODE_BIN');
-  assert.match(runtime.note, /opencode auth login/);
+  assert.match(runtime.note, /1\.19\.5/);
 });
 
 test('OpenCode: an unsupported 2.x CLI is reported and not offered', async (t) => {
