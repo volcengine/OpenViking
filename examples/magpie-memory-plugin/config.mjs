@@ -76,7 +76,7 @@ export async function loadConfig(env = process.env, options = {}) {
   const settingsFile = { ...file, plugin: { ...file.plugin, magpie: { ...scoped, ...overrides } } };
   const { settings, configured, sources } = resolveSettings("magpie", { env: {}, cliFile: settingsFile });
   if (!configured.has("mcpEnabled")) settings.mcpEnabled = false;
-  if (!configured.has("autoCapture")) settings.autoCapture = false;
+  if (!configured.has("autoCapture")) settings.autoCapture = true;
   if (!configured.has("recallContextTimeoutMs")) settings.recallContextTimeoutMs = 700;
   const connection = resolveConnection("magpie", { env: { OPENVIKING_CREDENTIAL_SOURCE: "cli" }, files });
   const peerId = resolvePluginPeerId({ settings, configured, sources, credentials: connection, env: {} });
@@ -84,7 +84,6 @@ export async function loadConfig(env = process.env, options = {}) {
   const version = readManifestVersion(new URL("./package.json", import.meta.url));
   const config = {
     ...settings,
-    autoCapture: settings.autoCapture && (options.autoCapture === true || (options.autoCapture === undefined && scoped?.autoCapture === true)),
     enabled: file.plugin?.enabled !== false && settings.enabled,
     baseUrl: connection.baseUrl, apiKey: connection.apiKey,
     account: connection.account, user: connection.user, peerId,

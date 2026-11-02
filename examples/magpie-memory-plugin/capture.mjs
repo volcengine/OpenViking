@@ -11,6 +11,9 @@ import { recallDigest } from "./recall-ledger.mjs";
 export const captureDirectory = (cfg, ctx) => join(dataDirectory(cfg), "capture", connectionScope(cfg, ctx));
 const workers = new Map();
 export async function nativeOwner(cfg, ctx, body) {
+  // Without a session, ownership is request-local: never share a marker
+  // between unrelated conversations from the same client.
+  if (!ctx.session?.trim()) return cfg.nativeAgents.includes(ctx.agent) || hasNativeContext(body, ctx.protocol);
   const directory = captureDirectory(cfg, ctx);
   const marker = join(directory, "native-owner");
   if (cfg.nativeAgents.includes(ctx.agent) || hasNativeContext(body, ctx.protocol)) {

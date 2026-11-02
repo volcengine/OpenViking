@@ -44,7 +44,7 @@ magpie plugin add ./examples/magpie-memory-plugin
   "magpie": {
     "enabled": true,
     "autoRecall": true,
-    "autoCapture": false,
+    "autoCapture": true,
     "recallContextTimeoutMs": 700,
     "recallMaxTokens": 1600,
     "recallPeerScope": "all",
@@ -62,7 +62,7 @@ magpie plugin add ./examples/magpie-memory-plugin
 OIDC 配置使用 `oidc_token`（或 `api_key`）作为 Bearer Token。两者由服务端解析身份，不断言账户或用户。
 配置类型、别名、范围和召回请求体复用已有共享模块；文件读取策略、宿主超时、工具默认关闭等适配放在 Magpie 自身目录，不改变其他插件。
 Magpie 的文件读取策略排除环境变量和 workspace 层。
-工具和采集分别需要 `plugin.magpie.mcpEnabled: true`、`plugin.magpie.autoCapture: true` 显式开启，共享设置不会直接开启这两项能力。
+工具仍需 `plugin.magpie.mcpEnabled: true` 显式开启。采集默认开启；宿主选项或客户端配置中显式设置的 `autoCapture: false` 仍然生效。优先级为宿主选项、Magpie 专属配置、共享配置。
 
 Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`recallMaxTokens`、
 `recallContextTimeoutMs`、`nativeAgents`，优先于本插件的文件行为配置；Hook 和工具使用同一套设置。
@@ -83,7 +83,7 @@ Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`reca
   资料读取与检索在召回超时预算内并行执行；任一路失败时仍可使用另一路结果。
   资料遵守 `profileTokenBudget`，且最多占 `recallMaxTokens` 的一半，使用共享的中日韩字符 token 估算器；
   资料与检索结果合计不超过 `recallMaxTokens`，与首轮决策一起持久化；重试和后续轮次回放原始快照。
-- 仅处理宿主确认为本机的 `local`、`magpie-key` 请求，并要求 Magpie 提供非空会话 ID。
+- 仅处理宿主确认为本机的 `local`、`magpie-key` 请求。没有会话 ID 时，新用户请求使用无状态召回：不读写持久化账本、不重放 Profile 快照、不采集对话；重复请求可能获得不同的召回结果。
   共享网关 Key、转发请求或身份缺失时跳过，始终使用文件中配置的 OV 身份。
 - 只有新的文本用户消息触发检索。工具续轮只回放已有记忆；重试复用首次决策，
   包括无结果和失败的决策。同样的问题出现在后续新轮次时仍可重新检索。
@@ -121,8 +121,8 @@ Anthropic 协议内容块的缓存注解不参与召回锚点计算；原始请�
 
 ## 自动采集与原生插件避让
 
-采集默认关闭。在 `ovcli.conf` 中设置 `plugin.magpie.autoCapture: true`，或在 Magpie 的“选项”中保存
-`"autoCapture": true` 后启用。完整对话先写入本地队列，再由独立后台任务增量写入按连接、Agent、
+有可靠会话 ID 的请求默认开启采集。在 `ovcli.conf` 中设置 `plugin.magpie.autoCapture: false`，或在 Magpie 的“选项”中保存
+`"autoCapture": false` 可关闭。已有显式关闭设置继续生效；未配置该项的安装或升级将开启采集，把完整对话提交到配置的 OpenViking 服务。完整对话先写入本地队列，再由独立后台任务增量写入按连接、Agent、
 会话、workspace、协议隔离的 OV Session；不保存系统指令、注入记忆、宿主提醒和私有推理。
 启用后应新建会话：首轮会绑定当前连接和第一条用户消息，且该用户消息之前不能存在可采集的助手或工具内容。未知的已有历史，包括切换凭据后的旧对话，
 会跳过采集，避免把之前的私有内容复制到新身份。
