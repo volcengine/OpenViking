@@ -21,13 +21,6 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 from openviking.connector.auth import is_external_feishu_auth, restore_feishu_request
 from openviking.connector.delegate import ConnectorDelegate
 from openviking.observability.http_error_context import sanitize_public_http_error
-from openviking.resource.feishu_watch_auth import (
-    FeishuOAuthClient,
-    FeishuTokenRefreshError,
-    apply_feishu_refreshed_token,
-    feishu_auth_state_needs_refresh,
-    is_feishu_auth_state,
-)
 from openviking.resource.git_watch_auth import (
     git_http_auth_config_from_state,
     is_git_http_auth_state,
@@ -668,6 +661,15 @@ class WatchManager:
         return WatchReceipt(run.task_id, run.run_id, True)
 
     async def _submit_resource(self, run: WatchRun, on_task_created: Any) -> Any:
+        # Keep parser-backed Feishu dependencies out of WatchManager's import boundary.
+        from openviking.resource.feishu_watch_auth import (
+            FeishuOAuthClient,
+            FeishuTokenRefreshError,
+            apply_feishu_refreshed_token,
+            feishu_auth_state_needs_refresh,
+            is_feishu_auth_state,
+        )
+
         task, auth = run.task, run.task.auth_state
         connector = ConnectorDelegate.is_watch_auth_state(auth)
         ctx = self.context(task)
