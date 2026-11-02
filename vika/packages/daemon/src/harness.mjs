@@ -209,16 +209,18 @@ export class Harness {
   // Shows an accepted line again, tagged undecided=1, after a turn ended with
   // neither a delivery nor stay_silent for it. Same event= (still a valid
   // decision_id), but no seq: it never moves the fence or counts as a new
-  // input, so it cannot start another reminder.
-  redeliverUndecided(row) {
+  // input, so it cannot start another reminder. A line a loop-stopped turn
+  // left behind comes back with its seq instead (a second stop must see it
+  // again), and with the tag only where the policy explains it.
+  redeliverUndecided(row, { seq = null, undecided = true } = {}) {
     return this.enqueueIngress(async () => {
       await this.runtime.prepareInputContext?.();
-      this.groupBurst.route(eventDeliveryItem(row, null, {
+      this.groupBurst.route(eventDeliveryItem(row, seq, {
         text: formatInboundLine(row, null, {
           owner: this.isOwner(row),
           mention: this.mentionTarget(row),
           replyTo: row.messageType === 'card_action' ? { kind: 'me' } : resolveReplyTarget(this.store, row),
-          undecided: true,
+          undecided,
         }),
       }));
     });

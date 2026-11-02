@@ -278,6 +278,35 @@ describe('OpencodeAgent ACP backend', () => {
     await agent.stop();
   });
 
+  it('cancels a looping prompt in place and drains the queue into the same session behind the notice', async () => {
+    const failed = [];
+    const { agent, children } = newAgent(makeStore(), { onTurnFailed: (info) => failed.push(info) });
+    const child = await startSession(agent, children);
+    const adapter = new RuntimeAdapter('opencode', agent);
+    assert.equal(adapter.cancelTurn(), false, 'nothing to cancel while idle');
+    agent.deliver('loop forever', 7);
+    await waitFor(() => agent.turnActive);
+    agent.deliver('waiting meanwhile', 8);
+    await waitFor(() => agent.queue.length === 1);
+
+    assert.equal(adapter.cancelTurn(), true);
+    assert.deepEqual(requests(child).at(-1), { jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'ses_start1' } });
+    assert.equal(agent.turnActive, true, 'live until OpenCode ends the prompt');
+    adapter.setTurnNotice('[daemon notice] stopped');
+    const [prompt] = requests(child).filter((message) => message.method === 'session/prompt');
+    child.feed({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'cancelled' } });
+    await waitFor(() => requests(child).filter((message) => message.method === 'session/prompt').length === 2);
+
+    const next = requests(child).filter((message) => message.method === 'session/prompt')[1];
+    assert.equal(next.params.sessionId, 'ses_start1');
+    assert.deepEqual(next.params.prompt, [{ type: 'text', text: '[daemon notice] stopped\nwaiting meanwhile' }]);
+    assert.equal(children.length, 1, 'same process');
+    // AgentRuntime turns this report of the stopped turn into a normal end.
+    assert.deepEqual(failed.map((info) => [info.inboundSeqs, info.error]), [[[7], 'opencode turn ended: cancelled']]);
+    assert.equal(agent.turnNotice, null, 'shown once');
+    await agent.stop();
+  });
+
   it('records agent note, tool activity and denies permission requests', async () => {
     const { agent, children, store } = newAgent();
     const child = await startSession(agent, children);

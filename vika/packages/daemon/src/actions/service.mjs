@@ -26,6 +26,10 @@ const NO_ACTION = 'No action was taken.';
 // Replies to bot messages in one chat/thread with no person writing there,
 // after which the safety fuse holds further ones (VIKA_BOT_REPLY_FUSE).
 const BOT_REPLY_FUSE = 20;
+// Calls in one turn that change nothing for the same input (a duplicate
+// stay_silent, send or timer) before the daemon ends that turn. One repeat is
+// a harmless retry; this many is a model that cannot stop.
+const LOOP_BREAK_AFTER = 3;
 
 const HANDLERS = {
   send_message: 'sendMessage',
@@ -54,6 +58,15 @@ const HANDLERS = {
 // A refusal the model can act on; `code` is what logs and activities record.
 function blocked(code, message) {
   return Object.assign(new Error(message), { code });
+}
+
+// Tools whose success changes something (a delivery, a decision, a timer), as
+// against reads. Only these count as progress for the loop guard; marking a
+// timer occurrence done counts only when it was marked.
+const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
+function changesState(tool, result) {
+  if (tool?.name === 'complete_timer_occurrence') return result?.data?.completed === true;
+  return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
 function actionKey(...parts) {
@@ -112,11 +125,18 @@ export class ActionService {
     timers = null,
     clock = () => Date.now(),
     onTimersChanged = () => {},
+    onNoProgress = null,
+    loopBreakAfter = LOOP_BREAK_AFTER,
     logger,
   }) {
     Object.assign(this, {
-      config, store, connectors, roster, liveness, meetingEnabled, ovClient, timers, clock, onTimersChanged, logger,
+      config, store, connectors, roster, liveness, meetingEnabled, ovClient, timers, clock, onTimersChanged,
+      onNoProgress, loopBreakAfter, logger,
     });
+    // Loop guard: duplicate outcomes per input in the current turn, cleared
+    // by resetLoopGuard() at every turn end.
+    this.duplicateCounts = new Map();
+    this.loopBroken = false;
     // One temporary working reaction per conversation, removed by the next
     // final delivery there.
     this.temporaryReactions = new Map();
@@ -194,6 +214,10 @@ export class ActionService {
         result = { ...result, text: `STOP: this stay_silent call changed nothing for this input. Do not call it again for it; decide any other input you still have, otherwise finish your turn. ${result.text}` };
       }
       trace.outcome = result.data?.dry_run ? 'dry_run' : result.data?.duplicate ? 'duplicate' : 'ok';
+      if (trace.outcome === 'duplicate') result = this.noteDuplicate(name, trace, result);
+      // Progress: a call that changed something clears every count. Reads
+      // neither count nor clear.
+      else if (changesState(tool, result)) this.duplicateCounts.clear();
       this.logger.info('agent_tool', { ...trace, durationMs: Date.now() - startedAt });
       return result;
     } catch (error) {
@@ -210,6 +234,41 @@ export class ActionService {
       }
       throw error;
     }
+  }
+
+  // A call that changed nothing, because what it asks for is already done for
+  // that input. Repeating it is how a model that cannot finish its turn shows
+  // itself: the daemon's STOP text alone did not stop one (a model calling
+  // stay_silent for one decided input every few seconds, each time with new
+  // reason wording, while the turn held every later input). Counted per input
+  // (decision seq), whatever the arguments or tool, since the last call that
+  // changed anything: a retry after each real step (an interim message sent,
+  // then resent) never adds up. At the limit onNoProgress asks for the turn to
+  // end, once per turn.
+  noteDuplicate(name, trace, result) {
+    const key = trace.decisionSeq ?? `tool:${name}`;
+    const count = (this.duplicateCounts.get(key) ?? 0) + 1;
+    this.duplicateCounts.set(key, count);
+    trace.duplicates = count;
+    if (count < this.loopBreakAfter || this.loopBroken || !this.onNoProgress) return result;
+    let outcome = null;
+    try {
+      outcome = this.onNoProgress({ tool: name, decisionSeq: trace.decisionSeq ?? null, count, runtime: trace.runtime ?? null });
+    } catch (error) {
+      this.logger.warn('loop_break_request_failed', { error: safeError(error) });
+    }
+    // A stop that cannot start right now (a /model or /runtime transition in
+    // progress) is asked for again on the next repeat.
+    if (outcome?.action === 'skipped' && outcome.reason !== 'stop-in-flight') return result;
+    this.loopBroken = true;
+    trace.loopBreak = true;
+    return { ...result, text: `${result.text} The daemon is ending this turn now: do nothing more in it.` };
+  }
+
+  // Turn end: the next turn starts with no repeats counted.
+  resetLoopGuard() {
+    this.duplicateCounts.clear();
+    this.loopBroken = false;
   }
 
   // Daemon-authored reply (slash command result, failure notice) on an event's
@@ -329,9 +388,11 @@ export class ActionService {
 
   // A delivery made on a decision settles it in the ledger, even when the send
   // then fails or turns uncertain: the model did decide, and a nudge must not
-  // invite a resend. Keyed on the fence, never on the attributed input.
+  // invite a resend. Keyed on the fence, never on the attributed input. Kept
+  // with explicitSilence off too: after a loop stop the ledger is what tells
+  // the inputs that were answered from those the stopped turn left behind.
   settleDecision(caller, fence, final) {
-    if (!this.config.explicitSilence || !caller.authority || !fence || !final) return;
+    if (!caller.authority || !fence || !final) return;
     try {
       const { created, previous } = this.store.recordDecision({ row: fence, outcome: 'delivered' });
       if (created && previous === 'silent') caller.trace.overrode = 'silent';

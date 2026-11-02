@@ -201,6 +201,9 @@ export class PersonalAgentDaemon {
         ovClient,
         timers: this.timers,
         onTimersChanged: () => this.timerConnector?.wake(),
+        // A model that keeps redoing a settled decision: end its turn so the
+        // inputs it holds go on (AgentRuntime.breakLoop).
+        onNoProgress: (info) => this.agentRuntime?.breakLoop(info),
         logger: this.logger.child({ component: 'actions' }),
       });
       this.actionApi = await startActionApi({
@@ -210,8 +213,10 @@ export class PersonalAgentDaemon {
       });
 
       this.agentRuntime = new AgentRuntime(this.config, this.store, this.logger.child({ component: 'agent-runtime' }), {
-        // A turn that ended leaves no OnIt behind, whatever it delivered.
+        // A turn that ended leaves no OnIt behind, whatever it delivered, and
+        // no repeated calls counted toward the loop breaker.
         onTurnFailed: (info) => {
+          this.actions.resetLoopGuard();
           void this.actions.clearTemporaryReactions('turn_end');
           void this.failurePolicy.onTurnFailed(info)
             .catch((error) => {
@@ -219,13 +224,23 @@ export class PersonalAgentDaemon {
             });
         },
         onTurnSucceeded: (info) => {
+          this.actions.resetLoopGuard();
           void this.actions.clearTemporaryReactions('turn_end');
           this.failurePolicy.onTurnSucceeded(info);
           this.decisionPolicy?.onTurnSucceeded(info);
         },
         onTurnAbandoned: (info) => {
+          this.actions.resetLoopGuard();
           void this.actions.clearTemporaryReactions('turn_end');
         },
+        // A turn the loop breaker ended: no failure notice, and what it held
+        // and left undecided comes back once (on any instance).
+        onTurnStopped: (info) => {
+          this.actions.resetLoopGuard();
+          void this.actions.clearTemporaryReactions('turn_end');
+          this.decisionPolicy?.onTurnStopped(info);
+        },
+        recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
         onAvailable: () => { this.harness?.onAvailable(); },
         onAuthorityChanged: ({ runtime, authorityToken }) => {
           // Fires at startup and on a /runtime switch; authority also rotates
@@ -293,15 +308,18 @@ export class PersonalAgentDaemon {
         isStopping: () => this.shuttingDown,
       });
       // Checks at each successful turn's end that every input it consumed got a
-      // decision (a delivery or stay_silent), with one reminder if not. Only on
-      // an instance with explicitSilence on.
-      this.decisionPolicy = this.config.explicitSilence ? new DecisionPolicy({
+      // decision (a delivery or stay_silent), with one reminder if not: only on
+      // an instance with explicitSilence on. Recovers what a loop-stopped turn
+      // left undecided on every instance.
+      this.decisionPolicy = new DecisionPolicy({
         store: this.store,
         harness: this.harness,
         logger: this.logger.child({ component: 'decisions' }),
         recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
+        explicitSilence: Boolean(this.config.explicitSilence),
+        notifyFailure: (info) => this.failurePolicy.notifyTurnFailure(info),
         isStopping: () => this.shuttingDown,
-      }) : null;
+      });
       this.meeting.attachHarness({ runtime: this.agentRuntime });
       await this.agentRuntime.start();
       this.timerConnector = new TimerConnector({

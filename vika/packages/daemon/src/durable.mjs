@@ -16,7 +16,7 @@ import {
   durableHostPath,
   sanitizeDurableEnv,
 } from './durable-runtime.mjs';
-import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
@@ -368,7 +368,7 @@ export class DurableAgent {
       this.cognitionEpoch,
     ) ?? 0;
     const needsCatchup = this.needsHistoryPrefix;
-    let body = items.map((item) => item.text).join('\n');
+    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (needsCatchup) {
       const catchup = cognitionHistoryPrefix(
@@ -929,6 +929,20 @@ export class DurableAgent {
     this.nativeSessionId = ack.conversationId;
     this._persistSession();
     return this.sessionId;
+  }
+
+  // Loop breaker: abort the live run, keeping the host and the conversation.
+  // The host still reports the aborted run as settled, and _completeTurn ends
+  // the turn as usual, draining the queue into the same conversation.
+  cancelTurn() {
+    if (!this.turnActive || !this.connected || !this.child?.stdin?.writable) return false;
+    try {
+      this._write({ type: 'abort' });
+    } catch (error) {
+      this.logger.warn('durable_turn_cancel_failed', { error: safe(error) });
+      return false;
+    }
+    return true;
   }
 
   async interruptTurn() {

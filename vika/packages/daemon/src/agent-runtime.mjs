@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix } from './cognition.mjs';
 import { adaptRuntime } from './runtime-adapter.mjs';
 import { createRuntimeFactories } from './runtime-factory.mjs';
+import { metadataTag } from './runtime-input.mjs';
 import {
   DEFAULT_RUNTIME_ID,
   RUNTIME_IDS,
@@ -18,6 +19,11 @@ import {
   isModelUnavailableError,
 } from './runtime-catalog.mjs';
 
+// Loop breaker (breakLoop): how long a cancelled turn may take to end before
+// its session is replaced, and the window in which a second stop in the same
+// session replaces it instead of cancelling in place again.
+const LOOP_CANCEL_GRACE_MS = 30_000;
+const LOOP_RESET_WINDOW_MS = 10 * 60_000;
 
 export class AgentRuntime {
   constructor(config, store, logger, options = {}) {
@@ -27,9 +33,18 @@ export class AgentRuntime {
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.onTurnAbandoned = options.onTurnAbandoned ?? null;
+    // The end of a turn the loop breaker stopped, however the transport saw it.
+    this.onTurnStopped = options.onTurnStopped ?? null;
     this.onAvailable = options.onAvailable ?? null;
     this.onAuthorityChanged = options.onAuthorityChanged ?? null;
     this.persistRuntimePreference = options.persistRuntimePreference ?? null;
+    this.recordActivity = options.recordActivity ?? null;
+    this.clock = options.clock ?? (() => Date.now());
+    this.loopCancelGraceMs = options.loopCancelGraceMs ?? LOOP_CANCEL_GRACE_MS;
+    this.loopResetWindowMs = options.loopResetWindowMs ?? LOOP_RESET_WINDOW_MS;
+    // The loop stop in flight, and the sessions lately stopped in place.
+    this.loopBreak = null;
+    this.loopStops = [];
     this.factories = createRuntimeFactories(config, store, logger, options);
     this.backend = null;
     this.stagedBackend = null;
@@ -71,9 +86,9 @@ export class AgentRuntime {
   _backendOptions(overrides = {}) {
     const cognition = this.store.getCognitionState();
     return {
-      onTurnFailed: this.onTurnFailed,
-      onTurnSucceeded: this.onTurnSucceeded,
-      onTurnAbandoned: this.onTurnAbandoned,
+      onTurnFailed: (info) => this._turnEnded('failed', info),
+      onTurnSucceeded: (info) => this._turnEnded('succeeded', info),
+      onTurnAbandoned: (info) => this._turnEnded('abandoned', info),
       onAvailable: this.onAvailable,
       authorityToken: cognition.authorityToken,
       cognitionEpoch: cognition.epoch,
@@ -169,6 +184,142 @@ export class AgentRuntime {
 
   _interrupt() { return this.backend?.interrupt() ?? Promise.resolve(); }
 
+  // Every transport's turn end passes here. The turn a loop stop ended goes
+  // to onTurnStopped whatever the transport saw (a cancelled prompt reports as
+  // failed on some, a replaced session as abandoned): nobody is told it
+  // failed, and what it held is recovered there.
+  _turnEnded(kind, info) {
+    if (this.loopBreak) {
+      this._stopEnded(kind, info);
+      return;
+    }
+    const callback = kind === 'failed' ? this.onTurnFailed
+      : kind === 'succeeded' ? this.onTurnSucceeded : this.onTurnAbandoned;
+    callback?.(info);
+  }
+
+  // Loop breaker, asked for by ActionService when the model keeps redoing a
+  // decision already made: such a turn never ends and holds every later
+  // input. Stop it in place: the transport cancels the live turn, which then
+  // ends as a normal turn in the same session (its inputs settled, the queue
+  // drained, a notice in front of the next prompt). A session already stopped
+  // within loopResetWindowMs, a transport that cannot cancel in place, or a
+  // cancel that has not ended the turn after loopCancelGraceMs gets a fresh
+  // session that keeps the recent history instead.
+  breakLoop({ tool = null, decisionSeq = null, count = 0 } = {}) {
+    const details = { runtime: this.runtime, tool, decisionSeq, count };
+    const busy = this.stopping ? 'stopping' : this.loopBreak ? 'stop-in-flight'
+      : this.pendingTransitions > 0 ? 'transition' : !this.backend?.turnInProgress ? 'no-turn' : null;
+    if (busy) {
+      this.logger.info('turn_loop_stop_skipped', { ...details, reason: busy });
+      return { action: 'skipped', reason: busy };
+    }
+    const now = this.clock();
+    this.loopStops = this.loopStops.filter((entry) => now - entry.atMs < this.loopResetWindowMs);
+    const sessionId = this.threadId;
+    const repeated = this.loopStops.some((entry) => entry.sessionId === sessionId);
+    const stop = { ...details, sessionId, startedAtMs: now, action: 'cancel', timer: null };
+    this.loopBreak = stop;
+    this.logger.warn('turn_loop_detected', { ...details, repeated });
+    if (!repeated) {
+      let cancelled = false;
+      try { cancelled = this.backend.cancelTurn(); } catch (error) {
+        this.logger.warn('turn_cancel_failed', { runtime: this.runtime, error: error.message });
+      }
+      if (cancelled) {
+        stop.timer = setTimeout(() => this._loopCancelExpired(stop), this.loopCancelGraceMs);
+        stop.timer.unref?.();
+        return { action: 'cancel' };
+      }
+    }
+    stop.action = 'new-session';
+    void this._replaceLoopingSession(stop);
+    return { action: 'new-session' };
+  }
+
+  _loopCancelExpired(stop) {
+    if (this.loopBreak !== stop) return;
+    // Ended without telling (no inputs to report): nothing is left to replace.
+    if (!this.backend?.turnInProgress) {
+      this._stopEnded('ended', { inboundSeqs: [] });
+      return;
+    }
+    stop.cancelTimedOut = true;
+    stop.action = 'new-session';
+    void this._replaceLoopingSession(stop);
+  }
+
+  async _replaceLoopingSession(stop) {
+    try {
+      const result = await this.transition({ kind: 'loop-reset', expectedRuntime: stop.runtime, stop });
+      if (result?.ok === false) this.logger.info('turn_loop_reset_skipped', { runtime: this.runtime, reason: result.reason });
+    } catch (error) {
+      this.logger.warn('turn_loop_reset_failed', { runtime: this.runtime, error: error.message });
+    } finally {
+      // Not replaced (another transition won, or it failed): release the stop
+      // so a turn that still repeats itself can be stopped again.
+      if (this.loopBreak === stop) {
+        clearTimeout(stop.timer);
+        this.loopBreak = null;
+        this._notifyStopped({ inboundSeqs: [] });
+      }
+    }
+  }
+
+  // Every way a loop stop ends comes here, so the daemon always resets its
+  // repeat counts: a stop ended without a transport callback (an interrupted
+  // turn with no seq or receipt to report) would otherwise leave them armed
+  // and blind to the next loop.
+  _stopEnded(endedAs, info) {
+    this._endLoopBreak(endedAs);
+    this._notifyStopped(info);
+  }
+
+  _notifyStopped(info) {
+    (this.onTurnStopped ?? this.onTurnSucceeded)?.(info);
+  }
+
+  _endLoopBreak(endedAs) {
+    const stop = this.loopBreak;
+    this.loopBreak = null;
+    clearTimeout(stop.timer);
+    const now = this.clock();
+    if (stop.action === 'cancel') this.loopStops.push({ sessionId: stop.sessionId, atMs: now });
+    this.backend?.setTurnNotice(this._loopNotice(stop));
+    const fields = {
+      runtime: stop.runtime, action: stop.action, endedAs, tool: stop.tool, decisionSeq: stop.decisionSeq,
+      count: stop.count, durationMs: now - stop.startedAtMs, ...(stop.cancelTimedOut ? { cancelTimedOut: true } : {}),
+    };
+    this.logger.warn('turn_loop_stopped', fields);
+    try {
+      this.recordActivity?.('agent.loop_stopped', {
+        inboundSeq: stop.decisionSeq ?? undefined,
+        status: stop.action === 'cancel' ? 'CANCELLED' : 'NEW_SESSION',
+        summary: `${stop.tool} repeated ${stop.count} times without effect; turn ${stop.action === 'cancel' ? 'cancelled in place' : 'ended in a new session'}`,
+        metadata: fields,
+      });
+    } catch (error) {
+      this.logger.warn('activity_persist_failed', { kind: 'agent.loop_stopped', error: error.message });
+    }
+  }
+
+  // Says the input is done only when the ledger has its decision (a repeated
+  // timer, or an instance without explicitSilence, records none).
+  _loopNotice(stop) {
+    let row = null;
+    let decided = false;
+    try {
+      row = stop.decisionSeq == null ? null : this.store.inboundBySeq?.(stop.decisionSeq);
+      decided = Boolean(row?.scopeKey && this.store.coveringDecision?.(row.scopeKey, row.seq));
+    } catch {}
+    const target = row?.eventId ? ` for event=${metadataTag(row.eventId)}` : '';
+    return `[daemon notice] The daemon stopped your previous turn: it called ${stop.tool}${target} ${stop.count} times`
+      + ' after that call had nothing left to change.'
+      + (decided ? ' That input already has its decision; take no further action on it.' : ' Do not repeat that call.')
+      + `${stop.action === 'new-session' ? ' You are now in a new session; what came before is in the history above.' : ''}`
+      + ' Go on with the inputs below.';
+  }
+
   async _listModels() {
     const backend = this.backend;
     const current = await backend?.listModels() ?? [];
@@ -257,9 +408,22 @@ export class AgentRuntime {
         revision: this.revision,
       };
     }
+    if (request.kind === 'loop-reset' && (!request.stop || this.loopBreak !== request.stop)) {
+      // Another transition already ended that turn (/new, /runtime).
+      return { ok: false, kind: request.kind, reason: 'stale-loop-stop', runtime: this.runtime, revision: this.revision };
+    }
     this.transitioning = true;
     this.revision += 1;
     try {
+      if (request.kind === 'loop-reset') {
+        await this._interrupt();
+        // A transport with no inputs to report on abandon ends the stop here,
+        // still before the new session drains anything.
+        if (this.loopBreak === request.stop) this._stopEnded('abandoned', { inboundSeqs: [] });
+        if (this.stopping) throw new Error('agent runtime stopped during session transition');
+        const threadId = await this._rotateSession({ resume: false, preserveContext: true });
+        return { ok: true, kind: request.kind, runtime: this.runtime, threadId };
+      }
       if (request.kind === 'new-session') {
         await this._interrupt();
         if (this.stopping) throw new Error('agent runtime stopped during session transition');
@@ -471,6 +635,7 @@ export class AgentRuntime {
       staged.activate();
       this.backend = staged;
       this.runtime = target.runtime;
+      this.loopStops = [];
       this.cachedModels = [];
       this._authorityChanged({ runtime: target.runtime, epoch: cognition.epoch, authorityToken });
       this.stagedBackend = null;
@@ -518,6 +683,9 @@ export class AgentRuntime {
       const plan = await this.backend.prepareSession({ resume: true });
       return this.backend.commitSession(plan);
     }
+    // A fresh native session has no loop stops of its own, whatever id a
+    // transport reuses for it.
+    this.loopStops = [];
     // Every transport prepares its replacement before the SQLite CAS. Prepare
     // may perform fallible RPC/process work, but cannot persist or drain input;
     // commit is a synchronous activation after the local authority hand-off.

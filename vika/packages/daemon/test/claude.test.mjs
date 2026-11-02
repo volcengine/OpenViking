@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
 import { ClaudeAgent, sanitizeClaudeEnv } from '../src/claude.mjs';
+import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
@@ -410,6 +411,34 @@ describe('ClaudeAgent persistent stream-json runtime', () => {
     assert.equal(agent.turnInProgress, false);
     assert.equal(store.global().syncedThroughSeq, 3);
     assert.ok(store.activities.some((activity) => activity.metadata?.delivery === 'telemetry_only'));
+    await agent.stop();
+  });
+
+  it('cancels a looping turn in place with an interrupt control request and keeps the process for the next prompt', async () => {
+    const { agent, persistent, failures } = harness();
+    await agent.start();
+    const child = persistent[0];
+    const adapter = new RuntimeAdapter('claude', agent);
+    assert.equal(adapter.cancelTurn(), false, 'nothing to cancel while idle');
+    agent.deliver('stuck request', 7);
+    child.feed({ type: 'system', subtype: 'init', session_id: agent.sessionId });
+
+    assert.equal(adapter.cancelTurn(), true);
+    const request = JSON.parse(child.writes.at(-1));
+    assert.equal(request.type, 'control_request');
+    assert.deepEqual(request.request, { subtype: 'interrupt' });
+    child.feed({ type: 'control_response', response: { subtype: 'success', request_id: request.request_id } });
+    assert.equal(agent.turnInProgress, true, 'live until Claude reports the result');
+    child.feed({ type: 'result', subtype: 'error_during_execution', is_error: true });
+    assert.equal(agent.turnInProgress, false);
+    // AgentRuntime turns this report of the stopped turn into a normal end.
+    assert.deepEqual(failures.map((info) => info.inboundSeqs), [[7]]);
+
+    adapter.setTurnNotice('[daemon notice] stopped');
+    agent.deliver('next request', 8);
+    assert.equal(JSON.parse(child.writes.at(-1)).message.content[0].text, '[daemon notice] stopped\nnext request');
+    assert.equal(persistent.length, 1, 'same process');
+    assert.equal(child.exitCode, null);
     await agent.stop();
   });
 

@@ -13,7 +13,7 @@ import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
-import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
 const OPENCODE_RUNTIME = getRuntimeDefinition('opencode');
@@ -469,7 +469,7 @@ export class OpencodeAgent {
       beforeSeq,
       this.cognitionEpoch,
     ) ?? 0;
-    let body = items.map((item) => item.text).join('\n');
+    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (this.needsHistoryPrefix) {
       const catchup = cognitionHistoryPrefix(
@@ -1075,6 +1075,16 @@ export class OpencodeAgent {
     this.sessionRotation = null;
     if (!rotation?.previous) return;
     await this._restorePreparedSession(rotation.previous);
+  }
+
+  // Loop breaker: ACP cancel on the live prompt, keeping the process, the
+  // session and the turn's state. session/prompt then resolves (stopReason
+  // cancelled) and _completeTurn ends the turn as usual, draining the queue
+  // into the same session.
+  cancelTurn() {
+    if (!this.turnActive || !this.sessionId || !this.child?.stdin?.writable) return false;
+    this._send({ method: 'session/cancel', params: { sessionId: this.sessionId } });
+    return true;
   }
 
   // Never wait for a stuck turn: notify ACP cancel best-effort, then the caller

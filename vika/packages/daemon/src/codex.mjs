@@ -11,7 +11,7 @@ import { captureStartupStderr } from './runtime-diagnostics.mjs';
 import { activityPayload } from './activity.mjs';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
-import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
 const CODEX_RUNTIME = getRuntimeDefinition('codex');
@@ -388,7 +388,11 @@ export class CodexAgent {
 
   _startTurn(items, { prime = false } = {}) {
     const text = items.map((item) => item.text).join('\n');
-    let body = text;
+    // The daemon notice (RuntimeAdapter.setTurnNotice) belongs to the next real
+    // turn, never to a catch-up prime; a failed turn/start puts it back.
+    const notice = prime ? null : this.turnNotice;
+    const input = prime ? text : withTurnNotice(this, text);
+    let body = input;
     this.startingInput = { input: text, historyChars: 0 };
     const hadPrefix = this.needsHistoryPrefix;
     let journalThroughSeq = this.syncedThroughSeq;
@@ -407,7 +411,7 @@ export class CodexAgent {
         );
         journalThroughSeq = catchup.throughSeq;
         if (catchup.text) {
-          body = `${catchup.text}\n${text}`;
+          body = `${catchup.text}\n${input}`;
           this.startingInput.historyChars = catchup.text.length;
         }
       }
@@ -443,6 +447,7 @@ export class CodexAgent {
       this.startingJournalThroughSeq = 0;
       this.startingOwner = null;
       if (hadPrefix) this.needsHistoryPrefix = true;
+      if (notice) this.turnNotice ??= notice;
       this.logger.warn(`${this.logPrefix}_turn_start_failed`, { error: safe(error) });
       if (prime && this.primeWaiter) {
         const waiter = this.primeWaiter;
@@ -1053,6 +1058,18 @@ export class CodexAgent {
     // The app-server has created an empty, unreachable thread only. Dropping the local
     // candidate restores the exact pre-prepare state; no live thread was swapped.
     this.sessionRotation = null;
+  }
+
+  // Loop breaker: turn/interrupt on the live turn, keeping the thread, the
+  // process and the turn's state. turn/completed (status interrupted, not
+  // failed) then ends the turn as usual, draining the queue into the same
+  // thread. A turn/start still in flight has no id to interrupt yet.
+  cancelTurn() {
+    if (!this.activeTurnId || !this.child || !this.threadId) return false;
+    this._request('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId }).catch((error) => {
+      this.logger.warn(`${this.logPrefix}_turn_cancel_failed`, { error: safe(error) });
+    });
+    return true;
   }
 
   // /new and runtime switches must not wait for a stuck turn: best-effort turn/interrupt on the live

@@ -39,6 +39,12 @@ export class RuntimeAdapter {
   stop() { return this.#implementation.stop(); }
   whenIdle() { return this.#implementation.whenIdle?.() ?? Promise.resolve(); }
   interrupt() { return this.#implementation.interruptTurn?.() ?? Promise.resolve(); }
+  // Ends the live turn in place: same process, same native session, and the
+  // turn then ends through the transport's own completion path (which drains
+  // the queue). False when the transport cannot or there is no live turn.
+  cancelTurn() { return Boolean(this.#implementation.cancelTurn?.()); }
+  // A daemon line for the next prompt this transport starts; taken once.
+  setTurnNotice(text) { this.#implementation.turnNotice = text || null; }
   activate() { return this.#implementation.activateSession?.(); }
   listModels() { return this.#implementation.listModels?.() ?? Promise.resolve([]); }
   selectModel(model, options) { return this.#implementation.setModel(model, options); }

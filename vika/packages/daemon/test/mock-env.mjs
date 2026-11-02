@@ -185,7 +185,13 @@ function fakeLarkSource(dir) {
 // 'complete' | 'fail' (with FAIL_BLOB) | 'ack-only' | 'silent' (calls
 // stay_silent on the newest event= of the turn input over the daemon's agent
 // tool socket, as a real runtime's MCP adapter would, then completes) |
-// 'reply' (likewise answers the newest msg= with reply_message "mock reply").
+// 'reply' (likewise answers the newest msg= with reply_message "mock reply") |
+// 'loop' (like 'silent', but a turn whose input says LOOP keeps calling
+// stay_silent on that event, new reason wording each time, as a model that
+// cannot stop, until turn/interrupt ends it as interrupted; turn/interrupt is
+// logged to INPUT_LOG with the turn id as text) | 'reply-loop' (the same with
+// the identical reply_message "mock reply" in place of stay_silent, for an
+// instance without explicitSilence).
 const ACTION_CLIENT = fileURLToPath(new URL('../src/actions/client.mjs', import.meta.url));
 
 function fakeCodexSource(dir, { behavior, failBlob }) {
@@ -201,6 +207,8 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
     const send = (payload) => process.stdout.write(JSON.stringify(payload) + '\\n');
     const rl = readline.createInterface({ input: process.stdin });
     let turnSeq = 0;
+    const interrupted = new Set();
+    const steered = new Set();
     rl.on('line', (line) => {
       let msg;
       try { msg = JSON.parse(line); } catch { return; }
@@ -237,6 +245,27 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
               fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
               done();
             });
+        } else if (BEHAVIOR === 'loop' || BEHAVIOR === 'reply-loop') {
+          const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
+          const target = [...text.matchAll(/ msg=(\\S+)/g)].at(-1)?.[1];
+          const done = (status) => send({ method: 'turn/completed', params: { turn: { id: turnId, status } } });
+          if (!decision) { done('completed'); return; }
+          const [tool, input] = BEHAVIOR === 'loop' ? ['stay_silent', { decision_id: decision }]
+            : ['reply_message', { decision_id: decision, message_id: target, markdown: 'mock reply' }];
+          const silence = (reason) => callTool(actionEndpoint('fake-codex'), tool, BEHAVIOR === 'loop' ? { ...input, reason } : input)
+            .catch((error) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n'));
+          if (!/LOOP/.test(text)) { silence('mock').then(() => done('completed')); return; }
+          // Settles its input first, then waits (up to 2 s) for a line steered
+          // in while it works before it starts repeating itself.
+          let calls = 0;
+          const startedAt = Date.now();
+          const loop = () => {
+            if (interrupted.has(turnId)) { done('interrupted'); return; }
+            if (calls === 1 && !steered.has(turnId) && Date.now() - startedAt < 2000) { setTimeout(loop, 20); return; }
+            calls += 1;
+            silence('loop wording ' + calls).then(() => setTimeout(loop, 10));
+          };
+          loop();
         } else if (BEHAVIOR === 'fail') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'failed', error: { message: FAIL_BLOB } } } });
         }
@@ -245,10 +274,18 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
       if (msg.method === 'turn/steer') {
         const text = msg.params.input.map((part) => part.text).join('');
         fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/steer', text }) + '\\n');
+        steered.add(msg.params.expectedTurnId);
         send({ id: msg.id, result: {} });
         return;
       }
-      if (msg.method === 'turn/interrupt') { send({ id: msg.id, result: {} }); return; }
+      if (msg.method === 'turn/interrupt') {
+        if (BEHAVIOR === 'loop' || BEHAVIOR === 'reply-loop') {
+          interrupted.add(msg.params.turnId);
+          fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/interrupt', text: msg.params.turnId }) + '\\n');
+        }
+        send({ id: msg.id, result: {} });
+        return;
+      }
     });
   `;
 }
