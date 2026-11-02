@@ -969,7 +969,7 @@ async def read(
     uri_list = requested if isinstance(requested, list) else [requested]
     if not uri_list or any(not item for item in uri_list):
         raise InvalidArgumentError(
-            'read takes uri for one file or uris for several, e.g. '
+            "read takes uri for one file or uris for several, e.g. "
             'read(uri="viking://resources/a.md") or '
             'read(uris=["viking://resources/a.md", "viking://resources/b.md"])'
         )
@@ -2147,12 +2147,9 @@ async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
     ctx = _get_ctx()
-    scheduler = getattr(service, "watch_scheduler", None)
-    if scheduler is None or not scheduler.is_running:
-        return _mcp_failure("Error: Watch scheduler not running")
-    wm = scheduler.watch_manager
+    wm = getattr(service, "watch_manager", None)
     if wm is None:
-        return _mcp_failure("Error: Watch scheduler not running")
+        return _mcp_failure("Error: Watch service not initialized")
     # get_all_tasks does not raise PermissionDeniedError — it silently filters
     # tasks the caller cannot see (watch_manager.py:596-624), so we just
     # accept the filtered list.
@@ -2183,12 +2180,9 @@ async def cancel_watch(to_uri: str) -> str:
     service = get_service()
     ctx = _get_ctx()
     to_uri = _resolve_mcp_workspace_uri(to_uri, ctx)
-    scheduler = getattr(service, "watch_scheduler", None)
-    if scheduler is None or not scheduler.is_running:
-        return _mcp_failure("Error: Watch scheduler not running")
-    wm = scheduler.watch_manager
+    wm = getattr(service, "watch_manager", None)
     if wm is None:
-        return _mcp_failure("Error: Watch scheduler not running")
+        return _mcp_failure("Error: Watch service not initialized")
     task = await wm.get_task_by_uri(
         to_uri,
         ctx.account_id,

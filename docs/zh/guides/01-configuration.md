@@ -1303,6 +1303,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单节点）或 `mysql`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1359,6 +1360,82 @@ Task/Work/Event 记录，用于隔离共用同一套表的多个 OpenViking 部�
 再按顺序执行变更脚本；升级使用旧 TaskStore 表的库前，先执行
 `openviking/service/sql/changes/0001_task_store_service_name.sql`。同一部署
 不要同时让 FileStore 和 MySQL 表作为写入端。
+
+#### watch_store
+
+默认的 `file` provider 与旧版本一样，把 Watch 任务保存在内部控制文件
+`viking://resources/.watch_tasks.json` 中，只供单个 OpenViking 进程使用。任务启动时
+一次性加载到内存；开始运行和关联 Task 只更新内存，创建、配置、checkpoint、
+结果、删除及目标变化时写完整任务快照，内容相同的 patch 不落盘。即使其它 Watch
+发生变化，也不会保存运行占用；重启后与旧版本一样，按保存的计划重新调度过期 Watch。
+快照及其 tmp/backup 文件均为内部控制状态。当 Watch
+元数据本身需要共享存储时使用 `mysql`：安装 `openviking[mysql]`，并执行
+`openviking/service/sql/001_watch_tasks.sql`。MySQL 的 `params` 与 `task_store`
+使用相同的连接字段；`params.table` 默认为 `ov_watch_tasks`。必须配置
+`params.credential_encryption_key`：一个 base64 编码的 32 字节密钥，用于以 AES-GCM
+加密存储每个 Watch 的私有 `auth_state`（数据源 token）和 `connector_states`，密文与
+task ID 绑定。所有节点必须使用同一密钥，更换密钥会导致已有 Watch 凭证无法解密。
+`file` 模式下这些状态仍由 VikingFS 文件加密保护。
+
+候选查询按剩余并发容量分批读取 Watch ID、归属和目标 URI。Manager 的 `due()` 在
+目标 PathLock 内调用 `begin_run()`，在同一事务中读取一次当前 Watch 并占用，
+提交时直接使用快照，不再读取 Watch。占用后的参数修改从下一轮生效。
+`running()` 只读取归属和运行 ID、开始时间、Connector 标记、
+instruction 及数据库时间，不搬运或解密鉴权、Connector 状态和 checkpoint。
+
+MySQL 持久化占用、真实 Task 关联和终态结算，本轮 checkpoint 版本与之前一样
+保存在 payload 中，结算不会用旧 checkpoint 覆盖新配置。缺失 Task
+沿用现有宽限期及重试语义，创建 Task 后、关联 Watch 前崩溃的窗口仍可能造成重复导入。
+
+Watch 列表分页使用建表脚本中的 `list` 和 `list_all` 索引。若此前已创建 Watch 表，
+需执行一次索引更新；自定义表名时同步替换表名及索引名：
+
+```sql
+ALTER TABLE ov_watch_tasks
+  DROP INDEX ix_ov_watch_tasks_list,
+  ADD INDEX ix_ov_watch_tasks_list
+    (service_name(128), account_id(128), user_id(128), deleted, created_at, task_id),
+  ADD INDEX ix_ov_watch_tasks_list_all
+    (service_name, deleted, created_at, task_id);
+```
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "mysql",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
+调度器。`watch_leader_provider` 选择 leader 模式：`auto` 保持按存储类型推导的默认值，
+`local` 将 leader 限制在本进程内，`cache` 使用 AGFS CacheRuntime 的共享 leader 租约。
+leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
+的轮询与有限并发派发流程。后台派发在 leader 内存中维护
+未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描
+恢复占用（File 为本进程状态，MySQL 为持久化行），后续派发不额外查询占用。
+手动触发和首次导入独立受理，扫描发现后计入
+后台占用。File 目标移动没有 1000 条 Watch 上限，MySQL 仍保留该事务限制。
+一次运行就是
+对应的 ingestion Task：运行占用目标期间，Watch 行记录该 Task ID，且只有在持有
+目标 Tree PathLock 时才能开始运行。提交在创建 Task 前停止（服务停机、身份删除、
+失败）时立即结算；Task 超过 1 小时仍不存在时，阻止后续提交并按 error 结算。
+运行超过 3 小时会请求取消，在 Task 停止前仍占用目标；若再过 30 分钟仍无法停止，
+则释放运行并按 failed 结算。
+
+对与被占用 Watch 目标重叠的路径执行 `mv`、`cp`、`rm`、`mkdir` 时，最多等待
+10 秒，之后返回可重试的 busy 错误。
 
 #### agfs (RAGFS)
 

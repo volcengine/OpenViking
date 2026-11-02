@@ -326,6 +326,30 @@ async def test_delete_account_files_disables_automatic_pathlock(monkeypatch):
     agfs.rm.assert_awaited_once_with(path, recursive=True, auto_pathlock=False)
 
 
+async def test_creation_guard_reads_account_store_on_service_loop():
+    """Queue workers call the guard from their own loops; store reads stay on the service loop."""
+    service_loop = asyncio.get_running_loop()
+    lookup_loops = []
+
+    class Store:
+        async def get_deletion(self, account_id, user_id):
+            lookup_loops.append(asyncio.get_running_loop())
+            return None
+
+        async def get_user(self, account_id, user_id):
+            lookup_loops.append(asyncio.get_running_loop())
+            return None
+
+    deletion = DeletionService(service=Mock(), manager=Store(), service_loop=service_loop)
+
+    blocked = await asyncio.to_thread(
+        asyncio.run, deletion._creation_blocked("account", "missing-user")
+    )
+
+    assert blocked is True
+    assert lookup_loops == [service_loop, service_loop]
+
+
 @pytest_asyncio.fixture
 async def template_account(lightweight_admin_client):
     account_id = _uid()
@@ -3180,7 +3204,10 @@ async def test_user_other_auth_cannot_disclose_or_rotate_personal_key(
         update={"auth_mode": auth_mode}
     )
     lightweight_admin_app.dependency_overrides[get_request_context] = lambda: RequestContext(
-        UserIdentifier(account, "alice"), Role(Role.USER), from_oauth=from_oauth, api_key="identity-token"
+        UserIdentifier(account, "alice"),
+        Role(Role.USER),
+        from_oauth=from_oauth,
+        api_key="identity-token",
     )
     response = await lightweight_admin_client.get(f"/api/v1/admin/accounts/{account}/users")
     assert response.status_code == 200
@@ -3224,8 +3251,12 @@ async def test_in_flight_user_rotation_cannot_overwrite_admin_reset(
         response = await asyncio.wait_for(pending, timeout=5)
     assert response.status_code == 401
     url = f"/api/v1/admin/accounts/{account}/users"
-    assert (await lightweight_admin_client.get(url, headers={"X-API-Key": reset_key})).status_code == 200
-    assert (await lightweight_admin_client.get(url, headers={"X-API-Key": old_key})).status_code == 401
+    assert (
+        await lightweight_admin_client.get(url, headers={"X-API-Key": reset_key})
+    ).status_code == 200
+    assert (
+        await lightweight_admin_client.get(url, headers={"X-API-Key": old_key})
+    ).status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -3719,12 +3750,12 @@ async def test_session_storage_uses_canonical_uri(
     ctx = RequestContext(user=UserIdentifier("default", "admin_user"), role=Role.USER)
     await _agfs_write(
         admin_service,
-        "/local/default/session/old-session/messages.jsonl",
+        "/local/default/user/admin_user/sessions/old-session/messages.jsonl",
         '{"role":"user"}\n',
     )
     await _agfs_write(
         admin_service,
-        "/local/default/session/old-session/.meta.json",
+        "/local/default/user/admin_user/sessions/old-session/.meta.json",
         '{"created_by_user_id":"admin_user"}',
     )
 
@@ -4450,10 +4481,7 @@ async def test_user_point_read_returns_role_without_credentials(
         headers=root_headers(),
     )
     assert unknown_account.status_code == 404
-    assert (
-        unknown_account.json()["error"]["message"]
-        == f"Account not found: {unknown_account_id}"
-    )
+    assert unknown_account.json()["error"]["message"] == f"Account not found: {unknown_account_id}"
 
 
 async def test_user_point_read_admin_scoped_to_own_account(lightweight_admin_client):
