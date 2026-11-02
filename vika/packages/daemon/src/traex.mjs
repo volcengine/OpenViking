@@ -1,16 +1,16 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { CodexAgent } from './codex.mjs';
-import { sanitizeAgentChildEnv } from './process-utils.mjs';
-import { agentCliCommands } from './agent-clis.mjs';
+import { CodexAgent, sanitizeCodexEnv } from './codex.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
 const TRAEX_RUNTIME = getRuntimeDefinition('traex');
 const TRAEX_APP_SERVER_CONFIG_ARGS = Object.freeze([]);
 
 export function sanitizeTraexEnv(environment, profile = '', actions = null, config = {}) {
-  return sanitizeAgentChildEnv(environment, { profile, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
+  // TraeCode installs the same OpenViking plugin and uses the same headless
+  // app-server transport as Codex, so it needs the same presentation guard.
+  return sanitizeCodexEnv(environment, profile, actions, config);
 }
 
 // TraeX currently speaks the same app-server JSON-RPC shape that CodexAgent

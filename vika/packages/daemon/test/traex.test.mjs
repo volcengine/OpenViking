@@ -146,6 +146,7 @@ describe('TraexAgent app-server backend', () => {
     assert.doesNotMatch(rendered, /--effort/);
     assert.equal(spawnCalls[0].options.env.LARKSUITE_CLI_PROFILE, 'test-profile');
     assert.ok(spawnCalls[0].options.env.PATH.startsWith('/fake:/fake-slack:'));
+    assert.equal(spawnCalls[0].options.env.OPENVIKING_USAGE_VIEW, 'off');
     assert.equal(spawnCalls[0].options.env.PERSONAL_AGENT_SOCKET, '/tmp/traex-actions.sock');
     assert.equal(spawnCalls[0].options.env.PERSONAL_AGENT_AUTHORITY, 'traex-token');
   });
