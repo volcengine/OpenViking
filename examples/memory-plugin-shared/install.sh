@@ -33,7 +33,7 @@
 # be done before installing.
 #
 # Needs macOS or Linux, bash 3.2+, Node.js 18+ and curl; unzip when a harness
-# installs from the plugin bundle, npm for the CLI.
+# installs from the plugin bundle, npm for OpenCode, pi and the CLI.
 #
 # Hosts it contacts:
 #   docs.openviking.net, docs.openviking.ai  The documentation site, which
@@ -47,7 +47,8 @@
 #   The OpenViking server given: GET /health, and /api/v1/system/status with
 #       the API key.
 #   The npm registry npm is configured with: the CLI (@openviking/cli and its
-#       binary for this platform), pi's dependencies (npm ci) and the dsh
+#       binary for this platform), OpenCode's runtime dependencies (npm install),
+#       pi's dependencies (npm ci) and the dsh
 #       package (dsh plugin add, for DeepSeek Harness Desktop too).
 # docs.openviking.ai is hosted on GitHub Pages. The script itself never
 # contacts github.com and never runs git.
@@ -3037,25 +3038,37 @@ install_opencode() {
     warn "$(t 'opencode CLI not found; skipping OpenCode install.' '未找到 opencode 命令，跳过 OpenCode 安装。')"
     return 0
   fi
-  local plugin_dir dest
+  command -v npm >/dev/null 2>&1 || { err "OpenCode: npm is required to install runtime dependencies"; return 1; }
+  local plugin_dir dest runtime_dir
   ensure_bundle
   plugin_dir="$(plugin_dir_on_disk opencode-plugin)" || {
     warn "$(t 'OpenCode plugin sources not found; skipping.' '未找到 OpenCode 插件源码，跳过。')"
     return 0
   }
   sync_shared_runtime || return 1
-  # Import resolves the complete dependency graph; node --check only parses.
-  "$NODE_BIN" --input-type=module -e 'import { pathToFileURL } from "node:url"; await import(pathToFileURL(process.argv[2]));' \
-    check-runtime "$plugin_dir/servers/mcp-proxy.mjs" || return 1
   dest="$HOME/.config/opencode/plugins/openviking"
   mkdir -p "$(dirname "$dest")"
   if [ "$SOURCE_MODE" = "dev" ]; then
-    rm -rf "$dest"
-    ln -sfn "$plugin_dir" "$dest"
+    runtime_dir="$plugin_dir"
   else
-    rm -rf "$dest.tmp" "$dest"
+    runtime_dir="$dest.tmp"
+    rm -rf "$dest.tmp"
     mkdir -p "$dest.tmp"
     (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$dest.tmp" && tar -xf -)
+  fi
+  # Source packages have no npm lockfile. Install their declared runtime
+  # dependencies without running lifecycle scripts or changing the manifest.
+  # Import both public entrypoints: the proxy alone misses server dependencies.
+  if ! (cd "$runtime_dir" && npm install --omit=dev --ignore-scripts --package-lock=false --no-audit --no-fund \
+      && "$NODE_BIN" --input-type=module -e 'await import("./index.mjs"); await import("./servers/mcp-proxy.mjs"); await (await import("./lib/v2-skills.mjs")).loadBundledV2Skills(process.cwd())'); then
+    err "OpenCode: dependency installation or public entrypoint import failed; plugin registration was not updated"
+    [ "$SOURCE_MODE" = "dev" ] || rm -rf "$dest.tmp"
+    return 1
+  fi
+  rm -rf "$dest"
+  if [ "$SOURCE_MODE" = "dev" ]; then
+    ln -sfn "$plugin_dir" "$dest"
+  else
     mv "$dest.tmp" "$dest"
   fi
   if [ -f "$plugin_dir/wrappers/openviking.js" ]; then

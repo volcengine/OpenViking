@@ -16,7 +16,7 @@ function matchingFiles(directory, suffix) {
 
 const files = [
   "index.mjs",
-  ...["config", "mcp-config", "runtime", "plugin-runtime", "v2-events", "v2-plugin",
+  ...["config", "mcp-config", "runtime", "plugin-runtime", "v2-events", "v2-plugin", "v2-skills",
     "repo-context", "memory-session", "memory-recall", "session-inject", "viking-uri-guard", "utils"]
     .map((name) => `lib/${name}.mjs`),
   ...matchingFiles("lib/shared", ".mjs"),

@@ -22,7 +22,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - On OpenCode v2, reads the structured session context at execution boundaries so tool calls and results are captured too.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
-- Ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths on v1, or registered through the public skill editor on v2, together with the MCP server. They are left out in hook-only mode.
+- Ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths on v1 and registered through the public skill editor on v2. Bundled skills are omitted in hook-only mode or when the existing OpenViking MCP server is explicitly disabled. An existing skill with the same name takes precedence.
 - Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
 
 ## Files
@@ -105,9 +105,15 @@ cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/op
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
+cp -r examples/opencode-plugin/skills ~/.config/opencode/plugins/openviking/
+(cd ~/.config/opencode/plugins/openviking && \
+  npm install --omit=dev --ignore-scripts --package-lock=false --no-audit --no-fund && \
+  node --input-type=module -e 'await import("./index.mjs"); await import("./servers/mcp-proxy.mjs"); await (await import("./lib/v2-skills.mjs")).loadBundledV2Skills(process.cwd())')
 ```
 
 `sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
+
+File/source installs also need the runtime dependencies declared in `package.json`, including `yaml`, on both OpenCode versions. The unified installer runs the same npm dependency install and public-entrypoint import check before registering the plugin. This requires npm and access to its configured registry (or a populated cache); an installation or import failure stops installation. Lifecycle scripts and development dependencies are skipped. Published package installs resolve dependencies through OpenCode's package mechanism.
 
 This creates a stable OpenCode plugin layout:
 

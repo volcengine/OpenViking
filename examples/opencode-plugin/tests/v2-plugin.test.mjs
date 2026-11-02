@@ -1,5 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { join, resolve } from "node:path"
+import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
@@ -72,6 +74,10 @@ test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
     assert.ok(skill.description.length > 20)
     assert.match(skill.path, /SKILL\.md$/)
     assert.match(skill.content, /^# /)
+    const packaged = await readFile(skill.path, "utf8")
+    assert.ok(packaged.endsWith(skill.content))
+    assert.equal(skill.path, join(pluginRoot, "skills", skill.name, "SKILL.md"))
+    assert.equal(skill.id, skill.name)
   }
   assert.equal(registered[0][0], "openviking")
   assert.equal(registered[0][1].type, "local")
@@ -88,6 +94,62 @@ for (const mode of ["hook-only", "disabled-server"]) {
     else ctx.mcp.transform = async (callback) => callback({ get: () => ({ disabled: true }) })
     await (await startV2Plugin(ctx, runtime, { pluginRoot }))()
     assert.deepEqual(skillSources, [])
+  })
+}
+
+for (const deferred of [false, true]) {
+  for (const disabled of [false, true]) {
+    test(`bundled skills survive ${deferred ? "deferred" : "eager"} boot and reload, disabled=${disabled}`, async () => {
+      const { runtime } = runtimeFixture()
+      const { ctx } = contextFixture()
+      const transforms = []
+      let skills = new Map()
+      const replay = (serverDisabled = disabled) => {
+        const servers = new Map(serverDisabled ? [["openviking", { disabled: true }]] : [])
+        skills = new Map()
+        for (const [domain, callback] of transforms) {
+          callback(domain === "mcp" ? {
+            get: (name) => servers.get(name),
+            set: (name, config) => servers.set(name, config),
+          } : {
+            list: () => [...skills.values()],
+            add: (skill) => skills.set(skill.id, skill),
+          })
+        }
+      }
+      for (const domain of ["mcp", "skill"]) ctx[domain].transform = async (callback) => {
+        transforms.push([domain, callback])
+        if (!deferred) replay()
+      }
+      const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
+      replay()
+      assert.equal(skills.size, disabled ? 0 : 3)
+      const initial = [...skills.values()]
+      replay()
+      assert.deepEqual([...skills.values()], initial)
+      replay(!disabled)
+      assert.equal(skills.size, disabled ? 3 : 0)
+      replay()
+      assert.deepEqual([...skills.values()], initial)
+      await cleanup()
+    })
+  }
+}
+
+for (const late of [false, true]) {
+  test(`bundled skills preserve user skill precedence, config replays late=${late}`, async () => {
+    const { runtime } = runtimeFixture()
+    const { ctx } = contextFixture()
+    const existing = { id: late ? "openviking-memory" : "user-memory", name: "openviking-memory", content: "user instructions" }
+    const skills = new Map(late ? [] : [[existing.id, existing]])
+    ctx.skill.transform = async (callback) => {
+      callback({ list: () => [...skills.values()], add: (skill) => skills.set(skill.id, skill) })
+      if (late) skills.set(existing.id, existing)
+    }
+    await (await startV2Plugin(ctx, runtime, { pluginRoot }))()
+    assert.equal(skills.size, 3)
+    assert.equal(skills.get(existing.id), existing)
+    assert.equal([...skills.values()].filter((skill) => skill.name === existing.name).length, 1)
   })
 }
 

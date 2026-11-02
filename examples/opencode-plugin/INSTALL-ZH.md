@@ -67,6 +67,10 @@ cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/op
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
+cp -r examples/opencode-plugin/skills ~/.config/opencode/plugins/openviking/
+(cd ~/.config/opencode/plugins/openviking && \
+  npm install --omit=dev --ignore-scripts --package-lock=false --no-audit --no-fund && \
+  node --input-type=module -e 'await import("./index.mjs"); await import("./servers/mcp-proxy.mjs"); await (await import("./lib/v2-skills.mjs")).loadBundledV2Skills(process.cwd())')
 ```
 
 `sync.mjs` 会生成 `lib/shared/`，插件和 MCP 代理都从这里 import 共享模块。这个目录不在 git 里，所以复制前要先运行；之后每次 `git pull` 也要重新运行再复制。
@@ -80,7 +84,9 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
     ├── index.mjs
     ├── package.json
     ├── lib/
-    └── servers/
+    ├── servers/
+    ├── skills/
+    └── node_modules/
 ```
 
 顶层 `openviking.js` 只负责把 OpenCode 能发现的一级 `.js` 入口转发到插件目录：
@@ -95,6 +101,8 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 如果你使用 npm 包方式安装，也可以将 `examples/opencode-plugin` 作为一个普通 OpenCode 插件包使用。
 
 ## 配置
+
+文件或源码安装需要 npm，并能访问配置的 registry 或使用已有缓存来安装 `yaml` 等运行依赖。统一安装器会在替换现有插件前检查两个入口并实际读取内置技能；依赖安装或技能加载失败时，保留旧插件及其注册配置。
 
 行为旋钮写在共享的客户端配置文件里：
 
