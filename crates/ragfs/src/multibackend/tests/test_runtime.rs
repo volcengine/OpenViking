@@ -78,7 +78,7 @@ async fn delete_account_event_removes_backup_scope() {
         1,
         vec!["backup".to_string()],
         Some(primary),
-        Arc::new(StdMutex::new(HashSet::<ScopeKey>::new())),
+        vec![Arc::new(StdMutex::new(HashSet::<ScopeKey>::new()))],
         metrics,
     );
 

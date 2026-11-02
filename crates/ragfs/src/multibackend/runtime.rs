@@ -88,7 +88,6 @@ impl MultiWriteRuntime {
         let worker_pending_events = pending_events.clone();
         let (activation, _) = watch::channel(None);
         let (catch_up_cancelled, _) = watch::channel(false);
-        let dirty_scopes = Arc::new(StdMutex::new(HashSet::<ScopeKey>::new()));
         let flush_primary = primary.clone();
         let checkpoint_state = primary.as_ref().map(|primary| {
             Arc::new(CheckpointWorker::new(
@@ -111,7 +110,8 @@ impl MultiWriteRuntime {
             targets
                 .into_iter()
                 .map(|target| {
-                    Arc::new(
+                    let dirty_scopes = Arc::new(StdMutex::new(HashSet::<ScopeKey>::new()));
+                    let worker = Arc::new(
                         CatchUpWorker::new(
                             target.backend_id,
                             primary.clone(),
@@ -122,11 +122,15 @@ impl MultiWriteRuntime {
                         )
                         .with_checkpoint_consumer(checkpoint_reader.clone())
                         .with_cancellation(catch_up_cancelled.subscribe()),
-                    )
+                    );
+                    (worker, dirty_scopes)
                 })
                 .collect::<Vec<_>>()
         });
-        let flush_dirty_scopes = dirty_scopes.clone();
+        let flush_dirty_scopes = catch_up_workers
+            .iter()
+            .map(|(_, dirty_scopes)| dirty_scopes.clone())
+            .collect();
         let worker = FlushWorker::new(
             store.clone(),
             provider,
@@ -146,10 +150,9 @@ impl MultiWriteRuntime {
             }
             worker_running.store(false, Ordering::SeqCst);
         }));
-        for worker in catch_up_workers {
+        for (worker, dirty_scopes) in catch_up_workers {
             let mut cancelled = catch_up_cancelled.subscribe();
             let mut activated = activation.subscribe();
-            let dirty_scopes = dirty_scopes.clone();
             drop(tokio::spawn(async move {
                 if !wait_for_start(&mut activated).await {
                     return;
@@ -312,7 +315,7 @@ pub struct FlushWorker {
     initial_partitions: u32,
     backup_names: Vec<String>,
     initialized_accounts: HashSet<String>,
-    dirty_scopes: Arc<StdMutex<HashSet<ScopeKey>>>,
+    dirty_scopes: Vec<Arc<StdMutex<HashSet<ScopeKey>>>>,
     metrics: Arc<MultiWriteMetricsSnapshot>,
 }
 
@@ -324,7 +327,7 @@ impl FlushWorker {
         initial_partitions: u32,
         backup_names: Vec<String>,
         primary: Option<Arc<dyn FileSystem>>,
-        dirty_scopes: Arc<StdMutex<HashSet<ScopeKey>>>,
+        dirty_scopes: Vec<Arc<StdMutex<HashSet<ScopeKey>>>>,
         metrics: Arc<MultiWriteMetricsSnapshot>,
     ) -> Self {
         Self {
@@ -364,6 +367,7 @@ impl FlushWorker {
         for event in batch {
             if matches!(event.kind, PendingEventKind::DeleteAccount) {
                 self.initialized_accounts.remove(&event.account_id);
+                self.metrics.remove_account(&event.account_id);
                 accounts
                     .entry(SYSTEM_DIR.to_string())
                     .or_default()
@@ -503,18 +507,22 @@ impl FlushWorker {
 
     /// Record a successfully updated scope for the next dirty catch-up scan.
     fn mark_dirty_scope(&self, scope: ScopeKey) {
-        self.dirty_scopes
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(scope);
+        for dirty_scopes in &self.dirty_scopes {
+            dirty_scopes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(scope.clone());
+        }
     }
 
     /// Record successfully updated scopes for the next dirty catch-up scan.
     fn mark_dirty_scopes(&self, scopes: Vec<ScopeKey>) {
-        self.dirty_scopes
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .extend(scopes);
+        for dirty_scopes in &self.dirty_scopes {
+            dirty_scopes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .extend(scopes.iter().cloned());
+        }
     }
 
     /// Check account membership through the in-memory initialized set or user registry.

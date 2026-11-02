@@ -153,6 +153,14 @@ impl MultiWriteMetricsSnapshot {
         *value = value.saturating_sub(progress - previous);
     }
 
+    /// Remove every lag entry owned by one deleted account.
+    pub(crate) fn remove_account(&self, account_id: &str) {
+        self.scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(scope, _), _| scope.account_id != account_id);
+    }
+
     /// Return lag aggregated by backend and partition labels.
     pub(crate) fn backend_lag(&self) -> BTreeMap<(String, u32), u64> {
         let mut aggregated = BTreeMap::new();
