@@ -878,7 +878,7 @@ async def test_wm_creation_retries_over_budget_summary_with_reasoning_effort(
     assert [call["reasoning_effort"] for call in calls] == ["low", "low", "low"]
     assert "prompt" in calls[0]
     assert calls[1]["messages"][0]["role"] == "system"
-    assert calls[0]["prompt"] == calls[1]["messages"][1]["content"]
+    assert calls[1]["messages"][1]["content"] == outputs[0]
     assert "tools" not in calls[2]
 
 
