@@ -12,6 +12,7 @@ import os
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
+from openviking.core.namespace import canonical_user_root
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
@@ -1054,8 +1055,24 @@ class OpenVikingService:
         ).sync_if_changed()
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize current user's directory tree."""
+        """Initialize the user's preset directories under one user Tree lease."""
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0
-        return await self._directory_initializer.initialize_user_directories(ctx)
+        agfs = self._viking_fs._async_agfs
+        uri = canonical_user_root(ctx)
+        path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        guard = PathLockGuard(agfs)
+        try:
+            try:
+                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    f"User workspace is busy and cannot be initialized now: {ctx.user.user_id}",
+                    uri=uri,
+                ) from exc
+            return await self._directory_initializer.initialize_user_directories(
+                ctx, lease_ref=lease
+            )
+        finally:
+            await guard.close()

@@ -241,7 +241,9 @@ class DirectoryInitializer:
         roots, children = self._account_directory_targets(ctx)
         return len(await self._initialize_directory_trees(roots, children))
 
-    async def initialize_user_directories(self, ctx: RequestContext) -> int:
+    async def initialize_user_directories(
+        self, ctx: RequestContext, *, lease_ref: Any = None
+    ) -> int:
         """Initialize the current user's root and first-level entry directories.
 
         Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
@@ -251,7 +253,9 @@ class DirectoryInitializer:
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
-        return len(await self._initialize_directory_trees((user_root,), user_children))
+        return len(
+            await self._initialize_directory_trees((user_root,), user_children, lease_ref=lease_ref)
+        )
 
     async def _initialize_directory_trees(
         self,
@@ -366,16 +370,24 @@ class DirectoryInitializer:
         viking_fs = self._get_viking_fs()
         contents = {}
         missing = {}
+        defaults = (
+            ("abstract", target.definition.abstract),
+            ("overview", target.definition.overview),
+        )
+        results = await asyncio.gather(
+            *(
+                viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
+                for name, _ in defaults
+            ),
+            return_exceptions=True,
+        )
         try:
-            for name, default in (
-                ("abstract", target.definition.abstract),
-                ("overview", target.definition.overview),
-            ):
-                try:
-                    raw = await viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
-                except (FileNotFoundError, NotFoundError):
+            for (name, default), raw in zip(defaults, results, strict=True):
+                if isinstance(raw, (FileNotFoundError, NotFoundError)):
                     contents[name] = default
                     missing[name] = contents[name]
+                elif isinstance(raw, BaseException):
+                    raise raw
                 else:
                     contents[name] = body_for_preview(raw)
         except AbstractOverviewFormatError as exc:
