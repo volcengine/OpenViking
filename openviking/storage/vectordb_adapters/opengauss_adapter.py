@@ -14,7 +14,7 @@ Driver: any psycopg2-compatible driver.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from openviking.storage.expr import FilterExpr, Or
 from openviking.storage.vectordb.collection.collection import Collection
@@ -440,11 +440,6 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             raise
         finally:
             cursor.close()
-
-    def update_data(self, data_list: List[Dict[str, Any]]) -> list[str]:
-        normalized_records = [self._normalize_record_for_write(record) for record in data_list]
-        result = self.get_collection().update_data(normalized_records)
-        return list(result or [])
 
     def _existing_scalar_index_fields(self, og_coll: "OpenGaussCollection") -> list[str]:
         for source in (

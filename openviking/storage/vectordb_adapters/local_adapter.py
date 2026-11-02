@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
@@ -81,11 +81,6 @@ class LocalCollectionAdapter(CollectionAdapter):
             path=collection_path,
             config=self._collection_config,
         )
-
-    def update_data(self, data_list: List[Dict[str, Any]]):
-        collection = self.get_collection()
-        result = collection.update_data(data_list)
-        return list(result.ids or [])
 
     def begin_bulk_ingest(self) -> None:
         self.get_collection().begin_bulk_ingest()

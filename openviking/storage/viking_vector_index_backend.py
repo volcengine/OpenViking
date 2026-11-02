@@ -680,6 +680,69 @@ class _SingleAccountBackend:
     async def end_bulk_ingest(self) -> None:
         await self._async_adapter.call("end_bulk_ingest")
 
+    def _prepare_acl_update_payloads(self, data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate account-scoped ACL snapshots without adding write defaults."""
+        if not self._bound_account_id:
+            raise PermissionError("ACL updates require an account-bound backend")
+        required = {"id", "account_id", *ACL_CONTEXT_FIELDS}
+        payloads: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for index, data in enumerate(data_list):
+            if set(data) != required:
+                raise ValueError(
+                    f"ACL record at index {index} must contain only id, account_id "
+                    "and all ACL fields"
+                )
+            if data["account_id"] != self._bound_account_id:
+                raise PermissionError(
+                    f"ACL record at index {index}: record account_id does not match "
+                    "the request context account_id"
+                )
+            record_id = data["id"]
+            if not isinstance(record_id, str) or not record_id:
+                raise ValueError(f"ACL record at index {index}: a nonempty string id is required")
+            if record_id in seen_ids:
+                raise ValueError(f"duplicate ACL record id at index {index}")
+            seen_ids.add(record_id)
+            if any(data[key] is None for key in ACL_CONTEXT_FIELDS):
+                raise ValueError(f"ACL record at index {index}: ACL fields cannot be None")
+            acl = AclManager._effective_from_record(data)
+            # account_id is an assertion about the previously read snapshot,
+            # never a field that an ACL operation is allowed to change.
+            payloads.append({"id": record_id, **acl.context_fields()})
+
+        fields = {
+            field["FieldName"]
+            for field in self._get_meta_data(self._get_collection()).get("Fields", [])
+        }
+        missing = {"id", *ACL_CONTEXT_FIELDS} - fields
+        if missing:
+            # Generic partial updates silently filter unknown fields. ACL writes
+            # must instead fail if schema drift would discard a permission change.
+            raise RuntimeError(f"Collection is missing ACL update fields: {sorted(missing)}")
+        return payloads
+
+    @_backend_operation
+    async def update_acl_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Patch ACLs from authorized, account-scoped snapshots of existing records.
+
+        The caller owns authorization and subtree locking. This uses the backend's
+        update-only path, with no upsert fallback. Validation and backend failures
+        propagate so the caller can compensate a partially applied batch.
+        """
+        if not data_list:
+            return []
+        payloads = await self._async_adapter.run(self._prepare_acl_update_payloads, data_list)
+        ids = await self._async_adapter.call("update_data", payloads)
+        normalized_ids = [str(item) for item in (ids or []) if item is not None]
+        expected_ids = [payload["id"] for payload in payloads]
+        if normalized_ids != expected_ids:
+            raise RuntimeError(
+                "bulk ACL update adapter returned IDs that do not match the input count and order "
+                f"(expected {len(expected_ids)}, got {len(normalized_ids)})"
+            )
+        return normalized_ids
+
     @_backend_operation
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -1423,6 +1486,12 @@ class VikingVectorIndexBackend:
     ) -> List[str]:
         """Write records whose ACL fields have already been materialized."""
         return await (await self._get_backend_for_context(ctx)).upsert_many(data_list)
+
+    async def _update_acl_many_raw(
+        self, data_list: List[Dict[str, Any]], *, ctx: RequestContext
+    ) -> List[str]:
+        """Update only materialized ACL fields on existing account-scoped records."""
+        return await (await self._get_backend_for_context(ctx)).update_acl_many(data_list)
 
     async def _materialize_acl_fields(
         self,

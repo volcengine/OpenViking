@@ -1014,7 +1014,7 @@ def test_volcengine_adapter_update_data_falls_back_to_batch_request_ids_when_bac
     assert result == ["doc-1", "doc-2"]
 
 
-def test_volcengine_adapter_update_data_falls_back_when_ids_key_is_not_a_list():
+def test_volcengine_adapter_update_data_rejects_malformed_ids():
     adapter = VolcengineCollectionAdapter(
         ak="test-ak",
         sk="test-sk",
@@ -1034,12 +1034,11 @@ def test_volcengine_adapter_update_data_falls_back_when_ids_key_is_not_a_list():
 
     adapter._collection = _Collection()
 
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
+    with pytest.raises(RuntimeError, match="IDs"):
+        adapter.update_data([{"id": "doc-1", "name": "updated"}])
 
-    assert result == ["doc-1"]
 
-
-def test_volcengine_adapter_update_data_falls_back_when_primary_keys_is_not_a_list():
+def test_volcengine_adapter_update_data_rejects_malformed_primary_keys():
     adapter = VolcengineCollectionAdapter(
         ak="test-ak",
         sk="test-sk",
@@ -1059,12 +1058,11 @@ def test_volcengine_adapter_update_data_falls_back_when_primary_keys_is_not_a_li
 
     adapter._collection = _Collection()
 
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
+    with pytest.raises(RuntimeError, match="IDs"):
+        adapter.update_data([{"id": "doc-1", "name": "updated"}])
 
-    assert result == ["doc-1"]
 
-
-def test_volcengine_adapter_update_data_returns_empty_when_backend_reports_zero_updates():
+def test_volcengine_adapter_update_data_reports_missing_when_backend_updates_nothing():
     adapter = VolcengineCollectionAdapter(
         ak="test-ak",
         sk="test-sk",
@@ -1084,12 +1082,11 @@ def test_volcengine_adapter_update_data_returns_empty_when_backend_reports_zero_
 
     adapter._collection = _Collection()
 
-    result = adapter.update_data([{"id": "doc-404", "name": "updated"}])
+    with pytest.raises(ValueError, match="not found"):
+        adapter.update_data([{"id": "doc-404", "name": "updated"}])
 
-    assert result == []
 
-
-def test_volcengine_adapter_update_data_returns_empty_when_backend_dict_has_no_ids_or_updated_count():
+def test_volcengine_adapter_update_data_rejects_unverified_acknowledgement():
     adapter = VolcengineCollectionAdapter(
         ak="test-ak",
         sk="test-sk",
@@ -1109,12 +1106,11 @@ def test_volcengine_adapter_update_data_returns_empty_when_backend_dict_has_no_i
 
     adapter._collection = _Collection()
 
-    result = adapter.update_data([{"id": "doc-404", "name": "updated"}])
+    with pytest.raises(RuntimeError, match="IDs"):
+        adapter.update_data([{"id": "doc-404", "name": "updated"}])
 
-    assert result == []
 
-
-def test_volcengine_adapter_update_data_skips_records_without_id_in_fallback():
+def test_volcengine_adapter_update_data_validates_all_ids_before_writing():
     adapter = VolcengineCollectionAdapter(
         ak="test-ak",
         sk="test-sk",
@@ -1129,14 +1125,12 @@ def test_volcengine_adapter_update_data_skips_records_without_id_in_fallback():
 
     class _Collection:
         def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}, {"name": "missing-id"}]
-            return {"updated": 2}
+            pytest.fail("update must not write a batch containing an invalid ID")
 
     adapter._collection = _Collection()
 
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}, {"name": "missing-id"}])
-
-    assert result == ["doc-1"]
+    with pytest.raises(ValueError, match="id is required"):
+        adapter.update_data([{"id": "doc-1", "name": "updated"}, {"name": "missing-id"}])
 
 
 def test_volcengine_adapter_update_data_supports_api_key_mode():

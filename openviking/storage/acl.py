@@ -13,9 +13,13 @@ from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+
+
+logger = get_logger(__name__)
 
 
 class AccountConfigReader(Protocol):
@@ -367,9 +371,7 @@ class AclManager:
         records: list[dict[str, Any]] = []
         for offset in range(0, len(unique), 100):
             conditions = [PathScope("uri", uri, depth=0) for uri in unique[offset : offset + 100]]
-            records.extend(
-                await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx)
-            )
+            records.extend(await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx))
         return records
 
     async def _scroll_all(
@@ -564,11 +566,15 @@ class AclManager:
             )
 
         updated = [
-            {**record, **effective_by_uri[str(record["uri"])].context_fields()}
+            {
+                "id": record["id"],
+                "account_id": record["account_id"],
+                **effective_by_uri[str(record["uri"])].context_fields(),
+            }
             for record in records
             if str(record.get("uri") or "") in effective_by_uri
         ]
-        ids = await self._context_store._upsert_many_raw(updated, ctx=ctx)
+        ids = await self._context_store._update_acl_many_raw(updated, ctx=ctx)
         if len(ids) != len(updated):
             raise RuntimeError(f"Failed to update {len(updated) - len(ids)} context ACL record(s)")
         return effective_by_uri[root_uri]
@@ -597,6 +603,14 @@ class AclManager:
             raise InvalidArgumentError("entries or acl_mode must be provided")
         proposed_direct = DirectAcl.from_entries(entries) if entries is not None else None
         old_records = await self._subtree_records(uri, ctx)
+        old_acl_records = [
+            {
+                "id": record["id"],
+                "account_id": record["account_id"],
+                **self._effective_from_record(record).context_fields(),
+            }
+            for record in old_records
+        ]
         try:
             effective = await self._apply_subtree(
                 uri,
@@ -606,8 +620,36 @@ class AclManager:
                 root_mode=acl_mode,
             )
         except Exception:
-            if old_records:
-                await self._context_store._upsert_many_raw(old_records, ctx=ctx)
+            # Restore only ACL fields: a whole-record snapshot could overwrite
+            # concurrent content updates or recreate a deleted context record.
+            if old_acl_records:
+                try:
+                    ids = await self._context_store._update_acl_many_raw(old_acl_records, ctx=ctx)
+                    if ids != [str(record["id"]) for record in old_acl_records]:
+                        raise RuntimeError("ACL rollback did not restore all expected records")
+                except Exception:
+                    logger.warning(
+                        "Batch ACL rollback failed for %s; retrying records individually",
+                        uri,
+                        exc_info=True,
+                    )
+                    # A missing record must not prevent restoring the others.
+                    # Log compensation failures without replacing the original
+                    # update error or falling back to an inserting write.
+                    for record in old_acl_records:
+                        try:
+                            ids = await self._context_store._update_acl_many_raw([record], ctx=ctx)
+                            if ids != [str(record["id"])]:
+                                raise RuntimeError(
+                                    "ACL rollback did not restore the expected record"
+                                )
+                        except Exception:
+                            logger.error(
+                                "Failed to restore context ACL record id=%s account_id=%s",
+                                record["id"],
+                                record["account_id"],
+                                exc_info=True,
+                            )
             raise
         return effective
 

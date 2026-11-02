@@ -124,6 +124,8 @@ acl_inherited_grants
 
 ACL 随索引更新，允许同一 URI 的不同索引记录短暂保留不同版本。读取采用索引返回的一份 ACL 快照，不合并不同版本的授权，也不因副本暂时不一致阻断处理。权限变更按索引更新进度生效，不保证强一致。
 
+修改 ACL 时，会重算目标及后代已有 context 记录的权限，并批量局部更新上述三个字段；失败补偿也只恢复 ACL 字段，不使用完整记录快照进行 upsert。跨批次更新不保证事务原子性，补偿失败会记录错误。首次创建 context 记录仍使用 upsert 并生成继承权限。本地后端的局部更新内部仍会合并完整记录并更新向量索引。
+
 请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。检索在共享区内用 `acl_mode IN [inherit, restricted]` 判断受控资源，再匹配各 principal 的 `1`、`3`、`7` grant token：inherit 匹配 direct 或 inherited，restricted 只匹配 direct。未写入 ACL 字段（字段缺失、为 `null` 或 `none`）的共享记录按根目录默认全员授权参与检索。已保存的 inherit 节点必须匹配自己的直接或继承授权，不能因为模式是 inherit 就放行全员。个人资源始终按 URI owner 隔离。
 
 检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。

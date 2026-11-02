@@ -12,6 +12,7 @@ from openviking.storage.vectordb.collection.result import (
     FetchDataInCollectionResult,
     SearchResult,
     parse_remote_search_result,
+    parse_remote_update_response,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
     VIKING_DB_VERSION,
@@ -432,7 +433,10 @@ class VolcengineCollection(ICollection):
             "data": data_list,
             "ignore_unknown_fields": True,
         }
-        return self._data_post(path, data)
+        response = self.data_client.do_req("POST", path, req_body=self._sanitize_payload(data))
+        if response.status_code != 200:
+            raise self._build_response_error(response, path)
+        return parse_remote_update_response(response, [item["id"] for item in data_list], path)
 
     def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
         path = "/api/vikingdb/data/fetch_in_collection"

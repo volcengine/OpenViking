@@ -27,7 +27,10 @@ from openviking.storage.expr import (
     TimeRange,
 )
 from openviking.storage.vectordb.collection.collection import Collection
-from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
+from openviking.storage.vectordb.collection.result import (
+    FetchDataInCollectionResult,
+    UpsertDataResult,
+)
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME
 
@@ -94,7 +97,7 @@ class CollectionAdapter(ABC):
     Internal extension hooks for subclasses use leading underscore.
     """
 
-    # Maximum number of records per single data-plane request (upsert / fetch / delete).
+    # Maximum number of records per single data-plane request (upsert / update / fetch / delete).
     # ``None`` means no batching (suitable for backends without a hard limit).
     # VikingDB-backed adapters override this to 100 to avoid 400 errors.
     _DATA_BATCH_SIZE: int | None = None
@@ -441,6 +444,72 @@ class CollectionAdapter(ABC):
         else:
             coll.upsert_data(normalized)
         return ids
+
+    def update_data(self, data_list: list[Dict[str, Any]]) -> list[str]:
+        """Update existing records in bounded batches, requiring complete results.
+
+        Validate the entire request before issuing any writes. Batches are not
+        transactional across requests; callers must compensate earlier batches
+        if a later request fails.
+        """
+        if not data_list:
+            return []
+        normalized: list[Dict[str, Any]] = []
+        expected_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for index, item in enumerate(data_list):
+            if not isinstance(item, dict) or not item.get("id"):
+                raise ValueError(f"record at index {index}: id is required for update")
+            record_id = str(item["id"])
+            if record_id in seen_ids:
+                raise ValueError(f"duplicate record id at index {index}")
+            seen_ids.add(record_id)
+            expected_ids.append(record_id)
+            normalized.append(self._normalize_record_for_write(item))
+
+        collection = self.get_collection()
+        batch_size = self._DATA_BATCH_SIZE or len(normalized)
+        for start in range(0, len(normalized), batch_size):
+            batch = normalized[start : start + batch_size]
+            ids = expected_ids[start : start + batch_size]
+            result = collection.update_data(batch)
+            self._validate_update_result(result, ids)
+        return expected_ids
+
+    @staticmethod
+    def _validate_update_result(result: Any, expected_ids: list[str]) -> None:
+        """Never expand a partial result into success for the whole request."""
+        reported_ids = None
+        if isinstance(result, UpsertDataResult):
+            reported_ids = result.ids
+        elif isinstance(result, list):
+            reported_ids = result
+        elif isinstance(result, dict):
+            if "updated" in result:
+                count = result["updated"]
+                if type(count) is not int or count != len(expected_ids):
+                    if type(count) is int and count == 0:
+                        raise ValueError("record not found: update returned zero updated records")
+                    raise RuntimeError("update returned an incomplete or invalid updated count")
+            for key in ("primary_keys", "ids"):
+                if key not in result:
+                    continue
+                values = result[key]
+                if (
+                    not isinstance(values, list)
+                    or any(value is None for value in values)
+                    or [str(value) for value in values] != expected_ids
+                ):
+                    raise RuntimeError("update returned IDs that do not match the request")
+                reported_ids = values
+            if reported_ids is None and "updated" in result:
+                return
+        if (
+            not isinstance(reported_ids, list)
+            or any(value is None for value in reported_ids)
+            or [str(value) for value in reported_ids] != expected_ids
+        ):
+            raise RuntimeError("update returned IDs that do not match the request")
 
     def get(self, ids: list[str]) -> list[Dict[str, Any]]:
         if not ids:

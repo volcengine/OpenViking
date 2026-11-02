@@ -15,6 +15,7 @@ from openviking.storage.vectordb.collection.result import (
     SearchItemResult,
     SearchResult,
     parse_remote_search_result,
+    parse_remote_update_response,
 )
 
 # Default request timeout (seconds)
@@ -310,10 +311,9 @@ class HttpCollection(ICollection):
             },
             timeout=DEFAULT_TIMEOUT,
         )
-        if response.status_code != 200:
-            return []
-        result = json.loads(response.text)
-        return result.get("data", [])
+        return parse_remote_update_response(
+            response, [item["id"] for item in data_list], url, result_key="data"
+        )
 
     def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
         url = self.url_prefix + "api/vikingdb/data/fetch_in_collection"

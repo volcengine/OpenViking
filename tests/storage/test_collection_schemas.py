@@ -1403,19 +1403,19 @@ def test_volcengine_api_key_collection_reports_trusted_openviking_schema():
     assert any(item.get("Field") == "content" for item in meta["FullText"])
 
 
-def test_volcengine_api_key_collection_ignores_unknown_fields_on_writes():
+def test_volcengine_api_key_collection_ignores_unknown_fields_on_writes(monkeypatch):
     calls = []
 
-    class _Collection(VolcengineApiKeyCollection):
-        def _data_post(self, path, data):
-            calls.append((path, data))
-            return {"updated": 1}
+    def _do_req(method, path, *, req_body):
+        calls.append((path, req_body))
+        return SimpleNamespace(status_code=200, json=lambda: {"result": {"updated": 1}})
 
-    collection = _Collection(
+    collection = VolcengineApiKeyCollection(
         api_key="vk-test-token",
         host="https://vikingdb.example.com",
         meta_data={"ProjectName": "default", "CollectionName": "context", "IndexName": "default"},
     )
+    monkeypatch.setattr(collection.data_client, "do_req", _do_req)
 
     collection.upsert_data([{"id": "rec-1", "content": "hello"}])
     collection.update_data([{"id": "rec-1", "search_tags": ["tag"]}])
@@ -1441,20 +1441,20 @@ def test_volcengine_api_key_collection_ignores_unknown_fields_on_writes():
     )
 
 
-def test_volcengine_aksk_collection_ignores_unknown_fields_on_writes():
+def test_volcengine_aksk_collection_ignores_unknown_fields_on_writes(monkeypatch):
     calls = []
 
-    class _Collection(VolcengineCollection):
-        def _data_post(self, path, data):
-            calls.append((path, data))
-            return {"updated": 1}
+    def _do_req(method, path, *, req_body):
+        calls.append((path, req_body))
+        return SimpleNamespace(status_code=200, json=lambda: {"result": {"updated": 1}})
 
-    collection = _Collection(
+    collection = VolcengineCollection(
         ak="ak",
         sk="sk",
         region="cn-beijing",
         meta_data={"ProjectName": "default", "CollectionName": "context"},
     )
+    monkeypatch.setattr(collection.data_client, "do_req", _do_req)
 
     collection.upsert_data([{"id": "rec-1", "content": "hello"}])
     collection.update_data([{"id": "rec-1", "search_tags": ["tag"]}])
@@ -1463,18 +1463,18 @@ def test_volcengine_aksk_collection_ignores_unknown_fields_on_writes():
     assert calls[1][1]["ignore_unknown_fields"] is True
 
 
-def test_private_vikingdb_collection_ignores_unknown_fields_on_writes():
+def test_private_vikingdb_collection_ignores_unknown_fields_on_writes(monkeypatch):
     calls = []
 
-    class _Collection(VikingDBCollection):
-        def _data_post(self, path, data):
-            calls.append((path, data))
-            return {"updated": 1}
+    def _do_req(method, path, *, req_body):
+        calls.append((path, req_body))
+        return SimpleNamespace(status_code=200, json=lambda: {"result": {"updated": 1}})
 
-    collection = _Collection(
+    collection = VikingDBCollection(
         host="https://vikingdb.example.com",
         meta_data={"ProjectName": "default", "CollectionName": "context"},
     )
+    monkeypatch.setattr(collection.client, "do_req", _do_req)
 
     collection.upsert_data([{"id": "rec-1", "content": "hello"}])
     collection.update_data([{"id": "rec-1", "search_tags": ["tag"]}])

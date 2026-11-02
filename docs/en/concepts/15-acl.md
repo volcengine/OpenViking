@@ -129,6 +129,8 @@ acl_inherited_grants
 
 ACLs update with the index, so records for the same URI may temporarily hold different versions. Reads use one ACL snapshot returned by the index, without merging grants across versions or blocking on temporary disagreement. Permission changes take effect as index updates complete; strong consistency is not guaranteed.
 
+Changing an ACL recalculates permissions for existing context records at the target and its descendants, then updates only the three ACL fields in batches. Failure compensation also restores only ACL fields rather than upserting full record snapshots. Updates across batches are not transactional, and compensation failures are logged. Creating a context record still uses upsert and materializes inherited permissions. The local backend's partial update still merges the complete record and updates the vector index internally.
+
 The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. Within the shared scope, retrieval identifies controlled records with `acl_mode IN [inherit, restricted]`, then matches each principal's `1`, `3`, and `7` grant tokens: direct or inherited for inherit mode, direct only for restricted mode. Shared records with missing, `null`, or `none` modes use the root’s default wildcard access in retrieval. Stored inherit nodes must match their direct or inherited grants; inherit mode alone never grants wildcard access. Private resources remain isolated by URI owner.
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
