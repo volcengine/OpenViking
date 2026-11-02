@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 import httpx
@@ -694,11 +694,13 @@ class CompileService:
                 details={"to": target},
             )
 
+        internal_ctx = replace(ctx, bypass_acl=True)
+
         async def commit_graph_snapshot(uri: str, lease: Any) -> str | None:
             return await lifecycle._commit(
                 [uri],
                 "artifact relation graph baseline",
-                ctx,
+                internal_ctx,
                 lease_ref=lease,
             )
 
@@ -940,9 +942,7 @@ class CompileService:
         )
         for source in sources:
             if classify_uri(source).is_system:
-                raise InvalidArgumentError(
-                    "Compile source must not be in the system namespace"
-                )
+                raise InvalidArgumentError("Compile source must not be in the system namespace")
         skill = request.skill.removesuffix("/SKILL.md")
         skill = validate_request_viking_uri(
             resolve_path_variables(skill), ctx, field_name="skill"

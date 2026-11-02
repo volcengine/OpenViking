@@ -146,8 +146,7 @@ async def test_compile_api_rejects_system_source_without_creating_task(
     owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
     tracker = get_task_tracker()
     before = {
-        task.task_id
-        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
     }
 
     response = await client.post(
@@ -162,8 +161,7 @@ async def test_compile_api_rejects_system_source_without_creating_task(
     assert response.status_code == 400, response.text
     assert "Compile source must not be in the system namespace" in response.text
     after = {
-        task.task_id
-        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
     }
     assert after == before
 
@@ -192,6 +190,53 @@ async def test_artifact_relations_http_contract(service, app, client, monkeypatc
     assert response.status_code == 200
     assert response.json()["result"] == graph
     mocked.assert_awaited_once_with("viking://resources/wiki", ctx)
+
+
+@pytest.mark.asyncio
+async def test_artifact_relations_commits_missing_baseline_with_internal_context():
+    from openviking.service.compile_service import CompileService
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+
+    target = "viking://resources/wiki"
+    ctx = RequestContext(user=UserIdentifier("acme", "reader"), role=Role.USER)
+    record = {"to": target, "initialized": True, "wiki_head": None}
+    commit = AsyncMock(return_value="new-head")
+    lifecycle = SimpleNamespace(
+        _fs=SimpleNamespace(_ensure_access=AsyncMock()),
+        store=SimpleNamespace(get_by_to=AsyncMock(return_value=record)),
+        _commit=commit,
+        _locked_output=Mock(),
+    )
+
+    async def get_graph(graph_record, graph_ctx, *, lock_output, commit_snapshot):
+        assert graph_record is record
+        assert graph_ctx is ctx
+        assert lock_output(target) is lifecycle._locked_output.return_value
+        return {"head": await commit_snapshot(target, "tree-lease")}
+
+    compile_service = CompileService(
+        CompileApiConfig(),
+        ExternalTaskService(),
+        SimpleNamespace(),
+    )
+    compile_service._lifecycle = lifecycle
+    compile_service._artifact_graph = SimpleNamespace(get=AsyncMock(side_effect=get_graph))
+
+    result = await compile_service.artifact_relations(target, ctx)
+
+    assert result == {"head": "new-head"}
+    lifecycle._fs._ensure_access.assert_awaited_once_with(target, ctx)
+    commit_ctx = commit.await_args.args[2]
+    assert commit_ctx is not ctx
+    assert commit_ctx.user == ctx.user
+    assert commit_ctx.role == ctx.role
+    assert commit_ctx.bypass_acl is True
+    commit.assert_awaited_once_with(
+        [target],
+        "artifact relation graph baseline",
+        commit_ctx,
+        lease_ref="tree-lease",
+    )
 
 
 @pytest.mark.asyncio
