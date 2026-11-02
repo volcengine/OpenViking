@@ -43,7 +43,8 @@ openviking-server doctor
       "cachefs": {
         "backend": "cache",
         "max_file_size_bytes": 1048576,
-        "bypass_prefixes": ["/queue", "/tmp"]
+        "bypass_prefixes": ["/queue", "/tmp"],
+        "priority_ttl_seconds": 7200
       },
       "pathlock": {
         "provider": "cache",
@@ -152,6 +153,7 @@ Cache PathLock 和 cache-backed 多写 metadata 提供 Redis namespace。
 | `max_file_size_bytes` | int | `1048576` | 允许进入缓存的最大完整文件大小 |
 | `traversal_mode` | str | `"backend"` | 递归 API 使用 backend 遍历或 `cached_traversal` |
 | `bypass_prefixes` | list[str] | `[]` | 强制绕过缓存的路径前缀 |
+| `priority_ttl_seconds` | int | `0` | 优先缓存对象的 TTL；`0` 表示沿用 Provider 默认 TTL。仅当缓存与 QueueFS、PathLock 或 expiry 调度共用同一个 Redis 服务时生效 |
 
 `storage.agfs.pathlock` 控制 PathLock 存储：
 
@@ -232,6 +234,8 @@ RAGFS 主要缓存三类对象。
 文件 value 是 `CacheEnvelope`，包含文件内容、对象类型、路径和 generation 快照。全量读取命中后，RAGFS 会先校验 envelope 和 generation，再返回内容。
 
 默认策略会优先缓存 `.abstract.md` 和 `.overview.md` 这类摘要文件；超过 `max_file_size_bytes` 的文件不会进入缓存。非全量 range read 也会绕过缓存。
+
+优先缓存的对象默认沿用 Provider 的 TTL，只有设置 `priority_ttl_seconds` 才会使用独立 TTL。该选项仅在 CacheFS 与 QueueFS、PathLock 或 expiry 调度共用同一个 Redis 服务时生效——分属不同 Redis 服务时不存在需要让出的共享容量。配合按 TTL 淘汰的策略使用，可以让优先对象比普通对象存活更久。
 
 ### 目录缓存
 

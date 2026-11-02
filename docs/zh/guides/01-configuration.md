@@ -1445,6 +1445,7 @@ Redis 命名空间。
 | `max_file_size_bytes` | int | 允许缓存的单文件最大字节数 | `1048576` |
 | `traversal_mode` | str | `backend` 或 `cached_traversal` | `backend` |
 | `bypass_prefixes` | array[str] | 绕过缓存的路径前缀 | `[]` |
+| `priority_ttl_seconds` | int | 优先缓存对象（摘要、概览、目录条目）的 TTL；`0` 表示沿用 Provider 默认 TTL。仅当缓存与 QueueFS、PathLock 或 expiry 调度共用同一个 Redis 服务时生效 | `0` |
 
 `storage.agfs.pathlock` 选择 PathLock 存储 Provider：
 

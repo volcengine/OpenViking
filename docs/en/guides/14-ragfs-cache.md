@@ -44,7 +44,8 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
       "cachefs": {
         "backend": "cache",
         "max_file_size_bytes": 1048576,
-        "bypass_prefixes": ["/queue", "/tmp"]
+        "bypass_prefixes": ["/queue", "/tmp"],
+        "priority_ttl_seconds": 7200
       },
       "pathlock": {
         "provider": "cache",
@@ -160,6 +161,7 @@ The top-level `cache` section is a sibling of `storage`:
 | `max_file_size_bytes` | int | `1048576` | Maximum full-file object size admitted to cache |
 | `traversal_mode` | str | `"backend"` | Use backend traversal or `cached_traversal` for recursive APIs |
 | `bypass_prefixes` | list[str] | `[]` | Path prefixes that always bypass cache |
+| `priority_ttl_seconds` | int | `0` | TTL for preferred entries; `0` keeps the provider default TTL. Only applies when the cache shares a Redis service with QueueFS, PathLock, or the expiry scheduler |
 
 `storage.agfs.pathlock` controls PathLock storage:
 
@@ -241,6 +243,8 @@ File keys use a stable namespace and path hash:
 The file value is a `CacheEnvelope` containing file content, object kind, path, and generation snapshots. After a full-read cache hit, RAGFS validates the envelope and generation before returning the content.
 
 The default policy prefers summary files such as `.abstract.md` and `.overview.md`. Files larger than `max_file_size_bytes` are not admitted to cache. Non-full range reads also bypass the cache.
+
+A preferred entry is written with the provider default TTL unless `priority_ttl_seconds` is set. The option only applies when CacheFS shares a Redis service with QueueFS, PathLock, or the expiry scheduler, because separate Redis services have no shared capacity to yield to. Pair it with a TTL-driven eviction policy so the preferred entries outlive the ordinary ones.
 
 ### Directory Cache
 

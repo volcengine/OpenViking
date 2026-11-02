@@ -1461,6 +1461,7 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | `max_file_size_bytes` | int | Maximum full-file object size admitted to cache | `1048576` |
 | `traversal_mode` | str | `backend` or `cached_traversal` | `backend` |
 | `bypass_prefixes` | array[str] | Path prefixes that bypass cache | `[]` |
+| `priority_ttl_seconds` | int | TTL for preferred cache entries (summaries, overviews, directory entries); `0` keeps the provider default TTL. Only applies when the cache shares a Redis service with QueueFS, PathLock, or the expiry scheduler | `0` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
 
