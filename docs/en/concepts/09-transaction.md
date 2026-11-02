@@ -528,14 +528,21 @@ processes to write business files. Waiting for old tokens to expire cannot
 replace the process exit check.
 
 New handoffs include `handle_mode`; historic payloads without it remain supported.
-On a provider change or an unavailable token, consumers acquire the complete
-logical coverage with its Exact/Tree kinds under a new owner before resuming.
+Native adoption only transfers a live source holder; a missing or expired source
+or a provider change returns `HandoffRecoveryRequired`. Consumers use
+`adopt_or_reacquire` to validate account and coverage and acquire the complete
+logical coverage with its Exact/Tree kinds under the original owner, receiving
+a fresh holder, `lease_ref` and `ownership_ref` before resuming.
 They prefer `covered_paths`, invert historic `.path.ovlock` Tree handles, and use
 the operation's complete requests for non-invertible Exact handles. Recovery
 never acquires only part of a mixed batch. Acquisition conflicts and service
-errors leave durable work pending for retry. Malformed coverage, invalidated
-references, and duplicate adoption do not trigger reacquisition. Old `.ovlock`
-files need no scanning or copying into Redis.
+errors leave durable work pending for retry. Malformed coverage and invalid local
+ownership capabilities do not trigger reacquisition. Duplicate deliveries whose
+source holder has already been consumed also use this recovery path; business
+writes must be idempotent. Old `.ovlock` files need no scanning or copying into Redis.
+
+`owner_lease_ref` contains `lease_ref` and `ownership_ref` and is a live local
+ownership capability. It cannot recover a lease across a restart or provider migration.
 
 Recovery requires a valid account context and rejects coverage outside that
 account. Semantic jobs preserve the Exact/Tree kind in `covered_paths`. When a
