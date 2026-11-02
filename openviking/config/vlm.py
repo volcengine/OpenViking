@@ -46,6 +46,8 @@ class VLMHandle(Protocol):
 class VLMResolver(Protocol):
     """Resolve a call-safe model handle for one Account."""
 
+    async def effective_vlm_config(self, account_id: str) -> VLMConfig: ...
+
     async def get_vlm(self, account_id: str) -> VLMHandle: ...
 
     async def get_query_planner(self, account_id: str) -> VLMHandle: ...
@@ -189,6 +191,11 @@ class AccountVLMProvider:
             sections={"vlm", "query_planner"},
             consumer=self._on_cluster_config_change,
         )
+
+    async def effective_vlm_config(self, account_id: str) -> VLMConfig:
+        """Return a detached account-effective configuration without creating clients."""
+        selection = await self._select(account_id, "vlm")
+        return VLMConfig.model_validate(selection.config.model_dump(mode="python"))
 
     async def get_vlm(self, account_id: str) -> AccountBoundVLM:
         return await self._new_handle(account_id, "vlm")

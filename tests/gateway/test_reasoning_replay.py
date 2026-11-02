@@ -103,7 +103,7 @@ async def chat_turns(client, key, session, turns, streaming, keep_reasoning=Fals
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_chat_restores_dropped_reasoning_byte_for_byte(running_gateway, streaming):
     app, client, admin, key, captured, _ = running_gateway
-    await configure_chat(client, admin, base_url=str(app.state.config.openviking_url))
+    await configure_chat(client, admin, base_url=app.state.openviking_url + "/v1")
     requests = []
     reasoning_backend(app, requests)
     await chat_turns(client, key, "deepseek", ["One?", "Two?", "Three?"], streaming)
@@ -121,7 +121,7 @@ async def test_chat_restores_dropped_reasoning_byte_for_byte(running_gateway, st
 
 async def test_chat_keeps_reasoning_the_client_sent(running_gateway):
     app, client, admin, key, _, _ = running_gateway
-    await configure_chat(client, admin, base_url=str(app.state.config.openviking_url))
+    await configure_chat(client, admin, base_url=app.state.openviking_url + "/v1")
     requests = []
     reasoning_backend(app, requests)
     await chat_turns(client, key, "kept", ["One?", "Two?"], False, keep_reasoning=True)
@@ -130,7 +130,7 @@ async def test_chat_keeps_reasoning_the_client_sent(running_gateway):
 
 async def test_option_off_restores_nothing_and_keeps_the_deepseek_gate(running_gateway):
     app, client, admin, key, _, _ = running_gateway
-    url = str(app.state.config.openviking_url)
+    url = app.state.openviking_url + "/v1"
     await enable_tools(client, admin)
     requests = []
     reasoning_backend(app, requests)
@@ -147,7 +147,7 @@ async def test_option_off_restores_nothing_and_keeps_the_deepseek_gate(running_g
 
 async def test_generic_upstream_restores_nothing(running_gateway):
     app, client, admin, key, _, _ = running_gateway
-    url = str(app.state.config.openviking_url)
+    url = app.state.openviking_url + "/v1"
     await configure_chat(client, admin, base_url=url, vendor="generic")
     requests = []
     reasoning_backend(app, requests)

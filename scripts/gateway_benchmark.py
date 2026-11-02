@@ -8,7 +8,6 @@ provider latency or cache hit rates. Run with PYTHONPATH set to the tested tree.
 import argparse
 import asyncio
 import json
-import os
 import platform
 import socket
 import statistics
@@ -20,11 +19,11 @@ import aiohttp
 import orjson
 import uvicorn
 from aiohttp import web
-from cryptography.fernet import Fernet
 from gateway_profile import RuntimeProfile
 
+from openviking.crypto import FileEncryptor, LocalFileProvider
 from openviking_gateway.app import create_app
-from openviking_gateway.config import OpenVikingGatewayConfig
+from openviking_gateway.config import GatewayConfig
 from openviking_gateway.kernel import MemoryKernel
 from openviking_gateway.models import Policy, Upstream
 from openviking_gateway.protocols import parse_body
@@ -92,10 +91,12 @@ async def benchmark(args):
         times.append((time.perf_counter() - started) * 1000)
     result["parse_8mib"] = distribution(times)
     with tempfile.TemporaryDirectory(prefix="ovgw-bench-") as directory:
-        encryption = Fernet.generate_key().decode()
-        store = SQLiteKernelStore(Path(directory) / "replay.sqlite3", encryption)
+        encryptor = FileEncryptor(LocalFileProvider(str(Path(directory) / "master.key")))
+        store = SQLiteKernelStore(Path(directory) / "replay.sqlite3", encryptor)
         await store.initialize()
-        policy = Policy(recall=False, capture=False, takeover=False).model_dump()
+        policy = Policy(
+            recall=False, profile=False, capture=False, gateway_tools=False
+        ).model_dump()
         credential = {
             "account": "bench",
             "user_id": "bench",
@@ -116,15 +117,18 @@ async def benchmark(args):
             headers = {"x-openviking-session": str(turns)}
             body = {"model": "benchmark", "messages": messages}
             await kernel.prepare(body, "chat", headers, credential, {"id": "upstream"}, policy)
+            # Encryption runs on this loop, so encode on a storage thread.
+            receipt = await store.run(store.encode, {"content": "old receipt"})
             with store.connect() as c:
                 c.execute("BEGIN IMMEDIATE")
                 c.executemany(
-                    "INSERT OR IGNORE INTO state VALUES (?,?,?,1)",
+                    "INSERT OR IGNORE INTO state VALUES (?,?,?,1,?)",
                     (
                         (
                             digest("bench\0bench\0chat"),
                             f"tool:{turns}:{i}",
-                            store.encode({"content": "old receipt"}),
+                            receipt,
+                            time.time(),
                         )
                         for i in range(turns * 10)
                     ),
@@ -202,15 +206,9 @@ async def benchmark(args):
         site = web.TCPSite(runner, "127.0.0.1", 0, backlog=2048)
         await site.start()
         base = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
-        os.environ["OVGW_BENCH_ENCRYPTION"] = encryption
-        os.environ["OVGW_BENCH_ADMIN"] = "synthetic-benchmark-admin-token-000000"
-        config = OpenVikingGatewayConfig(
-            storage_path=directory,
-            openviking_url=base,
-            encryption_key_env="OVGW_BENCH_ENCRYPTION",
-            admin_token_env="OVGW_BENCH_ADMIN",
+        app = create_app(
+            GatewayConfig(storage_path=directory), openviking_url=base, encryptor=encryptor
         )
-        app = create_app(config)
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen(2048)

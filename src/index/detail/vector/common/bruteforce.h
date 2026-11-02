@@ -291,6 +291,11 @@ class BruteforceSearch {
     out.write(data_buffer_, capacity_ * element_byte_size_);
     write_binary(out, next_logical_offset_);
 
+    out.close();
+    if (out.fail()) {
+      throw std::runtime_error("Failed to write vector index file: " + path);
+    }
+
     if (sparse_index_) {
       size_t dummy;
       sparse_index_->save_data(dir, dummy);

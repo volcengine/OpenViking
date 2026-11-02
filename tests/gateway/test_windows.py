@@ -153,11 +153,16 @@ def visible_text(messages):
     )
 
 
-def stored(app, kind):
+async def stored(app, kind):
     store = app.state.store
-    with store.connect() as c:
-        rows = c.execute("SELECT anchor, value FROM replay WHERE kind=?", (kind,)).fetchall()
-    return {anchor: store.decode(value) for anchor, value in rows}
+
+    def read():
+        # Decoding waits on the event loop for the encryptor, so it runs on a storage thread.
+        with store.connect() as c:
+            rows = c.execute("SELECT anchor, value FROM replay WHERE kind=?", (kind,)).fetchall()
+        return {anchor: store.decode(value) for anchor, value in rows}
+
+    return await store.run(read)
 
 
 def round_output(protocol, value):
@@ -634,11 +639,11 @@ async def test_reset_continues_in_the_new_window(
     assert header.endswith("</openviking-context>\n\n" + opening)
     # The cut follows the last client message; the hidden record holds only the new window.
     anchor = hidden_chain(run.body[field], protocol)[-1]
-    assert stored(app, "replacement") == {
+    assert await stored(app, "replacement") == {
         anchor: {"source": "window", "text": header, "tokens": token_estimate(header)}
     }
     assert confirmed_cuts == [anchor]
-    assert stored(app, "hidden") == {
+    assert await stored(app, "hidden") == {
         hidden_chain([*run.body[field], *visible], protocol)[-1]: {
             "messages": round_output(protocol, run.upstream[1]),
             "visible_count": len(visible),
@@ -659,8 +664,8 @@ async def test_last_reset_in_a_request_wins(running_gateway, confirmed_cuts):
     assert run.response.status_code == 200, run.response.text
     header = run.requests[2]["messages"][-1]["content"]
     assert "This is context window 2." in header and "Second notes." in header
-    assert [r["text"] for r in stored(app, "replacement").values()] == [header]
-    (record,) = stored(app, "hidden").values()
+    assert [r["text"] for r in (await stored(app, "replacement")).values()] == [header]
+    (record,) = (await stored(app, "hidden")).values()
     assert record["messages"] == round_output("chat", run.upstream[2])
     assert len(confirmed_cuts) == 1
 
@@ -682,7 +687,7 @@ async def test_new_context_must_be_the_only_call(running_gateway, confirmed_cuts
         assert [(b["content"], b["is_error"]) for b in message["content"]] == [(ALONE, True)] * 2
     else:
         assert [r["content"] for r in results] == [ALONE, ALONE]
-    assert not run.mcp and not stored(app, "replacement") and not confirmed_cuts
+    assert not run.mcp and not await stored(app, "replacement") and not confirmed_cuts
     text = visible_text(visible_messages(protocol, run.response, False))
     assert "> OpenViking new_context — failed" in text
 
@@ -693,7 +698,11 @@ async def test_failed_loop_after_a_reset_writes_nothing(running_gateway, confirm
     await enable_tools(client, admin, agent_windows=True)
     run = await send(running_gateway, protocol, False, [[(NEW_CONTEXT, NOTES)]], fail=True)
     assert run.response.status_code == 503 and len(run.requests) == 2
-    assert not stored(app, "replacement") and not stored(app, "hidden") and not confirmed_cuts
+    assert (
+        not await stored(app, "replacement")
+        and not await stored(app, "hidden")
+        and not confirmed_cuts
+    )
 
 
 async def test_context_remaining_reads_the_latest_round(running_gateway):
@@ -709,7 +718,7 @@ async def test_context_remaining_reads_the_latest_round(running_gateway):
         "User messages in this window: 1.\n"
         "Advice: no action needed; keep working.",
     }
-    assert not stored(app, "replacement")
+    assert not await stored(app, "replacement")
 
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
@@ -722,9 +731,13 @@ async def test_reset_replays_on_the_next_request(running_gateway, protocol):
     # The history up to the cut is queued for delivery at once.
     anchor = hidden_chain(run.body[field], protocol)[-1]
     store = app.state.store
-    with store.connect() as c:
-        (value,) = c.execute("SELECT value FROM capture").fetchone()
-    state = store.decode(value)
+
+    def read():
+        with store.connect() as c:
+            (value,) = c.execute("SELECT value FROM capture").fetchone()
+        return store.decode(value)
+
+    state = await store.run(read)
     confirmed = [turn["anchor"] for turn in state["pending"] if turn["confirmed"]]
     assert anchor in [state["delivered"], *confirmed]
     run.body[field] += [

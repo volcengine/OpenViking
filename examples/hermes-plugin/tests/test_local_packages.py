@@ -89,7 +89,7 @@ def test_bad_hash_never_reaches_pm(external_provider, tmp_path, wheel_source, mo
         lambda **_kw: [ql.OPENVIKING_REQUIREMENT, f"probe @ {url}#sha256={'0' * 64}"],
     )
     monkeypatch.setattr(
-        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.4.23"
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.5.0"
     )
     install = MagicMock()
     monkeypatch.setattr(pm, "ensure_python_tool", install)
@@ -119,11 +119,12 @@ def test_server_selection_uses_latest_compatible_stable_wheel(external_provider)
     releases = {
         "0.4.21": [_distribution("0.4.21")],
         "0.4.22": [_distribution("0.4.22")],
-        "0.4.24": [_distribution("0.4.24", tag="cp310-abi3-manylinux_2_31_x86_64")],
-        "0.4.25": [_distribution("0.4.25", requires_python="<3.14")],
-        "0.4.26": [_distribution("0.4.26", yanked=True)],
-        "0.4.27rc1": [_distribution("0.4.27rc1")],
-        "0.5.0": [_distribution("0.5.0")],
+        "0.4.23": [_distribution("0.4.23")],
+        "0.5.0": [_distribution("0.5.0", tag="cp310-abi3-manylinux_2_31_x86_64")],
+        "0.5.1": [_distribution("0.5.1", requires_python="<3.14")],
+        "0.5.2": [_distribution("0.5.2", yanked=True)],
+        "0.5.3rc1": [_distribution("0.5.3rc1")],
+        "0.6.0": [_distribution("0.6.0")],
     }
     selected = packages._select_server_requirement(
         releases,
@@ -132,7 +133,7 @@ def test_server_selection_uses_latest_compatible_stable_wheel(external_provider)
     )
     assert selected == (
         "openviking[local-embed] @ https://files.pythonhosted.org/packages/"
-        "openviking-0.4.24-cp310-abi3-manylinux_2_31_x86_64.whl#sha256=" + "a" * 64
+        "openviking-0.5.0-cp310-abi3-manylinux_2_31_x86_64.whl#sha256=" + "a" * 64
     )
 
 
@@ -140,14 +141,14 @@ def test_source_build_requires_explicit_consent(external_provider):
     _h, _p, module, _s = external_provider("releases")
     packages = importlib.import_module(module.__name__ + ".local_packages")
     ql = importlib.import_module(module.__name__ + ".quick_local")
-    releases = {"0.4.24": [_distribution("0.4.24", packagetype="sdist")]}
+    releases = {"0.5.0": [_distribution("0.5.0", packagetype="sdist")]}
     with pytest.raises(ql.QuickLocalSetupError, match="No compatible"):
         packages._select_server_requirement(releases, python_version="3.14", tags=[])
     assert (
         packages._select_server_requirement(
             releases, python_version="3.14", tags=[], allow_source_build=True
         )
-        == "openviking[local-embed]==0.4.24"
+        == "openviking[local-embed]==0.5.0"
     )
 
 
@@ -171,7 +172,7 @@ def test_each_setup_resolves_new_pypi_release(external_provider, monkeypatch):
 
     _h, _p, module, _s = external_provider("releases")
     packages = importlib.import_module(module.__name__ + ".local_packages")
-    versions = iter(["0.4.23", "0.4.24"])
+    versions = iter(["0.5.0", "0.5.1"])
     requests = []
 
     def respond(url, **kwargs):
@@ -184,6 +185,6 @@ def test_each_setup_resolves_new_pypi_release(external_provider, monkeypatch):
         )
 
     monkeypatch.setattr(packages.httpx, "get", respond)
-    assert "openviking-0.4.23-" in packages.resolve_server_requirement()
-    assert "openviking-0.4.24-" in packages.resolve_server_requirement()
+    assert "openviking-0.5.0-" in packages.resolve_server_requirement()
+    assert "openviking-0.5.1-" in packages.resolve_server_requirement()
     assert requests == [("https://pypi.org/pypi/openviking/json", {"timeout": 30})] * 2

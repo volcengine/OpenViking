@@ -18,7 +18,7 @@ risk/
 
 > 以上仅展示目录结构。实际主题和结论由来源与指令决定，文件名概括结论。
 
-Skill 源码：[examples/compile/ov-compile-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-distillation)
+Skill 源码：[openviking/system_assets/compile/example-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/knowledge-distillation)
 
 先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
 
@@ -32,7 +32,7 @@ ov ls -r viking://resources/finance-reports
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-distillation -p viking://agent/skills --wait
+ov add-skill openviking/system_assets/compile/example-skills/knowledge-distillation -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/knowledge-distillation
 ```

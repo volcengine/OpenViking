@@ -1,20 +1,83 @@
 const workspace = {
   appShell: {
+    apiKey: {
+      title: 'API Key',
+      userId: 'User ID',
+      account: 'Account',
+      credentialType: 'Credential type',
+      root: 'Root API Key',
+      trusted: 'Trusted credential (Root API Key)',
+      management: 'Management API Key',
+      unset: 'Not selected',
+      empty: 'No API Key configured for this identity',
+      show: 'Show API Key',
+      hide: 'Hide API Key',
+      copy: 'Copy API Key',
+      copied: 'Copied',
+    },
+    studioSettings: {
+      connections: 'Saved connections',
+      addConnection: 'Add connection',
+      manageConnections: 'Manage connections',
+      root: 'Root',
+      accountAdmin: 'Account Admin',
+      dualCredential: 'Management + User',
+      controlCredential: 'Management key',
+      brand: 'OpenViking',
+      open: 'Studio settings',
+      settings: 'Settings',
+      defaultEntry: 'Default entry',
+      workbench: 'Workbench',
+      management: 'Administration',
+      language: 'Language',
+      theme: 'Theme',
+      light: 'Light',
+      dark: 'Dark',
+    },
+    modes: {
+      botManagement: 'VikingBot management',
+      agentEvolution: 'Agent experience settings',
+      management: 'Administration',
+      workbench: 'Workbench',
+      managementDescription:
+        'Manage accounts, users, permissions and service configuration. Select a user to open their workbench.',
+      enterWorkbench: 'Open workbench',
+      returnManagement: 'Admin console',
+      selectUser: 'Select a user',
+      selectUserDescription:
+        'Select a user with a valid data credential before opening the workbench.',
+      unavailable: 'Administration unavailable',
+      unavailableDescription:
+        'This connection does not provide administration access. Check your connection credentials.',
+      checking: 'Checking permissions…',
+      makeDefault: 'Use as default',
+      isDefault: 'Default entry',
+      configuration: 'Configuration',
+      configurationDescription:
+        'Manage OpenViking features for the current Account.',
+      accountConfiguration: 'Account {{account}}',
+      serverConfiguration: 'Server configuration',
+      serverConfigurationHint:
+        'Manage models, storage, and runtime parameters. Only server administrators can change these settings.',
+      rootRequired: 'Service configuration requires a Root API Key.',
+    },
     footer: {
       agentIntegrations: 'Agent Integrations',
       beta: 'Beta',
       connection: 'Connection Settings',
-      gateway: 'OpenViking Gateway',
-      gatewayBeta: 'OpenViking Gateway · Beta',
+      gateway: 'Gateway',
+      gatewayBeta: 'Gateway · Beta',
       docs: 'Documentation',
       github: 'GitHub',
       sdkApi: 'SDK & API',
       users: 'Users & Permissions',
     },
     header: {
+      backToConfig: 'Back to workspace setup',
+      chooseWorkspace: 'Choose workspace',
       currentUser: {
-        account: 'Account',
-        accountSummary: 'Account · {{account}}',
+        account: 'Space',
+        accountSummary: 'Space · {{account}}',
         keyUnavailable: 'User key unavailable',
         loadingUsers: 'Loading users',
         loadUsersFailed: 'Failed to load users',
@@ -73,9 +136,11 @@ const workspace = {
     },
     sidebar: {
       groups: {
+        services: 'Service management',
         operations: 'Activity',
         resources: 'Resources',
         settings: 'Settings',
+        connections: 'Connections',
         workspace: 'Workspace',
       },
       loadingSessions: 'Loading...',
@@ -92,6 +157,7 @@ const workspace = {
     loading: 'Loading monitoring data...',
     loadFailed: 'Could not load monitoring data',
     health: {
+      unknown: 'No data',
       healthy: 'Healthy',
       unhealthy: 'Unhealthy',
     },
@@ -269,6 +335,9 @@ const workspace = {
       reasonCommit: 'Whether those sessions were committed to OpenViking',
     },
     settings: {
+      toggleLabel: 'Experience extraction',
+      toggleHint:
+        'Account {{account}} · Extract experiences and trajectories from new session commits.',
       title: 'Experience settings',
       description:
         'Agent Evolution switch for the target account. When off, new session commits in that account stop extracting experiences and trajectories.',
@@ -349,6 +418,34 @@ const workspace = {
     title: 'Skills',
     description:
       'View Agent skills available to the current user and workspace.',
+    add: {
+      title: 'Add Skill',
+      description:
+        'Import a SKILL.md for agents to find and read. Execution is controlled by the agent using it.',
+      scope: 'Add to',
+      scopeDescription: {
+        user: 'Available only to the current user',
+        agent: 'Shared with this account; requires permission',
+      },
+      content: 'SKILL.md content',
+      placeholder:
+        '---\nname: my-skill\ndescription: What this skill does\n---\n\n# My skill',
+      contentHint:
+        'Paste the complete content or select a local SKILL.md file. This imports one file only.',
+      upload: 'Choose SKILL.md',
+      removeFile: 'Remove file {{fileName}}',
+      warnings: 'Validation notes',
+      failed: 'Could not add Skill',
+      processingFailed: 'Background processing failed',
+      processing: 'Submitted and processing in the background',
+      completed: 'Skill added and processing completed',
+      taskId: 'Task ID',
+      close: 'Close',
+      another: 'Add another',
+      validating: 'Validating…',
+      adding: 'Submitting…',
+      submit: 'Add Skill',
+    },
     refresh: 'Refresh',
     loading: 'Loading skills...',
     empty: 'No skills available',
@@ -396,7 +493,7 @@ const workspace = {
       totalDuration: 'Total Time',
       processingNotStarted: 'Not started',
       processingDurationHelp:
-        'Worker processing time, including model and I/O calls. Excludes queue and downstream waits; overlapping workers count once. Incomplete or legacy records are unavailable.',
+        'Processing time is wall-clock time after at least one Work is claimed by a worker, including model calls, I/O, downstream waits, and backoff; overlapping workers count once. Waiting time is total time minus processing time, mainly queue and scheduling gaps.',
       processingDuration: 'Processing Time',
       waitingDuration: 'Waiting Time',
       timingUnavailable: 'Not recorded',
@@ -557,8 +654,6 @@ const workspace = {
       connector_import: 'Connector import',
       admin_reindex: 'Reindex',
       snapshot_restore_reindex: 'Snapshot reindex',
-      legacy_migration: 'Legacy migration',
-      legacy_cleanup: 'Legacy cleanup',
     },
   },
   watchesPage: {
@@ -653,7 +748,71 @@ const workspace = {
     },
   },
   accountSwitcher: {
-    create: 'Create account',
+    scope: {
+      managementCredential: 'Current management credential',
+      managementAccount: 'Current managed Account',
+      rootManagement: 'Root API Key',
+      accountManagement: 'Account Admin API Key',
+      checkingManagement: 'Verifying management credential…',
+      trustedManagement: 'Trusted authentication (Root)',
+      devManagement: 'Development mode',
+      unverifiedManagement: 'Unverified management credential',
+      assertedIdentity:
+        'The current identity is supplied by the server authentication mode.',
+      savedAccounts: 'Saved Accounts',
+      savedAccountsHint: 'Accounts with API Keys saved on this device.',
+      savedUsersHint: 'Only User API Keys saved on this device are listed.',
+      noSavedUsers: 'No saved User API Key for this Account.',
+      addUserKey: 'Configure User API Key',
+      userCredential: 'User API Key',
+      createDescription:
+        'Create an Account and its first administrator, then switch to that Account for management.',
+      searchConnections: 'Search connection configurations',
+      noConnections: 'No matching connection configurations',
+      switchAccount: 'Switch Account',
+      switchUser: 'Switch User ID',
+      searchUsers: 'Search User IDs',
+      usersInAccount: 'Saved User API Keys · {{account}}',
+      trustedUsersInAccount: 'User IDs · {{account}}',
+      useTrustedUser: 'Switch to {{user}}',
+      loadingUsers: 'Loading users…',
+      noUsers: 'No matching users in this Account',
+      accountBound:
+        'This credential is restricted to the current Account. Use a Root connection to select another Account.',
+      userBound:
+        'This credential can only use the current User ID. Select a connection authorized to manage users to switch identities.',
+      loadFailed: 'Could not load the list.',
+      retry: 'Retry',
+    },
+    accountsConnectFirst:
+      'Select a saved identity to connect to this service before browsing its accounts.',
+    accountsChecking: 'Checking account management access…',
+    accountsRootRequired:
+      'Configure a Root API Key in Connection Settings to browse and switch server accounts. Saved identities remain available in the adjacent tab.',
+    servicesSearch: 'Search services',
+    identitiesSearch: 'Search saved identities',
+    identities: 'Saved Identities',
+    connected: 'Connected',
+    noConnections: 'No matching services',
+    noIdentities: 'No saved identities for this service',
+    backToServices: 'Back to services',
+    accountSettings: 'Account Settings',
+    manageConnections: 'Manage Connections',
+    create: 'Add Account',
+    connections: {
+      add: 'Add Connection',
+      savedOnly: 'Connections saved in Connection Settings',
+      switch: 'Switch connection',
+      title: 'Saved connections',
+    },
+    serverAccountsTitle: 'Accounts',
+    provider: {
+      hosted: 'VolcEngine Hosted',
+      opensource: 'Open source',
+    },
+    hosted: {
+      currentWorkspace: 'Current space',
+    },
     dialog: {
       accountLabel: 'Account',
       accountPlaceholder: 'team-account',
@@ -782,6 +941,22 @@ const workspace = {
     },
   },
   settings: {
+    gatewayConnection: {
+      title: 'Sign in to OpenViking Gateway',
+      openvikingUrl: 'This gateway uses OpenViking at {{url}}',
+      apiKey: 'OpenViking API key',
+      keyHint: 'A user, account admin or root API key all work.',
+      wrongKey:
+        "Gateway keys (ovgw_) and gateway management keys (ovgm_) can't be used to sign in. Enter an OpenViking API key.",
+      invalidKey:
+        'OpenViking rejected this API key. Check the key and try again.',
+      unreachable:
+        "The gateway can't reach OpenViking ({{url}}). Make sure OpenViking is running and the gateway's openviking_url (in gateway.conf or OPENVIKING_GATEWAY_OPENVIKING_URL) points to it, then try again.",
+      gatewayUnreachable:
+        "Can't reach this gateway. Make sure it is running, then try again.",
+      connect: 'Sign in',
+      connecting: 'Signing in…',
+    },
     pageTitle: 'Settings',
     tabs: { connection: 'Connection', configuration: 'Server configuration' },
     models: {
@@ -849,6 +1024,35 @@ const workspace = {
       dense: 'Dense',
       sparse: 'Sparse',
       hybrid: 'Hybrid',
+      connectionTest: {
+        action: 'Test connection',
+        testing: 'Testing…',
+        hint: 'Sends a small model request from the OpenViking server and may incur usage. Does not save the draft or switch running models.',
+        unsupported: 'Connection testing is unavailable for this provider.',
+        success: 'Connected: model returned a valid result ({{ms}} ms).',
+        network:
+          'The OpenViking server could not reach the model service. Check the URL, network or TLS.',
+        timeout:
+          'Test timed out after 25 seconds. Check the network and model response time.',
+        invalidResponse: 'The model service did not return a valid result.',
+        invalid_request: 'Invalid model configuration or request parameters.',
+        authentication_error:
+          'The model service rejected the API key. Check whether it is correct or expired.',
+        permission_denied: 'This key cannot access the selected model.',
+        rate_limit_error: 'Model service rate limit reached. Retry later.',
+        quota_exhausted:
+          'Model service quota exhausted. Check the plan or balance.',
+        model_not_found: 'Model or endpoint not found. Check the model ID.',
+        failed:
+          'Could not complete the test. Check the connection configuration and retry.',
+        input_too_large: 'The model service rejected the input size.',
+        content_safety:
+          'The model service content policy rejected the request.',
+      },
+      dragToReorder: 'Drag to reorder {{model}}',
+      dragHint: 'Drag to reorder, or use the up and down arrow keys.',
+      thinkingHint:
+        'Shared by all VLM models. Requires model/provider support; takes effect after saving and restarting.',
       priority: 'Order',
       preferred: 'Preferred',
       backup: 'Backup',
@@ -996,6 +1200,9 @@ const workspace = {
       retryHint:
         'The request failed. Retry, or inspect the error details if it persists.',
       recovery: {
+        dataIdentityTitle: 'Select an account administrator identity',
+        dataIdentityDescription:
+          'The Root key manages accounts and users. Browsing resource permissions requires an account administrator data identity. Select an identity below to continue.',
         loadFailed: 'Failed to load account administrators.',
         switchFailed: 'Failed to switch user.',
         title: 'Switch to a user with permission',

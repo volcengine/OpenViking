@@ -102,7 +102,7 @@ def normalize_part(part: Union[Dict[str, Any], MessagePart, Any]) -> Dict[str, A
             "tool_output_externalized_reason",
         ):
             value = getattr(part, field, None)
-            if value:
+            if value or (field == "tool_input" and value is not None):
                 payload[field] = value
         for field in (
             "duration_ms",

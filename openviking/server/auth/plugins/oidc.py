@@ -242,7 +242,7 @@ class OIDCAuthPlugin(AuthPlugin):
             if self._jwks_uri:
                 return self._jwks_uri
 
-            discovery_url = f"{self._config.issuer}{_DISCOVERY_PATH}"
+            discovery_url = f"{self._config.issuer.rstrip('/')}{_DISCOVERY_PATH}"
             logger.info("Performing OIDC discovery at %s", discovery_url)
             try:
                 async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:

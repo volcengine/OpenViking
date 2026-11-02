@@ -180,7 +180,7 @@ openviking-server
 In another terminal, configure the CLI and create `quickstart.md` using the [Quick Start](../getting-started/02-quickstart.md). Import it into an unused target:
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/model-check --wait --timeout 120
+ov add-resource ./quickstart.md --to viking://resources/model-check --wait
 ov find "Who owns the backup process?" --uri viking://resources/model-check
 ```
 

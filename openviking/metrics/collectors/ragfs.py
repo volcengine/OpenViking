@@ -21,7 +21,7 @@ class RagfsMetricCollector(DomainStatsMetricCollector):
     data_source: RagfsMetricDataSource
     config: CollectorConfig = CollectorConfig(ttl_seconds=None, timeout_seconds=1.0)
     _collect_lock: Lock = field(default_factory=Lock, init=False, repr=False)
-    _tracked_series: set[tuple[str, str, tuple[tuple[str, str], ...]]] = field(
+    _tracked_series: set[tuple[str, tuple[tuple[str, str], ...]]] = field(
         default_factory=set, init=False, repr=False
     )
 
@@ -72,10 +72,10 @@ class RagfsMetricCollector(DomainStatsMetricCollector):
                     labels=labels,
                     label_names=label_names,
                 )
-            identity = (kind, name, tuple(sorted(labels.items())))
+            identity = (name, tuple(sorted(labels.items())))
             current_series.add(identity)
             self._tracked_series.add(identity)
         for identity in sorted(self._tracked_series - current_series):
-            kind, name, labels = identity
-            getattr(registry, f"{kind}_delete_matching")(name, match_labels=dict(labels))
+            name, labels = identity
+            registry.delete_matching(name, match_labels=dict(labels))
             self._tracked_series.remove(identity)

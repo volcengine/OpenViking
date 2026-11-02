@@ -16,6 +16,7 @@ from starlette.requests import Request
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
+from openviking.server.auth.plugins.api_key import _api_key_root_can_access_path
 from openviking.server.auth.registry import get_registry
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
@@ -54,6 +55,7 @@ class _FakeAgfs:
         return "OK"
 
     def read(self, path: str, offset: int = 0, size: int = -1, stream: bool = False):
+        del stream
         if path not in self.files:
             raise FileNotFoundError(path)
         data = self.files[path]
@@ -79,6 +81,20 @@ def _set_fake_task_tracker():
 
 
 ROOT_KEY = "root-secret-key-for-testing-only-1234567890abcdef"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/system/backend/sync-status",
+        "/api/v1/system/backend/sync-retry",
+        "/api/v1/system/sync/viking://resources",
+        "/api/v1/system/sync/viking://resources/retry",
+    ],
+)
+def test_root_key_allowlist_rejects_removed_sync_paths(path: str):
+    """Removed sync paths must stay outside the API-key root allowlist."""
+    assert not _api_key_root_can_access_path(path)
 
 
 def _make_request(
@@ -385,46 +401,6 @@ async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
     tenant_resp = await auth_client.get(
         "/api/v1/fs/ls?uri=viking://",
         headers={"X-API-Key": ROOT_KEY},
-    )
-    assert tenant_resp.status_code == 403
-    assert tenant_resp.json()["error"]["code"] == "PERMISSION_DENIED"
-
-
-async def test_admin_sync_route_accepts_root_key(auth_client: httpx.AsyncClient, auth_service):
-    """ROOT keys should be allowed to call the system sync admin route."""
-    calls: list[str] = []
-
-    async def _fake_system_sync_status(uri: str, ctx):
-        calls.append(uri)
-        return {"path": uri, "entry_count": 1}
-
-    auth_service.fs.system_sync_status = _fake_system_sync_status
-
-    resp = await auth_client.get(
-        "/api/v1/system/sync/viking://resources",
-        headers={"X-API-Key": ROOT_KEY},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["result"] == {"path": "viking://resources", "entry_count": 1}
-    assert calls == ["viking://resources"]
-
-
-async def test_admin_sync_route_rejects_user_key(auth_client: httpx.AsyncClient, user_key: str):
-    """Regular user keys must not access the system sync admin route."""
-    resp = await auth_client.get(
-        "/api/v1/system/sync/viking://resources",
-        headers={"X-API-Key": user_key},
-    )
-    assert resp.status_code == 403
-    assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
-
-    tenant_resp = await auth_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={
-            "X-API-Key": ROOT_KEY,
-            "X-OpenViking-Account": "default",
-            "X-OpenViking-User": "default",
-        },
     )
     assert tenant_resp.status_code == 403
     assert tenant_resp.json()["error"]["code"] == "PERMISSION_DENIED"
@@ -1031,6 +1007,7 @@ async def test_trusted_identity_registration_batches_data_plane_identity(auth_se
     for restarted in (False, True):
         app = FastAPI()
         app.state.config = config
+        app.state.service_name = "openviking-server"
         plugin = TrustedAuthPlugin()
         await plugin.initialize(app, auth_service, config)
         try:
@@ -1068,6 +1045,7 @@ async def test_invalid_trusted_identity_does_not_block_later_registration(
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
@@ -1113,6 +1091,47 @@ async def test_invalid_trusted_identity_does_not_block_later_registration(
         await plugin.shutdown()
 
 
+async def test_trusted_identity_registration_skips_identity_loaded_from_registry(auth_service):
+    """A restarted plugin must not queue an identity already loaded from storage."""
+    from openviking.server.auth.plugins import TrustedAuthPlugin
+
+    config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
+    app = FastAPI()
+    app.state.config = config
+    app.state.service_name = "openviking-server"
+    first_plugin = TrustedAuthPlugin()
+    await first_plugin.initialize(app, auth_service, config)
+    try:
+        await first_plugin._api_key_manager.ensure_trusted_identities({"acme": {"alice"}})
+    finally:
+        await first_plugin.shutdown()
+
+    restarted_app = FastAPI()
+    restarted_app.state.config = config
+    restarted_app.state.service_name = "openviking-server"
+    restarted_plugin = TrustedAuthPlugin()
+    await restarted_plugin.initialize(restarted_app, auth_service, config)
+    try:
+        request = _make_request(
+            "/api/v1/resources",
+            headers={
+                "X-OpenViking-Account": "acme",
+                "X-OpenViking-User": "alice",
+            },
+            auth_enabled=False,
+            auth_mode="trusted",
+        )
+        request.app.state.config = config
+
+        await restarted_plugin.resolve_identity(
+            request, x_openviking_account="acme", x_openviking_user="alice"
+        )
+
+        assert restarted_plugin._pending == {}
+    finally:
+        await restarted_plugin.shutdown()
+
+
 @pytest.mark.parametrize(
     "interval,path",
     [(0, "/api/v1/resources"), (0, "/api/v1/admin/accounts"), (300, "/api/v1/admin/accounts")],
@@ -1128,6 +1147,7 @@ async def test_trusted_registration_respects_configuration_and_route(auth_servic
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
@@ -1168,6 +1188,7 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
@@ -1210,7 +1231,14 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
         await plugin.shutdown()
 
 
-def test_trusted_identity_registration_config_rejects_invalid_limits():
+def test_trusted_identity_registration_config_allows_disabling():
+    """A zero interval disables registration; negative values remain invalid."""
+    assert (
+        ServerConfig(
+            trusted_identity_flush_interval_seconds=0
+        ).trusted_identity_flush_interval_seconds
+        == 0
+    )
     with pytest.raises(ValueError):
         ServerConfig(trusted_identity_flush_interval_seconds=-1)
     with pytest.raises(ValueError):

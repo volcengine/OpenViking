@@ -292,6 +292,7 @@ def test_load_server_config_trace_local_defaults(tmp_path):
     traces = config.observability.traces
     assert traces.enabled is True
     assert traces.protocol == "local"
+    assert traces.service_name == "openviking-server"
     assert traces.local_path == "~/.openviking/logs/traces.jsonl"
     assert traces.local_rotation_mb == 40
     assert traces.local_backup_count == 2

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-04",
+  "updatedAt": "2026-10-13",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -139,6 +139,30 @@
           "detailPath": "https://docs.openviking.net/agents/en/deerflow-mcp.md"
         }
       ]
+    },
+    {
+      "id": "pi",
+      "name": "pi",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/pi/logo.png",
+      "summary": "Give pi cross-session long-term memory with automatic recall, turn capture, and context takeover; the server's MCP tools are registered as native pi tools.",
+      "detailPath": "https://docs.openviking.net/agents/en/pi.md"
+    },
+    {
+      "id": "zcode",
+      "name": "ZCode",
+      "tags": ["Hook", "MCP"],
+      "logo": "https://docs.openviking.net/agents/image/zcode/logo.png",
+      "summary": "Add automatic profile injection, prompt recall, and turn capture to ZCode through lifecycle hooks plus MCP tools.",
+      "detailPath": "https://docs.openviking.net/agents/en/zcode.md"
+    },
+    {
+      "id": "kimi-code",
+      "name": "Kimi Code",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/kimi-code/logo.png",
+      "summary": "A native Kimi Code plugin for automatic memory recall and turn capture, with OpenViking MCP tools.",
+      "detailPath": "https://docs.openviking.net/agents/en/kimi-code.md"
     }
   ]
 }

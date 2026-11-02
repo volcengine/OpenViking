@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Bounded, user-authenticated MCP calls, native tools and signed file upload handoff."""
+"""Bounded, user-authenticated MCP calls, native tools and signed file link handoff."""
 
 import asyncio
 import base64
@@ -17,6 +17,8 @@ import orjson
 
 from .capture_store import Document
 from .client import VikingError
+from .config import MOUNT_PATH
+from .protocols import string_type
 from .state_store import get_state
 from .storage import digest
 from .tool_catalog import PREFIX, TOOL_OVERRIDES
@@ -26,6 +28,15 @@ from .windows import NATIVE_TOOLS
 UPLOAD_URL = re.compile(
     r'https?://[^\s<>"\x27`]+/api/v1/resources/temp_upload\?token=[^\s<>"\x27`]+'
 )
+DOWNLOAD_URL = re.compile(r'https?://[^\s<>"\x27`]+/api/v1/content/download\?token=[^\s<>"\x27`]+')
+AUTO_DETECTED_NOTE = re.compile(
+    r"\n*Note for the user: this (?:upload|download) URL was auto-detected[^\n]*"
+)
+UNKNOWN_OUTCOME = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
+
+
+def error_result(text):
+    return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
 def has_shell(body):
@@ -48,7 +59,7 @@ def attachments(body, protocol):
         content = message.get("content", [])
         if isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") in {"file", "input_file"}:
+                if string_type(part) in {"file", "input_file"}:
                     output.append(part.get("file", part))
                 elif isinstance(part, dict) and part.get("type") == "document":
                     source = part.get("source", {})
@@ -98,10 +109,10 @@ def content_blocks(result):
     return blocks
 
 
-def upload_token(result):
+def signed_token(result, pattern):
     for block in content_blocks(result):
         if block.get("type") == "text":
-            match = UPLOAD_URL.search(block.get("text", ""))
+            match = pattern.search(block.get("text", ""))
             if match:
                 return parse_qs(urlsplit(match[0]).query).get("token", [""])[0]
     return ""
@@ -152,10 +163,13 @@ def result_text(result, limit):
 
 
 class ToolExecutor:
-    def __init__(self, viking, store, prepared, credential, public_url, max_upload_bytes):
+    def __init__(
+        self, viking, store, prepared, credential, public_url, max_upload_bytes, file_links="proxy"
+    ):
         self.viking, self.store, self.request = viking, store, prepared
         self.credential, self.key = credential, credential["openviking_key"]
         self.public_url, self.max_upload_bytes = public_url.rstrip("/"), max_upload_bytes
+        self.file_links = file_links
         self.policy = prepared.root["policy"]
         self.schemas = {
             t["function"]["name"]: t["function"]["parameters"] for t in prepared.root["tools"]
@@ -191,12 +205,16 @@ class ToolExecutor:
             Document(claim, 1) if won else await get_state(self.store.state, scope, receipt_key)
         )
         claim = receipt.value
+        if not claim:
+            return {**result, "content": UNKNOWN_OUTCOME, "failed": True}
         timeout = self.policy.get("tool_timeout_seconds", 30)
         try:
             async with async_timeout.timeout(timeout):
                 if claim["owner"] != owner:
                     while True:
                         saved = await get_state(self.store.state, scope, receipt_key)
+                        if not saved.value:
+                            raise asyncio.TimeoutError
                         if "content" in saved.value:
                             return {
                                 **result,
@@ -214,7 +232,7 @@ class ToolExecutor:
                 )
                 return {**result, "content": content, "failed": failed}
         except asyncio.TimeoutError:
-            content = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
+            content = UNKNOWN_OUTCOME
         except (ValueError, TypeError, binascii.Error, VikingError, KeyError):
             # Validation and server errors can contain arguments and secrets.
             content = "Invalid tool arguments or OpenViking operation failed"
@@ -257,8 +275,16 @@ class ToolExecutor:
                 self.request.original
             ):
                 raise ValueError("A local path requires a client shell or attachment")
+        elif name == "download" and not has_shell(self.request.original):
+            return error_result("download requires a client shell tool to fetch the file")
         value = await self.viking.mcp("tools/call", self.key, {"name": name, "arguments": args})
-        token = upload_token(value) if upload else ""
+        if upload:
+            pattern, route = UPLOAD_URL, "/uploads"
+        elif name == "download":
+            pattern, route = DOWNLOAD_URL, "/downloads"
+        else:
+            pattern, route = None, ""
+        token = signed_token(value, pattern) if pattern else ""
         if file:
             if not token or value.get("isError"):
                 raise VikingError("upload_instruction_missing")
@@ -267,11 +293,12 @@ class ToolExecutor:
                 "content": [{"type": "text", "text": orjson.dumps(uploaded).decode()}],
                 "isError": uploaded.get("status") == "error" or bool(uploaded.get("error")),
             }
-        if token:
+        if token and self.file_links == "proxy":
             if not self.public_url:
-                raise ValueError("Set gateway.public_url for client uploads")
-            url = self.public_url + "/gateway/uploads?token=" + quote(token, safe="")
+                return error_result("Set gateway.public_url for client uploads and downloads")
+            url = self.public_url + MOUNT_PATH + route + "?token=" + quote(token, safe="")
             for block in value.get("content", []):
                 if block.get("type") == "text":
-                    block["text"] = UPLOAD_URL.sub(lambda _: url, block["text"])
+                    text = AUTO_DETECTED_NOTE.sub("", block["text"])
+                    block["text"] = pattern.sub(lambda _: url, text)
         return value

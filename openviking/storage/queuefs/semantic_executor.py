@@ -5,7 +5,6 @@
 import asyncio
 import re
 import threading
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
@@ -13,7 +12,6 @@ from weakref import WeakKeyDictionary
 from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
-from openviking.service.task_processing_time import pause_task_processing, processing_owner
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -24,7 +22,6 @@ from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
     body_for_preview,
-    deterministic_sample,
     freshness_metadata,
     read_abstract_overview_pending_snapshot,
     write_abstract_overview,
@@ -33,11 +30,10 @@ from openviking.storage.context_update_plan import FileVectorSource, SemanticAct
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry import bind_telemetry, get_current_telemetry
+from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -196,6 +192,8 @@ class SemanticTreeExecutor:
         file_md5s: Optional[Dict[str, str]] = None,
         artifact_files: Optional[List[str]] = None,
         file_abstracts: Optional[Dict[str, str]] = None,
+        file_vector_actions: Optional[Dict[str, str]] = None,
+        file_ingest_options: Optional[Dict[str, IngestOptions | Dict[str, Any]]] = None,
         semantic_plan: Optional["SemanticPlan"] = None,
         telemetry_id: str | None = None,
         source_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
@@ -215,6 +213,11 @@ class SemanticTreeExecutor:
                 semantic_plan is not None
                 and semantic_plan.file_vector_source is FileVectorSource.SUMMARY_WHEN_AVAILABLE
             )
+        )
+        self._source_type = (
+            ("repository" if self._is_code_repo else "document")
+            if context_type == "resource"
+            else None
         )
         self._changes_provided = changes is not None
         self._changes = changes or {}
@@ -240,7 +243,6 @@ class SemanticTreeExecutor:
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
         self._task_context = get_task_context()
-        self._processing_index = None
         self._telemetry = get_current_telemetry()
         self._telemetry_id = telemetry_id
         self._stale = False
@@ -255,6 +257,11 @@ class SemanticTreeExecutor:
         self._file_md5s = dict(file_md5s or {})
         self._artifact_files = [path.strip("/") for path in (artifact_files or []) if path]
         self._file_abstracts = dict(file_abstracts or {})
+        self._file_vector_actions = dict(file_vector_actions or {})
+        self._file_ingest_options = {
+            uri.rstrip("/"): IngestOptions.from_value(options)
+            for uri, options in (file_ingest_options or {}).items()
+        }
         self._plan_entries_by_uri: Dict[str, "SemanticTreeEntry"] = {}
         self._plan_children: Dict[str, tuple[List[str], List[str]]] = {}
         self._plan_active_dirs: Set[str] = set()
@@ -378,7 +385,8 @@ class SemanticTreeExecutor:
                 previous_incremental = self._incremental_update
                 self._incremental_update = False
                 try:
-                    await self._file_summary_task(root_uri, root_uri)
+                    with bind_ingestion_source_type(self._source_type):
+                        await self._file_summary_task(root_uri, root_uri)
                 finally:
                     self._incremental_update = previous_incremental
                 self._root_write_result = AbstractOverviewWriteResult(
@@ -386,36 +394,31 @@ class SemanticTreeExecutor:
                 )
                 return
 
-        owner = processing_owner.get()
-        if owner is not None and self._task_context is not None:
-            if owner[1] == self._task_context.task_id:
-                self._processing_index = owner[0]
-        with pause_task_processing():
+        try:
+            self._register_active()
+            self._schedule_dir(root_uri, parent_uri=None)
+            await self._root_done.wait()
+            if self._failure:
+                raise self._failure
+        except BaseException:
+            self._closed = True
+            if self._context_type == "skill":
+                for task in self._skill_node_tasks:
+                    task.cancel()
+                await run_to_completion(
+                    lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
+                )
+            await self._active_work_idle.wait()
+            raise
+        finally:
+            self._closed = True
             try:
-                self._register_active()
-                self._schedule_dir(root_uri, parent_uri=None)
-                await self._root_done.wait()
-                if self._failure:
-                    raise self._failure
-            except BaseException:
-                self._closed = True
                 if self._context_type == "skill":
-                    for task in self._skill_node_tasks:
-                        task.cancel()
-                    await run_to_completion(
-                        lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
-                    )
-                await self._active_work_idle.wait()
-                raise
+                    await run_to_completion(self._active_work_idle.wait)
+                else:
+                    await self._active_work_idle.wait()
             finally:
-                self._closed = True
-                try:
-                    if self._context_type == "skill":
-                        await run_to_completion(self._active_work_idle.wait)
-                    else:
-                        await self._active_work_idle.wait()
-                finally:
-                    self._unregister_active()
+                self._unregister_active()
 
     def _schedule_work(self, work: SemanticTreeWork) -> None:
         if self._closed:
@@ -517,23 +520,18 @@ class SemanticTreeExecutor:
                 self._task_context.task_id,
                 self._task_context.account_id,
                 self._task_context.user_id,
+                enqueued_work=self._task_context.enqueued_work,
+                work_id=self._task_context.work_id,
             )
             if self._task_context is not None
             else detach_task_context()
         )
-        timing = (
-            self._processing_index.measure_processing(self._task_context.task_id)
-            if self._processing_index is not None and self._task_context is not None
-            else nullcontext()
-        )
-        # Shared workers inherit their creator's ContextVars. Never let an
-        # unrelated node pause the creator's clock when it has no timing owner.
-        token = processing_owner.set(None)
-        try:
-            with bind_telemetry(self._telemetry), task_context, timing:
-                await self._run_work_bound(work)
-        finally:
-            processing_owner.reset(token)
+        with (
+            bind_telemetry(self._telemetry),
+            bind_ingestion_source_type(self._source_type),
+            task_context,
+        ):
+            await self._run_work_bound(work)
 
     async def _await_write(self, operation):
         if self._context_type == "skill":
@@ -583,17 +581,12 @@ class SemanticTreeExecutor:
                 self._schedule_overview(dir_uri)
                 return False
 
-            sample_limit = getattr(
-                get_openviking_config().semantic,
-                "overview_sample_limit",
-                32,
-            )
             direct_entries = sorted(
                 [("directory", uri) for uri in children_dirs]
                 + [("file", uri) for uri in file_paths],
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
-            sampled_entries = deterministic_sample(direct_entries, sample_limit)
+            sampled_entries = direct_entries
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = 0
@@ -791,13 +784,12 @@ class SemanticTreeExecutor:
         children_dirs: List[str],
         file_paths: List[str],
     ) -> DirNode:
-        """Sample the target directory first, then read only existing summaries."""
+        """Read existing summaries for all direct children of the target directory."""
         candidates = sorted(
             [("file", uri) for uri in file_paths] + [("directory", uri) for uri in children_dirs],
             key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]),
         )
-        sample_limit = getattr(get_openviking_config().semantic, "overview_sample_limit", 32)
-        primary = deterministic_sample(candidates, sample_limit)
+        primary = candidates
         loaded = await self._load_transfer_candidates(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
 
@@ -921,6 +913,10 @@ class SemanticTreeExecutor:
         )
 
     def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
+        if self._generation_trigger == "content_write":
+            options = self._file_ingest_options.get(file_path.rstrip("/"))
+            if options is not None:
+                return options
         if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
             return IngestOptions(acl_update=self._ingest_options.acl_update)
         return self._ingest_options
@@ -1203,6 +1199,8 @@ class SemanticTreeExecutor:
                     vectorize_kwargs["scalar_override"] = self._plan_scalar_override(file_path, 2)
                     vectorize_kwargs["field_patch"] = self._plan_field_patch(file_path, 2)
                     vectorize_kwargs["action"] = slot.action.value if slot is not None else "upsert"
+                elif action := self._file_vector_actions.get(file_path.rstrip("/")):
+                    vectorize_kwargs["action"] = action
                 enqueued = await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,

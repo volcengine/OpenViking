@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.identifiers import validate_identifier_part, validate_user_id
 from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import FilterExpr, Or, PathScope
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking_cli.exceptions import InvalidArgumentError
 
 if TYPE_CHECKING:
@@ -116,6 +116,9 @@ class DirectAcl:
         raw_grants = record.get(f"{prefix}_grants") or []
         if not isinstance(raw_grants, (list, tuple)):
             raise RuntimeError(f"Invalid ACL grants for {prefix}: expected a list")
+        # ponytail: 兼容离线索引将空 ACL list 还原为空字符串元素；只忽略精确空串，
+        # 其他非法 token 仍由 _decode_grant 拒绝。底层稳定保留 [] 后应删除。
+        raw_grants = [grant for grant in raw_grants if grant != ""]
         return cls.from_entries(_decode_grant(grant) for grant in raw_grants)
 
 
@@ -235,6 +238,31 @@ def acl_grant_tokens(principals: Iterable[str], action: AclAction) -> list[str]:
         for level, mask in _LEVEL_MASK.items()
         if mask & required_mask == required_mask
     ]
+
+
+def acl_filter(ctx: RequestContext, action: AclAction, *, denied: bool = False) -> FilterExpr:
+    """Filter shared-resource ACL records; callers handle role and namespace bypasses."""
+    grants = acl_grant_tokens(acl_principals(ctx), action)
+    controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
+    grant_op = "must_not" if denied else "must"
+    direct = RawDSL({"op": grant_op, "field": "acl_direct_grants", "conds": grants})
+    inherited = RawDSL({"op": grant_op, "field": "acl_inherited_grants", "conds": grants})
+    if denied:
+        return And(
+            [
+                In(ACL_MODE_FIELD, controlled_modes),
+                direct,
+                Or([Eq(ACL_MODE_FIELD, AclMode.RESTRICTED.value), inherited]),
+            ]
+        )
+    # Uncontrolled records retain the shared root's default user:* manage grant.
+    return Or(
+        [
+            RawDSL({"op": "must_not", "field": ACL_MODE_FIELD, "conds": controlled_modes}),
+            direct,
+            And([Eq(ACL_MODE_FIELD, AclMode.INHERIT.value), inherited]),
+        ]
+    )
 
 
 def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[AclEntry]:
@@ -358,11 +386,44 @@ class AclManager:
                 limit=500,
                 cursor=cursor,
                 output_fields=output_fields,
-                ctx=ctx,
+                # ACL resolution must see records the caller's own grants hide.
+                ctx=replace(ctx, bypass_acl=True),
             )
             records.extend(page)
             if cursor is None:
                 return records
+
+    async def iter_denied_uris(
+        self, uri: str, ctx: RequestContext, *, action: AclAction
+    ) -> AsyncIterator[str]:
+        """Find denied records in a subtree, validating each URI's current ACL snapshot."""
+        scope = And(
+            [
+                Eq("account_id", ctx.account_id),
+                PathScope("uri", uri, depth=-1),
+                acl_filter(ctx, action, denied=True),
+            ]
+        )
+        cursor: str | None = None
+        checked: set[str] = set()
+        while True:
+            records, cursor = await self._context_store.scroll(
+                filter=scope,
+                limit=1,
+                cursor=cursor,
+                output_fields=["uri"],
+                ctx=replace(ctx, bypass_acl=True),
+            )
+            for record in records:
+                candidate = record["uri"]
+                if candidate in checked:
+                    continue
+                checked.add(candidate)
+                # Index levels can carry older snapshots for the same path.
+                if not acl_allows(await self.resolve(candidate, ctx), ctx, action):
+                    yield candidate
+            if cursor is None:
+                return
 
     async def _subtree_records(self, uri: str, ctx: RequestContext) -> list[dict[str, Any]]:
         refs = await self._scroll_all(PathScope("uri", uri, depth=-1), ["id"], ctx)
@@ -457,30 +518,6 @@ class AclManager:
             else dict(record)
             for record in records
         ]
-
-    async def materialize_moved_record(
-        self, record: Mapping[str, Any], new_uri: str, ctx: RequestContext
-    ) -> dict[str, Any]:
-        if not is_acl_uri(new_uri):
-            return EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl()).context_fields()
-        ancestors = acl_ancestors(new_uri)
-        parent = ancestors[-2] if len(ancestors) > 1 else None
-        parent_acl = (
-            await self.resolve(parent, ctx)
-            if parent
-            else EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
-        )
-        inherited = parent_acl.permissions
-        source_uri = str(record.get("uri") or "")
-        direct = (
-            DirectAcl.from_context_fields(record, "acl_direct")
-            if is_acl_uri(source_uri)
-            else DirectAcl()
-        )
-        mode = self._effective_from_record(record).mode if is_acl_uri(source_uri) else AclMode.NONE
-        return EffectiveAcl.from_permissions(
-            direct, inherited, mode=mode, parent_mode=parent_acl.mode
-        ).context_fields()
 
     async def _apply_subtree(
         self,

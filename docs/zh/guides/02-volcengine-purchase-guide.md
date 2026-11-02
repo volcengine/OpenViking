@@ -182,7 +182,7 @@ openviking-server
 另开终端，按[快速开始](../getting-started/02-quickstart.md)配置 CLI 并创建其中的 `quickstart.md`，然后导入到未使用的目录：
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/model-check --wait --timeout 120
+ov add-resource ./quickstart.md --to viking://resources/model-check --wait
 ov find "谁负责备份流程？" --uri viking://resources/model-check
 ```
 

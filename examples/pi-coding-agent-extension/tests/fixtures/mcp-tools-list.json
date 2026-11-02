@@ -400,10 +400,6 @@
             "default": false,
             "title": "Wait",
             "type": "boolean"
-          },
-          "timeout": {
-            "type": "number",
-            "title": "Timeout"
           }
         },
         "required": [
@@ -440,10 +436,6 @@
             "default": false,
             "title": "Wait",
             "type": "boolean"
-          },
-          "timeout": {
-            "type": "number",
-            "title": "Timeout"
           }
         },
         "required": [

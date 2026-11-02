@@ -86,7 +86,7 @@ that it depends on OV history. Middleware defaults to
 `include_session_context=False`. Put it before native summarization middleware
 so raw messages are captured before the framework replaces them. Message capture
 watermarks are persisted in graph state. See the runnable
-[native history example](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/middleware/native_history.py)
+[native history example](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/langgraph/middleware/native_history.py)
 and its pinned requirements for LangChain summarization with a SQLite checkpointer.
 
 VikingBot is an exception to the host-history default: it still uses OV Working

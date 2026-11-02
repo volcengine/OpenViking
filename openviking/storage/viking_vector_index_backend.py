@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
@@ -26,10 +27,8 @@ from openviking.storage.acl import (
     ACL_MODE_FIELD,
     AclAction,
     AclManager,
-    AclMode,
     AclUpdate,
-    acl_grant_tokens,
-    acl_principals,
+    acl_filter,
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
@@ -42,7 +41,11 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
-from openviking.utils.tags import merge_search_tags, preserve_memory_type_tag
+from openviking.utils.tags import (
+    merge_search_tags,
+    normalize_search_tags,
+    preserve_memory_type_tag,
+)
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
@@ -144,6 +147,7 @@ class VectorTransferResult:
     deleted: int = 0
     restored: int = 0
     batches: int = 0
+    source_acl: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 class VectorTransferRollbackError(RuntimeError):
@@ -380,6 +384,11 @@ class _SingleAccountBackend:
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
         result = {k: v for k, v in filtered.items() if v is not None}
+        # Full-record writes must not carry legacy invalid tags through a merge.
+        if "search_tags" in result:
+            result["search_tags"] = normalize_search_tags(
+                result["search_tags"], discard_invalid=True
+            )
 
         # Ensure text fields required by the schema are present (even if empty).
         # VikingDB requires all schema-defined fields in upsert data.
@@ -416,6 +425,10 @@ class _SingleAccountBackend:
         payload = self._filter_known_fields(
             {key: value for key, value in data.items() if value is not None}
         )
+        if "search_tags" in payload:
+            payload["search_tags"] = normalize_search_tags(
+                payload["search_tags"], discard_invalid=True
+            )
         if self._adapter.USE_CONTENT_FIELD:
             content = payload.get("content")
             if isinstance(content, (str, bytes)):
@@ -2349,6 +2362,179 @@ class VikingVectorIndexBackend:
         assert last_error is not None
         raise last_error
 
+    async def get_reindex_inventory_under_uri(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        output_fields: Optional[List[str]] = None,
+        recursive: bool = True,
+        include_direct_children: bool = False,
+        include_virtual_chunks: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Load one complete lightweight reindex inventory without page-level planning."""
+        projection = list(
+            dict.fromkeys(
+                [
+                    *INCREMENTAL_INVENTORY_OUTPUT_FIELDS,
+                    *(output_fields or []),
+                ]
+            )
+        )
+        canonical_uri = resolve_uri(uri).uri.rstrip("/")
+        depth = -1 if recursive else 1 if include_direct_children else 0
+        if include_virtual_chunks and depth != 0:
+            raise ValueError("virtual chunk inventory requires an exact file scope")
+        # Path-index queries are portable; some VikingDB services reject string prefixes.
+        inventory_uri = canonical_uri.rsplit("/", 1)[0] if include_virtual_chunks else canonical_uri
+        inventory_depth = 1 if include_virtual_chunks else depth
+        root_parts = uri_parts(inventory_uri)
+        chunk_prefix = canonical_uri + "#chunk_"
+        scope = And(
+            [
+                Eq("account_id", ctx.account_id),
+                PathScope("uri", inventory_uri, depth=inventory_depth),
+                In("level", [0, 1, 2]),
+            ]
+        )
+        records: Dict[str, Dict[str, Any]] = {}
+        seen_ids: set[str] = set()
+        async for record in self._strict_scan(
+            ctx,
+            scope,
+            output_fields=projection,
+            batch_size=5000,
+            what=f"Reindex inventory under {canonical_uri}",
+        ):
+            record_id = str(record.get("id") or "")
+            record_uri = str(record.get("uri") or "")
+            try:
+                record_parts = uri_parts(record_uri)
+            except ValueError:
+                record_parts = None
+            try:
+                level = int(record.get("level"))
+            except (TypeError, ValueError):
+                level = -1
+            is_chunk = (
+                include_virtual_chunks
+                and level == 2
+                and re.fullmatch(re.escape(chunk_prefix) + r"[0-9]{4,}", record_uri) is not None
+            )
+            if (
+                not record_id
+                or level not in {0, 1, 2}
+                or record_parts is None
+                or record_parts[: len(root_parts)] != root_parts
+                or (inventory_depth >= 0 and len(record_parts) - len(root_parts) > inventory_depth)
+            ):
+                raise RuntimeError(
+                    f"Reindex inventory under {canonical_uri} returned an invalid record: "
+                    f"id={record_id or '<missing>'} uri={record_uri or '<missing>'} level={level}"
+                )
+            if record_id in seen_ids:
+                raise RuntimeError(f"Reindex inventory returned duplicate record id: {record_id}")
+            seen_ids.add(record_id)
+            if include_virtual_chunks and record_uri != canonical_uri and not is_chunk:
+                continue
+            records[record_id] = {field: record[field] for field in projection if field in record}
+            records[record_id].update(
+                {
+                    "id": record_id,
+                    "uri": record_uri,
+                    "level": level,
+                    "md5": str(record.get("md5") or ""),
+                }
+            )
+        return records
+
+    async def get_incremental_inventory_by_uris(
+        self,
+        uris: List[str],
+        *,
+        ctx: RequestContext,
+        batch_size: int = 100,
+        output_fields: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Read lightweight inventory with one exact scalar query per URI chunk.
+
+        Unlike :meth:`get_incremental_inventory_under_uri`, this never uses a
+        path scope: every returned record must belong to one of ``uris``.  The
+        result remains keyed by the caller's URI spelling and then by record ID
+        so file-scoped RNFV snapshots can consume a pre-hydrated V subset
+        without one vector query per file.  Canonical V has at most one record
+        per L0/L1/L2 level at each URI; request one extra result so an abnormal
+        duplicate set fails explicitly rather than being silently truncated.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+
+        requested_by_canonical: Dict[str, str] = {}
+        for uri in uris:
+            requested_by_canonical.setdefault(resolve_uri(uri).uri, uri)
+        canonical_uris = list(requested_by_canonical)
+        if not canonical_uris:
+            return {}
+
+        projection = list(
+            dict.fromkeys(
+                [
+                    *INCREMENTAL_INVENTORY_OUTPUT_FIELDS,
+                    *(output_fields or []),
+                ]
+            )
+        )
+        records_by_uri: Dict[str, Dict[str, Dict[str, Any]]] = {uri: {} for uri in canonical_uris}
+        for start in range(0, len(canonical_uris), batch_size):
+            chunk = canonical_uris[start : start + batch_size]
+            scope = And(
+                [
+                    Eq("account_id", ctx.account_id),
+                    In("uri", chunk),
+                    In("level", [0, 1, 2]),
+                ]
+            )
+            what = f"Incremental inventory for {len(chunk)} exact URI(s)"
+            result_limit = len(chunk) * 3 + 1
+            page = await self.filter(
+                filter=scope,
+                limit=result_limit,
+                output_fields=projection,
+                ctx=ctx,
+            )
+            if len(page) >= result_limit:
+                raise RuntimeError(
+                    f"{what} exceeded its canonical L0/L1/L2 record limit; "
+                    "run reindex or prune the duplicate records before retrying"
+                )
+            for record in page:
+                record_id = str(record.get("id") or "")
+                record_uri = str(record.get("uri") or "")
+                try:
+                    level = int(record.get("level"))
+                except (TypeError, ValueError):
+                    level = -1
+                if not record_id or record_uri not in records_by_uri or level not in {0, 1, 2}:
+                    raise RuntimeError(
+                        f"{what} returned an invalid record: id={record_id or '<missing>'} "
+                        f"uri={record_uri or '<missing>'} level={level}"
+                    )
+                if record_id in records_by_uri[record_uri]:
+                    raise RuntimeError(f"{what} returned duplicate record id: {record_id}")
+                records_by_uri[record_uri][record_id] = {
+                    field: record[field] for field in projection if field in record
+                }
+                records_by_uri[record_uri][record_id].update(
+                    {
+                        "id": record_id,
+                        "uri": record_uri,
+                        "level": level,
+                        "md5": str(record.get("md5") or ""),
+                    }
+                )
+
+        return {requested_by_canonical[uri]: records for uri, records in records_by_uri.items()}
+
     async def hydrate_incremental_records(
         self,
         expected: Mapping[str, Mapping[str, Any]],
@@ -2451,7 +2637,14 @@ class VikingVectorIndexBackend:
             And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
         )
 
-    async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
+    async def delete_uris(
+        self, ctx: RequestContext, uris: List[str], *, recursive: bool = False
+    ) -> None:
+        if recursive:
+            backend = await self._get_backend_for_context(ctx)
+            for uri in uris:
+                await backend.delete_by_filter(self._uri_transfer_filter(ctx, uri, recursive=True))
+            return
         for uri in uris:
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),
@@ -2652,7 +2845,6 @@ class VikingVectorIndexBackend:
         *,
         recursive: bool,
         source_uris: List[str] | None,
-        preserve_target_acl: bool = False,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
     ) -> tuple[List[Dict[str, Any]], int, Dict[str, Dict[str, Any]]]:
         """Read selected source records and remove affected target records."""
@@ -2709,9 +2901,8 @@ class VikingVectorIndexBackend:
                 )
         # A chunk cannot carry ACL for its base file URI. Keep the old main record
         # when copy has no main record to replace it, accepting its stale content.
-        acl_enabled = await self._acl_enabled(ctx)
         preserved_acl_uris: set[str] = set()
-        if preserve_target_acl and acl_enabled:
+        if self.acl_manager is not None:
             written_uris = {
                 rewrite_transfer_uri(str(record["uri"]), source_uri, target_uri)
                 for record in source_records
@@ -2743,8 +2934,7 @@ class VikingVectorIndexBackend:
             ):
                 affected_target_ids.append(str(record["id"]))
         target_acl_fields: Dict[str, Dict[str, Any]] = {}
-        if preserve_target_acl and acl_enabled and replacement_target_uris:
-            assert self.acl_manager is not None
+        if self.acl_manager is not None and replacement_target_uris:
             acl_target_uris = {uri for uri in replacement_target_uris if is_acl_uri(uri)}
             target_acl_fields = {
                 uri: effective.context_fields()
@@ -2777,7 +2967,6 @@ class VikingVectorIndexBackend:
             recursive=recursive,
             source_uris=source_uris,
             target_entry_exists=target_entry_exists,
-            preserve_target_acl=True,
         )
         result = VectorTransferResult(scanned=len(source_records), batches=batches)
         timestamp = get_current_timestamp()
@@ -2846,12 +3035,13 @@ class VikingVectorIndexBackend:
         *,
         source_uris: List[str] | None = None,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
+        restore_acl: Dict[str, Dict[str, Any]] | None = None,
     ) -> VectorTransferResult:
         """Move every vector record in a URI scope with compensating rollback."""
         source_uri = resolve_uri(source_uri).uri
         target_uri = resolve_uri(target_uri).uri
         self._validate_uri_transfer_scopes(source_uri, target_uri)
-        source_records, batches, _ = await self._prepare_uri_transfer(
+        source_records, batches, target_acl_fields = await self._prepare_uri_transfer(
             ctx,
             source_uri,
             target_uri,
@@ -2859,13 +3049,23 @@ class VikingVectorIndexBackend:
             source_uris=source_uris,
             target_entry_exists=target_entry_exists,
         )
-        result = VectorTransferResult(scanned=len(source_records), batches=batches)
+        result = VectorTransferResult(
+            scanned=len(source_records),
+            batches=batches,
+            # Keep the original ACL only for a failed move's compensation.
+            source_acl={
+                str(record["uri"]): {
+                    key: value for key, value in record.items() if key in ACL_CONTEXT_FIELDS
+                }
+                for record in source_records
+            },
+        )
+        if restore_acl is not None:
+            target_acl_fields.update(restore_acl)
         if not source_records:
             return result
 
         timestamp = get_current_timestamp()
-        acl_enabled = await self._acl_enabled(ctx)
-        moved_acl_by_uri: Dict[str, Dict[str, Any]] = {}
         target_payloads: List[Dict[str, Any]] = []
         for record in source_records:
             payload = rewrite_vector_record(
@@ -2876,17 +3076,10 @@ class VikingVectorIndexBackend:
                 mode="move",
                 timestamp=timestamp,
             )
-            if acl_enabled:
-                assert self.acl_manager is not None
-                rewritten_uri = str(payload["uri"])
-                acl_fields = moved_acl_by_uri.get(rewritten_uri)
-                if acl_fields is None:
-                    acl_fields = await self.acl_manager.materialize_moved_record(
-                        record,
-                        rewritten_uri,
-                        ctx,
-                    )
-                    moved_acl_by_uri[rewritten_uri] = acl_fields
+            acl_fields = target_acl_fields.get(
+                self._vector_entry_uri(str(payload["uri"]), target_acl_fields)
+            )
+            if acl_fields is not None:
                 payload.update(acl_fields)
             target_payloads.append(payload)
         target_ids = [str(payload["id"]) for payload in target_payloads]
@@ -2897,7 +3090,7 @@ class VikingVectorIndexBackend:
                 attempted_target_ids.extend(str(payload["id"]) for payload in payload_batch)
                 written_ids = (
                     await self._upsert_many_raw(payload_batch, ctx=ctx)
-                    if acl_enabled
+                    if target_acl_fields
                     else await self.upsert_many(payload_batch, ctx=ctx)
                 )
                 if len(written_ids) != len(payload_batch):
@@ -3034,38 +3227,10 @@ class VikingVectorIndexBackend:
                 ]
             )
 
-        controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
-        # Shared records written while ACL was disabled retain the root's
-        # default user:* manage access. Controlled descendants must match their
-        # own grants, including inherit nodes below a restricted boundary.
-        default_shared_filter = RawDSL(
-            {"op": "must_not", "field": ACL_MODE_FIELD, "conds": controlled_modes}
-        )
-        read_grants = acl_grant_tokens(acl_principals(ctx), AclAction.READ)
         shared_acl_filter = And(
             [
                 PathScope("uri", "viking://resources", depth=-1),
-                Or(
-                    [
-                        default_shared_filter,
-                        And(
-                            [
-                                In(ACL_MODE_FIELD, controlled_modes),
-                                Or(
-                                    [
-                                        In("acl_direct_grants", read_grants),
-                                        And(
-                                            [
-                                                Eq(ACL_MODE_FIELD, AclMode.INHERIT.value),
-                                                In("acl_inherited_grants", read_grants),
-                                            ]
-                                        ),
-                                    ]
-                                ),
-                            ]
-                        ),
-                    ]
-                ),
+                acl_filter(ctx, AclAction.READ),
             ]
         )
         access_filters: List[FilterExpr] = [

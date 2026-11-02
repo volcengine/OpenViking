@@ -1,18 +1,16 @@
-//! VFS enumeration with pruning rules from design §4.2.
+//! VFS enumeration with snapshot pruning rules.
 //!
 //! Walks an account's VFS subtree at `/local/{account}` and returns
 //! account-relative paths of files that must be included in a Git snapshot.
 //!
-//! Pruning rules (verbatim from design §4.2):
+//! Pruning rules:
 //!
 //! | Skip if account-relative path matches | Reason |
 //! |---|---|
 //! | First path segment ∈ {`_system`, `tasks`, `temp`, `queue`, `upload`} | Internal scopes + runtime locks |
 //! | Any segment equals `.path.ovlock` OR starts with `.path.ovlock` | Runtime lock |
 //! | File extension is `.faiss` or `.index`, OR path contains an `embedding_cache/` segment | Vector index — derived data |
-//!
-//! L0/L1 derived files (`.abstract.md`, `.overview.md`)
-//! are intentionally KEPT — design §4.2 says they belong in snapshots.
+//! | File name ends with `.abstract.md` or `.overview.md` | L0/L1 summaries — derived data |
 
 use crate::core::internal_names::{is_hidden_runtime_lock_name, PATH_LOCK_FILE};
 
@@ -65,9 +63,13 @@ pub fn prune_path(rel: &str) -> bool {
         }
     }
 
-    // Rule 3b: extension is .faiss or .index
+    // Rule 3b: derived indexes and summaries.
     if let Some(last) = segments.last() {
-        if last.ends_with(".faiss") || last.ends_with(".index") {
+        if last.ends_with(".faiss")
+            || last.ends_with(".index")
+            || last.ends_with(".abstract.md")
+            || last.ends_with(".overview.md")
+        {
             return true;
         }
     }
@@ -296,28 +298,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_collect_all_keeps_derived_l0_l1_files() {
+    async fn test_collect_all_prunes_derived_l0_l1_files() {
         let mock = MockFS::new(
             "/local/acct",
             vec![
                 ("/local/acct/resources/x.md", false),
+                ("/local/acct/resources/.abstract.md", false),
+                ("/local/acct/resources/.overview.md", false),
                 ("/local/acct/resources/x.md.abstract.md", false),
                 ("/local/acct/resources/x.md.overview.md", false),
             ],
         );
         let fs: Arc<dyn FileSystem> = Arc::new(mock);
 
-        let mut got = collect_all(&fs, "acct").await.unwrap();
-        got.sort();
-
-        let mut expected = vec![
-            "resources/x.md".to_string(),
-            "resources/x.md.abstract.md".to_string(),
-            "resources/x.md.overview.md".to_string(),
-        ];
-        expected.sort();
-
-        assert_eq!(got, expected);
+        assert_eq!(collect_all(&fs, "acct").await.unwrap(), vec!["resources/x.md"]);
     }
 
     #[tokio::test]
@@ -410,12 +404,14 @@ mod tests {
         assert!(prune_path("resources/x.index"));
         assert!(prune_path("resources/embedding_cache/v.bin"));
         assert!(prune_path("agent/embedding_cache/something"));
+        assert!(prune_path("resources/.abstract.md"));
+        assert!(prune_path("resources/.overview.md"));
+        assert!(prune_path("resources/x.md.abstract.md"));
+        assert!(prune_path("resources/x.md.overview.md"));
 
         // Survivors
         assert!(!prune_path("resources/a.md"));
         assert!(!prune_path("agent/skills/b.py"));
-        assert!(!prune_path("resources/x.md.abstract.md"));
-        assert!(!prune_path("resources/x.md.overview.md"));
         // "_systemfoo" is NOT "_system", must survive.
         assert!(!prune_path("_systemfoo/x"));
         // Per "any segment starting with .path.ovlock", ".path.ovlocking"

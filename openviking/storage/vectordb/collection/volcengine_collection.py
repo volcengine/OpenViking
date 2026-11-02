@@ -453,7 +453,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "ids": primary_keys,
         }
-        return self._data_post(path, data)
+        return self._data_post(path, data, raise_for_status=True)
 
     def delete_all_data(self):
         path = "/api/vikingdb/data/delete"
@@ -462,7 +462,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "del_all": True,
         }
-        return self._data_post(path, data)
+        return self._data_post(path, data, raise_for_status=True)
 
     def _parse_fetch_result(self, data: Dict[str, Any]) -> FetchDataInCollectionResult:
         result = FetchDataInCollectionResult()
@@ -647,7 +647,7 @@ class VolcengineCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
-        resp_data = self._data_post(path, data)
+        resp_data = self._data_post(path, data, raise_for_status=True)
         return self._parse_search_result(resp_data)
 
     def _parse_aggregate_result(

@@ -63,13 +63,14 @@ test("describeApiKey decodes identity segments and masks the secret", () => {
   assert.deepEqual(info.problems, []);
 });
 
-test("describeApiKey shows head/tail only for legacy keys", () => {
+test("describeApiKey reports unsupported key shapes", () => {
   const key = "ff6e58" + "a".repeat(54) + "f956";
   const info = describeApiKey(key);
-  assert.equal(info.format, "legacy");
-  assert.equal(info.display, "ff6e…f956 (64 chars, legacy single-segment format)");
+  assert.equal(info.format, "unsupported");
+  assert.equal(info.display, "ff6e…f956 (64 chars, unsupported format)");
+  assert.ok(info.problems.some((p) => p.includes("unsupported shape")));
   assert.equal(describeApiKey("").present, false);
-  assert.equal(describeApiKey("short").display, "***** (5 chars, legacy single-segment format)");
+  assert.equal(describeApiKey("short").display, "***** (5 chars, unsupported format)");
 });
 
 test("describeApiKey flags copy/paste damage", () => {
@@ -237,7 +238,7 @@ test("lintServerConf covers every harness, not just the two with a legacy ov.con
 });
 
 test("assessReady interprets the readiness checks", () => {
-  const ok = { ok: true, status: 200, json: { status: "ready", checks: { agfs: { status: "ok", checks: { filesystem: "ok", multiwrite_sync: "not_supported" } }, vectordb: "ok", api_key_manager: "not_configured", embedding: "ok", ollama: "not_configured" } } };
+  const ok = { ok: true, status: 200, json: { status: "ready", checks: { agfs: { status: "ok", checks: { filesystem: "ok" } }, vectordb: "ok", api_key_manager: "not_configured", embedding: "ok", ollama: "not_configured" } } };
   let report = createReport();
   assert.equal(assessReady(report, ok).ready, true);
   assert.equal(report.exitCode(), 0);

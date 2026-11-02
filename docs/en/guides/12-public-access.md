@@ -77,7 +77,7 @@ as the issuer in OAuth metadata and `WWW-Authenticate` headers) and Caddy
 }
 ```
 
-If you also run [OpenViking Gateway](15-gateway.md), use the domain block under [Docker Compose](22-gateway-operations.md#docker-compose) in the gateway's operations guide instead. It sends the model API paths to the gateway and everything else to OpenViking.
+With OpenViking Gateway enabled (`gateway.enabled: true`), the model APIs and the gateway management API are served under `/gateway` on the server port, so this proxy block covers them too. No extra upstream or path-based routing is needed.
 
 ### 3. Uncomment HTTPS lines in `docker-compose.yml`
 
@@ -203,20 +203,14 @@ For Compose, set it in `.env` and run `docker compose up -d`; an `export` in an 
 
 ## Compatibility note: the `:1934` proxy
 
-`docker compose up` also ships a Caddy reverse proxy on port 1934. It sends the
-[OpenViking Gateway](15-gateway.md) paths (`/v1/*`, `/api/v3/*`, `/api/compatible/v1/*`
-and `/gateway/uploads`) to the `gateway` service and everything else to
-`openviking:{$OPENVIKING_SERVER_PORT:1933}`. The port is **kept for compatibility with
-deployments that already bookmarked 1934**, and it is how clients reach the gateway over
-plain HTTP, because the gateway's own port is not published (see
-[Docker Compose](22-gateway-operations.md#docker-compose) in the gateway's operations
-guide). New deployments can connect to 1933 on the private network; public clients should use
-the HTTPS entrypoint above. Remove the caddy service and the 1934 port mapping in
-`docker-compose.yml` if you don't need it.
+The bundled Caddy's compatibility port 1934 forwards all paths to `openviking:{$OPENVIKING_SERVER_PORT:1933}`. With OpenViking Gateway enabled, port 1933 serves the regular OpenViking APIs and, under `/gateway`, the model APIs, tool uploads and the gateway management API. You no longer need a separate gateway container, port 1935 or path-based routing rules.
+
+Keep 1934 if existing bookmarks or clients still use it; otherwise remove its port mapping. Public clients should use the HTTPS entrypoint.
+
 
 ## Related
 
 - [Deployment Guide](03-deployment.md) — Docker, systemd, Kubernetes
 - [OAuth Guide](11-oauth.md) — OAuth 2.1 setup and client onboarding
 - [Authentication](04-authentication.md) — API key management
-- [OpenViking Gateway deployment and operations](22-gateway-operations.md) — routes, proxy settings and HTTPS for the gateway
+- [OpenViking Gateway deployment and operations](22-gateway-operations.md) — deploying the gateway, its routes and reverse proxy requirements

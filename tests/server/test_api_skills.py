@@ -803,7 +803,7 @@ async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(clien
             "required": ["expression"],
         },
     }
-    added = await client.post("/api/v1/skills", json={"data": tool, "wait": True, "timeout": 10})
+    added = await client.post("/api/v1/skills", json={"data": tool, "wait": True})
     assert added.status_code == 200, added.text
     root = added.json()["result"]["root_uri"]
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)

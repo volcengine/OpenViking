@@ -4,24 +4,10 @@
 
 from __future__ import annotations
 
-import math
+import re
 
 EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
-
-
-def estimate_embedding_input_tokens(text: str) -> int:
-    """Estimate tokens for the raw text embedding input guard."""
-    if not text:
-        return 0
-    cjk_chars = sum(
-        1
-        for char in text
-        if "\u4e00" <= char <= "\u9fff"
-        or "\u3040" <= char <= "\u30ff"
-        or "\uac00" <= char <= "\ud7af"
-    )
-    other_chars = len(text) - cjk_chars
-    return max(1, cjk_chars + math.ceil(other_chars / 4))
+_CJK_RUN = re.compile("[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+")
 
 
 def truncate_embedding_input(
@@ -29,23 +15,38 @@ def truncate_embedding_input(
     max_tokens: int,
     suffix: str = EMBEDDING_TRUNCATION_SUFFIX,
 ) -> str:
-    """Trim raw text before embedding using the local estimate above."""
+    """Keep the original estimated-token prefix budget, then append the marker."""
     if not text:
         return text
     if max_tokens <= 0:
         return suffix.lstrip()
-    if estimate_embedding_input_tokens(text) <= max_tokens:
+    if len(text) <= max_tokens:
         return text
 
-    low = 0
-    high = len(text)
-    while low < high:
-        mid = (low + high + 1) // 2
-        if estimate_embedding_input_tokens(text[:mid]) <= max_tokens:
-            low = mid
-        else:
-            high = mid - 1
-    return text[:low].rstrip() + suffix
+    # Quarter-token units preserve the original estimate without rounding each
+    # run. No prefix longer than 4 * max_tokens can fit, even with only ASCII.
+    max_units = max_tokens * 4
+    if text.isascii():
+        return text if len(text) <= max_units else text[:max_units].rstrip() + suffix
+    scan_end = min(len(text), max_units + 1)
+    units = position = 0
+    for match in _CJK_RUN.finditer(text, 0, scan_end):
+        start, end = match.span()
+        # Ordinary characters preceding the CJK run cost one unit each.
+        if units + start - position > max_units:
+            prefix_end = position + max_units - units
+            return text[:prefix_end].rstrip() + suffix
+        units += start - position
+        if units + (end - start) * 4 > max_units:
+            prefix_end = start + (max_units - units) // 4
+            return text[:prefix_end].rstrip() + suffix
+        units += (end - start) * 4
+        position = end
+
+    if units + scan_end - position <= max_units:
+        return text
+    prefix_end = position + max_units - units
+    return text[:prefix_end].rstrip() + suffix
 
 
 def resolve_embedding_max_input_tokens(

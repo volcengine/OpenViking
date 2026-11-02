@@ -21,14 +21,12 @@ export type AddResourceCommandInput = {
   reason?: string;
   instruction?: string;
   wait?: boolean;
-  timeout?: number;
 };
 
 export type AddSkillCommandInput = {
   source?: string;
   data?: unknown;
   wait?: boolean;
-  timeout?: number;
 };
 
 export type OVSearchCommandInput = {

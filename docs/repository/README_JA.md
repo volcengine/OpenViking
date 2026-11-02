@@ -11,7 +11,7 @@
 
 [English](../../README.md) / [中文](README_CN.md) / 日本語
 
-<a href="https://www.openviking.ai">Webサイト</a> · <a href="https://openviking.ai/studio">ライブデモ</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">ドキュメント</a> · <a href="https://blog.openviking.ai/">ブログ</a>
+<a href="https://www.openviking.ai">Webサイト</a> · <a href="https://studio.openviking.ai">ライブデモ</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">ドキュメント</a> · <a href="https://blog.openviking.ai/">ブログ</a>
 
 <p>
   <a href="https://github.com/volcengine/OpenViking/releases"><img src="https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square" alt="release"></a>
@@ -45,14 +45,14 @@ OpenVikingは、AIエージェントのためのオープンソースのコン�
 
 多くのエージェントメモリはブラックボックスです。テキストを入れると埋め込みが返ってきますが、何が保存されたのかは誰にも見えません。OpenVikingは、コンテキストを `viking://` という仮想ファイルシステムとして整理します。エージェントは `ls`、`tree`、`read`、`write`、`grep` でファイルのように操作し、人間もディレクトリを開いて中身を確認・編集できます。各ディレクトリには自動生成の要約があり、エージェントは要約を確認してから読む内容を決められます。
 
-<a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
+<a href="https://studio.openviking.ai" target="_blank" rel="noopener noreferrer">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-playground-dark.png">
-    <img src="../images/studio-playground.png" alt="OpenViking Studio：コンテキストの閲覧と意味検索">
+    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-filesystem-dark.png">
+    <img src="../images/studio-filesystem.png" alt="OpenViking Studio のファイルシステム：個人のメモリとリソースを閲覧">
   </picture>
 </a>
 
-[OpenViking Studioを試す](https://openviking.ai/studio)。ブラウザから利用でき、インストールは不要です。 [Web Studioを自分の環境にデプロイ](../../web-studio/README.md)。
+[OpenViking Studioを試す](https://studio.openviking.ai)。ブラウザから利用でき、インストールは不要です。 [Web Studioを自分の環境にデプロイ](../../web-studio/README.md)。
 
 ## OpenVikingを選ぶ理由
 
@@ -191,27 +191,17 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 <summary><strong>エージェントにインストールしてもらう</strong></summary>
 
 ```text
-OpenViking メモリプラグインをインストールすること。次を実行する：
+OpenViking メモリプラグインをインストールして、使い始めるところまで手伝ってください。OpenViking は AI エージェント向けのコンテキストデータベースです（https://github.com/volcengine/OpenViking）。下のコマンドとリンクは公式ドキュメントに載っているものです。
 
-curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+1. 公式インストーラーを実行してください。ネットワークに接続し、私のホームディレクトリに書き込みます。サンドボックスでブロックされたら、私に承認を求めてください：
+   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang en --url <SERVER_URL> --api-key <API_KEY>
+2. インストールが終わったら OpenViking のオンボーディングガイドを読み、それに沿って私のセットアップを進めてください。履歴のインポートや作業ルールの追加といった選択の前には、ガイドに従って私に確認することになっています。docs.openviking.ai と docs.openviking.net は同じドキュメントサイトなので、開けるほうを使ってください：
+   https://docs.openviking.ai/agents/en/onboarding.md
 
-<SERVER_URL> は私の OpenViking サーバーのアドレス。
-推測せずに私に確認すること。サーバーで認証が有効なら user key が必要
-（root key ではメモリを読み書きできない）：保存済みのキーがあるか確認し、
-なければ私に求めて --api-key で渡すこと。
-このチャットに貼りたくない場合の渡し方も伝えること。キーは復唱しないこと。
-認証が無効なら --api-key '' を付け、以前保存したキーを使い回さないこと。
-
-スクリプトはネットワークに接続し、ホームディレクトリに書き込む。
-サンドボックスでブロックされたら、
-サンドボックスの外で実行する許可を私に求めること。
-
-完了したら、どのツールにインストールしたかと、
-それぞれの次の手順を伝えること。そのうえで、
-ほかのツールにも入れるか私に確認すること。
+API キーは、私がそのサーバーで自分用に作成した user key です。インストーラーがこのマシンの ~/.openviking/ovcli.conf に保存します。コマンドではそのまま使ってください。返信の中で表示する必要はありません。ほかのファイルやルールにも書き込まないでください。やり取りは日本語でお願いします。
 ```
 
-サーバーのアドレスを用意しておいてください。認証が有効なら API キーも必要です。
+送信する前に、`<SERVER_URL>` をサーバーのアドレスに、`<API_KEY>` を user key に置き換えてください。root key ではメモリを読み書きできません。サーバーで認証が無効なら `--api-key ''` を使ってください。
 
 </details>
 
@@ -318,6 +308,8 @@ Codex は初回起動時に `Hooks need review` で止まるので、`Trust all 
 
 設定方法と統合の詳細は [Integrations](https://openviking.ai/integrations) を参照してください。
 
+フレームワークを使うアプリケーション向けには、[LangChain/LangGraph と Microsoft Agent Framework の統合パッケージ](../../integrations/frameworks/README.md)を参照してください。他のフレームワーク用アダプターを追加する手順も説明しています。
+
 ## デスクトップアプリ（Beta）
 
 デスクトップアプリは macOS と Windows x64 向けのコンソール（Beta）です。対応するローカルエージェントとの連携を設定し、セッションのリコールやキャプチャを確認して、ローカルのメモリとスキルを OpenViking に同期できます。
@@ -398,6 +390,7 @@ ov chat   # 別のターミナルで実行
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI ネイティブの分散ファイルシステム
 - [loopx](https://github.com/huangruiteng/loopx) - 軽量なループエンジニアリング状態カーネル
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - あなたと共に成長するエージェント
+- [NVIDIA cuVS](https://github.com/NVIDIA/cuvs) - GPU アクセラレーションによるベクトル検索・クラスタリングライブラリ
 
 提携の提案は [issue](https://github.com/volcengine/OpenViking/issues) で受け付けています。
 
@@ -424,4 +417,5 @@ OpenViking プロジェクトは、コンポーネントごとに異なるライ
 - **メインプロジェクト**: AGPLv3 - 詳細は [LICENSE](../../LICENSE) ファイルを参照してください
 - **crates/ov\_cli**: Apache 2.0 - 詳細は [LICENSE](../../crates/LICENSE) を参照してください
 - **examples**: Apache 2.0 - 詳細は [LICENSE](../../examples/LICENSE) を参照してください。`examples/hermes-plugin` の Hermes プラグインは元の [MIT ライセンス](../../examples/hermes-plugin/LICENSE) を保持します。
+- **integrations/frameworks**: LangChain/LangGraph アダプターは AGPLv3、Microsoft Agent Framework アダプターは MIT を採用しています。各パッケージの `LICENSE` を参照してください。実行可能なサンプルは Apache 2.0 を維持し、各パッケージの `examples/LICENSE` に記載されています。
 - **third\_party**: 各サードパーティプロジェクトの元のライセンス

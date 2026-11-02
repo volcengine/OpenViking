@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,7 +10,7 @@ import pytest
 from starlette.requests import Request
 
 from openviking.server.account_stores.base import AccountStore
-from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.auth import (
     get_request_context,
     get_session_request_context,
@@ -22,6 +23,7 @@ from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
     FailedPreconditionError,
+    InvalidArgumentError,
     UnauthenticatedError,
 )
 from tests.server.account_store_fakes import InMemoryAGFS
@@ -72,35 +74,46 @@ async def make_request(
     return request
 
 
-async def test_key_identity_and_groups_are_resolved_independently(runtime):
+@pytest.mark.parametrize("groups", [(), ("team",)])
+async def test_key_identity_supplies_groups_to_both_contexts(runtime, groups, monkeypatch):
     key = await runtime.register_user("acme", "bob")
-    await runtime.create_group("acme", "team")
-    await runtime.add_group_member("acme", "team", "bob")
+    for group in groups:
+        await runtime.create_group("acme", group)
+        await runtime.add_group_members("acme", group, ["bob"])
+
     request = await make_request(runtime, headers=[(b"x-openviking-user", b"spoof")])
     plugin = request.app.state.auth_plugin
     identity = await plugin.resolve_identity(
         request, api_key=key, x_openviking_user="spoof", x_openviking_account="spoof"
     )
+
+    async def redundant_read(*args):
+        pytest.fail("resolved API-key identity must supply its own groups and deletion proof")
+
+    monkeypatch.setattr(runtime, "get_user_group_ids", redundant_read)
+    monkeypatch.setattr(runtime, "get_deletion", redundant_read)
     ctx = await get_request_context(request, identity, "peer", key, None)
-    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, ("team",))
+    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, groups)
     assert ctx.actor_peer_id == "peer"
     assert ctx.api_key == key
     assert "x-openviking-user" not in request.headers
     session = await get_session_request_context(request, identity, key, None)
+    assert session.group_ids == groups
     assert session.actor_peer_id is None
 
 
 async def test_key_store_error_and_unknown_identity_fail_closed():
     store = AsyncMock(spec=AccountStore)
-    store.verify_api_key.return_value = ("acme", "missing")
-    store.get_user.return_value = None
+    store.get_auth_snapshot.return_value = None
     manager = APIKeyManager("root", store)
     request = await make_request(manager)
-    with pytest.raises(UnauthenticatedError, match="Unknown"):
-        await request.app.state.auth_plugin.resolve_identity(request, api_key="verified-key")
-    store.get_user.side_effect = OSError("database offline")
+    key = generate_api_key("acme", "missing")
+    with pytest.raises(UnauthenticatedError, match="Invalid"):
+        await request.app.state.auth_plugin.resolve_identity(request, api_key=key)
+    store.get_auth_snapshot.side_effect = OSError("database offline")
+
     with pytest.raises(OSError, match="database offline"):
-        await request.app.state.auth_plugin.resolve_identity(request, api_key="verified-key")
+        await request.app.state.auth_plugin.resolve_identity(request, api_key=key)
 
 
 async def test_trusted_explicit_user_role_with_root_key(runtime):
@@ -120,6 +133,119 @@ async def test_trusted_explicit_user_role_with_root_key(runtime):
         x_openviking_user="alice",
     )
     assert identity.role == Role.USER
+
+
+async def test_trusted_group_header_overrides_internal_group_lookup(runtime):
+    await runtime.create_group("acme", "local-team")
+    await runtime.add_group_members("acme", "local-team", ["alice"])
+    request = await make_request(
+        runtime,
+        "trusted",
+        "root",
+        headers=[(b"x-openviking-groups", b"gateway-team, finance, gateway-team")],
+    )
+    plugin = request.app.state.auth_plugin
+
+    identity = await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account="acme", x_openviking_user="alice"
+    )
+    ctx = await get_request_context(request, identity, None, "root", None)
+
+    assert identity.group_ids == ("gateway-team", "finance")
+    assert ctx.group_ids == ("gateway-team", "finance")
+
+
+async def test_trusted_empty_group_header_falls_back_to_internal_group_lookup(runtime):
+    await runtime.create_group("acme", "local-team")
+    await runtime.add_group_members("acme", "local-team", ["alice"])
+    request = await make_request(
+        runtime,
+        "trusted",
+        "root",
+        headers=[(b"x-openviking-groups", b" , ")],
+    )
+    plugin = request.app.state.auth_plugin
+
+    identity = await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account="acme", x_openviking_user="alice"
+    )
+    ctx = await get_request_context(request, identity, None, "root", None)
+
+    assert identity.group_ids == ()
+    assert ctx.group_ids == ("local-team",)
+
+
+async def test_trusted_group_header_rejects_invalid_group_id(runtime):
+    request = await make_request(
+        runtime,
+        "trusted",
+        "root",
+        headers=[(b"x-openviking-groups", b"good,bad/group")],
+    )
+    plugin = request.app.state.auth_plugin
+
+    with pytest.raises(InvalidArgumentError, match="group_id"):
+        await plugin.resolve_identity(
+            request, api_key="root", x_openviking_account="acme", x_openviking_user="alice"
+        )
+
+
+async def test_oversized_trusted_identity_does_not_block_valid_registration(runtime):
+    request = await make_request(runtime, "trusted", trusted_flush_interval=300)
+    plugin = request.app.state.auth_plugin
+    account_id = "a" * 255
+    await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account=account_id, x_openviking_user="alice"
+    )
+
+    with pytest.raises(InvalidArgumentError, match="account_id.*255.*UTF-8 bytes"):
+        await plugin.resolve_identity(
+            request,
+            api_key="root",
+            x_openviking_account="a" * 256,
+            x_openviking_user="bob",
+        )
+
+    long_user_id = "u" * 256
+    with pytest.raises(InvalidArgumentError, match="user_id.*255"):
+        await plugin.resolve_identity(
+            request, api_key="root", x_openviking_account="acme", x_openviking_user=long_user_id
+        )
+    await plugin.flush_trusted_identities()
+
+    assert await runtime.get_registered_user_role(account_id, "alice") == Role.USER
+    assert await runtime.get_registered_user_role("acme", long_user_id) is None
+
+
+async def test_trusted_registration_preserves_existing_oversized_account():
+    account_id = "a" * 1024
+    agfs = InMemoryAGFS()
+    agfs.write(
+        "/local/_system/accounts.json",
+        json.dumps({"accounts": {account_id: {"created_at": "legacy"}}}).encode(),
+    )
+    agfs.write(
+        f"/local/{account_id}/_system/users.json",
+        json.dumps({"users": {"alice": {"role": "admin"}}}).encode(),
+    )
+    manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs), issue_user_keys=False)
+    await manager.load()
+    try:
+        request = await make_request(manager, "trusted", trusted_flush_interval=300)
+        plugin = request.app.state.auth_plugin
+        identity = await plugin.resolve_identity(
+            request, api_key="root", x_openviking_account=account_id, x_openviking_user="alice"
+        )
+        assert identity.role == Role.ADMIN
+
+        await plugin.resolve_identity(
+            request, api_key="root", x_openviking_account=account_id, x_openviking_user="bob"
+        )
+        await plugin.flush_trusted_identities()
+
+        assert await manager.get_registered_user_role(account_id, "bob") == Role.USER
+    finally:
+        await manager.close()
 
 
 async def test_trusted_unknown_user_cannot_bypass_account_deletion(runtime):
@@ -271,3 +397,100 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     assert identity.role == Role.USER
     ctx = await get_request_context(request, identity, None, None, None)
     assert ctx.role == Role.USER
+
+
+@pytest.mark.parametrize(
+    "configured_issuer,token_issuer,accepted",
+    [
+        ("https://issuer.test/app/", "https://issuer.test/app/", True),
+        ("https://issuer.test/app", "https://issuer.test/app", True),
+        ("https://issuer.test/app/", "https://issuer.test/app", False),
+        ("https://issuer.test/app", "https://issuer.test/app/", False),
+        ("https://issuer.test/app", "https://issuer.test/app///", False),
+        ("https://issuer.test/app", "https://attacker.test/app", False),
+    ],
+)
+async def test_oidc_issuer_matches_exactly(configured_issuer, token_issuer, accepted, monkeypatch):
+    import base64
+    import time
+
+    import httpx
+
+    jwt = pytest.importorskip("jose.jwt")
+
+    from openviking.server.auth.oidc_config import OIDCConfig
+    from openviking.server.auth.plugins import oidc as oidc_module
+
+    assert oidc_module._check_jwt_available()
+    plugin = oidc_module.OIDCAuthPlugin()
+    config = SimpleNamespace(oidc=OIDCConfig(issuer=configured_issuer, audience="openviking"))
+    plugin.validate_config(config)
+    await plugin.initialize(None, None, config)
+    secret = "test-secret"
+    encoded_key = base64.urlsafe_b64encode(secret.encode()).rstrip(b"=").decode()
+
+    def idp_response(request):
+        if str(request.url) == "https://issuer.test/app/.well-known/openid-configuration":
+            return httpx.Response(
+                200, json={"issuer": configured_issuer, "jwks_uri": "https://issuer.test/keys"}
+            )
+        assert str(request.url) == "https://issuer.test/keys"
+        return httpx.Response(
+            200, json={"keys": [{"kty": "oct", "k": encoded_key, "alg": "HS256", "kid": "test"}]}
+        )
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        oidc_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(idp_response), **kwargs),
+    )
+    token = jwt.encode(
+        {
+            "iss": token_issuer,
+            "aud": "openviking",
+            "sub": "user-1",
+            "exp": int(time.time()) + 60,
+        },
+        secret,
+        algorithm="HS256",
+        headers={"kid": "test"},
+    )
+    if accepted:
+        claims = await plugin._validate_token(token)
+        assert claims["sub"] == "user-1"
+    else:
+        with pytest.raises(UnauthenticatedError, match="Invalid claims"):
+            await plugin._validate_token(token)
+
+
+@pytest.mark.parametrize("role", ["root", "unknown"])
+async def test_snapshot_cannot_bypass_main_registered_role_validation(role):
+    store = AsyncMock(spec=AccountStore)
+    store.get_auth_snapshot.return_value = {
+        "account_id": "acme",
+        "user_id": "alice",
+        "role": role,
+        "group_ids": (),
+    }
+    manager = APIKeyManager("root-key", store)
+    with pytest.raises(UnauthenticatedError, match="invalid role"):
+        await manager.resolve_identity(generate_api_key("acme", "alice"))
+
+
+async def test_snapshot_accepts_a_registered_custom_role(monkeypatch):
+    monkeypatch.setitem(
+        Role._TOKEN_ROLE_ALLOWLIST, "snapshot-reviewer", frozenset({"snapshot-reviewer"})
+    )
+    store = AsyncMock(spec=AccountStore)
+    store.get_auth_snapshot.return_value = {
+        "account_id": "acme",
+        "user_id": "alice",
+        "role": "snapshot-reviewer",
+        "group_ids": (),
+    }
+    identity = await APIKeyManager("root-key", store).resolve_identity(
+        generate_api_key("acme", "alice")
+    )
+    assert identity.role == "snapshot-reviewer"
+    assert identity.group_ids == ()

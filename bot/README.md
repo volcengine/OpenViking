@@ -320,7 +320,8 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |
 | `bot.sandbox.mode` | `shared` | Workspace isolation mode |
-| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Compile uses dedicated read tools; set to `true` to allow Compile agents to execute host commands |
+| `bot.sandbox.backends.direct.allow_exec` | `true` | Allow agents to execute host commands through the built-in `exec` tool; disabling it also removes the tool from subagents and Compile |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Compile uses dedicated read tools; both this setting and `allow_exec` must be `true` for Compile agents to execute host commands |
 | `bot.heartbeat.enabled` | `true` | Whether to check `HEARTBEAT.md` periodically |
 | `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
 | `bot.mode` | `normal` | One of `normal`, `readonly`, or `debug` |
@@ -409,7 +410,7 @@ For the complete loading order, file responsibilities, and customization boundar
 |----------|-------|
 | Files and commands | `read_file`, `write_file`, `edit_file`, `list_dir`, `exec` |
 | Web | `web_search`, `web_fetch` |
-| OpenViking | `openviking_list`, `openviking_search`, `openviking_grep`, `openviking_glob`, `openviking_multi_read`, `openviking_add_resource`, `openviking_memory_commit` |
+| OpenViking | `openviking_list`, `openviking_search`, `openviking_rule_search`, `openviking_grep`, `openviking_glob`, `openviking_multi_read`, `openviking_add_resource`, `openviking_memory_commit` |
 | Other | `message`, `generate_image`, `cron`, `spawn` |
 
 `readonly` mode does not register `openviking_add_resource`. When a channel sets `ov_tools_enable: false`, it does not expose OpenViking tools or inject Profiles, Memories, and Experiences.
@@ -481,7 +482,22 @@ Workspace modes:
 - `per-session`: every Session has an independent workspace;
 - `per-channel`: sessions on the same channel instance share a workspace.
 
-DirectBackend defaults to `restrict_to_workspace: false`. For a Gateway exposed to untrusted users, choose an isolated backend and configure channel allowlists and network/file policies.
+Direct allows agents to execute host commands by default. To disable this capability, set the following in `ov.conf` and restart Bot:
+
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "direct",
+      "backends": {
+        "direct": { "allow_exec": false }
+      }
+    }
+  }
+}
+```
+
+Chat, subagents, and Compile can no longer call the built-in `exec` tool when disabled; chat, retrieval, and workspace file tools remain available. `allow_compile_exec=true` cannot override this setting. The switch only controls agent command execution with Direct: it does not affect other sandbox backends or provide file or network isolation. For a Gateway exposed to untrusted users, choose an isolated backend and configure channel allowlists and network/file policies.
 
 ```json
 {

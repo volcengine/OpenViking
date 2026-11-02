@@ -9,131 +9,22 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_content_target_uri
-from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.local_input_guard import require_remote_resource_source
-from openviking.server.resource_ingest import ingest_temp_upload
+from openviking.server.resource_ingest import (
+    AddResourceRequest,
+    ingest_resource_request,
+    ingest_temp_upload,
+)
 from openviking.server.responses import response_from_result
 from openviking.server.skill_ingest import ingest_temp_upload_skill, install_skills
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
-from openviking.storage.acl import AclSpec
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
-
-
-class AddResourceRequest(BaseModel):
-    """Request model for add_resource.
-
-    Attributes:
-        path: Remote resource source such as an HTTP(S) URL or repository URL.
-            Either path or temp_file_id must be provided.
-        temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
-            Either path or temp_file_id must be provided.
-        add_type: Explicit Connector source type (e.g. "tos", "git"). When set, the
-            request routes to the Connector integration: the type must be enabled in
-            connector.allowed_add_types, and args are forwarded to the source plugin
-            (credentials under args.auth_config). Never degrades to the standard
-            pipeline. Requires 'path' and an exact 'to' target; cannot be combined
-            with 'temp_file_id' or 'parent'.
-        to: Target URI for the resource (e.g., "viking://resources/my_resource").
-            Required when add_type is set. Otherwise, if not specified, an
-            auto-generated URI will be used.
-        parent: Parent URI under which the resource will be stored.
-            Cannot be used together with 'to' or 'add_type'.
-        create_parent: Whether to automatically create the parent directory if it doesn't exist.
-            Default is False.
-        reason: Reason for adding the resource. Used for documentation and monitoring.
-        instruction: Processing instruction for semantic extraction.
-            Provides hints for how the resource should be processed.
-        wait: Whether to wait for semantic extraction and vectorization to complete.
-            Default is False (async processing).
-        timeout: Timeout in seconds when wait=True. None means no timeout.
-        strict: Whether to use strict mode for processing. Default is True.
-        internal_task: Whether to hide this task from the default task list.
-        ignore_dirs: Comma-separated list of directory names to ignore during parsing.
-        include: Glob pattern for files to include during parsing.
-        exclude: Glob pattern for files to exclude during parsing.
-        directly_upload_media: Whether to directly upload media files. Default is True.
-        preserve_structure: Whether to preserve directory structure when adding directories.
-        args: Parser-specific import options. Native HTTPS Git imports accept
-            {"auth_config": {"username": "oauth2", "token": "..."}}; when
-            watch_interval > 0 the credentials are stored in private watch state.
-            For Feishu one-time user-token imports,
-            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
-            also pass "feishu_refresh_token". The optional "feishu_app_id" and
-            "feishu_app_secret" pair overrides the server app for that watch.
-        watch_interval: Interval in minutes (default: 0). Positive values create a new
-            Watch using explicit ``to`` or the imported ``root_uri``. Nonpositive values
-            create no Watch: native imports with explicit ``to`` pause a single accessible
-            Watch (409 if ambiguous); Connector imports leave Watches untouched.
-            See the endpoint's Watch ownership rules.
-        is_active: Initial Watch state for Connector, native Feishu, and native Git imports. When false,
-            requires watch_interval > 0 and an explicit to or parent target and creates the Watch
-            paused; it stays paused until updated, regardless of the import result.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    path: Optional[str] = None
-    temp_file_id: Optional[str] = None
-    add_type: Optional[str] = None
-    to: Optional[str] = None
-    parent: Optional[str] = None
-    create_parent: bool = False
-    reason: str = ""
-    instruction: str = ""
-    wait: bool = False
-    timeout: Optional[float] = None
-    strict: bool = False
-    internal_task: bool = False
-    source_name: Optional[str] = None
-    ignore_dirs: Optional[str] = None
-    include: Optional[str] = None
-    exclude: Optional[str] = None
-    directly_upload_media: bool = True
-    preserve_structure: Optional[bool] = None
-    args: Dict[str, Any] = Field(default_factory=dict)
-    telemetry: TelemetryRequest = False
-    watch_interval: float = 0
-    is_active: bool = True
-    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
-    tags: Optional[list[str]] = None
-    tag_mode: str = "replace"
-    acl: AclSpec | None = None
-
-    @model_validator(mode="after")
-    def check_path_or_temp_file_id(self):
-        if not self.path and not self.temp_file_id:
-            raise ValueError("Either 'path' or 'temp_file_id' must be provided")
-        return self
-
-    @model_validator(mode="after")
-    def check_add_type(self):
-        if self.add_type is not None:
-            self.add_type = self.add_type.strip() or None
-        if self.add_type and self.temp_file_id:
-            raise ValueError("'add_type' cannot be combined with 'temp_file_id'")
-        if self.add_type and not self.path:
-            raise ValueError("'add_type' requires 'path'")
-        if self.add_type and self.parent:
-            raise ValueError("'add_type' cannot be combined with 'parent'")
-        if self.add_type and not self.to:
-            raise ValueError("'add_type' requires an exact 'to' target")
-        return self
-
-    @model_validator(mode="after")
-    def check_paused_watch(self):
-        has_target = bool((self.to or "").strip() or (self.parent or "").strip())
-        if self.is_active is False and (self.watch_interval <= 0 or not has_target):
-            raise ValueError(
-                "is_active=false requires watch_interval > 0 and either 'to' or 'parent'"
-            )
-        return self
 
 
 class AddSkillRequest(BaseModel):
@@ -144,7 +35,6 @@ class AddSkillRequest(BaseModel):
             HTTP requests do not treat strings as host filesystem paths.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         wait: Whether to wait for skill processing to complete.
-        timeout: Timeout in seconds when wait=True.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -154,7 +44,11 @@ class AddSkillRequest(BaseModel):
     skills: list[str] = Field(default_factory=list)
     list_only: bool = False
     wait: bool = False
-    timeout: Optional[float] = None
+    timeout: float | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    )
     source_metadata: Optional[Dict[str, Any]] = None
     target_uri: Optional[str] = None
     telemetry: TelemetryRequest = False
@@ -252,106 +146,19 @@ async def add_resource(
     until that import records its result.
     """
     service = get_service()
-    to_uri = resolve_path_variables(request.to).strip() if request.to else ""
-    if to_uri:
-        to_uri = validate_content_target_uri(to_uri, _ctx, kind="resource", field_name="to")
-    parent_uri = resolve_path_variables(request.parent).strip() if request.parent else ""
-    if parent_uri:
-        parent_uri = validate_content_target_uri(
-            parent_uri,
-            _ctx,
-            kind="resource",
-            field_name="parent",
-        )
-
-    path = request.path
-    allow_local_path_resolution = False
-    original_filename = None
-    resolved = None
-    shared_source_ref = None
-    if request.temp_file_id:
-        if request.watch_interval > 0:
-            raise InvalidArgumentError(
-                "watch_interval > 0 is not supported for uploaded content: an "
-                "upload is a static snapshot, so the watch would re-process "
-                "stale content forever. Watch a URL / "
-                "sitemap / RSS source instead, or re-add the resource when the "
-                "source changes."
-            )
-        store = TempUploadStore.build(http_request.app.state.config)
-        # A shared upload already lives in durable storage: the API only validates
-        # a reference and the SOURCE worker downloads it once, avoiding a second
-        # API-side download + task re-stage. Local uploads keep the copy path.
-        shared_source_ref = await store.resolve_shared_reference(request.temp_file_id, _ctx)
-        if shared_source_ref is not None:
-            path = shared_source_ref.original_filename or request.temp_file_id
-            original_filename = shared_source_ref.original_filename or None
-            allow_local_path_resolution = True
-        else:
-            resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
-            path = resolved.local_path
-            original_filename = resolved.original_filename
-            allow_local_path_resolution = True
-    elif path is not None:
-        path = require_remote_resource_source(path, declared_connector_add_type=request.add_type)
-    if path is None:
-        raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
-
-    # Use original_filename from upload if source_name not explicitly provided
-    source_name = request.source_name
-    if source_name is None and original_filename is not None:
-        source_name = original_filename
-
-    kwargs = {
-        "strict": request.strict,
-        "source_name": source_name,
-        "ignore_dirs": request.ignore_dirs,
-        "include": request.include,
-        "exclude": request.exclude,
-        "directly_upload_media": request.directly_upload_media,
-        "watch_interval": request.watch_interval,
-        "processing_mode": request.processing_mode,
-    }
-    # Connector routing needs to distinguish an omitted create_parent from an
-    # explicit false.  Standard imports still observe false when the field is
-    # omitted because ResourceService reads it with kwargs.get(..., False).
-    if "create_parent" in request.model_fields_set:
-        kwargs["create_parent"] = request.create_parent
-    if request.temp_file_id and request.watch_interval <= 0:
-        kwargs["temp_file_id"] = request.temp_file_id
-    if request.preserve_structure is not None:
-        kwargs["preserve_structure"] = request.preserve_structure
+    app = getattr(http_request, "app", None)
+    state = getattr(app, "state", None)
+    config = getattr(state, "config", None)
 
     async def _add() -> dict[str, Any]:
-        try:
-            result = await service.resources.add_resource(
-                path=path,
-                ctx=_ctx,
-                add_type=request.add_type,
-                to=to_uri,
-                parent=parent_uri,
-                reason=request.reason,
-                instruction=request.instruction,
-                wait=request.wait,
-                timeout=request.timeout,
-                acl=request.acl,
-                tags=request.tags,
-                tag_mode=request.tag_mode,
-                allow_local_path_resolution=allow_local_path_resolution,
-                enforce_public_remote_targets=True,
-                internal_task=request.internal_task,
-                is_active=request.is_active,
-                args=request.args,
-                shared_source=shared_source_ref,
-                **kwargs,
-            )
-        except Exception:
-            raise
-        else:
-            return result
-        finally:
-            if resolved:
-                await resolved.cleanup()
+        return await ingest_resource_request(
+            request,
+            _ctx,
+            resources=service.resources,
+            config=config,
+            wait=request.wait,
+            internal_task=request.internal_task,
+        )
 
     execution = await run_operation(
         operation="resources.add_resource",
@@ -409,7 +216,6 @@ async def add_skill(
                 names=request.skills,
                 list_only=request.list_only,
                 wait=request.wait,
-                timeout=request.timeout,
                 target_uri=target_uri,
                 source_metadata=source_metadata,
                 allow_local_path_resolution=allow_local_path_resolution,

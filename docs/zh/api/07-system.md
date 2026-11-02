@@ -1,6 +1,7 @@
 # 系统状态
 
-OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和主备后端同步状态。组件级观测和 Prometheus 指标分别提供独立文档。
+OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和后台处理状态。
+组件级观测和 Prometheus 指标分别提供独立文档。
 
 ## API 参考
 
@@ -321,7 +322,7 @@ ov system consistency viking://resources/my-project
 
 #### 1. API 实现介绍
 
-等待处理队列排空，或在超时后结束。该检查不限定为调用方刚提交的请求，也不覆盖所有异步 API。需检查返回的 `error_count` 和 `errors`，队列排空不代表所有操作成功。确认某次导入或 commit 的结果，应查询它的[任务 ID](17-tasks.md)。
+等待处理队列排空。该检查不限定为调用方刚提交的请求，也不覆盖所有异步 API。需检查返回的 `error_count` 和 `errors`，队列排空不代表所有操作成功。确认某次导入或 commit 的结果，应查询它的[任务 ID](17-tasks.md)。
 
 **代码入口**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP 路由
@@ -332,9 +333,7 @@ ov system consistency viking://resources/my-project
 
 **参数**
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| timeout | float | 否 | None | 超时时间（秒），None 表示无限等待 |
+无必填参数。可选 JSON 请求体仍接受旧版 `timeout` 字段，但该字段已废弃，传入值会被忽略。不传请求体仍可调用。HTTP 请求超时使用客户端配置。
 
 #### 3. 使用示例
 
@@ -347,32 +346,27 @@ POST /api/v1/system/wait
 ```bash
 curl -X POST http://localhost:1933/api/v1/system/wait \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "timeout": 60.0
-  }'
+  -H "X-API-Key: your-key"
 ```
 
 **Python SDK**
 
 ```python
 # 等待当前处理队列排空
-status = client.wait_processed(timeout=60.0)
+status = client.wait_processed()
 print(status)  # 检查各队列的 error_count 和 errors
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.waitProcessed(60));
+console.log(await client.waitProcessed());
 ```
 
 **Go SDK**
 
 ```go
-status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
-    Timeout: openviking.Float64(60),
-})
+status, err := client.WaitProcessed(ctx)
 if err != nil {
     return err
 }
@@ -382,7 +376,7 @@ fmt.Println(status)
 **CLI**
 
 ```bash
-ov system wait --timeout 60
+ov system wait
 ```
 
 **响应示例**
@@ -406,99 +400,6 @@ ov system wait --timeout 60
   }
 }
 ```
-
----
-
-### backend_sync_status()
-
-查询指定 Viking URI 子树在主备存储后端之间的同步状态。该接口要求 ROOT 或 ADMIN 权限。
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-status
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-status \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-也可以使用 URI 路径形式：
-
-```http
-GET /api/v1/system/sync/{sync_path}
-```
-
-**CLI**
-
-```bash
-ov system backend sync-status viking://resources
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "entry_count": 12
-  }
-}
-```
-
-`result` 由当前文件系统后端返回；`path` 标识查询范围，`entry_count` 表示该范围内的同步记录数。具体后端可能附加待同步、失败记录等诊断字段。
-
-### backend_sync_retry()
-
-重试指定 URI 子树中尚未完成的主备后端同步工作。该接口要求 ROOT 或 ADMIN 权限。
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-retry
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-retry \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-URI 路径形式为：
-
-```http
-POST /api/v1/system/sync/{sync_path}/retry
-```
-
-**CLI**
-
-```bash
-ov system backend sync-retry viking://resources
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "retried": 2,
-    "failed": 0
-  }
-}
-```
-
-`retried` 是本次重新调度的记录数，`failed` 是重试调度失败的记录数；具体后端可能附加额外诊断字段。
-
-公共 Python、TypeScript 和 Go SDK 当前没有主备后端同步方法，因此以上小节只展示 HTTP 和 CLI Tab。
 
 ---
 

@@ -13,6 +13,7 @@ from .common import (
     ToolRound,
     append_text,
     merge_delta,
+    merge_usage,
     sse,
 )
 
@@ -42,7 +43,7 @@ class ChatProtocol(ToolProtocol):
         return ToolProtocol.block_reason(body)
 
     @staticmethod
-    def history_chain(messages):
+    def history_chain(messages, after=()):
         # Chat clients often omit reasoning/vendor metadata. Match visible
         # content and calls; the stored transcript retains the original objects.
         canonical = []
@@ -54,7 +55,7 @@ class ChatProtocol(ToolProtocol):
                     **({"tool_calls": message["tool_calls"]} if message.get("tool_calls") else {}),
                 }
             canonical.append(message)
-        return prefix_chain(canonical)
+        return prefix_chain(canonical, after)
 
     @staticmethod
     def split_reasoning(output):
@@ -108,7 +109,7 @@ class ChatProtocol(ToolProtocol):
     def accumulate(self, value):
         self.envelope.update({k: v for k, v in value.items() if k not in {"choices", "usage"}})
         if value.get("usage"):
-            self.usage.update(value["usage"])
+            merge_usage(self.usage, value["usage"])
         # Only the first completion is the reply; the tool loop refuses any other.
         choice = next((c for c in value.get("choices") or [] if c.get("index", 0) == 0), None)
         if choice is None:

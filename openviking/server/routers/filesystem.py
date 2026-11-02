@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace_policy import namespace_policy_for_uri
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -22,6 +23,7 @@ from openviking.storage.acl import AclSpec
 from openviking.storage.expr import And, Eq, In
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+from openviking.ttl.wiring import attach_expires_at
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import NotFoundError
 
@@ -126,6 +128,7 @@ async def ls(
         if mapped is not None:
             raise mapped from e
         raise
+    await attach_expires_at(page.entries, _ctx)
     return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
@@ -182,6 +185,7 @@ async def tree(
         if mapped is not None:
             raise mapped from e
         raise
+    await attach_expires_at(page.entries, _ctx)
     return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
@@ -203,7 +207,9 @@ async def stat(
         # URI requests use the canonical validated URI. ID requests are resolved
         # inside VikingFS, which returns the corresponding canonical URI.
         response_uri = result.get("uri", resolved)
-        return Response(status="ok", result={**result, "uri": response_uri})
+        payload = {**result, "uri": response_uri}
+        await attach_expires_at([payload], _ctx)
+        return Response(status="ok", result=payload)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -228,14 +234,16 @@ async def attrs(
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         stat_result = await service.fs.stat(uri, ctx=_ctx, skip_count=True)
+        namespace_policy = namespace_policy_for_uri(uri)
+        tags = (
+            await _tags_attr(service, uri, _ctx, is_dir=stat_result.get("isDir", False))
+            if namespace_policy.supports_tags
+            else []
+        )
         result = {
             "uri": uri,
             "context_type": context_type_for_uri(uri),
-            "attrs": {
-                "tags": await _tags_attr(
-                    service, uri, _ctx, is_dir=stat_result.get("isDir", False)
-                ),
-            },
+            "attrs": {"tags": tags},
         }
         if result["context_type"] == "memory" and not stat_result.get("isDir", False):
             result["attrs"]["memory"] = _clean_memory_attrs(await service.fs.read(uri, ctx=_ctx))
@@ -300,7 +308,11 @@ async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
     wait: bool = Query(False, description="Wait for semantic refresh to complete"),
-    timeout: Optional[float] = Query(None, description="Wait timeout in seconds"),
+    timeout: Optional[float] = Query(
+        None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""
@@ -308,7 +320,7 @@ async def rm(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait, timeout=timeout)
+        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -333,6 +345,8 @@ async def rm(
         response_result["semantic_status"] = result["semantic_status"]
     if isinstance(result, dict) and "queue_status" in result:
         response_result["queue_status"] = result["queue_status"]
+    if isinstance(result, dict) and "task_id" in result:
+        response_result["task_id"] = result["task_id"]
     return Response(status="ok", result=response_result)
 
 

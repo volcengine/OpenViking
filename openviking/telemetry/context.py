@@ -18,6 +18,10 @@ _CURRENT_TELEMETRY_STAGE: contextvars.ContextVar[str | None] = contextvars.Conte
     "openviking_operation_telemetry_stage",
     default=None,
 )
+_CURRENT_INGESTION_SOURCE_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "openviking_ingestion_source_type",
+    default=None,
+)
 
 
 def get_current_telemetry() -> OperationTelemetry:
@@ -59,9 +63,26 @@ def bind_telemetry_stage(stage: str | None) -> Iterator[str | None]:
         _CURRENT_TELEMETRY_STAGE.reset(token)
 
 
+def get_ingestion_source_type() -> str | None:
+    """Return the source type bound to the current ingestion operation."""
+    return _CURRENT_INGESTION_SOURCE_TYPE.get()
+
+
+@contextmanager
+def bind_ingestion_source_type(source_type: str | None) -> Iterator[str | None]:
+    """Bind resource origin for downstream model-token attribution."""
+    token = _CURRENT_INGESTION_SOURCE_TYPE.set(source_type)
+    try:
+        yield source_type
+    finally:
+        _CURRENT_INGESTION_SOURCE_TYPE.reset(token)
+
+
 __all__ = [
+    "bind_ingestion_source_type",
     "bind_telemetry",
     "bind_telemetry_stage",
     "get_current_telemetry",
     "get_current_telemetry_stage",
+    "get_ingestion_source_type",
 ]

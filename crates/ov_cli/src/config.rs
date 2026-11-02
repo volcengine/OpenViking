@@ -151,19 +151,6 @@ pub(crate) fn timeout_is_valid(timeout: f64) -> bool {
     timeout > 0.0 && std::time::Duration::try_from_secs_f64(timeout).is_ok()
 }
 
-pub(crate) fn parse_positive_timeout(value: &str) -> std::result::Result<f64, String> {
-    let timeout = value
-        .parse::<f64>()
-        .map_err(|_| format!("invalid timeout {value:?}: expected a positive number of seconds"))?;
-    if timeout_is_valid(timeout) {
-        Ok(timeout)
-    } else {
-        Err(format!(
-            "invalid timeout {value:?}: expected a positive finite number of seconds"
-        ))
-    }
-}
-
 fn default_output_format() -> String {
     "table".to_string()
 }

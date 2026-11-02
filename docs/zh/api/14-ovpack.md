@@ -158,7 +158,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 | on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
 | vector_mode | string | 否 | auto | 向量处理方式：`auto`、`recompute` 或 `require` |
 
-**权限要求**：ROOT、ADMIN 或 USER
+**权限要求**：ROOT、ADMIN 或 USER；开启 ACL 时，新路径导入要求目标父目录 `write`，覆盖已有目录要求该目录 `manage`；授权后不逐个检查子节点。
 
 **行为说明**：
 - API 已不再接受 `vectorize` 或 `force`。

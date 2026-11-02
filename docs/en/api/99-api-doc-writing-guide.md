@@ -148,7 +148,7 @@ Use the following sections for each API. Add implementation details after the re
 
 #### 3. Usage Examples
 
-For operations that return background tasks, default examples should submit a task and query its status. Avoid explicitly setting `wait` or `timeout`, and do not use global `wait_processed()` as a substitute for task status. Keep supported parameters and their actual defaults in the full reference. When later operations depend on asynchronous output, show polling by `task_id` until `completed` and handle `failed` and `cancelled`; do not just remove waiting parameters and immediately read the result.
+For operations that return background tasks, default examples should submit a task and query its status. Avoid explicitly setting `wait`, and do not use global `wait_processed()` as a substitute for task status. Keep supported parameters and their actual defaults in the full reference. When later operations depend on asynchronous output, show polling by `task_id` until `completed` and handle `failed` and `cancelled`; do not just remove waiting parameters and immediately read the result.
 
 When an operation presents all transports together, prefer this order:
 - Python SDK example

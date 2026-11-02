@@ -10,7 +10,7 @@ from test_review_regressions import worker_for
 
 from openviking_gateway.records import RecordKind as K
 from openviking_gateway.state_store import get_state
-from openviking_gateway.storage import SCHEMA_VERSION, ManagementStore, SQLiteKernelStore
+from openviking_gateway.storage import SCHEMA_VERSION, SQLiteKernelStore, SQLiteManagementStore
 from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain
 
 QUESTION = {"role": "user", "content": "How do I deploy?"}
@@ -161,6 +161,45 @@ async def test_anonymous_client_tool_handoff_keeps_the_session_and_captures_the_
         pass
     assert "It is sunny." in str(viking.writes) and "Weather in Paris?" in str(viking.writes)
     assert len(set(viking.write_sessions)) == 1
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses"])
+async def test_resent_call_matches_its_reply_whatever_its_json_spacing(
+    setup_kernel, credential, policy, protocol
+):
+    # Ark's DeepSeek streams spaced arguments; pi-ai, as in DSH, resends them compact.
+    kernel, _, _, _ = setup_kernel
+    policy.update(recall=False)
+    field = "input" if protocol == "responses" else "messages"
+    question = {"role": "user", "content": "Weather in Paris?"}
+    body = {
+        "model": "model",
+        field: [question],
+        **({"store": False} if protocol == "responses" else {}),
+    }
+    first = await kernel.prepare(body, protocol, {}, credential, {"id": "upstream"}, policy)
+    reply, _ = client_call_reply(protocol)
+    if protocol == "chat":
+        function = reply["choices"][0]["message"]["tool_calls"][0]["function"]
+    else:
+        function = reply["output"][0]
+    function["arguments"] = '{"city": "Paris"}'
+    capture = ResponseCapture(protocol)
+    capture.nonstream(reply)
+    await kernel.completed(first, credential, capture)
+    call, result = tool_handoff(protocol)
+    if protocol == "responses":
+        item = {**reply["output"][0], "arguments": '{"city":"Paris"}'}
+        call, result = item, {"type": "function_call_output", "call_id": "c1", "output": "Sunny"}
+    continued = await kernel.prepare(
+        {**body, field: [question, call, result]},
+        protocol,
+        {},
+        credential,
+        {"id": "upstream"},
+        policy,
+    )
+    assert continued.session == first.session and continued.kind == "continuation"
 
 
 def tool_handoff(protocol):
@@ -356,7 +395,7 @@ async def test_expiry_removes_stale_sessions_records_and_documents(
 
 
 @pytest.mark.parametrize("old", [1, 2, 3, 4, SCHEMA_VERSION + 1])
-@pytest.mark.parametrize("kind", [SQLiteKernelStore, ManagementStore])
+@pytest.mark.parametrize("kind", [SQLiteKernelStore, SQLiteManagementStore])
 async def test_storage_rejects_other_schema_versions(tmp_path, setup_kernel, kind, old):
     """Versions 1-4 were stamped on older pre-release layouts and must not pass."""
     _, _, _, encryption = setup_kernel

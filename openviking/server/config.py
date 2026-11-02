@@ -19,7 +19,9 @@ from openviking_cli.utils.config.config_loader import (
     resolve_config_path,
 )
 from openviking_cli.utils.config.config_utils import (
+    DEFAULT_SERVICE_NAME,
     format_validation_error,
+    normalize_service_name,
     warn_unknown_config_fields,
 )
 from openviking_cli.utils.config.consts import (
@@ -28,6 +30,7 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from openviking_cli.utils.config.ttl_config import TTLConfig
 
 logger = get_logger(__name__)
 
@@ -139,6 +142,7 @@ class UserConfig(BaseModel):
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
     memory_policy: Optional[Dict[str, Any]] = None
+    ttl: Optional[TTLConfig] = None
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
@@ -162,9 +166,16 @@ class UserConfigDefaults(UserConfig):
     @field_validator("auto_commit_policy", mode="before")
     @classmethod
     def validate_auto_commit_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
-        from openviking.session.auto_commit_policy import AutoCommitPolicy
+        from openviking.session.auto_commit_policy import (
+            AutoCommitPolicy,
+            validate_idle_timeout_input,
+        )
 
-        return None if value is None else AutoCommitPolicy.from_dict(value).to_dict()
+        if value is None:
+            return None
+        if isinstance(value, dict) and "idle_timeout_seconds" in value:
+            validate_idle_timeout_input(value["idle_timeout_seconds"])
+        return AutoCommitPolicy.from_dict(value).to_dict()
 
 
 class MetricsAccountDimensionConfig(BaseModel):
@@ -253,6 +264,22 @@ class UsageReporterConfig(BaseModel):
     sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
 
 
+class TTLAdapterConfig(BaseModel):
+    """Opt-in Redis-backed directory TTL configuration.
+
+    Uses the built-in implementation, supplied with its ResourceID, Redis
+    connection and writer/reader role through ``config``. No external Python
+    package is required. Unset or disabled leaves all TTL hooks inactive.
+    """
+
+    enabled: bool = False
+    config: Dict[str, object] = Field(default_factory=dict)
+
+    @property
+    def writer_enabled(self) -> bool:
+        return self.enabled and bool(self.config.get("writer", True))
+
+
 class TraceDumpBodyConfig(BaseModel):
     """HTTP body dump configuration.
 
@@ -311,8 +338,11 @@ class AccountStoreConfig(BaseModel):
     @classmethod
     def _validate_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if not normalized:
-            raise ValueError("account_store.provider must not be empty")
+        supported = {"file", "mysql", "redis_mysql"}
+        if normalized not in supported:
+            raise ValueError(
+                "account_store.provider must be one of: " + ", ".join(sorted(supported))
+            )
         return normalized
 
 
@@ -359,6 +389,8 @@ class ServerConfig(BaseModel):
     trusted_identity_pending_max_size: int = Field(10_000, gt=0)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
+    # Built-in Redis TTL; disabled unless explicitly configured.
+    ttl_adapter: Optional[TTLAdapterConfig] = None
     # Public-facing base URL emitted in MCP-issued upload instructions. See
     # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
     # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header
@@ -430,6 +462,36 @@ def get_server_url_from_server_data(server_data: object) -> str:
     return f"http://{host}:{port}"
 
 
+def _inherit_otel_service_names(server_data: Dict[str, Any], service_name: str) -> None:
+    """Fill omitted OTel service_name fields from the top-level service name."""
+    if "observability" not in server_data:
+        server_data["observability"] = {}
+    observability = server_data["observability"]
+    if not isinstance(observability, dict):
+        return
+
+    for key in ("traces", "logs"):
+        if key not in observability:
+            observability[key] = {"service_name": service_name}
+        elif isinstance(observability[key], dict) and "service_name" not in observability[key]:
+            observability[key]["service_name"] = service_name
+
+    if "metrics" not in observability:
+        observability["metrics"] = {}
+    metrics = observability["metrics"]
+    if not isinstance(metrics, dict):
+        return
+    if "exporters" not in metrics:
+        metrics["exporters"] = {}
+    exporters = metrics["exporters"]
+    if not isinstance(exporters, dict):
+        return
+    if "otel" not in exporters:
+        exporters["otel"] = {"service_name": service_name}
+    elif isinstance(exporters["otel"], dict) and "service_name" not in exporters["otel"]:
+        exporters["otel"]["service_name"] = service_name
+
+
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     """Load server configuration from ov.conf.
 
@@ -467,6 +529,9 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
         server_data = {}
     if not isinstance(server_data, dict):
         raise ValueError(f"Invalid server config in {path}: 'server' section must be an object")
+    server_data = dict(server_data)
+    service_name = normalize_service_name(data.get("service_name", DEFAULT_SERVICE_NAME))
+    _inherit_otel_service_names(server_data, service_name)
 
     # Convert auth_mode string — built-in enums are converted to their string
     # value; custom modes are kept as-is for plugin extensibility.

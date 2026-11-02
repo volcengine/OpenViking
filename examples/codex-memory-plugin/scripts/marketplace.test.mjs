@@ -278,8 +278,6 @@ test("required plugin files are present", () => {
     "skills/ov-memory-doctor/reference.md",
     "scripts/ov-memory-doctor.mjs",
     "scripts/shared/doctor-core.mjs",
-    "scripts/uri-guard.mjs",
-    "scripts/shared/uri-guard.mjs",
   ]) {
     assert.ok(existsSync(join(pluginDir, rel)), `missing required plugin file: ${rel}`);
   }
@@ -319,7 +317,7 @@ test("hooks.json uses Codex's native ${PLUGIN_ROOT}, not the legacy placeholder"
     .flat()
     .flatMap((group) => group.hooks || [])
     .map((h) => h.command || "");
-  assert.ok(commands.length >= 6, "expected at least 6 hook commands (SessionStart/UserPromptSubmit/PreToolUse/Stop/SessionEnd/PreCompact)");
+  assert.ok(commands.length >= 6, "expected at least 6 hook commands (SessionStart/UserPromptSubmit/Stop/SessionEnd/PreCompact/PostToolUse)");
   for (const cmd of commands) {
     assert.match(
       cmd,
@@ -338,16 +336,13 @@ test("hooks.json registers SessionEnd within Codex's clamped budget", () => {
   assert.ok(entries[0].timeout <= 3, `SessionEnd timeout must be <= 3, got ${entries[0].timeout}`);
 });
 
-test("hooks.json registers the PreToolUse URI guard on Bash only", () => {
-  // Codex's Edit and Write matchers are aliases for apply_patch, whose input is
-  // a patch body with no path argument to guard.
+test("hooks.json registers no PreToolUse hook", () => {
+  // Codex records PreToolUse additionalContext as a developer message before the
+  // tool runs, i.e. between the function_call and its function_call_output.
+  // Responses servers that validate the history as chat messages (Ark) reject
+  // that order with HTTP 400 and the turn fails.
   const parsed = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf-8"));
-  const groups = parsed.hooks?.PreToolUse || [];
-  assert.deepEqual(groups.map((group) => group.matcher), ["Bash"]);
-  const entries = groups.flatMap((group) => group.hooks || []);
-  assert.equal(entries.length, 1, "expected exactly one PreToolUse hook");
-  assert.equal(entries[0].command, 'node "${PLUGIN_ROOT}/scripts/uri-guard.mjs"');
-  execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
+  assert.equal(parsed.hooks?.PreToolUse, undefined);
 });
 
 test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {

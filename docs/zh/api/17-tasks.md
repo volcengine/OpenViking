@@ -195,6 +195,8 @@ ov task status uuid-xxx
 }
 ```
 
+完成任务结果中的 `memories_extracted` 是本次提交各类别的提取数量；`token_usage` 通常是统计更新后的 session 累计用量。如果 Phase 2 无法读到有效的 session 元数据（临时存储错误会有限重试），提取仍可完成，保留 session 的 `.meta.json` 原样并记录统计失败日志。此时 `token_usage` 保持完整结构、所有计数返回 `0`，表示统计不可用，并不代表实际消耗为零。本次累计 token 和记忆数量不会自动补计，提取结果与遥测数据仍然保留。
+
 ---
 
 ### cancel_task()
@@ -314,7 +316,7 @@ ov task cancel uuid-xxx
 | task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
 | status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`cancelling`、`completed`、`failed`、`cancelled` |
 | resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
-| include_internal | bool | 否 | false | 是否包含 Connector 导入产生的内部子任务 |
+| include_internal | bool | 否 | false | 是否包含 Connector 导入和 Compile 产生的内部任务 |
 | limit | int | 否 | 50 | 每次最多返回的任务条数，范围 1～200 |
 | pagination | str | 否 | None | 仅 HTTP；传 `cursor` 后以分页对象返回 |
 | cursor | str | 否 | None | 仅 HTTP；上一页的 `next_cursor`，与 `pagination=cursor` 一起使用 |
@@ -322,7 +324,7 @@ ov task cancel uuid-xxx
 
 使用 `pagination=cursor` 时，`result` 是包含 `items`、`has_more` 和 `next_cursor` 的对象，而不是数组。请求下一页时原样传入 `next_cursor`，并保持相同的过滤条件和身份。未使用 cursor 模式时，`q` 和 `cursor` 不影响结果。
 
-默认仅返回用户可见任务；排查 Connector 导入时可传 `include_internal=true` 查看其内部 `add_resource` 子任务。
+默认仅返回用户可见任务；可传 `include_internal=true` 查看 Connector 导入产生的内部 `add_resource` 任务，以及 Compile 产生的内部 `ensure_directory_index` 任务。
 
 #### 3. 使用示例
 

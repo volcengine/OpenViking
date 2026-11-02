@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import contextvars
 import json
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.retrieve.types import QueryResult
+from openviking_cli.retrieve.types import ContextType, MatchedContext, QueryResult
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
@@ -200,3 +201,65 @@ async def test_session_search_plan_respects_explicit_context_scope(
 
     assert response["status"] == "ok"
     assert response["result"]["query_plan"]["queries"][0]["context_type"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "provider"])
+async def test_session_search_falls_back_when_intent_planning_fails(monkeypatch, failure):
+    from starlette.requests import Request
+
+    from openviking.server.routers import search as search_router
+    from openviking.service.search_service import SearchService
+
+    fs = _make_viking_fs(enable_intent=True)
+    fs.retrieval_config = RetrievalConfig(recall_intent_timeout_s=0.02)
+
+    async def failed_completion(prompt):
+        if failure == "timeout":
+            await asyncio.Event().wait()
+        raise RuntimeError("provider overloaded")
+
+    planner = SimpleNamespace(get_completion_async=failed_completion)
+    fs._vlm_resolver = SimpleNamespace(get_query_planner=AsyncMock(return_value=planner))
+    session = SimpleNamespace(
+        load=AsyncMock(),
+        get_context_for_search=AsyncMock(
+            return_value={"latest_archive_overview": "previous discussion"}
+        ),
+    )
+    service = SimpleNamespace(
+        search=SearchService(fs),
+        sessions=SimpleNamespace(session=lambda *args: session),
+    )
+    match = MatchedContext(
+        uri="viking://resources/docs/answer.md", context_type=ContextType.RESOURCE
+    )
+
+    async def retrieve(typed_query, **kwargs):
+        assert typed_query.query == "raw query"
+        assert typed_query.target_directories == ["viking://resources/docs"]
+        return QueryResult(
+            query=typed_query,
+            matched_contexts=[match],
+            searched_directories=typed_query.target_directories,
+        )
+
+    monkeypatch.setattr(search_router, "get_service", lambda: service)
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.HierarchicalRetriever",
+        lambda **kwargs: SimpleNamespace(retrieve=retrieve),
+    )
+    response = await asyncio.wait_for(
+        search_router.search(
+            search_router.SearchRequest(
+                query="raw query", session_id="fixture", target_uri="viking://resources/docs"
+            ),
+            Request({"type": "http"}),
+            _ctx(),
+        ),
+        timeout=1.0,
+    )
+
+    assert response["status"] == "ok"
+    assert response["result"]["resources"][0]["uri"] == match.uri
+    assert "query_plan" not in response["result"]

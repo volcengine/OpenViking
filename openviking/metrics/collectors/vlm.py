@@ -53,6 +53,9 @@ class VLMCollector(EventMetricCollector):
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_tokens_total
     # e.g.: openviking_vlm_tokens_total
     TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "tokens", unit="total")
+    # rule: <METRICS_NAMESPACE>_<DOMAIN>_ingestion_tokens_total
+    # e.g.: openviking_vlm_ingestion_tokens_total
+    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "ingestion_tokens", unit="total")
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"vlm.call"})
 
@@ -83,6 +86,7 @@ class VLMCollector(EventMetricCollector):
             account_id=(
                 None if payload.get("account_id") is None else str(payload.get("account_id"))
             ),
+            source_type=payload.get("source_type"),
         )
 
     def record_call(
@@ -96,6 +100,7 @@ class VLMCollector(EventMetricCollector):
         completion_tokens: int,
         error_code: str = "OK",
         account_id: str | None = None,
+        source_type: str | None = None,
     ) -> None:
         """
         Record one VLM call as counters for calls and tokens plus a latency histogram sample.
@@ -140,10 +145,19 @@ class VLMCollector(EventMetricCollector):
             amount=int(completion_tokens),
             account_id=account_id,
         )
+        total_tokens = int(prompt_tokens) + int(completion_tokens)
         registry.inc_counter(
             self.TOKENS_TOTAL,
             labels=token_labels,
             label_names=("provider", "model_name"),
-            amount=int(prompt_tokens) + int(completion_tokens),
+            amount=total_tokens,
             account_id=account_id,
         )
+        if total_tokens > 0 and source_type:
+            registry.inc_counter(
+                self.INGESTION_TOKENS_TOTAL,
+                labels={"source_type": str(source_type)},
+                label_names=("source_type",),
+                amount=total_tokens,
+                account_id=account_id,
+            )

@@ -54,10 +54,10 @@ AGFS provides POSIX-style file operations with multiple backend support.
 
 By default, AGFS uses a single backend for content storage. Once `storage.agfs.backups` is configured, OpenViking enters multi-write mode:
 
-- Top-level `storage.agfs.backend` is the primary backend and remains the authoritative write target.
-- `storage.agfs.backups.items[]` defines backup backends for replicas, migration, or read acceleration.
+- Top-level `storage.agfs.backend` is the primary backend and the only direct read source.
+- `storage.agfs.backups.items[]` defines asynchronously updated backup backends.
 - The Python SDK, HTTP API, and CLI filesystem interfaces stay unchanged.
-- Multi-write uses `.redirect.json` and `.sync_log.json` internally to track redirect mappings and sync progress. These files are not visible to users.
+- V2 metadata is partitioned and stored only on the primary.
 
 For the conceptual model, see [Multi-Write Storage](./14-multi-write-storage.md). For examples, see the [Multi-Write Storage Guide](../guides/13-multi-write-storage.md).
 
@@ -161,5 +161,5 @@ client.mv(
 - [Architecture Overview](./01-architecture.md) - System architecture
 - [Context Layers](./03-context-layers.md) - L0/L1/L2 model
 - [Viking URI](./04-viking-uri.md) - URI specification
-- [Multi-Write Storage](./14-multi-write-storage.md) - Primary/backup roles, routing, and consistency
+- [Multi-Write Storage](./14-multi-write-storage.md) - V2 primary and backup consistency
 - [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details

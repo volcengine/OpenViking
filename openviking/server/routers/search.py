@@ -112,7 +112,11 @@ def _resolve_uri_list(uris: Sequence[str], ctx: RequestContext) -> list[str]:
     return [validate_request_viking_uri(resolve_path_variables(uri), ctx) for uri in uris]
 
 
-def _resolve_image_url(image_url: Optional[str], ctx: RequestContext) -> Optional[str]:
+def _resolve_image_url(
+    image_url: str | list[str] | None, ctx: RequestContext
+) -> str | list[str] | None:
+    if isinstance(image_url, list):
+        return [_resolve_image_url(url, ctx) for url in image_url]
     if not image_url:
         return image_url
     resolved = resolve_path_variables(image_url)
@@ -127,7 +131,7 @@ class FindRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = ""
-    image_url: Optional[str] = None
+    image_url: str | list[str] | None = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     limit: int = Field(default=DEFAULT_LIMIT, ge=1)
@@ -220,7 +224,7 @@ class SearchRequest(BaseModel):
 
     query: str = ""
     search_type: SearchType = "semantic"
-    image_url: Optional[str] = None
+    image_url: str | list[str] | None = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     session_id: Optional[str] = None

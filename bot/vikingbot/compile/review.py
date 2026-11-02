@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
+
+from loguru import logger
 
 from vikingbot.agent.tools.base import Tool
 from vikingbot.compile import file_ops
@@ -37,7 +40,7 @@ it does not guarantee complete grouping of every matching record or transitive l
 ## Revision Boundaries
 
 Start from input_handle with input_type. Completed stages and their outputs remain
-fixed. Do not refer to consumed datasets or reuse completed_names.
+fixed. Do not refer to consumed datasets, reuse completed_names or repeat completed_ops.
 Changing instructions does not restore missing information or regroup existing groups.
 Keep output_format and distinguish meanings unchanged. Do not weaken task requirements
 or erase execution failures. When revisions_left is zero, return continue.
@@ -95,7 +98,8 @@ class StageOutputReader(Tool):
         if payload is None:
             raise ValueError(f"Missing stage payload: {record.record_id}")
         self.evidence.allowed.update(record.source_refs)
-        value = {"id": record.record_id, "payload": payload.get("fields", payload)}
+        visible = {key: item for key, item in payload.items() if key != "image"}
+        value = {"id": record.record_id, "payload": visible.get("fields", visible)}
         if record.ready_ref:
             ready = await self.runtime.files.get(record.ready_ref)
             if ready is None:
@@ -174,12 +178,21 @@ class StageOutputReader(Tool):
         )
 
 
-async def run(runtime, node, outputs, remaining_plan, completed_names, revisions, prompt, context):
-    """Return an accepted decision and parsed suffix, or None to retain the existing plan.
+async def run(
+    runtime,
+    node,
+    outputs,
+    remaining_plan,
+    completed_names,
+    revisions,
+    prompt,
+    context,
+    *,
+    completed_ops,
+):
+    """Validate revisions against completed names/operators; return None on rejection or continuation.
 
-    Only future configurations may change; output format and scope meanings remain fixed.
-    Invalid decisions get up to three repairs per review; exhausted or model/read failures
-    are recorded. Cancellation and diagnostic-write failures propagate; the contract stays fixed.
+    Completed outputs stay fixed and cancellation propagates.
     """
     record = {}
     accepted = None
@@ -199,6 +212,7 @@ async def run(runtime, node, outputs, remaining_plan, completed_names, revisions
             "input_handle": node.name,
             "input_type": output_type,
             "completed_names": sorted(completed_names),
+            "completed_ops": sorted(completed_ops),
             "current": {
                 "handle": node.name,
                 "type": output_type,
@@ -236,7 +250,7 @@ async def run(runtime, node, outputs, remaining_plan, completed_names, revisions
                     input_handle=node.name,
                     input_type=output_type,
                     completed_names=completed_names,
-                    input_against_target=node.against_target,
+                    completed_ops=completed_ops,
                 )
                 accepted = (decision, nodes)
 
@@ -245,8 +259,18 @@ async def run(runtime, node, outputs, remaining_plan, completed_names, revisions
         )
         record["decision"] = decision.model_dump(exclude_none=True)
         record["status"] = "accepted" if accepted else "continued"
-    except (OSError, ValueError, TypeError) as exc:
+    except Exception as exc:
+        if asyncio.current_task().cancelling():
+            raise asyncio.CancelledError() from exc
+        accepted = None
         record.update(status="rejected", error=str(exc)[:800])
         runtime.metrics["review_rejections"] += 1
-    await runtime.files.put(f"reviews/{node.name}", record)
+        logger.warning("Compile stage review {} failed: {}", node.name, exc)
+    try:
+        await runtime.files.put(f"reviews/{node.name}", record)
+    except Exception as exc:
+        if asyncio.current_task().cancelling():
+            raise asyncio.CancelledError() from exc
+        logger.warning("Compile stage review {} record write failed: {}", node.name, exc)
+        return None
     return accepted

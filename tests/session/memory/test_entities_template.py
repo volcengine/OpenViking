@@ -11,8 +11,8 @@ from jinja2 import Template
 @pytest.mark.parametrize(
     "schema_path",
     [
-        "openviking/prompts/templates/memory/entities.yaml",
-        "openviking/prompts/templates/memory/experimental_memory/entities.yaml",
+        "openviking/system_assets/memory/memory_templates/builtin/entities.yaml",
+        "openviking/system_assets/memory/memory_templates/builtin/experimental_memory/entities.yaml",
     ],
 )
 def test_entity_filename_is_case_insensitive(schema_path):

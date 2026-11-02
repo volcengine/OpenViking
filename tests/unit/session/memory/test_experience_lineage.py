@@ -34,7 +34,7 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
                 ToolPart(
                     tool_id="read-1",
                     tool_name="mcp__openviking__read",
-                    tool_input={"uri": uri},
+                    tool_input={"uris": "viking://~/memories/experiences/order-exchange.md"},
                     tool_status="pending",
                 ),
                 ToolPart(
@@ -54,7 +54,7 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
                     tool_id="read-1",
                     tool_name="mcp__openviking__read",
                     tool_status="completed",
-                    tool_output='{"uri":"%s"}' % uri,
+                    tool_output="Experience body without a URI.",
                 ),
                 ToolPart(
                     tool_id="read-2",
@@ -71,8 +71,35 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
                 ToolPart(
                     tool_id="read-3",
                     tool_name="read",
-                    tool_input={"uri": uri},
+                    tool_input={"uris": "viking://~/memories/experiences/failed.md"},
                     tool_status="error",
+                ),
+                ToolPart(
+                    tool_id="read-4",
+                    tool_name="read",
+                    tool_input={"uris": uri},
+                    tool_status="completed",
+                    tool_output="The same experience read through its canonical URI.",
+                ),
+                ToolPart(
+                    tool_id="read-5",
+                    tool_name="read",
+                    tool_input={"uris": "viking://~/memories/experiences/unfinished.md"},
+                    tool_status="running",
+                ),
+                ToolPart(
+                    tool_id="read-6",
+                    tool_name="read",
+                    tool_input={
+                        "uris": [
+                            "file:///tmp/experience.md",
+                            "viking://~/memories/experiences/.abstract.md",
+                            "viking://~/memories/experiences/../other.md",
+                            "viking://~/memories/experiences/example.md?offset=1",
+                            "viking://~/memories/experiences/example.md#section",
+                        ]
+                    },
+                    tool_status="completed",
                 ),
             ],
         ),

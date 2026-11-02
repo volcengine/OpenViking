@@ -14,7 +14,6 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder, followed by an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
 - **OV-Usage source summaries** after each answer: show sources made available through automatic recall and explicit OpenViking lookups, with optional source URI and query details.
-- **`viking://` notice on `PreToolUse` (`Bash`)**: a shell command that carries a `viking://` URI still runs, and the model is told that the URI is an OpenViking virtual path and which MCP tool reads it.
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit and archive every captured message.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionEnd`** (Codex ≥ 0.145): when a thread shuts down gracefully, catch up any turns `Stop` never sent and commit the OV session, so the extractor runs on the whole conversation the moment you leave.
@@ -206,7 +205,7 @@ The env vars are comma-separated lists, split before parsing, so a rule needing 
 }
 ```
 
-Rules run top to bottom and the first `d` that matches (or `k` that does not) ends the decision; text a substitution empties is not a drop, just too short to recall on. Filters run before `OPENVIKING_MIN_QUERY_LENGTH` and before the built-in ack / slash-command heuristics. A capture rule shapes what is sent, not what is already stored, and anything already in the pending queue carries the rules that were in effect when it was enqueued; adding a `d`/`k` rule mid-session also shortens the turn list the cursor counts, which reads as a transcript rewrite and replays from the last user turn. A rule that fails to compile is skipped, never fatal — `ov-memory-doctor` lists the active rules and reports the exact error for the ones it could not parse.
+Rules run top to bottom and the first `d` that matches (or `k` that does not) ends the decision; text a substitution empties is not a drop, just too short to recall on. Filters run before `OPENVIKING_MIN_QUERY_LENGTH` and before the built-in ack / slash-command heuristics. A capture rule shapes what is sent, not what is already stored, and anything already in the pending queue carries the rules that were in effect when it was enqueued; adding a `d`/`k` rule mid-session also shortens the turn list the cursor counts, which reads as a transcript rewrite and replays from the last user turn. On the capture path an `s` rule also rewrites every string value in a tool call's input and a tool result's output, so a redaction rule covers a secret that reached a command or its output; `d`/`k` rules look only at the turn's text. A rule that fails to compile is skipped, never fatal — `ov-memory-doctor` lists the active rules and reports the exact error for the ones it could not parse.
 
 #### Workspace configuration files
 
@@ -357,6 +356,7 @@ Config knobs:
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` | Cache TTL used by `UserPromptSubmit` when reading the latest profile. |
 | `OPENVIKING_RECALL_MAX_TOKENS` | `1600` | Token budget the server assembles the context block within, independent of the local compressor input limit. |
 | `OPENVIKING_RECALL_DEDUP_TURNS` | `5` | Cross-turn cooldown: URIs served in the last N turns are skipped. |
+| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | (off) | Event memories keep their score for this period (`7d`, `12h`) and decay after it, so older events stop outranking recent ones. Sent as `events_time_decay_protection`. |
 | `OPENVIKING_RECALL_QUERY_EXPANSION` | `auto` | `auto` lets the server widen short prompts using session context; `off` disables it. |
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | Comma-separated regex rules applied to the prompt before it becomes a query — see [Input filters](#input-filters). |
 
@@ -378,14 +378,6 @@ Client-side knobs can also live in `~/.openviking/ovcli.conf` under
 `plugin` (shared) or `plugin.codex` (this harness only), or in the workspace
 layers; resolution order is env vars → the workspace layers → `plugin.codex` →
 `plugin` → the legacy `codex` block in `ov.conf` → defaults.
-
-### viking:// URI notice (PreToolUse on Bash)
-
-`viking://` URIs are OpenViking virtual paths, so `cat viking://…` or `ls viking://…` cannot open them. `uri-guard.mjs` runs before every `Bash` call. When the command contains a `viking://` URI, it returns `hookSpecificOutput.additionalContext` without a `permissionDecision`: the command runs unchanged, and the model is told which OpenViking MCP tool reads the URI and to ignore the notice when the URI is intentional data (an `ov` CLI argument, an HTTP payload, a search pattern). A command without a `viking://` URI gets no output.
-
-Nothing is denied: Codex edits files through `apply_patch`, whose input is a patch body rather than a path (Codex's `Edit` / `Write` matchers are aliases for it), so there is no path argument to guard.
-
-> **Upgrading to 0.9.1**: `PreToolUse` is a newly registered hook event. Run `/hooks` in Codex after updating and approve it; until then shell commands run without the notice.
 
 ### Stop (turn end → `add_message`, threshold commit)
 
@@ -423,7 +415,6 @@ Codex's hook output schema differs from Claude Code's. Notably:
 |------|------------------------|--------------------------------------|
 | `SessionStart`   | `source` (`startup`/`resume`/`clear`), `session_id`, `cwd` | `hookSpecificOutput.additionalContext`; may also include `systemMessage` when an orphaned session was committed |
 | `UserPromptSubmit` | `prompt`, `session_id`                     | `hookSpecificOutput.additionalContext` |
-| `PreToolUse` (`Bash`) | `tool_name`, `tool_input.command`       | `hookSpecificOutput.additionalContext` with no `permissionDecision`, so the command still runs; no output when the command has no `viking://` URI |
 | `Stop`           | `last_assistant_message`, `transcript_path`, `session_id` | `systemMessage` (only) |
 | `PreCompact`     | `trigger` (`manual`/`auto`), `transcript_path`, `session_id` | `systemMessage` (only) |
 | `SessionEnd`     | `session_id`, `transcript_path`, `cwd`, `reason` (constant `other`) | none — Codex ignores the output; the script prints `{}` for symmetry |
@@ -483,7 +474,7 @@ codex-memory-plugin/
 ├── .codex-plugin/
 │   └── plugin.json              # Plugin manifest (hooks + mcp wiring)
 ├── hooks/
-│   └── hooks.json               # SessionStart + UserPromptSubmit + PreToolUse + Stop
+│   └── hooks.json               # SessionStart + UserPromptSubmit + Stop
 │                                  + SessionEnd + PreCompact (uses Codex's native
 │                                  ${PLUGIN_ROOT} token; no rendering needed on modern Codex)
 ├── skills/
@@ -504,7 +495,6 @@ codex-memory-plugin/
 │   ├── session-start-commit.mjs # SessionStart hook (profile + fallback sweep + resume archive)
 │   ├── session-end.mjs          # SessionEnd hook (mark + detached catch-up + commit)
 │   ├── pre-compact-capture.mjs  # PreCompact hook
-│   ├── uri-guard.mjs            # PreToolUse hook (viking:// notice on Bash)
 │   └── *.test.mjs               # node --test suites (session-end, pre-compact, ...)
 ├── servers/
 │   └── mcp-proxy.mjs            # stdio -> OpenViking /mcp bridge

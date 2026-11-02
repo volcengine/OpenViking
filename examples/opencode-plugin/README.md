@@ -68,9 +68,19 @@ openviking-server --config ~/.openviking/ov.conf
 
 ## Installation
 
+### One-line Installer (Recommended)
+
+OpenCode shares the unified installer with the other memory plugins. It asks which harnesses to install and for your OpenViking credentials:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+```
+
+The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
+
 ### Published Package
 
-Normal users should enable it through OpenCode's package plugin mechanism:
+To enable it through OpenCode's package plugin mechanism instead:
 
 The published npm package is `@openviking/opencode-plugin`; verify availability with:
 
@@ -216,6 +226,7 @@ OpenCode sees the OpenViking MCP server as `openviking`, so tool names are names
 - `openviking_find`: fast semantic retrieval.
 - `openviking_remember`: store important facts or decisions for memory extraction.
 - `openviking_read`: read one or more `viking://` files.
+- `openviking_download`: get a one-time URL for fetching a file's original bytes with `curl`.
 - `openviking_list`: list a `viking://` directory.
 - `openviking_tree`: show a `viking://` directory tree.
 - `openviking_grep`: exact text or regex search.

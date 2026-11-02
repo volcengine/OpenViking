@@ -21,7 +21,7 @@ Rules:
 
 - When global `encryption.enabled=true`, the primary backend must be encrypted.
 - Each backup backend may control its own encryption through `encryption.enabled`.
-- Multi-write internal metadata such as `.redirect.json` and `.sync_log.json` follows the primary backend's encryption policy.
+- V2 multi-write metadata is stored on the raw primary and bypasses `EncryptionWrappedFS`.
 - OpenViking does not expose and does not need public encryption APIs for operating on these internal files.
 
 See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more multi-write configuration details.
@@ -101,7 +101,7 @@ File encryption and API key hashing are independent controls:
 **By default, `encryption.api_key_hashing.enabled = false`**:
 - API keys are stored in plaintext within JSON files
 - If `encryption.enabled = true`, the entire file is protected by AES-GCM encryption
-- `ov admin list-users` can display the full API key
+- `ov admin list-users` can display the full API key when run with `--reveal-api-keys`
 - If `encryption.enabled = true` and API key hashing stays disabled, the server writes an informational log line about this at startup
 
 ### Enabling Argon2id Hashing
@@ -122,7 +122,7 @@ Enable Argon2id one-way hashing to stop storing recoverable API key values:
 **Note**: When enabled:
 - API keys are stored using Argon2id one-way hashing
 - Plaintext keys cannot be recovered from hash values
-- `ov admin list-users` only shows `key_prefix` instead of the full API key
+- `ov admin list-users` only shows `key_prefix` instead of the full API key (a caller's own row cannot be revealed either, since no plaintext is stored)
 - Plaintext keys are only visible when creating users or regenerating keys
 
 ### Configuration Example
@@ -146,7 +146,7 @@ Enable Argon2id one-way hashing to stop storing recoverable API key values:
 
 | Provider | Use Case | Pros | Cons |
 |----------|----------|------|------|
-| **Local** | Dev environments, single-node | Simple, no external services | Requires local file permissions and separate key backups |
+| **Local** | Dev environments, single-node | Simple, no external services | Requires local secret permissions and separate key backups |
 | **Vault** | Production, multi-cloud | Enterprise-grade KMS, version control | Requires deploying and maintaining Vault |
 | **Volcengine KMS** | Volcengine cloud | Cloud-native KMS service | Volcengine-only |
 
@@ -190,6 +190,35 @@ ov system crypto init-key -f ~/.openviking/master.key
   }
 }
 ```
+
+### Inline Root Key
+
+For simple, controlled deployments, the Local provider can read the same 32-byte root key
+directly from `ov.conf` instead of a separate file:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "root_key": "<64-character hexadecimal root key>"
+    }
+  }
+}
+```
+
+The value is 32 bytes encoded as exactly 64 hexadecimal characters. You can generate one with
+`openssl rand -hex 32`, or reuse the contents of an existing `master.key` when moving between the
+two Local configurations.
+
+- Do not configure `root_key` and `key_file` together. If both are omitted, the Local provider
+  continues to use `~/.openviking/master.key`.
+- An inline key is never generated automatically. Losing or changing it makes existing encrypted
+  data unreadable.
+- Treat `ov.conf` as a key file: restrict it to the service user, back it up securely, and never
+  commit it to version control.
+- Prefer Vault or KMS when production deployments need centralized secret management.
 
 ---
 

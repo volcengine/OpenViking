@@ -195,7 +195,7 @@ pub async fn update(
                 if data.is_empty() {
                     return Err(Error::Client("No update source supplied.".into()));
                 }
-                client.skill_update(&name, data, wait, None, false, false, None, parent).await
+                client.skill_update(&name, data, wait, false, false, None, parent).await
             } else {
                 Err(Error::Client(format!("Skill '{}' has no recorded Git source; supply a local path or Git URL interactively.", name)))
             }

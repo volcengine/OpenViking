@@ -298,7 +298,7 @@ docker compose up -d
 启动后可以访问：
 - API 服务：`http://localhost:1933`
 - Web Studio：`http://localhost:1933/studio`（与 API 同源）
-- Caddy 入口：`http://localhost:1934`。它把请求转发到 1933，主要为已有部署保留；同时运行 OpenViking 网关时，它还把模型 API 路径转发给网关，见[OpenViking 网关部署与运维](22-gateway-operations.md#docker-compose)。
+- Caddy 入口：`http://localhost:1934`。它把所有路径转发到 1933，主要为已有部署保留。开启 OpenViking 网关后，网关在同一端口的 `/gateway` 下提供服务，例如 `http://localhost:1933/gateway/v1`，见[OpenViking 网关部署与运维](22-gateway-operations.md#docker-compose)。
 
 ### 部署到 Railway
 

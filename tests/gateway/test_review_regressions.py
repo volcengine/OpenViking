@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from contextlib import contextmanager
 
 import pytest
 from conftest import make_due, replay_records
@@ -9,7 +10,7 @@ from conftest import make_due, replay_records
 from openviking_gateway.capture import MAX_ATTEMPTS, CaptureWorker
 from openviking_gateway.client import VikingError
 from openviking_gateway.protocols import plugin_present
-from openviking_gateway.storage import ManagementStore, SQLiteKernelStore
+from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
 from openviking_gateway.tool_protocols import ResponseCapture
 
 
@@ -36,7 +37,7 @@ def history(turns):
 
 
 async def worker_for(store, encryption, credential, viking):
-    management = ManagementStore(store.path.parent / "management.sqlite3", encryption)
+    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", encryption)
     await management.initialize()
     await management.save("tenant", "keys", credential["id"], credential)
     return CaptureWorker(store, management, viking)
@@ -294,20 +295,44 @@ async def test_repeated_prepare_has_one_read_and_no_capture_write(
     assert len(old.value["pending"]) == 5
 
 
+async def test_reply_lookup_searches_its_index_without_statistics(setup_kernel, monkeypatch):
+    # Stores are never ANALYZEd; scanning a user's records cost 20 ms at 1k sessions.
+    _, store, _, _ = setup_kernel
+    statements, connect = [], store.connect
+
+    @contextmanager
+    def traced():
+        with connect() as c:
+            c.set_trace_callback(statements.append)
+            yield c
+            c.set_trace_callback(None)
+
+    monkeypatch.setattr(store, "connect", traced)
+    await store.replay.replies("scope", ["a", "b"])
+    with connect() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + statements[0])]
+    assert any("INDEX replay_kinds (scope=? AND kind=? AND anchor=?)" in step for step in plan)
+
+
 async def test_hot_read_ignores_unrelated_operational_documents(
     setup_kernel, credential, policy, monkeypatch
 ):
     kernel, store, _, _ = setup_kernel
     policy.update(recall=False)
     p = await prepare(kernel, credential, policy, history(1)[:1])
-    with store.connect() as c:
-        c.executemany(
-            "INSERT INTO state(scope,key,value,version,touched) VALUES (?,?,?,1,?)",
-            [
-                (p.scope, f"tool:unrelated-{i}", store.encode({"content": "old"}), time.time())
-                for i in range(1500)
-            ],
-        )
+
+    def insert():
+        # Encoding runs the encryptor on the event loop, so it must happen off the loop thread.
+        with store.connect() as c:
+            c.executemany(
+                "INSERT INTO state(scope,key,value,version,touched) VALUES (?,?,?,1,?)",
+                [
+                    (p.scope, f"tool:unrelated-{i}", store.encode({"content": "old"}), time.time())
+                    for i in range(1500)
+                ],
+            )
+
+    await store.run(insert, write=True)
     decoded = []
     original = store.decode
 
@@ -403,7 +428,7 @@ async def test_anonymous_greetings_cannot_share_capture_or_archive(
 
 async def test_management_get_uses_one_row_and_response_expiry(setup_kernel, monkeypatch):
     _, store, _, encryption = setup_kernel
-    management = ManagementStore(store.path.parent / "management.sqlite3", encryption)
+    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", encryption)
     await management.initialize()
     for i in range(30):
         await management.save("tenant", "responses", str(i), {"upstream_id": "test"}, ttl=100)

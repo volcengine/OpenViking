@@ -12,6 +12,7 @@ Docs sidebar additions (2026-10-03):
 - `codex.png`: [documentation catalog artwork](https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/codex.png), referenced by `docs/images/agents/en/index.json`.
 - `openclaw.jpg`, `hermes-agent.png`, `pi.svg`: reused from `openviking_playground/src/assets/brand/` (`ca4fb82`). The OpenClaw file contains JPEG data and uses the matching extension here.
 - `pi-dark.svg`: the same monochrome pi mark with a light foreground for dark backgrounds.
+- `docs/images/agents/image/{pi,zcode,kimi-code}/logo.png`: 128×128 transparent PNGs for the agent catalog, rendered from `pi.svg` and from the ZCode and Kimi marks used by [OpenViking integrations](https://openviking.ai/integrations), with the longest side at 96px like the other catalog logos.
 
 The READMEs also reuse Claude Code, Cursor, TRAE, and OpenCode logos from `docs/images/agents/image/`.
 

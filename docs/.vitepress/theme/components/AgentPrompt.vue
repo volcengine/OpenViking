@@ -3,6 +3,7 @@
 // without opening it. The prompt stays in the page DOM (and in llms.txt).
 import { computed, ref } from 'vue'
 import { useData } from 'vitepress'
+import { trackEvent } from '../track'
 
 const props = defineProps<{ label?: string }>()
 const { lang } = useData()
@@ -30,6 +31,7 @@ async function copy() {
   const code = root.value?.querySelector('pre code')
   if (!code) return
   await writeText((code.textContent ?? '').replace(/\n$/, ''))
+  trackEvent('copy-agent-prompt')
   copied.value = true
   clearTimeout(timer)
   timer = setTimeout(() => { copied.value = false }, 2000)

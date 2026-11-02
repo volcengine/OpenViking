@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
+from typing import Any, Awaitable, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
 
 AGFSByteStream = Iterator[bytes]
 
 
 @runtime_checkable
 class AGFSSyncClientProtocol(Protocol):
-    """Minimal synchronous AGFS client contract used by OpenViking."""
+    """AGFS binding contract used by OpenViking."""
 
     def ls(
         self,
@@ -119,8 +119,25 @@ class AGFSSyncClientProtocol(Protocol):
     ) -> Dict[str, Any]:
         """Return one page of flat glob matches for the given AGFS directory."""
 
-    def system_sync_status(self, path: str) -> Dict[str, Any]:
-        """Return multi-write sync status for a file or directory path."""
+    def pathlock_acquire_batch_async(
+        self,
+        ctx: Dict[str, str],
+        requests: list[Dict[str, str]],
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+    ) -> Awaitable[Dict[str, Any]]:
+        """Acquire a PathLock batch without blocking a Python worker thread."""
 
-    def system_sync_retry(self, path: str) -> Dict[str, Any]:
-        """Retry pending multi-write sync work for a file or directory path."""
+    def leader_try_acquire_async(
+        self, key: str, holder_id: str, ttl_secs: float
+    ) -> Awaitable[str | None]:
+        """Try to acquire leadership and return an opaque lease reference."""
+
+    def leader_validate(self) -> None:
+        """Validate that distributed leadership is available."""
+
+    def leader_renew_async(self, lease_ref: str, ttl_secs: float) -> Awaitable[bool]:
+        """Renew leadership while its hidden ownership token still matches."""
+
+    def leader_release_async(self, lease_ref: str) -> Awaitable[None]:
+        """Release leadership while its hidden ownership token still matches."""

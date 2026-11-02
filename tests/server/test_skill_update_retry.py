@@ -49,7 +49,7 @@ async def test_update_wait_true_retries_transient_failure_without_conflicting_wi
 
     response = await client.put(
         f"/api/v1/skills/{name}",
-        json={"data": _skill_md(name, "Replacement"), "wait": True, "timeout": 5},
+        json={"data": _skill_md(name, "Replacement"), "wait": True},
     )
 
     assert response.status_code == 200, response.text
@@ -59,14 +59,14 @@ async def test_update_wait_true_retries_transient_failure_without_conflicting_wi
 
 
 @pytest.mark.parametrize("enqueue_committed", [False, True])
-async def test_update_timeout_waits_for_retry_handoff_to_settle_before_restoring(
+async def test_update_cancellation_waits_for_retry_handoff_to_settle_before_restoring(
     client, service, monkeypatch, enqueue_committed
 ):
     name = f"update-cancel-retry-enqueue-{enqueue_committed}"
     root = (await _add_skill(client, name, "Original"))["root_uri"]
     old_content = await _download(client, f"{root}/SKILL.md")
     # A published retry may already be running while its enqueue is returning.
-    # Keep that work pending so this case actually exercises a request timeout.
+    # Keep that work pending so this case actually exercises request cancellation.
     _fail_first_run(monkeypatch, root, block_retries=enqueue_committed)
     queue_manager = get_queue_manager()
     queue = queue_manager.get_queue(queue_manager.SEMANTIC)
@@ -95,20 +95,22 @@ async def test_update_timeout_waits_for_retry_handoff_to_settle_before_restoring
     updating = asyncio.create_task(
         client.put(
             f"/api/v1/skills/{name}",
-            json={"data": _skill_md(name, "Replacement"), "wait": True, "timeout": 2},
+            json={"data": _skill_md(name, "Replacement"), "wait": True},
         )
     )
     try:
         await _wait_until(retry_started.is_set)
-        await asyncio.sleep(2.1)
+        updating.cancel()
+        await asyncio.sleep(0)
         assert not updating.done(), "Rollback must wait for the started retry enqueue"
         await _assert_locked(service.viking_fs, root)
         resume_enqueue.set()
-        response = await asyncio.wait_for(updating, 10)
-        assert response.status_code == 504, response.text
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(updating, 10)
         assert await _download(client, f"{root}/SKILL.md") == old_content
         await _assert_unlocked(service.viking_fs, root)
     finally:
         resume_enqueue.set()
         if not updating.done():
-            await asyncio.wait_for(updating, 10)
+            updating.cancel()
+        await asyncio.wait_for(asyncio.gather(updating, return_exceptions=True), 10)

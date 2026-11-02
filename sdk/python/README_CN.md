@@ -319,7 +319,9 @@ result = client.find(
 - `admin_create_account`
 - `admin_register_user`
 - `admin_list_accounts`
+- `admin_get_account`
 - `admin_list_users`
+- `admin_get_user`
 - `admin_regenerate_key`
 - `admin_delete_account`
 

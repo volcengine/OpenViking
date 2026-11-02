@@ -385,7 +385,7 @@ def _make_provider(config, langfuse_client: Any = None):
     """
     p = config.agents
     model = p.model if p else None
-    temperature = p.temperature if p else 0.7
+    temperature = p.temperature if p else None
     thinking = p.thinking if p else True
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
@@ -584,6 +584,7 @@ def gateway(
         enable_openapi=True,
         openapi_port=effective_port,
         compile_service=compile_service,
+        agent_loop=agent_loop,
     )
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
@@ -793,6 +794,7 @@ def prepare_channel(
     enable_openapi: bool = False,
     openapi_port: int = 18790,
     compile_service=None,
+    agent_loop=None,
 ):
     """Prepare channels for the bot.
 
@@ -819,6 +821,7 @@ def prepare_channel(
             app=fastapi_app,  # Pass the external FastAPI app
             global_config=config,
             compile_service=compile_service,
+            agent_loop=agent_loop,
         )
         from vikingbot.studio.service import StudioService
 
@@ -955,7 +958,9 @@ def chat(
         "--memory-user",
         help="Deprecated legacy OpenViking user ID for root-key memory fanout",
     ),
-    disabled_tools: Annotated[list[str] | None, typer.Option("--disable-tool", help="Disable a tool (repeatable)")] = None,
+    disabled_tools: Annotated[
+        list[str] | None, typer.Option("--disable-tool", help="Disable a tool (repeatable)")
+    ] = None,
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None

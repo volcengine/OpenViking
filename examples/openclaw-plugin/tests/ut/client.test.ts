@@ -304,51 +304,6 @@ describe("OpenVikingClient resource and skill import", () => {
     );
   });
 
-  it("uses an extended request timeout for wait=true imports", async () => {
-    vi.useFakeTimers();
-    const transport = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-      setTimeout(() => {
-        resolve(okResponse({ root_uri: "viking://resources/site", status: "success" }));
-      }, 20_000);
-    }));
-
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 15_000, "", "", undefined, false, true, { transport });
-    const pending = client.addResource({
-      pathOrUrl: "https://example.com/docs",
-      wait: true,
-      timeout: 60,
-    });
-
-    await vi.advanceTimersByTimeAsync(20_000);
-
-    await expect(pending).resolves.toMatchObject({
-      root_uri: "viking://resources/site",
-      status: "success",
-    });
-  });
-
-  it("still uses the default request timeout for non-wait imports", async () => {
-    vi.useFakeTimers();
-    const transport = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
-      setTimeout(() => {
-        resolve(okResponse({ root_uri: "viking://resources/site", status: "success" }));
-      }, 20_000);
-    }));
-
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 15_000, "", "", undefined, false, true, { transport });
-    const pending = client.addResource({
-      pathOrUrl: "https://example.com/docs",
-      wait: false,
-    });
-    const assertion = expect(pending).rejects.toThrow(/aborted/i);
-
-    await vi.advanceTimersByTimeAsync(15_001);
-
-    await assertion;
-  });
-
   it("keeps polling wait=true commit long enough for slow Phase 2 completion", async () => {
     vi.useFakeTimers();
     const transport = vi.fn((url: string) => {

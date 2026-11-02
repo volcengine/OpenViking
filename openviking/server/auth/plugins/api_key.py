@@ -24,8 +24,6 @@ _API_KEY_ROOT_ALLOWED_PREFIXES = (
     "/api/v1/observer",
     "/api/v1/console",
     "/api/v1/tasks",
-    "/api/v1/system/backend",
-    "/api/v1/system/sync",
 )
 
 
@@ -183,6 +181,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
             root_key=config.root_api_key,
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
+            service_name=app.state.service_name,
             account_store_provider=config.account_store.provider,
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,

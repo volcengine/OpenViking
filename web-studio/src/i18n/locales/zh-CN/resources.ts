@@ -399,6 +399,8 @@ const resources = {
       },
     },
     filePreview: {
+      editFailed: '无法读取完整文件用于编辑。',
+      saveFailed: '文件保存失败。',
       directoryLevels: {
         abstractLabel: '摘要',
         overviewLabel: '概览',
@@ -457,6 +459,12 @@ const resources = {
     },
   },
   retrieval: {
+    modeDescriptions: {
+      find: '按语义查找相关上下文，适合单次问题。',
+      search: '按语义检索，可结合会话上下文查找相关内容。',
+      grep: '按文本或正则表达式匹配文件内容。',
+      glob: '按路径通配符查找文件，例如 **/*.md。',
+    },
     title: '检索',
     searchPlaceholder: '输入检索内容',
     placeholders: {

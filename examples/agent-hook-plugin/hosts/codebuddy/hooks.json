@@ -1,0 +1,71 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/agent-integrations/codebuddy/scripts/hook.mjs session-start codebuddy",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/agent-integrations/codebuddy/scripts/hook.mjs user-prompt-submit codebuddy",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Write|Edit|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/agent-integrations/codebuddy/scripts/uri-guard.mjs codebuddy",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/agent-integrations/codebuddy/scripts/hook.mjs stop codebuddy",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/agent-integrations/codebuddy/scripts/hook.mjs pre-compact codebuddy",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/agent-integrations/codebuddy/scripts/hook.mjs session-end codebuddy",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

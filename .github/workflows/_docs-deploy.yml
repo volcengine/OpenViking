@@ -6,6 +6,9 @@ on:
 jobs:
   deploy:
     name: Build and Deploy Docs
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -2,6 +2,9 @@
 
 import copy
 import json
+import os
+import uuid
+from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -9,13 +12,18 @@ import orjson
 import pytest
 import pytest_asyncio
 from aiohttp import web
-from cryptography.fernet import Fernet
 
+from openviking.crypto import FileEncryptor, LocalFileProvider
 from openviking_gateway.app import create_app
-from openviking_gateway.config import OpenVikingGatewayConfig
+from openviking_gateway.config import GatewayConfig
 from openviking_gateway.kernel import MemoryKernel
 from openviking_gateway.models import Policy
-from openviking_gateway.storage import SQLiteKernelStore
+from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
+
+
+def local_encryptor(key_file):
+    """OpenViking's local-provider encryptor; it creates the root key file on first use."""
+    return FileEncryptor(LocalFileProvider(str(key_file)))
 
 
 def mcp_tool(name, properties, required=()):
@@ -97,6 +105,9 @@ class FakeViking:
             return [{"name": "alice", "isDir": True}]
         return self.preferences if uri.endswith("/preferences") else self.entities
 
+    async def identify(self, key=""):
+        return await self.health(key)
+
     async def health(self, key="", require_identity=True):
         return {"version": "0.4.16", "role": "user", "account_id": "tenant", "user_id": "alice"}
 
@@ -139,12 +150,12 @@ def credential():
 
 @pytest_asyncio.fixture
 async def setup_kernel(tmp_path):
-    key = Fernet.generate_key().decode()
-    store = SQLiteKernelStore(tmp_path / "kernel.sqlite3", key)
+    encryptor = local_encryptor(tmp_path / "master.key")
+    store = SQLiteKernelStore(tmp_path / "kernel.sqlite3", encryptor)
     await store.initialize()
     viking = FakeViking()
     kernel = MemoryKernel(store, viking)
-    yield kernel, store, viking, key
+    yield kernel, store, viking, encryptor
     store.close()
 
 
@@ -189,7 +200,7 @@ async def make_due(store):
 
 
 @pytest_asyncio.fixture
-async def running_gateway(tmp_path, monkeypatch):
+async def gateway_backend():
     captured = []
     writes = []
     override = {}
@@ -200,7 +211,8 @@ async def running_gateway(tmp_path, monkeypatch):
             key = request.headers.get("X-API-Key")
             override.setdefault("tools_calls", []).append(key)
             # Maps an OpenViking key to the HTTP status its tools/list gets.
-            status = override.get("tools_status", {}).get(key, 200)
+            # Like OV, /mcp refuses root keys.
+            status = override.get("tools_status", {}).get(key, 403 if key == "root" else 200)
             if status != 200:
                 return web.json_response({"error": "private server detail"}, status=status)
             return web.json_response(
@@ -213,17 +225,47 @@ async def running_gateway(tmp_path, monkeypatch):
         raw = await request.read()
         body = json.loads(raw) if raw else {}
         if request.path == "/health":
-            key = request.headers.get("X-API-Key")
+            key = request.headers.get("X-API-Key", "")
+            status = override.get("health_status", {}).get(key, 200)
+            if status != 200:
+                return web.json_response({}, status=status)
+            if override.get("auth_mode") in {"dev", "trusted"}:
+                return web.json_response({"version": "0.4.16", "auth_mode": override["auth_mode"]})
             return web.json_response(
                 {
                     "version": "0.4.16",
                     "status": "ok",
                     "auth_mode": "api_key",
-                    "role": "root" if key == "root" else "user",
+                    "role": "root" if key == "root" else "admin" if key == "admin-key" else "user",
                     "account_id": "other" if key == "other" else "tenant",
-                    "user_id": "alice",
+                    "user_id": "bob" if key == "bob-key" else "alice",
                 }
             )
+        if request.path == "/api/v1/admin/accounts":
+            return web.json_response({"status": "ok", "result": [{"account_id": "tenant"}]})
+        if request.path.startswith("/api/v1/admin/accounts/") and request.path.endswith("/users"):
+            override.setdefault("users_calls", []).append(
+                (str(request.rel_url), request.headers.get("X-API-Key"))
+            )
+            users = override.get(
+                "users",
+                [
+                    {"user_id": "alice", "role": "user", "api_key": "user-key"},
+                    {"user_id": "bob", "role": "user", "api_key": "bob-key"},
+                ],
+            )
+            if name := request.query.get("name"):
+                users = [u for u in users if u["user_id"] == name]
+            if request.query.get("include_credentials") == "false":
+                users = [
+                    {
+                        "user_id": u["user_id"],
+                        "role": u["role"],
+                        "api_key_available": bool(u.get("api_key")),
+                    }
+                    for u in users
+                ]
+            return web.json_response({"status": "ok", "result": users})
         if request.path == "/api/v1/search/search":
             assert body["mode"] == "context" and "session_id" not in body
             return web.json_response(
@@ -255,6 +297,8 @@ async def running_gateway(tmp_path, monkeypatch):
         if request.path == "/api/v1/content/read":
             return web.json_response({"status": "error"}, status=404)
         captured.append((request.path, raw, dict(request.headers)))
+        if request.path.endswith("/models"):
+            return web.json_response({"data": []})
         if body.get("model") == "error":
             return web.Response(
                 body=b'{"error":{"raw":"provider error"}}',
@@ -318,46 +362,201 @@ async def running_gateway(tmp_path, monkeypatch):
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     base = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
-    monkeypatch.setenv("OPENVIKING_GATEWAY_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    monkeypatch.setenv("OPENVIKING_GATEWAY_ADMIN_TOKEN", "admin-" + "x" * 32)
-    config = OpenVikingGatewayConfig(enabled=True, storage_path=str(tmp_path), openviking_url=base)
-    app = create_app(config)
+    try:
+        yield base, captured, writes, override
+    finally:
+        await runner.cleanup()
+
+
+def default_upstreams(base):
+    """One upstream per protocol on the fake backend."""
+    return {
+        protocol: {
+            "name": protocol,
+            "protocol": protocol,
+            "base_url": base if protocol == "anthropic" else base + "/v1",
+            "api_key": "model-secret",
+            "models": ["model", "error"],
+        }
+        for protocol in ("chat", "anthropic", "responses")
+    }
+
+
+@pytest.fixture
+def gateway_config():
+    return {}
+
+
+@asynccontextmanager
+async def serve_gateway(tmp_path, gateway_backend, gateway_config):
+    base, captured, writes, override = gateway_backend
+    settings = {"storage_path": str(tmp_path), **gateway_config}
+    config = GatewayConfig.model_validate(settings)
+    app = create_app(
+        config, openviking_url=base, encryptor=local_encryptor(tmp_path / "master.key")
+    )
     app.state.test_backend = override
     async with app.router.lifespan_context(app):
+        # Requests arrive as the hosts mount the gateway: below root_path /gateway.
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+            transport=httpx.ASGITransport(app=app, root_path="/gateway"),
+            base_url="http://gateway/gateway",
         ) as client:
-            admin = {"Authorization": "Bearer admin-" + "x" * 32, "X-OpenViking-Account": "tenant"}
-            for protocol in ("chat", "anthropic", "responses"):
-                response = await client.put(
-                    f"/admin/upstreams/{protocol}",
+            admin = {"X-API-Key": "admin-key"}
+            minted = None
+            if config.management_api:
+                for protocol, upstream in default_upstreams(base).items():
+                    response = await client.put(
+                        f"/admin/upstreams/{protocol}", headers=admin, json=upstream
+                    )
+                    assert response.status_code == 200, response.text
+                assert (
+                    await client.put(
+                        "/admin/policies/default",
+                        headers=admin,
+                        json={"name": "Default", "gateway_tools": False},
+                    )
+                ).status_code == 200
+                minted = await client.post(
+                    "/admin/keys",
                     headers=admin,
                     json={
-                        "name": protocol,
-                        "protocol": protocol,
-                        "base_url": base,
-                        "api_key": "model-secret",
-                        "models": ["model", "error"],
+                        "name": "test",
+                        "openviking_key": "user-key",
+                        "policy_id": "default",
+                        "upstream_ids": ["chat", "anthropic", "responses"],
                     },
                 )
-                assert response.status_code == 200, response.text
-            assert (
-                await client.put(
-                    "/admin/policies/default",
-                    headers=admin,
-                    json={"name": "Default", "gateway_tools": False},
-                )
-            ).status_code == 200
-            minted = await client.post(
-                "/admin/keys",
-                headers=admin,
-                json={
-                    "name": "test",
-                    "openviking_key": "user-key",
-                    "policy_id": "default",
-                    "upstream_ids": ["chat", "anthropic", "responses"],
-                },
-            )
-            assert minted.status_code == 200, minted.text
-            yield app, client, admin, minted.json(), captured, writes
-    await runner.cleanup()
+                assert minted.status_code == 200, minted.text
+                minted = minted.json()
+            yield app, client, admin, minted, captured, writes
+
+
+@pytest_asyncio.fixture
+async def running_gateway(tmp_path, gateway_backend, gateway_config):
+    async with serve_gateway(tmp_path, gateway_backend, gateway_config) as gateway:
+        yield gateway
+
+
+@pytest.fixture
+def storage_encryptor(request, tmp_path):
+    """Plaintext unless a test parametrizes it indirectly with True."""
+    if getattr(request, "param", False):
+        return local_encryptor(tmp_path / "storage-root.key")
+    return None
+
+
+def redis_settings(provider):
+    """``storage.redis`` settings for "redis" or "redis-cluster"; skips when unconfigured."""
+    variable = "OV_TEST_REDIS_CLUSTER" if provider == "redis-cluster" else "OV_TEST_REDIS"
+    if not (endpoints := os.environ.get(variable)):
+        pytest.skip(f"{variable} is not set")
+    pytest.importorskip("redis")
+    return {
+        "mode": "cluster" if provider == "redis-cluster" else "standalone",
+        "endpoints": endpoints.split(","),
+        "username": os.environ.get("OV_TEST_REDIS_USERNAME", ""),
+        "password": os.environ.get("OV_TEST_REDIS_PASSWORD", ""),
+    }
+
+
+@asynccontextmanager
+async def open_redis_backend(provider, encryptor=None):
+    from openviking_gateway.redis_store import RedisBackend, connect
+    from openviking_gateway.storage import AsyncCodec
+
+    handle = connect({**redis_settings(provider), "command_timeout_ms": 5000, "pool_size": 128})
+    backend = RedisBackend(handle.client, f"ovgw:test:{uuid.uuid4().hex}:", AsyncCodec(encryptor))
+    try:
+        await handle.client.ping()
+        yield backend
+    finally:
+        await backend.delete_matching(backend.prefix + "*")
+        await handle.close()
+
+
+@asynccontextmanager
+async def open_kernel_store(provider, tmp_path, encryptor=None):
+    if provider == "sqlite":
+        store = SQLiteKernelStore(tmp_path / "kernel-contract.sqlite3", encryptor)
+        await store.initialize()
+        try:
+            yield store
+        finally:
+            store.close()
+        return
+    from openviking_gateway.redis_store import RedisKernelStore
+
+    async with open_redis_backend(provider, encryptor) as backend:
+        store = RedisKernelStore(backend, ttl=7 * 86400)
+        await store.initialize()
+        yield store
+
+
+@asynccontextmanager
+async def open_management_store(provider, tmp_path, encryptor=None):
+    if provider == "sqlite":
+        store = SQLiteManagementStore(tmp_path / "management.sqlite3", encryptor)
+        await store.initialize()
+        try:
+            yield store
+        finally:
+            store.close()
+        return
+    from openviking_gateway.redis_store import RedisManagementStore
+
+    async with open_redis_backend(provider, encryptor) as backend:
+        store = RedisManagementStore(backend, log_ttl=7 * 86400)
+        await store.initialize()
+        yield store
+
+
+# Each port lists its own providers, so a backend for one port adds one entry here.
+@pytest_asyncio.fixture(params=["sqlite", "redis", "redis-cluster"])
+async def kernel_store(request, tmp_path, storage_encryptor):
+    async with open_kernel_store(request.param, tmp_path, storage_encryptor) as store:
+        yield store
+
+
+@pytest_asyncio.fixture(params=["sqlite", "redis", "redis-cluster"])
+async def management_store(request, tmp_path, storage_encryptor):
+    async with open_management_store(request.param, tmp_path, storage_encryptor) as store:
+        yield store
+
+
+@pytest_asyncio.fixture(params=["redis", "redis-cluster"])
+async def redis_kernel_store(request, tmp_path):
+    async with open_kernel_store(request.param, tmp_path) as store:
+        yield store
+
+
+@pytest_asyncio.fixture(params=["redis", "redis-cluster"])
+async def redis_management_store(request, tmp_path):
+    async with open_management_store(request.param, tmp_path) as store:
+        yield store
+
+
+async def corrupt_root(store, scope, session, value):
+    """Overwrite the stored bytes of a session's root replay record."""
+    if isinstance(store, SQLiteKernelStore):
+
+        def corrupt():
+            with store.connect() as connection:
+                connection.execute("UPDATE replay SET value=? WHERE scope=?", (value, scope))
+
+        await store.run(corrupt, write=True)
+    else:
+        await store.client.hset(store.replay_key(scope, session), "root:", value)
+
+
+async def evict_state(store, scope, key):
+    """Drop a state record behind the store's back, as Redis eviction would."""
+    if isinstance(store, SQLiteKernelStore):
+
+        def remove():
+            with store.connect() as connection:
+                connection.execute("DELETE FROM state WHERE scope=? AND key=?", (scope, key))
+
+        await store.run(remove, write=True)
+    else:
+        await store.client.execute_command("DEL", store.state_key(scope, key))

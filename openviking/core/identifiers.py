@@ -6,6 +6,7 @@ import re
 from typing import Optional
 
 _VALIDATION_PATTERN = re.compile(r"^[a-zA-Z0-9_.@-]+$")
+MAX_IDENTIFIER_LENGTH = 255
 
 
 def validate_identifier_part(part: str, part_name: str) -> str | None:
@@ -51,3 +52,10 @@ def validate_account_id(account_id: str) -> str | None:
 def validate_user_id(user_id: str) -> str | None:
     """Validate a user id."""
     return validate_identifier_part(user_id, "user_id")
+
+
+def validate_identifier_length(value: str, name: str) -> str | None:
+    """Validate the persistence length of a new account-store identifier."""
+    if len(value) > MAX_IDENTIFIER_LENGTH:
+        return f"{name} must not exceed {MAX_IDENTIFIER_LENGTH} characters."
+    return None

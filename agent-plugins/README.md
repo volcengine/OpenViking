@@ -16,6 +16,7 @@ skills/ov-memory-troubleshoot/       # read-only extraction troubleshooting
 skills/ov-experience-memory/         # retrieve and apply prior task Experience
 skills/openviking-skills/            # find, use, create, and share OpenViking skills
 skills/ov-kanban/                    # kanban board: pick, execute, hand off tasks stored as OV markdown files
+skills/ov-resources/                 # search and read documents stored under viking://resources/
 plugin.test.mjs                      # node --test conformance checks
 ```
 
@@ -34,7 +35,7 @@ Zero npm dependencies; the proxy and tests run on the Node.js standard library (
 1. Have an OpenViking server reachable (see the [quickstart](../docs/en/getting-started/02-quickstart.md)); default local endpoint is `http://127.0.0.1:1933`.
 2. Point your Agent-Plugins-conforming client at this directory (each client has its own install command or plugin directory; consult its docs). The client will:
    - register the `openviking` MCP server from `mcp.json` — it runs `node <plugin>/servers/mcp-proxy.mjs` over stdio;
-   - discover the `openviking-memory`, `ov-memory-troubleshoot`, `ov-experience-memory`, `openviking-skills`, and `ov-kanban` skills from `skills/`.
+   - discover the `openviking-memory`, `ov-memory-troubleshoot`, `ov-experience-memory`, `openviking-skills`, `ov-kanban`, and `ov-resources` skills from `skills/`.
 3. Configure credentials (next section) and start a session. The model gains `find` / `search` / `read` / `remember` / `write` / `add_skill` and the other OpenViking MCP tools. Use `search` with `mode="context"` for server-assembled context.
 
 ## Why a stdio proxy instead of a `streamable-http` entry

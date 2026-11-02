@@ -13,7 +13,12 @@ from openviking.server.identity import (
     ResolvedIdentity,
     Role,
 )
-from openviking.server.upload_token_store import UploadTokenError, upload_token_store
+from openviking.server.upload_token_store import (
+    ConsumedUploadToken,
+    UploadTokenError,
+    download_token_store,
+    upload_token_store,
+)
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -116,14 +121,23 @@ async def _build_request_context(
     plugin.get_request_context_checks(request.url.path, identity)
     account_id = identity.account_id or "default"
     user_id = identity.user_id or "default"
+    has_auth_groups = (
+        plugin.auth_mode == AuthMode.API_KEY.value
+        and not identity.from_oauth
+        and identity.group_ids is not None
+    )
+    group_ids = identity.group_ids or ()
+    if (
+        not has_auth_groups
+        and not group_ids
+        and identity.role != Role.ROOT
+        and _uses_local_account_store(plugin)
+    ):
+        group_ids = await resolve_group_ids(request, account_id, user_id)
     ctx = RequestContext(
         user=UserIdentifier(account_id, user_id),
         role=identity.role,
-        group_ids=(
-            await resolve_group_ids(request, account_id, user_id)
-            if identity.role != Role.ROOT and _uses_local_account_store(plugin)
-            else ()
-        ),
+        group_ids=group_ids,
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,
@@ -131,7 +145,8 @@ async def _build_request_context(
     manager = getattr(request.app.state, "api_key_manager", None)
     deletion = None
     if (
-        _uses_local_account_store(plugin)
+        not has_auth_groups
+        and _uses_local_account_store(plugin)
         and ctx.role != Role.ROOT
         and manager is not None
         and hasattr(manager, "get_deletion")
@@ -205,6 +220,59 @@ async def get_session_request_context(
     )
 
 
+async def _context_from_signed_token(
+    request: Request, consumed: ConsumedUploadToken
+) -> RequestContext:
+    """Rebuild the request context bound to a consumed upload/download token.
+
+    In API-key mode the saved authorization role must remain compatible with the
+    registered account role. Other auth modes retain their USER token context.
+    """
+    if _auth_mode(request) == AuthMode.API_KEY:
+        manager = get_api_key_manager_or_raise(request)
+        registered_account_role = await manager.get_registered_user_role(
+            consumed.account_id, consumed.user_id
+        )
+        if registered_account_role is None:
+            raise UnauthenticatedError("Signed token's user no longer exists")
+        try:
+            authorized_account_role = Role.parse(consumed.role)
+        except ValueError:
+            raise UnauthenticatedError("Invalid signed-token authorization role") from None
+        if not registered_account_role.allows_token_role(authorized_account_role):
+            raise UnauthenticatedError(
+                "Signed token's role exceeds the user's current role; request a new token"
+            )
+        return await _build_request_context(
+            request,
+            ResolvedIdentity(
+                role=authorized_account_role,
+                account_id=consumed.account_id,
+                user_id=consumed.user_id,
+                from_oauth=consumed.from_oauth,
+            ),
+            actor_peer_id=consumed.actor_peer_id or None,
+        )
+    try:
+        ctx = RequestContext(
+            user=UserIdentifier(consumed.account_id, consumed.user_id),
+            role=Role.USER,
+            group_ids=await resolve_group_ids(request, consumed.account_id, consumed.user_id),
+            # Actor peer comes from the token (bound at mint time from the trusted MCP
+            # context), never from this request's headers, so server-side
+            # auto-ingest keeps the caller's peer scope for reason-memory routing.
+            actor_peer_id=consumed.actor_peer_id or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid identity in token: {exc}") from exc
+    update_root_span_identity(
+        request_state=request.state,
+        account_id=consumed.account_id,
+        user_id=consumed.user_id,
+    )
+    return ctx
+
+
 async def get_upload_request_context(
     request: Request,
     token: Optional[str] = Query(None),
@@ -231,52 +299,44 @@ async def get_upload_request_context(
         except UploadTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         request.state.signed_upload = consumed
-        if _auth_mode(request) == AuthMode.API_KEY:
-            manager = get_api_key_manager_or_raise(request)
-            current_role = await manager.get_registered_user_role(
-                consumed.account_id, consumed.user_id
-            )
-            if current_role is None:
-                raise UnauthenticatedError("Upload token's user no longer exists")
-            if Role(consumed.role).rank > current_role.rank:
-                raise UnauthenticatedError(
-                    "Upload token's role exceeds the user's current role; request a new upload"
-                )
-            return await _build_request_context(
-                request,
-                ResolvedIdentity(
-                    role=consumed.role,
-                    account_id=consumed.account_id,
-                    user_id=consumed.user_id,
-                    from_oauth=consumed.from_oauth,
-                ),
-                actor_peer_id=consumed.actor_peer_id or None,
-            )
-        try:
-            ctx = RequestContext(
-                user=UserIdentifier(consumed.account_id, consumed.user_id),
-                role=Role.USER,
-                group_ids=await resolve_group_ids(request, consumed.account_id, consumed.user_id),
-                # Actor peer comes from the token (bound at mint time from the trusted MCP
-                # context), never from this upload request's headers, so server-side
-                # auto-ingest keeps the caller's peer scope for reason-memory routing.
-                actor_peer_id=consumed.actor_peer_id or None,
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail=f"invalid identity in token: {exc}"
-            ) from exc
-        update_root_span_identity(
-            request_state=request.state,
-            account_id=consumed.account_id,
-            user_id=consumed.user_id,
-        )
-        return ctx
+        return await _context_from_signed_token(request, consumed)
 
     identity = await resolve_identity(
         request, x_api_key, authorization, x_openviking_account, x_openviking_user
     )
     return await get_request_context(request, identity, x_openviking_actor_peer)
+
+
+async def get_download_request_context(
+    request: Request,
+    token: Optional[str] = Query(None),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
+    x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
+    x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
+) -> RequestContext:
+    """Two-layer auth for ``GET /content/download``: API key first, else a signed token.
+
+    Mirrors :func:`get_upload_request_context`. A download token (minted by the MCP
+    ``download`` tool) is single-use and bound to one resolved URI, which is stashed on
+    ``request.state.signed_download_uri``; the handler serves only that URI.
+    """
+    api_key = _extract_api_key(x_api_key, authorization)
+    if token and not api_key:
+        try:
+            consumed = download_token_store.consume(token)
+        except UploadTokenError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        request.state.signed_download_uri = consumed.uri
+        return await _context_from_signed_token(request, consumed)
+
+    identity = await resolve_identity(
+        request, x_api_key, authorization, x_openviking_account, x_openviking_user
+    )
+    return await get_request_context(
+        request, identity, x_openviking_actor_peer, x_api_key, authorization
+    )
 
 
 def require_role(*allowed_roles: Role):
@@ -310,7 +370,7 @@ _DEV_MODE_ADMIN_API_MESSAGE = (
 )
 
 
-def require_auth_role(*allowed_roles: Role):
+def require_auth_role(*allowed_roles: str):
     """Decorator for Admin API routes with mode-aware errors.
 
     Usage:
@@ -395,3 +455,13 @@ def should_expose_user_key(request: Request) -> bool:
     if not isinstance(config, ServerConfig):
         return True
     return config.get_effective_auth_mode() != "trusted"
+
+
+def is_personal_api_key_auth(request: Request | None, ctx: RequestContext) -> bool:
+    """Self-service credentials require a personal key, not a delegated token."""
+    return (
+        request is not None
+        and _auth_mode(request) == "api_key"
+        and not ctx.from_oauth
+        and bool(ctx.api_key)
+    )

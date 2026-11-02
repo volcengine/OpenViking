@@ -82,3 +82,14 @@ class UserPrivacyConfigVersion:
             created_by=data.get("created_by", ""),
             change_reason=data.get("change_reason", ""),
         )
+
+
+@dataclass(frozen=True)
+class UserPrivacyFieldDeleteResult:
+    """Outcome of removing a field from the active Privacy target."""
+
+    category: str
+    target_key: str
+    field: str
+    target_deleted: bool
+    active_version: int | None = None
