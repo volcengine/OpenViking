@@ -233,7 +233,8 @@ Each path and operation has one HASH bucket:
 <service_name>:ov:cache:v1:<path_key>:<op>
 ```
 
-The HASH field is `xxh3_128(canonical_request_json)`. The value is a `QueryCacheEnvelope` containing:
+Each bucket reserves `__epoch` for a random generation token. Query fields use
+`xxh3_128(canonical_request_json)` and store a `QueryCacheEnvelope` containing:
 
 - `request`
 - `payload`
@@ -276,7 +277,11 @@ For recursive path operations such as `remove_all`, `rename`, and `replace`, RAG
 ZSCAN <service_name>:ov:cacheidx:v1 MATCH '<service_name>:ov:cache:v1:<path_key>/*:*' COUNT 1000
 ```
 
-Matched descendant buckets are added to the same batched `UNLINK` and `ZREM` calls. No generation fallback is kept.
+Matched descendant buckets are added to the same batched `UNLINK` and `ZREM` calls.
+After a miss, an atomic script captures `__epoch` before backend fallback.
+Another script fills the query field only when that epoch is still current.
+A successful `UNLINK` removes the epoch, so an older query cannot restore stale data.
+Pending no-TTL epochs expire after 300 seconds; successful fills remain persistent.
 
 Typical write order:
 

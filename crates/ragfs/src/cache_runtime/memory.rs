@@ -3,7 +3,7 @@
 use super::provider::{CacheOperation, CacheProvider};
 use super::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, ScriptRequest, ScriptResult, SetCondition, SetOptions, SetResult,
+    ListMoveRequest, ScriptRequest, ScriptResult, ScriptValue, SetCondition, SetOptions, SetResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -107,7 +107,7 @@ impl MemoryMockProvider {
         self
     }
 
-    /// Delay individual set calls to exercise bounded write concurrency.
+    /// Delay individual string and hash set calls to exercise write races.
     pub fn with_set_delay(mut self, delay: Duration) -> Self {
         self.set_delay = delay;
         self
@@ -202,7 +202,7 @@ impl MemoryMockProvider {
         self.max_active_gets.load(Ordering::Relaxed)
     }
 
-    /// Return the maximum number of concurrent set calls.
+    /// Return the maximum number of concurrent string and hash set calls.
     pub fn max_concurrent_sets(&self) -> u64 {
         self.max_active_sets.load(Ordering::Relaxed)
     }
@@ -532,6 +532,10 @@ impl CacheProvider for MemoryMockProvider {
 
     async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
         self.ensure_open()?;
+        let _guard = self.enter_set();
+        if !self.set_delay.is_zero() {
+            tokio::time::sleep(self.set_delay).await;
+        }
         self.purge_expired_key(key).await;
         self.remove_non_hash_values(key).await;
         let mut hashes = self.hashes.write().await;
@@ -877,11 +881,14 @@ impl CacheProvider for MemoryMockProvider {
 
     async fn execute_script(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
         self.ensure_open()?;
-        let handler = self
-            .script_handler
-            .as_ref()
-            .ok_or_else(|| CacheError::UnsupportedScript(request.script_id.clone()))?;
-        handler(request)
+        if let Some(handler) = &self.script_handler {
+            return handler(request);
+        }
+        match request.script_id.as_str() {
+            "ragfs.cache.query.begin_fill.v1" => self.begin_query_fill(request).await,
+            "ragfs.cache.query.fill_if_epoch.v1" => self.fill_query_if_epoch(request).await,
+            _ => Err(CacheError::UnsupportedScript(request.script_id)),
+        }
     }
 
     async fn close(&self) -> CacheResult<()> {
@@ -893,6 +900,69 @@ impl CacheProvider for MemoryMockProvider {
         self.zsets.write().await.clear();
         self.lists.write().await.clear();
         Ok(())
+    }
+}
+
+impl MemoryMockProvider {
+    /// Capture a CacheFS epoch and recheck one query field atomically.
+    async fn begin_query_fill(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        let [key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "begin-fill requires one key".into(),
+            ));
+        };
+        let [field, candidate, _ttl, _pending_ttl] = request.args.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "begin-fill requires four arguments".into(),
+            ));
+        };
+        let field = std::str::from_utf8(field)
+            .map_err(|error| CacheError::InvalidArgument(error.to_string()))?;
+        self.purge_expired_key(key).await;
+        self.remove_non_hash_values(key).await;
+        let mut hashes = self.hashes.write().await;
+        let hash = hashes.entry(key.clone()).or_default();
+        let epoch = hash
+            .entry("__epoch".to_string())
+            .or_insert_with(|| candidate.clone())
+            .clone();
+        let value = hash.get(field).cloned();
+        let mut values = vec![
+            ScriptValue::Bytes(epoch.to_vec()),
+            ScriptValue::Integer(value.is_some() as i64),
+        ];
+        if let Some(value) = value {
+            values.push(ScriptValue::Bytes(value.to_vec()));
+        }
+        ScriptResult::encode(&ScriptValue::Array(values))
+    }
+
+    /// Store a CacheFS query field only while its captured epoch remains current.
+    async fn fill_query_if_epoch(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        let [key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument("fill requires one key".into()));
+        };
+        let [epoch, field, value, _ttl] = request.args.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "fill requires four arguments".into(),
+            ));
+        };
+        let field = std::str::from_utf8(field)
+            .map_err(|error| CacheError::InvalidArgument(error.to_string()))?;
+        let _guard = self.enter_set();
+        if !self.set_delay.is_zero() {
+            tokio::time::sleep(self.set_delay).await;
+        }
+        self.purge_expired_key(key).await;
+        let mut hashes = self.hashes.write().await;
+        let Some(hash) = hashes.get_mut(key) else {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        };
+        if hash.get("__epoch").map(Bytes::as_ref) != Some(epoch.as_ref()) {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        }
+        hash.insert(field.to_string(), value.clone());
+        ScriptResult::encode(&ScriptValue::Integer(1))
     }
 }
 

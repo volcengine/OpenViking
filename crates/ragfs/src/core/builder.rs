@@ -188,6 +188,7 @@ pub async fn build_configured_stack(
                 CacheOperation::ZrangeByScore,
                 CacheOperation::Zrem,
                 CacheOperation::Unlink,
+                CacheOperation::ExecuteScript,
             ])
             .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
     }

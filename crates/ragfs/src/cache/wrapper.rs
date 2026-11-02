@@ -2,7 +2,9 @@
 
 use super::envelope::QueryCacheEnvelope;
 use super::CacheMetrics;
-use crate::cache_runtime::{CacheError, CacheResult, CacheRuntime};
+use crate::cache_runtime::{
+    CacheError, CacheResult, CacheRuntime, ScriptDefinition, ScriptRequest, ScriptValue,
+};
 use crate::core::filesystem::{apply_read_dir_options, normalize_prefix_path};
 use crate::core::internal_names::is_hidden_internal_name;
 use crate::core::{
@@ -21,9 +23,49 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::warn;
+use uuid::Uuid;
 use xxhash_rust::xxh3::xxh3_128;
 
 const QUERY_INDEX_GC_TRIGGER_THRESHOLD: u64 = 64;
+const PENDING_EPOCH_TTL_MS: u64 = 300_000;
+const BEGIN_FILL_SCRIPT_ID: &str = "ragfs.cache.query.begin_fill.v1";
+const FILL_SCRIPT_ID: &str = "ragfs.cache.query.fill_if_epoch.v1";
+const BEGIN_FILL_SCRIPT: &str = r#"
+local epoch = redis.call("HGET", KEYS[1], "__epoch")
+local created = 0
+if not epoch then
+    epoch = ARGV[2]
+    created = 1
+    redis.call("HSET", KEYS[1], "__epoch", epoch)
+end
+local value = redis.call("HGET", KEYS[1], ARGV[1])
+local ttl = tonumber(ARGV[3])
+if ttl > 0 then
+    redis.call("PEXPIRE", KEYS[1], ttl)
+elseif created == 1 then
+    redis.call("PEXPIRE", KEYS[1], ARGV[4])
+end
+if value then return { epoch, 1, value } end
+return { epoch, 0 }
+"#;
+const FILL_SCRIPT: &str = r#"
+if redis.call("HGET", KEYS[1], "__epoch") ~= ARGV[1] then return 0 end
+redis.call("HSET", KEYS[1], ARGV[2], ARGV[3])
+local ttl = tonumber(ARGV[4])
+if ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl)
+else redis.call("PERSIST", KEYS[1]) end
+return 1
+"#;
+const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
+    ScriptDefinition {
+        id: BEGIN_FILL_SCRIPT_ID,
+        redis_lua: BEGIN_FILL_SCRIPT,
+    },
+    ScriptDefinition {
+        id: FILL_SCRIPT_ID,
+        redis_lua: FILL_SCRIPT,
+    },
+];
 
 /// A provider-independent read-through filesystem cache.
 ///
@@ -54,6 +96,11 @@ impl CachedFileSystem {
         runtime: Arc<CacheRuntime>,
         service_name: String,
     ) -> Self {
+        for definition in SCRIPT_DEFINITIONS {
+            runtime
+                .register_script(*definition)
+                .expect("CacheFS script registration must succeed");
+        }
         Self {
             backend,
             runtime,
@@ -99,23 +146,79 @@ impl CachedFileSystem {
         }
     }
 
-    /// Store one query cache field and register its bucket in the provider index.
-    async fn cache_hash_put(&self, key: &str, field: &str, value: Bytes) -> bool {
+    /// Capture the bucket epoch and atomically recheck one missed field.
+    async fn begin_query_fill(
+        &self,
+        key: &str,
+        field: &str,
+    ) -> CacheResult<(Bytes, Option<Bytes>)> {
         let started = Instant::now();
-        let result = self.runtime.hset(key, field, value).await;
-        self.metrics.put(started.elapsed());
-        if result.is_err() {
-            self.metrics.error();
-            return false;
+        let result = self
+            .runtime
+            .execute_script(ScriptRequest {
+                script_id: BEGIN_FILL_SCRIPT_ID.to_string(),
+                keys: vec![key.to_string()],
+                args: vec![
+                    Bytes::copy_from_slice(field.as_bytes()),
+                    Bytes::from(Uuid::new_v4().to_string()),
+                    Bytes::from(self.default_ttl_ms().to_string()),
+                    Bytes::from(PENDING_EPOCH_TTL_MS.to_string()),
+                ],
+            })
+            .await
+            .and_then(|result| result.decode());
+        self.metrics.get(started.elapsed());
+        match result {
+            Ok(ScriptValue::Array(values)) => match values.as_slice() {
+                [ScriptValue::Bytes(epoch), ScriptValue::Integer(0)] => {
+                    Ok((Bytes::copy_from_slice(epoch), None))
+                }
+                [ScriptValue::Bytes(epoch), ScriptValue::Integer(1), ScriptValue::Bytes(value)] => {
+                    Ok((
+                        Bytes::copy_from_slice(epoch),
+                        Some(Bytes::copy_from_slice(value)),
+                    ))
+                }
+                _ => Err(CacheError::InvalidData(
+                    "CacheFS begin-fill script returned invalid data".to_string(),
+                )),
+            },
+            Ok(value) => Err(CacheError::InvalidData(format!(
+                "CacheFS begin-fill script returned {value:?}"
+            ))),
+            Err(error) => Err(error),
         }
+        .inspect_err(|_| self.metrics.error())
+    }
 
+    /// Store one query field only when its captured epoch is still current.
+    async fn cache_hash_put(&self, key: &str, epoch: Bytes, field: &str, value: Bytes) -> bool {
+        let started = Instant::now();
+        let result = self
+            .runtime
+            .execute_script(ScriptRequest {
+                script_id: FILL_SCRIPT_ID.to_string(),
+                keys: vec![key.to_string()],
+                args: vec![
+                    epoch,
+                    Bytes::copy_from_slice(field.as_bytes()),
+                    value,
+                    Bytes::from(self.default_ttl_ms().to_string()),
+                ],
+            })
+            .await
+            .and_then(|result| result.decode());
+        self.metrics.put(started.elapsed());
+        match result {
+            Ok(ScriptValue::Integer(1)) => {}
+            Ok(ScriptValue::Integer(0)) => return false,
+            Ok(_) | Err(_) => {
+                self.metrics.error();
+                return false;
+            }
+        }
         let expire_at_ms = match self.runtime.default_ttl() {
             Some(ttl) => {
-                if let Err(error) = self.runtime.expire(key, ttl).await {
-                    let _ = error;
-                    self.metrics.error();
-                    return false;
-                }
                 current_time_ms().saturating_add(ttl.as_millis().min(u128::from(u64::MAX)) as u64)
             }
             None => u64::MAX,
@@ -131,6 +234,14 @@ impl CachedFileSystem {
         }
 
         true
+    }
+
+    /// Return the configured cache TTL in milliseconds, or zero when disabled.
+    fn default_ttl_ms(&self) -> u64 {
+        self.runtime
+            .default_ttl()
+            .map(|ttl| ttl.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
     }
 
     /// Delete query cache buckets and remove them from the provider index.
@@ -189,7 +300,14 @@ impl CachedFileSystem {
             Ok(value) => value?,
             Err(_) => return None,
         };
+        self.decode_query(&value, request)
+    }
 
+    /// Decode one query envelope and require an exact request match.
+    fn decode_query<T>(&self, value: &[u8], request: &Value) -> Option<T>
+    where
+        T: DeserializeOwned,
+    {
         let envelope = match QueryCacheEnvelope::<T>::decode(&value) {
             Ok(envelope) if envelope.request_matches(request) => envelope,
             Ok(_) => return None,
@@ -203,13 +321,20 @@ impl CachedFileSystem {
     }
 
     /// Store one query payload in its HASH bucket.
-    async fn fill_query<T>(&self, bucket_key: &str, query_hash: &str, request: Value, payload: &T)
-    where
+    async fn fill_query<T>(
+        &self,
+        bucket_key: &str,
+        epoch: Bytes,
+        query_hash: &str,
+        request: Value,
+        payload: &T,
+    ) where
         T: Serialize,
     {
         match QueryCacheEnvelope::new(request, payload).encode() {
             Ok(value) => {
-                self.cache_hash_put(bucket_key, query_hash, value).await;
+                self.cache_hash_put(bucket_key, epoch, query_hash, value)
+                    .await;
             }
             Err(_) => self.metrics.error(),
         }
@@ -238,22 +363,28 @@ impl CachedFileSystem {
         self.metrics.query_miss();
 
         let inflight_key = format!("{bucket_key}:{query_hash}");
-        let (inflight, leader) = self.acquire_inflight(&inflight_key).await;
+        let (inflight, _) = self.acquire_inflight(&inflight_key).await;
         let inflight_guard = inflight.lock().await;
 
-        if !leader {
-            if let Some(payload) = self.probe_query(&bucket_key, &query_hash, &request).await {
-                drop(inflight_guard);
-                self.release_inflight(&inflight_key, &inflight).await;
-                return Ok(payload);
-            }
-        }
-
+        let epoch = match self.begin_query_fill(&bucket_key, &query_hash).await {
+            Ok((epoch, Some(value))) => match self.decode_query::<T>(&value, &request) {
+                Some(payload) => {
+                    drop(inflight_guard);
+                    self.release_inflight(&inflight_key, &inflight).await;
+                    return Ok(payload);
+                }
+                None => Some(epoch),
+            },
+            Ok((epoch, None)) => Some(epoch),
+            Err(_) => None,
+        };
         let result = load().await;
         if let Ok(value) = &result {
             self.metrics.backend_fallback();
-            self.fill_query(&bucket_key, &query_hash, request, value)
-                .await;
+            if let Some(epoch) = epoch {
+                self.fill_query(&bucket_key, epoch, &query_hash, request, value)
+                    .await;
+            }
         }
         drop(inflight_guard);
         self.release_inflight(&inflight_key, &inflight).await;

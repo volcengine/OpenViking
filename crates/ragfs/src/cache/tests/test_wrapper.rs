@@ -33,6 +33,17 @@ async fn wait_for_unlink_count(provider: &MemoryMockProvider, expected: u64) {
     );
 }
 
+/// Wait until one delayed cache fill reaches the provider.
+async fn wait_for_set_start(provider: &MemoryMockProvider) {
+    for _ in 0..50 {
+        if provider.max_concurrent_sets() > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("expected a cache fill to reach the provider");
+}
+
 /// Wait until one query index member disappears.
 async fn wait_for_index_member_removed(
     runtime: &Arc<CacheRuntime>,
@@ -92,6 +103,55 @@ async fn query_cache_hits_and_invalidates_after_write() {
         vec!["a.txt", "b.txt"]
     );
     assert_eq!(cached.metrics().snapshot().query_misses, 2);
+}
+
+/// Verifies invalidation prevents an older backend result from restoring stale cache data.
+#[tokio::test]
+async fn invalidation_rejects_an_older_query_fill() {
+    let backend = MemFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.txt", b"a", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let provider = Arc::new(MemoryMockProvider::new().with_set_delay(Duration::from_millis(200)));
+    let runtime = CacheRuntime::memory_with_provider(Arc::clone(&provider));
+    let cached = Arc::new(CachedFileSystem::with_runtime(
+        Box::new(backend),
+        runtime,
+        SERVICE_NAME,
+    ));
+
+    let stale_reader = {
+        let cached = Arc::clone(&cached);
+        tokio::spawn(async move { cached.read_dir("/docs", None, None, None, None).await })
+    };
+    wait_for_set_start(&provider).await;
+
+    let mut buckets = Vec::new();
+    cached.collect_path_change_buckets("/docs/b.txt", &mut buckets);
+    buckets.sort();
+    buckets.dedup();
+    let expected_unlinks = provider.unlink_count() + buckets.len() as u64;
+    cached
+        .write("/docs/b.txt", b"b", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    wait_for_unlink_count(&provider, expected_unlinks).await;
+
+    assert_eq!(
+        sorted_names(stale_reader.await.unwrap().unwrap()),
+        vec!["a.txt"]
+    );
+    assert_eq!(
+        sorted_names(
+            cached
+                .read_dir("/docs", None, None, None, None)
+                .await
+                .unwrap()
+        ),
+        vec!["a.txt", "b.txt"]
+    );
 }
 
 /// Verifies PathLock sidecar files are filtered before query results are cached.

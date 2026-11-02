@@ -233,6 +233,30 @@ static int32_t fixture_unlink(
     return OV_CACHE_STATUS_OK;
 }
 
+/* Return a valid scalar result to advertise atomic script execution. */
+static int32_t fixture_execute_script(
+    void *provider,
+    OvCacheByteSliceV1 script_id,
+    OvCacheByteSliceV1 script_source,
+    const OvCacheByteSliceV1 *keys,
+    size_t keys_len,
+    const OvCacheByteSliceV1 *args,
+    size_t args_len,
+    OvCacheScriptValueV1 *output,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)script_id;
+    (void)script_source;
+    (void)keys;
+    (void)keys_len;
+    (void)args;
+    (void)args_len;
+    (void)error;
+    output->kind = OV_CACHE_SCRIPT_INTEGER;
+    output->integer = 1;
+    return OV_CACHE_STATUS_OK;
+}
+
 OV_CACHE_PROVIDER_EXPORT uint32_t ov_fixture_close_count(void) {
     return atomic_load(&fixture_close_calls);
 }
@@ -255,6 +279,7 @@ static const OvCacheProviderApiV1 FIXTURE_API = {
     .zadd = fixture_zadd,
     .zscan = fixture_zscan,
     .zrem = fixture_zrem,
+    .execute_script = fixture_execute_script,
 #ifndef OV_FIXTURE_NO_UNLINK
     .unlink = fixture_unlink,
 #endif

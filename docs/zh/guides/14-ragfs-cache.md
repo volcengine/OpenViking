@@ -224,7 +224,8 @@ RAGFS 缓存只读查询结果。不再存储旧的路径对象缓存。
 <service_name>:ov:cache:v1:<path_key>:<op>
 ```
 
-HASH field 是 `xxh3_128(canonical_request_json)`。value 是 `QueryCacheEnvelope`，包含：
+每个 bucket 保留 `__epoch` field，用于存储随机版本 token。查询 field 使用
+`xxh3_128(canonical_request_json)`，value 是 `QueryCacheEnvelope`，包含：
 
 - `request`
 - `payload`
@@ -267,7 +268,11 @@ ZSET member 是 bucket key。score 是 `expire_at_ms`。写入发生时，RAGFS 
 ZSCAN <service_name>:ov:cacheidx:v1 MATCH '<service_name>:ov:cache:v1:<path_key>/*:*' COUNT 1000
 ```
 
-命中的后代 bucket 会进入同一批量 `UNLINK` 和 `ZREM`。不保留 generation 兜底逻辑。
+命中的后代 bucket 会进入同一批量 `UNLINK` 和 `ZREM`。
+缓存 miss 后，原子脚本会在回源前取得 `__epoch`。
+另一个脚本只在 epoch 未变化时写入 query field。
+`UNLINK` 成功后会删除 epoch，因此旧查询无法重新写入陈旧数据。
+无 TTL 配置下，未完成回填的 epoch 在 300 秒后过期；成功回填仍永久保留。
 
 典型写入顺序：
 
