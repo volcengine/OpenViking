@@ -1,2 +1,24 @@
-// 模块入口占位，公开能力随迁移补充。
-export {};
+// 模块入口：已定义 props 类型，组件随视图迁入补齐。
+export type {
+  TuiCommandSuggestion,
+  TuiCustomContent,
+  TuiErrorContent,
+  TuiHistoryEntry,
+  TuiJsonContent,
+  TuiLabels,
+  TuiMarkdownContent,
+  TuiProps,
+  TuiQuickAction,
+  TuiRecord,
+  TuiRecordContent,
+  TuiRecordStatus,
+  TuiResourceTreeContent,
+  TuiResourceTreeDetailRow,
+  TuiResourceTreeItem,
+  TuiSearchListContent,
+  TuiSearchResultItem,
+  TuiStatusContent,
+  TuiStatusRow,
+  TuiTextContent,
+  TuiWriteResultContent,
+} from './types.js';

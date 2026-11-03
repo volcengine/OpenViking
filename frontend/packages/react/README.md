@@ -1,6 +1,6 @@
 # @openviking/react
 
-React UI modules for OpenViking applications. The initial scaffold exports `StatusBadge`; business modules have not been migrated.
+React UI modules for OpenViking applications. The initial scaffold exports `StatusBadge`; the seven business modules currently export their public props types while the views are still to be migrated.
 
 This package is private during initial development and is not published to npm. It inherits the repository's AGPL-3.0-only license.
 
@@ -18,8 +18,18 @@ This package is private during initial development and is not published to npm. 
 | [pages](./src/pages/README.md)                                           | 尚无公开入口                                   | 页面组合、数据获取与处理         |
 | [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)           | 仅包内使用                                     | 跨模块 Hook 与纯工具             |
 
-七个业务模块均为占位入口，尚无组件或类型可导入；对应 CSS 入口目前为空样式。`StatusBadge` 是唯一已实现的脚手架示例，可从根入口或 `@openviking/react/components/status-badge` 导入。
+七个业务模块已定义公开的 props 类型，可从各自子路径以 `import type` 消费；组件实现随视图迁入补齐，对应 CSS 入口目前仍为空样式。`StatusBadge` 是唯一已实现的脚手架示例，可从根入口或 `@openviking/react/components/status-badge` 导入。
 组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[pages](./src/pages/README.md) 负责取数、处理业务状态和编排；尚未定义首个页面。
+
+### Props 约定
+
+同一套 props 由不同宿主接入。宿主之间的流程与接口不同，交互与 UI 对齐，因此：
+
+- 组件只接收**已适配的数据**：文件条目、消息、任务、作用域选项都由宿主映射成包内类型，组件不引用任一宿主的数据模型。
+- 状态用受控字段表达，回调只上报意图，不返回业务数据。
+- 文案通过 labels 传入，缺省为英文；动态文案由宿主在接入层映射 i18next 或 Starling。
+- 图标、扩展页签、额外字段、工具栏动作通过插槽或节点传入，组件不绑定第三方 UI 库。
+- 列表型组件按「宿主展开后的行/项」渲染，分页、加载、错误、空态都由宿主提供。
 
 ## 公开入口与样式
 
