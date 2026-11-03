@@ -14,6 +14,8 @@ Use the optional `--instruction` to specify this run's scope, audience, language
 
 The configured [Agent Runtime](../api/23-agent-runtime.md) runs the compilation; local deployments can use the built-in [VikingBot](../concepts/15-vikingbot.md). It reads the sources and Skill under the requesting user's identity, then organizes and writes content in a dedicated agent loop. The task runs asynchronously and returns a `task_id` for checking progress and results.
 
+Image sources reach the model as native tool-result media, so the configured VLM backend must support that request format. A backend that cannot carry an image part inside a tool result stops the compilation with `UNSUPPORTED_MEDIA` before any model request is sent. The `anthropic`, `openai-codex`, and `volcengine` backends support it.
+
 ## Run it in one command
 
 First import the sources and install the Skill using the [LLM Wiki example](02-llm-wiki.md), then run:

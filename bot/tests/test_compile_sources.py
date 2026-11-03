@@ -359,6 +359,43 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
 
 
 @pytest.mark.asyncio
+async def test_volcengine_provider_admits_native_image_sources():
+    """A VolcEngine-backed provider delivers image evidence instead of failing."""
+    from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+    from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+
+    image = Image.new("RGB", (400, 100), "white")
+    ImageDraw.Draw(image).text((10, 30), "RETRY LIMIT: 7", fill="black")
+    output = BytesIO()
+    image.save(output, format="PNG")
+    png = output.getvalue()
+
+    client = SimpleNamespace(
+        stat=AsyncMock(return_value={"size": len(png)}),
+        download_bytes=AsyncMock(return_value=png),
+        read_raw=AsyncMock(return_value=""),
+    )
+    provider = VLMProviderAdapter(
+        VolcEngineVLM(
+            {
+                "provider": "volcengine",
+                "api_key": "key",
+                "api_base": "https://ark.example/v3",
+                "model": "doubao-seed-2-1-lite",
+                "max_tokens": 1024,
+            }
+        ),
+        default_model="doubao-seed-2-1-lite",
+        langfuse_client=SimpleNamespace(),
+    )
+
+    source = await read_source(client, URI, provider)
+    assert source.image is not None
+    assert source.image["type"] == "image_url"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["notes.md", "config.ts"])
 async def test_text_reads_remain_exact_even_without_media_support(runtime, name):
     pipeline, _ = runtime

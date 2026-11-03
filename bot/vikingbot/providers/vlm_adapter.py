@@ -719,6 +719,13 @@ class VLMProviderAdapter(LLMProvider):
                 primary
             ) and cls._backend_supports_tool_result_media(backup)
 
+        # A backend may declare its own native tool-result media support. The
+        # declaration is authoritative: it is the only way a backend can state
+        # that its request format carries media inside a tool result.
+        declared = getattr(vlm, "supports_tool_result_media", None)
+        if callable(declared):
+            return bool(declared())
+
         resolve_provider = getattr(vlm, "resolved_provider", None)
         provider = (
             resolve_provider() if callable(resolve_provider) else getattr(vlm, "provider", "")

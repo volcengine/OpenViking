@@ -203,6 +203,16 @@ class VolcEngineVLM(OpenAIVLM):
             size_bytes=size_bytes,
         )
 
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Return true: the Ark chat API carries image parts inside tool results.
+
+        VolcEngine's OpenAI-compatible endpoint accepts an ``image_url`` content
+        part in a ``role="tool"`` message, so Compile can deliver native image
+        evidence to this backend. OpenAI's own Chat Completions API restricts
+        tool messages to text parts, so that backend stays excluded.
+        """
+        return True
+
     async def get_media_completion_async(
         self,
         *,

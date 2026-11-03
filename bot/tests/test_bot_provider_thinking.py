@@ -44,6 +44,47 @@ def test_vlm_adapter_exposes_only_native_tool_result_media_backends():
     assert mixed_failover.supports_tool_result_media() is False
 
 
+def test_vlm_adapter_honors_backend_tool_result_media_declaration():
+    """A backend that declares its own capability decides the result."""
+
+    declared_true = VLMProviderAdapter(
+        SimpleNamespace(provider="openai", supports_tool_result_media=lambda: True),
+        default_model="gpt-4o",
+        langfuse_client=SimpleNamespace(),
+    )
+    assert declared_true.supports_tool_result_media() is True
+
+    declared_false = VLMProviderAdapter(
+        SimpleNamespace(provider="anthropic", supports_tool_result_media=lambda: False),
+        default_model="claude-sonnet",
+        langfuse_client=SimpleNamespace(),
+    )
+    assert declared_false.supports_tool_result_media() is False
+
+
+def test_volcengine_backend_delivers_native_tool_result_media():
+    """The Ark chat API carries image parts inside tool results."""
+    from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+
+    vlm = VolcEngineVLM(
+        {
+            "provider": "volcengine",
+            "api_key": "key",
+            "api_base": "https://ark.example/v3",
+            "model": "doubao-seed-2-1-lite",
+            "max_tokens": 1024,
+        }
+    )
+    provider = VLMProviderAdapter(
+        vlm,
+        default_model="doubao-seed-2-1-lite",
+        langfuse_client=SimpleNamespace(),
+    )
+
+    assert vlm.supports_tool_result_media() is True
+    assert provider.supports_tool_result_media() is True
+
+
 def test_vlm_adapter_uses_litellm_resolved_provider_for_tool_result_media():
     vlm = OpenVikingLiteLLMVLMProvider(
         {
