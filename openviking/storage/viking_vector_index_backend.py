@@ -3164,7 +3164,12 @@ class VikingVectorIndexBackend:
     ) -> Optional[FilterExpr]:
         targets = [target_dir for target_dir in target_directories or [] if target_dir]
         tenant_filter = self._tenant_filter(ctx, acl_enabled=acl_enabled)
-        if tenant_filter and not acl_enabled and self._targets_within_visible_roots(ctx, targets):
+        if (
+            tenant_filter
+            and not acl_enabled
+            and ctx.data_access is None
+            and self._targets_within_visible_roots(ctx, targets)
+        ):
             # The target scopes are already narrower than the tenant-visible
             # roots. Keep account isolation, but avoid recursively evaluating
             # the broader path scopes as an additional filter.
@@ -3205,6 +3210,8 @@ class VikingVectorIndexBackend:
             return None
 
         account_filter = Eq("account_id", ctx.account_id)
+        if ctx.data_access is not None:
+            account_filter = And([account_filter, ctx.data_access.query_filter()])
         if not acl_enabled:
             return And(
                 [

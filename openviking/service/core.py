@@ -572,6 +572,7 @@ class OpenVikingService:
             user_count,
         )
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+        self._viking_fs.set_global_policy_service(self._privacy_config_service.global_policies)
         self._privacy_sanitizer = PrivacySanitizer(self._privacy_config_service)
         self._viking_fs.set_privacy_sanitizer(self._privacy_sanitizer)
         self._resource_processor.set_privacy_sanitizer(self._privacy_sanitizer)
