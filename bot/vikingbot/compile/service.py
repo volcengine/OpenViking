@@ -915,8 +915,11 @@ class BotCompileService:
                 wiki_uri_resolver=resolve_wiki_uri,
             )
             submit_tool = registry.get("submit_wiki_bundle")
+            source_skips: list[str] = []
             source_batches = (
-                await self._prepare_source_batches(client, request.from_, files=source_files)
+                await self._prepare_source_batches(
+                    client, request.from_, files=source_files, warnings=source_skips
+                )
                 if registry.get("spawn") is not None
                 else None
             )
@@ -1007,6 +1010,7 @@ class BotCompileService:
             )
             warnings = list(getattr(submit_tool, "warnings", []))
             warnings.extend(getattr(registry.get("wait_subagents"), "failures", []))
+            warnings.extend(source_skips)
             preserve_workspace = preserve_workspace or bool(warnings)
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
@@ -1136,7 +1140,10 @@ class BotCompileService:
             for start in range(0, len(ordered), 8):
                 uris = ordered[start : start + 8]
                 contents = await asyncio.gather(
-                    *(read_source(client, uri, pipeline.model.provider) for uri in uris),
+                    *(
+                        read_source(client, uri, pipeline.model.provider, pipeline.warnings)
+                        for uri in uris
+                    ),
                     return_exceptions=True,
                 )
                 readable = []
@@ -1600,7 +1607,12 @@ class BotCompileService:
         return sorted(files)
 
     async def _prepare_source_batches(
-        self, client: VikingClient, roots: list[str], *, files: list[str] | None = None
+        self,
+        client: VikingClient,
+        roots: list[str],
+        *,
+        files: list[str] | None = None,
+        warnings: list[str] | None = None,
     ) -> list[list[CompileSourceRange]]:
         """Read selected files (or inventory roots) eight at a time; read errors propagate."""
         sources: list[tuple[str, str | CompileSourceRange]] = []
@@ -1608,7 +1620,7 @@ class BotCompileService:
         for start in range(0, len(ordered), 8):
             uris = ordered[start : start + 8]
             contents = await asyncio.gather(
-                *(read_source(client, uri, self.agent_loop.provider) for uri in uris)
+                *(read_source(client, uri, self.agent_loop.provider, warnings) for uri in uris)
             )
             sources.extend(zip(uris, contents, strict=True))
         return pack_source_batches(sources, self.limits)

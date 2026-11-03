@@ -576,6 +576,18 @@ async def test_runtime_memory_child_fetches_native_image_from_reference(runtime,
 
 
 @pytest.mark.asyncio
+async def test_a_skipped_image_is_reported(runtime):
+    """A skipped image leaves a note instead of passing unnoticed."""
+    pipeline, _ = runtime
+    pipeline.model.provider.supports_tool_result_media.return_value = False
+    warnings: list[str] = []
+    source = await read_source(pipeline.client, URI, pipeline.model.provider, warnings)
+    assert source.image is None
+    assert len(warnings) == 1
+    assert URI in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_a_provider_without_media_support_sends_the_request_without_media(runtime):
     """A provider that cannot carry the image still gets the request."""
     pipeline, png = runtime

@@ -64,8 +64,14 @@ class CompileSourceRange:
         return len(self.content) + len(self.context)
 
 
-async def read_source(client, uri, provider) -> str | CompileSourceRange:
-    """Keep text reads intact; consume image sources through multi-read's native reader."""
+async def read_source(
+    client, uri, provider, warnings: list[str] | None = None
+) -> str | CompileSourceRange:
+    """Keep text reads intact; consume image sources through multi-read's native reader.
+
+    ``warnings`` collects a note for every image the provider cannot deliver, so
+    a skipped image is reported instead of passing unnoticed.
+    """
     if get_media_type(urlsplit(uri).path, None) != "image":
         return await client.read_raw(uri)
     if VikingMultiReadTool._media_kind(uri) != "image":
@@ -76,6 +82,10 @@ async def read_source(client, uri, provider) -> str | CompileSourceRange:
         # The provider cannot carry the pixels, but the source still belongs in
         # the evidence trail. Keep it as a cited reference so the compilation
         # continues instead of failing on evidence nobody can deliver.
+        if warnings is not None:
+            warnings.append(
+                f"Image evidence skipped, the provider cannot deliver image content: {uri}"
+            )
         return CompileSourceRange(uri, 0, 0, 0, 0, IMAGE_EVIDENCE_SKIPPED)
     result = await VikingMultiReadTool._read_image(client, uri)
     if not result["success"]:
