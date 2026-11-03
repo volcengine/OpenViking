@@ -5,10 +5,10 @@ export default defineConfig({
   source: {
     entry: {
       index: './src/index.ts',
-      tree: './src/patterns/file-tree/file-tree.ts',
-      preview: './src/patterns/file-preview/file-preview.ts',
-      console: './src/patterns/command-console/command-console.ts',
-      'viking-bot': './src/patterns/viking-bot/viking-bot.ts',
+      tree: './src/components/file-tree/file-tree.ts',
+      preview: './src/components/file-preview/file-preview.ts',
+      console: './src/components/command-console/command-console.ts',
+      'viking-bot': './src/components/viking-bot/viking-bot.ts',
     },
   },
   lib: [{ format: 'esm', dts: true }],

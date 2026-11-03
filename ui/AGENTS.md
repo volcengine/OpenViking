@@ -5,17 +5,17 @@
 ## 模块与依赖
 
 - `ui/` 是独立 npm workspace。依赖操作在此作用域执行，维护自身锁文件；新增 UI 能力不要求把仓库根目录、Studio、产品文档或 SDK 合并为一个 workspace。
-- 组件库承载可复用的展示与交互，应用通过数据、异步回调和必要的渲染插槽接入。请求、鉴权、路由、账号作用域和业务缓存由应用侧 Adapter 负责；用小接口隐藏内部状态，避免把内部 setter/ref 整批暴露给调用者。
+- `components/` 承载可复用的展示与交互，通过 props 接收视图数据、状态、事件回调和必要的渲染插槽。数据获取、响应处理及业务编排由上层页面或应用侧 Adapter 负责；用小接口隐藏内部状态，避免把内部 setter/ref 整批暴露给调用者。
 - 新增依赖、图标和资源必须能在公开环境安装与使用。内部 SDK、Starling、私有 IconBox、内部 CDN 和内部路径不进入公共库或示例。迁入已有代码时检查其授权及第三方许可证，沿用仓库既定许可证，变更许可证属于独立决策。
 - React/ReactDOM 保持为 peer dependencies，并从库构建中 externalize；消费者使用自己的 React 实例。重型编辑器、媒体和浏览器专用依赖按需加载，模块导入和服务端渲染阶段应能在没有 `window`、`document` 的环境运行。
 - 包导出、类型声明、CSS 和附属资源一起构成消费接口。新增 worker 或其他资源时，验证发布产物及消费端 URL，避免把某个构建工具的源码导入语法直接暴露给消费者。
 
 ## 源码目录
 
-- `packages/react/src/` 按职责分层：`components/` 放通用 UI 组件，`patterns/` 放可复用的组合区块，`layouts/` 放页面骨架，`templates/` 放整页模板；真正跨模块复用的 Hook 和工具分别放 `hooks/`、`utils/`。
-- 每个组件、区块、布局或模板独占一个 kebab-case 目录，入口文件与目录同名。实现、CSS Modules、测试及私有子组件就近放置，例如 `components/status-badge/status-badge.tsx` 和同目录的 `status-badge.module.css`。模块私有的 Hook、类型和工具留在模块内，不提前提升到公共目录。
+- `packages/react/src/components/` 放纯视图组件，包括基础组件和目录树、文件预览、命令控制台、Bot 对话等组合视图，遵循其 [AGENTS.md](./packages/react/src/components/AGENTS.md)。`StatusBadge` 只是脚手架示例，不限定组件的复杂度或粒度。真正跨模块复用的 Hook 和工具分别放 `hooks/`、`utils/`，组件对它们的依赖同样遵守视图层边界。
+- 每个组件独占一个 kebab-case 目录，入口文件与目录同名。实现、CSS Modules、测试及私有子组件就近放置，例如 `components/status-badge/status-badge.tsx` 和同目录的 `status-badge.module.css`。模块私有的 Hook、类型和工具留在模块内，不提前提升到公共目录。
 - `src/index.ts` 统一维护公开导出；移动内部文件时保持消费接口稳定，并同步更新包导出和 Rslib 入口等直接路径引用。
-- 布局与整页模板通过 props、回调和渲染插槽接收数据与内容，不绑定具体路由、请求或业务状态；应用级页面和业务编排留在消费应用，不放进组件库。
+- `packages/react/src/pages/` 为页面组合层，负责组织完整页面，获取数据、处理响应与业务状态，再将视图数据和事件回调传给 `components/`，遵循其 [AGENTS.md](./packages/react/src/pages/AGENTS.md)。当前仅有目录说明与约定，尚无页面实现。依赖方向为页面层使用组件层，组件层不依赖页面层。
 - 目录按实际内容创建，不预建空目录，也不为单个简单模块增加不必要的转发层。
 
 ## 样式与交互
@@ -27,8 +27,8 @@
 
 ## 示例与文档
 
-- 顶部导航以 Guide、Components 和 OpenViking docs 外链为基础。Guide 承载入门、安装、样式与集成说明；Components 承载通用组件。出现实际内容后再增加 Patterns 和 Page templates，分别对应组合区块，以及布局与整页模板；独立 API 栏目在内容需要时再引入。
-- 文档按语言组织在 `docs/docs/en/` 和 `docs/docs/zh/`，各语言内按 `guide/`、`components/`、`patterns/`、`templates/` 分类。布局与整页模板在 Page templates 下分组，不把所有模块都归入 Components。
+- 顶部导航以 Guide、Components 和 OpenViking docs 外链为基础。Guide 承载入门、安装、样式与集成说明；Components 承载基础组件和组合视图。页面组合层出现真实页面后再增加 Pages 文档分类；独立 API 栏目在内容需要时再引入。
+- 文档按语言组织在 `docs/docs/en/` 和 `docs/docs/zh/`，各语言内目前按 `guide/`、`components/` 分类。
 - 英文为默认语言，保留 `/ui/` 下的原有地址；简体中文使用 `/ui/zh/`。新增或修改文档时同步维护两种语言的页面、导航和侧边栏，保持对应页面路径一致，以支持原位语言切换。可运行示例共用 `docs/docs/_demos/`，不要为翻译复制实现；组件文案仍由调用者定制。
 - 模块分类入口指向该分类的 `index.mdx` 概览，而不是首个模块；侧边栏按路由前缀隔离，仅列出当前分类的概览与详情，并按职责分组。新增分类时同时提供真实内容、概览和导航，不创建空栏目或占位页面。
 - 示例从 `@openviking/ui` 的公开导出及样式入口导入，不通过相对路径绕过接口。外部 TSX 示例是可运行代码与源码展示的同一事实源。
