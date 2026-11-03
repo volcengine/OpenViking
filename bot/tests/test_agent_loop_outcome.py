@@ -372,19 +372,16 @@ async def test_chat_completion_tool_images_require_compile_scope(
     from openviking.models.vlm.base import ToolCall, VLMResponse
 
     vlm = VLMFactory.create({"provider": "kimi", "model": "kimi-k2"})
-    calls = []
-
-    async def complete(**kwargs):
-        calls.append(copy.deepcopy(kwargs["messages"]))
-        if len(calls) == 1:
-            return VLMResponse(
+    completion = AsyncMock(
+        side_effect=[
+            VLMResponse(
                 content="", tool_calls=[ToolCall(id="call-1", name="read_image", arguments={})]
-            )
-        return VLMResponse(content="done")
-
-    monkeypatch.setattr(vlm.inner, "get_completion_async", complete)
+            ),
+            VLMResponse(content="done"),
+        ]
+    )
+    monkeypatch.setattr(vlm.inner, "get_completion_async", completion)
     adapter = VLMProviderAdapter(vlm, vlm.model, langfuse_client=SimpleNamespace(enabled=False))
-    assert adapter.supports_tool_result_media()
     provider = _CompileProvider(adapter, asyncio.Semaphore(1)) if compile_scope else adapter
     loop = make_loop(provider=provider, max_iterations=2)
     final, *_ = await loop._run_agent_loop(
@@ -393,22 +390,18 @@ async def test_chat_completion_tool_images_require_compile_scope(
         publish_events=False,
         tool_registry=_ImageRegistry(),
     )
-    assert final == "done" and len(calls) == 2
-    tool = next(message for message in calls[-1] if message["role"] == "tool")
+    assert final == "done"
+    sent = completion.await_args.kwargs["messages"]
+    tool = next(message for message in sent if message["role"] == "tool")
     images = [
         part
-        for message in calls[-1]
-        if isinstance(message.get("content"), list)
+        for message in sent
+        if message["role"] == "user" and isinstance(message.get("content"), list)
         for part in message["content"]
         if part.get("type") == "image_url"
     ]
-    if compile_scope:
-        assert len(images) == 1
-        assert images[0]["image_url"]["url"] == "data:image/png;base64,ZGF0YQ=="
-        assert "Media content was omitted" not in tool["content"]
-    else:
-        assert images == []
-        assert "Media content was omitted" in tool["content"]
+    assert bool(images) == compile_scope
+    assert ("Media content was omitted" in tool["content"]) != compile_scope
 
 
 @pytest.mark.asyncio

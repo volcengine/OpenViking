@@ -278,9 +278,7 @@ class JsonModel:
         if media_bytes and not self.provider.supports_tool_result_media(self.model):
             raise CompileFailure(
                 "UNSUPPORTED_MEDIA",
-                "Compile provider cannot deliver image evidence. The image transport is "
-                "unverified or unsupported; LiteLLM requires a matching provider/model "
-                "route and an image-preserving converter.",
+                "Compile provider cannot send images (check provider/model)",
                 stage=stage,
             )
         if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:

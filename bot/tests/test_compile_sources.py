@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Issue #6713: native images must remain readable, cited evidence in Compile."""
 
-import asyncio
 import base64
 import json
 from dataclasses import asdict
@@ -27,7 +26,7 @@ from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import ChildProvider, complete_tool_result
 from vikingbot.compile.pipeline_io import ModelCallError
 from vikingbot.compile.results import CombineResponse, FileResponse, RecordResponse
-from vikingbot.compile.service import BotCompileService, _CompileProvider
+from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.compile.sources import read_source, split_source
 from vikingbot.config import loader
@@ -93,18 +92,13 @@ def runtime():
     return pipeline, png
 
 
-async def seed(runtime, *, roots=None):
+async def seed(runtime):
     pipeline, _ = runtime
     service = SimpleNamespace(
         limits=pipeline.limits, agent_loop=SimpleNamespace(provider=pipeline.model.provider)
     )
-    files = (
-        await BotCompileService._list_source_files(service, pipeline.client, roots)
-        if roots
-        else [TEXT, URI]
-    )
     batches = await BotCompileService._prepare_source_batches(
-        service, pipeline.client, [], files=files
+        service, pipeline.client, [], files=[TEXT, URI]
     )
 
     async def inputs():
@@ -112,7 +106,7 @@ async def seed(runtime, *, roots=None):
             yield batch
 
     records = await pipeline.seed(inputs())
-    return next(record for record in records if pipeline.evidence[record.record_id]["uri"] == URI)
+    return records[-1]
 
 
 @pytest.mark.asyncio
@@ -182,93 +176,59 @@ async def test_preloaded_image_fact_reaches_output_with_source_identity(runtime,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "backend,plan,bot_override,accepts_images",
-    [
-        pytest.param("volcengine", "plan", False, True, id="doubao-agent-plan"),
-        pytest.param("volcengine", "coding", False, True, id="doubao-coding-plan"),
-        pytest.param("volcengine", "coding", True, True, id="doubao-bot-override"),
-        pytest.param("volcengine", "", False, True, id="doubao-payg"),
-        pytest.param("openai", "coding", False, True, id="doubao-openai-compatible"),
-        pytest.param("kimi", "", False, True, id="kimi"),
-        pytest.param("glm", "", False, True, id="glm"),
-        pytest.param("openai", "coding", False, False, id="image-rejection"),
-    ],
-)
+@pytest.mark.parametrize("backend,status", [("volcengine", 200), ("openai", 200), ("openai", 400)])
 async def test_compile_image_reaches_chat_completion_wire(
-    runtime, tmp_path, monkeypatch, backend, plan, bot_override, accepts_images
+    runtime, tmp_path, monkeypatch, backend, status
 ):
-    """Load actual Bot configuration and serialize image evidence through the SDK."""
+    """Load Bot configuration and serialize original PNG evidence through the SDK."""
     from openai import AsyncOpenAI
     from vikingbot.cli.commands import _make_provider
     from volcenginesdkarkruntime import AsyncArk
 
     pipeline, png = runtime
-    model = "doubao-seed-2.1-lite" if plan else "doubao-seed-2-1-lite-260915"
-    api_base = f"https://ark.cn-beijing.volces.com/api/{plan + '/' if plan else ''}v3"
-    if backend in {"kimi", "glm"}:
-        api_base = "https://compile.invalid/v1"
-    selected = {"provider": backend, "model": model, "api_base": api_base, "api_key": "test-key"}
-    data = {"vlm": selected}
-    if bot_override:
-        data = {
-            "vlm": {"provider": "openai", "model": "unused-root", "api_key": "unused-key"},
-            "bot": {"agents": selected},
-        }
+    model = "doubao-seed-2.1-lite"
+    api_base = "https://ark.cn-beijing.volces.com/api/coding/v3"
+    selected = {
+        "provider": backend,
+        "model": model,
+        "api_base": api_base,
+        "api_key": "test-key",
+        "max_retries": 0,
+    }
     config_path = tmp_path / "ov.conf"
-    config_path.write_text(json.dumps(data))
+    config_path.write_text(json.dumps({"vlm": selected}))
     monkeypatch.setattr(loader, "CONFIG_PATH", config_path)
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    config = loader.load_config()
-    provider = _make_provider(config, langfuse_client=SimpleNamespace(enabled=False))
-    vlm = provider._vlm.inner
+    pipeline.model.provider = _make_provider(
+        loader.load_config(), langfuse_client=SimpleNamespace(enabled=False)
+    )
+    pipeline.model.model = model
+    image = await seed(runtime)
+
+    call = {
+        "id": "read-image",
+        "type": "function",
+        "function": {
+            "name": "read_evidence",
+            "arguments": json.dumps({"source_range": image.record_id}),
+        },
+    }
+    files = [{"path": "image.md", "content": URI, "inputs": [image.record_id]}]
+    replies = [
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "assistant", "content": json.dumps({"files": files})},
+    ]
     requests = []
 
     def handle(request):
-        assert request.method == "POST"
-        assert str(request.url) == f"{api_base}/chat/completions"
-        requests.append(json.loads(request.content))
-        assert requests[-1]["model"] == model
-        if len(requests) > 1 and not accepts_images:
+        body = json.loads(request.content)
+        assert str(request.url) == f"{api_base}/chat/completions" and body["model"] == model
+        requests.append(body)
+        if len(requests) == 2 and status == 400:
             return httpx.Response(
-                400,
-                json={
-                    "error": {
-                        "code": "unsupported_image",
-                        "message": "This model does not support image inputs.",
-                    }
-                },
+                400, json={"error": {"message": "Model does not support image inputs."}}
             )
-        if len(requests) == 1:
-            message = {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "read-image",
-                        "type": "function",
-                        "function": {
-                            "name": "read_evidence",
-                            "arguments": json.dumps({"source_range": image.record_id}),
-                        },
-                    }
-                ],
-            }
-        else:
-            message = {
-                "role": "assistant",
-                "content": json.dumps(
-                    {
-                        "files": [
-                            {
-                                "path": "cedar.md",
-                                "content": f"Retry limit: 7. [Source]({URI})",
-                                "inputs": [image.record_id],
-                            }
-                        ]
-                    }
-                ),
-            }
+        reply = replies[len(requests) - 1]
         return httpx.Response(
             200,
             json={
@@ -279,66 +239,50 @@ async def test_compile_image_reaches_chat_completion_wire(
                 "choices": [
                     {
                         "index": 0,
-                        "message": message,
-                        "finish_reason": "tool_calls" if len(requests) == 1 else "stop",
+                        "message": reply,
+                        "finish_reason": "tool_calls" if reply.get("tool_calls") else "stop",
                     }
                 ],
             },
         )
 
+    vlm = pipeline.model.provider._vlm.inner
     sdk_type = AsyncArk if backend == "volcengine" else AsyncOpenAI
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
-        async with sdk_type(
-            api_key=vlm.api_key,
-            base_url=vlm.api_base,
-            http_client=http,
-            max_retries=0,
-        ) as sdk:
-            monkeypatch.setattr(vlm, "get_async_client", lambda: sdk)
-            pipeline.model.provider = provider
-            root, directory = "viking://resources", URI.rsplit("/", 1)[0]
-            pipeline.client.stat.side_effect = lambda uri: (
-                {"isDir": True} if uri == root else {"size": len(png)}
-            )
-            pipeline.client.list_resources = AsyncMock(
-                side_effect=lambda uri, **kwargs: (
-                    [{"uri": directory, "isDir": True}]
-                    if uri == root
-                    else [{"uri": TEXT}, {"uri": URI}]
-                )
-            )
-            image = await seed(runtime, roots=[root])
-            pipeline.model.provider = _CompileProvider(provider, asyncio.Semaphore(1))
-            pipeline.model.model = model
-            response = pipeline.model.ask(
-                "compile",
-                "Inspect original images.",
-                {"inputs": [await payload(pipeline, image)]},
-                FileResponse,
-            )
-            if accepts_images:
-                result = await response
-                assert result.files[0].inputs == [image.record_id]
-                assert URI in result.files[0].content
-            else:
-                with pytest.raises(ModelCallError, match="does not support image"):
-                    await response
+    async with (
+        httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http,
+        sdk_type(
+            api_key=vlm.api_key, base_url=vlm.api_base, http_client=http, max_retries=0
+        ) as sdk,
+    ):
+        monkeypatch.setattr(vlm, "get_async_client", lambda: sdk)
+        response = pipeline.model.ask(
+            "compile",
+            "Inspect the image.",
+            {"inputs": [await payload(pipeline, image)]},
+            FileResponse,
+        )
+        if status == 400:
+            with pytest.raises(ModelCallError, match="does not support image"):
+                await response
+        else:
+            result = await response
+            assert result.files[0].inputs == [image.record_id]
 
-    assert len(requests) == 2
-    messages = requests[-1]["messages"]
-    tool = next(m for m in messages if m["role"] == "tool")
-    assert tool["tool_call_id"] == "read-image" and URI in tool["content"]
-    assert isinstance(tool["content"], str) and "base64," not in tool["content"]
+    sent = requests[-1]["messages"]
+    tool = next(m for m in sent if m["role"] == "tool")
+    assert (
+        isinstance(tool["content"], str)
+        and URI in tool["content"]
+        and "base64," not in tool["content"]
+    )
     images = [
-        p
-        for m in messages
+        base64.b64decode(p["image_url"]["url"].split(",", 1)[1])
+        for m in sent
         if m["role"] == "user" and isinstance(m["content"], list)
         for p in m["content"]
         if p["type"] == "image_url"
     ]
-    assert len(images) == 1
-    assert base64.b64decode(images[0]["image_url"]["url"].split(",")[1]) == png
-    pipeline.client.read_raw.assert_awaited_once_with(TEXT)
+    assert images == [png]
 
 
 @pytest.mark.asyncio

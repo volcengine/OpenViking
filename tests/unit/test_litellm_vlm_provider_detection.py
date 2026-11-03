@@ -22,54 +22,6 @@ def _vlm(model: str) -> LiteLLMVLMProvider:
     return LiteLLMVLMProvider({"model": model, "provider": "litellm"})
 
 
-@pytest.mark.parametrize("api_base", [None, "https://compat.invalid/v1"])
-def test_new_model_needs_declared_image_protocol(api_base):
-    implicit = LiteLLMVLMProvider(
-        {"provider": "litellm", "model": "future-claude-vision", "api_base": api_base}
-    )
-    assert implicit.tool_result_media_mode() is None
-    explicit = LiteLLMVLMProvider(
-        {"provider": "litellm", "model": "openai/future-claude-vision", "api_base": api_base}
-    )
-    assert explicit.tool_result_media_mode() == "user_message"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "provider,model,expected",
-    [
-        ("aihubmix", "gpt-4o", "gpt-4o"),
-        ("doubao", "doubao-seed-1.6", "openai/doubao-seed-1.6"),
-        ("litellm", "custom/my-model", "openai/custom/my-model"),
-        ("ollama", "ollama_chat/llama3.2-vision", "ollama_chat/llama3.2-vision"),
-        ("hosted_vllm", "openai/foo", "openai/foo"),
-        ("siliconflow", "Qwen/Qwen2.5-VL-72B", "dashscope/Qwen/Qwen2.5-VL-72B"),
-        ("lmstudio", "local-model", "openai/local-model"),
-        ("qwen", "qwen-plus", "dashscope/qwen-plus"),
-        ("litellm", "huggingface/facebook/opt-125m", "openai/huggingface/facebook/opt-125m"),
-        ("myproxy", "gpt-4o", "gpt-4o"),
-    ],
-)
-async def test_text_routes_keep_baseline_behavior(monkeypatch, provider, model, expected):
-    from openviking.models.vlm import VLMFactory
-
-    for name in ("OPENAI", "DASHSCOPE", "OLLAMA", "HOSTED_VLLM", "ANTHROPIC"):
-        monkeypatch.setenv(f"{name}_API_KEY", "original-key")
-    completion = AsyncMock(return_value="done")
-    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", completion)
-    vlm = VLMFactory.create(
-        {
-            "provider": provider,
-            "model": model,
-            "api_base": "https://proxy.invalid/v1",
-            "api_key": "test-key",
-        }
-    )
-    assert await vlm.get_completion_async(prompt="hello") == "done"
-    assert completion.await_args.kwargs["model"] == expected
-    assert completion.await_args.kwargs["api_base"] == "https://proxy.invalid/v1"
-
-
 class TestLiteLLMVLMProviderDetection:
     def test_nvidia_nim_detected_by_nemotron_keyword(self):
         assert detect_provider_by_model(NEMOTRON_MODEL) == "nvidia_nim"

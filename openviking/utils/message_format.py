@@ -33,8 +33,8 @@ def tool_images_as_user_messages(messages: List[Dict[str, Any]]) -> List[Dict[st
         call_id = message.get("tool_call_id")
         tool_name = message.get("name") or "<unknown>"
         if not isinstance(call_id, str) or not call_id:
-            raise ValueError(f"Cannot deliver images from tool {tool_name}: invalid tool_call_id")
-        source = f"tool {tool_name} (call {call_id})"
+            raise ValueError(f"Tool {tool_name}: invalid tool_call_id")
+        source = f"{tool_name}[{call_id}]"
         text = []
         image_number = 0
         for part in content:
@@ -51,10 +51,7 @@ def tool_images_as_user_messages(messages: List[Dict[str, Any]]) -> List[Dict[st
                 text.append(part["text"])
             else:
                 part_type = part.get("type") if isinstance(part, dict) else type(part).__name__
-                raise ValueError(
-                    f"Cannot deliver images from {source}: unsupported or malformed "
-                    f"part type {part_type!r}; expected text/image_url parts"
-                )
+                raise ValueError(f"Tool result {source}: invalid {part_type!r} part")
         converted.append({**message, "content": "\n".join(text)})
     if images:
         converted.append({"role": "user", "content": images})
