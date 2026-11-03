@@ -321,6 +321,13 @@ pub struct FlushWorker {
     metrics: Arc<MultiWriteMetricsSnapshot>,
 }
 
+struct FlushRetryState {
+    events: Vec<PendingEvent>,
+    attempts: u32,
+    started_at: Instant,
+    retry_at: Instant,
+}
+
 impl FlushWorker {
     /// Create a worker using one metadata store and persistence provider.
     pub(crate) fn new(
@@ -351,81 +358,185 @@ impl FlushWorker {
         mut receiver: mpsc::UnboundedReceiver<PendingEvent>,
         pending_events: Arc<AtomicUsize>,
     ) {
-        let mut retry_batch = Vec::new();
-        let mut retry_attempts = 0;
-        let mut retry_started_at = None;
-        let mut retry_delay = Duration::ZERO;
+        let mut retries = HashMap::<String, FlushRetryState>::new();
+        let mut receiver_open = true;
         loop {
-            let fresh_batch = retry_batch.is_empty();
-            let mut batch = if fresh_batch {
-                let Some(first) = receiver.recv().await else {
+            if retries.is_empty() {
+                if !receiver_open {
                     break;
-                };
-                vec![first]
-            } else {
-                tokio::time::sleep(retry_delay).await;
-                let elapsed =
-                    retry_started_at.map_or(Duration::ZERO, |start: Instant| start.elapsed());
-                if Self::retry_exhausted(retry_attempts, elapsed) {
-                    let dropped = retry_batch.len();
-                    pending_events.fetch_sub(dropped, Ordering::Relaxed);
-                    self.store.record_worker_error(MultiWriteWorker::Flush);
-                    error!(
-                        retry_attempts,
-                        elapsed_ms = elapsed.as_millis(),
-                        event_count = dropped,
-                        "multi-write account initialization retry limit exhausted"
-                    );
-                    retry_batch.clear();
-                    retry_attempts = 0;
-                    retry_started_at = None;
-                    retry_delay = Duration::ZERO;
-                    continue;
                 }
-                std::mem::take(&mut retry_batch)
-            };
-            if fresh_batch {
+                let Some(first) = receiver.recv().await else {
+                    receiver_open = false;
+                    continue;
+                };
+                let mut batch = vec![first];
                 while let Ok(event) = receiver.try_recv() {
                     batch.push(event);
                 }
-            }
-            let attempted = batch.len();
-            let retry = self.flush_batch(batch).await;
-            pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
-            if retry.is_empty() {
-                retry_attempts = 0;
-                retry_started_at = None;
-                retry_delay = Duration::ZERO;
+                self.flush_fresh_events(batch, &mut retries, &pending_events)
+                    .await;
                 continue;
             }
 
-            let started_at = retry_started_at.get_or_insert_with(Instant::now);
-            let elapsed = started_at.elapsed();
-            if Self::retry_exhausted(retry_attempts, elapsed) {
-                pending_events.fetch_sub(retry.len(), Ordering::Relaxed);
-                self.store.record_worker_error(MultiWriteWorker::Flush);
-                error!(
-                    retry_attempts,
-                    elapsed_ms = elapsed.as_millis(),
-                    event_count = retry.len(),
-                    "multi-write account initialization retry limit exhausted"
-                );
-                retry_attempts = 0;
-                retry_started_at = None;
-                retry_delay = Duration::ZERO;
-                continue;
+            let (account, retry_at) = retries
+                .iter()
+                .min_by_key(|(_, state)| state.retry_at)
+                .map(|(account, state)| (account.clone(), state.retry_at))
+                .expect("retry map is not empty");
+            if receiver_open {
+                tokio::select! {
+                    event = receiver.recv() => {
+                        match event {
+                            Some(first) => {
+                                let mut batch = vec![first];
+                                while let Ok(event) = receiver.try_recv() {
+                                    batch.push(event);
+                                }
+                                self.flush_fresh_events(batch, &mut retries, &pending_events)
+                                    .await;
+                            }
+                            None => receiver_open = false,
+                        }
+                    }
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(retry_at)) => {
+                        let state = retries.remove(&account).expect("retry account exists");
+                        self.flush_retry(&account, state, &mut retries, &pending_events)
+                            .await;
+                    }
+                }
+            } else {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(retry_at)).await;
+                let state = retries.remove(&account).expect("retry account exists");
+                self.flush_retry(&account, state, &mut retries, &pending_events)
+                    .await;
             }
-
-            retry_attempts += 1;
-            retry_delay = Self::retry_delay(retry_attempts, elapsed);
-            debug!(
-                retry_attempts,
-                delay_ms = retry_delay.as_millis(),
-                event_count = retry.len(),
-                "multi-write account initialization deferred by PathLock contention"
-            );
-            retry_batch = retry;
         }
+    }
+
+    async fn flush_fresh_events(
+        &mut self,
+        events: Vec<PendingEvent>,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let mut ready = Vec::new();
+        for event in events {
+            if let Some(state) = retries.get_mut(&event.account_id) {
+                state.events.push(event);
+            } else {
+                ready.push(event);
+            }
+        }
+        let attempted = ready.len();
+        let retry = self.flush_batch(ready).await;
+        pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
+
+        let mut retry_by_account = HashMap::<String, Vec<PendingEvent>>::new();
+        for event in retry {
+            retry_by_account
+                .entry(event.account_id.clone())
+                .or_default()
+                .push(event);
+        }
+        for (account, events) in retry_by_account {
+            self.schedule_retry(&account, events, 0, Instant::now(), retries, pending_events);
+        }
+    }
+
+    async fn flush_retry(
+        &mut self,
+        account: &str,
+        state: FlushRetryState,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let elapsed = state.started_at.elapsed();
+        if Self::retry_exhausted(state.attempts, elapsed) {
+            Self::drop_exhausted_retry(
+                &self.store,
+                account,
+                state.events.len(),
+                state.attempts,
+                elapsed,
+                pending_events,
+            );
+            return;
+        }
+        let attempted = state.events.len();
+        let retry = self.flush_batch(state.events).await;
+        pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
+        if retry.is_empty() {
+            return;
+        }
+        self.schedule_retry(
+            account,
+            retry,
+            state.attempts,
+            state.started_at,
+            retries,
+            pending_events,
+        );
+    }
+
+    fn schedule_retry(
+        &self,
+        account: &str,
+        events: Vec<PendingEvent>,
+        attempts: u32,
+        started_at: Instant,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let elapsed = started_at.elapsed();
+        if Self::retry_exhausted(attempts, elapsed) {
+            Self::drop_exhausted_retry(
+                &self.store,
+                account,
+                events.len(),
+                attempts,
+                elapsed,
+                pending_events,
+            );
+            return;
+        }
+
+        let attempts = attempts + 1;
+        let delay = Self::retry_delay(attempts, elapsed);
+        debug!(
+            account,
+            retry_attempts = attempts,
+            delay_ms = delay.as_millis(),
+            event_count = events.len(),
+            "multi-write account initialization deferred by PathLock contention"
+        );
+        retries.insert(
+            account.to_string(),
+            FlushRetryState {
+                events,
+                attempts,
+                started_at,
+                retry_at: Instant::now() + delay,
+            },
+        );
+    }
+
+    fn drop_exhausted_retry(
+        store: &MetadataStore,
+        account: &str,
+        event_count: usize,
+        retry_attempts: u32,
+        elapsed: Duration,
+        pending_events: &AtomicUsize,
+    ) {
+        pending_events.fetch_sub(event_count, Ordering::Relaxed);
+        store.record_worker_error(MultiWriteWorker::Flush);
+        error!(
+            account,
+            retry_attempts,
+            elapsed_ms = elapsed.as_millis(),
+            event_count,
+            "multi-write account initialization retry limit exhausted"
+        );
     }
 
     /// Flush one batch while returning events blocked by transient PathLock contention.
