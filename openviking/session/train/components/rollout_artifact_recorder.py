@@ -831,22 +831,12 @@ def _safe_fragment(value: Any) -> str:
 
 
 def _build_commit_messages(rollout: Rollout) -> list[dict[str, Any]]:
-    """Build the full message list as sent to session.commit.
-
-    Matches the message assembly in session_commit._commit_one:
-      [case_spec] + rollout.messages + [evaluation]
-    """
+    """Record exactly the normalized message list sent to session.commit."""
     from openviking.session.train.components.session_commit import (
-        _case_spec_message_to_request,
-        _evaluation_message_to_request,
-        _message_to_request,
+        _build_commit_messages as build_commit_messages,
     )
 
-    messages: list[dict[str, Any]] = [_case_spec_message_to_request(rollout)]
-    for msg in rollout.messages:
-        messages.append(_message_to_request(msg))
-    messages.append(_evaluation_message_to_request(rollout))
-    return messages
+    return build_commit_messages(rollout)
 
 
 def _format_commit_messages_markdown(messages: list[dict[str, Any]]) -> str:

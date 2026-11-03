@@ -182,6 +182,7 @@ class MemoryOperationSkipCode(str, Enum):
     AMBIGUOUS_TARGET = "ambiguous_target"
     NO_WRITABLE_TARGET = "no_writable_target"
     PAGE_ID_TYPE_MISMATCH = "page_id_type_mismatch"
+    INVALID_URI_TEMPLATE_VARS = "invalid_uri_template_vars"
 
 
 class MemoryOperationSkip(BaseModel):
@@ -217,6 +218,7 @@ class MemoryField(BaseModel):
     description: str = Field("", description="Field description")
     merge_op: MergeOp = Field(MergeOp.PATCH, description="Merge strategy")
     init_value: Optional[str] = Field(None, description="Initial value for this field")
+    required: bool = Field(True, description="Required in complete Python SDK create/set calls")
 
 
 class MemoryTypeSchema(BaseModel):

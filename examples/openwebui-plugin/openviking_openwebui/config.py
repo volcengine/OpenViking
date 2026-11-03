@@ -31,14 +31,22 @@ class Settings:
     bind: str
     timeout_seconds: float
 
+    def _split_bind(self) -> tuple[str, str]:
+        if self.bind.startswith("["):
+            host, closing, suffix = self.bind[1:].partition("]")
+            if closing and ":" in host and (not suffix or suffix.startswith(":")):
+                return host, suffix[1:]
+        host, _, port = self.bind.partition(":")
+        return host, port
+
     @property
     def bind_host(self) -> str:
-        host, _, _ = self.bind.partition(":")
+        host, _ = self._split_bind()
         return host or "0.0.0.0"
 
     @property
     def bind_port(self) -> int:
-        _, _, port = self.bind.partition(":")
+        _, port = self._split_bind()
         try:
             return int(port) if port else 8765
         except ValueError:

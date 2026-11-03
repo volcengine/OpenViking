@@ -703,6 +703,8 @@ class CollectionAdapter(ABC):
         offset: int = 0,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         output_fields: Optional[list[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[list[str]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
@@ -719,6 +721,8 @@ class CollectionAdapter(ABC):
             index_name=self._index_name,
             keywords=keywords,
             query=query,
+            mode=mode,
+            fields=fields,
             limit=limit,
             offset=offset,
             filters=compiled_filter,

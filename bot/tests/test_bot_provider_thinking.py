@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
@@ -183,7 +184,9 @@ async def test_vlm_adapter_volcengine_stream_respects_optional_max_tokens(
                     usage=None,
                 )
 
-            return chunks()
+            response = MagicMock()
+            response.__aenter__.return_value = chunks()
+            return response
 
     vlm = SimpleNamespace(
         provider="volcengine",

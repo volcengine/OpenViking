@@ -183,17 +183,17 @@ for (const [mode, modeConfig] of [
   }
 
   const toolCall = { type: "toolCall", id: "call-filter", name: "lookup", arguments: { value: "secret" } };
-  const toolPart = {
+  const toolPart = (value = "secret") => ({
     type: "tool", tool_id: "call-filter", tool_name: "lookup",
-    tool_status: "running", tool_input: { value: "secret" },
-  };
-  for (const [name, rules, texts, expected] of [
+    tool_status: "running", tool_input: { value },
+  });
+  for (const [name, rules, texts, expected, toolValue] of [
     ["whole-turn drop", ["d/secret/"], ["Remember secret for later."], null],
     ["whole-turn keep miss", ["k/approved/"], ["Remember other settings."], null],
-    ["conversation-only matching", ["d/secret/"], ["Remember safe settings."], "Remember safe settings."],
-    ["conversation-only substitution", ["s/secret/secret-safe/"], ["Remember secret for later."], "Remember secret-safe for later."],
+    ["text-only matching", ["d/secret/"], ["Remember safe settings."], "Remember safe settings."],
+    ["substitution", ["s/secret/secret-safe/"], ["Remember secret for later."], "Remember secret-safe for later.", "secret-safe"],
     ["aggregate keep", ["k/approved/"], ["Remember approved settings.", "Keep this detail too."], "Remember approved settings.\n\nKeep this detail too."],
-    ["empty text removal", ["s/^.*$//s"], ["Remember secret for later."], ""],
+    ["empty text removal", ["s/^.*$//s"], ["Remember secret for later."], "", ""],
   ]) {
     test(`${mode} capture uses ${name} for mixed text and tools`, () => {
       const branch = [{ role: "assistant", content: [
@@ -203,13 +203,13 @@ for (const [mode, modeConfig] of [
       const { payloads } = extractBranchCapturePayloads(branch, 0, { ...modeConfig, captureFilters: rules });
       assert.deepEqual(payloads, expected === null ? [] : [{
         role: "assistant",
-        parts: [...(expected ? [{ type: "text", text: expected }] : []), toolPart],
+        parts: [...(expected ? [{ type: "text", text: expected }] : []), toolPart(toolValue)],
       }]);
       assert.deepEqual(branch, original);
     });
   }
 
-  test(`${mode} capture preserves tool-only input and output with conversation rules`, () => {
+  test(`${mode} capture substitutes in tool-only input and output without judging them`, () => {
     const branch = [
       { role: "assistant", content: [toolCall] },
       { role: "toolResult", toolCallId: "call-filter", toolName: "lookup", content: "secret" },
@@ -218,10 +218,10 @@ for (const [mode, modeConfig] of [
       ...modeConfig, captureFilters: ["s/secret/[removed]/", "d/secret/", "k/approved/"],
     });
     assert.deepEqual(payloads, [
-      { role: "assistant", parts: [toolPart] },
+      { role: "assistant", parts: [toolPart("[removed]")] },
       { role: "user", parts: [{
         type: "tool", tool_id: "call-filter", tool_name: "lookup",
-        tool_status: "completed", tool_output: "secret",
+        tool_status: "completed", tool_output: "[removed]",
       }] },
     ]);
   });

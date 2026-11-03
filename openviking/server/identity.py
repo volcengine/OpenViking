@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, List, Optional
@@ -17,8 +18,12 @@ from openviking_cli.session.user_id import UserIdentifier
 class Role(str):
     """Role type — supports built-in roles and custom plugin-defined roles.
 
-    Built-in roles (root/admin/user) are available as class attributes.
-    Custom roles can be registered via ``Role.register(name, rank)``.
+    Built-in roles (root/admin/user/global) are available as class attributes.
+    Custom roles can be registered via ``Role.register(name)``.
+
+    Token downgrade checks use an explicit allowlist table, not privilege
+    ranks. GLOBAL is orthogonal to ADMIN/USER: a GLOBAL identity may only
+    carry a GLOBAL token, and no other role may carry a GLOBAL token.
 
     Role comparison is string-based, so ``Role.ROOT == "root"`` and
     ``Role("custom") == "custom"`` both work.
@@ -27,30 +32,73 @@ class Role(str):
     ROOT = "root"
     ADMIN = "admin"
     USER = "user"
+    GLOBAL = "global"
 
-    # Privilege ranking for role-downgrade detection.
-    # Higher rank => more privilege.
-    _BUILTIN_RANK: dict[str, int] = {
-        USER: 0,
-        ADMIN: 1,
-        ROOT: 2,
+    # Token downgrade allowlist: key = the role currently registered for the
+    # identity, value = the token roles that identity may still present.
+    # Authorization is a direct lookup here; there is no privilege rank.
+    _TOKEN_ROLE_ALLOWLIST: dict[str, frozenset[str]] = {
+        ROOT: frozenset({ROOT, ADMIN, USER}),
+        ADMIN: frozenset({ADMIN, USER}),
+        USER: frozenset({USER}),
+        GLOBAL: frozenset({GLOBAL}),
     }
-    _CUSTOM_RANK: dict[str, int] = {}
 
     @classmethod
-    def register(cls, name: str, rank: int) -> None:
-        """Register a custom role with a privilege rank.
+    def register(
+        cls,
+        name: str,
+        rank: int | None = None,
+        *,
+        allowed_token_roles: Iterable[str] | None = None,
+    ) -> None:
+        """Register a custom role and its token-downgrade allowlist.
 
         Args:
             name: Role identifier string.
-            rank: Privilege rank — higher = more privilege.
-        """
-        cls._CUSTOM_RANK[name] = rank
+            rank: Deprecated and ignored. Accepted only so existing callers
+                that pass a legacy rank keep working.
+            allowed_token_roles: Token roles this custom role may present.
+                The role itself is always included. When omitted, the custom
+                role may only present its own role.
 
-    @property
-    def rank(self) -> int:
-        """Return the privilege rank for this role."""
-        return self._BUILTIN_RANK.get(self, self._CUSTOM_RANK.get(self, 0))
+        The allowlist is stored in the same table used for built-in roles, so
+        authorization never compares privilege ranks.
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError("Custom role name must be a non-empty string")
+        if name in (cls.ROOT, cls.ADMIN, cls.USER, cls.GLOBAL):
+            raise ValueError("Built-in roles cannot be registered as custom roles")
+        if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool)):
+            raise ValueError("Custom role rank must be an integer")
+        if allowed_token_roles is None:
+            allowed_token_roles = {name}
+        else:
+            # A registered role must always be able to present its own token.
+            allowed_token_roles = {*allowed_token_roles, name}
+        cls._TOKEN_ROLE_ALLOWLIST[name] = frozenset(allowed_token_roles)
+
+    @classmethod
+    def parse(cls, value: object) -> Role:
+        """Validate a role before it enters an identity or request context.
+
+        Construction remains string-compatible. Only enabled built-in roles
+        and explicitly registered custom roles may become internal identities.
+        """
+        if not isinstance(value, str) or value not in cls._TOKEN_ROLE_ALLOWLIST:
+            raise ValueError("Unknown or inactive identity role")
+        return cls(value)
+
+    def allows_token_role(self, authorized_role: str) -> bool:
+        """Check a saved authorization role against this registered role.
+
+        This preserves legacy token compatibility, not operation permissions.
+        The decision is a direct allowlist lookup keyed by the registered role;
+        GLOBAL is orthogonal to the other roles and never crosses over.
+        """
+        authorized = self.parse(authorized_role)
+        allowed = self._TOKEN_ROLE_ALLOWLIST.get(str(self), frozenset())
+        return authorized in allowed
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Role):
@@ -61,6 +109,15 @@ class Role(str):
 
     def __hash__(self) -> int:
         return hash(str(self))
+
+
+# Roles that may be assigned when creating an account user. ROOT stays
+# control-plane only; GLOBAL is creation-only and is never a role-change target.
+ACCOUNT_USER_CREATION_ROLES: tuple[Role, ...] = (Role.USER, Role.ADMIN, Role.GLOBAL)
+
+# Roles an existing account user may be changed to. GLOBAL identities are
+# created explicitly by ROOT and cannot be promoted or demoted in place.
+ACCOUNT_USER_ASSIGNABLE_ROLES: tuple[Role, ...] = (Role.USER, Role.ADMIN)
 
 
 class AuthMode(str, Enum):
@@ -81,11 +138,17 @@ class ResolvedIdentity:
     role: Role
     account_id: Optional[str] = None
     user_id: Optional[str] = None
+    # API-key snapshots provide resolved groups (including empty). Trusted
+    # plugins may supply asserted groups; absent groups use the local registry.
+    group_ids: tuple[str, ...] | None = None
     # True when this identity was minted from an OAuth-issued bearer token;
     # downstream checks (e.g. ROOT-requires-explicit-tenant headers) can skip
     # rules that target raw API-key auth, since OAuth claims already pin
     # account/user.
     from_oauth: bool = False
+
+    def __post_init__(self) -> None:
+        self.role = Role.parse(self.role)
 
 
 @dataclass
@@ -111,6 +174,9 @@ class RequestContext:
     # Trusted background workers may maintain derived content without replaying
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
+
+    def __post_init__(self) -> None:
+        self.role = Role.parse(self.role)
 
     @property
     def account_id(self) -> str:

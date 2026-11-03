@@ -1,8 +1,14 @@
+import json
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from openai import AsyncOpenAI
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+from volcenginesdkarkruntime import AsyncArk
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm import FailoverVLM, MultiCredentialVLM, OpenAIVLM, VolcEngineVLM
 
 
@@ -23,7 +29,9 @@ class FakeCompletions:
                     raise chunk
                 yield chunk
 
-        return generate()
+        response = MagicMock()
+        response.__aenter__.return_value = generate()
+        return response
 
 
 def stream_chunk(
@@ -48,7 +56,14 @@ def stream_chunk(
 
 
 def attach_client(vlm, completions: FakeCompletions) -> None:
-    vlm.get_async_client = lambda: SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    async def post(path, *, body, options, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return await completions.create(**body, extra_headers=options.get("headers"))
+
+    vlm.get_async_client = lambda: SimpleNamespace(
+        chat=SimpleNamespace(completions=completions), post=post
+    )
 
 
 def make_adapter(vlm, default_model: str) -> VLMProviderAdapter:
@@ -112,13 +127,16 @@ async def test_vlm_adapter_streams_openai_content_deltas():
 
 @pytest.mark.asyncio
 async def test_vlm_adapter_streams_with_credential_failover_before_first_delta():
-    primary_completions = FakeCompletions(error=RuntimeError("status 429: rate limit"))
+    primary_completions = FakeCompletions(
+        error=ModelError(ModelErrorKind.RATE_LIMIT_ERROR, "Rate limit exceeded")
+    )
     backup_completions = FakeCompletions(chunks=[stream_chunk("backup", finish_reason="stop")])
     primary = VolcEngineVLM(
         {
             "provider": "volcengine",
             "model": "primary-model",
             "api_key": "primary-key",
+            "max_retries": 0,
         }
     )
     backup = VolcEngineVLM(
@@ -126,6 +144,8 @@ async def test_vlm_adapter_streams_with_credential_failover_before_first_delta()
             "provider": "volcengine",
             "model": "backup-model",
             "api_key": "backup-key",
+            "thinking": True,
+            "reasoning_effort": "low",
         }
     )
     attach_client(primary, primary_completions)
@@ -149,6 +169,7 @@ async def test_vlm_adapter_streams_with_credential_failover_before_first_delta()
     assert events[-1].response.content == "backup"
     assert len(primary_completions.calls) == 1
     assert backup_completions.calls[0]["model"] == "backup-model"
+    assert backup_completions.calls[0]["reasoning_effort"] == "low"
     assert credentials.active_credential_id == "backup"
 
 
@@ -178,7 +199,10 @@ async def test_vlm_adapter_streams_with_legacy_primary_backup_failover():
 @pytest.mark.asyncio
 async def test_credential_stream_does_not_replay_after_a_visible_delta():
     primary_completions = FakeCompletions(
-        chunks=[stream_chunk("partial"), RuntimeError("status 429: rate limit")]
+        chunks=[
+            stream_chunk("partial"),
+            ModelError(ModelErrorKind.RATE_LIMIT_ERROR, "Rate limit exceeded"),
+        ]
     )
     backup_completions = FakeCompletions(chunks=[stream_chunk("duplicate", finish_reason="stop")])
     primary = OpenAIVLM({"provider": "openai", "model": "primary-model", "api_key": "primary-key"})
@@ -202,4 +226,51 @@ async def test_credential_stream_does_not_replay_after_a_visible_delta():
     assert events[0].content == "partial"
     assert events[-1].type == "response"
     assert events[-1].response.finish_reason == "error"
+    assert len(primary_completions.calls) == 1
     assert backup_completions.calls == []
+
+
+@pytest.mark.parametrize(
+    "backend,client_type", [(OpenAIVLM, AsyncOpenAI), (VolcEngineVLM, AsyncArk)]
+)
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
+@pytest.mark.asyncio
+async def test_bot_stream_temperature_defaults_on_the_wire(backend, client_type, temperature):
+    bodies = []
+
+    def send(request):
+        bodies.append(json.loads(request.content))
+        chunk = {"choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]}
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
+        )
+
+    vlm = backend(
+        {
+            "model": "fixed-model",
+            "api_key": "test-key",
+            **({"temperature": temperature} if temperature != "omitted" else {}),
+        }
+    )
+    async with client_type(
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(send)),
+    ) as client:
+        vlm.get_async_client = lambda: client
+        events = [
+            event
+            async for event in make_adapter(vlm, "routed-model").chat_stream(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+        ]
+    assert events[-1].response.content == "ok"
+    assert len(bodies) == 1
+    assert bodies[0]["stream"] is True
+    if temperature is None or temperature == "omitted":
+        assert "temperature" not in bodies[0]
+    else:
+        assert bodies[0]["temperature"] == temperature

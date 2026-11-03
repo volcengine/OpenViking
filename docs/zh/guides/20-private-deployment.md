@@ -4,13 +4,13 @@ description: 使用 Viking 私有交付包，从配置预览、VikingDB 部署�
 
 # 企业私有化部署
 
-<p><VPButton text="联系我们获取部署物料" href="https://github.com/volcengine/OpenViking/blob/main/README_CN.md#%E5%95%86%E4%B8%9A%E7%89%88%E6%9C%AC" /></p>
+<p><VPButton text="联系我们获取部署物料" href="https://github.com/volcengine/OpenViking/blob/main/docs/repository/README_CN.md#%E5%95%86%E4%B8%9A%E7%89%88%E6%9C%AC" /></p>
 
 通过部署物料，在自己的 Kubernetes 集群中安装 VikingDB 和 OpenViking。开始前，请先完成[部署前检查](19-deployment-checklist.md)。Python、Docker 和开源 Helm 安装见[服务端部署](03-deployment.md)。
 
 ## 1. 获取物料并同步镜像
 
-部署物料需要先申请：在 [README 商业版本](https://github.com/volcengine/OpenViking/blob/main/README_CN.md#%E5%95%86%E4%B8%9A%E7%89%88%E6%9C%AC)登记邮箱，审核通过后，安装包下载链接和试用 License 会发到登记邮箱。
+部署物料需要先申请：在 [README 商业版本](https://github.com/volcengine/OpenViking/blob/main/docs/repository/README_CN.md#%E5%95%86%E4%B8%9A%E7%89%88%E6%9C%AC)登记邮箱，审核通过后，安装包下载链接和试用 License 会发到登记邮箱。
 
 解压后核对 `bin/ovadmin`、`viking-docs/` 与交付清单。安装包只含 CLI 和文档，运行镜像要按 `vikinglist` 另外下载，再导入客户 Registry。镜像已同步到 Registry 时跳过本节。
 

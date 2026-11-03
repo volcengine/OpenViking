@@ -26,26 +26,6 @@ use uuid::Uuid;
 const GREP_CACHE_FILE_CONCURRENCY: usize = 8;
 const GENERATION_PUT_CONCURRENCY: usize = 8;
 
-/// Namespace prepended to every provider key owned by one wrapper.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheNamespace {
-    value: String,
-}
-
-impl CacheNamespace {
-    /// Create a namespace from a mount-, account-, or application-specific value.
-    pub fn new(value: impl Into<String>) -> Self {
-        Self {
-            value: value.into(),
-        }
-    }
-
-    /// Return the namespace text.
-    pub fn as_str(&self) -> &str {
-        &self.value
-    }
-}
-
 /// A provider-independent read-through filesystem cache.
 ///
 /// Construction is explicit. RAGFS does not install this wrapper in the
@@ -53,7 +33,7 @@ impl CacheNamespace {
 pub struct CachedFileSystem {
     backend: Box<dyn FileSystem>,
     runtime: Arc<CacheRuntime>,
-    namespace: CacheNamespace,
+    service_name: String,
     policy: CachePolicy,
     metrics: Arc<CacheMetrics>,
     operation_lock: RwLock<()>,
@@ -68,22 +48,22 @@ impl CachedFileSystem {
     pub fn with_runtime(
         backend: Box<dyn FileSystem>,
         runtime: Arc<CacheRuntime>,
-        namespace: CacheNamespace,
+        service_name: impl Into<String>,
         policy: CachePolicy,
     ) -> Self {
-        Self::build(backend, runtime, namespace, policy)
+        Self::build(backend, runtime, service_name.into(), policy)
     }
 
     fn build(
         backend: Box<dyn FileSystem>,
         runtime: Arc<CacheRuntime>,
-        namespace: CacheNamespace,
+        service_name: String,
         policy: CachePolicy,
     ) -> Self {
         Self {
             backend,
             runtime,
-            namespace,
+            service_name,
             policy,
             metrics: Arc::new(CacheMetrics::default()),
             operation_lock: RwLock::new(()),
@@ -1010,8 +990,8 @@ impl CachedFileSystem {
     fn object_key(&self, kind: &str, path: &str) -> String {
         let normalized = normalize_path(path);
         format!(
-            "ragfs:v1:{}:{}:{:016x}",
-            self.namespace.as_str(),
+            "{}:ov:cache:v1:{}:{:016x}",
+            self.service_name,
             kind,
             stable_hash(normalized.as_bytes())
         )

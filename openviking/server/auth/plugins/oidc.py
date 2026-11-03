@@ -242,7 +242,7 @@ class OIDCAuthPlugin(AuthPlugin):
             if self._jwks_uri:
                 return self._jwks_uri
 
-            discovery_url = f"{self._config.issuer}{_DISCOVERY_PATH}"
+            discovery_url = f"{self._config.issuer.rstrip('/')}{_DISCOVERY_PATH}"
             logger.info("Performing OIDC discovery at %s", discovery_url)
             try:
                 async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
@@ -351,11 +351,6 @@ class OIDCAuthPlugin(AuthPlugin):
             self._config.issuer,
             self._effective_audience,
         )
-
-    def requires_api_key_manager(self) -> bool:
-        """OIDC does not map external identities to admin roles, so no
-        APIKeyManager is needed. Admin API access is gated by role checks."""
-        return False
 
     def can_skip_api_key_for_bot_proxy(self) -> bool:
         """OIDC does not declare bot-proxy compatibility until VikingBot

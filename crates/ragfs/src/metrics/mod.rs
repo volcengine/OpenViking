@@ -2,9 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::core::stats::DURATION_BUCKET_BOUNDS_NS;
 use crate::core::{Error, FilesystemStats, FsOperation, Result};
 use crate::lock::metrics::LockMetrics;
+
+pub(crate) mod duration;
 
 /// One metric series, identified by its name and bounded labels.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +69,9 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
                 1.0,
             ));
         }
+        if stats.count == 0 {
+            continue;
+        }
         metrics.push(RagfsMetric {
             name: "ragfs_operation_duration_seconds".into(),
             labels: [
@@ -75,7 +79,7 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
                 ("operation".into(), operation.as_str().into()),
             ].into(),
             value: RagfsMetricValue::Histogram {
-                bucket_bounds: DURATION_BUCKET_BOUNDS_NS.to_vec(),
+                bucket_bounds: stats.duration_bucket_bounds_ns.clone(),
                 bucket_counts: stats.duration_bucket_counts.to_vec(),
                 count: stats.count,
                 sum: stats.total_time_ns,
@@ -125,9 +129,34 @@ pub(crate) fn cache_metrics(stats: crate::cache::CacheMetricsSnapshot) -> Vec<Ra
     metrics
 }
 
-/// Convert the single lock manager's snapshot into unlabeled metric records.
+/// Convert the single lock manager's snapshot into bounded metric records.
 pub(crate) fn lock_metrics(stats: LockMetrics) -> Vec<RagfsMetric> {
     let mut metrics = Vec::new();
+    let scan = stats.descendant_scan.snapshot().into_iter().next();
+    if let Some(acquire) = &stats.redis_acquire {
+        metrics.push(RagfsMetric::counter(
+            "lock_redis_slow_acquisitions_total",
+            &[],
+            stats.redis_slow_acquisitions,
+            1.0,
+        ));
+        for point in acquire.snapshot() {
+            metrics.push(RagfsMetric {
+                name: "lock_redis_acquire_duration_seconds".into(),
+                labels: point
+                    .attributes()
+                    .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+                    .collect(),
+                value: RagfsMetricValue::Histogram {
+                    bucket_bounds: point.bounds().map(|bound| bound as u64).collect(),
+                    bucket_counts: point.bucket_counts().collect(),
+                    count: point.count(),
+                    sum: point.sum(),
+                    scale: 1e-9,
+                },
+            });
+        }
+    }
     for (name, value) in [
         ("lock_active", stats.active_lock_count),
         ("lock_waiting", stats.waiting_lock_count),
@@ -142,13 +171,28 @@ pub(crate) fn lock_metrics(stats: LockMetrics) -> Vec<RagfsMetric> {
     for (name, value) in [
         ("lock_conflicts_total", stats.conflict_count),
         ("lock_stale_leases_released_total", stats.stale_leases_released),
-        ("lock_descendant_scans_total", stats.descendant_scan_count),
     ] {
         metrics.push(RagfsMetric::counter(name, &[], value as u64, 1.0));
     }
     metrics.push(RagfsMetric::counter(
-        "lock_descendant_scan_duration_seconds_total", &[], stats.descendant_scan_duration_ns, 1e-9,
+        "lock_descendant_scans_total", &[], scan.as_ref().map_or(0, |point| point.count()), 1.0,
     ));
+    metrics.push(RagfsMetric::counter(
+        "lock_descendant_scan_duration_seconds_total", &[], scan.as_ref().map_or(0, |point| point.sum()), 1e-9,
+    ));
+    if let Some(scan) = scan {
+        metrics.push(RagfsMetric {
+            name: "lock_descendant_scan_duration_seconds".into(),
+            labels: BTreeMap::new(),
+            value: RagfsMetricValue::Histogram {
+                bucket_bounds: scan.bounds().map(|bound| bound as u64).collect(),
+                bucket_counts: scan.bucket_counts().collect(),
+                count: scan.count(),
+                sum: scan.sum(),
+                scale: 1e-9,
+            },
+        });
+    }
     metrics
 }
 

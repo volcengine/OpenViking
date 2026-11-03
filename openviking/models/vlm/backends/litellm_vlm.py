@@ -16,9 +16,9 @@ import litellm
 from litellm import acompletion, completion
 from litellm.types.utils import all_litellm_params
 
+from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
-from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -286,17 +286,21 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         thinking: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": sanitize_openai_messages(messages),
-            "temperature": self.temperature,
+            **({"temperature": self.temperature} if self.temperature is not None else {}),
             "timeout": self.timeout,
+            "num_retries": 0,
         }
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
@@ -408,6 +412,9 @@ class LiteLLMVLMProvider(VLMBase):
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                     "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                    "completion_tokens_details": getattr(
+                        response.usage, "completion_tokens_details", None
+                    ),
                 }
 
             return VLMResponse(
@@ -426,11 +433,18 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         model = self._resolve_model(self.model or "gpt-4o-mini")
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         return self._build_kwargs(
-            model, kwargs_messages, tools, tool_choice, thinking=thinking, max_tokens=max_tokens
+            model,
+            kwargs_messages,
+            tools,
+            tool_choice,
+            thinking=thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def _build_vision_kwargs(
@@ -454,6 +468,7 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs_messages = [{"role": "user", "content": content}]
         return self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
+    @model_error_boundary
     def get_completion(
         self,
         prompt: str = "",
@@ -471,17 +486,16 @@ class LiteLLMVLMProvider(VLMBase):
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
-        return retry_sync(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="LiteLLM VLM completion",
-        )
+        return _call()
 
+    @model_error_boundary
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -490,10 +504,17 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(
-            prompt, thinking, tools, tool_choice, messages, max_tokens=max_tokens
+            prompt,
+            thinking,
+            tools,
+            tool_choice,
+            messages,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
         # 用 tracer.info 打印请求（人类可读格式）
         tracer.info(
@@ -507,17 +528,16 @@ class LiteLLMVLMProvider(VLMBase):
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="LiteLLM VLM async completion",
-        )
+        return await _call()
 
+    @model_error_boundary
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -535,17 +555,16 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
-        return retry_sync(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="LiteLLM VLM vision completion",
-        )
+        return _call()
 
+    @model_error_boundary
     async def get_vision_completion_async(
         self,
         prompt: str = "",
@@ -563,16 +582,14 @@ class LiteLLMVLMProvider(VLMBase):
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="LiteLLM VLM async vision completion",
-        )
+        return await _call()
 
     def _update_token_usage_from_response(
         self,
@@ -583,10 +600,14 @@ class LiteLLMVLMProvider(VLMBase):
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            completion_details = getattr(response.usage, "completion_tokens_details", None)
             self.update_token_usage(
                 model_name=self.model or "unknown",
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 duration_seconds=duration_seconds,
+                prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
+                completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
             )

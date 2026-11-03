@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Check local section links against IDs in built VitePress HTML, not guessed slugs.
+"""Check local links and section IDs against the built VitePress output.
 
 Run after docs:build. DOCS_BASE must match the build's base path.
-External URLs, text fragments, and non-HTML assets are outside this check.
+External URLs and browser text fragments are outside this check. Local assets must exist.
 """
 
 import argparse
@@ -45,13 +45,11 @@ def check(dist, base):
     for filename, page in pages.items():
         for href in page.links:
             url = urlsplit(href)
-            if url.scheme or url.netloc or not url.fragment:
+            if url.scheme or url.netloc or (not url.path and not url.fragment):
                 continue
             # Browser text fragments do not refer to element IDs. A preceding
             # element fragment still needs to exist (e.g. #heading:~:text=...).
             fragment = unquote(url.fragment.split(":~:text=", 1)[0])
-            if not fragment:
-                continue
             target = unquote(url.path)
             if target.startswith("/"):
                 if not target.startswith(base):
@@ -65,20 +63,23 @@ def check(dist, base):
                 target = filename
             target = posixpath.normpath(target)
             if Path(target).suffix not in ("", ".html"):
+                checked += 1
+                if not (dist / target).is_file():
+                    errors.append(f"{filename}: {href} (local asset not found)")
                 continue
             candidates = [target, target + ".html", posixpath.normpath(posixpath.join(target, "index.html"))]
             resolved = next((candidate for candidate in candidates if candidate in pages), None)
             checked += 1
             if resolved is None:
                 errors.append(f"{filename}: {href} (target HTML not found)")
-            elif fragment not in pages[resolved].ids:
+            elif fragment and fragment not in pages[resolved].ids:
                 errors.append(f"{filename}: {href} (ID {fragment!r} missing in {resolved})")
-    print(f"Checked {checked} local section links across {len(pages)} built HTML pages.")
+    print(f"Checked {checked} local links and section anchors across {len(pages)} built HTML pages.")
     if errors:
         print("\n".join(errors))
-        print(f"Found {len(errors)} broken section links.")
+        print(f"Found {len(errors)} broken local links.")
         return 1
-    print("Built section-link checks passed.")
+    print("Built link and anchor checks passed.")
     return 0
 
 

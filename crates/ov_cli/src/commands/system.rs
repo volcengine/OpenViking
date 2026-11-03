@@ -8,12 +8,11 @@ use serde_json::json;
 
 pub async fn wait(
     client: &HttpClient,
-    timeout: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let response: serde_json::Value = client
-        .post("/api/v1/system/wait", &json!({ "timeout": timeout }))
+        .post("/api/v1/system/wait", &json!({}))
         .await?;
     output_success(&response, output_format, compact);
     Ok(())
@@ -78,28 +77,6 @@ pub async fn consistency(
     } else {
         output_success(&response, output_format, compact);
     }
-    Ok(())
-}
-
-pub async fn backend_sync_status(
-    client: &HttpClient,
-    uri: &str,
-    output_format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let response: serde_json::Value = client.backend_sync_status(uri).await?;
-    output_success(&response, output_format, compact);
-    Ok(())
-}
-
-pub async fn backend_sync_retry(
-    client: &HttpClient,
-    uri: &str,
-    output_format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let response: serde_json::Value = client.backend_sync_retry(uri).await?;
-    output_success(&response, output_format, compact);
     Ok(())
 }
 

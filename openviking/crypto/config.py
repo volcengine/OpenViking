@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.exceptions import ConfigError
-from openviking.crypto.providers import create_root_key_provider
+from openviking.crypto.providers import create_root_key_provider, decode_inline_root_key
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -60,8 +60,22 @@ def _validate_local_provider_config(config: Dict[str, Any]) -> List[str]:
     """Validate Local Provider configuration."""
     errors = []
     local_config = config.get("local", {})
-    key_file_path = local_config.get("key_file", "~/.openviking/master.key")
+    key_file_path = local_config.get("key_file")
+    root_key = local_config.get("root_key")
 
+    if key_file_path is not None and root_key is not None:
+        errors.append(
+            "encryption.local.root_key and encryption.local.key_file are mutually exclusive"
+        )
+        return errors
+    if root_key is not None:
+        try:
+            decode_inline_root_key(root_key)
+        except ConfigError as exc:
+            errors.append(str(exc))
+        return errors
+    if key_file_path is None:
+        key_file_path = "~/.openviking/master.key"
     if not key_file_path:
         errors.append("encryption.local.key_file is required")
         return errors

@@ -1,47 +1,25 @@
-# OpenCode Plugin
+# OpenCode
 
 Give [OpenCode](https://opencode.ai/) cross-project and cross-session long-term memory plus indexed repository context. Once installed, every conversation automatically recalls relevant memories and captures new content through OpenCode plugin hooks, while model-callable tools come from the same OpenViking stdio MCP proxy used by the Claude Code and Codex memory plugins.
 
 Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
-
-## Prerequisites
-
-- [OpenCode](https://opencode.ai/) 1.15.7+ or 2.0.15+
-- Node.js 18+
-- An OpenViking HTTP server
-- An OpenViking API key when your server requires authentication
-
-Start your OpenViking server first:
-
-```bash
-openviking-server --config ~/.openviking/ov.conf
-```
-
-In another terminal, check the service:
-
-```bash
-curl http://localhost:1933/health
-```
-
 ## Install
+
+Requirements: [OpenCode](https://opencode.ai/) 1.15.7+ or 2.0.15+, Node.js 18+, and an OpenViking HTTP server — verify with `curl http://localhost:1933/health`. You also need an OpenViking API key when the server requires authentication.
 
 ### One-line installer (recommended)
 
-OpenCode shares the unified installer with Claude Code and Codex. It asks for your language (English/中文), which harnesses to install, the download source, and your OpenViking credentials; every step is idempotent—re-running it is entirely safe.
+OpenCode shares the unified installer with Claude Code and Codex. It asks which harnesses to install and for your OpenViking credentials; every step is idempotent—re-running it is entirely safe.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness opencode
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-In regions where GitHub is hard to reach, run the same installer from the Volcengine TOS mirror (or pick "TOS mirror" at the download-source prompt):
+The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
-```
-
-The installer registers the npm plugin (or a local file plugin on the TOS channel), writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
+Once installed, start a new OpenCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ### Manual npm install
 
@@ -60,7 +38,9 @@ opencode
 
 If `~/.config/opencode/opencode.json` already exists, do not overwrite it; only merge `"@openviking/opencode-plugin"` into the existing `plugin` array. OpenCode downloads the npm package at startup, and the plugin registers its MCP server automatically.
 
-OpenCode 2 uses the same package. It calls `setup()`, while OpenCode 1 calls `server()`. OpenCode 2 normalizes `"plugin"` to `"plugins"`, so the installer continues to write the v1/v2-compatible `"plugin"` key; do not rewrite an existing config just for v2. There is no OpenCode skill to install.
+OpenCode 2 uses the same package. It calls `setup()`, while OpenCode 1 calls `server()`. OpenCode 2 normalizes `"plugin"` to `"plugins"`, so the installer continues to write the v1/v2-compatible `"plugin"` key; do not rewrite an existing config just for v2.
+
+The plugin also brings its own skills, so there is nothing extra to install: `openviking-memory`, `openviking-skills`, and `ov-experience-memory`, which tell the model when to use which OpenViking tool. OpenCode 1 gets them through the plugin's `config` hook, which adds the plugin's `skills/` directory to `skills.paths`; OpenCode 2 registers that directory with `skill.transform`. The skills come only with the plugin's OpenViking MCP server: they are left out in hook-only mode and when you disable `mcp.openviking`.
 
 On OpenCode 2, the plugin sets its MCP server to `codemode: false`, so tools remain directly available as `openviking_*` instead of being folded into Code Mode. OpenCode 2 has no plugin toast API, so service availability notices are written to the plugin log only.
 
@@ -117,7 +97,6 @@ Behavior knobs live in the `plugin` section of `~/.openviking/ovcli.conf`, besid
     "recallTokenBudget": 2000,
     "minQueryLength": 3,
     "commitTokenThreshold": 20000,
-    "commitKeepRecentCount": 10,
     "profileTokenBudget": 10000,
     "skillCatalog": true,
     "skillCatalogTokenBudget": 1200,
@@ -148,14 +127,16 @@ API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy
 
 ## Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (16 tools). OpenCode namespaces MCP tools as `openviking_*`:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (17 tools). OpenCode namespaces MCP tools as `openviking_*`:
 
 - `openviking_find`, `openviking_search` (`openviking_search` with `mode="context"` replaces the former recall tool)
-- `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
+- `openviking_read`, `openviking_download`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
 - `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
 OpenCode 2 captures the current turn's user message, assistant response, and tool results when each execution ends, and captures the transcript before compaction discards it. It commits at the token threshold, and forces a commit on compaction, session deletion, and plugin cleanup. OpenCode 2 runs cleanup after 60 minutes of inactivity, when the service stops, and when a local plugin is hot-reloaded.
+
+Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
 
 OpenCode 1.15.7 does not call plugin disposal hooks. A short-lived v1 CLI run can also exit before asynchronous capture finishes; this behavior predates v2 support. Keep the v1 service running to let idle capture finish. OpenCode 1.18.32 calls the disposal hook when its instance is disposed.
 

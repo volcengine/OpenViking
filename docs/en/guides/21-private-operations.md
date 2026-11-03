@@ -4,7 +4,7 @@ description: Apply private-delivery configuration changes, prepare upgrades and 
 
 # Enterprise Deployment: Upgrades and Troubleshooting
 
-Use ovadmin and Operators to update configuration, upgrade, and troubleshoot your [Enterprise Deployment](20-private-deployment.md). For open-source container updates, see [server deployment](03-deployment.md); for OpenViking data-model migration, see the [migration guide](../migration/01-user-peer-model.md). Check delivery and runtime versions separately.
+Use ovadmin and Operators to update configuration, upgrade, and troubleshoot your [Enterprise Deployment](20-private-deployment.md). For open-source container updates, see [server deployment](03-deployment.md). Check delivery and runtime versions separately.
 
 ## Applying configuration changes
 

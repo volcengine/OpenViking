@@ -6,16 +6,16 @@ The Watch API manages periodic resource checks, pausing, resuming, and manual tr
 
 ### Watch Management
 
-List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add-resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
+List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add-resource) with `watch_interval > 0`. Use REST (`/api/v1/watches`) or `ov task watch` for the full set of operations. MCP provides `list_watches` and `cancel_watch` for listing and removal.
 
 #### 1. API Implementation Overview
 
-This control plane wraps the `WatchManager` primitives without changing any server-side behavior. Every endpoint and CLI command resolves the target task by either its `task_id` (path) or its `to_uri` (query). The two keys are interchangeable; if both are supplied they must refer to the same task, otherwise the request is rejected with 400.
+Locate a task by `task_id`, or use `to_uri` when exactly one accessible task matches. Multiple Connector Watches can share a target; URI lookup then returns `409 Conflict` and requires a `task_id`. If both keys are supplied, they must identify the same task or the request returns `400`.
 
 **Operations**:
-- **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter; pass `?to_uri=...` to collapse to a single-task lookup
+- **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter, `?limit=100` for pagination, or `?to_uri=...` for a single-task lookup
 - **Show** (`GET /api/v1/watches/{task_id}`) — inspect one task; optional `?to_uri=` performs a cross-key sanity check
-- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is orthogonal to `watch_interval`: flip `is_active` to pause/resume without losing the configured cadence.
+- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is independent of `watch_interval`: change `is_active` to pause/resume without losing the configured cadence.
 - **Delete** (`DELETE /api/v1/watches/{task_id}` or `DELETE /api/v1/watches?to_uri=...`)
 - **Trigger** (`POST /api/v1/watches/{task_id}/trigger` or `POST /api/v1/watches/trigger?to_uri=...`) — fire-and-forget refresh; returns immediately while the underlying re-ingest runs in the background
 
@@ -29,6 +29,28 @@ This control plane wraps the `WatchManager` primitives without changing any serv
 
 For every single-task endpoint the path `{task_id}` can be replaced with a `?to_uri=` query argument. The CLI `<key>` argument is auto-classified: any value starting with `viking://` routes to the by-URI path, anything else is treated as a task ID (other URI schemes such as `http://` are rejected locally to avoid silent 404s).
 
+**`GET /watches` pagination**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| limit | integer | Page size, 1–200. Enables pagination when supplied. |
+| cursor | string | Copy `next_cursor` from the previous response; defaults to a page size of 100 when `limit` is omitted. |
+| active_only | boolean | Defaults to false; keep the same value on subsequent pages. |
+
+Paged responses contain `{tasks, total, has_more, next_cursor}`. `total` counts all
+currently visible matching Watches, not just this page; `next_cursor` is `null`
+on the last page. Ordering is `created_at DESC, task_id DESC`. Cursors work across
+MySQL nodes sharing the same service and table, and must retain the same caller
+identity and filter. Invalid cursors or combining pagination with `to_uri`
+return `400`. Without `limit` and `cursor`, the existing unpaged response is preserved.
+
+Each page is a live read. Newer Watches inserted after the first page are visible
+on a fresh traversal; deleting the cursor's Watch does not invalidate the next
+page. MySQL applies a keyset predicate and `LIMIT`, projecting public fields
+without loading credentials or checkpoints into the application. The File store
+scans its existing memory cache with bounded page selection and does not reread
+the snapshot. Exact totals still require counting matching rows.
+
 **`PATCH /watches` body** (all fields optional; at least one is required)
 
 | Field | Type | Description |
@@ -36,7 +58,14 @@ For every single-task endpoint the path `{task_id}` can be replaced with a `?to_
 | watch_interval | float | New cadence in minutes. Must be `> 0`; use `is_active=false` to pause without losing the cadence. |
 | is_active | bool | Toggle activation without losing the cadence (pause / resume). |
 | reason | string | Update the recorded reason for the watch. |
-| instruction | string | Update the semantic processing instruction. |
+| instruction | string | Update semantic processing instruction. |
+
+Automatic scheduling reads current parameters and reserves each selected Watch
+under its target lock before returning from due selection. Edits after reservation
+apply to the next run. Pausing prevents future automatic selection; a selected or running job
+continues, and manual triggering remains available while paused.
+
+The managed Connector control plane may also submit a separate `credential_state` notification, without combining it with the fields above. It contains the reference owner fields `account_id`, `resource_id`, `user_id`, `ov_user_id`, `ov_account_id`, `type`, `platform`, a positive storage `version`, and boolean `authorized`. The kernel verifies the private watch reference and ignores stale or duplicate notifications. Revocation records a credential pause; reauthorization resumes only watches with that marker. Explicit manual pause/resume clears the marker. Execution history is preserved. The watermark and marker stay in private watch storage; historical paused watches without a marker retain their state.
 
 Unrecognized fields are rejected with HTTP `400` and `INVALID_ARGUMENT` (`extra="forbid"` on the request model). Fields left unset preserve their current values.
 
@@ -48,6 +77,14 @@ Unrecognized fields are rejected with HTTP `400` and `INVALID_ARGUMENT` (`extra=
 # List active watch tasks (drop ?active_only to include paused ones)
 curl -s "http://localhost:1933/api/v1/watches?active_only=true" \
   -H "X-API-Key: your-key"
+
+# First page; pass its next_cursor to continue with the same filter
+curl -s "http://localhost:1933/api/v1/watches?active_only=true&limit=100" \
+  -H "X-API-Key: your-key"
+curl -sG "http://localhost:1933/api/v1/watches" \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "active_only=true" --data-urlencode "limit=100" \
+  --data-urlencode "cursor=<next_cursor>"
 
 # Pause a watch without losing its cadence
 curl -X PATCH "http://localhost:1933/api/v1/watches/<task_id>" \
@@ -64,6 +101,8 @@ curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/g
 ```
 
 **Python SDK**
+
+The following uses `SyncHTTPClient`; await each call with `AsyncHTTPClient`.
 
 ```python
 watches = client.list_watches(active_only=True)
@@ -204,14 +243,14 @@ Getting one task and a successful update return the same task object directly in
 re-ingestion has completed; read the task again until `last_execution_time` changes, then inspect
 `last_status` and `last_error`.
 
-**MCP** (agent control plane — minimum closure only)
+**MCP**
 
 ```text
 list_watches()                                            # one line per task; URIs only, no task_ids surfaced
 cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
 ```
 
-Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](02-resources.md#add-resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
+Removing a Watch removes its schedule, not the imported resource. MCP exposes listing and removal. To create a Watch, use [`add_resource`](02-resources.md#add-resource) with `watch_interval`. Use the CLI or REST API to pause, resume, trigger, or change the cadence of an existing Watch. Re-importing does not update an existing Watch.
 
 ---
 

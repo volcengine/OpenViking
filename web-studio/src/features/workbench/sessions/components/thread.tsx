@@ -1,0 +1,236 @@
+import { CompassIcon } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useStudioService } from '#/features/connection/hooks/use-studio-service'
+import { Composer } from '#/features/workbench/sessions/components/composer'
+import { MemoryImpact } from '#/features/workbench/sessions/components/memory-impact'
+import { MessageList } from '#/features/workbench/sessions/components/message-list'
+import { useChat } from '#/features/workbench/sessions/lib/use-chat'
+import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
+import {
+  useCreateSession,
+  useSession,
+  useSessionMessages,
+} from '#/features/workbench/sessions/lib/use-sessions'
+
+const PixelBlast = lazy(() => import('#/shared/ui/pixel-blast'))
+const PRODUCT_NAME = 'OpenViking'
+
+interface ThreadProps {
+  sessionId: string
+  draft?: boolean
+  onPersisted?: () => void
+}
+
+export function Thread(props: ThreadProps) {
+  const { identityScopeKey } = useAppConnection()
+  return (
+    <SessionThread key={`${identityScopeKey}:${props.sessionId}`} {...props} />
+  )
+}
+
+function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
+  const { t } = useTranslation('sessions')
+  const service = useStudioService()
+  const canChat = service.ready && service.provider === 'opensource'
+  const { identityScopeKey } = useAppConnection()
+  const { getTitle } = useSessionTitles(identityScopeKey)
+  const title = getTitle(sessionId)
+
+  const [historyId] = useState(draft ? undefined : sessionId)
+  const persisted = useRef(!draft)
+  const creating = useRef(false)
+  const mounted = useRef(false)
+  const [creationError, setCreationError] = useState<string>()
+  const createSession = useCreateSession()
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const { data: session } = useSession(historyId)
+  const {
+    data: historyMessages,
+    isPending: historyLoading,
+    error: historyError,
+  } = useSessionMessages(historyId)
+
+  const chat = useChat({
+    identityScopeKey,
+    sessionId,
+    initialMessages: historyMessages,
+    persistMessages: true,
+  })
+
+  const isStreaming = chat.status === 'streaming'
+
+  const handleSend = useCallback(
+    async (message: string) => {
+      if (!canChat || !message.trim() || creating.current) return false
+      if (!persisted.current) {
+        creating.current = true
+        setCreationError(undefined)
+        try {
+          await createSession.mutateAsync(sessionId)
+          onPersisted?.()
+          if (!mounted.current) return false
+          persisted.current = true
+        } catch (error) {
+          if (mounted.current)
+            setCreationError(
+              error instanceof Error ? error.message : String(error),
+            )
+          return false
+        } finally {
+          creating.current = false
+        }
+      }
+      const sending = chat.send(message)
+      if (chat.status === 'streaming') {
+        await sending
+      }
+      return true
+    },
+    [canChat, chat, createSession, sessionId, onPersisted],
+  )
+
+  // ---- Auto-scroll ----
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const isNearBottomRef = useRef(true)
+  const scrollRafRef = useRef(0)
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 100
+  }, [])
+
+  useEffect(() => {
+    if (!isNearBottomRef.current) return
+    cancelAnimationFrame(scrollRafRef.current)
+    scrollRafRef.current = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    })
+  }, [chat.messages.length, chat.streamingParts, chat.streamingInsertIndex])
+
+  const [showBackground, setShowBackground] = useState(false)
+
+  useEffect(() => {
+    const id =
+      'requestIdleCallback' in window
+        ? window.requestIdleCallback(() => setShowBackground(true))
+        : globalThis.setTimeout(() => setShowBackground(true), 200)
+    return () => {
+      if ('requestIdleCallback' in window)
+        window.cancelIdleCallback(id as number)
+      else clearTimeout(id)
+    }
+  }, [])
+
+  const isEmpty = chat.messages.length === 0 && !isStreaming
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-1 flex-col">
+      {/* PixelBlast background — deferred until idle */}
+      {showBackground && isEmpty && (
+        <div className="pointer-events-none absolute inset-0 z-0 opacity-40">
+          <Suspense fallback={null}>
+            <PixelBlast
+              color="#008bad"
+              pixelSize={1}
+              edgeFade={0.2}
+              speed={1.55}
+              enableRipples={false}
+            />
+          </Suspense>
+        </div>
+      )}
+
+      <div className="relative z-10 flex h-12 items-center justify-between gap-4 border-b border-border/50 bg-background/95 px-6">
+        <h2 className="truncate text-sm font-medium text-foreground">
+          {draft && title === sessionId
+            ? t('threadList.newSession')
+            : title || sessionId}
+        </h2>
+        {service.provider === 'opensource' ? (
+          <MemoryImpact session={session} />
+        ) : null}
+      </div>
+
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-6 pb-6"
+      >
+        {historyId && historyLoading ? (
+          <div role="status" className="py-6 text-sm text-muted-foreground">
+            {t('threadList.loading')}
+          </div>
+        ) : historyError ? (
+          <div role="alert" className="py-6 text-sm text-destructive">
+            {t('chat.historyLoadFailed', { error: historyError.message })}
+          </div>
+        ) : isEmpty ? (
+          <ThreadEmpty canChat={canChat} />
+        ) : (
+          <MessageList
+            messages={chat.messages}
+            streaming={
+              isStreaming
+                ? {
+                    parts: chat.streamingParts,
+                    insertIndex: chat.streamingInsertIndex,
+                    iteration: chat.iteration,
+                  }
+                : undefined
+            }
+          />
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {(creationError || chat.error) && (
+        <div
+          role="alert"
+          className="relative z-10 mx-auto w-full max-w-4xl px-4 py-2 text-sm text-destructive"
+        >
+          {t('chat.sendFailed', { error: creationError || chat.error })}
+        </div>
+      )}
+      {canChat ? (
+        <div className="relative z-10">
+          <Composer
+            onSend={handleSend}
+            onCancel={chat.abort}
+            isStreaming={isStreaming}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function ThreadEmpty({ canChat }: { canChat: boolean }) {
+  const { t } = useTranslation('sessions')
+
+  return (
+    <div className="flex grow flex-col items-center justify-center gap-3">
+      <div className="flex size-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 ring-1 ring-primary/10">
+        <CompassIcon className="size-7 text-primary/70" />
+      </div>
+      <div className="text-center">
+        <h3 className="text-base font-medium text-foreground">
+          {PRODUCT_NAME}
+        </h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t(canChat ? 'chat.emptyDescription' : 'chat.emptyReadDescription')}
+        </p>
+      </div>
+    </div>
+  )
+}

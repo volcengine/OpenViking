@@ -379,7 +379,8 @@ def parse_json_with_stability(
     Args:
         content: Raw LLM response string
         model_class: Optional Pydantic model class to validate against
-        expected_fields: Optional list of field names to keep (filter out extra fields)
+        expected_fields: Optional field names to keep. Non-empty objects containing
+            none of these fields are rejected instead of becoming an empty result.
 
     Returns:
         Tuple of (parsed_data, error_message). error_message is None on success.
@@ -430,10 +431,10 @@ def parse_json_with_stability(
 
     # Filter to only expected fields if provided
     if expected_fields:
-        filtered_data = {}
-        for k, v in parsed_data.items():
-            if k in expected_fields:
-                filtered_data[k] = v
+        filtered_data = {k: v for k, v in parsed_data.items() if k in expected_fields}
+        if parsed_data and not filtered_data:
+            fields = ", ".join(sorted(parsed_data))
+            return None, f"No expected fields found; got fields: {fields}"
         parsed_data = filtered_data
 
     # If no model class, return the raw dict

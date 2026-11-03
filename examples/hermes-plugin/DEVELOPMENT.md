@@ -14,7 +14,7 @@ Contributions to this directory are provided under its [MIT license](LICENSE).
 Preserve the existing copyright and permission notice.
 
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
-future Hermes catalog key remain `openviking`. Existing `memory.openviking`
+Hermes catalog key remain `openviking`. Existing `memory.openviking`
 settings, environment variables, linked `ovcli.conf` files, data paths, and
 `viking_*` tools keep their current behavior.
 
@@ -47,9 +47,37 @@ with the original author retained. This port leaves memory URI handling as it
 is: the original PR's UID-less `viking://user/memories/...` rewrite is not
 accepted by current OpenViking servers.
 
+Quick Local adapts [Hermes PR #94851](https://github.com/NousResearch/hermes-agent/pull/94851)
+(head `d15e0e65d67a2dd6d3f3ab09a382c1f1684e2560`). Provisioning remains separate
+from the setup UI. The port uses current Hermes PM, authenticated server reuse,
+and paths derived from the provider's bound home. On Python 3.14, the private
+server uses LiteLLM 1.83.7, within OpenViking's supported range; some other
+releases in that range exclude Python 3.14. The profile server controller verifies
+the PID, creation time, executable and config path before stopping a process.
+It repairs permissions on plugin-owned private files after backup restoration;
+no Hermes backup changes are required.
+
+`local_packages.py` selects compatible OpenViking wheels from PyPI and reviewed
+llama-cpp-python binaries, with SHA-256 verification before installation. Both PM
+and pre-PM installers receive verified local wheel files. Setup records the applied
+requirements so that a newer server release or native package pin updates an
+existing private runtime. Change native package pins only after installation,
+model and service checks pass on the listed platforms. Source builds require
+explicit consent. Platform CI runs real installation, local embedding, capture,
+restart and port-recovery checks. It uses a static test LLM configuration and
+does not establish live memory extraction; that remains a release check.
+The OpenViking hash comes from PyPI at setup time; llama-cpp-python hashes are
+fixed in this plugin. PM/uv resolve the other dependencies; this is not a fully
+locked server runtime.
+Source builds use package version pins without reviewed binary hashes. A platform
+needs a tested OpenViking/embedding-wheel pair for the prebuilt path.
+Setup also checks LLM access through the installed OpenViking backend. The CI
+fixture must serve an actual completion; an unreachable LLM must fail setup.
+
 ## Migration coordination
 
-Before the catalog cutover, submit a Hermes catalog entry with:
+Hermes publishes this provider through `plugin-catalog/openviking.yaml`. The
+entry must contain:
 
 - `name: openviking`
 - `repo: https://github.com/volcengine/OpenViking`
@@ -67,25 +95,55 @@ and validate the pinned installation directory:
 hermes plugins validate /path/to/hermes-profile/plugins/openviking
 ```
 
-Publish the catalog entry and validate migration before Hermes removes its
-bundled provider. Hermes PR [#114569](https://github.com/NousResearch/hermes-agent/pull/114569)
-adds catalog recovery for configured providers that no longer resolve. The
-bundled provider takes precedence while it remains present.
+Hermes PR [#131267](https://github.com/NousResearch/hermes-agent/pull/131267)
+published the catalog entry. Hermes PR
+[#114569](https://github.com/NousResearch/hermes-agent/pull/114569) added catalog
+recovery for configured providers that no longer resolve. Keep the reviewed
+catalog pin and migration path valid. Hermes PR
+[#134350](https://github.com/NousResearch/hermes-agent/pull/134350) removed the
+bundled OpenViking provider from main. Older releases still load their bundled
+copy first.
 
 This plugin does not add a Desktop `config_schema.py`.
 The wizard uses private helpers from `hermes_cli.memory_setup`; changes to
-those helpers require compatibility checks. The plugin uses HTTP and does not
-install or package the OpenViking server.
+those helpers require compatibility checks. The plugin uses HTTP. Quick Local installs the server in a separate
+profile runtime through Hermes PM, or the earlier Hermes uv installer on the
+tested release baseline. It does not add server dependencies to Hermes.
+Explicit Quick Local setup resolves the latest stable, Python/platform-compatible
+OpenViking 0.5 release from PyPI and verifies the wheel against PyPI's download
+hash. The native embedding package remains pinned and hash-verified. The resolved
+requirements are recorded per profile; unchanged requirements reuse the runtime,
+while a new release follows the existing validation and restart path. Chat and
+recovery do not resolve or upgrade packages.
+
+Installation records a runtime-validation-pending marker that only setup consumes.
+After validation passes, setup uses the existing server controller to request a
+restart and clears the validation marker. Chat therefore keeps using a healthy
+existing server while it keeps running. If that process stops, recovery can start
+the installed runtime without clearing pending validation. Local status reports
+`runtime_validation_pending` separately from readiness and `restart_required`.
 
 ## Validation
 
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
 It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
+The release-host job runs the complete provider suite on Hermes v2026.9.24
+with Python 3.13, selected explicitly by `uv sync --python` rather than the
+release checkout's `.python-version`. Legacy autostart uses Hermes's profile
+environment helper and credential scrubber on both hosts. Unrelated process and
+profile secrets are removed; missing helpers or secret-scope errors prevent spawning.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
 These regression tests use mock responses and local test servers; live-service
 validation remains part of release testing.
+The reviewed current host builds its test environment through Hermes PM.
+Fixtures use the host's YAML implementation, so they do not need a separate
+PyYAML install on current Hermes. The older release retains its uv installer.
+Native edit tests select the action advertised by the host tool schema:
+`patch` on current Hermes and `replace` on the release baseline. Both must
+update the same mapped file. Patch-specific tests also check that text outside
+the edited span is preserved in the native entry and its remote copy.
 
 CI also runs `scripts/check-hermes-plugin-install.py` through the real Hermes
 CLI in an isolated profile. It installs this repository's plugin subdirectory,
@@ -100,7 +158,9 @@ The complete mirror tests require the committed-entry event contract introduced
 in [Hermes PR #118903](https://github.com/NousResearch/hermes-agent/pull/118903)
 and merged through [#120003](https://github.com/NousResearch/hermes-agent/pull/120003)
 (commit `5908e1aaa83e82aaf12541d7a9d90762d0b46a64`):
-`MemoryManager` forwards `previous_content` for each successful replace/remove.
+`MemoryManager` forwards `previous_content` for each successful replacement or
+removal. Current native `patch` calls become provider `replace` events containing
+the complete updated entry; older native `replace` calls use that event directly.
 The legacy compatibility tests verify that missing metadata skips these remote
 mutations. Do not substitute a guessed match in tests or production.
 
@@ -126,9 +186,9 @@ actual Hermes session keys.
 Provider-specific regression tests belong here and must use the shared external
 loader fixture. Generic Hermes framework tests remain in Hermes.
 
-For compatibility checks while Hermes still bundles OpenViking, also run its
-provider tests. These load the bundled copy unless explicitly routed through the
-external loader; they do not replace this directory's tests:
+For compatibility checks against a Hermes release that bundles OpenViking,
+also run its provider tests. These load the bundled copy unless explicitly
+routed through the external loader; they do not replace this directory's tests:
 
 ```bash
 HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh \

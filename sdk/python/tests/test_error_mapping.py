@@ -1,8 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import httpx
 import pytest
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
+from openviking_sdk.client import ERROR_CODE_TO_EXCEPTION
 from openviking_sdk.errors import (
     AbortedError,
     ConflictError,
@@ -11,6 +13,43 @@ from openviking_sdk.errors import (
     UnavailableError,
     UnimplementedError,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("code", ERROR_CODE_TO_EXCEPTION)
+async def test_public_clients_preserve_server_error_details(sync, code):
+    details = {
+        "resource": "viking://resources/demo",
+        "uri": "viking://resources/demo",
+        "retryable": True,
+        "upstream_status_code": 503,
+        "provider": {"retry_after": 2},
+    }
+    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    async_client = client._async_client if sync else client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                409,
+                json={
+                    "status": "error",
+                    "error": {"code": code, "message": "busy", "details": details},
+                },
+            )
+        ),
+    )
+    try:
+        with pytest.raises(OpenVikingError) as raised:
+            if sync:
+                client.stat("viking://resources/demo")
+            else:
+                await client.stat("viking://resources/demo")
+        assert raised.value.code == code
+        assert {key: raised.value.details[key] for key in details} == details
+    finally:
+        await async_client.close()
 
 
 @pytest.mark.parametrize(

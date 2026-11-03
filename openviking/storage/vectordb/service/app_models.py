@@ -165,6 +165,8 @@ class SearchByKeywordsRequest(BaseModel):
     project: Optional[str] = Field("default", description="Project name")
     keywords: Optional[Any] = Field(None, description="Keywords list")
     query: Optional[str] = Field(None, description="Query string")
+    mode: Optional[str] = Field(None, description="Keyword ranking mode")
+    fields: Optional[Any] = Field(None, description="Fields used for keyword matching")
     filter: Optional[Any] = Field(None, description="Filter conditions")
     output_fields: Optional[Any] = Field(None, description="Output fields")
     limit: Optional[int] = Field(10, description="Result limit")

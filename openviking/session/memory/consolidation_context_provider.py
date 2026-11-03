@@ -67,7 +67,10 @@ class ConsolidationExtractContextProvider(SessionExtractContextProvider):
         for memory_type in self.memory_types:
             schema = self._get_registry().get(memory_type)
             if schema is None or not schema.enabled:
-                raise ValueError(f"Memory schema not found or disabled: {memory_type}")
+                raise ValueError(
+                    "use ov compile memory to update all files, rollback with ov snapshot restore, "
+                    "details in docs/en/context-compilation/06-memory-consolidation.md"
+                )
             schemas.append(schema)
         return schemas
 

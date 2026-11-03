@@ -209,6 +209,12 @@ fn delete_saved_config(store: &ConfigStore, args: ConfigDeleteArgs) -> AgentResu
         }));
     }
 
+    if store.selected_config_name() == Some(args.name.as_str()) {
+        return Err(AgentError::refused(
+            "Cannot delete the file selected by OPENVIKING_CLI_CONFIG_FILE. Change the environment variable first.",
+        ));
+    }
+
     match store.load_saved_config(&args.name) {
         Ok(_) => {
             if store
@@ -675,6 +681,11 @@ fn save_edited_config(
 ) -> AgentResult<AddEditResult> {
     let old_config = store.load_saved_config(old_name).map_err(config_error)?;
     let renamed = old_name != new_name;
+    if renamed && store.selected_config_name() == Some(old_name) {
+        return Err(AgentError::refused(
+            "Cannot rename the file selected by OPENVIKING_CLI_CONFIG_FILE. Change the environment variable first.",
+        ));
+    }
     let new_path = store.saved_config_path(new_name).map_err(config_error)?;
     if renamed && new_path.exists() {
         let existing_new = store.load_saved_config(new_name).map_err(config_error)?;

@@ -12,24 +12,32 @@ OpenViking 使用全局向量检索，并可在召回完成后对候选结果执
 
 | 特性 | find() | search() |
 |------|--------|----------|
-| 会话上下文 | 不需要 | 需要 |
-| 意图分析 | 不使用 | 使用 LLM 分析 |
-| 查询数量 | 单一查询 | 0-5 个 TypedQuery |
-| 延迟 | 低 | 较高 |
+| 会话上下文 | 不使用 | 可选，传入 `session_id` 时使用 |
+| 意图分析 | 不使用 | 有会话内容且启用时使用 LLM |
+| 查询数量 | 单一查询 | 零个或多个 TypedQuery |
+| 延迟 | 通常较低 | 取决于意图分析、查询数量和是否 Rerank |
 | 适用场景 | 简单查询 | 复杂任务 |
+
+`search` 的 `limit` 用于每条规划查询；多条查询合并后的总数可能超过它，当前也不保证跨查询去重。
 
 ### 使用示例
 
+以下示例使用已配置的同步 Python SDK 客户端 `client`。
+
 ```python
 # find(): 简单查询
-results = await client.find(
+results = client.find(
     query="OAuth 认证",
     target_uri="viking://resources/",
 )
 
 # search(): 复杂任务（需要会话上下文）
-session_info = await client.create_session()
-results = await client.search(
+session_info = client.create_session()
+client.add_message(
+    session_id=session_info["session_id"], role="user",
+    content="我们正在为项目设计 OAuth 登录流程。",
+)
+results = client.search(
     query="帮我创建一个 RFC 文档",
     session_id=session_info["session_id"],
 )
@@ -37,7 +45,7 @@ results = await client.search(
 
 ## 意图分析
 
-IntentAnalyzer 使用 LLM 分析查询意图，生成 0-5 个 TypedQuery。该阶段使用的模型可通过 [`query_planner`](../guides/01-configuration.md#query-planner) 配置项单独指定，未设置时回退到 `vlm`。
+当 `retrieval.enable_intent=true` 且会话包含摘要或消息时，IntentAnalyzer 使用 LLM 分析查询意图，生成零个或多个 TypedQuery。该阶段使用的模型可通过 [`query_planner`](../guides/01-configuration.md#query-planner) 配置项单独指定，未设置时回退到 `vlm`。
 
 ### 输入
 
@@ -81,7 +89,7 @@ class TypedQuery:
 | THINKING，且配置了可用的 Rerank | `2 × limit` | 对召回候选统一执行一次，返回最多 `limit` 条 |
 | THINKING，未配置可用的 Rerank | `limit` | 不执行 |
 
-`find()` 使用 QUICK。`search()` 配置了可用的 Rerank 时自动使用 THINKING，否则使用 QUICK。这是内部检索模式，不是 LLM 的思考参数，也不控制会话意图分析。意图分析生成的多条查询仍分别检索和排序，再按现有方式汇总。
+`find()` 使用 QUICK。`search()` 配置了可用的 Rerank 时自动使用 THINKING，否则使用 QUICK。这是内部检索模式，不是 LLM 的思考参数，也不控制会话意图分析。意图分析生成的多条查询仍分别检索和排序，再按现有方式汇总。Context 模式（`search(mode="context")`）通过 `find()` 召回，因此默认使用向量分数；服务端开启 `retrieval.apply_rerank_to_context` 后，会在配额和 token 预算之前，用原始查询及其会话扩展查询对合并后的候选每个请求统一重排一次。
 
 图像查询跳过文本 Rerank，候选数为 `limit`；未指定 `level` 时默认搜索 L2。
 
@@ -91,13 +99,15 @@ Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例�
 
 - 使用候选索引记录的 `abstract` 字段作为 Rerank 文本。
 - 分数与排序使用 Rerank 分数，否则使用向量分数；访问频次、更新时间和父目录分数不参与加权。
-- 分数阈值在 Rerank 后应用；未启用 Rerank 时使用向量分数。
+- 分数阈值在 Rerank 后应用。请求中的 `score_threshold` 过滤所有分数；未指定时，`rerank.threshold` 只过滤模型产出的 Rerank 分数，向量分数（未启用 Rerank 或 Rerank 失败时）不受其过滤。
 - Rerank 请求失败或返回无效结果时，保留已有的向量分数回退行为。
 - 不再使用目录优先队列、父子分数传播或多轮收敛判断。
 
 支持的 provider 和配置见 [Rerank 配置](../guides/01-configuration.md#rerank)。
 
 ## 检索结果
+
+以下是服务端内部类型的字段节选；HTTP/SDK 响应字段以[检索 API](../api/06-retrieval.md)为准。
 
 ### MatchedContext
 
@@ -106,7 +116,7 @@ Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例�
 class MatchedContext:
     uri: str                # 资源 URI
     context_type: ContextType
-    is_leaf: bool           # 是否文件
+    level: int              # 0=摘要，1=概览，2=详情
     abstract: str           # L0 摘要
     score: float            # 最终分数
 ```

@@ -149,7 +149,6 @@ export class OpenVikingClient {
       reason: options.reason,
       instruction: options.instruction,
       wait: options.wait,
-      timeout: options.timeout,
       strict: options.strict,
       ignore_dirs: options.ignoreDirs,
       include: options.include,
@@ -187,7 +186,6 @@ export class OpenVikingClient {
   ): Promise<JsonObject> {
     const body: JsonObject = compact({
       wait: options.wait ?? false,
-      timeout: options.timeout,
       telemetry: options.telemetry,
       target_uri: options.targetUri,
     });
@@ -279,7 +277,6 @@ export class OpenVikingClient {
   ): Promise<JsonObject> {
     const body: JsonObject = compact({
       wait: options.wait ?? false,
-      timeout: options.timeout,
       source_metadata: options.sourceMetadata,
       target_uri: options.targetUri,
       telemetry: options.telemetry,
@@ -394,6 +391,8 @@ export class OpenVikingClient {
       session_id:
         kind === "search" ? (options as SearchOptions).sessionId : undefined,
       events_time_decay_protection: options.eventsTimeDecayProtection,
+      search_type:
+        kind === "search" ? (options as SearchOptions).searchType : undefined,
       limit: options.limit,
       node_limit: options.nodeLimit,
       score_threshold: options.scoreThreshold,
@@ -423,6 +422,7 @@ export class OpenVikingClient {
     const body = compact({
       query,
       mode: "context",
+      search_type: options.searchType,
       image_url: imageUrl,
       session_id: options.sessionId,
       limit: options.limit,
@@ -612,14 +612,18 @@ export class OpenVikingClient {
   /** Remove a resource or directory. */
   remove(
     uri: string,
-    options: { recursive?: boolean; wait?: boolean; timeout?: number } = {},
+    options: {
+      recursive?: boolean;
+      wait?: boolean;
+      /** @deprecated Accepted for compatibility and ignored. */
+      timeout?: number;
+    } = {},
   ): Promise<void> {
     return this.request("DELETE", "/api/v1/fs", {
       query: {
         uri: normalizeURI(uri),
         recursive: options.recursive ?? false,
         wait: options.wait ?? false,
-        timeout: options.timeout,
       },
     });
   }
@@ -681,7 +685,6 @@ export class OpenVikingClient {
           ? (options.tagMode ?? "replace")
           : undefined,
       wait: options.wait,
-      timeout: options.timeout,
       telemetry: options.telemetry,
     });
     return this.request("POST", "/api/v1/content/write", {
@@ -702,14 +705,33 @@ export class OpenVikingClient {
           content: operation.content,
           content_base64: operation.contentBase64,
           mode: operation.mode,
+          tags: operation.tags,
+          tag_mode: operation.tagMode,
+          acl: operation.acl,
         }),
       ),
       wait: options.wait,
-      timeout: options.timeout,
       telemetry: options.telemetry,
+      processing_mode: options.processingMode,
+      defer_processing: options.deferProcessing,
     });
     return this.request("POST", "/api/v1/content/batch-write", {
       body: mergeExtra(body, options.extra),
+    });
+  }
+  /** Index uri; use fallbackAbstract only when both summaries are absent. */
+  ensureDirectoryIndex(
+    uri: string,
+    fallbackAbstract: string,
+    options: WaitOptions = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/content/ensure_directory_index", {
+      body: compact({
+        uri: normalizeURI(uri),
+        fallback_abstract: fallbackAbstract,
+        wait: options.wait ?? true,
+        telemetry: options.telemetry,
+      }),
     });
   }
   /** Set retrieval tags. */
@@ -928,6 +950,7 @@ export class OpenVikingClient {
       options = optionsOrKeepRecentCount;
     }
     const body = compact({
+      enable_working_memory: options.enableWorkingMemory,
       keep_recent_count: options.keepRecentCount,
       retention_mode: options.retentionMode,
       keep_recent_turn_count: options.keepRecentTurnCount,
@@ -1076,10 +1099,13 @@ export class OpenVikingClient {
       },
     });
   }
-  /** Wait for queued processing to finish. */
+  /**
+   * Wait for queued processing to finish.
+   * @param timeout - Deprecated. Accepted for compatibility and ignored.
+   */
   waitProcessed(timeout?: number): Promise<JsonObject> {
     return this.request("POST", "/api/v1/system/wait", {
-      body: compact({ timeout }),
+      body: {},
     });
   }
   /** Check the raw server health endpoint. */
@@ -1247,6 +1273,10 @@ export class OpenVikingClient {
       `/api/v1/admin/accounts/${pathPart(accountId)}`,
     );
   }
+  /** Return credential-free metadata for one account; rejects with NOT_FOUND if absent. */
+  adminGetAccount(accountId: string): Promise<JsonObject> {
+    return this.request("GET", `/api/v1/admin/accounts/${pathPart(accountId)}`);
+  }
   /** Register a user in an account. */
   adminRegisterUser(
     accountId: string,
@@ -1297,6 +1327,13 @@ export class OpenVikingClient {
       `/api/v1/admin/accounts/${pathPart(accountId)}/users/${pathPart(userId)}`,
     );
   }
+  /** One user's credential-free membership info (user_id, role); rejects NOT_FOUND if absent. Never returns api_key/key_prefix. */
+  adminGetUser(accountId: string, userId: string): Promise<JsonObject> {
+    return this.request(
+      "GET",
+      `/api/v1/admin/accounts/${pathPart(accountId)}/users/${pathPart(userId)}`,
+    );
+  }
   /** Change a user's role. */
   adminSetRole(
     accountId: string,
@@ -1320,12 +1357,6 @@ export class OpenVikingClient {
       `/api/v1/admin/accounts/${pathPart(accountId)}/users/${pathPart(userId)}/key`,
       { body: seed === undefined ? undefined : { seed } },
     );
-  }
-  /** Start legacy-data migration or cleanup. */
-  adminMigrate(cleanup = false): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/admin/migrate", {
-      body: { action: cleanup ? "cleanup" : "migrate" },
-    });
   }
   /** Return the effective Agent Evolution switch for the caller's account. */
   adminGetAgentEvolution(): Promise<JsonObject> {

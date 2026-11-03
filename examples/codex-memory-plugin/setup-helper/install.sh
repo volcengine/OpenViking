@@ -10,11 +10,7 @@
 # interactive prompts are skipped and existing config / env vars are used.
 #
 # Env overrides:
-#   OPENVIKING_HOME, OPENVIKING_REPO_DIR, OPENVIKING_REPO_URL,
-#   OPENVIKING_REPO_REF / OPENVIKING_REPO_BRANCH, OPENVIKING_CLI_CONFIG_FILE.
-#   OPENVIKING_REPO_ARCHIVE_URL  when set, fetch the source from this zip instead
-#                                of git clone (used by the TOS bootstrap for users
-#                                who can't reach GitHub). Requires `unzip`.
+#   OPENVIKING_HOME, OPENVIKING_CLI_CONFIG_FILE.
 
 set -euo pipefail
 

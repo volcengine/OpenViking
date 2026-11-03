@@ -81,6 +81,8 @@ class ICollection(ABC):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -269,7 +271,7 @@ class Collection:
             raise RuntimeError("Collection is closed")
         self.__collection.end_bulk_ingest()
 
-    def get_meta_data(self) -> Dict[str, Any]:
+    def get_meta_data(self, *, raise_on_error: bool = False) -> Dict[str, Any]:
         """
         Retrieve the full metadata of the collection.
 
@@ -279,6 +281,8 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        if raise_on_error:
+            return self.__collection.get_meta_data(raise_on_error=True)
         return self.__collection.get_meta_data()
 
     def get_meta(self) -> Dict[str, Any]:
@@ -391,6 +395,8 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ):
         """Search by keywords or query string using vectorization.
 
@@ -414,7 +420,15 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.search_by_keywords(
-            index_name, keywords, query, limit, offset, filters, output_fields
+            index_name=index_name,
+            keywords=keywords,
+            query=query,
+            mode=mode,
+            fields=fields,
+            limit=limit,
+            offset=offset,
+            filters=filters,
+            output_fields=output_fields,
         )
 
     def search_by_id(

@@ -21,6 +21,13 @@ class SessionAutoCommitConfig(BaseModel):
             "started. When disabled, neither happens."
         ),
     )
+    idle_backend: Literal["local", "redis"] = Field(
+        default="local",
+        description=(
+            "Idle timeout discovery backend. 'local' scans session metadata; "
+            "'redis' uses distributed expiry scheduling."
+        ),
+    )
     check_interval_seconds: float = Field(default=600.0, gt=0)
     scan_rate_limit_files_per_second: float = Field(
         default=2.0,
@@ -36,6 +43,10 @@ class SessionAutoCommitConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
 
+    summary_budget_retry_enabled: bool = Field(
+        default=True,
+        description="Regenerate over-budget session summaries with the second and third prompts.",
+    )
     version: str = Field(
         default="v3",
         description="Deprecated and ignored. Memory extraction always uses v3.",

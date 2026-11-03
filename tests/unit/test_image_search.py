@@ -30,9 +30,14 @@ class MultimodalEmbedder(TextOnlyEmbedder):
 def test_text_only_embedder_drops_image_parts():
     parts = build_multimodal_embedding_input(
         "cat photo",
-        "data:image/png;base64,abc",
+        ["data:image/png;base64,YQ==", "viking://resources/photos/cat.png"],
     )
 
+    assert parts == [
+        {"type": "text", "text": "cat photo"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
+        {"type": "image_url", "image_url": {"url": "viking://resources/photos/cat.png"}},
+    ]
     assert TextOnlyEmbedder("test").prepare_embedding_input(parts) == "cat photo"
     assert MultimodalEmbedder("test").prepare_embedding_input(parts) == parts
 

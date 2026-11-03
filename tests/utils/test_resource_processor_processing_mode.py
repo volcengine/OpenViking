@@ -15,6 +15,7 @@ from openviking.storage.context_update_plan import (
     SemanticTreeSnapshot,
 )
 from openviking.storage.index_action import FieldPatch
+from openviking.telemetry import get_ingestion_source_type
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -320,6 +321,82 @@ async def test_local_incremental_noop_skips_semantic_queue_and_releases_resource
 
 
 @pytest.mark.asyncio
+async def test_add_resources_rnfv_uses_subtree_inventory_to_delete_orphans(monkeypatch, ctx):
+    from openviking.storage.resource_diff import ArtifactInventory
+    from openviking.storage.resource_rnfv import (
+        FormalTreeSnapshot,
+        NewArtifactSnapshot,
+        NewEntry,
+        RNFVSnapshot,
+        VectorIndexSnapshot,
+    )
+
+    root_uri = "viking://resources/demo"
+    captured = {}
+    viking_fs = SimpleNamespace()
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+
+    artifact_inventory = ArtifactInventory(
+        entries={"a.py": NewEntry(md5="new")}, artifact_paths={"a.py": "a.py"}
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff.prepare_artifact_inventory",
+        AsyncMock(return_value=artifact_inventory),
+    )
+
+    async def build_snapshot(**kwargs):
+        captured.update(kwargs)
+        return RNFVSnapshot(
+            request=kwargs["request_intent"],
+            new=NewArtifactSnapshot(entries=artifact_inventory.entries),
+            formal=FormalTreeSnapshot(entries={}),
+            vectors=VectorIndexSnapshot(records_by_id={}, projected_fields=frozenset()),
+        )
+
+    monkeypatch.setattr("openviking.storage.resource_diff.build_rnfv_snapshot", build_snapshot)
+    context_plan = SimpleNamespace(
+        root_uri=root_uri,
+        context_type="resource",
+        content_tree_actions=(),
+        direct_index_actions=(),
+        semantic_plan=None,
+        after_content_commit=lambda: {"status": "success"},
+    )
+    monkeypatch.setattr(
+        "openviking.storage.context_update_plan.build_context_update_plan_from_snapshot",
+        AsyncMock(return_value=(SimpleNamespace(entries={}), context_plan)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.context_update_plan.execute_content_tree_actions",
+        AsyncMock(),
+    )
+
+    processor = ResourceProcessor(_FakeVikingDB())
+    result = await processor._commit_directory_artifact_with_plan(
+        output_store=object(),
+        artifact_ref=SimpleNamespace(backend="local", root="artifact"),
+        doc_rel="repository",
+        root_uri=root_uri,
+        target_preexisting=True,
+        ctx=ctx,
+        lease_ref=None,
+        vectorize=True,
+        summarize=True,
+        processing_mode="semantic_and_vectors",
+        is_code_repo=False,
+        ingest_options=IngestOptions(),
+        source_metadata=None,
+    )
+
+    assert result == {"status": "success"}
+    # V must be read for the whole target subtree. Otherwise a V-only URI is
+    # invisible to RNFV and cannot reach the existing ABSENT -> DELETE branch.
+    assert captured.get("vector_inventory_strategy", "subtree") == "subtree"
+    assert "inventory_limit" not in captured
+    assert "inventory_query_batch_size" not in captured
+
+
+@pytest.mark.asyncio
 async def test_vectors_only_scalar_update_is_enqueued_before_lock_release(monkeypatch, ctx):
     from openviking.storage.context_update_plan import DirectIndexAction
 
@@ -458,9 +535,7 @@ async def test_plan_artifact_is_cleaned_only_after_semantic_enqueue(monkeypatch,
         assert tmp_path.joinpath("artifacts", ref.root.split("/")[-1]).exists()
         return {"status": "success", "enqueued_count": 1}
 
-    processor._summarizer = SimpleNamespace(
-        summarize=AsyncMock(side_effect=summarize)
-    )
+    processor._summarizer = SimpleNamespace(summarize=AsyncMock(side_effect=summarize))
 
     await processor.finish_prepared_resource(
         {
@@ -718,11 +793,13 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         ),
     )
     vectorized = {}
+    source_types = []
     both_entered = asyncio.Event()
     release = asyncio.Event()
 
     async def vectorize_file(**kwargs):
         vectorized[kwargs["file_path"]] = kwargs
+        source_types.append(get_ingestion_source_type())
         if len(vectorized) == 2:
             both_entered.set()
         await release.wait()
@@ -755,6 +832,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
                 "temp_uri": "viking://temp/demo",
                 "temp_dir_path": "tmp/demo",
                 "source_committed": False,
+                "is_code_repo": True,
             },
             ctx=ctx,
             resource_lock=lock,
@@ -771,6 +849,8 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     result = task.result()
 
     assert result == {"status": "success", "root_uri": "viking://resources/demo"}
+    assert source_types == ["repository", "repository"]
+    assert get_ingestion_source_type() is None
     viking_fs.persist_temp_tree.assert_awaited_once_with(
         "viking://temp/demo",
         "viking://resources/demo",

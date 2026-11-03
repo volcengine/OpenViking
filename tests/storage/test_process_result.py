@@ -32,3 +32,9 @@ def test_result_preserves_value_and_empty_error():
     payload = {"value": 1}
     assert ProcessResult.success(payload).value is payload
     assert ProcessResult.failed("").error == ""
+
+
+@pytest.mark.parametrize("errors", [(), ("valid", 1)])
+def test_result_rejects_invalid_structured_errors(errors):
+    with pytest.raises(ValueError):
+        ProcessResult.failed("failure", errors=errors)

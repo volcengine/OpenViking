@@ -1,4 +1,7 @@
 {
+  "modules": [
+    "../mods/usage/register.tsx"
+  ],
   "hooks": {
     "SessionStart": [
       {

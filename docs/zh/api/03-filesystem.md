@@ -4,6 +4,14 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
 <a id="webdav"></a><a id="webdav-phase-1"></a>
 
+读取或写入文件正文见[内容 API](12-content.md)。通过 WebDAV 客户端访问文件见 [WebDAV](20-webdav.md)。
+
+`viking://system` 的文件系统和内容 API 对所有角色开放读取；ROOT 和 ADMIN
+只能修改 `viking://system/memory/memory_templates/custom/` 下的具体资产。
+`builtin/` 内置模板和 `viking://system/compile/example-skills/` 官方示例由服务自动同步，
+API 不允许写入、追加、删除、移动或覆盖复制，也不能通过操作其父目录绕过限制。
+自定义模板也可以通过[模板管理 API](08-admin.md)发布。
+
 ## API 参考
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
@@ -31,6 +39,7 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 | sort_by | str | 否 | None | 在分页前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
 | sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
 | extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
+| include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
 
 `tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
@@ -67,8 +76,13 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 内容。该行为只适用于共享的
 `viking://resources` 命名空间；个人和 peer 私有命名空间仍按原有规则隐藏。
 
+在大小写不敏感的 `localfs` 上，目录名大小写别名可能影响 `ls`、`tree` 和 `glob`
+看到的内容。例如真实目录是 `viking://resources/bob-private/`，请求
+`viking://resources/BOB-PRIVATE/` 也可能列出同一目录；大小写敏感系统上，别名目录
+不存在时会返回 `NOT_FOUND`。
 
-**Python HTTP SDK**
+
+**Python SDK (HTTP)**
 
 ```python
 page = client.ls_page(
@@ -156,15 +170,15 @@ curl -G "http://localhost:1933/api/v1/fs/ls" \
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive] [--include-abstract[=true|false]] [--include-overview[=true|false]] [--tags team=search,env=prod] [-f FIELDS]
-openviking tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
-openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
+ov ls viking://resources/ [--simple] [--recursive] [--include-abstract[=true|false]] [--include-overview[=true|false]] [--tags team=search,env=prod] [-f FIELDS]
+ov tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
+ov glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 
 # 在对齐的表格中显示名称和 tags
-openviking ls viking://resources/ --fields name,tags
+ov ls viking://resources/ --fields name,tags
 
 # 无表头，每行输出逗号分隔的 URI 和 tags
-openviking ls viking://resources/ --simple --fields uri,tags
+ov ls viking://resources/ --simple --fields uri,tags
 ```
 
 `-f` / `--fields` 接受逗号分隔的列名。在默认的 table 输出模式下，结果为带表头、按列对齐的表格。支持的字段为 `name`、`uri`、`path`、`type`、`size`、`mode`、`mtime`、`locked`、`id`、`count`、`abstract`、`overview`、`tags`。同时指定 `--simple` 和 `-f` 时，每行输出逗号分隔的字段值，不带表头或树缩进；仅使用 `--simple` 时仍每行输出一个 URI。若未选择 `name`、`uri` 或 `path`，列表会自动补充 `name` 列，树会补充 `path` 列。
@@ -173,7 +187,7 @@ CLI 会按所选列请求 `extra_fields`（`locked`、`id`、`count`）；选择
 
 HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应用可见性、tags、offset 和 limit 后仍有后续匹配节点；Python、TypeScript 和 Go SDK 继续返回 `result` 数组。CLI 检测到后续节点时会在输出末尾显示翻页提示。
 
-**响应**
+**响应（`output=original`、`include_tags=true`）**
 
 ```json
 {
@@ -189,8 +203,7 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
       "tags": ["team=search"]
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
 
@@ -217,12 +230,13 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 | limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
 | extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
+| include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
 目录过滤和 `tags` 均在 `offset`、`limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们。
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 page = client.tree_page(
@@ -294,19 +308,19 @@ curl -G "http://localhost:1933/api/v1/fs/tree" \
 **CLI**
 
 ```bash
-openviking tree viking://resources/my-project/ --fields path,type,tags
+ov tree viking://resources/my-project/ --fields path,type,tags
 
 # 与 ls、glob 一样支持 --simple 和列选择组合
-openviking tree viking://resources/my-project/ --simple --fields path,tags
+ov tree viking://resources/my-project/ --simple --fields path,tags
 
 # 仅返回目录，并附加 L0/L1 内容
-openviking tree viking://resources/my-project/ \
+ov tree viking://resources/my-project/ \
   --directories-only --include-abstract --include-overview
 ```
 
 与 `ls` 一致，HTTP 响应中的 `result` 保持为节点数组，`has_more` 位于响应顶层。CLI 检测到 `has_more=true` 时会在树输出末尾显示后续节点提示。
 
-**响应**
+**响应（`output=original`、`include_tags=true`）**
 
 ```json
 {
@@ -329,8 +343,7 @@ openviking tree viking://resources/my-project/ \
       "tags": ["team=search", "env=prod"]
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
 
@@ -347,7 +360,7 @@ openviking tree viking://resources/my-project/ \
 | uri | str | 是 | - | Viking URI（如 `viking://resources/docs/api.md`）或 32 字符十六进制向量记录 `id` |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 info = client.stat(uri="viking://resources/docs/api.md")
@@ -391,8 +404,8 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 **CLI**
 
 ```bash
-openviking stat viking://resources/my-project/docs/api.md
-openviking stat viking://resources/my-project/docs
+ov stat viking://resources/my-project/docs/api.md
+ov stat viking://resources/my-project/docs
 ```
 
 
@@ -410,8 +423,7 @@ openviking stat viking://resources/my-project/docs
     "isLocked": false,
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -429,16 +441,17 @@ openviking stat viking://resources/my-project/docs
     "isLocked": false,
     "uri": "viking://resources/docs",
     "count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
-`isLocked` 字段反映路径当前是否被路径锁持有：路径自身存在有效锁（包括目标路径对应的 exact-path lock），或者任一祖先目录持有 TreeLock。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
+`isLocked` 字段反映路径当前是否被路径锁持有：路径自身存在有效锁（包括目标路径对应的 exact-path lock），或者任一祖先目录持有 TreeLock。当 LockManager 不可用或查询失败时返回 `false`。这只是状态查询，不会预留锁；查询后仍可能有其他写入者取得锁，写入时仍需处理 `ResourceBusyError`。
 
-`id` 字段（仅文件）是 VikingDB 中向量记录的确定性主键，对 level 2（常规文件）记录按 `md5(f"{account_id}:{uri}")` 计算。该值与向量集合 schema 中的 `id` 字段一致，可用于直接交叉引用向量记录而无需额外查询。目录不返回此字段，因为一个目录在多个语义层（L0 abstract、L1 overview、L2）下可能对应多条向量记录，id 不唯一。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，`stat(id)` 都会返回 `NOT_FOUND`，并在原因中提示数据可能尚未索引或已经删除。
+`id` 字段（仅文件）是 VikingDB 中向量记录的确定性主键，对 level 2（常规文件）记录按 `md5(f"{account_id}:{uri}")` 计算。该值与向量集合 schema 中的 `id` 字段一致，可用于直接交叉引用向量记录而无需额外查询。目录不返回此字段，因为一个目录在多个语义层（L0 abstract、L1 overview）下可能对应多条向量记录，id 不唯一。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，`stat(id)` 都会返回 `NOT_FOUND`，并在原因中提示数据可能尚未索引或已经删除。
 
 `count` 字段（仅目录）包含该目录下的项目（文件和子目录）估计数量（来自向量索引）。
+
+在大小写不敏感的 `localfs` 上，`stat` 也可能通过大小写别名返回真实文件或目录的元数据。例如 `viking://resources/docs/REPORT.md` 可能命中真实的 `viking://resources/docs/report.md`；大小写敏感系统上，别名目标不存在时返回 `NOT_FOUND`。
 
 ---
 
@@ -498,14 +511,14 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
 **CLI**
 
 ```bash
-openviking attrs get viking://resources/docs/api.md
-openviking attrs get viking://resources/docs/api.md tags
-openviking attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
-openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
-openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs get viking://resources/docs/api.md
+ov attrs get viking://resources/docs/api.md tags
+ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
+ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
+ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
 ```
 
-目录目标会更新目录语义记录；`recursive=true` 还会更新已有子文件和子目录语义记录。
+`set-tags` 的目录目标会更新目录语义记录；`recursive=true` 还会更新已有子文件和子目录语义记录。
 
 
 **响应（Resource）**
@@ -560,7 +573,7 @@ openviking attrs set-tags viking://resources/docs --tags team=search --mode appe
 | description | str | 否 | `null` | 目录初始说明。未传入时使用目录名作为默认 L0；传入后使用该说明。两种情况都会写入 `.abstract.md` 并进入 L0 向量化队列。 |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.mkdir(uri="viking://resources/new-project/")
@@ -600,8 +613,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 **CLI**
 
 ```bash
-openviking mkdir viking://resources/new-project/
-openviking mkdir viking://resources/new-project/ --description "接口文档目录"
+ov mkdir viking://resources/new-project/
+ov mkdir viking://resources/new-project/ --description "接口文档目录"
 ```
 
 
@@ -612,10 +625,11 @@ openviking mkdir viking://resources/new-project/ --description "接口文档目�
   "status": "ok",
   "result": {
     "uri": "viking://resources/new-project/"
-  },
-  "time": 0.1
+  }
 }
 ```
+
+在大小写不敏感的 `localfs` 上，创建仅大小写不同的目录可能命中已有目录。例如已存在 `viking://resources/docs/` 时，`ov mkdir viking://resources/DOCS/` 可能作用到同一个底层目录；大小写敏感系统上二者是不同路径。
 
 ---
 
@@ -624,17 +638,19 @@ openviking mkdir viking://resources/new-project/ --description "接口文档目�
 删除文件或目录。递归删除目录时会返回删除的项目估计数量。
 
 `rm` 是幂等操作：删除一个合法但不存在的 URI 仍会成功。
-URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID_URI`。
+URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用域时返回 `INVALID_URI`。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要删除的 Viking URI |
+| wait | bool | 否 | False | 等待删除后的语义刷新完成 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | recursive | bool | 否 | False | 递归删除目录 |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 # 删除单个文件
@@ -680,7 +696,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 **CLI**
 
 ```bash
-openviking rm viking://resources/old.md [--recursive]
+ov rm viking://resources/old.md [--recursive]
 ```
 
 
@@ -691,8 +707,7 @@ openviking rm viking://resources/old.md [--recursive]
   "status": "ok",
   "result": {
     "uri": "viking://resources/docs/old.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -704,14 +719,15 @@ openviking rm viking://resources/old.md [--recursive]
   "result": {
     "uri": "viking://resources/old-project/",
     "estimated_deleted_count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
 `estimated_deleted_count` 字段（递归删除时）包含删除的项目（文件和目录）估计数量（来自向量索引）。CLI 会在输出中显示此信息。
 
 删除 `viking://resources/...` 时，响应可能包含 `memory_cleanup`，表示删除前已清理引用该资源 URI 的用户记忆。
+
+在大小写不敏感的 `localfs` 上，大小写别名可能影响删除目标。例如真实文件是 `viking://resources/bob-private/private.md`，执行 `ov rm viking://resources/BOB-PRIVATE/private.md` 可能删除同一个文件；大小写敏感系统上，别名目标不存在时该幂等删除仍会成功，但不会删除真实文件。
 
 ---
 
@@ -799,6 +815,8 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；路径锁繁忙时返回 `CONFLICT`；复制或删除目录但未设置 `recursive=true`、对文件执行目录操作、源和目标关系非法或类型冲突时返回 `INVALID_ARGUMENT`（HTTP 400）。
 
+在大小写不敏感的 `localfs` 上，`from_uri` 和 `to_uri` 都可能受大小写别名影响。例如 `ov cp viking://resources/BOB-PRIVATE/private.md viking://resources/archive/copy.md` 可能从真实的 `bob-private/private.md` 复制；`to_uri` 仅大小写不同也可能覆盖已有目标。大小写敏感系统上，大小写不同的源不存在时返回 `NOT_FOUND`，大小写不同的目标按独立路径处理。
+
 ---
 
 ### mv()
@@ -815,7 +833,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 | to_uri | str | 是 | - | 目标 Viking URI |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.mv(
@@ -860,7 +878,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
 **CLI**
 
 ```bash
-openviking mv viking://resources/old-name/ viking://resources/new-name/
+ov mv viking://resources/old-name/ viking://resources/new-name/
 ```
 
 
@@ -872,10 +890,11 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
   "result": {
     "from": "viking://resources/old-name/",
     "to": "viking://resources/new-name/"
-  },
-  "time": 0.1
+  }
 }
 ```
+
+在大小写不敏感的 `localfs` 上，`from_uri` 和 `to_uri` 都可能受大小写别名影响。例如 `ov mv viking://resources/BOB-PRIVATE/private.md viking://resources/archive/private.md` 可能移动真实的 `bob-private/private.md`；`to_uri` 仅大小写不同也可能覆盖或合并已有目标。大小写敏感系统上，大小写不同的源不存在时返回 `NOT_FOUND`，大小写不同的目标按独立路径处理。
 
 <a id="grep"></a><a id="glob"></a>
 

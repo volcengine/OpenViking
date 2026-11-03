@@ -10,7 +10,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 
 # --- stdout-safety guard (must run before any openviking/vikingbot imports) ---
@@ -108,6 +108,13 @@ app = typer.Typer(
     help=f"{__logo__} vikingbot - Personal AI Assistant",
     no_args_is_help=True,
 )
+# Force UTF-8 stdio on Windows. rich's legacy Windows renderer writes through
+# sys.stdout/stderr; on Chinese Windows (code page 936/gbk) that stream cannot
+# encode "✓" (U+2713), raising UnicodeEncodeError when output is redirected.
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
@@ -385,7 +392,7 @@ def _make_provider(config, langfuse_client: Any = None):
     """
     p = config.agents
     model = p.model if p else None
-    temperature = p.temperature if p else 0.7
+    temperature = p.temperature if p else None
     thinking = p.thinking if p else True
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
@@ -584,6 +591,7 @@ def gateway(
         enable_openapi=True,
         openapi_port=effective_port,
         compile_service=compile_service,
+        agent_loop=agent_loop,
     )
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
@@ -793,6 +801,7 @@ def prepare_channel(
     enable_openapi: bool = False,
     openapi_port: int = 18790,
     compile_service=None,
+    agent_loop=None,
 ):
     """Prepare channels for the bot.
 
@@ -819,6 +828,7 @@ def prepare_channel(
             app=fastapi_app,  # Pass the external FastAPI app
             global_config=config,
             compile_service=compile_service,
+            agent_loop=agent_loop,
         )
         from vikingbot.studio.service import StudioService
 
@@ -882,6 +892,7 @@ def prepare_agent_channel(
     sender: str | None = None,
     memory_peer: list[str] | None = None,
     memory_user: list[str] | None = None,
+    disabled_tools: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -903,6 +914,7 @@ def prepare_agent_channel(
             markdown=markdown,
             eval=eval,
             sender=sender,
+            disabled_tools=disabled_tools,
         )
         channels.add_channel(channel)
     else:
@@ -919,6 +931,7 @@ def prepare_agent_channel(
             markdown=markdown,
             logs=logs,
             sender=sender,
+            disabled_tools=disabled_tools,
         )
         channels.add_channel(channel)
 
@@ -952,6 +965,9 @@ def chat(
         "--memory-user",
         help="Deprecated legacy OpenViking user ID for root-key memory fanout",
     ),
+    disabled_tools: Annotated[
+        list[str] | None, typer.Option("--disable-tool", help="Disable a tool (repeatable)")
+    ] = None,
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None
@@ -1011,6 +1027,7 @@ def chat(
         sender,
         memory_peer,
         memory_user,
+        disabled_tools=disabled_tools,
     )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
