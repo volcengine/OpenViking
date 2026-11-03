@@ -11,7 +11,8 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from openviking.core.namespace import is_session_uri
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
-from openviking.storage.expr import And, PathScope, RawDSL
+from openviking.storage.expr import FilterExpr, PathScope, RawDSL
+from openviking.storage.scope_filter import build_scope_filter, merge_filters
 from openviking.storage.viking_fs._base import logger
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.grep_config import GrepEngine
@@ -22,6 +23,35 @@ _FULLTEXT_UNSUPPORTED_CACHE_TTL = 60.0
 
 def _pkg():
     return sys.modules[__package__]
+
+
+def _build_grep_scope_filter(
+    uri: str,
+    level_limit: Optional[int],
+    *,
+    exclude_uri: Optional[str] = None,
+    tag_filter: Optional[Dict[str, Any]] = None,
+) -> Optional[FilterExpr]:
+    """Build grep's bounded path scope without changing its filter shape."""
+    scope = build_scope_filter(
+        target_directories=[uri],
+        target_depth=level_limit,
+    )
+    if exclude_uri:
+        scope = merge_filters(
+            scope,
+            RawDSL(
+                {
+                    "op": "must_not",
+                    "field": "uri",
+                    "conds": [exclude_uri],
+                    "para": "-d=-1",
+                }
+            ),
+        )
+    if tag_filter is not None:
+        scope = merge_filters(scope, RawDSL(tag_filter))
+    return scope
 
 
 class _GrepMixin:
@@ -95,11 +125,10 @@ class _GrepMixin:
                 return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
             records = await self._grep_tag_records(
                 vector_store,
-                And(
-                    [
-                        PathScope("uri", uri, depth=level_limit),
-                        RawDSL(tag_filter),
-                    ]
+                _build_grep_scope_filter(
+                    uri,
+                    level_limit,
+                    tag_filter=tag_filter,
                 ),
                 ctx,
                 ordered=resolved_engine == "opengauss_fs",
@@ -362,26 +391,16 @@ class _GrepMixin:
         # single query string for bm25 search. VikingDB's standard tokenizer
         # will handle the tokenization of the query string.
         query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
-        filter_expr = PathScope("uri", uri, depth=level_limit)
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
             await self._ensure_access(excluded_prefix, ctx)
-            filter_expr = And(
-                [
-                    filter_expr,
-                    RawDSL(
-                        {
-                            "op": "must_not",
-                            "field": "uri",
-                            "conds": [excluded_prefix],
-                            "para": "-d=-1",
-                        }
-                    ),
-                ]
-            )
-        if tag_filter is not None:
-            filter_expr = And([filter_expr, RawDSL(tag_filter)])
+        filter_expr = _build_grep_scope_filter(
+            uri,
+            level_limit,
+            exclude_uri=excluded_prefix,
+            tag_filter=tag_filter,
+        )
 
         # Auto-adapt bm25 recall limit: recall up to 5x requested matches
         # while capping at VikingDB's max limit. If node_limit is unset,
@@ -400,6 +419,8 @@ class _GrepMixin:
             )
             result = await vector_store.search_by_keywords(
                 query=query,
+                mode="bm25",
+                fields=["content"],
                 limit=remote_return_limit,
                 filter=filter_expr,
                 output_fields=output_fields,
@@ -411,11 +432,10 @@ class _GrepMixin:
                 try:
                     records = await self._grep_tag_records(
                         vector_store,
-                        And(
-                            [
-                                PathScope("uri", uri, depth=level_limit),
-                                RawDSL(tag_filter),
-                            ]
+                        _build_grep_scope_filter(
+                            uri,
+                            level_limit,
+                            tag_filter=tag_filter,
                         ),
                         ctx,
                         ordered=engine in {"opengauss_then_fs", "opengauss_fs"},

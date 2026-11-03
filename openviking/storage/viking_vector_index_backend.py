@@ -32,6 +32,7 @@ from openviking.storage.acl import (
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.scope_filter import build_scope_filter, merge_filters
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -3161,10 +3162,6 @@ class VikingVectorIndexBackend:
         *,
         acl_enabled: bool,
     ) -> Optional[FilterExpr]:
-        filters: List[FilterExpr] = []
-        if context_type:
-            filters.append(Eq("context_type", context_type))
-
         targets = [target_dir for target_dir in target_directories or [] if target_dir]
         tenant_filter = self._tenant_filter(ctx, acl_enabled=acl_enabled)
         if tenant_filter and not acl_enabled and self._targets_within_visible_roots(ctx, targets):
@@ -3172,26 +3169,15 @@ class VikingVectorIndexBackend:
             # roots. Keep account isolation, but avoid recursively evaluating
             # the broader path scopes as an additional filter.
             tenant_filter = Eq("account_id", ctx.account_id)
-        if tenant_filter:
-            filters.append(tenant_filter)
-
-        if targets:
-            uri_conds: List[FilterExpr] = [
-                PathScope("uri", target_dir, depth=-1) for target_dir in targets
-            ]
-            if uri_conds:
-                filters.append(Or(uri_conds))
-
-        if extra_filter:
-            if isinstance(extra_filter, dict):
-                filters.append(RawDSL(extra_filter))
-            else:
-                filters.append(extra_filter)
-
-        if level:
-            filters.append(In("level", level))
-
-        return self._merge_filters(*filters)
+        return build_scope_filter(
+            context_type=context_type,
+            base_filter=tenant_filter,
+            target_directories=targets,
+            target_depth=-1,
+            wrap_single_target=True,
+            extra_filter=extra_filter,
+            level=level,
+        )
 
     @staticmethod
     def _targets_within_visible_roots(ctx: RequestContext, targets: List[str]) -> bool:
@@ -3250,21 +3236,4 @@ class VikingVectorIndexBackend:
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr | Dict[str, Any]]) -> Optional[FilterExpr]:
-        non_empty: List[FilterExpr] = []
-        for item in filters:
-            if not item:
-                continue
-            if isinstance(item, dict):
-                item = RawDSL(item)
-            if (
-                isinstance(item, RawDSL)
-                and item.payload.get("op") == "and"
-                and not item.payload.get("conds")
-            ):
-                continue
-            non_empty.append(item)
-        if not non_empty:
-            return None
-        if len(non_empty) == 1:
-            return non_empty[0]
-        return And(non_empty)
+        return merge_filters(*filters)
