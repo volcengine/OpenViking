@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Process-wide lifecycle for user-controlled GLOBAL access policies.
 
-The native ``UserGlobalPolicy`` is an immutable parsed snapshot. This module
-keeps one snapshot per owner and owns the shared TTL and FIFO eviction policy.
+Python reads the policy source through the AGFS client with the owner's account
+context and asks the native parser to interpret it. This module keeps one
+snapshot per owner and owns the shared TTL and FIFO eviction policy.
 """
 
 from __future__ import annotations
@@ -13,10 +14,11 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
-from openviking.core.global_policy import user_global_policy_from_file
+from openviking.core.global_policy import GlobalAccessPolicy, global_policy_from_source
 from openviking.core.namespace import owner_fields_for_uri, relative_uri_path
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -32,7 +34,7 @@ _POLICY_URI = "viking://user/{owner_user_id}/GLOBAL_POLICY.md"
 
 @dataclass(frozen=True)
 class _CacheEntry:
-    policy: Any
+    policy: GlobalAccessPolicy
     loaded_at: float
 
 
@@ -41,7 +43,7 @@ class UserGlobalPolicyService:
 
     A policy belongs to the owner of the user root, not to the actor reading it.
     Entries are therefore keyed by ``(account_id, owner_user_id)``. Missing,
-    unreadable or invalid policies deny access through the native evaluator.
+    unreadable or invalid policies deny access through the fail-closed evaluator.
     """
 
     def __init__(self, viking_fs: "VikingFS"):
@@ -53,7 +55,7 @@ class UserGlobalPolicyService:
         self,
         ctx: RequestContext,
         owner_user_id: Optional[str] = None,
-    ) -> Any:
+    ) -> GlobalAccessPolicy:
         """Return the snapshot for one owner, reloading it after the TTL."""
         owner = ctx.user.user_id if owner_user_id is None else owner_user_id
         key = (ctx.account_id, owner)
@@ -146,14 +148,26 @@ class UserGlobalPolicyService:
                 POLICY_CACHE_MAX_ENTRIES,
             )
 
-    def _build(self, account_id: str, owner_user_id: str) -> Any:
+    def _build(self, account_id: str, owner_user_id: str) -> GlobalAccessPolicy:
         owner_ctx = RequestContext(
             user=UserIdentifier(account_id, owner_user_id),
             role=Role.USER,
         )
         uri = _POLICY_URI.format(owner_user_id=owner_user_id)
         agfs_path = self._viking_fs._uri_to_path(uri, ctx=owner_ctx)
-        return user_global_policy_from_file(self._viking_fs.agfs, agfs_path)
+        try:
+            # Encrypted backends need the account context to decrypt the policy
+            # source. The account is already encoded in ``agfs_path``; pass it
+            # explicitly so the read does not fail with a missing FsContext.
+            raw = self._viking_fs.agfs.read(
+                agfs_path,
+                ctx={"account_id": account_id},
+            )
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return global_policy_from_source(None)
+            return global_policy_from_source(None, read_error=str(exc))
+        return global_policy_from_source(raw)
 
 
 __all__ = [

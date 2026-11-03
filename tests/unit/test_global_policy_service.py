@@ -45,15 +45,28 @@ class _FakeAGFS:
     def __init__(self, contents):
         self.contents = contents
         self.calls = []
+        self.contexts = []
 
-    def read(self, path):
+    def read(self, path, ctx=None):
         self.calls.append(path)
+        self.contexts.append(ctx)
         value = self.contents.get(path)
         if value is None:
             raise AGFSNotFoundError(path)
         if isinstance(value, Exception):
             raise value
         return value
+
+
+class _EncryptedFakeAGFS(_FakeAGFS):
+    """Mirror an encrypted backend that refuses reads without ``account_id``."""
+
+    def read(self, path, ctx=None):
+        if not ctx or not ctx.get("account_id"):
+            self.calls.append(path)
+            self.contexts.append(ctx)
+            raise RuntimeError("account_id missing in FsContext")
+        return super().read(path, ctx=ctx)
 
 
 class _FakeVikingFS:
@@ -103,6 +116,23 @@ def test_service_separates_accounts_for_the_same_user_id():
     assert first.allows_path("resources/public") is True
     assert second.allows_path("resources/public") is False
     assert len(fs.agfs.calls) == 2
+    assert fs.agfs.contexts == [
+        {"account_id": "acct1"},
+        {"account_id": "acct2"},
+    ]
+
+
+def test_service_reads_policy_with_account_context_for_encrypted_backends():
+    fs = _FakeVikingFS({_path(): _POLICY})
+    fs.agfs = _EncryptedFakeAGFS({_path(): _POLICY})
+    service = UserGlobalPolicyService(fs)
+    ctx = _ctx()
+
+    policy = service.for_owner(ctx, "alice")
+
+    assert policy.status == "valid"
+    assert service.allows(ctx, "resources/public", owner_user_id="alice") is True
+    assert fs.agfs.contexts == [{"account_id": "acct"}]
 
 
 def test_invalidate_forces_the_next_access_to_reload():

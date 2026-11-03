@@ -21,8 +21,8 @@ create_exception!(
 
 /// Immutable parsed policy exposed to Python as ``UserGlobalPolicy``.
 ///
-/// A file-backed instance reads its source once at construction.
-/// Reuse, expiry and eviction are managed by the caller.
+/// Construction only parses caller-provided text; it never touches a
+/// filesystem. Reuse, expiry and eviction are managed by the caller.
 #[pyclass(name = "UserGlobalPolicy", module = "ragfs_python", frozen)]
 pub(crate) struct PyUserGlobalPolicy {
     snapshot: PolicySnapshot,
@@ -45,26 +45,6 @@ impl PyUserGlobalPolicy {
                 snapshot: PolicySnapshot::valid(Arc::new(policy)),
             })
             .map_err(map_error)
-    }
-
-    /// Read ``fs.read(path)`` once and capture the result as a snapshot.
-    #[staticmethod]
-    fn from_file(py: Python<'_>, fs: Py<PyAny>, path: String) -> PyResult<Self> {
-        if path.is_empty() {
-            return Err(GlobalPolicyError::new_err("policy path must be non-empty"));
-        }
-        let read = fs
-            .bind(py)
-            .getattr("read")
-            .map_err(|_| GlobalPolicyError::new_err("filesystem object must expose read(path)"))?;
-        if !read.is_callable() {
-            return Err(GlobalPolicyError::new_err(
-                "filesystem read must be callable",
-            ));
-        }
-        Ok(Self {
-            snapshot: snapshot_from_source(read_policy_file(py, &fs, &path)),
-        })
     }
 
     /// Validate one canonical, literal path relative to a user root.
@@ -146,14 +126,6 @@ impl PyUserGlobalPolicy {
     }
 }
 
-fn snapshot_from_source(source: Result<Option<String>, String>) -> PolicySnapshot {
-    match source {
-        Ok(Some(text)) => PolicySnapshot::from_text(&text),
-        Ok(None) => PolicySnapshot::missing(),
-        Err(reason) => PolicySnapshot::unreadable(reason),
-    }
-}
-
 fn extract_policy_text(raw: &Bound<'_, PyAny>) -> PyResult<String> {
     if let Ok(text) = raw.cast::<PyString>() {
         return text
@@ -178,41 +150,6 @@ fn extract_string(value: &Bound<'_, PyAny>, message: &'static str) -> PyResult<S
             .map_err(|_| GlobalPolicyError::new_err(message)),
         Err(_) => Err(GlobalPolicyError::new_err(message)),
     }
-}
-
-fn read_policy_file(py: Python<'_>, fs: &Py<PyAny>, path: &str) -> Result<Option<String>, String> {
-    match fs.bind(py).call_method1("read", (path,)) {
-        Ok(value) => optional_policy_text(&value),
-        Err(error) if is_not_found(py, &error) => Ok(None),
-        Err(error) => Err(format!("failed to read {path}: {error}")),
-    }
-}
-
-fn optional_policy_text(value: &Bound<'_, PyAny>) -> Result<Option<String>, String> {
-    if value.is_none() {
-        return Ok(None);
-    }
-    if let Ok(text) = value.cast::<PyString>() {
-        return text
-            .to_str()
-            .map(|text| Some(text.to_owned()))
-            .map_err(|_| "policy content must be UTF-8 text".to_string());
-    }
-    if let Ok(bytes) = value.cast::<PyBytes>() {
-        return String::from_utf8(bytes.as_bytes().to_vec())
-            .map(Some)
-            .map_err(|_| "policy content must be UTF-8 text".to_string());
-    }
-    Err("policy source must return str, bytes or None".to_string())
-}
-
-fn is_not_found(py: Python<'_>, error: &PyErr) -> bool {
-    error
-        .get_type(py)
-        .name()
-        .ok()
-        .and_then(|name| name.to_str().ok().map(str::to_owned))
-        .is_some_and(|name| name.contains("NotFound"))
 }
 
 fn status_error(py: Python<'_>, status: &PolicyStatus) -> PyErr {

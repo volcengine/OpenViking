@@ -36,7 +36,11 @@ class GlobalPolicyRule:
 
 @dataclass(frozen=True)
 class GlobalAccessPolicy:
-    """Validated parser output. The body is preserved, not sanitized or executed."""
+    """Validated parser output. The body is preserved, not sanitized or executed.
+
+    A non-valid ``status`` represents a fail-closed snapshot built from source
+    that was missing, unreadable or rejected. Such snapshots deny every path.
+    """
 
     default: Literal["allow", "deny"]
     rules: tuple[GlobalPolicyRule, ...]
@@ -44,6 +48,12 @@ class GlobalAccessPolicy:
     schema_version: int = 1
     policy_hash: str = field(default="", repr=False, compare=False)
     _native: Any = field(default=None, repr=False, compare=False)
+    status: str = "valid"
+    last_error: str | None = None
+
+    def allows_path(self, path: str) -> bool:
+        """Evaluate one owner-relative path, failing closed for non-valid policies."""
+        return is_global_policy_path_allowed(self, path)
 
 
 def _native_types():
@@ -86,19 +96,53 @@ def parse_global_policy(raw: str | bytes) -> GlobalAccessPolicy:
     )
 
 
-def user_global_policy_from_file(fs: Any, path: str) -> Any:
-    """Create a native ``UserGlobalPolicy`` that reads ``fs.read(path)`` once.
+def global_policy_from_source(
+    raw: str | bytes | None,
+    *,
+    read_error: str | None = None,
+) -> GlobalAccessPolicy:
+    """Validate and parse policy text that the caller already read.
 
-    The returned snapshot is immutable. Reuse, expiry and eviction are managed
-    by the caller. A missing, unreadable or invalid policy denies every path.
+    This helper never touches a filesystem. Callers read the source through the
+    ``VikingFS``-owned AGFS client, passing the account context required by
+    encrypted backends, and hand the resulting bytes to this helper. Missing,
+    unreadable, invalid and unsupported documents return a fail-closed snapshot
+    instead of raising.
     """
-    NativePolicy, NativeInvalid, NativeUnsupported = _native_types()
+    if read_error is not None:
+        return GlobalAccessPolicy(
+            default="deny",
+            rules=(),
+            body="",
+            status="unreadable",
+            last_error=f"GLOBAL_POLICY_UNAVAILABLE: {read_error}",
+        )
+    if raw is None:
+        return GlobalAccessPolicy(
+            default="deny",
+            rules=(),
+            body="",
+            status="missing",
+            last_error="GLOBAL_POLICY_MISSING: policy file not found",
+        )
     try:
-        return NativePolicy.from_file(fs, path)
-    except NativeUnsupported as exc:
-        raise UnsupportedGlobalPolicySchemaError(str(exc)) from exc
-    except NativeInvalid as exc:
-        raise GlobalPolicyError(str(exc)) from exc
+        return parse_global_policy(raw)
+    except UnsupportedGlobalPolicySchemaError as exc:
+        return GlobalAccessPolicy(
+            default="deny",
+            rules=(),
+            body="",
+            status="unsupported_schema",
+            last_error=f"{exc.code}: {exc}",
+        )
+    except GlobalPolicyError as exc:
+        return GlobalAccessPolicy(
+            default="deny",
+            rules=(),
+            body="",
+            status="invalid",
+            last_error=f"{exc.code}: {exc}",
+        )
 
 
 def is_global_policy_path_allowed(policy: GlobalAccessPolicy | Any | None, path: str) -> bool:
