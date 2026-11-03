@@ -43,6 +43,25 @@ def test_format_messages_renders_multimodal_content_as_json(role):
     assert '"url": "[redacted]"' in rendered
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (
+            [{"type": "text", "text": "工具结果"}],
+            '[\n  {\n    "type": "text",\n    "text": "工具结果"\n  }\n]',
+        ),
+        ("plain result", "plain result"),
+        ('{"count":1}', '{\n  "count": 1\n}'),
+    ],
+)
+def test_format_messages_renders_tool_results(content, expected):
+    rendered = format_messages([{"role": "tool", "tool_call_id": "call-1", "content": content}])
+
+    assert rendered == (
+        "=== Messages ===\n\n[tool] (id=call-1)\n" + expected + "\n\n=== End Messages ==="
+    )
+
+
 def test_format_messages_renders_tool_call_details():
     rendered = format_messages(
         [
