@@ -272,13 +272,17 @@ class JsonModel:
         Diagnostics contain budgets, usage and failure categories, never reasoning.
         A cancelled or timed-out request cannot be accepted as a partial response.
         """
-        from vikingbot.agent.loop import _inline_media_bytes
+        from vikingbot.agent.loop import _inline_media_bytes, _strip_inline_media
 
         media_bytes = _inline_media_bytes(messages)
+        omitted_bytes = 0
         if media_bytes and not self.provider.supports_tool_result_media(self.model):
-            raise CompileFailure(
-                "UNSUPPORTED_MEDIA", "Compile provider cannot deliver image evidence", stage=stage
-            )
+            # The configured model cannot read images. Drop the media parts and
+            # keep the text: an image must never fail the whole compilation.
+            messages = _strip_inline_media(messages)
+            omitted_bytes = media_bytes
+            media_bytes = 0
+            self.metrics["media_omitted_bytes"] += omitted_bytes
         if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:
             raise CompileFailure(
                 "MEDIA_LIMIT", "Compile image request exceeds the inline media budget", stage=stage
@@ -302,6 +306,7 @@ class JsonModel:
             "tool_result_chars": sum(
                 len(str(m.get("content", ""))) for m in messages if m.get("role") == "tool"
             ),
+            "media_omitted_bytes": omitted_bytes,
             "skill_attachment_chars": sum(len(value) for value in self.resources.snapshots.values())
             if self.resources and stage not in {"plan", "review", "route", "combine"}
             else 0,

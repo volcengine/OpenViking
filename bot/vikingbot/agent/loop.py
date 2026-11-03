@@ -132,6 +132,31 @@ def _demote_historical_tool_media(
     return reclaimable_bytes
 
 
+def _strip_inline_media(messages: list[dict]) -> list[dict]:
+    """Return the messages with every inline media part removed.
+
+    The text of each message is kept so the model still reads the tool output.
+    Media is dropped instead of failing the request: an image the configured
+    model cannot read must never cost the whole compilation.
+    """
+    stripped: list[dict] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list) or not _inline_media_bytes([message]):
+            stripped.append(message)
+            continue
+        text_parts = [
+            part["text"]
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") in {"text", "input_text"}
+            and isinstance(part.get("text"), str)
+        ]
+        note = "Media content was omitted because the configured model cannot read images."
+        stripped.append({**message, "content": "\n".join(text_parts) + "\n\n" + note})
+    return stripped
+
+
 def _compact_render_message(message: dict) -> str:
     role = message.get("role")
     content = message.get("content")

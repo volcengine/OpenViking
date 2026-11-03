@@ -586,3 +586,32 @@ async def test_multi_read_and_request_budget_still_preserve_native_images(runtim
     with pytest.raises(CompileFailure, match="media budget"):
         await pipeline.model.call("compile", [{"content": result.content}], [], max_tokens=100)
     pipeline.model.provider.chat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_compile_omits_media_instead_of_failing_when_the_model_cannot_read_it(runtime):
+    """An image the model cannot read must never fail the compilation."""
+    pipeline, png = runtime
+    pipeline.model.provider.supports_tool_result_media = Mock(return_value=False)
+    pipeline.model.provider.chat = AsyncMock(return_value=LLMResponse(content="ok"))
+    encoded = base64.b64encode(png).decode()
+    messages = [
+        {"role": "user", "content": "read the diagram"},
+        {
+            "role": "tool",
+            "content": [
+                {"type": "text", "text": "diagram bytes"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
+            ],
+        },
+    ]
+
+    response = await pipeline.model.call("map", messages, None, max_tokens=1024)
+
+    assert response.content == "ok"
+    sent = pipeline.model.provider.chat.await_args.kwargs["messages"]
+    assert _inline_media_bytes(sent) == 0
+    assert "diagram bytes" in json.dumps(sent)
+    assert pipeline.model.metrics["media_omitted_bytes"] == len(png)
+    report = await pipeline.files.get("calls/map-1")
+    assert report["media_omitted_bytes"] == len(png)
