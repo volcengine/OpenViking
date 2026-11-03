@@ -468,6 +468,9 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 
 ROOT 可管理 Cluster 配置和任意 Account 配置；ADMIN 只能管理所属账号的 Account 层。
 
+Serverless 业务 Account 必须提供完整的 `vlm`、`embedding` 和 `vectordb`，不回退到集群业务身份。
+创建示例见[运行模式](../guides/25-runtime-modes.md)。
+
 ```http
 GET /api/v1/admin/configuration
 PATCH /api/v1/admin/configuration
@@ -514,7 +517,7 @@ cuVS 调优和自定义适配器参数。
 本地模型路径、融合/视频参数和 `allow_metadata_override` 不在 Account API 范围内。
 每次更新都在持久化前联合校验有效 Embedding 和 VectorDB，失败保留原配置。
 
-显式 `embedding: {}` 是合法配置，表示未声明 Account 模型模式或运行策略。
+`dedicated` 模式允许显式 `embedding: {}`，表示未声明 Account 模型模式或运行策略。
 作为 PATCH 提交时，`{}` 会与现有配置合并，不会清空已有值。未配置 Account
 模型模式时使用 Cluster 模型绑定。显式 Account VectorDB 配置会替换 Cluster
 的连接与鉴权字段，即使后端类型相同也不会拼接；仅支持 `http`、`volcengine`、
@@ -536,10 +539,10 @@ Feishu 时使用完整 Cluster 配置；一旦设置，`app_id`、`app_secret`�
 `request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
 Cluster 管理。GitHub 和 ACL 不回退到 Cluster。
 
-VLM 业务解析器在 Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
+`dedicated` 模式下，Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
 模型身份、服务端点和凭证仅来自 Account，部分运行参数按业务规则使用 Cluster
 配置。Account 设置 `timeout` 时覆盖 Cluster 的值，未设置或重置后使用 Cluster
-的值。Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
+的值。`dedicated` 模式下，Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
 Cluster `query_planner`、Cluster `vlm`；这是 VLM 业务规则，不是配置框架的隐式继承。
 
 PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。

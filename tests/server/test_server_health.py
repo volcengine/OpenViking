@@ -11,8 +11,15 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
-from openviking.server.app import _initialize_auth_plugin, _initialize_runtime_state, create_app
+from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
+from openviking.server.runtime import ServerRuntime
+from openviking.server.runtime import initialize_auth_plugin as _initialize_auth_plugin
+from openviking.service.core import OpenVikingService
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    OpenVikingConfigSingleton,
+)
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -113,8 +120,14 @@ async def test_health_trusted_identity_contract(credentials, service):
         assert {"account_id", "user_id", "role"}.isdisjoint(body)
 
 
-async def test_system_status(client: httpx.AsyncClient):
-    resp = await client.get("/api/v1/system/status")
+@pytest.mark.parametrize("roles", [["api"], ["queue_worker"], ["scheduler"]])
+async def test_system_status(app, roles):
+    node = create_app(config=ServerConfig(roles=roles))
+    node.state.auth_plugin = app.state.auth_plugin
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=node), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/system/status")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -159,42 +172,50 @@ async def test_openviking_error_handler(client: httpx.AsyncClient):
     assert body["error"]["code"] is not None
 
 
-async def test_404_for_unknown_route(client: httpx.AsyncClient):
-    resp = await client.get("/this/route/does/not/exist")
-    assert resp.status_code == 404
+@pytest.mark.parametrize("roles", [["queue_worker"], ["scheduler"], ["queue_worker", "scheduler"]])
+async def test_non_api_route_access(roles):
+    app = create_app(config=ServerConfig(roles=roles))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for path in (
+            "/this/route/does/not/exist",
+            "/api/v1/tasks",
+            "/api/v1/admin/ttl/configuration",
+            "/mcp",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/studio",
+            "/gateway/v1/models",
+            "/authorize",
+            "/favicon.ico",
+        ):
+            assert (await client.get(path)).status_code == 404, path
+        assert (await client.get("/api/v1/system/status")).status_code == 401
+        assert (await client.post("/api/v1/system/wait", json={})).status_code == 401
+        assert (
+            await client.post("/api/v1/system/consistency", json={"uri": "viking://resources"})
+        ).status_code == 401
 
 
-async def test_lifespan_shutdown_ignores_cancelled_service_close(monkeypatch):
-    closing = asyncio.Event()
+async def test_lifespan_retains_account_store_when_service_close_cancelled(monkeypatch):
+    service = Mock(spec=OpenVikingService, _initialized=False)
+    service.stop_background = AsyncMock(side_effect=asyncio.CancelledError("shutdown"))
+    monkeypatch.setattr(ServerRuntime, "start", AsyncMock())
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig.from_dict({}))
+    app = create_app(config=ServerConfig(), service=service)
+    app.state.auth_plugin = SimpleNamespace(shutdown=AsyncMock())
 
-    class _Service:
-        def __init__(self):
-            self.viking_fs = object()
-            self._queue_manager = None
-
-        async def initialize(self, **kwargs):
+    with pytest.raises(asyncio.CancelledError, match="shutdown"):
+        async with app.router.lifespan_context(app):
             pass
-
-        async def apply_agent_evolution_config(self):
-            pass
-
-        async def close(self):
-            closing.set()
-            raise asyncio.CancelledError("shutdown")
-
-    monkeypatch.setattr("openviking.server.app.OpenVikingService", _Service)
-    monkeypatch.setattr(
-        "openviking.server.app.get_task_tracker",
-        lambda: SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None),
-    )
-    app = create_app(config=ServerConfig())
-
-    async with app.router.lifespan_context(app):
-        pass
-    assert closing.is_set()
+    app.state.auth_plugin.shutdown.assert_not_awaited()
+    service.release_storage.assert_not_called()
 
 
-async def test_readiness_tracks_startup_and_filesystem_health(monkeypatch):
+@pytest.mark.parametrize("roles", [["api"], ["queue_worker"], ["scheduler"]])
+async def test_readiness_tracks_startup_and_filesystem_health(monkeypatch, roles):
     service = SimpleNamespace(_initialized=False, embedding_provider=object())
     filesystem = SimpleNamespace(
         ls=AsyncMock(return_value=[]),
@@ -207,7 +228,7 @@ async def test_readiness_tracks_startup_and_filesystem_health(monkeypatch):
         lambda config: (False, None, None),
     )
 
-    app = create_app(config=ServerConfig(), service=service)
+    app = create_app(config=ServerConfig(roles=roles), service=service)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -264,98 +285,3 @@ async def test_slow_init_does_not_block_health(monkeypatch):
         assert resp.status_code == 200
         # Health responds instantly since it's stateless (no service dependency)
         assert elapsed < 0.5
-
-
-async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
-    """Install TTL hooks before workers; preserve system-asset reconciliation."""
-    events = []
-    ov_config = SimpleNamespace(reconcile_system_assets_on_startup=True)
-    monkeypatch.setattr("openviking.server.app.get_openviking_config", lambda: ov_config)
-
-    class MockService:
-        def __init__(self):
-            self._initialized = False
-            self.viking_fs = object()
-            self._queue_manager = None
-            self.compile = SimpleNamespace(lifecycle=SimpleNamespace(resolve_groups=None))
-
-        async def initialize(self, **kwargs):
-            await kwargs["before_background_start"]()
-            events.extend(["workers", "service"])
-            self._initialized = True
-
-        async def apply_agent_evolution_config(self):
-            events.append("agent-evolution")
-
-        async def reconcile_system_assets(self, account_lister):
-            assert account_lister is manager
-            events.append("system-assets")
-            return 1
-
-    manager = SimpleNamespace(
-        resolve_identity=Mock(), get_user_group_ids=AsyncMock(return_value=("editors",))
-    )
-    ttl_init = AsyncMock(side_effect=lambda *args: events.append("ttl"))
-    monkeypatch.setattr("openviking.server.app._initialize_ttl_adapter", ttl_init)
-    setup = AsyncMock(side_effect=lambda **kwargs: events.append("deletion"))
-    monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
-
-    async def initialize_plugin(app, service, config):
-        app.state.api_key_manager = manager
-        events.append("auth")
-
-    monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
-
-    app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
-    service = MockService()
-    service.compile_scheduler = SimpleNamespace(set_identity_resolver=Mock())
-    config = ServerConfig(
-        root_api_key="root-key-for-test",
-        ttl_adapter={"enabled": True},
-    )
-    await _initialize_runtime_state(app, service, config)
-
-    startup = ["auth", "ttl", "deletion", "workers", "service", "agent-evolution"]
-    assert events == startup + ["system-assets"]
-    assert service._initialized is True
-    assert app.state.api_key_manager is manager
-    assert service.compile.lifecycle.resolve_groups is manager.get_user_group_ids
-    assert setup.await_args.kwargs["manager"] is manager
-    ttl_init.assert_awaited_once_with(app, service, config)
-    service.compile_scheduler.set_identity_resolver.assert_called_once_with(
-        manager.resolve_identity, manager.get_user_group_ids
-    )
-
-    events.clear()
-    ov_config.reconcile_system_assets_on_startup = False
-    await _initialize_runtime_state(app, service, config)
-
-    assert service._initialized is True
-    assert app.state.api_key_manager is manager
-    assert events == startup
-
-
-async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
-    service = SimpleNamespace(
-        initialize=AsyncMock(),
-        apply_agent_evolution_config=AsyncMock(),
-        reconcile_system_assets=AsyncMock(),
-    )
-    setup = AsyncMock(return_value=None)
-    monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
-
-    async def initialize_plugin(app, service, config):
-        app.state.api_key_manager = None
-
-    monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
-
-    async def initialize(**kwargs):
-        await kwargs["before_background_start"]()
-
-    service.initialize.side_effect = initialize
-
-    app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
-    await _initialize_runtime_state(app, service, ServerConfig())
-
-    service.reconcile_system_assets.assert_not_awaited()
-    assert setup.await_args.kwargs["manager"] is None

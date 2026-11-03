@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
@@ -118,22 +119,34 @@ async def readiness_check(request: Request):
         )
 
     checks = {}
+    serverless = (
+        getattr(getattr(service, "_config", None), "runtime_mode", "dedicated") == "serverless"
+    )
 
     # 1. AGFS: probe filesystem access
     try:
-        checks["agfs"] = await _probe_agfs_readiness()
+        if serverless:
+            # This node probe has no Account context; check the shared mount.
+            await AsyncAGFSClient(get_viking_fs().agfs).ls("/local")
+            checks["agfs"] = {"status": "ok", "checks": {"filesystem": "ok"}}
+        else:
+            checks["agfs"] = await _probe_agfs_readiness()
     except Exception as e:
         checks["agfs"] = {"status": "error", "checks": {"filesystem": f"error: {e}"}}
 
     # 2. VectorDB: health_check()
     try:
-        viking_fs = get_viking_fs()
-        storage = viking_fs._get_vector_store()
-        if storage:
-            healthy = await storage.health_check()
-            checks["vectordb"] = "ok" if healthy else "unhealthy"
-        else:
+        if serverless:
+            # Business collections are resolved by Account, not by this probe.
             checks["vectordb"] = "not_configured"
+        else:
+            viking_fs = get_viking_fs()
+            storage = viking_fs._get_vector_store()
+            if storage:
+                healthy = await storage.health_check()
+                checks["vectordb"] = "ok" if healthy else "unhealthy"
+            else:
+                checks["vectordb"] = "not_configured"
     except Exception as e:
         checks["vectordb"] = f"error: {e}"
 
@@ -156,22 +169,23 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["embedding"] = f"error: {e}"
 
-    # 5. Ollama: connectivity check if configured
-    try:
-        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-        from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
+    # Dedicated instances retain the cluster model connectivity probe.
+    if not serverless:
+        try:
+            from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+            from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
 
-        ov_config = OpenVikingConfigSingleton.get_instance()
-        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
-        if uses_ollama:
-            if check_ollama_running(ollama_host, ollama_port):
-                checks["ollama"] = "ok"
+            ov_config = OpenVikingConfigSingleton.get_instance()
+            uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
+            if uses_ollama:
+                if check_ollama_running(ollama_host, ollama_port):
+                    checks["ollama"] = "ok"
+                else:
+                    checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
             else:
-                checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
-        else:
-            checks["ollama"] = "not_configured"
-    except Exception as e:
-        checks["ollama"] = f"error: {e}"
+                checks["ollama"] = "not_configured"
+        except Exception as e:
+            checks["ollama"] = f"error: {e}"
 
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503

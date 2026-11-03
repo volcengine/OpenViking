@@ -564,6 +564,10 @@ For example, this `events` PUT body shows only the event name and summary, witho
 ROOT can manage Cluster configuration and any Account configuration. ADMIN can
 manage only its own Account layer.
 
+Serverless business Accounts require complete `vlm`, `embedding`, and `vectordb`
+settings, with no Cluster business-identity fallback. See
+[Runtime Modes](../guides/25-runtime-modes.md) for the creation example.
+
 ```http
 GET /api/v1/admin/configuration
 PATCH /api/v1/admin/configuration
@@ -617,8 +621,8 @@ version, text source and input token limit are create-only. Provider fields outs
 fusion/video settings and metadata override are not on the Account API surface.
 Every change validates the effective Embedding/VectorDB pair before persistence.
 
-An explicit `embedding: {}` is valid and declares no Account model mode or runtime
-policy. As a PATCH, `{}` merges with existing settings and does not clear them.
+In dedicated mode, an explicit `embedding: {}` declares no Account model mode or
+runtime policy. As a PATCH, `{}` merges with existing settings and does not clear them.
 When no Account model mode is configured, Cluster model bindings are used.
 An explicit Account VectorDB connection replaces Cluster connection and
 authentication fields even when the backend type is unchanged; only remote
@@ -644,12 +648,13 @@ is absent it uses the complete Cluster section; once present, `app_id`,
 Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
-VLM business resolution uses Cluster VLM when an Account has no VLM section.
+In dedicated mode, VLM business resolution uses Cluster VLM when an Account has
+no VLM section.
 Once the Account section exists, its model-service identity fields come
 exclusively from Account settings, while selected runtime behavior is composed
 with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
-omitting or resetting it uses Cluster `timeout`. Query Planner precedence is
-Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
+omitting or resetting it uses Cluster `timeout`. In dedicated mode, Query Planner
+precedence is Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
 These are VLM business rules, not generic configuration inheritance.
 
 The PATCH is validated structurally before the merged configuration is built:

@@ -227,6 +227,35 @@ class RuntimeConfigSettings(BaseModel):
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
+    runtime_mode: Literal["dedicated", "serverless"] = Field(
+        default="dedicated",
+        description="Startup-only business configuration and initialization boundary",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _prepare_runtime_mode(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("runtime_mode") != "serverless":
+            return data
+        data = dict(data)
+        embedding = data.get("embedding", {})
+        if embedding is None:
+            embedding = {}
+        if isinstance(embedding, dict):
+            data["embedding"] = EmbeddingConfig.model_validate(
+                embedding, context={"runtime_mode": "serverless"}
+            )
+        storage = data.get("storage", {})
+        if isinstance(storage, dict):
+            data["storage"] = {**storage, "vectordb": storage.get("vectordb")}
+        return data
+
+    @model_validator(mode="after")
+    def _validate_runtime_mode(self) -> "OpenVikingConfig":
+        if self.runtime_mode == "dedicated" and self.storage.vectordb is None:
+            raise ValueError("storage.vectordb is required in dedicated mode")
+        return self
+
     default_account: Optional[str] = Field(
         default="default", description="Default account identifier"
     )
@@ -725,7 +754,8 @@ class OpenVikingConfig(BaseModel):
 
             # Check dimension consistency
             if (
-                getattr(instance, "storage", None)
+                instance.runtime_mode == "dedicated"
+                and getattr(instance, "storage", None)
                 and getattr(instance.storage, "vectordb", None)
                 and getattr(instance, "embedding", None)
             ):
@@ -956,7 +986,7 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
-    if not config.vlm.model:
+    if config.runtime_mode == "dedicated" and not config.vlm.model:
         errors.append(
             "A VLM is required. Configure the vlm section in ov.conf or run openviking-server init."
         )
@@ -1002,7 +1032,8 @@ def initialize_openviking_config(
     if path:
         # Explicit local workspace override
         config.storage.agfs.backend = config.storage.agfs.backend or "local"
-        config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
+        if config.storage.vectordb is not None:
+            config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         # Resolve and update workspace + dependent paths (model_validator won't
         # re-run on attribute assignment, so sync agfs.path / vectordb.path here).
         workspace_path = Path(path).expanduser().resolve()
@@ -1010,9 +1041,11 @@ def initialize_openviking_config(
         resolved = str(workspace_path)
         config.storage.workspace = resolved
         config.storage.agfs.path = resolved
-        config.storage.vectordb.path = resolved
+        if config.storage.vectordb is not None:
+            config.storage.vectordb.path = resolved
 
-    config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
+    if config.runtime_mode == "dedicated" and config.storage.vectordb is not None:
+        config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
 
     # Validate configuration
     if not is_valid_openviking_config(config):

@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
@@ -20,7 +20,7 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
-from openviking.server.config import UserConfigDefaults
+from openviking.server.config import ServerConfig, UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -132,6 +132,8 @@ class OpenVikingService:
         self._rule_cleanup_scheduler: Optional[RuleCleanupScheduler] = None
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
         self._ttl_adapter: Optional["TTLAdapter"] = None
+        self._usage_reporter: Optional[Any] = None
+        self._server_config: Optional[ServerConfig] = None
         self._compile_scheduler: Optional[CompileScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
@@ -166,6 +168,9 @@ class OpenVikingService:
 
         # State
         self._initialized = False
+        self._shared_initialized = False
+        self._background_prepared = False
+        self._recovered = False
 
         # Acquire local-storage exclusivity before encryption and storage initialization.
         self._ensure_data_dir_lock_acquired()
@@ -235,7 +240,9 @@ class OpenVikingService:
 
         # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
-            vectordb_config=config.vectordb, queue_manager=self._queue_manager
+            vectordb_config=config.vectordb,
+            queue_manager=self._queue_manager,
+            runtime_mode=self._config.runtime_mode,
         )
         self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
 
@@ -407,6 +414,8 @@ class OpenVikingService:
             return
 
         storage = self._config.storage
+        if getattr(self._config, "runtime_mode", "dedicated") == "serverless":
+            return
         if storage.vectordb.backend not in {"local", "cuvs"}:
             return
 
@@ -530,40 +539,78 @@ class OpenVikingService:
         """Get the Compile task service."""
         return self._compile_service
 
-    async def initialize(
-        self, *, before_background_start: Optional[Callable[[], Awaitable[None]]] = None
-    ) -> None:
-        """Initialize OpenViking storage and indexes."""
-        if self._initialized:
-            if before_background_start is not None:
-                await before_background_start()
-            logger.debug("Already initialized")
+    def configure_runtime(self, config: ServerConfig) -> None:
+        """Apply deployment defaults before wiring and activating execution."""
+        if self._background_prepared or self._initialized:
+            raise RuntimeError("Configure the service runtime before starting execution")
+        if self._server_config is not None:
+            raise RuntimeError("A prepared service already has a runtime configuration")
+        from openviking.usage_reporter.config import build_usage_reporter
+
+        self._server_config = config.model_copy(deep=True)
+        self.user_config_defaults = self._server_config.user_config_defaults
+        self._session_service.set_tool_output_externalization_config(
+            self._server_config.tool_output_externalization
+        )
+        self._usage_reporter = build_usage_reporter(self._server_config.usage_reporter)
+        self._session_service.set_usage_reporter(self._usage_reporter)
+        self.set_agent_evolution_config(self._server_config.agent_evolution)
+        self._session_service.set_default_user_memory_policy(
+            self._server_config.user_config_defaults.memory_policy
+        )
+        self._session_service.set_default_user_auto_commit_policy(
+            self._server_config.user_config_defaults.auto_commit_policy
+        )
+
+    def wire_runtime(self, manager: Any) -> None:
+        """Bind account capabilities without taking ownership of the auth plugin."""
+        from openviking.ttl.wiring import build_ttl_adapter, install_ttl_hook, set_ttl_adapter
+
+        self._compile_service.lifecycle.resolve_groups = (
+            manager.get_user_group_ids if manager is not None else None
+        )
+        if self._compile_scheduler is not None:
+            self._compile_scheduler.set_identity_resolver(
+                manager.resolve_identity if manager is not None else None,
+                manager.get_user_group_ids if manager is not None else None,
+            )
+        if self._server_config is not None:
+            self._ttl_adapter = build_ttl_adapter(self._server_config.ttl_adapter)
+            set_ttl_adapter(self._ttl_adapter)
+            if self._ttl_adapter is not None:
+                self._ttl_adapter.bind_runtime(self, manager)
+                install_ttl_hook(self._viking_fs, self._ttl_adapter)
+
+    def detach_runtime(self) -> None:
+        """Remove host callbacks after draining, before their owners close."""
+        if self._compile_service.lifecycle is not None:
+            self._compile_service.lifecycle.resolve_groups = None
+        if self._compile_scheduler is not None:
+            self._compile_scheduler.set_identity_resolver(None, None)
+        if self._viking_fs is not None:
+            self._viking_fs.set_deletion_guard(None)
+        get_task_tracker().set_deletion_guard(None)
+        if self._watch_manager is not None:
+            self._watch_manager.set_deletion_guard(None)
+        if self._shared_initialized and self._queue_manager is not None:
+            queue = self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP)
+            queue.set_dequeue_handler(None)
+
+    @property
+    def ttl_adapter(self) -> Optional["TTLAdapter"]:
+        return self._ttl_adapter
+
+    async def initialize(self) -> None:
+        """Prepare storage and sub-services without starting background execution.
+
+        Embedded callers wire dependencies, then call ``recover()`` and
+        ``start_background()``. HTTP hosting performs those phases in ServerRuntime.
+        """
+        if self._shared_initialized:
             return
 
         self._ensure_data_dir_lock_acquired()
         await get_task_tracker().load()
-
-        if self._vikingdb_manager is None:
-            self._init_storage(
-                self._config.storage,
-                max_concurrent_embedding=self._config.embedding.max_concurrent,
-                max_concurrent_semantic=self._config.vlm.max_concurrent,
-                max_concurrent_external_parse=(
-                    self._config.queue_workers.external_parse.max_concurrent
-                ),
-                max_concurrent_add_resource=(
-                    self._config.queue_workers.add_resource.max_concurrent
-                ),
-                max_concurrent_reindex=self._config.queue_workers.reindex.max_concurrent,
-                max_concurrent_session_commit=(
-                    self._config.queue_workers.session_commit.max_concurrent
-                ),
-                max_concurrent_external_task=(
-                    self._config.queue_workers.external_task.max_concurrent
-                ),
-                binding_config=self._build_ragfs_binding_config(),
-                git_config=self._config.git,
-            )
 
         config = get_openviking_config()
 
@@ -578,7 +625,8 @@ class OpenVikingService:
         # Create context collection
         if self._vikingdb_manager is None:
             raise RuntimeError("VikingDBManager not initialized")
-        await init_context_collection(self._vikingdb_manager)
+        if self._config.runtime_mode == "dedicated":
+            await init_context_collection(self._vikingdb_manager)
 
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
@@ -620,23 +668,24 @@ class OpenVikingService:
             user_config_defaults=self.user_config_defaults,
         )
         self._directory_initializer = directory_initializer
-        default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        # The vector collection can be pre-created externally. Existing resource
-        # metadata distinguishes a workspace restart from initial provisioning.
-        new_workspace = not await self._viking_fs.exists(
-            "viking://resources/.abstract.md", ctx=default_ctx
-        )
-        source_type = "create_collection" if new_workspace else "workspace_init"
-        with bind_dashboard_token_source_type(source_type):
-            account_count, user_count = await directory_initializer.initialize_account_workspace(
-                default_ctx,
-                sync_system_assets=False,
+        if self._config.runtime_mode == "dedicated":
+            default_ctx = RequestContext(user=self._user, role=Role.ROOT)
+            # The vector collection can be pre-created externally. Existing resource
+            # metadata distinguishes a workspace restart from initial provisioning.
+            new_workspace = not await self._viking_fs.exists(
+                "viking://resources/.abstract.md", ctx=default_ctx
             )
-        logger.info(
-            "Initialized preset directories account=%d user=%d",
-            account_count,
-            user_count,
-        )
+            source_type = "create_collection" if new_workspace else "workspace_init"
+            with bind_dashboard_token_source_type(source_type):
+                account_count, user_count = await directory_initializer.initialize_account_workspace(
+                    default_ctx,
+                    sync_system_assets=False,
+                )
+            logger.info(
+                "Initialized preset directories account=%d user=%d",
+                account_count,
+                user_count,
+            )
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
         self._viking_fs.set_global_policy_service(self._privacy_config_service.global_policies)
         self._privacy_sanitizer = PrivacySanitizer(self._privacy_config_service)
@@ -713,11 +762,6 @@ class OpenVikingService:
         except Exception:
             session_auto_commit_config = SessionAutoCommitConfig()
         self._session_service.set_session_auto_commit_config(session_auto_commit_config)
-        expiry_config = get_openviking_config().expiry
-        session_expiry_enabled = (
-            session_auto_commit_config.enabled
-            and getattr(session_auto_commit_config, "idle_backend", "local") == "redis"
-        )
         if (
             session_auto_commit_config.enabled
             and getattr(session_auto_commit_config, "idle_backend", "local") == "local"
@@ -777,10 +821,6 @@ class OpenVikingService:
 
         if self._queue_manager:
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
-        if before_background_start is not None:
-            await before_background_start()
-
-        if self._queue_manager:
             for queue_name in (
                 self._queue_manager.EXTERNAL_PARSE,
                 self._queue_manager.ADD_RESOURCE,
@@ -823,6 +863,16 @@ class OpenVikingService:
                 ),
                 allow_create=True,
             )
+        self._shared_initialized = True
+        logger.info("OpenVikingService prepared")
+
+    async def recover(self) -> None:
+        """Recover durable work after all guards and handlers are installed."""
+        if self._recovered:
+            return
+        if not self._shared_initialized:
+            raise RuntimeError("Prepare shared services before recovering work")
+        if self._queue_manager:
             tracker = get_task_tracker()
             await self._queue_manager.prepare_task_tracking(tracker)
             # Target reservations need recovery even when Work is already durable.
@@ -831,18 +881,18 @@ class OpenVikingService:
             )
             await self._external_task_service.restore_tasks(restored_tasks)
 
-        if self._session_auto_commit_scheduler is not None:
-            await self._session_auto_commit_scheduler.start()
-        if self._rule_cleanup_scheduler is not None:
-            await self._rule_cleanup_scheduler.start()
-        await self._watch_runtime.start()
+        self._recovered = True
 
-        if self._queue_manager:
-            self._queue_manager.start()
-            logger.info("QueueManager workers started")
-        if self._config.reconcile_system_assets_on_startup:
-            await system_asset_synchronizer.sync(default_ctx)
-
+    async def prepare_background(self, *, queue_worker: bool, scheduler: bool) -> None:
+        """Prepare expiry storage and handlers without activating any roles."""
+        if self._background_prepared:
+            raise RuntimeError("Background execution has already been prepared")
+        if not self._shared_initialized:
+            raise RuntimeError("Shared services must be initialized before roles")
+        config = get_openviking_config()
+        expiry_config = config.expiry
+        idle = config.memory.session_auto_commit
+        session_expiry_enabled = idle.enabled and idle.idle_backend == "redis"
         compile_expiry_enabled = self._compile_scheduler is not None
         ttl_expiry_enabled = self._ttl_adapter is not None and self._ttl_adapter.supports_config()
         if session_expiry_enabled or compile_expiry_enabled or ttl_expiry_enabled:
@@ -853,8 +903,8 @@ class OpenVikingService:
                 expiry_config,
                 roles=ExpiryRuntimeRoles(
                     report=True,
-                    publish=not expiry_config.publisher_separate_process,
-                    consume=True,
+                    publish=scheduler and not expiry_config.publisher_separate_process,
+                    consume=queue_worker,
                 ),
             )
             try:
@@ -868,17 +918,10 @@ class OpenVikingService:
                 if ttl_expiry_enabled:
                     self._ttl_adapter.install_expiry(self._expiry_runtime.scheduler)
                 await self._expiry_runtime.start_storage()
-                await self._expiry_runtime.start_roles()
-                if ttl_expiry_enabled:
-                    await self._ttl_adapter.start()
             except Exception:
                 await self._stop_expiry()
                 raise
-            logger.info("Expiry roles started")
-
-        if self._compile_scheduler is not None:
-            await self._compile_scheduler.start()
-            logger.info("CompileScheduler started (backend=redis)")
+            logger.info("Expiry storage prepared")
 
         # Preflight the MinerU endpoint when it will be used, so endpoint
         # misconfiguration or a stopped service surfaces now instead of on the
@@ -888,7 +931,7 @@ class OpenVikingService:
             pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None
         )
 
-        if should_preflight_mineru and pdf_config.mineru_endpoint:
+        if queue_worker and should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
                 await wait_for_mineru_ready(pdf_config.mineru_endpoint)
                 logger.info(
@@ -904,10 +947,54 @@ class OpenVikingService:
                     extra={"error_type": type(exc).__name__, "degraded": True},
                 )
 
+        self._background_prepared = True
+
+    async def reconcile_default_system_assets(self) -> None:
+        """Persist packaged files under the system asset lock."""
+        if self._config.reconcile_system_assets_on_startup:
+            await self._system_asset_synchronizer.sync(
+                RequestContext(user=self._user, role=Role.ROOT)
+            )
+
+    async def start_scheduler(self) -> None:
+        """Start periodic producers using already prepared shared services."""
+        if self._watch_runtime is not None:
+            await self._watch_runtime.start()
+        if self._session_auto_commit_scheduler is not None:
+            await self._session_auto_commit_scheduler.start()
+        if self._rule_cleanup_scheduler is not None:
+            await self._rule_cleanup_scheduler.start()
+        if self._compile_scheduler is not None:
+            await self._compile_scheduler.start()
+
+    async def start_queue_worker(self) -> None:
+        """Start queue workers and TTL maintenance after guards are installed."""
+        if self._queue_manager is not None:
+            self._queue_manager.start()
+
+    async def start_background(self, *, queue_worker: bool = True, scheduler: bool = True) -> None:
+        """Activate selected execution roles after dependency wiring and recovery."""
+        if self._initialized:
+            raise RuntimeError("Background execution has already been started")
+        if not self._recovered:
+            raise RuntimeError("Recover work before starting background execution")
+        await self.prepare_background(queue_worker=queue_worker, scheduler=scheduler)
+        if self._ttl_adapter is not None:
+            if queue_worker:
+                await self._ttl_adapter.start()
+            else:
+                await self._ttl_adapter.start_reporting()
+        if self._expiry_runtime is not None:
+            await self._expiry_runtime.start_roles()
         if self._runtime_config_manager is not None:
             self._runtime_config_manager.start_refresh_loop()
+        get_task_tracker().start_cleanup_loop()
+        if scheduler:
+            await self.start_scheduler()
+        if queue_worker:
+            await self.start_queue_worker()
+        await self.reconcile_default_system_assets()
         self._initialized = True
-        logger.info("OpenVikingService initialized")
 
     def configure_ttl(self, adapter: "TTLAdapter") -> None:
         """Install optional TTL before background producers and expiry roles start."""
@@ -937,65 +1024,94 @@ class OpenVikingService:
             self._expiry_runtime = None
             logger.info("Expiry stopped")
 
-    async def close(self) -> None:
-        """Close OpenViking and release resources."""
-        if self._watch_runtime is not None:
-            await self._watch_runtime.stop()
-            self._watch_runtime = None
-        vlm_resolver = getattr(self, "_vlm_resolver", None)
-
-        if self._compile_scheduler is not None:
+    async def stop_scheduler(self) -> None:
+        """Drain periodic producers before stopping consumers and shared stores."""
+        if getattr(self, "_compile_scheduler", None) is not None:
             await self._compile_scheduler.stop()
-            self._compile_scheduler = None
             logger.info("CompileScheduler stopped")
-
-        if self._ttl_adapter is None:
-            await self._stop_expiry()
-        elif self._expiry_runtime is not None:
-            # Stop new callbacks, but keep reports available while writers drain.
-            await self._expiry_runtime.stop_roles(keep_reporting=True)
-
-        if self._runtime_config_manager:
-            await self._runtime_config_manager.stop_refresh_loop()
-            self._runtime_config_manager = None
-            logger.info("Runtime config manager stopped")
-
-        if self._session_auto_commit_scheduler:
+        if getattr(self, "_watch_runtime", None) is not None:
+            await self._watch_runtime.stop()
+            logger.info("WatchRuntime stopped")
+        if getattr(self, "_session_auto_commit_scheduler", None):
             await self._session_auto_commit_scheduler.stop()
-            self._session_auto_commit_scheduler = None
             logger.info("SessionAutoCommitScheduler stopped")
-
         rule_cleanup_scheduler = getattr(self, "_rule_cleanup_scheduler", None)
         if rule_cleanup_scheduler:
             await rule_cleanup_scheduler.stop()
-            self._rule_cleanup_scheduler = None
             logger.info("RuleCleanupScheduler stopped")
 
-        await self._resource_service.close_background_tasks()
+    async def stop_queue_worker(self) -> None:
+        """Stop callbacks, then drain writers while reporting remains available."""
+        if getattr(self, "_expiry_runtime", None) is not None:
+            await self._expiry_runtime.stop_roles(keep_reporting=True)
         if self._queue_manager:
-            await asyncio.to_thread(self._queue_manager.stop)
-            self._queue_manager = None
-            logger.info("Queue manager stopped")
+            await asyncio.to_thread(self._queue_manager.stop_workers)
+            logger.info("Queue workers stopped")
+
+    async def stop_background(self) -> None:
+        """Drain execution and reporting, retaining borrowed storage resources."""
+        self._initialized = False
+        await self.stop_scheduler()
+        await self._resource_service.close_background_tasks()
+        await self.stop_queue_worker()
+
+        if self._runtime_config_manager:
+            await self._runtime_config_manager.stop_refresh_loop()
+            logger.info("Runtime config manager stopped")
 
         # Draining writers still need post-write registration.
         # Stop TTL consumers only after those writers settle, while their storage
         # and vector clients remain available for in-flight recycling.
         from openviking.ttl.wiring import get_ttl_adapter, set_ttl_adapter
 
-        ttl_adapter = get_ttl_adapter()
-        if ttl_adapter is not None:
-            await ttl_adapter.aclose()
+        ttl_adapter = getattr(self, "_ttl_adapter", None)
+        await self._stop_expiry()
+        if get_ttl_adapter() is ttl_adapter:
             set_ttl_adapter(None)
+        if ttl_adapter is not None and self._viking_fs is not None:
+            self._viking_fs.set_post_write_hook(None)
         self._ttl_adapter = None
-        if self._expiry_runtime is not None:
-            await self._stop_expiry()
 
         # Queue workers and scheduled producers persist their final Task/Work
         # transitions while stopping, so keep their store open until they drain.
+        tracker = get_task_tracker()
+        stop_tracker_loops = getattr(tracker, "stop_background_loops", None)
+        if stop_tracker_loops is not None:
+            await stop_tracker_loops()
+        self._background_prepared = False
+
+    async def release_runtime(self) -> None:
+        """Release service-owned reporting after host plugins have flushed."""
+        if getattr(self, "_usage_reporter", None) is not None:
+            await self._usage_reporter.close()
+            self._usage_reporter = None
+        if getattr(self, "_session_service", None) is not None:
+            self._session_service.set_usage_reporter(None)
+
+    async def close(self) -> None:
+        """Drain standalone execution and release its owned resources."""
+        await self.stop_background()
+        await self.release_runtime()
+        await self.release_storage()
+
+    async def release_storage(self) -> None:
+        """Release core storage after execution and host dependencies have closed."""
+        if self._initialized or self._background_prepared:
+            raise RuntimeError("Drain execution before releasing service storage")
+        vlm_resolver = getattr(self, "_vlm_resolver", None)
+        self._compile_scheduler = None
+        self._watch_runtime = None
+        self._session_auto_commit_scheduler = None
+        self._rule_cleanup_scheduler = None
+        if self._queue_manager:
+            await asyncio.to_thread(self._queue_manager.stop)
+        self._queue_manager = None
+        self._runtime_config_manager = None
         if self._watch_manager is not None:
             await self._watch_manager.close()
             self._watch_manager = None
-        await get_task_tracker().close()
+        tracker = get_task_tracker()
+        await tracker.close()
 
         close_vlm_resolver = getattr(vlm_resolver, "close", None)
         if callable(close_vlm_resolver):
@@ -1039,6 +1155,9 @@ class OpenVikingService:
         self._directory_initializer = None
         self._privacy_config_service = None
         self._initialized = False
+        self._shared_initialized = False
+        self._background_prepared = False
+        self._recovered = False
 
         # Clear the process-wide registration if it still points at us, so a
         # closed service is never resolved via the dependency global.
@@ -1125,7 +1244,7 @@ class OpenVikingService:
 
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""
-        if not self._initialized:
+        if not getattr(self, "_shared_initialized", self._initialized):
             raise NotInitializedError("OpenVikingService")
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:

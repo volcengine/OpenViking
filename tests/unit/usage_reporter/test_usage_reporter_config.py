@@ -3,13 +3,14 @@
 
 import json
 import sys
-from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
-from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, UsageReporterConfig
-from openviking.usage_reporter import FileLogUsageSink, UsageContext, UsageEvent
+from openviking.service.core import OpenVikingService
+from openviking.service.session_service import SessionService
+from openviking.usage_reporter import FileLogUsageSink, UsageContext, UsageEvent, UsageReporter
 from openviking.usage_reporter.config import build_usage_reporter
 
 
@@ -106,68 +107,23 @@ def test_builtin_file_log_sink_is_built_from_config(tmp_path, monkeypatch):
     reporter.sinks[0].close()
 
 
-async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
-    built_reporters = []
-    assigned_reporters = []
-    assigned_agent_evolution_configs = []
-
-    class Reporter:
-        closed = False
-
-        async def close(self):
-            self.closed = True
-
-    reporter = Reporter()
-
-    def build_reporter(config):
-        del config
-        built_reporters.append(reporter)
-        return reporter
-
-    class Sessions:
-        def set_tool_output_externalization_config(self, config):
-            del config
-
-        def set_usage_reporter(self, value):
-            assigned_reporters.append(value)
-
-        def set_agent_evolution_config(self, config):
-            assigned_agent_evolution_configs.append(config)
-
-    class Service:
-        sessions = Sessions()
-
-    class TaskTracker:
-        def start_cleanup_loop(self):
-            return None
-
-        def stop_cleanup_loop(self):
-            return None
-
-    async def initialize_runtime_state(app, service, config):
-        del app, service, config
-
-    @asynccontextmanager
-    async def mcp_lifespan():
-        yield
-
+async def test_service_configures_and_closes_usage_reporter(monkeypatch):
+    reporter = AsyncMock(spec=UsageReporter)
     monkeypatch.setattr(
         "openviking.usage_reporter.config.build_usage_reporter",
-        build_reporter,
+        lambda config: reporter,
     )
-    monkeypatch.setattr(
-        "openviking.server.app._initialize_runtime_state",
-        initialize_runtime_state,
-    )
-    monkeypatch.setattr("openviking.server.app.get_task_tracker", lambda: TaskTracker())
-    monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", mcp_lifespan)
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._initialized = False
+    service._background_prepared = False
+    service._server_config = None
+    service._directory_initializer = None
+    service._session_service = Mock(spec=SessionService)
+    service.configure_runtime(ServerConfig.model_validate({}))
+    await service.release_runtime()
 
-    config = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
-    app = create_app(config=config, service=Service())
-    async with app.router.lifespan_context(app):
-        pass
-
-    assert built_reporters == [reporter]
-    assert assigned_reporters == [reporter, reporter]
-    assert [config.enabled for config in assigned_agent_evolution_configs] == [True, True]
-    assert reporter.closed is True
+    reporter.close.assert_awaited_once()
+    assert service._session_service.set_usage_reporter.call_args_list == [
+        call(reporter),
+        call(None),
+    ]

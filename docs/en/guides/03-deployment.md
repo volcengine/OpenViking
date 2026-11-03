@@ -14,6 +14,9 @@ Managed and existing-service users can start with the [CLI quickstart](../gettin
 
 The rest of this guide covers self-hosting.
 
+For shared deployments with per-Account models and vector storage, see
+[Serverless mode](25-runtime-modes.md).
+
 For sizing, measure memory and disk use with a representative corpus and expected concurrency. Budget storage for source files, indexes, and snapshots; use [observability](../guides/05-observability.md) to check headroom before expanding the workload.
 
 ## Quick Start

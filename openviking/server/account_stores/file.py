@@ -169,9 +169,15 @@ class FileStore(AccountStore):
 
     async def load(self) -> None:
         """Load persisted identities; only writers bootstrap and migrate the store."""
-        if self._read_only:
+        # Ordinary watched loads are non-mutating; writable hashing upgrades
+        # must retain their initial migration.
+        if self._read_only or (
+            self._watch_enabled
+            and not self._api_key_hashing_enabled
+            and await self._read_json(ACCOUNTS_PATH) is not None
+        ):
             await self._reload()
-            if not self._accounts:
+            if self._read_only and not self._accounts:
                 raise FailedPreconditionError(
                     "Read-only account store requires an initialized registry."
                 )

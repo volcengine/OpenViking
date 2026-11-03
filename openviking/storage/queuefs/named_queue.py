@@ -119,7 +119,7 @@ class NamedQueue:
             call_next = partial(getattr(middleware, operation), call_next=call_next)
         return await call_next(ctx)
 
-    def set_dequeue_handler(self, handler: DequeueHandlerBase) -> None:
+    def set_dequeue_handler(self, handler: Optional[DequeueHandlerBase]) -> None:
         """Bind the consumer after its runtime dependencies are initialized."""
         self._dequeue_handler = handler
 
