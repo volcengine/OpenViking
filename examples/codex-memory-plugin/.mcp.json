@@ -27,8 +27,19 @@
         "OPENVIKING_TIMEOUT_MS",
         "OPENVIKING_DEBUG",
         "OPENVIKING_DEBUG_LOG",
-        "OPENVIKING_EXTRA_HEADERS"
-      ]
+        "OPENVIKING_EXTRA_HEADERS",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy"
+      ],
+      "env": {
+        "NODE_USE_ENV_PROXY": "1"
+      }
     }
   }
 }
