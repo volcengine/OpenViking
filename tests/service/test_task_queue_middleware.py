@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -70,6 +71,34 @@ async def enqueue_task(queue, tracker, transport, task_id="task-1"):
     with bind_task_context(task_id, "account", "user"):
         await queue.enqueue({"value": 1})
     return {"id": "message-1", "data": transport.write.await_args.args[1].decode()}
+
+
+async def test_requeue_limit_stops_next_delivery_before_handler(tracked_queue):
+    queue, tracker, transport = tracked_queue
+    message = await enqueue_task(queue, tracker, transport)
+    metadata = extract_task_metadata(message)
+    assert metadata is not None
+    await tracker.mark_work_requeued(
+        metadata.task_id,
+        metadata.work_id,
+        account_id=metadata.account_id,
+        user_id=metadata.user_id,
+    )
+    handler = SimpleNamespace(on_dequeue=AsyncMock(return_value=ProcessResult.success()))
+    queue.set_dequeue_handler(handler)
+    queue._middlewares = (TaskWorkQueueMiddleware(max_requeues=1),)
+
+    result = await queue.process_dequeued(message)
+
+    assert result.outcome is ProcessOutcome.FAILED
+    handler.on_dequeue.assert_not_awaited()
+    work = await tracker.get_work(
+        metadata.task_id,
+        metadata.work_id,
+        account_id=metadata.account_id,
+        user_id=metadata.user_id,
+    )
+    assert work is not None and work.state is WorkState.FAILED
 
 
 def test_log_correlation_uses_bound_task_and_telemetry() -> None:

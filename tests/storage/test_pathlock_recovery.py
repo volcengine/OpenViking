@@ -249,6 +249,37 @@ async def test_migration_blockage_is_requeued_even_after_previous_retry_limit(
 
 
 @pytest.mark.asyncio
+async def test_prepare_handoff_retry_honors_configured_limits(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.storage.pathlock_recovery.sleep", sleep)
+    msg = SimpleNamespace(
+        task_id="task",
+        lock_handoff_retry=3,
+        to_dict=lambda: {"task_id": "task"},
+    )
+
+    assert (
+        await prepare_handoff_retry(
+            msg,
+            HandoffRecoveryBlocked("busy"),
+            queue="Reindex",
+            max_requeues=3,
+        )
+        is None
+    )
+    assert (
+        await prepare_handoff_retry(
+            msg,
+            HandoffRecoveryRequired("restart"),
+            queue="Reindex",
+            max_requeues=3,
+        )
+        is None
+    )
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_content_write_historic_batch_recovers_all_exact_write_targets():
     from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 

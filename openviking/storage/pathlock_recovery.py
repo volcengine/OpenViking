@@ -20,10 +20,17 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 Requests = list[dict[str, str]]
 HANDOFF_RECOVERY_MAX_RETRIES = 8
+HANDOFF_RECOVERY_MAX_NON_BLOCKED_RETRIES = 2
 HANDOFF_RECOVERY_MAX_DELAY_SECS = 30.0
 
 
-async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> dict | None:
+async def prepare_handoff_retry(
+    msg: Any,
+    error: Exception,
+    *,
+    queue: str,
+    max_requeues: int = -1,
+) -> dict | None:
     """Bound recovery retries; keep the original delivery durable during backoff.
 
     The incremented counter is persisted in the replacement message. If waiting
@@ -31,7 +38,9 @@ async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> di
     """
     retry = msg.lock_handoff_retry
     blocked = isinstance(error, HandoffRecoveryBlocked)
-    limit = HANDOFF_RECOVERY_MAX_RETRIES if blocked else 2
+    limit = HANDOFF_RECOVERY_MAX_RETRIES if blocked else HANDOFF_RECOVERY_MAX_NON_BLOCKED_RETRIES
+    if max_requeues >= 0:
+        limit = min(limit, max_requeues)
     exhausted = retry >= limit
     if blocked:
         EventMetricDataSource._emit(

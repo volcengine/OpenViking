@@ -11,7 +11,11 @@ from typing import Any, Dict, Optional
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import bind_task_context_from_message, extract_task_metadata
-from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
+from openviking.storage.pathlock_recovery import (
+    HANDOFF_RECOVERY_MAX_RETRIES,
+    adopt_or_reacquire,
+    prepare_handoff_retry,
+)
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -31,8 +35,14 @@ logger = get_logger(__name__)
 
 
 class ReindexProcessor(DequeueHandlerBase):
-    def __init__(self, viking_fs: Any) -> None:
+    def __init__(
+        self,
+        viking_fs: Any,
+        *,
+        max_requeues: int = -1,
+    ) -> None:
         self._viking_fs = viking_fs
+        self._max_requeues = max_requeues
 
     @staticmethod
     def _ctx(msg: ReindexMsg) -> RequestContext:
@@ -65,7 +75,12 @@ class ReindexProcessor(DequeueHandlerBase):
         return await acquire(self._viking_fs._uri_to_path(msg.uri, ctx=ctx))
 
     async def _requeue_lock_handoff(self, msg: ReindexMsg, exc: Exception) -> bool:
-        payload = await prepare_handoff_retry(msg, exc, queue="Reindex")
+        payload = await prepare_handoff_retry(
+            msg,
+            exc,
+            queue="Reindex",
+            max_requeues=self._max_requeues,
+        )
         if payload is None:
             return False
 

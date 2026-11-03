@@ -1078,8 +1078,14 @@ class TaskTracker:
     async def get_work_state(
         self, task_id: str, work_id: str, *, account_id: str, user_id: str
     ) -> Optional[WorkState]:
-        work = await self._store.get_work(task_id, work_id, account_id=account_id, user_id=user_id)
+        work = await self.get_work(task_id, work_id, account_id=account_id, user_id=user_id)
         return work.state if work is not None else None
+
+    async def get_work(
+        self, task_id: str, work_id: str, *, account_id: str, user_id: str
+    ) -> Optional[WorkRecord]:
+        """Return one durable queue-work record, including its requeue count."""
+        return await self._store.get_work(task_id, work_id, account_id=account_id, user_id=user_id)
 
     async def start_work(
         self, task_id: str, work_id: str, *, account_id: str, user_id: str

@@ -174,6 +174,7 @@ class OpenVikingService:
             max_concurrent_reindex=config.queue_workers.reindex.max_concurrent,
             max_concurrent_session_commit=config.queue_workers.session_commit.max_concurrent,
             max_concurrent_external_task=config.queue_workers.external_task.max_concurrent,
+            max_requeues=config.queue_workers.max_requeues,
             binding_config=binding_config,
             git_config=config.git,
             service_name=config.service_name,
@@ -189,6 +190,7 @@ class OpenVikingService:
         max_concurrent_reindex: int = 4,
         max_concurrent_session_commit: int = 8,
         max_concurrent_external_task: int = 10,
+        max_requeues: int = -1,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,
@@ -215,6 +217,7 @@ class OpenVikingService:
                 max_concurrent_reindex=max_concurrent_reindex,
                 max_concurrent_session_commit=max_concurrent_session_commit,
                 max_concurrent_external_task=max_concurrent_external_task,
+                max_requeues=max_requeues,
             )
         else:
             logger.warning("RAGFS client not initialized, skipping queue manager")
@@ -499,6 +502,7 @@ class OpenVikingService:
                 max_concurrent_external_task=(
                     self._config.queue_workers.external_task.max_concurrent
                 ),
+                max_requeues=self._config.queue_workers.max_requeues,
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
             )
@@ -724,17 +728,25 @@ class OpenVikingService:
                         self._resource_service,
                         queue_name,
                         self._viking_fs,
+                        max_requeues=self._config.queue_workers.max_requeues,
                     ),
                     allow_create=True,
                 )
             self._queue_manager.get_queue(
                 self._queue_manager.REINDEX,
-                dequeue_handler=ReindexProcessor(self._viking_fs),
+                dequeue_handler=ReindexProcessor(
+                    self._viking_fs,
+                    max_requeues=self._config.queue_workers.max_requeues,
+                ),
                 allow_create=True,
             )
             self._queue_manager.get_queue(
                 self._queue_manager.CONTENT_WRITE,
-                dequeue_handler=ContentWriteProcessor(self._viking_fs, self._vikingdb_manager),
+                dequeue_handler=ContentWriteProcessor(
+                    self._viking_fs,
+                    self._vikingdb_manager,
+                    max_requeues=self._config.queue_workers.max_requeues,
+                ),
                 allow_create=True,
             )
             self._queue_manager.get_queue(

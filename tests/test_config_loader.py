@@ -135,6 +135,7 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
     assert config.queue_workers.session_commit.max_concurrent == 8
     assert config.queue_workers.external_task.max_concurrent == 10
+    assert config.queue_workers.max_requeues == -1
     assert config.reindex.file_vectorization_concurrency == 8
 
 
@@ -158,6 +159,7 @@ def test_runtime_concurrency_accepts_separate_values():
                 "reindex": {"max_concurrent": 6},
                 "session_commit": {"max_concurrent": 50},
                 "external_task": {"max_concurrent": 11},
+                "max_requeues": 5,
             },
             "reindex": {"file_vectorization_concurrency": 16},
         }
@@ -170,6 +172,7 @@ def test_runtime_concurrency_accepts_separate_values():
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
     assert config.queue_workers.session_commit.max_concurrent == 50
     assert config.queue_workers.external_task.max_concurrent == 11
+    assert config.queue_workers.max_requeues == 5
     assert config.reindex.file_vectorization_concurrency == 16
 
 
@@ -179,6 +182,10 @@ def test_queue_worker_concurrency_rejects_non_positive_value(value):
         QueueWorkersConfig(reindex={"max_concurrent": value})
 
     assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+
+def test_max_requeues_negative_value_disables_global_cap():
+    assert QueueWorkersConfig(max_requeues=-1).max_requeues == -1
 
 
 def test_parser_and_compile_api_validation():
