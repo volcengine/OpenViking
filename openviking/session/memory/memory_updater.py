@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
 from openviking.core.context import ContextLevel
+from openviking.core.namespace import context_type_for_uri
 from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFSTimeoutError
@@ -1766,8 +1767,6 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
         if not viking_fs:
             return
-        from openviking.core.namespace import context_type_for_uri
-
         upserted_uris = upserted_uris or set()
         non_memory_endpoints = {
             uri
@@ -1923,7 +1922,7 @@ class MemoryUpdater:
             and operation.old_memory_file_content.uri
         }
         for uri, link_groups in inherited_by_uri.items():
-            if uri in stale_uris:
+            if uri in stale_uris or context_type_for_uri(uri) != "memory":
                 continue
             # Implicit renames already copied and remapped the source's links
             # while writing the new file; drop that source's contribution to

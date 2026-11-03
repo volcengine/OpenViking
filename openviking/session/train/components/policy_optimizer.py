@@ -491,7 +491,6 @@ def _operations_to_plan_items(
         if target_uri:
             upsert_target_uris.add(target_uri)
 
-    delete_uris: set[str] = set()
     for old_file in getattr(operations, "delete_file_contents", []) or []:
         target_uri = old_file.uri
         target_name = str(
@@ -526,35 +525,6 @@ def _operations_to_plan_items(
                 ),
             )
         )
-        delete_uris.add(target_uri)
-
-    replacement_uris = sorted(upsert_target_uris)
-    for policy in superseded_policies:
-        if policy.uri in upsert_target_uris or policy.uri in delete_uris:
-            continue
-        # Keep the old URI unless the merged replacement is unambiguous.
-        if len(replacement_uris) != 1:
-            continue
-        items.append(
-            PolicyPlanItem(
-                kind="delete",
-                memory_type=memory_type,
-                target_name=policy.name,
-                target_uri=policy.uri,
-                before_content=policy.content,
-                after_content=None,
-                base_version=policy.version,
-                confidence=confidence,
-                links=_source_trajectory_links_from_experience(policy),
-                metadata={
-                    "rationale": "Superseded by broader experience from semantic gradient.",
-                    "merge_gradient_count": len(gradients),
-                    "superseded_by": replacement_uris,
-                },
-                replacement_uri=replacement_uris[0],
-            )
-        )
-        delete_uris.add(policy.uri)
     case_uris_by_trajectory: dict[str, set[str]] = defaultdict(set)
     for gradient in gradients:
         for link in gradient.links:

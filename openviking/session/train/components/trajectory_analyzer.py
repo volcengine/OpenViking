@@ -27,7 +27,11 @@ from openviking.session.memory.experience_lineage import (
     trajectory_outcome_tag,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdateError,
+    MemoryUpdateResult,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
@@ -315,6 +319,8 @@ class TrajectoryRolloutAnalyzer:
                 f"deleted={len(memory_result.deleted_uris)}, "
                 f"errors={len(memory_result.errors)}"
             )
+            if memory_result.errors:
+                raise MemoryUpdateError(memory_result)
             contexts = _contexts_from_memory_result(memory_result)
             return (
                 list(memory_result.written_uris),
@@ -324,7 +330,7 @@ class TrajectoryRolloutAnalyzer:
             )
         except Exception as exc:
             logger.error("[trajectory] Failed to extract: %s", exc, exc_info=True)
-            if strict_extract_errors:
+            if strict_extract_errors or isinstance(exc, MemoryUpdateError):
                 raise
             return None
 

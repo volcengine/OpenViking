@@ -43,6 +43,7 @@ from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import (
     ExtractContext,
     MemoryUpdateError,
+    MemoryUpdateResult,
 )
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
@@ -1212,6 +1213,16 @@ class SessionCompressorV3:
 
         async def commit_experience_batch(batch_result: RolloutTrainingResult) -> None:
             persisted_result = getattr(batch_result, "batch_result", None) or batch_result
+            apply_result = persisted_result.apply_result
+            if apply_result.errors:
+                failed_result = MemoryUpdateResult()
+                failed_result.written_uris = list(apply_result.written_uris)
+                failed_result.deleted_uris = list(apply_result.deleted_uris)
+                for error in apply_result.errors:
+                    failed_result.add_error(
+                        apply_result.updated_policy_set.root_uri, RuntimeError(error)
+                    )
+                raise MemoryUpdateError(failed_result)
             snapshot_apply_result, experience_trajectory_map = _experience_snapshot_provenance(
                 batch_result,
                 fallback_trajectory_uris={trajectory.uri for trajectory in analysis.trajectories},
@@ -2140,8 +2151,8 @@ def _v3_extraction_response(
     Historically ``extract_long_term_memories`` returned ``list[Context]`` and
     a number of direct callers still index/compare the return value as a list.
     Commit orchestration also understands a structured response for session
-    skills. Preserve the old list shape unless there are actual session skills
-    to report.
+    skills and training failures. Preserve the old list shape on success unless
+    there are actual session skills to report.
     """
     skill_dicts: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -2151,6 +2162,12 @@ def _v3_extraction_response(
             if uri_str and uri_str not in seen:
                 seen.add(uri_str)
                 skill_dicts.append({"uri": uri_str, "archive_uri": archive_uri})
+        if train_result.get("error"):
+            return {
+                "contexts": contexts,
+                "session_skills": skill_dicts,
+                "error": train_result["error"],
+            }
     if not skill_dicts:
         return contexts
     return {"contexts": contexts, "session_skills": skill_dicts}

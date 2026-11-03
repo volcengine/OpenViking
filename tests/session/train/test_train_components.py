@@ -1117,7 +1117,7 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
 
     upserts = [item for item in plan.items if item.kind == "upsert"]
     deletes = [item for item in plan.items if item.kind == "delete"]
-    assert [item.target_uri for item in deletes] == ([old_uri] if supersedes else [])
+    assert deletes == []
     assert len(upserts) == 1
     assert {link.to_uri for link in upserts[0].links} == {
         "viking://user/u/memories/trajectories/traj1.md",
