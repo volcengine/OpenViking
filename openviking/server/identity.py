@@ -10,8 +10,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
+    from openviking.storage.acl import AclAction
+    from openviking.storage.expr import FilterExpr
     from openviking.storage.viking_fs import VikingFS
 
+from openviking.core.global_policy import GlobalPolicyError, PolicyScopePlan
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -151,6 +154,121 @@ class ResolvedIdentity:
         self.role = Role.parse(self.role)
 
 
+class AccessDecision(str, Enum):
+    ALLOWED = "allowed"
+    CONTAINER = "container"
+    DENIED = "denied"
+
+
+@dataclass(frozen=True)
+class DataAccessScope:
+    owner_user_id: str
+    operation: AclAction
+    plan: PolicyScopePlan
+    policy_hash: str | None
+    request_root: str
+    requested_targets: tuple[str, ...]
+    effective_targets: tuple[str, ...]
+
+    def query_filter(self) -> FilterExpr:
+        """Filter before query limits; public paths retain actor ACL filtering."""
+        from openviking.storage.expr import And, Or, PathScope, RawDSL
+
+        public_filters = [
+            PathScope("uri", "viking://resources", depth=-1),
+            PathScope("uri", "viking://agent", depth=-1),
+        ]
+        if self.plan.status != "allowed" or not self.plan.includes:
+            # No owner content is in scope (e.g. a public target survived while
+            # every owner target was denied); keep only the public roots. An
+            # empty include list must not degrade to an unfiltered scan.
+            return Or(public_filters)
+
+        def scope_uri(scope):
+            return self.request_root + ("/" + scope.path if scope.path else "")
+
+        owner_filters = [
+            Or(
+                [
+                    PathScope("uri", scope_uri(s), depth=-1 if s.recursive else 0)
+                    for s in self.plan.includes
+                ]
+            )
+        ]
+        owner_filters.append(
+            RawDSL({"op": "must_not", "field": "uri", "conds": [self.request_root], "para": "-d=0"})
+        )
+        owner_filters.extend(
+            RawDSL(
+                {
+                    "op": "must_not",
+                    "field": "uri",
+                    "conds": [scope_uri(s)],
+                    "para": "-d=-1" if s.recursive else "-d=0",
+                }
+            )
+            for s in self.plan.excludes
+        )
+        return Or([*public_filters, And(owner_filters)])
+
+    def _is_fully_allowed_directory(self, path: str | None) -> bool:
+        """Whether the policy grants the directory and every descendant."""
+        try:
+            restricted = self.plan.restrict_scope(path)
+        except GlobalPolicyError:
+            return False
+        return (
+            restricted.status == "allowed"
+            and not restricted.excludes
+            and any(scope.path == path and scope.recursive for scope in restricted.includes)
+        )
+
+    def allows_overview(self, uri: str) -> bool:
+        """L1 overview is exposed only for directories with no denied descendants.
+
+        A partially allowed container may still expose its L0 abstract, but its
+        overview aggregates child summaries and would otherwise leak the
+        denied subtree.
+        """
+        uri = uri.rstrip("/")
+        if uri.endswith("/.overview.md"):
+            uri = uri[: -len("/.overview.md")]
+        if uri != self.request_root and not uri.startswith(self.request_root + "/"):
+            return False
+        path = uri[len(self.request_root) + 1 :] or None
+        return self._is_fully_allowed_directory(path)
+
+    def decide(self, uri: str) -> AccessDecision:
+        uri = uri.rstrip("/")
+        if uri != self.request_root and not uri.startswith(self.request_root + "/"):
+            return AccessDecision.DENIED
+        if not any(uri == t or uri.startswith(t + "/") for t in self.requested_targets):
+            return AccessDecision.DENIED
+        path = uri[len(self.request_root) + 1 :] or None
+        if path == "GLOBAL_POLICY.md" or (path and path.startswith("GLOBAL_POLICY.md/")):
+            return AccessDecision.DENIED
+        if path is not None and (path == ".overview.md" or path.endswith("/.overview.md")):
+            if not self.allows_overview(uri):
+                return AccessDecision.DENIED
+        if path is not None and self.plan.allows(path):
+            return AccessDecision.ALLOWED
+        if self.plan.has_allowed_descendant(path):
+            return AccessDecision.CONTAINER
+        return AccessDecision.DENIED
+
+
+def data_owner_id(ctx: RequestContext) -> str:
+    return ctx.data_access.owner_user_id if ctx.data_access else ctx.user.user_id
+
+
+def data_user_root(ctx: RequestContext) -> str:
+    return f"viking://user/{data_owner_id(ctx)}"
+
+
+def is_delegated(ctx: RequestContext) -> bool:
+    return ctx.data_access is not None
+
+
 @dataclass
 class RequestContext:
     """Request-level context, flows through Router -> Service -> VikingFS."""
@@ -174,9 +292,19 @@ class RequestContext:
     # Trusted background workers may maintain derived content without replaying
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
+    data_access: DataAccessScope | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.role = Role.parse(self.role)
+        if self.data_access is not None:
+            from openviking.storage.acl import AclAction
+
+            if (
+                self.role != Role.GLOBAL
+                or self.bypass_acl
+                or self.data_access.operation is not AclAction.READ
+            ):
+                raise ValueError("Delegated data access requires GLOBAL READ without ACL bypass")
 
     @property
     def account_id(self) -> str:

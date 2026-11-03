@@ -103,6 +103,8 @@ class _GrepMixin:
         # stat() authorizes the requested path.
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
+        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
+        await self._ensure_traversable(uri, ctx)
         await self.stat(uri, ctx=ctx, skip_count=True)
 
         # Read engine and threshold from grep_config (ov.conf)
@@ -115,7 +117,10 @@ class _GrepMixin:
         # persisted raw content, so it cannot safely recall projected results.
         resolved_engine = (
             "fs"
-            if force_fs or content_transform is not None or is_session_uri(uri)
+            if force_fs
+            or ctx.data_access is not None
+            or content_transform is not None
+            or is_session_uri(uri)
             else await self._resolve_grep_engine(engine, uri, ctx, switch_to_remote_threshold)
         )
         tags_by_uri: Dict[str, List[str]] = {}
@@ -326,7 +331,11 @@ class _GrepMixin:
         after_context=0,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
-        native_safe = content_transform is None and allowed_uris is None
+        native_safe = (
+            content_transform is None
+            and allowed_uris is None
+            and self._ctx_or_default(ctx).data_access is None
+        )
         if native_safe:
             try:
                 # Session grep historically used the Python fallback, where
@@ -385,7 +394,9 @@ class _GrepMixin:
         """VikingDB bm25 recall + local fs precise matching."""
         vector_store = self._get_vector_store()
         tags_by_uri: Dict[str, List[str]] = {}
-        output_fields = ["uri", "search_tags"] if tag_filter is not None or include_tags else ["uri"]
+        output_fields = (
+            ["uri", "search_tags"] if tag_filter is not None or include_tags else ["uri"]
+        )
 
         # Split regex alternation (e.g. "error|warning|fail") and join as a
         # single query string for bm25 search. VikingDB's standard tokenizer
@@ -394,7 +405,8 @@ class _GrepMixin:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
-            await self._ensure_access(excluded_prefix, ctx)
+            if self._ctx_or_default(ctx).data_access is None:
+                await self._ensure_access(excluded_prefix, ctx)
         filter_expr = _build_grep_scope_filter(
             uri,
             level_limit,
@@ -635,7 +647,8 @@ class _GrepMixin:
         excluded_path = None
         if exclude_uri:
             normalized_excluded_uri = exclude_uri.rstrip("/")
-            await self._ensure_access(normalized_excluded_uri, ctx)
+            if self._ctx_or_default(ctx).data_access is None:
+                await self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
         try:
@@ -756,7 +769,8 @@ class _GrepMixin:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
-            await self._ensure_access(excluded_prefix, ctx)
+            if self._ctx_or_default(ctx).data_access is None:
+                await self._ensure_access(excluded_prefix, ctx)
         file_uris = await self._collect_grep_files(
             uri,
             excluded_prefix=excluded_prefix,
@@ -950,14 +964,12 @@ class _GrepMixin:
         if before_context > 0:
             start = max(0, line_index - before_context)
             match["before_context"] = [
-                {"line": index + 1, "content": lines[index]}
-                for index in range(start, line_index)
+                {"line": index + 1, "content": lines[index]} for index in range(start, line_index)
             ]
         if after_context > 0:
             end = min(len(lines), line_index + after_context + 1)
             match["after_context"] = [
-                {"line": index + 1, "content": lines[index]}
-                for index in range(line_index + 1, end)
+                {"line": index + 1, "content": lines[index]} for index in range(line_index + 1, end)
             ]
         return match
 
