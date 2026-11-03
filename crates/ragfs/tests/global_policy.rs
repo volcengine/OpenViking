@@ -291,6 +291,28 @@ fn quoted_scalar_values_are_still_valid() {
 }
 
 #[test]
+fn plain_scalars_with_indicator_characters_after_hyphen_are_valid() {
+    // A hyphen inside a plain scalar does not start a new YAML token, so an
+    // immediately following ``!`` or ``&`` is literal filename content.
+    for path in ["resources/release-!important", "resources/a-&b"] {
+        let policy = GlobalPolicy::parse(&POLICY.replace("resources/public", path)).unwrap();
+        assert_eq!(policy.rules()[0].path, path);
+        assert!(policy.allows_path(path));
+    }
+}
+
+#[test]
+fn yaml_tags_anchors_and_aliases_are_still_rejected() {
+    for value in [
+        "!tag resources/public",
+        "&anchor resources/public",
+        "*alias",
+    ] {
+        assert_invalid(&POLICY.replace("resources/public", value));
+    }
+}
+
+#[test]
 fn policy_hash_is_stable_and_content_addressed() {
     let first = GlobalPolicy::parse(POLICY).unwrap();
     let second = GlobalPolicy::parse(POLICY).unwrap();

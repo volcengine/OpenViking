@@ -329,10 +329,14 @@ fn is_token_start(previous: Option<char>) -> bool {
     match previous {
         None => true,
         Some(character) => {
+            // A block sequence entry is written as ``- `` (dash plus separation
+            // space), so the indicator character itself is preceded by
+            // whitespace. Treating a bare ``-`` as a token start would misread
+            // plain scalars such as ``resources/release-!important`` as tags.
             character.is_whitespace()
                 || matches!(
                     character,
-                    '-' | ':' | ',' | '[' | ']' | '{' | '}' | '?' | '|' | '>'
+                    ':' | ',' | '[' | ']' | '{' | '}' | '?' | '|' | '>'
                 )
         }
     }
