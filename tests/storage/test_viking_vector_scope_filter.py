@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
+from openviking.storage.acl import AclAction, AclManager, AclMode, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.viking_vector_index_backend import (
@@ -199,6 +199,98 @@ async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
         acl = await backend.acl_manager.resolve("viking://resources/private/rules.md", reader)
 
         assert acl_allows(acl, reader, AclAction.READ) is allowed
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [AclMode.RESTRICTED, AclMode.INHERIT])
+async def test_clearing_acl_persists_sentinel_and_preserves_inheritance(
+    vector_backend_factory, tmp_path, mode
+):
+    reader = RequestContext(user=UserIdentifier("acct", "reader"), role=Role(Role.USER))
+    admin = RequestContext(user=UserIdentifier("acct", "admin"), role=Role(Role.ADMIN))
+    parent = "viking://resources/parent"
+    target = f"{parent}/target"
+    leaf = f"{target}/leaf.md"
+    grants = ["1:user:reader"]
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path / "clear_acl_vectors"),
+        )
+    )
+
+    async def visible_ids():
+        rows = await backend.search_in_tenant(
+            ctx=reader,
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            context_type="resource",
+            target_directories=[target],
+        )
+        return {row["id"] for row in rows}
+
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        backend.acl_manager = AclManager(backend, _AclConfigReader(True))
+        await backend._upsert_many_raw(
+            [
+                {
+                    "id": record_id,
+                    "uri": uri,
+                    "account_id": "acct",
+                    "context_type": "resource",
+                    "level": 2,
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "acl_mode": record_mode,
+                    "acl_direct_grants": direct,
+                    "acl_inherited_grants": inherited,
+                }
+                for record_id, uri, record_mode, direct, inherited in (
+                    ("parent", parent, "restricted", grants, []),
+                    ("target", target, mode.value, grants, grants),
+                    ("leaf", leaf, "inherit", [], grants),
+                )
+            ],
+            ctx=admin,
+        )
+        assert await visible_ids() == {"target", "leaf"}
+
+        effective = await backend.acl_manager.set_acl(target, [], admin)
+        assert effective.mode == mode
+        assert effective.direct.empty
+        assert effective.inherited.principals_for(AclAction.READ) == {"user:reader"}
+        allowed = mode == AclMode.INHERIT
+        assert acl_allows(effective, reader, AclAction.READ) is allowed
+
+        saved = {row["id"]: row for row in await backend.get_strict(["target", "leaf"], ctx=admin)}
+        assert saved["target"]["acl_direct_grants"] == ["none"]
+        assert saved["target"]["acl_inherited_grants"] == grants
+        assert saved["target"]["acl_mode"] == mode.value
+        assert saved["leaf"]["acl_direct_grants"] == ["none"]
+        assert saved["leaf"]["acl_inherited_grants"] == (grants if allowed else ["none"])
+        expected_visible = {"target", "leaf"} if allowed else set()
+        assert await visible_ids() == expected_visible
+
+        # An ordinary metadata upsert must retain the cleared direct ACL and its mode.
+        assert (
+            await backend.upsert({**saved["target"], "abstract": "updated"}, ctx=admin) == "target"
+        )
+        refreshed = (await backend.get_strict(["target"], ctx=admin))[0]
+        assert refreshed["abstract"] == "updated"
+        assert refreshed["acl_direct_grants"] == ["none"]
+        assert refreshed["acl_inherited_grants"] == grants
+        assert refreshed["acl_mode"] == mode.value
+        assert await visible_ids() == expected_visible
+        assert (
+            acl_allows(await backend.acl_manager.resolve(leaf, reader), reader, AclAction.READ)
+            is allowed
+        )
     finally:
         await backend.close()
 

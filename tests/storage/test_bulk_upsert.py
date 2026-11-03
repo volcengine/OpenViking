@@ -4,12 +4,14 @@
 import asyncio
 import threading
 import uuid
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -103,6 +105,65 @@ async def test_single_account_backend_upsert_many_uses_one_adapter_call():
     assert "id" not in records[1]
     assert "account_id" not in records[0]
     assert records[0]["unknown"] == "ignored"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_upsert_encodes_only_explicit_empty_acl_grants(bulk):
+    written = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return CollectionSchemas.context_collection("context", 4)
+
+    class _Adapter:
+        mode = "local"
+        USE_CONTENT_FIELD = False
+
+        def get_collection(self):
+            return _Collection()
+
+        def upsert(self, data):
+            rows = data if isinstance(data, list) else [data]
+            written.extend(rows)
+            return [row["id"] for row in rows]
+
+    acl_fields: list[dict[str, list[str]]] = [
+        {"acl_direct_grants": [], "acl_inherited_grants": []},
+        {"acl_direct_grants": [], "acl_inherited_grants": ["1:user:alice"]},
+        {"acl_direct_grants": ["7:group:editors"], "acl_inherited_grants": []},
+        {"acl_direct_grants": ["none"], "acl_inherited_grants": ["none"]},
+        {},
+    ]
+    records = [
+        {
+            "id": f"rec-{index}",
+            "uri": f"viking://resources/{index}",
+            "acl_mode": "restricted",
+            "search_tags": [],
+            **fields,
+        }
+        for index, fields in enumerate(acl_fields)
+    ]
+    original = deepcopy(records)
+    backend = make_backend(_Adapter())
+    if bulk:
+        assert await backend.upsert_many(records) == [row["id"] for row in records]
+    else:
+        for record in records:
+            assert await backend.upsert(record) == record["id"]
+
+    assert records == original
+    assert [(row.get("acl_direct_grants"), row.get("acl_inherited_grants")) for row in written] == [
+        (["none"], ["none"]),
+        (["none"], ["1:user:alice"]),
+        (["7:group:editors"], ["none"]),
+        (["none"], ["none"]),
+        (None, None),
+    ]
+    assert "acl_direct_grants" not in written[-1]
+    assert "acl_inherited_grants" not in written[-1]
+    assert all(row["acl_mode"] == "restricted" and row["search_tags"] == [] for row in written)
 
 
 @pytest.mark.asyncio
@@ -345,9 +406,14 @@ async def test_viking_vector_index_backend_upsert_many_persists_batch(tmp_path):
         )
     )
     backend.set_vector_config_resolver(
-        SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(
-            dedicated_vectordb=False, vectordb=backend._config,
-        )))
+        SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=SimpleNamespace(
+                    dedicated_vectordb=False,
+                    vectordb=backend._config,
+                )
+            )
+        )
     )
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     schema = {
