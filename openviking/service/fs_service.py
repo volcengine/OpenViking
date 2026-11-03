@@ -87,6 +87,9 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+_DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS = 60.0
+_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS = 3.0
+
 # Compile waits for directory search visibility without rerunning generation.
 _COMPILE_DIRECTORY_TAG_TIMEOUT_SECONDS = 60.0
 _COMPILE_DIRECTORY_TAG_POLL_SECONDS = 3.0
@@ -1852,6 +1855,28 @@ class FSService:
             )
         return records
 
+    async def _wait_for_directory_index(
+        self, uri: str, ctx: RequestContext, expected_levels: set[int]
+    ) -> set[int]:
+        """Return visible levels once expected_levels are searchable; raise on timeout or read error."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS
+        while True:
+            indexed = {record["level"] for record in await self._directory_index_records(uri, ctx)}
+            if expected_levels <= indexed:
+                return indexed
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise OpenVikingError(
+                    f"Directory index is not readable: {uri}",
+                    code="PROCESSING_ERROR",
+                    details={
+                        "expected_levels": sorted(expected_levels),
+                        "actual_levels": sorted(indexed),
+                    },
+                )
+            await asyncio.sleep(min(_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS, remaining))
+
     async def ensure_directory_index(
         self,
         uri: str,
@@ -2001,14 +2026,7 @@ class FSService:
                             raise OpenVikingError(
                                 f"Directory index processing failed: {uri}", code="PROCESSING_ERROR"
                             )
-                        indexed = {
-                            record["level"]
-                            for record in await self._directory_index_records(uri, ctx)
-                        }
-                        if required - indexed:
-                            raise OpenVikingError(
-                                f"Directory index is not readable: {uri}", code="PROCESSING_ERROR"
-                            )
+                        indexed = await self._wait_for_directory_index(uri, ctx, required)
                     result = {
                         "uri": uri,
                         "created_abstract": created_abstract,
