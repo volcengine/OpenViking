@@ -152,21 +152,22 @@ class _AnyDocMarkdownRenderer:
     ) -> str:
         normalized = self._normalize_inlines(_items(inlines))
         parts: list[str] = []
+        at_line_start = True
         for index, inline in enumerate(normalized):
             if isinstance(inline, _TextRun):
                 next_inline = normalized[index + 1] if index + 1 < len(normalized) else None
                 trailing_active = self._next_inline_is_active(next_inline)
-                rendered_so_far = "".join(parts)
-                parts.append(
-                    self._render_text(
-                        inline.text,
-                        inline.style,
-                        context=context,
-                        in_label=in_label,
-                        trailing_active=trailing_active,
-                        at_line_start=not rendered_so_far or rendered_so_far.endswith("\n"),
-                    )
+                rendered = self._render_text(
+                    inline.text,
+                    inline.style,
+                    context=context,
+                    in_label=in_label,
+                    trailing_active=trailing_active,
+                    at_line_start=at_line_start,
                 )
+                parts.append(rendered)
+                if rendered:
+                    at_line_start = rendered.endswith("\n")
                 continue
             rendered = self._render_inline(inline, context=context, in_label=in_label)
             if _kind(inline) == "checkbox" and index + 1 < len(normalized):
@@ -178,6 +179,8 @@ class _AnyDocMarkdownRenderer:
                 if not starts_with_space:
                     rendered += " "
             parts.append(rendered)
+            if rendered:
+                at_line_start = rendered.endswith("\n")
         return "".join(parts)
 
     def _render_inline(self, inline: Any, *, context: str, in_label: bool) -> str:
