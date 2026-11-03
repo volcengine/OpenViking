@@ -72,7 +72,7 @@ The server adds memberships to `RequestContext.group_ids` for each request. Addi
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add members from a JSON body `{"user_ids": [...]}` (1–1000 existing users) atomically; users who are already members are skipped, and the result is `added=true` |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove members from a JSON body `{"user_ids": [...]}` (1–1000) atomically; the result is `removed=true` when any membership was removed |
 
 ```bash
 ov --sudo admin create-group acme engineering
