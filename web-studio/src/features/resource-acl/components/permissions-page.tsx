@@ -1,3 +1,4 @@
+import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { AccountAclSettings } from '#/features/resource-acl/components/account-acl-settings'
 import { ResourceAclIdentityRecovery } from '#/features/resource-acl/components/resource-acl-identity-recovery'
 import { ResourcePermissionsPanel } from '#/features/resource-acl/components/resource-permissions'
@@ -31,13 +32,13 @@ const root = 'viking://resources/'
 
 export function PermissionsPage() {
   const state = useAclManagement()
-  const { t } = useTranslation('settings')
+  const { t } = useTranslation(['settings', 'appShell'])
   return (
     <main className="flex w-full min-w-0 flex-col gap-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t('acl.page.title')}
+          <h1 className="text-xl font-semibold tracking-tight">
+            {t('appShell:adminNavigation.permissions')}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {t('acl.page.description')}
@@ -47,6 +48,7 @@ export function PermissionsPage() {
           <AccountAclSettings inPopover />
         )}
       </header>
+      <AdminSpaceBanner accountId={state.connection.accountId} />
       {state.allowed && state.settings.data !== true && <AccountAclSettings />}
       <DirectoryPermissions
         key={`${state.connection.baseUrl}:${state.connection.accountId}`}

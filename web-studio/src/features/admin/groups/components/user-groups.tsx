@@ -45,6 +45,8 @@ import {
   TableRow,
 } from '#/shared/ui/table'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArchiveIcon, PlusIcon, SearchIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -64,7 +66,13 @@ function QueryError({ error, retry }: { error: unknown; retry: () => void }) {
   )
 }
 
-export function UserGroups({ connection }: { connection: AdminConnection }) {
+export function UserGroups({
+  connection,
+  navigation,
+}: {
+  connection: AdminConnection
+  navigation?: ReactNode
+}) {
   const { t } = useTranslation('settings')
   const client = useQueryClient()
   const scope = [connection.baseUrl, connection.accountId, connection.apiKey]
@@ -108,48 +116,55 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
       group.group_id.toLowerCase().includes(search.trim().toLowerCase()),
     ) ?? []
   return (
-    <div className="flex flex-col gap-5">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold">{t('groups.title')}</h1>
-          <p className="text-sm text-muted-foreground">
-            {t('groups.description')}
-          </p>
-        </div>
-        <div className="flex gap-2">
+    <div className="flex min-w-0 flex-col gap-3">
+      {groups.isSuccess ? (
+        <p className="text-sm">
+          {t('groups.total', { count: groups.data.length })}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {navigation}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-52">
+            <SearchIcon
+              aria-hidden="true"
+              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              type="search"
+              className="h-8 pl-9"
+              aria-label={t('groups.search')}
+              placeholder={t('groups.search')}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
           <Button
-            variant="outline"
-            disabled={groups.isFetching}
-            onClick={() => void groups.refetch()}
+            size="sm"
+            className="bg-[var(--studio-accent)] px-4 text-white hover:bg-[var(--studio-accent-hover)]"
+            onClick={() => setCreating(true)}
           >
-            {t('actions.refresh')}
-          </Button>
-          <Button onClick={() => setCreating(true)}>
+            <PlusIcon />
             {t('groups.create')}
           </Button>
         </div>
-      </header>
-      <Input
-        className="max-w-sm"
-        aria-label={t('groups.search')}
-        placeholder={t('groups.search')}
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-      />
+      </div>
       {groups.isPending ? (
         <p role="status">{t('loading')}</p>
       ) : groups.isError ? (
         <QueryError error={groups.error} retry={() => void groups.refetch()} />
       ) : (
-        <div className="rounded-lg border">
+        <div className="overflow-hidden rounded-xl border">
           <Table>
             <TableHeader>
-              <TableRow>
-                <TableHead>{t('groups.id')}</TableHead>
-                <TableHead>{t('groups.count')}</TableHead>
-                <TableHead className="text-right">
-                  {t('groups.actions')}
+              <TableRow className="bg-muted/55">
+                <TableHead className="h-11 w-[38%] pl-4">
+                  {t('groups.id')}
                 </TableHead>
+                <TableHead className="w-[37%]">
+                  {t('groups.memberColumn')}
+                </TableHead>
+                <TableHead>{t('groups.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -157,20 +172,21 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
                 <TableRow>
                   <TableCell
                     colSpan={3}
-                    className="py-10 text-center text-muted-foreground"
+                    className="h-40 text-center text-muted-foreground"
                   >
+                    <ArchiveIcon className="mx-auto mb-2 size-5" />
                     {t('groups.empty')}
                   </TableCell>
                 </TableRow>
               ) : (
                 filtered.map((group) => (
                   <TableRow key={group.group_id}>
-                    <TableCell className="font-mono">
+                    <TableCell className="pl-4 font-mono">
                       {group.group_id}
                     </TableCell>
                     <TableCell>{group.member_count}</TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <Button
                           variant="outline"
                           size="sm"

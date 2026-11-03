@@ -1,3 +1,4 @@
+import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import {
   getCapabilities,
   getConnections,
@@ -10,7 +11,7 @@ import { ConversationRow } from '#/shared/components/conversation-row'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { ArrowLeftIcon, BotIcon, UsersIcon } from 'lucide-react'
+import { ArrowLeftIcon, UsersIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -28,6 +29,7 @@ export function BotManagementPage() {
 
 function BotManagementWorkspace({ scope }: { scope: string }) {
   const { t } = useTranslation('vikingbot')
+  const { connection } = useAppConnection()
   const [tab, setTab] = useState<'channels' | 'conversations'>('channels')
   const [selected, setSelected] = useState<{ id: string; connection: string }>()
   const [search, setSearch] = useState('')
@@ -63,32 +65,35 @@ function BotManagementWorkspace({ scope }: { scope: string }) {
   if (!capabilities.data.can_manage) return <p>{t('adminOnly')}</p>
   return (
     <section className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-col items-start gap-4 border-b pb-3">
+      <header className="flex shrink-0 flex-col items-start gap-4">
         <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <BotIcon className="size-5" />
           {t('managementTitle')}
         </h1>
+        <div className="w-full">
+          <AdminSpaceBanner accountId={connection.accountId} />
+        </div>
         <p className="text-sm text-muted-foreground">{t('managementHint')}</p>
         <div
           role="tablist"
           aria-label={t('managementTitle')}
-          className="flex gap-2"
+          className="flex w-full gap-5 border-b"
         >
           {MANAGEMENT_TABS.map((value) => (
-            <Button
+            <button
+              type="button"
               key={value}
               role="tab"
               aria-selected={tab === value}
-              variant={tab === value ? 'secondary' : 'ghost'}
+              className="-mb-px cursor-pointer border-b-2 border-transparent px-1 py-2 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring aria-selected:border-b-foreground aria-selected:font-semibold aria-selected:text-foreground"
               onClick={() => setTab(value)}
             >
               {t(value)}
-            </Button>
+            </button>
           ))}
         </div>
       </header>
       {tab === 'channels' ? (
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="min-h-0 flex-1 pt-4">
           <Channels canManage scope={scope} />
         </div>
       ) : (

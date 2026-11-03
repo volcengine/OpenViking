@@ -145,7 +145,7 @@ const activity = {
     readFailed: '无法读取 {{uri}}',
     tabs: {
       terminal: '终端',
-      agent: 'Agent',
+      agent: 'VikingBot',
     },
     actionPanel: {
       collapse: '收起面板',
@@ -158,14 +158,14 @@ const activity = {
     },
     explorer: {
       title: '文件系统',
-      addResource: '添加资源',
+      addResource: '导入资源',
       abstractLevel: 'L0',
       collapseDirectory: '收起 {{name}}',
       empty: '空',
       expandDirectory: '展开 {{name}}',
       loading: '加载中',
       overviewLevel: 'L1',
-      search: '搜索上下文',
+      search: '搜索文件和内容',
       refresh: '刷新文件系统',
       namespaces: {
         agent: 'Agent 的能力、工具和经验',
@@ -197,8 +197,8 @@ const activity = {
         retry: '重新检测',
       },
       empty: {
-        heading: 'Agent 操作会与左侧目录联动',
-        body: '发送问题后，工具调用输出里的 `viking://` 文件会变成可点击链接，点击即可在左侧定位并在中间打开。',
+        heading: '欢迎使用 VikingBot',
+        body: '围绕资料、记忆和上下文提问，也可以在工作台直接打开回复里引用的文件。',
         prompts: [
           '总结当前目录',
           '递归查找相关文档',

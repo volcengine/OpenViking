@@ -4,7 +4,7 @@ import {
   CircleAlertIcon,
   HistoryIcon,
   Loader2Icon,
-  SparklesIcon,
+  BotIcon,
   SquarePenIcon,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -497,13 +497,15 @@ export function AgentEmptyState({
     returnObjects: true,
   }) as string[]
   return (
-    <div className="flex h-full flex-col justify-end gap-4 pb-4">
-      <div className="rounded-xl border bg-background p-4">
-        <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <SparklesIcon className="size-4 text-primary" />
-          {t('agent.empty.heading')}
+    <div className="flex min-h-full flex-col gap-4">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
+        <div className="mb-1 flex size-12 items-center justify-center rounded-xl bg-muted text-foreground">
+          <BotIcon className="size-6" />
         </div>
-        <p className="text-sm leading-6 text-muted-foreground">
+        <h2 className="text-lg font-semibold tracking-tight">
+          {t('agent.empty.heading')}
+        </h2>
+        <p className="max-w-xs text-sm leading-6 text-muted-foreground">
           {t('agent.empty.body')}
         </p>
       </div>
@@ -512,7 +514,7 @@ export function AgentEmptyState({
           <button
             key={prompt}
             type="button"
-            className="rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            className="rounded-full border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
             onClick={() => onSend(prompt)}
           >
             {prompt}

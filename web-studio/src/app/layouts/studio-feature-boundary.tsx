@@ -29,7 +29,11 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     studioMode,
   } = useAppConnection()
   const service = useStudioService()
-  const feature = featureForPath(pathname)
+  const feature = featureForPath(
+    pathname === '/admin/request-logs' || pathname === '/admin/request-logs/'
+      ? '/request-logs'
+      : pathname,
+  )
   const probe = feature && 'probe' in feature ? feature.probe : undefined
   const cloudProbe =
     service.ready && service.provider === 'volcengine' && Boolean(probe)

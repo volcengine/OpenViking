@@ -1,5 +1,20 @@
 const workspace = {
   appShell: {
+    adminNavigation: {
+      spaceScope: '这一页只显示这个数据空间的数据',
+      overview: '概览',
+      currentSpace: '当前数据空间：{{space}}',
+      dashboard: '数据看板',
+      members: '数据空间与成员',
+      users: 'User 与 API Keys',
+      spaceConfiguration: '数据空间配置',
+      permissions: '目录权限',
+      extraction: '记忆抽取规则',
+      services: '服务配置',
+      operations: '运维',
+      tasks: '任务监控',
+      root: 'Root 配置',
+    },
     apiKey: {
       title: 'API Key',
       userId: 'User ID',
@@ -1231,6 +1246,10 @@ const workspace = {
       confirmEveryoneGrant: '确认授予所有用户{{level}}权限',
     },
     groups: {
+      userLabel: 'User ({{total}})',
+      groupLabel: 'Group ({{total}})',
+      memberColumn: '组内成员',
+      total: '共 {{count}} 个用户组',
       navigation: '用户与权限',
       usersTab: '用户',
       title: '用户组',
@@ -1238,7 +1257,7 @@ const workspace = {
       id: '用户组 ID',
       count: '成员数',
       actions: '操作',
-      create: '新建用户组',
+      create: '创建 Group',
       idHint: '当前 Account 内唯一的标识，创建后不可修改。',
       manage: '管理成员',
       delete: '删除用户组',
@@ -1247,7 +1266,7 @@ const workspace = {
         '确定删除 {{group}}？资源中的 ACL 引用不会被清理，重新创建相同 ID 可能恢复原有授权。',
       empty: '暂无用户组。',
       notJoined: '未加入用户组',
-      search: '搜索用户组',
+      search: '搜索 Group ID',
       members: '{{group}} 的成员',
       memberHint:
         '成员变更在后续请求中生效。移除成员后，其他授权仍可能允许其访问资源。',

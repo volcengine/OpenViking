@@ -1,9 +1,12 @@
+import type { ReactNode } from 'react'
 import { UserGroups } from '#/features/admin/groups/components/user-groups'
 import { UserManagementPanel } from '#/features/admin/users/page'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { resolveStudioManagementCapabilities } from '#/features/connection/lib/studio-permissions'
 
-export function UserGroupsRoute() {
+export function UserGroupsRoute({
+  navigation,
+}: { navigation?: ReactNode } = {}) {
   const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
     useAppConnection()
   const { canManageUsers } = resolveStudioManagementCapabilities({
@@ -15,6 +18,7 @@ export function UserGroupsRoute() {
   if (!canManageUsers) return <UserManagementPanel />
   return (
     <UserGroups
+      navigation={navigation}
       connection={{
         accountId: connection.accountId,
         apiKey: connection.adminApiKey,

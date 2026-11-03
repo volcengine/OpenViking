@@ -1,3 +1,4 @@
+import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { useQuery } from '@tanstack/react-query'
 import * as React from 'react'
 
@@ -31,8 +32,10 @@ function hashSecret(value: string): string {
   return (hash >>> 0).toString(36)
 }
 
-export function RequestLogsRoute() {
-  const { t } = useTranslation('requestLogs')
+export function RequestLogsRoute({
+  management = false,
+}: { management?: boolean } = {}) {
+  const { t } = useTranslation(['requestLogs', 'appShell'])
   const { connection, connectionRole, isConnectionRoleLoading } =
     useAppConnection()
   const [draftFilters, setDraftFilters] =
@@ -103,6 +106,14 @@ export function RequestLogsRoute() {
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
+      {management ? (
+        <>
+          <h1 className="text-xl font-semibold tracking-tight">
+            {t('appShell:navigation.requestLogs.title')}
+          </h1>
+          <AdminSpaceBanner accountId={connection.accountId} />
+        </>
+      ) : null}
       <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
         {scopeLabel}
       </div>

@@ -104,6 +104,10 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
     serverMode,
     allowed: canManageGateway,
   })
+  const filesystemMode =
+    pathname === '/filesystem' || pathname === '/filesystem/'
+  const [filesystemNavigationOpen, setFilesystemNavigationOpen] =
+    React.useState(false)
   const navSections = isGatewayHost ? [] : NAV_SECTIONS
   const crossDeviceVerifyActive =
     pathname === '/oauth/verify' ||
@@ -146,18 +150,34 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider
       defaultOpen
-      className="flex h-svh min-h-0 flex-col overflow-hidden bg-sidebar"
+      data-management={managementMode}
+      data-workbench={filesystemMode}
+      style={
+        managementMode
+          ? ({ '--sidebar-width': '236px' } as React.CSSProperties)
+          : undefined
+      }
+      open={
+        managementMode
+          ? true
+          : filesystemMode
+            ? filesystemNavigationOpen
+            : undefined
+      }
+      onOpenChange={filesystemMode ? setFilesystemNavigationOpen : undefined}
+      className="flex h-svh min-h-0 flex-col overflow-hidden bg-[#f3f3fa] dark:bg-sidebar"
     >
       <StudioHeader
         managementMode={managementMode}
+        filesystemMode={filesystemMode}
         canManage={canManage}
         isGatewayHost={isGatewayHost}
         settingsPath={settingsPath}
       />
-      <div className="flex min-h-0 flex-1">
+      <div className="studio-layout-body flex min-h-0 flex-1">
         <Sidebar
           variant="sidebar"
-          collapsible="icon"
+          collapsible={filesystemMode ? 'offcanvas' : 'icon'}
           className="top-14 h-[calc(100svh-3.5rem)]"
         >
           <SidebarContent className="gap-0 py-1">
@@ -165,6 +185,11 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
               <StudioManagementNavigation
                 pathname={pathname}
                 isRoot={connectionRole === 'root' && !isGatewayHost}
+                showRootConfiguration={
+                  connectionRole === 'root' &&
+                  !isConnectionRoleLoading &&
+                  Boolean(connection.adminApiKey.trim())
+                }
                 showGateway={showGateway}
                 gatewayOnly={isGatewayHost}
                 developmentMode={serverMode === 'dev'}
@@ -227,107 +252,126 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
                   </SidebarGroup>
                 ))}
 
-            <SidebarGroup
-              className="pb-1"
-              hidden={provider !== 'opensource' || isGatewayHost}
-            >
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {provider === 'opensource' && !isGatewayHost ? (
-                    <SidebarMenuItem>
-                      <SidebarMenuButton
-                        onClick={openCrossDeviceVerify}
-                        isActive={crossDeviceVerifyActive}
-                        tooltip={t('navigation.crossDeviceVerify.title', {
-                          ns: 'appShell',
-                        })}
-                        className="h-9"
-                      >
-                        <KeyRoundIcon />
-                        <span>
-                          {t('navigation.crossDeviceVerify.title', {
+            {!managementMode && (
+              <SidebarGroup
+                className="pb-1"
+                hidden={provider !== 'opensource' || isGatewayHost}
+              >
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {provider === 'opensource' && !isGatewayHost ? (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          onClick={openCrossDeviceVerify}
+                          isActive={crossDeviceVerifyActive}
+                          tooltip={t('navigation.crossDeviceVerify.title', {
                             ns: 'appShell',
                           })}
-                        </span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ) : null}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+                          className="h-9"
+                        >
+                          <KeyRoundIcon />
+                          <span>
+                            {t('navigation.crossDeviceVerify.title', {
+                              ns: 'appShell',
+                            })}
+                          </span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ) : null}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
 
-            <SidebarGroup className="pb-1" hidden={isGatewayHost}>
-              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
-                {t('sidebar.groups.resources', { ns: 'appShell' })}
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      render={
-                        <a
-                          href={
-                            provider === 'volcengine'
-                              ? sdkApiHref
-                              : 'https://docs.openviking.ai/'
-                          }
-                          target="_blank"
-                          rel="noreferrer"
-                        />
-                      }
-                      tooltip={t('footer.docs', { ns: 'appShell' })}
-                      className="h-9"
-                    >
-                      <BookOpenIcon />
-                      <span>{t('footer.docs', { ns: 'appShell' })}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      render={
-                        <a href={sdkApiHref} target="_blank" rel="noreferrer" />
-                      }
-                      tooltip={t('footer.sdkApi', { ns: 'appShell' })}
-                      className="h-9"
-                    >
-                      <BracesIcon />
-                      <span>{t('footer.sdkApi', { ns: 'appShell' })}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  {provider === 'opensource' && !isGatewayHost ? (
+            {!managementMode && (
+              <SidebarGroup className="pb-1" hidden={isGatewayHost}>
+                <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                  {t('sidebar.groups.resources', { ns: 'appShell' })}
+                </SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
                     <SidebarMenuItem>
                       <SidebarMenuButton
                         render={
                           <a
-                            href={agentIntegrationsHref}
+                            href={
+                              provider === 'volcengine'
+                                ? sdkApiHref
+                                : 'https://docs.openviking.ai/'
+                            }
                             target="_blank"
                             rel="noreferrer"
                           />
                         }
-                        tooltip={t('footer.agentIntegrations', {
-                          ns: 'appShell',
-                        })}
+                        tooltip={t('footer.docs', { ns: 'appShell' })}
                         className="h-9"
                       >
-                        <BotIcon />
-                        <span>
-                          {t('footer.agentIntegrations', { ns: 'appShell' })}
-                        </span>
+                        <BookOpenIcon />
+                        <span>{t('footer.docs', { ns: 'appShell' })}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
-                  ) : null}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        render={
+                          <a
+                            href={sdkApiHref}
+                            target="_blank"
+                            rel="noreferrer"
+                          />
+                        }
+                        tooltip={t('footer.sdkApi', { ns: 'appShell' })}
+                        className="h-9"
+                      >
+                        <BracesIcon />
+                        <span>{t('footer.sdkApi', { ns: 'appShell' })}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    {provider === 'opensource' && !isGatewayHost ? (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          render={
+                            <a
+                              href={agentIntegrationsHref}
+                              target="_blank"
+                              rel="noreferrer"
+                            />
+                          }
+                          tooltip={t('footer.agentIntegrations', {
+                            ns: 'appShell',
+                          })}
+                          className="h-9"
+                        >
+                          <BotIcon />
+                          <span>
+                            {t('footer.agentIntegrations', { ns: 'appShell' })}
+                          </span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ) : null}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
           </SidebarContent>
-          <SidebarFooter className="hidden items-end border-t border-sidebar-border/70 px-2 py-1 group-data-[collapsible=icon]:items-center md:flex">
-            <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
-          </SidebarFooter>
+          {!managementMode && (
+            <SidebarFooter className="hidden items-end border-t border-sidebar-border/70 px-2 py-1 group-data-[collapsible=icon]:items-center md:flex">
+              <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
+            </SidebarFooter>
+          )}
         </Sidebar>
 
-        <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
+        <SidebarInset
+          className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 data-[filesystem=true]:bg-transparent md:m-0 md:ml-0"
+          data-filesystem={filesystemMode}
+        >
           <ScrollArea className="min-h-0 flex-1">
-            <div className="flex w-full flex-col gap-6 px-4 py-6 md:px-6">
+            <div
+              className={
+                filesystemMode
+                  ? 'flex w-full flex-col'
+                  : 'flex w-full flex-col gap-6 px-4 py-6 md:px-8 lg:px-12'
+              }
+            >
               {children}
             </div>
           </ScrollArea>

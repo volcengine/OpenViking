@@ -1,3 +1,4 @@
+import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import type {
   EditableMemoryType,
   MemoryTemplate,
@@ -20,12 +21,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowLeftIcon,
-  BookOpenTextIcon,
-  BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   RotateCcwIcon,
-  UserRoundIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -223,25 +221,17 @@ export function MemoryTemplatesPage() {
       {!selected || !template ? (
         <div className="w-full min-w-0 space-y-7 pb-12">
           <header className="space-y-2">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-xl border border-primary/20 bg-primary/5 text-primary">
-                <BookOpenTextIcon className="size-5" />
-              </div>
-              <h2 className="text-2xl font-semibold tracking-tight">
-                {t('memoryTemplates.title')}
-              </h2>
-            </div>
+            <h1 className="text-xl font-semibold tracking-tight">
+              {t('memoryTemplates.title')}
+            </h1>
+            <AdminSpaceBanner accountId={connection.accountId} />
             <p className="text-sm text-muted-foreground">
               {t('memoryTemplates.subtitle')}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t('memoryTemplates.account', { account: connection.accountId })}
             </p>
           </header>
           <TemplateGroup
             title={t('memoryTemplates.userGroup')}
             hint={t('memoryTemplates.userGroupHint')}
-            icon={<UserRoundIcon className="size-12 stroke-[1.2]" />}
             types={editableMemoryTypes.slice(0, 4)}
             templates={templatesQuery.data.templates}
             onSelect={choose}
@@ -249,7 +239,6 @@ export function MemoryTemplatesPage() {
           <TemplateGroup
             title={t('memoryTemplates.agentGroup')}
             hint={t('memoryTemplates.agentGroupHint')}
-            icon={<BotIcon className="size-12 stroke-[1.2]" />}
             types={editableMemoryTypes.slice(4)}
             templates={templatesQuery.data.templates}
             onSelect={choose}
@@ -427,28 +416,19 @@ export function MemoryTemplatesPage() {
 function TemplateGroup({
   title,
   hint,
-  icon,
   types,
   templates,
   onSelect,
 }: {
   title: string
   hint: string
-  icon: React.ReactNode
   types: readonly EditableMemoryType[]
   templates: MemoryTemplate[]
   onSelect: (memoryType: EditableMemoryType) => void
 }) {
   const { t } = useTranslation('settings')
   return (
-    <section className="grid overflow-hidden rounded-2xl border bg-card md:grid-cols-[minmax(200px,25%)_minmax(0,1fr)]">
-      <div className="relative flex min-h-52 items-center justify-center overflow-hidden border-b bg-muted/15 text-muted-foreground/60 md:border-r md:border-b-0">
-        <div className="absolute size-44 rounded-full border border-border/60" />
-        <div className="absolute size-32 rounded-full border border-border/70" />
-        <div className="relative flex size-20 items-center justify-center rounded-full border bg-background shadow-sm">
-          {icon}
-        </div>
-      </div>
+    <section className="overflow-hidden rounded-xl border bg-card">
       <div className="min-w-0 px-5 py-5 md:px-7">
         <h3 className="mb-4 flex flex-wrap items-baseline gap-x-2 text-base font-semibold">
           {title}

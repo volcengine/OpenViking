@@ -121,7 +121,7 @@ it.each([
       screen.queryByRole('link', { name: /Connection settings/i }),
     ).toBeNull()
     if (path.startsWith('/admin'))
-      expect(screen.getByText('Administration')).toBeTruthy()
+      expect(screen.getByText('Admin console')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Studio settings/i }))
     const link = screen.getByRole('link', { name: /Manage connections/i })
     expect(link.getAttribute('href')).toBe(destination)
@@ -250,10 +250,10 @@ it.each([
     ).toBe(destination)
     if (role === 'root') {
       expect(screen.queryByRole('link', { name: 'Home' })).toBeNull()
-      expect(screen.getByRole('link', { name: 'Users' })).toBeTruthy()
+      expect(screen.getByRole('link', { name: 'User & API Keys' })).toBeTruthy()
     } else {
       expect(screen.queryByRole('link', { name: 'Home' })).toBeNull()
-      expect(screen.queryByRole('link', { name: 'Users' })).toBeNull()
+      expect(screen.queryByRole('link', { name: 'User & API Keys' })).toBeNull()
     }
   },
 )

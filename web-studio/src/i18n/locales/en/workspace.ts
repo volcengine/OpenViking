@@ -1,5 +1,20 @@
 const workspace = {
   appShell: {
+    adminNavigation: {
+      spaceScope: 'This page shows data for this space only.',
+      overview: 'Overview',
+      currentSpace: 'Current space: {{space}}',
+      dashboard: 'Dashboard',
+      members: 'Spaces and members',
+      users: 'User & API Keys',
+      spaceConfiguration: 'Space configuration',
+      permissions: 'Directory permissions',
+      extraction: 'Memory extraction rules',
+      services: 'Service configuration',
+      operations: 'Operations',
+      tasks: 'Task monitoring',
+      root: 'Root settings',
+    },
     apiKey: {
       title: 'API Key',
       userId: 'User ID',
@@ -1293,6 +1308,10 @@ const workspace = {
       confirmEveryoneGrant: 'Grant {{level}} access to all users',
     },
     groups: {
+      userLabel: 'User ({{total}})',
+      groupLabel: 'Group ({{total}})',
+      memberColumn: 'Members',
+      total: '{{count}} groups',
       navigation: 'Users & Permissions',
       usersTab: 'Users',
       title: 'User groups',
@@ -1300,7 +1319,7 @@ const workspace = {
       id: 'Group ID',
       count: 'Members',
       actions: 'Actions',
-      create: 'Create group',
+      create: 'Create Group',
       idHint:
         'A unique ID within this Account. It cannot be renamed after creation.',
       manage: 'Manage members',
@@ -1310,7 +1329,7 @@ const workspace = {
         'Delete {{group}}? Existing resource ACL references are not removed. Recreating this ID may reactivate those grants.',
       empty: 'No user groups yet.',
       notJoined: 'No groups',
-      search: 'Search groups',
+      search: 'Search Group ID',
       members: 'Members of {{group}}',
       memberHint:
         'Membership changes affect subsequent requests. Other grants may still allow access after removal.',

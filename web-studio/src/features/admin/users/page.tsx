@@ -1,7 +1,13 @@
+import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { ErrorMessage } from '#/shared/components/error-message'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, Outlet, useNavigate } from '@tanstack/react-router'
+import {
+  Link,
+  Outlet,
+  useNavigate,
+  useRouterState,
+} from '@tanstack/react-router'
 import {
   CheckIcon,
   CopyIcon,
@@ -12,7 +18,6 @@ import {
   RotateCwIcon,
   ShieldAlertIcon,
   Trash2Icon,
-  UsersRoundIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -90,10 +95,29 @@ function resolveKeyLabel(user: AdminUser): string {
 }
 
 export function UserManagementRoute() {
-  return <Outlet />
+  const { t } = useTranslation(['appShell', 'settings'])
+  const { connection } = useAppConnection()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const current = pathname.replace(/\/$/, '')
+  if (current !== '/admin/users' && current !== '/admin/users/groups')
+    return <Outlet />
+
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <h1 className="text-xl font-semibold tracking-tight">
+        {t('adminNavigation.users')}
+      </h1>
+      <AdminSpaceBanner accountId={connection.accountId} showScope />
+      <Outlet />
+    </div>
+  )
 }
 
-export function UserManagementPanel() {
+export function UserManagementPanel({
+  navigation,
+}: { navigation?: React.ReactNode } = {}) {
   const { t } = useTranslation('settings')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -330,17 +354,30 @@ export function UserManagementPanel() {
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t('management.title')}
-          </h1>
-          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            {t('management.currentAccountDescription')}
-          </p>
-        </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+    <div className="flex w-full min-w-0 flex-col gap-3">
+      {usersQuery.isSuccess ? (
+        <p className="flex flex-wrap gap-x-4 text-sm">
+          <span>
+            {t('stats.users')}{' '}
+            <strong className="font-medium tabular-nums">{accountTotal}</strong>
+          </span>
+          <span className="text-muted-foreground">
+            {t('stats.apiKeys')}{' '}
+            <strong className="font-medium tabular-nums">{visibleKeys}</strong>
+          </span>
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {navigation}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Input
+            type="search"
+            className="w-full sm:w-52"
+            aria-label={t('userList.search')}
+            placeholder={t('userList.search')}
+            value={userList.search}
+            onChange={(event) => userList.setSearch(event.target.value)}
+          />
           {canManageAccounts ? (
             <DeleteAccountButton
               accountId={connection.accountId}
@@ -384,67 +421,23 @@ export function UserManagementPanel() {
             />
             {t('actions.refresh')}
           </Button>
-          <Button type="button" onClick={() => setAddUserOpen(true)}>
+          <Button
+            type="button"
+            className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
+            onClick={() => setAddUserOpen(true)}
+          >
             <PlusIcon />
             {t('actions.addUser')}
           </Button>
         </div>
-      </header>
+      </div>
 
       <RootSetupGuide onCreate={() => setAddUserOpen(true)} />
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Card className="bg-card/70 py-4">
-          <CardContent className="flex items-center justify-between gap-4 px-5">
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t('stats.users')}
-              </p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {usersQuery.isSuccess ? accountTotal : '-'}
-              </p>
-            </div>
-            <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
-              <UsersRoundIcon className="size-4" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-card/70 py-4">
-          <CardContent className="flex items-center justify-between gap-4 px-5">
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t('stats.apiKeys')}
-              </p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {usersQuery.isSuccess ? visibleKeys : '-'}
-              </p>
-            </div>
-            <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
-              <KeyRoundIcon className="size-4" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b bg-muted/20">
-          <CardTitle>{t('management.memberListTitle')}</CardTitle>
-          <CardDescription>
-            {t(
-              canManageAccounts
-                ? 'management.memberListDescriptionRoot'
-                : 'management.memberListDescription',
-            )}
-          </CardDescription>
-          <Input
-            type="search"
-            className="max-w-sm"
-            aria-label={t('userList.search')}
-            placeholder={t('userList.search')}
-            value={userList.search}
-            onChange={(event) => userList.setSearch(event.target.value)}
-          />
-        </CardHeader>
+      <Card
+        className="gap-0 overflow-hidden py-0"
+        aria-label={t('management.memberListTitle')}
+      >
         <CardContent className="p-0">
           {usersQuery.isPending || searchQuery !== userList.search ? (
             <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">

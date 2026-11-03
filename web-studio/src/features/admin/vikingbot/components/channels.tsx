@@ -85,21 +85,9 @@ export function Channels({
       />
     )
   return (
-    <div className="mx-auto w-full min-w-0 max-w-7xl space-y-5 p-4 md:p-6 lg:p-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold">{t('channels')}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t('botsHint')}</p>
-        </div>
-        {canManage && (
-          <Button onClick={() => setChoosing(true)}>
-            <PlusIcon className="size-4" />
-            {t('addBot')}
-          </Button>
-        )}
-      </div>
+    <div className="w-full min-w-0 space-y-4">
       {canManage && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/20 p-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-48 flex-1 sm:max-w-sm">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -128,6 +116,10 @@ export function Channels({
           <span className="ml-auto text-xs tabular-nums text-muted-foreground">
             {t('botCount', { count: visibleConnections.length })}
           </span>
+          <Button onClick={() => setChoosing(true)}>
+            <PlusIcon className="size-4" />
+            {t('addBot')}
+          </Button>
         </div>
       )}
       {!canManage && (

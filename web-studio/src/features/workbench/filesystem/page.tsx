@@ -9,6 +9,7 @@ import {
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   TerminalIcon,
+  UploadIcon,
   WandSparkles,
 } from 'lucide-react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
@@ -564,13 +565,13 @@ function FilesystemWorkbench() {
   }, [])
 
   return (
-    <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-h-0 flex-col bg-background md:-mx-6">
+    <div className="flex h-[calc(100svh-3.5rem)] min-h-0 flex-col p-1.5">
       <div
         ref={layoutRef}
-        className="flex min-h-0 flex-1 flex-col bg-background lg:flex-row"
+        className="flex min-h-0 flex-1 flex-col gap-1.5 lg:flex-row"
         style={layoutStyle}
       >
-        <aside className="flex min-h-[180px] min-w-0 shrink-0 basis-[36%] flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--filesystem-left-width)] lg:min-w-[var(--filesystem-left-width)] lg:basis-auto lg:border-b-0">
+        <aside className="flex min-h-[180px] min-w-0 shrink-0 basis-[36%] flex-col overflow-hidden rounded-xl border border-border/60 bg-background lg:min-h-0 lg:w-[var(--filesystem-left-width)] lg:min-w-[var(--filesystem-left-width)] lg:basis-auto">
           <ContextExplorerHeader
             activeTaskCount={activeTaskCount}
             hasActiveTasks={hasActiveTasks}
@@ -603,8 +604,8 @@ function FilesystemWorkbench() {
           onPointerDown={(event) => handleResizeStart('context', event)}
         />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:border-b-0">
-          <div className="flex min-h-14 items-center gap-3 border-b px-4">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/60 bg-background">
+          <div className="flex min-h-12 items-center gap-2 border-b border-border/60 px-3">
             <button
               type="button"
               className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
@@ -630,6 +631,20 @@ function FilesystemWorkbench() {
             >
               <ClipboardIcon className="size-4" />
             </Button>
+            {canUseLocalTools && selectedIsDirectory ? (
+              <Button
+                type="button"
+                size="sm"
+                aria-label={t('explorer.addResource')}
+                className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
+                onClick={() => setUploadDialogOpen(true)}
+              >
+                <UploadIcon className="size-4" />
+                <span className="hidden xl:inline">
+                  {t('explorer.addResource')}
+                </span>
+              </Button>
+            ) : null}
             {canUseLocalTools &&
               selectedIsDirectory &&
               /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
@@ -720,7 +735,7 @@ function FilesystemWorkbench() {
               </Button>
             ) : null}
           </div>
-          <div className="min-h-0 flex-1">
+          <div className="filesystem-preview min-h-0 flex-1">
             <LazyFilePreview
               defaultReadLimit={canUseLocalTools ? -1 : 10000}
               file={selectedFile}
@@ -740,7 +755,7 @@ function FilesystemWorkbench() {
         ) : null}
 
         {!isCompactLayout && canUseCliPanel && !rightCollapsed ? (
-          <aside className="hidden min-h-0 min-w-0 flex-col bg-muted/15 lg:flex lg:w-[var(--filesystem-right-width)] lg:min-w-[var(--filesystem-right-width)]">
+          <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-background lg:flex lg:w-[var(--filesystem-right-width)] lg:min-w-[var(--filesystem-right-width)]">
             <FilesystemActionPanel
               activePanel={activePanel}
               currentUri={currentUri}
@@ -886,7 +901,7 @@ function FilesystemActionPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-12 shrink-0 items-center gap-2 px-3">
         <FilesystemActionTabs
           activePanel={activePanel}
           onPanelChange={onPanelChange}
@@ -1009,13 +1024,7 @@ function FilesystemActionTabs({
   const { t } = useTranslation('filesystem')
 
   return (
-    <div className="inline-flex rounded-lg border bg-background p-1">
-      <PanelTab
-        active={activePanel === 'terminal'}
-        icon={TerminalIcon}
-        label={t('tabs.terminal')}
-        onClick={() => onPanelChange('terminal')}
-      />
+    <div className="inline-flex rounded-lg bg-muted p-0.5">
       {showAgentTab ? (
         <PanelTab
           active={activePanel === 'agent'}
@@ -1024,6 +1033,12 @@ function FilesystemActionTabs({
           onClick={() => onPanelChange('agent')}
         />
       ) : null}
+      <PanelTab
+        active={activePanel === 'terminal'}
+        icon={TerminalIcon}
+        label={t('tabs.terminal')}
+        onClick={() => onPanelChange('terminal')}
+      />
     </div>
   )
 }

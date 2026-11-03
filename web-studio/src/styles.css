@@ -349,3 +349,75 @@
   margin: 0;
   padding: 0;
 }
+
+.filesystem-preview {
+  background-color: var(--studio-preview);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--muted-foreground) 16%, transparent) 0.65px,
+    transparent 0.65px
+  );
+  background-size: 12px 12px;
+}
+
+:is([data-management='true'], [data-workbench='true']) {
+  --studio-canvas: #f2f1f9;
+  --studio-accent: #5054eb;
+  --studio-accent-hover: #4246d5;
+  --studio-accent-text: #4649c9;
+  --studio-accent-tint: #eeefff;
+  --studio-preview: #fafafd;
+  background: var(--studio-canvas);
+}
+
+.dark :is([data-management='true'], [data-workbench='true']) {
+  --studio-canvas: #141519;
+  --background: #1b1c22;
+  --foreground: #edecf2;
+  --card: #202128;
+  --card-foreground: var(--foreground);
+  --muted: #272831;
+  --muted-foreground: #a5a6b5;
+  --accent: #292a34;
+  --border: #30313b;
+  --input: #383943;
+  --sidebar: #1b1c22;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --studio-accent: #695ee8;
+  --studio-accent-hover: #5f53da;
+  --studio-accent-text: #a9a2ff;
+  --studio-accent-tint: #24243d;
+  --studio-preview: #18191e;
+}
+
+[data-management='true'] .studio-layout-body {
+  background: var(--background);
+}
+
+@media (min-width: 768px) {
+  [data-admin-header='true'] {
+    height: 4rem;
+  }
+
+  [data-management='true'] .studio-layout-body {
+    margin: 0 12px 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 2px 8px rgb(24 18 54 / 4%);
+  }
+
+  [data-management='true'] .studio-layout-body > [data-slot='sidebar'] > [data-slot='sidebar-container'] {
+    top: calc(4rem + 1px);
+    bottom: 13px;
+    left: 13px;
+    height: auto;
+    overflow: hidden;
+    border-radius: 13px 0 0 13px;
+  }
+
+  [data-management='true'] .studio-layout-body > [data-slot='sidebar'] [data-slot='sidebar-inner'] {
+    --sidebar-accent: color-mix(in srgb, var(--foreground) 8%, var(--background));
+    background: color-mix(in srgb, var(--background) 82%, var(--sidebar));
+  }
+}

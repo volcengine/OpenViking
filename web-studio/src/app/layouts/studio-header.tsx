@@ -14,11 +14,13 @@ import { useTranslation } from 'react-i18next'
 
 export function StudioHeader({
   managementMode,
+  filesystemMode = false,
   canManage,
   isGatewayHost,
   settingsPath,
 }: {
   managementMode: boolean
+  filesystemMode?: boolean
   canManage: boolean
   isGatewayHost: boolean
   settingsPath: '/settings' | '/admin/settings'
@@ -37,9 +39,14 @@ export function StudioHeader({
         connection.serviceSelection,
       ) === 'opensource')
   return (
-    <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-background px-3 sm:gap-4 sm:px-4">
+    <header
+      data-admin-header={managementMode}
+      className="z-20 flex h-14 shrink-0 items-center justify-between gap-2 bg-transparent px-3 sm:gap-4 sm:px-4"
+    >
       <div className="flex min-w-0 items-center gap-2 sm:gap-4">
-        <SidebarTrigger className="shrink-0 md:hidden" />
+        <SidebarTrigger
+          className={filesystemMode ? 'shrink-0' : 'shrink-0 md:hidden'}
+        />
         <Link
           to={managementMode ? '/admin' : '/'}
           aria-label={t('studioSettings.brand')}
@@ -59,7 +66,11 @@ export function StudioHeader({
             className="hidden h-7 w-auto dark:lg:block"
           />
         </Link>
-        <div className="hidden h-5 w-px bg-border/70 sm:block" />
+        {managementMode ? (
+          <span className="hidden shrink-0 rounded-md bg-foreground px-2 py-1 text-xs text-background lg:inline">
+            {t('modes.returnManagement')}
+          </span>
+        ) : null}
         <StudioScopeSwitcher
           key={`${identityScopeKey}:${managementMode}:${showAccountScope}`}
           settingsPath={settingsPath}
@@ -68,11 +79,6 @@ export function StudioHeader({
         />
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
-        {managementMode ? (
-          <span className="hidden rounded-md bg-muted/60 px-2 py-1 text-xs text-muted-foreground xl:inline">
-            {t('modes.management')}
-          </span>
-        ) : null}
         {showManagementEntry ? (
           <StudioModeSwitch
             key={`${identityScopeKey}:${managementMode}`}

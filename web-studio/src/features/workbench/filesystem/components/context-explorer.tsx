@@ -3,9 +3,8 @@ import {
   ClipboardListIcon,
   FileTextIcon,
   FolderIcon,
-  FolderTreeIcon,
   Loader2Icon,
-  PlusIcon,
+  UploadIcon,
   RefreshCcwIcon,
   SearchIcon,
 } from 'lucide-react'
@@ -56,14 +55,20 @@ export function ContextExplorerHeader({
   const showProcessingTasks = hasTasks || isRefreshingTasks
 
   return (
-    <div className="border-b px-3 py-3">
-      <div className="flex items-center gap-2">
-        <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <FolderTreeIcon className="size-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">{t('explorer.title')}</div>
-        </div>
+    <div className="space-y-2 px-2.5 py-2.5">
+      {onAddResource ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="w-full justify-center gap-2 bg-[var(--studio-accent-tint)] text-[var(--studio-accent-text)] hover:bg-[var(--studio-accent-tint)] hover:text-foreground"
+          onClick={onAddResource}
+        >
+          <UploadIcon className="size-4" />
+          {t('explorer.addResource')}
+        </Button>
+      ) : null}
+      <div className="flex items-center gap-1.5">
         {showProcessingTasks ? (
           <Button
             type="button"
@@ -88,17 +93,19 @@ export function ContextExplorerHeader({
         ) : null}
         <Button
           type="button"
-          size="icon-sm"
-          variant="ghost"
+          size="sm"
+          variant="outline"
+          className="min-w-0 flex-1 justify-start text-muted-foreground"
           title={t('explorer.search')}
           onClick={onOpenSearch}
         >
           <SearchIcon className="size-4" />
+          <span className="truncate">{t('explorer.search')}</span>
         </Button>
         <Button
           type="button"
           size="icon-sm"
-          variant="ghost"
+          variant="outline"
           title={t('explorer.refresh')}
           onClick={onRefresh}
         >
@@ -107,18 +114,6 @@ export function ContextExplorerHeader({
           />
         </Button>
       </div>
-      {onAddResource ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="mt-3 w-full justify-center gap-2"
-          onClick={onAddResource}
-        >
-          <PlusIcon className="size-4" />
-          {t('explorer.addResource')}
-        </Button>
-      ) : null}
     </div>
   )
 }
@@ -248,10 +243,10 @@ export function FilesystemResizeHandle({
       aria-label={label}
       aria-orientation="vertical"
       data-active={active}
-      className="group hidden w-2 shrink-0 cursor-col-resize touch-none items-center justify-center border-x border-transparent transition-colors hover:bg-primary/10 active:bg-primary/15 data-[active=true]:bg-primary/15 lg:flex"
+      className="group relative z-10 hidden -mx-1.5 w-1.5 shrink-0 cursor-col-resize touch-none items-center justify-center border-x border-transparent transition-colors hover:bg-primary/10 active:bg-primary/15 data-[active=true]:bg-primary/15 lg:flex"
       onPointerDown={onPointerDown}
     >
-      <span className="h-full w-px bg-border transition-colors group-hover:bg-primary/60 group-data-[active=true]:bg-primary" />
+      <span className="h-full w-px bg-transparent transition-colors group-hover:bg-primary/60 group-data-[active=true]:bg-primary" />
     </div>
   )
 }
@@ -506,9 +501,10 @@ export function PanelTab({
       className={cn(
         'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors',
         active
-          ? 'bg-muted text-foreground'
+          ? 'bg-background text-foreground shadow-xs'
           : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
+      aria-pressed={active}
       onClick={onClick}
     >
       <Icon className="size-3.5" />

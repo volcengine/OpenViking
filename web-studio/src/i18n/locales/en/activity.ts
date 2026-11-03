@@ -152,7 +152,7 @@ const activity = {
     readFailed: 'Failed to read {{uri}}',
     tabs: {
       terminal: 'Terminal',
-      agent: 'Agent',
+      agent: 'VikingBot',
     },
     actionPanel: {
       collapse: 'Collapse panel',
@@ -166,14 +166,14 @@ const activity = {
     },
     explorer: {
       title: 'Filesystem',
-      addResource: 'Add resource',
+      addResource: 'Import resources',
       abstractLevel: 'L0',
       collapseDirectory: 'Collapse {{name}}',
       empty: 'empty',
       expandDirectory: 'Expand {{name}}',
       loading: 'loading',
       overviewLevel: 'L1',
-      search: 'Search context',
+      search: 'Search files and content',
       refresh: 'Refresh tree',
       namespaces: {
         agent: 'Agent capabilities, tools, and experience',
@@ -206,8 +206,8 @@ const activity = {
         retry: 'Detect again',
       },
       empty: {
-        heading: 'Agent actions sync with the tree on the left',
-        body: 'After you send a question, `viking://` files in the tool call output become clickable links — click to locate them on the left and open them in the middle.',
+        heading: 'Welcome to VikingBot',
+        body: 'Ask about your resources, memories, and context. Open linked files directly in the workspace.',
         prompts: [
           'Summarize the current directory',
           'Recursively find related docs',

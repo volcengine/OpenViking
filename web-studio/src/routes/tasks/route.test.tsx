@@ -204,9 +204,7 @@ describe('task status presentation', () => {
     expectRunningRows(20)
     expect(screen.getByText('25 / 0')).toBeDefined()
 
-    await user.click(
-      screen.getByRole('button', { name: 'Latest per Resource' }),
-    )
+    await user.click(screen.getByRole('button', { name: 'Individual Tasks' }))
     expect(screen.getByText('26 / 0')).toBeDefined()
     expectRunningRows(20)
 
