@@ -846,7 +846,16 @@ impl FileSystem for LocalFileSystem {
                     "account_store_diag local_registry_metadata_failed"
                 );
             }
-            Error::NotFound(path.to_string())
+            if path.ends_with("/_system/users.json") {
+                Error::NotFound(format!(
+                    "{path} [stage=metadata local_path={} kind={:?} errno={:?}]",
+                    local_path.display(),
+                    error.kind(),
+                    error.raw_os_error()
+                ))
+            } else {
+                Error::NotFound(path.to_string())
+            }
         })?;
 
         if metadata.is_dir() {
@@ -854,7 +863,26 @@ impl FileSystem for LocalFileSystem {
         }
 
         // Read file
-        let data = fs::read(&local_path).map_err(|e| Self::map_error(path, e))?;
+        let data = fs::read(&local_path).map_err(|error| {
+            if path.ends_with("/_system/users.json") {
+                tracing::warn!(
+                    path,
+                    local_path = %local_path.display(),
+                    error_kind = ?error.kind(),
+                    errno = ?error.raw_os_error(),
+                    "account_store_diag local_registry_read_failed"
+                );
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return Error::NotFound(format!(
+                        "{path} [stage=read local_path={} kind={:?} errno={:?}]",
+                        local_path.display(),
+                        error.kind(),
+                        error.raw_os_error()
+                    ));
+                }
+            }
+            Self::map_error(path, error)
+        })?;
 
         // Apply offset and size
         let file_size = data.len() as u64;

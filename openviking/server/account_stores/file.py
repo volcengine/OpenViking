@@ -1269,9 +1269,19 @@ class FileStore(AccountStore):
 
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             return json.loads(text)
-        except AGFSNotFoundError:
+        except AGFSNotFoundError as exc:
             if path.endswith("/_system/users.json"):
-                logger.warning("account_store_diag registry_missing path=%s", path)
+                logger.warning(
+                    "account_store_diag registry_missing path=%s client_type=%s error_type=%s",
+                    path,
+                    type(self._viking_fs.agfs).__qualname__,
+                    type(exc).__qualname__,
+                )
+                # Keep only the native NotFound path; arbitrary exception text can
+                # contain credentials when a third-party client implements read.
+                detail = str(exc)
+                if detail.lower().startswith("not found: /"):
+                    logger.warning("account_store_diag registry_missing_detail %s", detail[:1024])
             return None
 
     @staticmethod
