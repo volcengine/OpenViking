@@ -147,6 +147,17 @@ export function assembleConversationPolicy(config = {}) {
   ]);
 }
 
+// The rules for answering a Lark document comment, as one `[daemon notice]`
+// line. They are not in the policy: AgentRuntime.submit puts the notice after
+// the document comments it delivers, so chats never see them and do not take
+// up their lengths or their documents.
+export function docCommentNotice(config = {}) {
+  const text = renderPrompt(config, path.join('connectors', 'lark-doc-comment.md'))
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .split('\n').map((line) => line.replace(/^\s*-\s+/, '').trim()).filter(Boolean).join(' ');
+  return `[daemon notice] ${text}`;
+}
+
 // Volc reads the same lines but has no Core tools, so it gets the input
 // grammar, the events section and the Role instead of the whole Core.
 export function volcInboundSection(config = {}) {

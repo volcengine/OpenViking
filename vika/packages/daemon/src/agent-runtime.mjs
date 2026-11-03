@@ -6,6 +6,8 @@ import { cognitionHistoryPrefix } from './cognition.mjs';
 import { adaptRuntime } from './runtime-adapter.mjs';
 import { createRuntimeFactories } from './runtime-factory.mjs';
 import { metadataTag } from './runtime-input.mjs';
+import { docCommentNotice } from './conversation-policy.mjs';
+import { DOC_COMMENT_CONVERSATION } from './lark-doc-comments.mjs';
 import {
   DEFAULT_RUNTIME_ID,
   RUNTIME_IDS,
@@ -24,6 +26,14 @@ import {
 // session replaces it instead of cancelling in place again.
 const LOOP_CANCEL_GRACE_MS = 30_000;
 const LOOP_RESET_WINDOW_MS = 10 * 60_000;
+
+// A batch with a document comment carries the rules for answering one, as a
+// daemon notice after its last comment. Other inputs never get them.
+function withDocCommentRules(items, config) {
+  const last = items.findLastIndex((item) => item?.chatType === DOC_COMMENT_CONVERSATION);
+  if (last < 0) return items;
+  return items.map((item, index) => (index === last ? { ...item, text: `${item.text}\n${docCommentNotice(config)}` } : item));
+}
 
 export class AgentRuntime {
   constructor(config, store, logger, options = {}) {
@@ -179,7 +189,7 @@ export class AgentRuntime {
         return { accepted: false, reason: 'invalid-scope' };
       }
     }
-    return this.backend.submit(items, { admission });
+    return this.backend.submit(withDocCommentRules(items, this.config), { admission });
   }
 
   _interrupt() { return this.backend?.interrupt() ?? Promise.resolve(); }
