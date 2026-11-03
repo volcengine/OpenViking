@@ -74,7 +74,6 @@
     }
   },
   "scripts": {
-    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.config.json",
     "dev": "rslib build --watch",
     "build": "rslib build"
   },

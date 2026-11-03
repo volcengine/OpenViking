@@ -43,7 +43,7 @@ export default function IconsExample() {
       </div>
       <p className="ov-demo-row">
         <PdfIcon width={24} height={24} alt="PDF" />
-        <span>Standalone icon with alt="PDF"</span>
+        <span>Standalone icon with alt=&quot;PDF&quot;</span>
       </p>
     </div>
   );
