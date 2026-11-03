@@ -268,6 +268,10 @@ succeeds, resolve the reported error and retry the operation to finish cleanup.
 
 Record reads return `None` only for a missing record; permission, backend, and invalid-JSON
 errors propagate, and `put()` does not overwrite a record after a failed read.
+Index creation falls back to replacement only for an explicit already-existing target.
+Other index-write errors propagate. The JSON record is written before its projection,
+so a failed projection can leave the stored value updated; these writes are not transactional.
+
 `list_namespaces(prefix=("users", "*"))` matches one namespace label per `*`, including
 when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
 
