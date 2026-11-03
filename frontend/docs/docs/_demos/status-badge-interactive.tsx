@@ -1,6 +1,9 @@
 import { useState } from 'react';
-import { StatusBadge, type StatusBadgeStatus } from '@openviking/react';
-import '@openviking/react/style.css';
+import {
+  StatusBadge,
+  type StatusBadgeStatus,
+} from '@openviking/react/components/status-badge';
+import '@openviking/react/components/status-badge/style.css';
 
 const states: StatusBadgeStatus[] = ['ready', 'processing', 'error'];
 

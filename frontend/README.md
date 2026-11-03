@@ -28,13 +28,13 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: private `@openviking/react` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,command-console,viking-bot}`: reserved entries; see the [module map](./packages/react/README.md#模块目录). These entries have no component exports yet.
+- `packages/react/src/components/{file-tree,file-preview,tui,viking-bot,scope-switcher,agent-connect,resource-import}`: reserved entries; see the [module map](./packages/react/README.md#模块目录). These entries have no component exports yet.
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
 - `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.
 - `docs/docs/_demos`: runnable examples using the public package exports.
 
-Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. `npm run check` builds the library first so documentation type-checking can resolve its declarations on a clean checkout. Import `@openviking/react/style.css` once in applications; it resolves to `dist/index.css`. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. The package is private until a separate publication change establishes its release policy.
+Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. `npm run check` builds the library first so documentation type-checking can resolve its declarations on a clean checkout. Import `@openviking/react/style.css`, `@openviking/react/components/style.css`, or `@openviking/react/components/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. Component subpaths use `components/<module>`; there are no category-level `components` or `pages` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. The package is private until a separate publication change establishes its release policy.
 
 ## Target layout
 
@@ -51,8 +51,7 @@ frontend/
 │   │   └── src/
 │   │       ├── components/
 │   │       ├── icons/       # @openviking/react/icons
-│   │       └── pages/       # Embeddable pages
-│   │           └── workbench/ # Planned export @openviking/react/pages/workbench
+│   │       └── pages/       # Embeddable pages; first page not defined
 │   └── vue/                 # Future @openviking/vue
 ├── apps/
 │   └── workbench-embed/     # Deployable microfrontend entry
@@ -60,11 +59,11 @@ frontend/
 └── docs/                   # Rspress documentation
 ```
 
-Pages use components and shared libraries. Service adapters handle OpenViking requests. Micro-apps consume public page entries and own deployment and host integration. Shared source directories can supply multiple framework builds. The `lib/` directory is a source boundary. React-only consumers receive the shared code through the React package. When standalone consumers need those functions, expose a framework-neutral package and verify installation in a project without React or Vue. React icon components use the shared SVG sources and ship with the React package, including their type declarations. Import icons from `@openviking/react/icons`. Add the planned `/pages/workbench` subpath when its implementation lands. Web Studio consumes these assets through package exports from its separate application directory.
+Pages use components and shared libraries. Service adapters handle OpenViking requests. Micro-apps consume public page entries and own deployment and host integration. Shared source directories can supply multiple framework builds. The `lib/` directory is a source boundary. React-only consumers receive the shared code through the React package. When standalone consumers need those functions, expose a framework-neutral package and verify installation in a project without React or Vue. React icon components use the shared SVG sources and ship with the React package, including their type declarations. Import icons from `@openviking/react/icons`. Page implementations and names are deferred; add page JS and CSS entries when real pages land. Web Studio consumes these assets through package exports from its separate application directory.
 
 ## Add a module
 
-1. Implement the module in `packages/react/src/` and export it from its module entry. Add new public entries to the package exports and `rslib.config.ts` together. Export root-level APIs explicitly from `src/index.ts` when needed.
+1. Implement the module in `packages/react/src/` and export it from its module entry. Add new public JS and CSS entries to the package exports and `rslib.config.ts` together. Include module styles in the relevant aggregate stylesheet; page styles must cover their component dependencies. Export root-level APIs explicitly from `src/index.ts` when needed.
 2. Keep module styling local and expose theme variables with the `--ov-ui-` prefix.
 3. Add a demo in `docs/docs/_demos/` that imports from `@openviking/react`.
 4. Add matching documentation in `docs/docs/en/` and `docs/docs/zh/`, and update both locale sidebars in `docs/rspress.config.ts`. Reuse examples from `docs/docs/_demos/`.

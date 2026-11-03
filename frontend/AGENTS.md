@@ -14,18 +14,18 @@
 ## 源码目录
 
 - 按 [README 的目标目录](./README.md#target-layout) 放置资产。React 包发布名为 `@openviking/react`，Vue 落地后独立交付为 `@openviking/vue`。源码边界可以先在 workspace 内共享，通过子路径提供消费入口。有独立安装、依赖隔离或独立发布节奏的需求时再拆包。
-- 跨框架纯函数、资源类型和数据转换放在 `packages/lib/`。OpenViking 请求与服务适配器放在 `packages/client/`。仅供单个模块使用的工具留在模块内。仅随 React 使用的共享能力随 React 包交付。出现独立于框架的消费需求时，再为 `lib` 定义框架无关的公开包入口，并在未安装 React 或 Vue 的项目中验证。
+- 跨框架纯函数、资源类型和数据转换放在 `packages/lib/`。OpenViking 请求与服务适配器放在 `packages/client/`。仅供单个模块使用的工具留在模块内。仅随 React 使用的共享能力随 React 包交付。跨模块公共 Hook 有真实实现后再从 `@openviking/react/hooks` 开放，组件不能使用取数或缓存 Hook。出现独立于框架的消费需求时，再为 `lib` 定义框架无关的公开包入口，并在未安装 React 或 Vue 的项目中验证。
 - 图标的 SVG 源文件、来源与授权放在 `packages/icons/`。React 图标组件放在 `packages/react/src/icons/`，随 React 包从 `@openviking/react/icons` 交付。各框架的封装直接消费同一份 SVG 源文件。构建产物包含图标实现和类型声明，消费者通过 React 包一次安装。
-- React 源码的 `components/` 放独立组件，`pages/` 放可嵌入页面及其加载、会话等业务编排。工作台实现放在 `pages/workbench/`，落地后通过 `@openviking/react/pages/workbench` 导出。可独立部署的微应用放在 `apps/`，例如 `apps/workbench-embed/`，管理挂载、卸载、样式隔离和宿主通信。
+- React 源码的 `components/` 放独立组件，`pages/` 放可嵌入页面及其加载、会话等业务编排。首个页面的名称与范围待定，有实际实现后再提供对应公开入口。可独立部署的微应用放在 `apps/`，例如 `apps/workbench-embed/`，管理挂载、卸载、样式隔离和宿主通信。
 - 每个组件、区块、布局或模板独占一个 kebab-case 目录，入口文件与目录同名。实现、CSS Modules、测试及私有子组件就近放置，例如 `components/status-badge/status-badge.tsx` 和同目录的 `status-badge.module.css`。模块私有的 Hook、类型和工具留在模块内，不提前提升到公共目录。
-- 根入口与子路径分别维护公开导出；移动内部文件时保持消费接口稳定，并同步更新包导出和 Rslib 入口等直接路径引用。
+- 根入口与子路径分别维护公开导出；组件子路径为 `@openviking/react/components/<模块>`，页面为 `@openviking/react/pages/<页面>`。不提供 `components`、`pages` 分类聚合 JS 入口。包导出显式列举，内部文件不开放；各入口共享实现，避免重复创建 Provider、Context 或状态对象。同步维护 Rslib 入口和声明路径。
 - 可嵌入页面通过 props、回调和插槽组装视图组件。宿主提供身份、导航和服务能力，保留产品专属流程。
 - 目录按实际内容创建，不预建空目录，也不为单个简单模块增加不必要的转发层。
 
 ## 样式与交互
 
 - 库样式局部化，主题变量使用 `--ov-ui-` 前缀。消费者无需额外扫描库源码生成 Tailwind CSS，也不承担库的全局 reset；库样式不修改应用的 `html`、`body`、`:root` 或 `.dark`。
-- 文档站的全局样式、布局和主题覆盖只作用于文档站。库的独立 CSS 仍需可被消费者显式导入，保留构建中的 CSS 副作用声明。
+- 文档站的全局样式、布局和主题覆盖只作用于文档站。CSS 同时提供整包 `style.css`、分类 `components/style.css` / `pages/style.css` 和单模块 `<分类>/<模块>/style.css` 入口；JS 不隐式加载样式。各 CSS 入口共用样式源码并可独立消费，页面 CSS 包含所需组件样式。页面相关入口在真实页面实现后开放，保留构建中的 CSS 副作用声明。
 - 复用模块使用实例内状态和引用。持久化、请求缓存等需要跨实例共享的行为通过明确的 Adapter 接入，避免用全局 DOM ID、事件或 singleton Store 隐式关联实例与账号。
 - 公开组件提供可替换的默认文案，动态文案通过类型化参数传入。宿主在接入层映射 i18next 或 Starling。状态通过可见文本表达；可操作控件使用合适的语义、键盘行为和焦点样式。
 
