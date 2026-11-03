@@ -233,24 +233,29 @@ class TrustedAuthPlugin(AuthPlugin):
         sys.exit(1)
 
     async def initialize(self, app, service, config) -> None:
+        app.state.api_key_manager = await self.initialize_runtime(
+            service, config, service_name=app.state.service_name
+        )
+        self._flush_interval_seconds = config.trusted_identity_flush_interval_seconds
+        self._pending_max_size = config.trusted_identity_pending_max_size
+        if self._flush_interval_seconds > 0:
+            self._flush_task = asyncio.create_task(self._flush_loop())
+
+    async def initialize_runtime(self, service, config, *, service_name: str):
         manager = build_api_key_manager(
             root_key=config.root_api_key,
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
-            service_name=app.state.service_name,
+            service_name=service_name,
             account_store_provider=config.account_store.provider,
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,
             account_store_watch_interval_seconds=config.api_key_watch_interval_seconds,
             issue_user_keys=False,
         )
-        await manager.load()
         self._api_key_manager = manager
-        app.state.api_key_manager = manager
-        self._flush_interval_seconds = config.trusted_identity_flush_interval_seconds
-        self._pending_max_size = config.trusted_identity_pending_max_size
-        if self._flush_interval_seconds > 0:
-            self._flush_task = asyncio.create_task(self._flush_loop())
+        await manager.load()
+        return manager
 
     def should_auto_register_trusted_identity(
         self,

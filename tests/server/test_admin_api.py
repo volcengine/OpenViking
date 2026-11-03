@@ -3618,12 +3618,13 @@ async def test_remove_user(
 ):
     """Deletion revokes the user and removes only their private data, uploads, tasks,
     and embedded gateway state."""
-    import openviking_gateway.app as gateway_module
+    import openviking_gateway.storage as gateway_module
 
     gateway = object()
     delete_gateway_data = AsyncMock()
-    monkeypatch.setattr(gateway_module, "delete_data", delete_gateway_data)
-    monkeypatch.setattr(admin_app.state.deletion_service, "_gateway_app", gateway)
+    monkeypatch.setattr(gateway_module, "delete_user_data", delete_gateway_data)
+    monkeypatch.setattr(admin_app.state.deletion_service, "_gateway_store", gateway)
+    monkeypatch.setattr(admin_app.state.deletion_service, "_gateway_management", gateway)
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -3673,7 +3674,7 @@ async def test_remove_user(
     assert not await admin_service.viking_fs.exists(bob_upload_uri, ctx=upload_ctx)
     assert await admin_service.viking_fs.exists(alice_upload_uri, ctx=upload_ctx)
     assert not await admin_app.state.api_key_manager.has_user(acct, "bob")
-    delete_gateway_data.assert_awaited_once_with(gateway, acct, "bob")
+    delete_gateway_data.assert_awaited_once_with(gateway, gateway, acct, "bob")
     assert (
         await get_task_tracker().get(
             bob_task.task_id,

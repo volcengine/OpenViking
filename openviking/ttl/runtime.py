@@ -182,6 +182,7 @@ class DirectoryTTL:
         self._task = None
         self._registration_task = None
         self._started = False
+        self._maintenance_started = False
         self._closed = False
         self._wake = asyncio.Event()
         self._registration_wake = asyncio.Event()
@@ -291,7 +292,7 @@ class DirectoryTTL:
 
     def _wake_worker(self) -> None:
         self._wake.set()
-        if self.writer and self._started and not self._closed and self._recycle:
+        if self.writer and self._maintenance_started and not self._closed and self._recycle:
             if self._task is None or self._task.done():
                 self._task = asyncio.create_task(self._run(), name="ttl-maintenance")
 
@@ -537,17 +538,24 @@ class DirectoryTTL:
             self.redis = create_redis_client(self.redis_config, retry=Retry(NoBackoff(), 0))
         return self.redis
 
-    async def start(self) -> None:
+    async def start_reporting(self) -> None:
         self._dispatcher.bind_current_loop()
         self._closed = False
         self._started = True
-        self._recycle_after_ms = next_check_ms(self.resource_id, time.time_ns() // 1_000_000)
         if self._retry:
             self._wake_registrations()
+
+    async def start(self) -> None:
+        await self.start_reporting()
+        self._maintenance_started = True
+        self._recycle_after_ms = next_check_ms(self.resource_id, time.time_ns() // 1_000_000)
+        if self._recycle:
+            self._wake_worker()
 
     async def aclose(self) -> None:
         self._closed = True
         self._started = False
+        self._maintenance_started = False
         self._wake.set()
         self._registration_wake.set()
         if self._registration_task:

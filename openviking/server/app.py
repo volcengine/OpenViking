@@ -62,7 +62,6 @@ from openviking.server.routers import (
 )
 from openviking.server.timing_middleware import RequestTimingMiddleware
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import (
@@ -80,6 +79,7 @@ WORKER_HOST_ENV = "OPENVIKING_WORKER_HOST"
 WORKER_PORT_ENV = "OPENVIKING_WORKER_PORT"
 WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
 WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
+WORKER_ROLES_ENV = "OPENVIKING_WORKER_ROLES"
 
 
 def _configure_default_executor(config: ServerConfig) -> None:
@@ -120,6 +120,8 @@ def create_worker_app() -> FastAPI:
         config.host = os.environ[WORKER_HOST_ENV] or None
     if WORKER_PORT_ENV in os.environ:
         config.port = int(os.environ[WORKER_PORT_ENV])
+    if WORKER_ROLES_ENV in os.environ:
+        config.roles = ServerConfig(roles=os.environ[WORKER_ROLES_ENV].split(",")).roles
     return create_app(config, config_path=config_path)
 
 
@@ -129,35 +131,10 @@ async def _initialize_auth_plugin(
     config: ServerConfig,
 ) -> None:
     """Initialize the auth plugin before the app serves authenticated requests."""
-    from openviking.server.auth.registry import get_registry
+    from openviking.server.runtime import create_auth_plugin
 
     effective_auth_mode = config.get_effective_auth_mode()
-    registry = get_registry()
-
-    # Ensure built-in plugins are registered
-    from openviking.server.auth.plugins import (
-        ApiKeyAuthPlugin,
-        DevAuthPlugin,
-        TrustedAuthPlugin,
-    )
-
-    if registry.get("dev") is None:
-        registry.register(DevAuthPlugin)
-    if registry.get("api_key") is None:
-        registry.register(ApiKeyAuthPlugin)
-    if registry.get("trusted") is None:
-        registry.register(TrustedAuthPlugin)
-
-    plugin_cls = registry.get(effective_auth_mode)
-    if plugin_cls is None:
-        logger.error(
-            "Unknown auth_mode: %r. No auth plugin registered. Registered modes: %s.",
-            effective_auth_mode,
-            ", ".join(registry.list_modes()),
-        )
-        raise RuntimeError(f"Unknown auth_mode: {effective_auth_mode}")
-
-    plugin = plugin_cls()
+    plugin = create_auth_plugin(config)
     app.state.auth_plugin = plugin
     await plugin.initialize(app, service, config)
     logger.info("Auth plugin initialized: %s", effective_auth_mode)
@@ -197,37 +174,19 @@ async def _initialize_runtime_state(
     app: FastAPI,
     service: OpenVikingService,
     config: ServerConfig,
+    *,
+    owns_service: bool = True,
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
+    from openviking.server.runtime import ServerRuntime
 
-    async def install_write_guards():
-        await _initialize_auth_plugin(app, service, config)
-        await _initialize_ttl_adapter(app, service, config)
-        from openviking.service.deletion import setup_deletion
-
-        app.state.deletion_service = await setup_deletion(
-            service=service,
-            manager=app.state.api_key_manager,
-            oauth_store=getattr(app.state, "oauth_store", None),
-            usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
-            gateway_app=getattr(app.state, "gateway_app", None),
-            require_registered_identity=config.get_effective_auth_mode() == "api_key",
-        )
-
-    await service.initialize(before_background_start=install_write_guards)
-    await service.apply_agent_evolution_config()
-    manager = getattr(app.state, "api_key_manager", None)
-    if manager is not None:
-        service.compile.lifecycle.resolve_groups = manager.get_user_group_ids
-    if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
-        account_count = await service.reconcile_system_assets(manager)
-        logger.info("Reconciled system assets for %d active accounts", account_count)
-    compile_scheduler = getattr(service, "compile_scheduler", None)
-    if manager is not None and compile_scheduler is not None:
-        # Scheduled Compile re-verifies its saved key before every submission.
-        compile_scheduler.set_identity_resolver(
-            manager.resolve_identity, manager.get_user_group_ids
-        )
+    existing = getattr(app.state, "server_runtime", None)
+    if existing is not None:
+        await existing.start()
+        return
+    runtime = ServerRuntime(service, config, app=app, owns_service=owns_service)
+    app.state.server_runtime = runtime
+    await runtime.start()
     logger.info("OpenVikingService initialization complete")
 
 
@@ -329,6 +288,8 @@ def create_app(
         )
 
     validate_server_config(config)
+    if "api" not in config.roles:
+        raise ValueError("create_app requires the api role; use the headless server entry point")
 
     usage_reporter_unset = object()
     usage_reporter = usage_reporter_unset
@@ -342,32 +303,9 @@ def create_app(
         return usage_reporter
 
     def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
-        sessions = getattr(service_obj, "sessions", None)
-        tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
-        if callable(tool_output_setter):
-            tool_output_setter(config.tool_output_externalization)
+        from openviking.server.runtime import configure_session_runtime
 
-        usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
-        if callable(usage_reporter_setter):
-            usage_reporter_setter(_get_usage_reporter())
-
-        agent_evolution_setter = getattr(service_obj, "set_agent_evolution_config", None)
-        if not callable(agent_evolution_setter):
-            agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
-        if callable(agent_evolution_setter):
-            agent_evolution_setter(config.agent_evolution)
-
-        user_memory_policy_setter = getattr(
-            sessions,
-            "set_default_user_memory_policy",
-            None,
-        )
-        if callable(user_memory_policy_setter):
-            user_memory_policy_setter(config.user_config_defaults.memory_policy)
-
-        auto_commit_setter = getattr(sessions, "set_default_user_auto_commit_policy", None)
-        if callable(auto_commit_setter):
-            auto_commit_setter(config.user_config_defaults.auto_commit_policy)
+        configure_session_runtime(service_obj, config, _get_usage_reporter())
 
     if service is not None:
         _configure_session_runtime(service)
@@ -388,6 +326,34 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
+
+        async def cleanup() -> None:
+            from openviking.metrics.global_api import shutdown_metrics_async
+            from openviking.observability.usage_audit import shutdown_usage_audit
+
+            runtime = getattr(app.state, "server_runtime", None)
+            if runtime is not None:
+                await runtime.stop()
+            elif owns_service:
+                await service.close()
+            await shutdown_usage_audit(app=app)
+            await shutdown_metrics_async(app=app)
+            if config.observability.metrics.enabled:
+                from openviking.metrics.core.runtime import uninstall_executor_monitor
+
+                uninstall_executor_monitor()
+            oauth_store_state = getattr(app.state, "oauth_store", None)
+            if oauth_store_state is not None:
+                await oauth_store_state.close()
+            if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
+                await usage_reporter.close()
+
+        async with AsyncExitStack() as stack:
+            stack.push_async_callback(cleanup)
+            await _start_api_runtime(app, service, owns_service, stack)
+            yield
+
+    async def _start_api_runtime(app, service, owns_service, stack):
         if config.with_bot:
             service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
         _configure_session_runtime(service)
@@ -411,7 +377,6 @@ def create_app(
         # creation time so the SDK routes could capture them; here we just
         # async-initialize the SQLite connection on the same instance.
         oauth_store = getattr(app.state, "oauth_store", None)
-        oauth_gc_task: Optional[asyncio.Task] = None
         if oauth_store is not None:
             await oauth_store.initialize()
 
@@ -425,13 +390,14 @@ def create_app(
                     except Exception as e:  # noqa: BLE001
                         logger.warning("OAuth GC loop error: %s", e)
 
-            oauth_gc_task = asyncio.create_task(_oauth_gc_loop(oauth_store))
-            app.state.oauth_gc_task = oauth_gc_task
-            logger.info("OAuth 2.1 store initialized at %s", oauth_store._db_path)
+            app.state.oauth_gc_task = asyncio.create_task(_oauth_gc_loop(oauth_store))
 
-        # Start TaskTracker cleanup loop
-        task_tracker = get_task_tracker()
-        task_tracker.start_cleanup_loop()
+            async def stop_oauth_gc():
+                app.state.oauth_gc_task.cancel()
+                await asyncio.gather(app.state.oauth_gc_task, return_exceptions=True)
+
+            stack.push_async_callback(stop_oauth_gc)
+            logger.info("OAuth 2.1 store initialized at %s", oauth_store._db_path)
 
         # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
@@ -443,65 +409,16 @@ def create_app(
         from openviking.server.mcp_endpoint import mcp_lifespan
 
         gateway = app.state.gateway_app
-        async with AsyncExitStack() as stack:
-            await stack.enter_async_context(mcp_lifespan())
-            # Deletion setup receives the gateway, so it must be running first.
-            if gateway is not None:
-                await stack.enter_async_context(gateway.router.lifespan_context(gateway))
-            if service is not None:
-                await _initialize_runtime_state(app, service, config)
-            if gateway is not None and config.get_effective_auth_mode() == "dev":
-                from openviking_gateway.app import seed_defaults
+        await stack.enter_async_context(mcp_lifespan())
+        # Keep gateway resources alive while deletion consumers drain.
+        if gateway is not None:
+            await stack.enter_async_context(gateway.router.lifespan_context(gateway))
+        await _initialize_runtime_state(app, service, config, owns_service=owns_service)
+        stack.push_async_callback(app.state.server_runtime.stop)
+        if gateway is not None and config.get_effective_auth_mode() == "dev":
+            from openviking_gateway.app import seed_defaults
 
-                await seed_defaults(gateway, "default")
-            yield
-
-        # Cleanup
-        from openviking.metrics.global_api import shutdown_metrics_async
-        from openviking.observability.usage_audit import shutdown_usage_audit
-
-        await shutdown_usage_audit(app=app)
-        await shutdown_metrics_async(app=app)
-        if config.observability.metrics.enabled:
-            from openviking.metrics.core.runtime import uninstall_executor_monitor
-
-            uninstall_executor_monitor()
-        task_tracker.stop_cleanup_loop()
-        if oauth_gc_task is not None:
-            oauth_gc_task.cancel()
-            try:
-                await oauth_gc_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        oauth_store_state = getattr(app.state, "oauth_store", None)
-        if oauth_store_state is not None:
-            try:
-                await oauth_store_state.close()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("OAuth store close failed: %s", e)
-        service_closed = not owns_service
-        if owns_service and service:
-            try:
-                await service.close()
-                service_closed = True
-                logger.info("OpenVikingService closed")
-            except asyncio.CancelledError as e:
-                logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
-            except Exception as e:
-                logger.warning(f"OpenVikingService close failed during shutdown: {e}")
-        # Draining workers still check identity/deletion state through the
-        # auth plugin's account store. Retain it if service shutdown failed.
-        auth_plugin_state = getattr(app.state, "auth_plugin", None)
-        if service_closed and auth_plugin_state is not None:
-            try:
-                await auth_plugin_state.shutdown()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Auth plugin shutdown failed: %s", e)
-        if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
-            await usage_reporter.close()
-        from openviking.observability.reporting import stop_reporting
-
-        await stop_reporting()
+            await seed_defaults(gateway, "default")
 
     app = FastAPI(
         title="OpenViking API",

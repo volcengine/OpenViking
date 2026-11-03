@@ -455,9 +455,6 @@ class QueueManager:
     def stop(self) -> None:
         """Stop QueueManager and release resources."""
         global _instance
-        if not self._started:
-            return
-
         # Stop queue workers
         for stop_event in self._queue_stop_events.values():
             stop_event.set()
