@@ -1,0 +1,68 @@
+# 快速开始
+
+OpenViking UI 是 OpenViking 仓库中的 React 组件库 workspace。当前版本提供构建和文档基础设施，并以 `StatusBadge` 作为示例模块。
+
+该包目前为私有包，尚未发布到 npm。文件树、预览和命令控制台尚未迁入。
+
+## 本地运行
+
+使用 Node.js 22.12 或更新版本。在仓库根目录执行：
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+打开 Rspress 输出的 `/ui/` 地址。使用顶部语言菜单切换为简体中文，或直接访问 `/ui/zh/`。本地和生产环境使用相同的部署前缀。
+
+## 使用示例
+
+在此 workspace 内，从公开包入口导入组件及样式：
+
+```tsx
+import { StatusBadge } from '@openviking/react';
+import '@openviking/react/style.css';
+
+export default function Example() {
+  return <StatusBadge status="ready">已连接</StatusBadge>;
+}
+```
+
+React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
+
+官方 workspace 开发插件会在文档服务器启动前运行组件库的 Rslib watch。开发与生产示例都通过公开包入口消费构建产物，验证应用将使用的 JavaScript 和样式。Rslib 将 ESM JavaScript、TypeScript 类型声明和 `index.css` 输出到 `packages/react/dist/`；公开样式入口仍为 `@openviking/react/style.css`。
+
+## 构建与检查
+
+```bash
+npm run check
+npm run format:check
+npm run build
+npm run preview
+```
+
+静态站点输出到 `frontend/docs/doc_build/`。也可以通过 `npm run build:lib` 单独构建组件库。`npm run check` 会先构建组件库，再使用生成的声明检查组件库、示例和构建配置的类型。
+
+## 样式
+
+样式文件只需导入一次。模块通过 CSS Modules 隔离样式，不依赖 Tailwind、Arco 或全局 reset。可以在容器元素上覆盖主题颜色：
+
+```css
+.my-workbench {
+  --ov-ui-status-ready: #187347;
+  --ov-ui-status-processing: #2563c5;
+  --ov-ui-status-error: #c43838;
+  --ov-ui-radius: 6px;
+}
+```
+
+文档提供亮色与暗色主题下的示例。应用需根据自身背景选择合适的颜色。
+
+## 部署
+
+`frontend/` 下的变更会触发 UI 检查工作流。在 `main` 分支上，现有产品文档部署流程会构建 UI 站点，并将其放入同一产物或存储桶的 `/ui/` 路径。
+
+GitHub Pages 发布完整站点产物，因此部署前会合并组件站与产品文档。TOS 部署复用仓库现有凭证。npm 发布属于后续独立步骤。
+
+使用方式与交互示例见 [StatusBadge 状态徽标](../components/status-badge)。

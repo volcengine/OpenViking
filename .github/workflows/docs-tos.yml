@@ -5,7 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'docs/**'
-      - 'ui/**'
+      - 'frontend/**'
       - '.github/actions/build-ui/**'
       - '.github/workflows/docs-tos.yml'
       # The deploy also publishes the plugin downloads under /dl.
@@ -59,7 +59,7 @@ jobs:
       - name: Include UI docs in site
         run: |
           mkdir -p docs/.vitepress/dist/ui
-          cp -a ui/docs/doc_build/. docs/.vitepress/dist/ui/
+          cp -a frontend/docs/doc_build/. docs/.vitepress/dist/ui/
 
       - name: Build plugin downloads
         run: bash .github/scripts/build-plugin-downloads.sh docs/.vitepress/dist/dl https://docs.openviking.net/dl
