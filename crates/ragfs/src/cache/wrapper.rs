@@ -77,6 +77,14 @@ redis.call("ZADD", KEYS[2], score, KEYS[1])
 return 1
 "#;
 const DELETE_BUCKET_SCRIPT: &str = r#"
+if #ARGV > 0 then
+    if ARGV[1] ~= "cleanup_expired" then
+        return redis.error_reply("unsupported delete bucket mode")
+    end
+    local members = redis.call("ZRANGEBYSCORE", KEYS[1], ARGV[2], ARGV[3], "LIMIT", 0, ARGV[4])
+    if #members == 0 then return 0 end
+    return redis.call("ZREM", KEYS[1], unpack(members))
+end
 redis.call("UNLINK", KEYS[1])
 redis.call("ZREM", KEYS[2], KEYS[1])
 return 1
@@ -510,28 +518,26 @@ impl CachedFileSystem {
         let limit = u32::try_from(limit).unwrap_or(u32::MAX);
         let max_score = current_time_ms() as f64;
         match runtime
-            .zrangebyscore(&index_key, f64::NEG_INFINITY, max_score, limit)
+            .execute_script(ScriptRequest {
+                script_id: DELETE_BUCKET_SCRIPT_ID.to_string(),
+                keys: vec![index_key.clone()],
+                args: vec![
+                    Bytes::from_static(b"cleanup_expired"),
+                    Bytes::from(f64::NEG_INFINITY.to_string()),
+                    Bytes::from(max_score.to_string()),
+                    Bytes::from(limit.to_string()),
+                ],
+            })
             .await
         {
-            Ok(members) if members.is_empty() => {}
-            Ok(members) => {
-                if let Err(error) = runtime.zrem(&index_key, &members).await {
-                    metrics.error();
-                    warn!(
-                        index_key = %index_key,
-                        count = members.len(),
-                        error = %error,
-                        "query cache index gc removal failed"
-                    );
-                }
-            }
+            Ok(_) => {}
             Err(error) => {
                 metrics.error();
                 warn!(
                     index_key = %index_key,
                     limit = limit,
                     error = %error,
-                    "query cache index gc scan failed"
+                    "query cache index gc cleanup failed"
                 );
             }
         }

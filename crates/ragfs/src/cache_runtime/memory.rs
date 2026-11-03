@@ -1021,18 +1021,21 @@ impl MemoryMockProvider {
         ScriptResult::encode(&ScriptValue::Integer(1))
     }
 
-    /// Delete a CacheFS query bucket and its index member as one script action.
+    /// Dispatch CacheFS delete script modes.
     async fn delete_query_bucket(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        if !request.args.is_empty() {
+            return self.cleanup_expired_query_index_members(request).await;
+        }
+        self.delete_query_bucket_key(request).await
+    }
+
+    /// Delete a CacheFS query bucket and its index member as one script action.
+    async fn delete_query_bucket_key(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
         let [key, index_key] = request.keys.as_slice() else {
             return Err(CacheError::InvalidArgument(
                 "delete bucket requires two keys".into(),
             ));
         };
-        if !request.args.is_empty() {
-            return Err(CacheError::InvalidArgument(
-                "delete bucket requires no arguments".into(),
-            ));
-        }
         if self.delete_failure.load(Ordering::Acquire) {
             return Err(CacheError::Unavailable(
                 "memory provider delete intentionally failed".to_string(),
@@ -1064,6 +1067,61 @@ impl MemoryMockProvider {
 
         ScriptResult::encode(&ScriptValue::Integer(1))
     }
+
+    /// Remove a bounded batch of expired CacheFS query index members atomically.
+    async fn cleanup_expired_query_index_members(
+        &self,
+        request: ScriptRequest,
+    ) -> CacheResult<ScriptResult> {
+        let [index_key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "cleanup expired requires one key".into(),
+            ));
+        };
+        let [mode, min_score, max_score, limit] = request.args.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "cleanup expired requires four arguments".into(),
+            ));
+        };
+        if mode.as_ref() != b"cleanup_expired" {
+            return Err(CacheError::InvalidArgument(
+                "unsupported delete bucket mode".into(),
+            ));
+        }
+        let min_score = parse_f64_arg(min_score, "min score")?;
+        let max_score = parse_f64_arg(max_score, "max score")?;
+        let limit = parse_u64_arg(limit, "limit")?.min(usize::MAX as u64) as usize;
+        if limit == 0 {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        }
+
+        let mut zsets = self.zsets.write().await;
+        let Some(index) = zsets.get_mut(index_key) else {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        };
+        let mut members = index
+            .iter()
+            .filter(|(_, score)| **score >= min_score && **score <= max_score)
+            .map(|(member, score)| (member.clone(), *score))
+            .collect::<Vec<_>>();
+        members.sort_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        members.truncate(limit);
+        let mut removed = 0_i64;
+        for (member, _) in members {
+            if index.remove(&member).is_some() {
+                removed += 1;
+            }
+        }
+        if index.is_empty() {
+            zsets.remove(index_key);
+        }
+
+        ScriptResult::encode(&ScriptValue::Integer(removed))
+    }
 }
 
 /// Parse one integer script argument.
@@ -1072,6 +1130,18 @@ fn parse_u64_arg(value: &Bytes, name: &str) -> CacheResult<u64> {
         .map_err(|error| CacheError::InvalidArgument(error.to_string()))?
         .parse()
         .map_err(|error| CacheError::InvalidArgument(format!("invalid {name}: {error}")))
+}
+
+/// Parse one floating-point script argument.
+fn parse_f64_arg(value: &Bytes, name: &str) -> CacheResult<f64> {
+    let parsed = std::str::from_utf8(value)
+        .map_err(|error| CacheError::InvalidArgument(error.to_string()))?
+        .parse::<f64>()
+        .map_err(|error| CacheError::InvalidArgument(format!("invalid {name}: {error}")))?;
+    if parsed.is_nan() {
+        return Err(CacheError::InvalidArgument(format!("{name} cannot be NaN")));
+    }
+    Ok(parsed)
 }
 
 fn expiration_deadline(duration: Duration) -> CacheResult<Instant> {

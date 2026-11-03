@@ -91,3 +91,36 @@ async fn zrangebyscore_returns_bounded_expired_members() {
         vec!["expired-a".to_string()]
     );
 }
+
+/// Verifies the CacheFS delete script can atomically clean a bounded expired index batch.
+#[tokio::test]
+async fn delete_bucket_script_cleans_expired_index_members_bounded() {
+    let provider = Arc::new(MemoryMockProvider::new());
+    let runtime = CacheRuntime::memory_with_provider(provider);
+
+    assert_eq!(runtime.zadd("idx", 10.0, "expired-a").await.unwrap(), 1);
+    assert_eq!(runtime.zadd("idx", 20.0, "expired-b").await.unwrap(), 1);
+    assert_eq!(runtime.zadd("idx", 30.0, "fresh").await.unwrap(), 1);
+
+    runtime
+        .execute_script(ScriptRequest {
+            script_id: "ragfs.cache.query.delete_bucket.v1".to_string(),
+            keys: vec!["idx".to_string()],
+            args: vec![
+                Bytes::from_static(b"cleanup_expired"),
+                Bytes::from(f64::NEG_INFINITY.to_string()),
+                Bytes::from(20.0_f64.to_string()),
+                Bytes::from_static(b"1"),
+            ],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        runtime
+            .zrangebyscore("idx", f64::NEG_INFINITY, f64::INFINITY, 10)
+            .await
+            .unwrap(),
+        vec!["expired-b".to_string(), "fresh".to_string()]
+    );
+}
