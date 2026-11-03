@@ -175,22 +175,27 @@ class ApiKeyAuthPlugin(AuthPlugin):
         sys.exit(1)
 
     async def initialize(self, app, service, config) -> None:
+        app.state.api_key_manager = await self.initialize_runtime(
+            service, config, service_name=app.state.service_name
+        )
+
+    async def initialize_runtime(self, service, config, *, service_name: str):
         if not config.root_api_key or config.root_api_key == "":
             raise RuntimeError("api_key mode requires root_api_key")
         manager = build_api_key_manager(
             root_key=config.root_api_key,
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
-            service_name=app.state.service_name,
+            service_name=service_name,
             account_store_provider=config.account_store.provider,
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,
             account_store_watch_interval_seconds=config.api_key_watch_interval_seconds,
             issue_user_keys=True,
         )
-        await manager.load()
         self._api_key_manager = manager
-        app.state.api_key_manager = manager
+        await manager.load()
+        return manager
 
     async def shutdown(self) -> None:
         manager = getattr(self, "_api_key_manager", None)

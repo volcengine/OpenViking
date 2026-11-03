@@ -107,14 +107,18 @@ async def init_usage_audit_from_server_config(
     return runtime
 
 
-async def shutdown_usage_audit(*, app: Any = None) -> None:
-    """Shutdown Usage/Audit runtime if it is attached to the FastAPI app."""
+async def shutdown_usage_audit(
+    *, app: Any = None, runtime: UsageAuditRuntime | None = None
+) -> None:
+    """Shutdown the host's Usage/Audit runtime."""
     unregister_event_subscriber(_SUBSCRIBER_NAME)
-    runtime = getattr(getattr(app, "state", None), "usage_audit_runtime", None)
+    if runtime is None:
+        runtime = getattr(getattr(app, "state", None), "usage_audit_runtime", None)
     if runtime is None:
         return
     try:
         await runtime.worker.close(timeout_seconds=runtime.shutdown_flush_timeout_seconds)
     finally:
         await runtime.store.close()
-        app.state.usage_audit_runtime = None
+        if app is not None:
+            app.state.usage_audit_runtime = None

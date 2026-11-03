@@ -16,6 +16,7 @@ from openviking_gateway.config import EmbeddedGatewayConfig
 
 def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
+        service_name="openviking",
         gateway=gateway,
         storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
@@ -192,17 +193,13 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         )
     )
     initialized = []
-    monkeypatch.setattr(
-        server_module,
-        "get_task_tracker",
-        lambda: SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None),
-    )
 
-    async def initialize(app, _service, config):
+    async def initialize(app, _service, config, **kwargs):
         # The gateway is running before deletion setup receives it.
         assert await app.state.gateway_app.state.management.list("default", "upstreams") == []
         initialized.append(True)
         await server_module._initialize_auth_plugin(app, service, config)
+        app.state.server_runtime = SimpleNamespace(stop=app.state.auth_plugin.shutdown)
 
     monkeypatch.setattr(server_module, "_initialize_runtime_state", initialize)
     from openviking.server import body_dump_middleware
