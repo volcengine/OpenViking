@@ -39,15 +39,17 @@ export default defineConfig({
     ],
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Components', link: '/components/status-badge' },
+      { text: 'Components', link: '/components/' },
       { text: 'OpenViking docs', link: 'https://docs.openviking.ai/' },
     ],
     sidebar: {
-      '/': [
+      '/guide/': [
         {
           text: 'Guide',
           items: [{ text: 'Getting started', link: '/guide/getting-started' }],
         },
+      ],
+      '/components/': [
         {
           text: 'Components',
           items: [{ text: 'StatusBadge', link: '/components/status-badge' }],

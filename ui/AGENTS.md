@@ -10,6 +10,14 @@
 - React/ReactDOM 保持为 peer dependencies，并从库构建中 externalize；消费者使用自己的 React 实例。重型编辑器、媒体和浏览器专用依赖按需加载，模块导入和服务端渲染阶段应能在没有 `window`、`document` 的环境运行。
 - 包导出、类型声明、CSS 和附属资源一起构成消费接口。新增 worker 或其他资源时，验证发布产物及消费端 URL，避免把某个构建工具的源码导入语法直接暴露给消费者。
 
+## 源码目录
+
+- `packages/react/src/` 按职责分层：`components/` 放通用 UI 组件，`patterns/` 放可复用的组合区块，`layouts/` 放页面骨架，`templates/` 放整页模板；真正跨模块复用的 Hook 和工具分别放 `hooks/`、`utils/`。
+- 每个组件、区块、布局或模板独占一个 kebab-case 目录，入口文件与目录同名。实现、CSS Modules、测试及私有子组件就近放置，例如 `components/status-badge/status-badge.tsx` 和同目录的 `status-badge.module.css`。模块私有的 Hook、类型和工具留在模块内，不提前提升到公共目录。
+- `src/index.ts` 统一维护公开导出；移动内部文件时保持消费接口稳定，并同步更新文档开发模式的源码 alias 等直接路径引用。
+- 布局与整页模板通过 props、回调和渲染插槽接收数据与内容，不绑定具体路由、请求或业务状态；应用级页面和业务编排留在消费应用，不放进组件库。
+- 目录按实际内容创建，不预建空目录，也不为单个简单模块增加不必要的转发层。
+
 ## 样式与交互
 
 - 库样式局部化，主题变量使用 `--ov-ui-` 前缀。消费者无需额外扫描库源码生成 Tailwind CSS，也不承担库的全局 reset；库样式不修改应用的 `html`、`body`、`:root` 或 `.dark`。
@@ -19,6 +27,9 @@
 
 ## 示例与文档
 
+- 顶部导航以 Guide、Components 和 OpenViking docs 外链为基础。Guide 承载入门、安装、样式与集成说明；Components 承载通用组件。出现实际内容后再增加 Patterns 和 Page templates，分别对应组合区块，以及布局与整页模板；独立 API 栏目在内容需要时再引入。
+- 文档目录与分类对应：`docs/docs/guide/`、`components/`、`patterns/`、`templates/`。布局与整页模板在 Page templates 下分组，不把所有模块都归入 Components。
+- 模块分类入口指向该分类的 `index.mdx` 概览，而不是首个模块；侧边栏按路由前缀隔离，仅列出当前分类的概览与详情，并按职责分组。新增分类时同时提供真实内容、概览和导航，不创建空栏目或占位页面。
 - 示例从 `@openviking/ui` 的公开导出及样式入口导入，不通过相对路径绕过接口。外部 TSX 示例是可运行代码与源码展示的同一事实源。
 - 开发模式的源码 alias 仅用于热更新；正式文档构建消费实际库产物。保持这一差异，才能发现缺失导出、CSS 和打包资源等问题。
 - 新增或修改公开能力时，同步检查导出、示例、属性表和导航。手写属性表中的默认值、异步语义和错误行为必须与实际实现一致。
