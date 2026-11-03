@@ -85,6 +85,10 @@ class AuthPlugin(abc.ABC):
         """
         ...
 
+    async def initialize_runtime(self, service, config, *, service_name: str):
+        """Load account capabilities for a process without an HTTP application."""
+        raise RuntimeError(f"Auth plugin {self.auth_mode!r} does not support headless server roles")
+
     def get_request_context_checks(
         self,
         path: str,

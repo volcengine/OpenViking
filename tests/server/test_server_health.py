@@ -337,7 +337,11 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     """Install TTL hooks before workers; preserve system-asset reconciliation."""
     events = []
     ov_config = SimpleNamespace(reconcile_system_assets_on_startup=True)
-    monkeypatch.setattr("openviking.server.app.get_openviking_config", lambda: ov_config)
+    monkeypatch.setattr("openviking.server.runtime.get_openviking_config", lambda: ov_config)
+    monkeypatch.setattr(
+        "openviking.server.runtime.get_task_tracker",
+        lambda: SimpleNamespace(start_cleanup_loop=Mock()),
+    )
 
     class MockService:
         def __init__(self):
@@ -347,14 +351,26 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
             self.compile = SimpleNamespace(lifecycle=SimpleNamespace(resolve_groups=None))
 
         async def initialize(self, **kwargs):
-            await kwargs["before_background_start"]()
-            events.extend(["workers", "service"])
+            assert kwargs == {"start_background": False}
+            events.append("service")
             self._initialized = True
+
+        async def prepare_background(self, **kwargs):
+            events.append("expiry")
+
+        async def start_scheduler(self):
+            events.append("scheduler")
+
+        async def start_queue_worker(self):
+            events.append("workers")
 
         async def apply_agent_evolution_config(self):
             events.append("agent-evolution")
 
-        async def reconcile_system_assets(self, account_lister):
+        async def reconcile_default_system_assets(self, **kwargs):
+            pass
+
+        async def reconcile_system_assets(self, account_lister, **kwargs):
             assert account_lister is manager
             events.append("system-assets")
             return 1
@@ -382,8 +398,17 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     )
     await _initialize_runtime_state(app, service, config)
 
-    startup = ["auth", "ttl", "deletion", "workers", "service", "agent-evolution"]
-    assert events == startup + ["system-assets"]
+    assert events == [
+        "service",
+        "agent-evolution",
+        "auth",
+        "ttl",
+        "system-assets",
+        "deletion",
+        "expiry",
+        "scheduler",
+        "workers",
+    ]
     assert service._initialized is True
     assert app.state.api_key_manager is manager
     assert service.compile.lifecycle.resolve_groups is manager.get_user_group_ids
@@ -399,7 +424,7 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
     assert service._initialized is True
     assert app.state.api_key_manager is manager
-    assert events == startup
+    assert events == []
 
 
 async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
@@ -407,9 +432,19 @@ async def test_initialize_runtime_state_skips_reconcile_without_account_manager(
         initialize=AsyncMock(),
         apply_agent_evolution_config=AsyncMock(),
         reconcile_system_assets=AsyncMock(),
+        prepare_background=AsyncMock(),
+        start_scheduler=AsyncMock(),
+        start_queue_worker=AsyncMock(),
+        reconcile_default_system_assets=AsyncMock(),
+        compile=SimpleNamespace(lifecycle=SimpleNamespace(resolve_groups=None)),
+        compile_scheduler=None,
     )
     setup = AsyncMock(return_value=None)
     monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
+    monkeypatch.setattr(
+        "openviking.server.runtime.get_task_tracker",
+        lambda: SimpleNamespace(start_cleanup_loop=Mock()),
+    )
 
     async def initialize_plugin(app, service, config):
         app.state.api_key_manager = None
@@ -417,7 +452,7 @@ async def test_initialize_runtime_state_skips_reconcile_without_account_manager(
     monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
 
     async def initialize(**kwargs):
-        await kwargs["before_background_start"]()
+        assert kwargs == {"start_background": False}
 
     service.initialize.side_effect = initialize
 
