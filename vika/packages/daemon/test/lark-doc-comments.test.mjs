@@ -124,6 +124,20 @@ describe('document comment events', () => {
     assert.throws(() => commentContent('```\n```'), /needs text/);
   });
 
+  it('links a Lark document in a comment, keeping other URLs and trailing punctuation as text', () => {
+    const doc = 'https://bytedance.larkoffice.com/docx/AbcToken123';
+    assert.deepEqual(commentContent(`结论：能适配，分析见 ${doc}。`), [
+      { type: 'text', text: '结论：能适配，分析见 ' }, { type: 'link', text: doc }, { type: 'text', text: '。' }]);
+    assert.deepEqual(commentContent(`${doc}, 另见 https://github.com/a/b 和 https://x.feishu.cn/wiki/W1)`), [
+      { type: 'link', text: doc }, { type: 'text', text: ', 另见 https://github.com/a/b 和 ' },
+      { type: 'link', text: 'https://x.feishu.cn/wiki/W1' }, { type: 'text', text: ')' }]);
+    // A Lark host that is not a document, and a look-alike host, stay text.
+    assert.deepEqual(commentContent('https://open.feishu.cn/app 与 https://feishu.cn.evil.com/docx/a'),
+      [{ type: 'text', text: 'https://open.feishu.cn/app 与 https://feishu.cn.evil.com/docx/a' }]);
+    assert.deepEqual(commentContent(doc, [ALICE]), [{ type: 'mention_user', mention_user: ALICE }, { type: 'text', text: ' ' },
+      { type: 'link', text: doc }]);
+  });
+
   it('shows the commenter by the name the Connector found, never fetching a member roster for a document', async (t) => {
     const store = new Store(':memory:', logger);
     const delivered = [];
@@ -245,7 +259,7 @@ describe('Lark client on document comments', () => {
 });
 
 describe('agent tools on document comments', () => {
-  function setup(t, { fail = () => false } = {}) {
+  function setup(t, { fail = () => false, stagedReplies = false } = {}) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-comment-'));
     const store = new Store(path.join(directory, 'state.sqlite3'), logger);
     store.initializeCognition('codex', 'token');
@@ -255,8 +269,8 @@ describe('agent tools on document comments', () => {
       if (args.includes('+add-reply')) return larkSuccess({ reply_id: '7618859513273120000' });
       return larkSuccess({ message_id: 'om_sent123456789' });
     } });
-    const service = new ActionService({ config: { workspace: directory, tempDir: path.join(directory, 'tmp'), maxReplyChars: 30_000 },
-      store, connectors, logger });
+    const service = new ActionService({ config: { workspace: directory, tempDir: path.join(directory, 'tmp'), maxReplyChars: 30_000,
+      stagedReplies }, store, connectors, logger });
     t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
     store.ingest(normalizeEvent(normalizeDocComment(parseCommentNotice(notice()), { replies: thread() }, { selfId: SELF })));
     const call = (tool, input) => service.call(tool, input, { authority: 'token' });
@@ -284,6 +298,18 @@ describe('agent tools on document comments', () => {
     const row = store.db.prepare("SELECT chat_id, remote_message_id FROM outbox WHERE action = 'message.reply'").get();
     assert.deepEqual({ ...row }, { chat_id: `doc:docx:${TOKEN}`,
       remote_message_id: `comment:docx:${TOKEN}:7618859513273112345:7618859513273120000` });
+  });
+
+  it('takes no interim message even with staged replies on: only the result goes in the narrow comment panel', async (t) => {
+    const { store, connectors, call } = setup(t, { stagedReplies: true });
+    await call('react_to_message', { message_id: MSG, emoji_type: 'OnIt', temporary: true, decision_id: decision });
+    await assert.rejects(() => call('reply_message', { message_id: MSG, markdown: '收到，我在看', interim: true, decision_id: decision }),
+      (error) => error.code === 'unsupported' && /No interim message here: this conversation takes only the result/.test(error.message));
+    assert.deepEqual(connectors.calls.map(({ args }) => args[3]), ['+react-reply'], 'the refused interim reached no lark-cli call');
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE action = 'message.reply'").get().n, 0);
+
+    await call('reply_message', { message_id: MSG, markdown: '已改：美国已纳入。', decision_id: decision });
+    assert.deepEqual(connectors.calls.map(({ args }) => args[3]), ['+react-reply', '+batch-query-comments', '+add-reply', '+react-reply']);
   });
 
   it('never retries an uncertain comment reply: the comment API has no idempotency key', async (t) => {

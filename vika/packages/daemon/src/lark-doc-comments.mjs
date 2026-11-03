@@ -221,13 +221,45 @@ export function commentPlainText(markdown) {
     .trim();
 }
 
-// The --content elements of a comment or reply: plain text, optionally
-// after @mentions of the given people.
+// A URL in comment text, without the punctuation that usually follows one.
+const URL_PATTERN = /https?:\/\/[^\s<>"'，。；：、！？）】」』]+/g;
+const LARK_DOC_HOST = /(^|\.)(feishu\.cn|larksuite\.com|larkoffice\.com|feishu-pre\.cn|larkenterprise\.com)$/;
+const LARK_DOC_PATH = /^\/(docx|docs|doc|wiki|sheets|base|file|slides|mindnotes)\//;
+
+function larkDocUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return LARK_DOC_HOST.test(parsed.hostname) && LARK_DOC_PATH.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+// Plain text with each Lark document URL as a link element, which the
+// comment shows as that document; other URLs stay text.
+function textAndLinks(body) {
+  const elements = [];
+  let rest = 0;
+  for (const match of body.matchAll(URL_PATTERN)) {
+    const url = match[0].replace(/[.,;:!?)\]]+$/, '');
+    if (!larkDocUrl(url)) continue;
+    if (match.index > rest) elements.push({ type: 'text', text: body.slice(rest, match.index) });
+    elements.push({ type: 'link', text: url });
+    rest = match.index + url.length;
+  }
+  if (rest < body.length) elements.push({ type: 'text', text: body.slice(rest) });
+  return elements;
+}
+
+// The --content elements of a comment or reply: plain text with Lark
+// document links, optionally after @mentions of the given people.
 export function commentContent(textValue, mentionIds = []) {
   const body = commentPlainText(textValue);
   if (!body) throw new Error('a document comment needs text');
-  return [
-    ...mentionIds.map((id) => ({ type: 'mention_user', mention_user: id })),
-    { type: 'text', text: mentionIds.length > 0 ? ` ${body}` : body },
-  ];
+  const elements = textAndLinks(body);
+  if (mentionIds.length > 0) {
+    if (elements[0].type === 'text') elements[0] = { type: 'text', text: ` ${elements[0].text}` };
+    else elements.unshift({ type: 'text', text: ' ' });
+  }
+  return [...mentionIds.map((id) => ({ type: 'mention_user', mention_user: id })), ...elements];
 }

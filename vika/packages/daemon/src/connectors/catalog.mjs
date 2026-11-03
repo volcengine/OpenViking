@@ -13,15 +13,19 @@ const EMPTY_SCHEMA = Object.freeze({ type: 'object', additionalProperties: false
 // `actions` are the external side effects the Core may route through its
 // outbox. `content` lists the message bodies an action accepts; `idempotent`
 // means the provider honours the idempotency key, so an UNCERTAIN attempt may
-// be retried with the same key. `conversations` narrows an action for targets
-// in one type of conversation (null: not there at all). `queries` are
-// read-only operations.
+// be retried with the same key; `interim: false` refuses interim messages
+// (staged replies) there. `conversations` narrows an action for targets in
+// one type of conversation (null: not there at all). `queries` are read-only
+// operations.
 const LARK_CONTENT = ['markdown', 'file', 'file_key', 'card'];
 // A Lark document comment takes a plain-text reply in its own thread, and
 // the comment API has no idempotency key, so an uncertain reply is never
-// retried. A document takes no new message outside a comment.
+// retried. It is read in the document's narrow side panel, so it takes the
+// result alone: no interim message (staged replies). A document takes no new
+// message outside a comment.
 const LARK_DOC_COMMENT = Object.freeze({
   content: ['markdown'], mentions: false, idempotent: false, card_images: false, max_text_chars: MAX_COMMENT_CHARS,
+  interim: false,
 });
 const WEIXIN_CONTENT = ['markdown', 'file'];
 
