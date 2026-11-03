@@ -341,10 +341,8 @@ async def test_chained_replacement_inherits_links_on_terminal_target():
 
 
 @pytest.mark.asyncio
-async def test_split_without_migration_reports_still_referenced_links():
-    """Without a replacement or a derived_from signal there is no migration
-    channel: the deletion may proceed, but the result must surface the dangling
-    reference instead of returning errors=[] (issue #5904's minimum ask)."""
+async def test_delete_without_replacement_removes_referenced_links():
+    """A pure delete removes references instead of publishing dangling links."""
     source_uri = "viking://user/u/memories/preferences/Evan/hobby_preferences.md"
     other_uri = "viking://user/u/memories/preferences/Evan/summary.md"
     (
@@ -370,10 +368,11 @@ async def test_split_without_migration_reports_still_referenced_links():
     result = await updater.apply_operations(operations, MagicMock())
 
     assert result.deleted_uris == [source_uri]
-    dangling_errors = [
-        error for uri, error in result.errors if uri == source_uri and "referenced" in str(error)
-    ]
-    assert dangling_errors, (
-        "deleting a URI that in-batch links still reference must be reported, "
-        f"got errors={result.errors}"
-    )
+    assert result.errors == []
+    assert operations.resolved_links == []
+    for uri in (_profile_uri, _event_uri):
+        memory_file = MemoryFileUtils.read(_files[uri], uri=uri)
+        assert all(
+            source_uri not in (link["from_uri"], link["to_uri"])
+            for link in memory_file.links + memory_file.backlinks
+        )

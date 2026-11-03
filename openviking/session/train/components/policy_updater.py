@@ -108,8 +108,6 @@ class MemoryFilePolicyUpdater:
         related_uris.update(operations.delete_replacements.values())
         # The caller reloads these files under the EXP tree lock before planning.
         for source in operations.delete_file_contents:
-            if source.uri not in operations.delete_replacements:
-                continue
             related_uris.update(
                 uri
                 for link in [*source.links, *source.backlinks]
@@ -324,6 +322,11 @@ def _plan_to_resolved_operations(
             )
         )
         links.extend(_source_trajectory_links(exp_uri=uri, links=item.links))
+        links.extend(
+            link
+            for link in item.links
+            if "/memories/cases/" in link.from_uri and link.to_uri == uri
+        )
 
     return (
         ResolvedOperations(

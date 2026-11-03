@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from openviking.config.vlm import VLMResolver
@@ -358,6 +359,7 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
 
 def _compact_gradient_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     compact = dict(metadata)
+    compact.pop("case_uris", None)  # Runtime link ownership, not merge instructions.
     memory_fields = compact.get("memory_fields")
     if isinstance(memory_fields, dict) and "content" in memory_fields:
         compact["memory_fields"] = {
@@ -553,6 +555,29 @@ def _operations_to_plan_items(
             )
         )
         delete_uris.add(policy.uri)
+    case_uris_by_trajectory: dict[str, set[str]] = defaultdict(set)
+    for gradient in gradients:
+        for link in gradient.links:
+            if _is_source_trajectory_link(link):
+                case_uris_by_trajectory[link.to_uri].update(gradient.metadata.get("case_uris", []))
+    for item in items:
+        if item.kind != "upsert" or item.memory_type != "experiences":
+            continue
+        case_uris = {
+            case_uri
+            for link in item.links
+            for case_uri in case_uris_by_trajectory.get(link.to_uri, [])
+        }
+        item.links.extend(
+            StoredLink(
+                from_uri=case_uri,
+                to_uri=item.target_uri,
+                weight=1.0,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            for case_uri in sorted(case_uris)
+            if item.target_uri
+        )
     return items
 
 
@@ -718,7 +743,7 @@ def _plan_item_source_keys(
     # treat it as this plan item's source.  This handles URI/name normalization
     # without turning duplicate-content batches into a broadcast.
     content = str(after_content or "").strip()
-    if content:
+    if content and not keys:
         matches = [
             key
             for key in all_keys

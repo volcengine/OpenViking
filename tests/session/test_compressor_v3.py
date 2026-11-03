@@ -1589,7 +1589,7 @@ async def test_commit_experience_snapshot_skips_when_no_visible_content_changed(
 
 
 @pytest.mark.asyncio
-async def test_v3_training_links_case_to_trajectory_and_experience_via_trajectory(monkeypatch):
+async def test_v3_training_commits_snapshot_without_rewriting_link_endpoints(monkeypatch):
     case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
     traj_uri = "viking://user/u/memories/trajectories/duplicate_booking.md"
     exp_uri = "viking://user/u/memories/experiences/booking_duplicate_handling.md"
@@ -1767,6 +1767,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         ]
 
     fs = FakeFS()
+    files_after_apply = dict(fs.files)
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
@@ -1788,33 +1789,8 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     )
 
     assert result["submitted"] == 1
-    case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
-    assert any(
-        link["to_uri"] == traj_uri
-        and link["link_type"] == "related_to"
-        and link.get("match_text") is None
-        and link.get("description") == ""
-        for link in case_file.links
-    )
-    assert any(
-        link["to_uri"] == exp_uri
-        and link["link_type"] == "related_to"
-        and link.get("match_text") is None
-        and link.get("description") == ""
-        for link in case_file.links
-    )
-    linked_experiences_section = (
-        fs.files[case_uri].split("## Linked Experiences", 1)[1].split("<!-- MEMORY_FIELDS", 1)[0]
-    )
-    assert (
-        "[booking_duplicate_handling](../experiences/booking_duplicate_handling.md)"
-        in linked_experiences_section
-    )
-    assert "duplicate_booking.md" not in linked_experiences_section
-    traj_file = MemoryFileUtils.read(fs.files[traj_uri], uri=traj_uri)
-    assert any(link["from_uri"] == case_uri for link in traj_file.backlinks)
-    exp_file = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
-    assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
+    # Link endpoints are persisted inside their owning apply, before this callback.
+    assert fs.files == files_after_apply
     assert fs.commits == [
         {
             "message": (

@@ -43,7 +43,6 @@ from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import (
     ExtractContext,
     MemoryUpdateError,
-    write_stored_links,
 )
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
@@ -52,7 +51,6 @@ from openviking.session.memory.streaming_memory_updater import (
     MemoryUpdateRequest,
     get_streaming_memory_updater,
     make_streaming_memory_updater_key,
-    merge_link_lists,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -1131,17 +1129,6 @@ class SessionCompressorV3:
                         ctx=ctx,
                         archive_uri=archive_uri,
                     )
-                    for item in training_rollouts:
-                        case_uri = candidates_by_name[item.case.name]["uri"]
-                        if case_uri:
-                            await self._link_case_to_training_outputs(
-                                analysis=training_analysis,
-                                case_uri=case_uri,
-                                plan=exp_training_result.plan,
-                                apply_result=exp_training_result.apply_result,
-                                ctx=ctx,
-                                viking_fs=viking_fs,
-                            )
                     submitted += len(training_rollouts)
                     if collect_memory_diff:
                         memory_diff = await self._build_training_memory_diff(
@@ -1347,32 +1334,6 @@ class SessionCompressorV3:
             updates=updates,
             deletes=deletes,
         )
-
-    async def _link_case_to_training_outputs(
-        self,
-        *,
-        analysis: RolloutAnalysis,
-        case_uri: str,
-        plan: PolicyUpdatePlan,
-        apply_result: PolicyApplyResult,
-        ctx: RequestContext,
-        viking_fs: Any,
-    ) -> None:
-        links = _case_training_links(
-            analysis=analysis,
-            case_uri=case_uri,
-            plan=plan,
-            apply_result=apply_result,
-        )
-        if not links:
-            return
-        await _render_case_links_from_template(
-            case_uri=case_uri,
-            links=links,
-            ctx=ctx,
-            viking_fs=viking_fs,
-        )
-        await write_stored_links(links, ctx, viking_fs, skip_uris={case_uri})
 
     async def _write_final_memory_diff(
         self,
@@ -1900,51 +1861,6 @@ def _first_context_uri(contexts: list[Context]) -> str:
     return ""
 
 
-def _case_training_links(
-    *,
-    analysis: RolloutAnalysis,
-    case_uri: str,
-    plan: PolicyUpdatePlan,
-    apply_result: PolicyApplyResult,
-) -> list[StoredLink]:
-    trajectory_links = _case_trajectory_links(analysis=analysis, case_uri=case_uri)
-    trajectory_uris = {link.to_uri for link in trajectory_links if link.to_uri}
-    experience_links = _case_experience_links_via_trajectories(
-        case_uri=case_uri,
-        trajectory_uris=trajectory_uris,
-        plan=plan,
-        apply_result=apply_result,
-    )
-    return merge_link_lists([*trajectory_links, *experience_links])
-
-
-def _case_trajectory_links(
-    *,
-    analysis: RolloutAnalysis,
-    case_uri: str,
-) -> list[StoredLink]:
-    links: list[StoredLink] = []
-    for trajectory in getattr(analysis, "trajectories", []) or []:
-        case_uris = trajectory.metadata.get("case_uris")
-        if case_uris is not None:
-            if case_uri not in case_uris:
-                continue
-        elif analysis.metadata.get("case_associations_required"):
-            continue
-        uri = str(getattr(trajectory, "uri", "") or "")
-        if not uri or "/memories/trajectories/" not in uri:
-            continue
-        links.append(
-            _stored_link(
-                from_uri=case_uri,
-                target_uri=uri,
-                link_type="related_to",
-                description="",
-            )
-        )
-    return links
-
-
 def _case_experience_links_via_trajectories(
     *,
     case_uri: str,
@@ -2118,37 +2034,6 @@ def _stored_link(
         match_text=None,
         description=description,
         created_at=datetime.now(timezone.utc).isoformat(),
-    )
-
-
-async def _render_case_links_from_template(
-    *,
-    case_uri: str,
-    links: list[StoredLink],
-    ctx: RequestContext,
-    viking_fs: Any,
-) -> None:
-    if not links:
-        return
-    try:
-        raw = await viking_fs.read_file(case_uri, ctx=ctx)
-    except Exception as exc:
-        tracer.error(f"Failed to read case memory for link rendering {case_uri}: {exc}")
-        return
-
-    mf = MemoryFileUtils.read(raw or "", uri=case_uri)
-    from openviking.session.memory.merge_op.link_merge import merge_links
-
-    merged_links = merge_links(mf.links, [link.model_dump() for link in links])
-    if merged_links != mf.links:
-        mf.links = merged_links
-
-    schema = get_default_registry().get(_CASES_MEMORY_TYPE)
-    content_template = schema.content_template if schema is not None else None
-    await viking_fs.write_file(
-        case_uri,
-        MemoryFileUtils.write(mf, content_template=content_template),
-        ctx=ctx,
     )
 
 
