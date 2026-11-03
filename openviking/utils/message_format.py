@@ -7,12 +7,7 @@ from typing import Any, Dict, List
 
 
 def tool_images_as_user_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Deliver tool images through Chat Completions' user-image content format.
-
-    Keep tool replies contiguous, then attach their images with per-call labels.
-    Text and image positions remain identifiable without duplicating source text
-    or image bodies. Only request messages are rebuilt; stored history is untouched.
-    """
+    """Move tool images after parallel replies, preserving attribution and stored history."""
     converted: List[Dict[str, Any]] = []
     images: List[Dict[str, Any]] = []
     for message in messages:

@@ -719,7 +719,6 @@ class VLMProviderAdapter(LLMProvider):
 
     @staticmethod
     def _tool_result_media_mode(vlm: Any) -> ToolResultMediaMode | None:
-        """Backend declarations own capability; names cannot grant media support."""
         capability = getattr(vlm, "tool_result_media_mode", None)
         mode = capability() if callable(capability) else None
         return mode if mode in ("native", "user_message") else None

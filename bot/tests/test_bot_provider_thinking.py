@@ -20,7 +20,6 @@ from openviking.models.vlm.base import VLMResponse
 
 
 def test_provider_names_do_not_grant_undeclared_media_capabilities():
-    # A name alone must not grant a custom/unverified backend image support.
     unknown = SimpleNamespace(provider="openai")
     adapter = VLMProviderAdapter(unknown, "vision", langfuse_client=LangfuseClient())
     assert adapter.supports_tool_result_media() is False

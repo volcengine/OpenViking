@@ -239,11 +239,7 @@ class LiteLLMVLMProvider(VLMBase):
         return self._detected_provider or detect_provider_by_model(resolved_model) or self.provider
 
     def tool_result_media_mode(self) -> ToolResultMediaMode | None:
-        """Use the actual local protocol adapter, without credential resolution.
-
-        get_llm_provider() can trigger authentication (e.g. Copilot); capability
-        discovery must not use it. Unknown and text-only protocols fail closed.
-        """
+        """Select a verified image transport without resolving credentials."""
         provider = self._declared_provider(self.model)
         if provider is None or not self.model:
             return None
@@ -281,9 +277,7 @@ class LiteLLMVLMProvider(VLMBase):
             "OllamaChatConfig",
             "AmazonConverseConfig",
         )
-        # Subclasses may flatten images (DeepSeek, Sambanova, Heroku, Docker).
-        # Only audited converter implementations grant support, never inheritance.
-        # Databricks uses OpenAI conversion despite also inheriting AnthropicConfig.
+        # Match exact converters: subclasses may discard images or use another protocol.
         if config_type in tuple(getattr(litellm, name, None) for name in image_protocols):
             return "user_message"
         native_protocols = ("AnthropicConfig", "AzureAnthropicConfig", "VertexAIAnthropicConfig")
