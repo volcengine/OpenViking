@@ -19,8 +19,9 @@ Open the `/ui/` URL printed by Rspress. The official workspace development plugi
 The navigation language menu switches between English at `/ui/` and Simplified Chinese at `/ui/zh/`. Existing English URLs remain unchanged.
 
 ```bash
-npm run check          # Build the library, then type-check all workspaces
-npm run format:check   # Check workspace formatting
+npm run lint           # Check formatting, lint rules, and types for all workspaces
+npm run lint:fix       # Format files and apply available lint fixes
+npm run typecheck      # Check types without formatting or lint rules
 npm run build          # Build the ESM library, declarations, CSS, and static docs
 npm run preview        # Serve the built documentation at /ui/
 ```
@@ -34,7 +35,19 @@ npm run preview        # Serve the built documentation at /ui/
 - `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.
 - `docs/docs/_demos`: runnable examples using the public package exports.
 
-Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. `npm run check` builds the library first so documentation type-checking can resolve its declarations on a clean checkout. Import `@openviking/react/style.css`, `@openviking/react/components/style.css`, or `@openviking/react/components/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. Component subpaths use `components/<module>`; there are no category-level `components` or `pages` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. The package is private until a separate publication change establishes its release policy.
+Prettier checks formatting; Rslint checks code quality and TypeScript types in one run. `npm run lint`, `npm run lint:fix`, and `npm run typecheck` build the library first so documentation examples can resolve its declarations on a clean checkout. `npm run check` is an alias for `lint`. The standalone `typecheck` uses TypeScript's `tsc --noEmit` for the library, build configuration, and documentation projects. TypeScript also generates the library declarations.
+
+Pass files, directories, or quoted globs after `--` to limit formatting and lint rules. Without arguments, `lint` and `lint:fix` check the whole frontend workspace. Type checking always covers the complete configured TypeScript projects, including when lint targets specific files. Type errors require manual correction.
+
+JavaScript and TypeScript files, including JSX and TSX, are limited to 200 lines per file, excluding blank and comment-only lines. Exceeding this limit fails lint.
+
+```bash
+npm run lint -- packages/react/src/index.ts
+npm run lint -- packages/react/src/index.ts docs/rspress.config.ts
+npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
+```
+
+Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. Import `@openviking/react/style.css`, `@openviking/react/components/style.css`, or `@openviking/react/components/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. Component subpaths use `components/<module>`; there are no category-level `components` or `pages` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. The package is private until a separate publication change establishes its release policy.
 
 ## Target layout
 

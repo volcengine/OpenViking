@@ -36,13 +36,24 @@ React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19�
 ## 构建与检查
 
 ```bash
-npm run check
-npm run format:check
+npm run lint
+npm run lint:fix
+npm run typecheck
 npm run build
 npm run preview
 ```
 
-静态站点输出到 `frontend/docs/doc_build/`。也可以通过 `npm run build:lib` 单独构建组件库。`npm run check` 会先构建组件库，再使用生成的声明检查组件库、示例和构建配置的类型。
+静态站点输出到 `frontend/docs/doc_build/`。也可以通过 `npm run build:lib` 单独构建组件库。检查命令会先构建组件库，让示例能够解析其声明。`npm run lint` 通过 Rslint 检查代码规则与类型，并使用 Prettier 检查格式。`npm run lint:fix` 应用可用的 lint 修复并格式化文件。`npm run typecheck` 使用 TypeScript 的 `tsc --noEmit` 检查组件库、构建配置和文档项目，不运行格式检查和 lint 规则。TypeScript 也用于生成组件库的类型声明。
+
+在 `--` 后传入文件、目录或加引号的 glob，即可限定格式检查和 lint 规则的目标。不传参数时，`lint` 和 `lint:fix` 检查整个前端 workspace。类型检查始终覆盖配置的完整 TypeScript 项目，即使 lint 指定了文件。类型错误需要手动修正。
+
+JavaScript 和 TypeScript 文件（含 JSX、TSX）每个文件最多 200 行，不计空行和纯注释行，超出时 lint 报错。
+
+```bash
+npm run lint -- packages/react/src/index.ts
+npm run lint -- packages/react/src/index.ts docs/rspress.config.ts
+npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
+```
 
 ## 公开入口
 

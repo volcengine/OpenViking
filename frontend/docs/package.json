@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "rspress dev --host 0.0.0.0",
-    "check": "tsc --noEmit",
     "build": "rspress build",
     "preview": "rspress preview --host 0.0.0.0"
   },

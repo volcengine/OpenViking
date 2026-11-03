@@ -1,5 +1,5 @@
 name: Build UI
-description: Install, type-check, and build the UI library and documentation
+description: Install, lint, type-check, and build the UI library and documentation
 runs:
   using: composite
   steps:
@@ -14,13 +14,9 @@ runs:
       shell: bash
       run: npm ci --prefix frontend
 
-    - name: Check UI formatting
+    - name: Lint and type-check UI
       shell: bash
-      run: npm run format:check --prefix frontend
-
-    - name: Type-check UI
-      shell: bash
-      run: npm run check --prefix frontend
+      run: npm run lint --prefix frontend
 
     - name: Build UI library and docs
       shell: bash
