@@ -81,14 +81,16 @@ Capabilities are optional modules:
 Connector. `content` lists the message bodies an action accepts (`markdown`,
 `file`, `file_key`, `card`); `mentions` and `thread` opt into those Lark
 features; `idempotent: true` means the provider honours the idempotency key, so
-the Core may retry an `UNCERTAIN` attempt with the same key; `approval: true`
+the Core may retry an `UNCERTAIN` attempt with the same key; `interim: false`
+means the target takes no interim message (staged replies), only the result;
+`approval: true`
 means the action speaks for the owner (an email reply), so the Core never runs it
 for the agent: it shows the draft to the owner on the primary IM and runs it
 only when the owner confirms it there. `conversations` narrows an action for
 targets in one type of conversation: it maps the conversation type to the spec
 fields that differ there, or to `null` when the action does not reach it (the
 Lark Connector's `doc_comment` documents take a plain-text reply that is never
-retried, and no `message.send`). `queries` lists the
+retried and never interim, and no `message.send`). `queries` lists the
 read-only operations. The Core offers an agent tool only when some configured
 Connector declares the operation behind it, and checks every call against the
 target Connector's declaration.

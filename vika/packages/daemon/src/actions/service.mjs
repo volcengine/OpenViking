@@ -568,11 +568,16 @@ export class ActionService {
 
   // An interim finding (staged replies) while the work on a request goes on:
   // text, landing in the decision's own conversation (`convKey`: the chat, or
-  // the thread there; null when where it lands is unknown). It is not the
+  // the thread there; null when where it lands is unknown), where the target's
+  // action `spec` allows one (a Lark document comment does not). It is not the
   // final delivery, so it records no decision and leaves the temporary OnIt
   // where it is.
-  interim(input, caller, fence, connector, convKey) {
+  interim(input, caller, fence, connector, convKey, spec) {
     if (input.interim !== true) return false;
+    if (spec?.interim === false) {
+      throw blocked('unsupported', 'No interim message here: this conversation takes only the result. Do not send this message at all, '
+        + `with or without interim; finish the work, then give the result in one short final reply. ${NO_ACTION}`);
+    }
     if (input.markdown === undefined) throw blocked('invalid_input', `An interim message is text only: use markdown. ${NO_ACTION}`);
     if (connector !== fence.connector_instance || !convKey || convKey !== fence.conv_key) {
       throw blocked('invalid_input', `An interim message goes only where decision_id is: the same chat, and inside its thread when it has one (reply to its msg=). ${NO_ACTION}`);
@@ -735,7 +740,8 @@ export class ActionService {
 
   async sendMessage(input, caller) {
     const connector = this.route(caller, 'message.send', 'actions', input.source, { chatId: input.chat_id });
-    if (!this.actionSpec(connector, 'message.send', input.chat_id)) {
+    const spec = this.actionSpec(connector, 'message.send', input.chat_id);
+    if (!spec) {
       throw blocked('unsupported', `chat_id=${input.chat_id} takes no new message: answer one of its messages with reply_message. ${NO_ACTION}`);
     }
     const fence = this.fence(input, caller);
@@ -743,7 +749,7 @@ export class ActionService {
     this.authorizeTimerDelivery(fence, { connector, action: 'message.send', chatId: input.chat_id });
     // A plain send lands in the chat's main conversation.
     const interim = this.interim(input, caller, fence, connector,
-      conversationKeyFor(connector, { tenant_id: fence.tenant_key, id: input.chat_id }));
+      conversationKeyFor(connector, { tenant_id: fence.tenant_key, id: input.chat_id }), spec);
     this.assertStaysInThread(fence, connector, input.chat_id);
     const responseTo = this.attribution(caller, input.response_to_id, fence);
     const content = await this.content(input, connector, 'message.send', { chatId: input.chat_id, fence, caller });
@@ -808,7 +814,7 @@ export class ActionService {
     // The reply lands where its target is. A target outside any chat (a mail)
     // has no chat: it never borrows the decision's.
     const chatId = target ? target.chat_id : fence.chat_id;
-    const interim = this.interim(input, caller, fence, connector, target?.conv_key ?? null);
+    const interim = this.interim(input, caller, fence, connector, target?.conv_key ?? null, spec);
     this.authorizeTimerDelivery(fence, { connector, action: 'message.reply', chatId });
     if (spec.approval) return this.proposeReply(input, caller, connector, fence);
     this.authorize(fence);

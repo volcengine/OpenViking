@@ -523,6 +523,28 @@ describe('global Codex/Claude hard switch', () => {
     ]);
   });
 
+  it('follows the last document comment of a batch with the rules for answering it, and nothing else', () => {
+    const runtime = new AgentRuntime({ connectors: ['lark'] }, {}, quietLogger);
+    const calls = [];
+    runtime.backend = adaptRuntime('codex', {
+      deliverBatch(items) { calls.push(items); return true; },
+    });
+    const chat = { text: '[chat=oc_a] hi', seq: 1, chatType: 'group' };
+    runtime.submit([chat]);
+    runtime.submit([
+      { text: '[chat=doc:docx:A] first', seq: 2, chatType: 'doc_comment' },
+      chat,
+      { text: '[chat=doc:docx:A] second', seq: 3, chatType: 'doc_comment', receiptId: 'r-3' },
+    ]);
+    assert.deepEqual(calls[0], [chat], 'a chat batch is passed through untouched');
+    const [first, again, second] = calls[1];
+    assert.equal(first.text, '[chat=doc:docx:A] first');
+    assert.equal(again, chat);
+    assert.equal(second.receiptId, 'r-3');
+    assert.match(second.text, /^\[chat=doc:docx:A\] second\n\[daemon notice\] How to answer the document comment above\. /);
+    assert.equal(second.text.split('\n').length, 2);
+  });
+
   it('publishes an immutable normalized snapshot', async () => {
     const runtime = new AgentRuntime({}, {}, quietLogger);
     const implementation = backend('claude');

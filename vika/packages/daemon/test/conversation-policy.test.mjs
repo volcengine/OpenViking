@@ -14,6 +14,7 @@ import {
   assembleConversationPolicy,
   assembleVolcConversationPolicy,
   assembleVolcSelfHostedConversationPolicy,
+  docCommentNotice,
   resolveRolePromptPath,
   rolePrompt,
   substitutePromptPlaceholders,
@@ -121,6 +122,21 @@ describe('conversation policy assemble', () => {
       assert.match(text, /is part of the work, not the answer: make it, then still answer where you were asked/, `staged=${stagedReplies}`);
       assert.doesNotMatch(text, /Keep every message where the request is/, `staged=${stagedReplies}`);
     }
+  });
+
+  it('keeps the document comment rules out of the policy, in a one-line notice that only comments get', () => {
+    for (const stagedReplies of [false, true]) {
+      const text = assembleConversationPolicy({ connectors: ['lark'], stagedReplies });
+      // Seen by every chat turn, the comment lengths and documents leaked into chat answers.
+      assert.doesNotMatch(text, /200 characters|docs \+create|drive \+member-add/, `staged=${stagedReplies}`);
+      assert.match(text, /Each comment input is followed by a `\[daemon notice\]` saying how to answer it\./, `staged=${stagedReplies}`);
+    }
+    const notice = docCommentNotice({ larkCliBin: '/opt/lark-cli' });
+    assert.equal(notice.includes('\n'), false);
+    assert.match(notice, /^\[daemon notice\] How to answer the document comment above\. These rules are for document comments only, never for chats or topics\./);
+    assert.match(notice, /at most about 200 characters .* Up to about 1000 characters: no document\./);
+    assert.match(notice, /`\/opt\/lark-cli` as the bot .*drive \+member-add --member-type openid --perm view --yes/);
+    assert.doesNotMatch(notice, /<!--|\{\{|interim/);
   });
 
   it('adds the meeting notes only on the instance that stores them, after OpenViking, leaving the policy as it was otherwise', () => {
