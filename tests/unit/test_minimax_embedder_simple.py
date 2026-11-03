@@ -4,8 +4,10 @@
 
 import os
 import unittest
+from unittest.mock import Mock
 
 from openviking.models.embedder.minimax_embedders import MinimaxDenseEmbedder
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
 
 
@@ -68,6 +70,28 @@ class TestEmbeddingModelConfig(unittest.TestCase):
         self.assertEqual(config.extra_headers, {"GroupId": "group-123"})
         self.assertEqual(config.query_param, "query")
         self.assertEqual(config.document_param, "db")
+
+
+class TestMinimaxBusinessErrors(unittest.TestCase):
+    def test_business_error_uses_provider_scoped_kind(self):
+        embedder = MinimaxDenseEmbedder(
+            model_name="embo-01",
+            api_key="test-key",
+            dimension=1,
+        )
+        self.addCleanup(embedder.close)
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "base_resp": {"status_code": 1004, "status_msg": "invalid API key"}
+        }
+        embedder.session.post = Mock(return_value=response)
+
+        with self.assertRaises(ModelError) as raised:
+            embedder._call_api(["hello"])
+
+        self.assertIs(raised.exception.kind, ModelErrorKind.AUTHENTICATION_ERROR)
+        self.assertEqual(raised.exception.code, "1004")
 
 
 if __name__ == "__main__":
