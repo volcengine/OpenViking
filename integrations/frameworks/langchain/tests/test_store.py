@@ -3,7 +3,6 @@
 
 import asyncio
 import json
-from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import openviking_sdk
@@ -16,31 +15,80 @@ from langgraph.store.base import (
     PutOp,
 )
 from langgraph.store.memory import InMemoryStore
-from openviking_sdk.errors import NotFoundError, PermissionDeniedError, UnavailableError
+from openviking_sdk.errors import (
+    AlreadyExistsError,
+    NotFoundError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 
 from langchain_openviking.store import OpenVikingStore
 from langchain_openviking.testing import InMemoryOpenVikingClient
 
 
-def test_write_record_preserves_created_at_when_create_is_an_upsert_alias():
-    store = object.__new__(OpenVikingStore)
-    created_at = "2026-01-01T00:00:00+00:00"
-    store._read_record = Mock(return_value={"created_at": created_at})
-    store._write_create = Mock()
-    store._write_replace = Mock()
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "create_error,replace_error",
+    [
+        (None, None),
+        (FileExistsError("index exists"), None),
+        (AlreadyExistsError("index"), None),
+        (UnavailableError("index writer"), None),
+        (PermissionDeniedError("index denied"), None),
+        (TimeoutError("index timed out"), None),
+        (FileExistsError("index exists"), PermissionDeniedError("replace denied")),
+        (AlreadyExistsError("index"), UnavailableError("replace writer")),
+    ],
+)
+def test_store_preserves_created_at_and_reports_index_write_errors(
+    create_error, replace_error, asynchronous
+):
+    class Client(InMemoryOpenVikingClient):
+        fail = False
 
-    record = store._write_record(
-        "viking://user/default/langgraph/data/ns/key.json",
-        ("ns",),
-        "key",
-        {"version": 2},
-        datetime(2026, 1, 2, tzinfo=timezone.utc),
+        def write(
+            self, uri: str, content: str, mode: str = "replace", wait: bool = False, **kwargs
+        ):
+            if self.fail and "/index/" in uri:
+                error = create_error if mode == "create" else replace_error
+                if error is not None:
+                    raise error
+            if mode == "create" and uri in self.records:
+                mode = "replace"  # Current server create behavior is an upsert.
+            return super().write(uri, content, mode=mode, wait=wait, **kwargs)
+
+    client = Client()
+    store = OpenVikingStore(client=client)
+    store.put(("memory",), "note", {"version": 1})
+    before = store.get(("memory",), "note")
+    old_index = {uri: text for uri, text in client.records.items() if "/index/" in uri}
+    client.fail = True
+    conflict = isinstance(create_error, FileExistsError) or isinstance(
+        create_error, AlreadyExistsError
     )
+    expected_error = replace_error if conflict else create_error
 
-    assert record["created_at"] == created_at
-    assert record["updated_at"] == "2026-01-02T00:00:00+00:00"
-    store._write_create.assert_not_called()
-    store._write_replace.assert_called_once()
+    def update():
+        if asynchronous:
+            asyncio.run(store.aput(("memory",), "note", {"version": 2}))
+        else:
+            store.put(("memory",), "note", {"version": 2})
+
+    if expected_error is None:
+        update()
+    else:
+        with pytest.raises(type(expected_error)) as caught:
+            update()
+        assert caught.value is expected_error
+        assert {uri: text for uri, text in client.records.items() if "/index/" in uri} == old_index
+    after = store.get(("memory",), "note")
+    assert after.value == {"version": 2}
+    assert after.created_at == before.created_at
+    if expected_error is None:
+        assert any(
+            '"version": 2' in text for uri, text in client.records.items() if "/index/" in uri
+        )
+        assert [item.key for item in store.search(("memory",), query='"version": 2')] == ["note"]
 
 
 async def _read_or_update(store, operation, asynchronous):

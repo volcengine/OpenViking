@@ -413,12 +413,13 @@ class OpenVikingStore(BaseStore):
         try:
             self._write_create(uri, content)
             return
-        except Exception as create_exc:
-            try:
-                self._write_replace(uri, content)
-                return
-            except Exception:
-                raise create_exc
+        except Exception as exc:
+            if (
+                not isinstance(exc, FileExistsError)
+                and getattr(exc, "code", None) != "ALREADY_EXISTS"
+            ):
+                raise
+        self._write_replace(uri, content)
 
     def _write_create(self, uri: str, content: str) -> None:
         call_openviking(
