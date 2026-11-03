@@ -28,7 +28,8 @@
 ## 示例与文档
 
 - 顶部导航以 Guide、Components 和 OpenViking docs 外链为基础。Guide 承载入门、安装、样式与集成说明；Components 承载通用组件。出现实际内容后再增加 Patterns 和 Page templates，分别对应组合区块，以及布局与整页模板；独立 API 栏目在内容需要时再引入。
-- 文档目录与分类对应：`docs/docs/guide/`、`components/`、`patterns/`、`templates/`。布局与整页模板在 Page templates 下分组，不把所有模块都归入 Components。
+- 文档按语言组织在 `docs/docs/en/` 和 `docs/docs/zh/`，各语言内按 `guide/`、`components/`、`patterns/`、`templates/` 分类。布局与整页模板在 Page templates 下分组，不把所有模块都归入 Components。
+- 英文为默认语言，保留 `/ui/` 下的原有地址；简体中文使用 `/ui/zh/`。新增或修改文档时同步维护两种语言的页面、导航和侧边栏，保持对应页面路径一致，以支持原位语言切换。可运行示例共用 `docs/docs/_demos/`，不要为翻译复制实现；组件文案仍由调用者定制。
 - 模块分类入口指向该分类的 `index.mdx` 概览，而不是首个模块；侧边栏按路由前缀隔离，仅列出当前分类的概览与详情，并按职责分组。新增分类时同时提供真实内容、概览和导航，不创建空栏目或占位页面。
 - 示例从 `@openviking/ui` 的公开导出及样式入口导入，不通过相对路径绕过接口。外部 TSX 示例是可运行代码与源码展示的同一事实源。
 - 开发模式的源码 alias 仅用于热更新；正式文档构建消费实际库产物。保持这一差异，才能发现缺失导出、CSS 和打包资源等问题。

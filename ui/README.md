@@ -16,6 +16,8 @@ npm run dev
 
 Open the `/ui/` URL printed by Rspress. Public package imports resolve to library source during documentation development, so an initial library build is not required.
 
+The navigation language menu switches between English at `/ui/` and Simplified Chinese at `/ui/zh/`. Existing English URLs remain unchanged.
+
 ```bash
 npm run check          # Type-check the library, demos, and build configuration
 npm run format:check   # Check workspace formatting
@@ -27,6 +29,7 @@ npm run preview        # Serve the built documentation at /ui/
 
 - `packages/react`: private `@openviking/ui` package, Vite library build, CSS Modules, and React peer dependencies.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
+- `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.
 - `docs/docs/_demos`: runnable examples using the public package exports.
 
 Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Production documentation consumes the built package exports; only the development server aliases them to source. Import `@openviking/ui/style.css` once in applications. React is externalized from the library bundle. The package is private until a separate publication change establishes its release policy.
@@ -36,7 +39,7 @@ Library output is `packages/react/dist/`; documentation output is `docs/doc_buil
 1. Implement the module in `packages/react/src/` and export it from `src/index.ts`.
 2. Keep module styling local and expose theme variables with the `--ov-ui-` prefix.
 3. Add a demo in `docs/docs/_demos/` that imports from `@openviking/ui`.
-4. Add documentation and a sidebar entry in `docs/rspress.config.ts`.
+4. Add matching documentation in `docs/docs/en/` and `docs/docs/zh/`, and update both locale sidebars in `docs/rspress.config.ts`. Reuse examples from `docs/docs/_demos/`.
 5. Run the workspace checks and interact with the example in a browser.
 
 ## Continuous integration and deployment
