@@ -172,12 +172,14 @@ Redis configuration:
 | `username` | `""` | Redis ACL username |
 | `password_env` | `""` | Environment variable that stores the Redis password |
 | `pool_size` | `32` | Command concurrency |
-| `connect_timeout_ms` | `1000` | Connection timeout |
-| `command_timeout_ms` | `20` | Command timeout |
+| `connect_timeout_ms` | `10000` | Connection timeout in milliseconds |
+| `command_timeout_ms` | `0` | Command timeout in milliseconds; `0` disables command timeouts |
 | `default_ttl_seconds` | `300` | Runtime default TTL used by CacheFS query buckets; `0` means no TTL |
 | `tls_insecure_skip_verify` | `false` | Skip certificate verification for `rediss://`; intended only for controlled test environments |
 
 All Redis reads are sent to the primary node so QueueFS does not observe stale queue state. CacheRuntime relies on Redis transport security when required and does not add a separate application-layer value encryption format.
+
+With `command_timeout_ms=0`, CacheRuntime does not time out slow Redis commands. It also does not automatically fall back after a fixed interval.
 
 DynamicProvider configuration:
 
