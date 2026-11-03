@@ -13,6 +13,12 @@ from .base import EventMetricDataSource
 
 _operation_depth: ContextVar[int] = ContextVar("vikingdb_metrics_operation_depth", default=0)
 _suppressed: ContextVar[bool] = ContextVar("vikingdb_metrics_suppressed", default=False)
+_handled_error: ContextVar[Exception | None] = ContextVar(
+    "vikingdb_metrics_handled_error", default=None
+)
+_FALSE_RESULT_FAILURE_OPERATIONS = frozenset(
+    {"create_collection", "drop_collection", "update_collection_description", "health_check"}
+)
 
 
 def _exception_fields(error: Exception) -> tuple[str, str, str, str]:
@@ -36,14 +42,26 @@ class VikingDBEventDataSource(EventMetricDataSource):
     """Publish operation and retry events without coupling VectorDB code to a registry."""
 
     @classmethod
-    def enter_operation(cls) -> tuple[bool, object]:
+    def enter_operation(cls) -> tuple[bool, object, object]:
         depth = _operation_depth.get()
-        token = _operation_depth.set(depth + 1)
-        return depth == 0 and not _suppressed.get(), token
+        depth_token = _operation_depth.set(depth + 1)
+        error_token = _handled_error.set(None)
+        return depth == 0 and not _suppressed.get(), depth_token, error_token
 
     @classmethod
-    def exit_operation(cls, token: object) -> None:
-        _operation_depth.reset(token)
+    def exit_operation(cls, depth_token: object, error_token: object) -> None:
+        _handled_error.reset(error_token)
+        _operation_depth.reset(depth_token)
+
+    @classmethod
+    def record_handled_error(cls, error: Exception) -> None:
+        """Preserve an exception when a legacy API converts it into a return value."""
+        _handled_error.set(error)
+
+    @classmethod
+    def handled_error(cls) -> Exception | None:
+        """Return the exception captured by the current outermost backend operation."""
+        return _handled_error.get()
 
     @classmethod
     @contextmanager
@@ -69,6 +87,9 @@ class VikingDBEventDataSource(EventMetricDataSource):
         elif getattr(result, "ok", True) is False:
             outcome = "error"
             error_source, error_code, error_category = "backend", str(getattr(result, "error_code", None) or "UNKNOWN"), "backend_error"
+        elif result is False and operation in _FALSE_RESULT_FAILURE_OPERATIONS:
+            outcome = "error"
+            error_source, error_code, error_category = "backend", "FALSE_RESULT", "backend_error"
         elif operation == "upsert" and not result:
             outcome = "error"
             error_source, error_code, error_category = "backend", "EMPTY_RESULT", "backend_error"
@@ -91,9 +112,18 @@ class VikingDBEventDataSource(EventMetricDataSource):
 
     @classmethod
     def record_retry(
-        cls, *, backend: str, operation: str, error_source: str, error_code: str, delay_seconds: float,
+        cls,
+        *,
+        backend: str,
+        operation: str,
+        delay_seconds: float,
+        error: Exception | None = None,
+        error_source: str | None = None,
+        error_code: str | None = None,
     ) -> None:
         """Emit one extra retry attempt; the initial request is intentionally excluded."""
+        if error is not None:
+            error_source, error_code, _, _ = _exception_fields(error)
         cls._emit("vikingdb.retry", {
             "backend": str(backend or "unknown"), "operation": str(operation),
             "error_source": str(error_source or "unknown"), "error_code": str(error_code or "UNKNOWN"),

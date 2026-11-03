@@ -12,6 +12,7 @@ import openviking.metrics.datasources.vikingdb as vikingdb
 from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.metrics.datasources.cache import CacheEventDataSource
 from openviking.metrics.datasources.http import HttpRequestLifecycleDataSource
+from openviking.storage.errors import VikingDBException
 
 
 def test_event_datasources_use_shared_event_metric_datasource_emit(monkeypatch):
@@ -143,6 +144,59 @@ def test_vikingdb_datasource_emits_operation_and_retry_events(patch_event_emit):
     assert ("vikingdb.retry", {
         "backend": "bytedviking", "operation": "upsert", "error_source": "http_status",
         "error_code": "429", "delay_seconds": 0.1,
+    }) in patch_event_emit
+
+
+def test_vikingdb_datasource_preserves_handled_error_and_false_result(patch_event_emit):
+    owns_metric, depth_token, error_token = vikingdb.VikingDBEventDataSource.enter_operation()
+    assert owns_metric is True
+    try:
+        error = VikingDBException("rate limited", code="-55900461", retryable=True)
+        vikingdb.VikingDBEventDataSource.record_handled_error(error)
+        vikingdb.VikingDBEventDataSource.record_operation(
+            backend="vikingdb",
+            access_mode="default",
+            operation="drop_collection",
+            duration_seconds=0.1,
+            result=False,
+            error=vikingdb.VikingDBEventDataSource.handled_error(),
+        )
+    finally:
+        vikingdb.VikingDBEventDataSource.exit_operation(depth_token, error_token)
+
+    assert ("vikingdb.operation", {
+        "backend": "vikingdb", "access_mode": "default", "operation": "drop_collection",
+        "outcome": "error", "error_source": "backend", "error_code": "-55900461",
+        "error_category": "unknown", "retryable": "true", "duration_seconds": 0.1,
+    }) in patch_event_emit
+
+    vikingdb.VikingDBEventDataSource.record_operation(
+        backend="local",
+        access_mode="default",
+        operation="create_collection",
+        duration_seconds=0.1,
+        result=False,
+    )
+    assert any(
+        event_name == "vikingdb.operation"
+        and payload["operation"] == "create_collection"
+        and payload["outcome"] == "error"
+        and payload["error_code"] == "FALSE_RESULT"
+        for event_name, payload in patch_event_emit
+    )
+
+
+def test_vikingdb_retry_uses_the_exception_error_code(patch_event_emit):
+    vikingdb.VikingDBEventDataSource.record_retry(
+        backend="vikingdb",
+        operation="reindex_inventory",
+        error=VikingDBException("rate limited", code="-55900461", retryable=True),
+        delay_seconds=0.25,
+    )
+
+    assert ("vikingdb.retry", {
+        "backend": "vikingdb", "operation": "reindex_inventory", "error_source": "backend",
+        "error_code": "-55900461", "delay_seconds": 0.25,
     }) in patch_event_emit
 
 
