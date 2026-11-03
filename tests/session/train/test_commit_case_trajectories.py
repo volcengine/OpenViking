@@ -363,6 +363,18 @@ async def test_commit_preserves_evaluator_training_semantics(
             "openviking.session.compressor_v3.TrajectoryAnalyzerContext",
             lambda **kwargs: TrajectoryAnalyzerContext(**kwargs, inject_evaluation_feedback=False),
         )
+        submit = runtime.trainer.submit_gradients
+
+        async def submit_scoped(gradients, **kwargs):
+            suffix = "success" if kwargs["analysis"].evaluation.passed else "failure"
+            for gradient in gradients:
+                name = f"{gradient.target_name}_{suffix}"
+                gradient.after_file.uri = f"{runtime.trainer.policy_set.root_uri}/{name}.md"
+                gradient.after_file.extra_fields["experience_name"] = name
+                gradient.after_file.content = name
+            return await submit(gradients, **kwargs)
+
+        monkeypatch.setattr(runtime.trainer, "submit_gradients", submit_scoped)
     separate_extraction = evaluation_mode == "different_feedback"
     rows = (
         [[("shared", None)], [("shared", None)]]
@@ -404,6 +416,9 @@ async def test_commit_preserves_evaluator_training_semantics(
         uri = runtime.case_uris[case.name]
         mf = MemoryFileUtils.read(runtime.fs.files[uri], uri=uri)
         expected_names = {"shared"} if separate_extraction else {case.name, "shared"}
+        if evaluation_mode == "scores_only":
+            suffix = "success" if case.name == "book" else "failure"
+            expected_names = {f"{name}_{suffix}" for name in expected_names}
         assert {
             link["to_uri"] for link in mf.links if "/memories/experiences/" in link["to_uri"]
         } == {f"{runtime.trainer.policy_set.root_uri}/{name}.md" for name in expected_names}
@@ -418,3 +433,7 @@ async def test_commit_preserves_evaluator_training_semantics(
             assert trajectory.extra_fields["case_uris"] == [uri]
     if separate_extraction:
         assert case_trajectories[0].isdisjoint(case_trajectories[1])
+    else:
+        shared_uri = next(iter(case_trajectories[0].intersection(case_trajectories[1])))
+        shared = MemoryFileUtils.read(runtime.fs.files[shared_uri], uri=shared_uri)
+        assert set(shared.extra_fields["case_uris"]) == set(runtime.case_uris.values())

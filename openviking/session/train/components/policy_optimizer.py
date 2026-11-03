@@ -525,18 +525,26 @@ def _operations_to_plan_items(
                 ),
             )
         )
-    case_uris_by_trajectory: dict[str, set[str]] = defaultdict(set)
+    case_uris_by_source: dict[tuple[str, str], set[str]] = defaultdict(set)
     for gradient in gradients:
-        for link in gradient.links:
-            if _is_source_trajectory_link(link):
-                case_uris_by_trajectory[link.to_uri].update(gradient.metadata.get("case_uris", []))
+        for key in _gradient_source_keys(gradient, policy_set):
+            case_uris_by_source[key].update(gradient.metadata.get("case_uris", []))
     for item in items:
         if item.kind != "upsert" or item.memory_type != "experiences":
             continue
+        source_keys = _plan_item_source_keys(
+            target_uri=item.target_uri or "",
+            target_name=item.target_name,
+            before_content=item.before_content,
+            after_content=item.after_content,
+            source_links_by_target=source_links_by_target,
+            replacement_source_uris=replacement_source_uris_by_target.get(item.target_uri or "", []),
+            include_all_sources=upsert_output_count == 1,
+        )
         case_uris = {
             case_uri
-            for link in item.links
-            for case_uri in case_uris_by_trajectory.get(link.to_uri, [])
+            for key in source_keys
+            for case_uri in case_uris_by_source.get(key, [])
         }
         item.links.extend(
             StoredLink(

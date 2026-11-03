@@ -1111,7 +1111,17 @@ class SessionCompressorV3:
                             candidates_by_name[item.case.name]["uri"] for item in training_rollouts
                         }
                         trajectories = [
-                            trajectory
+                            replace(
+                                trajectory,
+                                metadata={
+                                    **trajectory.metadata,
+                                    "case_uris": [
+                                        uri
+                                        for uri in trajectory.metadata.get("case_uris", [])
+                                        if uri in case_uris
+                                    ],
+                                },
+                            )
                             for trajectory in trajectories
                             if case_uris.intersection(trajectory.metadata.get("case_uris", []))
                         ]
