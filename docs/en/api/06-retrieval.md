@@ -42,7 +42,7 @@ Semantic retrieval without session context.
 
 #### 1. API Implementation Introduction
 
-The `find()` method runs one global vector similarity search in QUICK mode for simple query scenarios. It recalls `limit` candidates and supports filtering by L0/L1/L2 through `level`.
+The `find()` method runs one global vector similarity search in QUICK mode for simple query scenarios. It recalls `limit` candidates (counted per URI) and supports filtering by L0/L1/L2 through `level`.
 
 **Processing Pipeline**:
 1. Convert query text to vector
@@ -431,9 +431,9 @@ New and updated memories produced by memory extraction automatically receive a `
 
 The local vector engine expands the requested event window by at most 3x internally (capped at 100,000), computes decay and sorts in C++, then returns top-k before any abstract or payload fields are fetched. This is a bounded candidate approximation, so events outside that semantic window are not guaranteed to be promoted. The HTTP vector service forwards the same native rule. Cloud adapters use VikingDB score fusion and request only the required limit plus offset, without a fixed 100,000-input override. cuVS collections use their native scalar/vector index for decay requests. openGauss accepts the forwarded parameters but does not apply time decay; it retains ordinary vector scoring.
 
-When model rerank is enabled, each recall branch requests `2 × limit` results. Event decay is already applied inside VikingDB for cloud backends, or inside the local C++ engine, before the two branches merge. The best `2 × limit` merged candidates go through one model rerank; model scores determine the final ranking and score threshold. There is no additional decay after the model. If rerank fails, retrieval keeps the already-decayed recall scores. `origin_score` and `time_score` remain recall-stage details, so their product need not equal a successful model rerank score. Parent-directory scores and hotness are not mixed into the result.
+When model rerank is enabled, each recall branch requests `2 × limit` results (`4 × limit` records when L0 and L1 are both in scope, because a directory's two records share one URI). Event decay is already applied inside VikingDB for cloud backends, or inside the local C++ engine, before the two branches merge. The best `2 × limit` merged candidates go through one model rerank; model scores determine the final ranking and score threshold. There is no additional decay after the model. If rerank fails, retrieval keeps the already-decayed recall scores. `origin_score` and `time_score` remain recall-stage details, so their product need not equal a successful model rerank score. Parent-directory scores and hotness are not mixed into the result.
 
-The local engine's 3x expansion applies to the requested event window independently of the model's 2x window. For a final `limit=10`, each branch returns at most 20 results, the local event engine considers at most 60 vector candidates internally, and at most 20 merged results reach the model.
+The local engine's 3x expansion applies to the requested event window independently of the model's 2x window. For a final `limit=10` with `level=[2]`, each branch returns at most 20 results, the local event engine considers at most 60 vector candidates internally, and at most 20 merged results reach the model. Without a `level` filter the first two windows double, and still at most 20 merged results reach the model.
 
 #### 3. Usage Examples
 

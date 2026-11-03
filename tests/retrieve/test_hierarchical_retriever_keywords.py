@@ -58,7 +58,7 @@ async def test_keywords_quick_search_skips_embedding_and_uses_keyword_recall():
 
     assert [item.uri for item in result.matched_contexts] == ["viking://resources/oauth.md"]
     assert storage.calls[0]["query"] == "OAuth token"
-    assert storage.calls[0]["limit"] == 5
+    assert storage.calls[0]["limit"] == 10
 
 
 @pytest.mark.asyncio
@@ -78,4 +78,4 @@ async def test_keywords_thinking_search_uses_global_keyword_recall_and_rerank():
     assert [item.uri for item in result.matched_contexts] == ["viking://resources/oauth.md"]
     assert len(storage.calls) == 1
     assert storage.calls[0]["query"] == "OAuth token"
-    assert storage.calls[0]["limit"] == 10
+    assert storage.calls[0]["limit"] == 20

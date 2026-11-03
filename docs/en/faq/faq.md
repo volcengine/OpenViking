@@ -299,7 +299,7 @@ Results use vector scores directly when reranking is disabled. When reranking is
 
 ### How does global retrieval work?
 
-Each query runs one global vector search within its directory scope, permission filters, and requested levels. THINKING with a usable reranker recalls at most `2 × limit` candidates, reranks them once, and returns at most `limit` results. Without reranking, it recalls `limit` hits directly. Retrieval does not navigate directories recursively or trigger further searches after reranking.
+Each query runs one global vector search within its directory scope, permission filters, and requested levels. THINKING with a usable reranker recalls at most `2 × limit` candidates, reranks them once, and returns at most `limit` results. Without reranking, it recalls `limit` hits directly. These counts are distinct URIs: a directory's L0 and L1 records share its URI, so when both levels are in scope the search fetches twice as many records. Retrieval does not navigate directories recursively or trigger further searches after reranking.
 
 ## Troubleshooting
 

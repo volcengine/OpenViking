@@ -22,6 +22,7 @@ from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
 from openviking.storage.expr import FilterExpr
+from openviking.storage.vector_ids import records_per_uri
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.tags import normalize_search_tags
@@ -200,6 +201,8 @@ class HierarchicalRetriever:
             context_type = ContextType.RESOURCE.value
 
         search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit
+        # Candidates are counted per URI, and a directory's L0 and L1 records share one.
+        record_limit = search_limit * records_per_uri(level)
         with telemetry.measure("search.vector_retrieval"):
             if search_type == "keywords":
                 vector_results = await vector_proxy.search_by_keywords_in_tenant(
@@ -208,7 +211,7 @@ class HierarchicalRetriever:
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=level,
-                    limit=search_limit,
+                    limit=record_limit,
                 )
             else:
                 vector_results = await vector_proxy.search_in_tenant(
@@ -218,7 +221,7 @@ class HierarchicalRetriever:
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=level,
-                    limit=search_limit,
+                    limit=record_limit,
                     **decay_kwargs,
                 )
         telemetry.count("vector.searches", 1)
@@ -239,7 +242,7 @@ class HierarchicalRetriever:
 
         candidates = sorted(
             collected_by_uri.values(), key=lambda candidate: candidate["_score"], reverse=True
-        )
+        )[:search_limit]
         scores = [candidate["_score"] for candidate in candidates]
         reranked = [False] * len(candidates)
         rerank_used = use_rerank and bool(candidates)

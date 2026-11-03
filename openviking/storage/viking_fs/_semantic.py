@@ -17,6 +17,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.acl import AclAction
+from openviking.storage.vector_ids import records_per_uri
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
     _ensure_non_empty_search_query,
@@ -290,16 +291,17 @@ class _SemanticMixin:
             target_directories=list(target_directories or []),
             extra_filter=filter,
             level=level,
-            limit=limit,
+            limit=limit * records_per_uri(level),
         )
 
         memories, resources, skills = [], [], []
         # Deduplicate by URI, mirroring what the vector path does: tags live on
         # per-level records, so a directory carrying one matches on both its L0
-        # and L1 record and would otherwise be returned twice — inflating the
-        # total and eating two of the caller's limit slots for one result.
+        # and L1 record and would otherwise be returned twice.
         seen_uris: set = set()
         for record in records:
+            if len(seen_uris) >= limit:
+                break
             matched = build_matched_context_from_record(record)
             if matched is None or matched.uri in seen_uris:
                 continue

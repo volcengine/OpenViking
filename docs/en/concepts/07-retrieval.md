@@ -81,6 +81,8 @@ class TypedQuery:
 
 `HierarchicalRetriever` runs one global vector search per query. Target directories, context type, permissions, metadata filters, and `level` constrain the search scope. Without an explicit `level`, text queries can directly match L0/L1/L2 records; retrieval does not navigate directories recursively.
 
+Candidate and result counts below are per URI. A directory's L0 and L1 records share its URI, so when both levels are in scope the search fetches twice as many records and keeps the best-scoring record for each URI.
+
 ### Retrieval Modes
 
 | Mode | Vector candidates | Rerank |
