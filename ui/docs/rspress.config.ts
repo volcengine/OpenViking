@@ -19,7 +19,7 @@ export default defineConfig({
           : {
               '@openviking/ui/style.css': fileURLToPath(
                 new URL(
-                  '../packages/react/src/status-badge.module.css',
+                  '../packages/react/src/components/status-badge/status-badge.module.css',
                   import.meta.url,
                 ),
               ),
