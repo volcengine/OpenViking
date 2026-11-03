@@ -119,14 +119,18 @@ async def restore_feishu_request(
 def validate_oauth_ref(
     value: Any, ov_user_id: str, *, platform: str = "feishu_doc"
 ) -> Dict[str, str]:
-    keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
-    if (
-        not isinstance(value, dict)
-        or set(value) != keys
-        or any(not isinstance(value[key], str) or not value[key].strip() for key in keys)
-    ):
+    legacy_keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
+    scoped_keys = legacy_keys | {"resource_id", "openviking_account_id"}
+    if not isinstance(value, dict) or set(value) not in (legacy_keys, scoped_keys):
         raise InvalidArgumentError("args.openviking_oauth_ref contains an invalid OAuth reference.")
-    ref = {key: value[key].strip() for key in keys}
+    ref: Dict[str, str] = {}
+    for key in value:
+        field = value[key]
+        if not isinstance(field, str) or not field.strip():
+            raise InvalidArgumentError(
+                "args.openviking_oauth_ref contains an invalid OAuth reference."
+            )
+        ref[key] = field.strip()
     if ref["type"] != "oauth" or ref["platform"] != platform:
         raise InvalidArgumentError(f"This import requires a {platform} OAuth reference.")
     if ref["ov_user_id"] != ov_user_id:
@@ -313,7 +317,7 @@ class ExternalFeishuToken:
             raise InvalidArgumentError("External OAuth authorization requires an API key.")
         self._reference = reference
         self._api_key = api_key
-        self._client = ConnectorClient("", "", account_id=reference["account_id"])
+        self._client = ConnectorClient("", "", account_id=reference.get("account_id", ""))
         self._lock = Lock()
         self._credentials: Dict[str, Any] = {}
         self._valid_until = 0.0
