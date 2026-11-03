@@ -17,7 +17,7 @@ import json_repair
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
-from openviking.models.model_error import ModelError, ModelErrorKind
+from openviking.models.model_error import ModelError
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking_cli.exceptions import NotFoundError
 from vikingbot.agent.tools.base import MultimodalToolResult
@@ -29,54 +29,6 @@ from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.utils.helpers import cal_str_tokens
 
 T = TypeVar("T")
-
-MEDIA_DROPPED_NOTE = (
-    "Media content was omitted because the configured model cannot accept image "
-    "content inside a tool result."
-)
-_MEDIA_PART_TYPES = {"image_url", "input_image"}
-
-
-def _strip_inline_media(messages: list[dict]) -> list[dict] | None:
-    """Return the messages without inline image parts, or None when there are none.
-
-    A model that cannot read an image still needs the surrounding request, so
-    the image part is replaced by a note instead of dropping the whole message.
-    """
-    from vikingbot.agent.loop import _inline_media_bytes
-
-    if not _inline_media_bytes(messages):
-        return None
-    stripped: list[dict] = []
-    for message in messages:
-        content = message.get("content")
-        if not isinstance(content, list):
-            stripped.append(message)
-            continue
-        parts = [
-            part
-            for part in content
-            if not (isinstance(part, dict) and part.get("type") in _MEDIA_PART_TYPES)
-        ]
-        if len(parts) == len(content):
-            stripped.append(message)
-            continue
-        parts.append({"type": "text", "text": MEDIA_DROPPED_NOTE})
-        stripped.append({**message, "content": parts})
-    return stripped
-
-
-def _rejects_media(exc: BaseException) -> bool:
-    """Whether a provider failure was caused by the inline media of a request."""
-    for error in (exc, getattr(exc, "__cause__", None)):
-        if getattr(error, "kind", None) in {
-            ModelErrorKind.INVALID_REQUEST,
-            ModelErrorKind.UNSUPPORTED,
-        }:
-            return True
-    return False
-
-
 R = TypeVar("R", bound=BaseModel)
 ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
 # Cache identity for the processing rules used by model calls.
@@ -271,10 +223,9 @@ class JsonModel:
     diagnostic unless the stage imposes a total submission limit.
     """
 
-    def __init__(self, provider, model, temperature, files, limits, usage, metrics, warnings=None):
+    def __init__(self, provider, model, temperature, files, limits, usage, metrics):
         self.provider, self.model, self.temperature = provider, model, temperature
         self.files, self.usage, self.metrics = files, usage, metrics
-        self.warnings = warnings if warnings is not None else []
         self.limits = limits
         self.budget = limits.merge_input_chars
         self.output_tokens = min(4096, max(128, self.budget // 8))
@@ -325,17 +276,9 @@ class JsonModel:
 
         media_bytes = _inline_media_bytes(messages)
         if media_bytes and not self.provider.supports_tool_result_media(self.model):
-            # The provider cannot carry image content. Send the request without
-            # the media instead of failing the whole compilation.
-            messages = _strip_inline_media(messages) or messages
-            media_bytes = 0
-            report_media_skip = True
-            self.warnings.append(
-                f"{stage}: the configured provider cannot deliver image content; "
-                "the request was sent without inline media"
+            raise CompileFailure(
+                "UNSUPPORTED_MEDIA", "Compile provider cannot deliver image evidence", stage=stage
             )
-        else:
-            report_media_skip = False
         if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:
             raise CompileFailure(
                 "MEDIA_LIMIT", "Compile image request exceeds the inline media budget", stage=stage
@@ -362,24 +305,20 @@ class JsonModel:
             "skill_attachment_chars": sum(len(value) for value in self.resources.snapshots.values())
             if self.resources and stage not in {"plan", "review", "route", "combine"}
             else 0,
-            "media_skipped": report_media_skip,
         }
         self.metrics["estimated_input_tokens"] += cal_str_tokens(
             json.dumps([messages, tools], ensure_ascii=False), text_type="mixed"
         )
-
-        async def invoke(request_messages):
+        try:
             async with asyncio.timeout(seconds):
-                return await self.provider.chat(
-                    messages=request_messages,
+                response = await self.provider.chat(
+                    messages=messages,
                     tools=tools,
                     model=self.model,
                     temperature=self.temperature,
                     max_tokens=max_tokens,
                     thinking=thinking,
                 )
-
-        def absorb(response):
             report.update(
                 finish_reason=response.finish_reason,
                 usage={k: v for k, v in (response.usage or {}).items() if isinstance(v, int)},
@@ -399,10 +338,6 @@ class JsonModel:
                 raise OSError(
                     response.content or "Model transport failure; see provider diagnostics"
                 )
-
-        try:
-            response = await invoke(messages)
-            absorb(response)
             return response
         except TimeoutError as exc:
             report["error"] = "TimeoutError"
@@ -411,24 +346,6 @@ class JsonModel:
             ) from exc
         except Exception as exc:
             report["error"] = type(exc).__name__
-            if media_bytes and _rejects_media(exc):
-                # The model rejected the image evidence. Retry without the media
-                # so the compilation continues instead of failing on evidence the
-                # model was never able to accept.
-                stripped = _strip_inline_media(messages)
-                if stripped is not None:
-                    try:
-                        degraded = await invoke(stripped)
-                        absorb(degraded)
-                    except Exception:
-                        report["media_degraded"] = False
-                    else:
-                        report["media_degraded"] = True
-                        self.warnings.append(
-                            f"{stage}: the model rejected the image evidence; "
-                            "the request was retried without inline media"
-                        )
-                        return degraded
             raise ModelCallError(str(exc)) from exc
         except BaseException as exc:
             report["error"] = type(exc).__name__
