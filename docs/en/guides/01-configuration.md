@@ -756,6 +756,17 @@ an explicit route such as `anthropic/claude-sonnet-4-5`; a model name or `api_ba
 alone does not declare image transport. Legacy text routing is unchanged. See
 [image-source configuration and migration](../context-compilation/01-overview.md#image-sources-and-models).
 
+For Compile images, vLLM support means the HTTP route `hosted_vllm/<served-model>`,
+which can also point to a local server. LiteLLM's `vllm/` route is unsupported and
+rejects image evidence.
+
+An explicit provider can still disagree with legacy bare-model routing:
+
+| `provider` | Bare `model` → resolved route (images rejected) | Matching `model` route |
+| --- | --- | --- |
+| `zai` | `glm-4.6v` → `zhipu/glm-4.6v` | `zai/glm-4.6v` |
+| `vertex_ai` | `gemini-2.5-flash` → `gemini/gemini-2.5-flash` | `vertex_ai/gemini-2.5-flash` |
+
 Vision Language Model for semantic extraction (L0/L1 generation).
 
 ```json

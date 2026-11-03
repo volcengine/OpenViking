@@ -28,7 +28,9 @@ LiteLLM 图片输入需要显式 provider 或已识别的 `provider/model` 路�
 
 未识别的自定义 provider 标签保留旧有文本路由，包括 OpenAI 兼容 `api_base` 的回退行为；标签本身不能授予图片传输能力。裸模型名配置的升级要求另见[未发布升级说明](../about/02-changelog.md#未发布)。
 
-LiteLLM 根据实际路由的本地转换器与已验证实现匹配：OpenAI 兼容协议（如通义、Moonshot、智谱 `zai`、OpenRouter、NVIDIA NIM、vLLM、Databricks）、Gemini/Vertex Gemini、Ollama 和 Bedrock Converse 使用图片消息；Anthropic 协议保留原生工具结果。仅继承 OpenAI 配置类不足以授予能力：当前会把图片压平成文本的 DeepSeek、Sambanova、Heroku、Docker Model Runner 转换器，以及尚未验证的转换器类，都拒绝图片证据。沿用已验证转换器的新模型无需进入模型名单。能力检查不解析凭据、不登录、不发请求；纯文本 Completion API 仍不支持图片。
+LiteLLM 根据实际路由的本地转换器与已验证实现匹配：OpenAI 兼容协议（如通义、Moonshot、智谱 `zai`、OpenRouter、NVIDIA NIM、`hosted_vllm/`、Databricks）、Gemini/Vertex Gemini、Ollama 和 Bedrock Converse 使用图片消息；Anthropic 协议保留原生工具结果。仅继承 OpenAI 配置类不足以授予能力：当前会把图片压平成文本的 DeepSeek、Sambanova、Heroku、Docker Model Runner 转换器，以及尚未验证的转换器类，都拒绝图片证据。沿用已验证转换器的新模型无需进入模型名单。能力检查不解析凭据、不登录、不发请求；纯文本 Completion API 仍不支持图片。
+
+支持的 vLLM 传输方式是 HTTP `hosted_vllm/` 路由，也可指向本机服务器；LiteLLM 的 `vllm/` 路由会拒绝 Compile 图片证据。裸模型名导致协议不匹配的具体示例与显式路由配置，见[配置说明](../guides/01-configuration.md#vlm)。
 
 图片消息会排在同一轮所有工具结果之后；转换仅发生在 provider 请求边界，不改写任务证据或会话历史。主备或多凭据链上的每个后端都必须支持图片证据传递；包含图片消息传输方式的混合链统一使用图片消息。
 
