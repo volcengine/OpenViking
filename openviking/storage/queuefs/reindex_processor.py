@@ -31,8 +31,14 @@ logger = get_logger(__name__)
 
 
 class ReindexProcessor(DequeueHandlerBase):
-    def __init__(self, viking_fs: Any) -> None:
+    def __init__(
+        self,
+        viking_fs: Any,
+        *,
+        max_requeues: int = -1,
+    ) -> None:
         self._viking_fs = viking_fs
+        self._max_requeues = max_requeues
 
     @staticmethod
     def _ctx(msg: ReindexMsg) -> RequestContext:
@@ -65,14 +71,19 @@ class ReindexProcessor(DequeueHandlerBase):
         return await acquire(self._viking_fs._uri_to_path(msg.uri, ctx=ctx))
 
     async def _requeue_lock_handoff(self, msg: ReindexMsg, exc: Exception) -> bool:
-        payload = await prepare_handoff_retry(msg, exc, queue="Reindex")
+        payload = await prepare_handoff_retry(
+            msg,
+            exc,
+            queue="Reindex",
+            max_requeues=self._max_requeues,
+        )
         if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
         queue_manager = get_queue_manager()
-        await queue_manager.enqueue(queue_manager.REINDEX, payload)
+        await queue_manager.requeue(queue_manager.REINDEX, payload, source=msg.to_dict())
         logger.warning(
             "[Reindex] Requeued task %s after lock handoff failure: %s",
             msg.task_id,
@@ -188,6 +199,19 @@ class ReindexProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
 
+        await self._release_queued_handoff(msg)
+        return ProcessResult.cancelled()
+
+    async def on_requeue_exhausted(self, data, error) -> ProcessResult:
+        payload = data.get("data", data)
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        msg = ReindexMsg.from_dict(payload)
+        await self._release_queued_handoff(msg)
+        unregister_telemetry(msg.telemetry_id or "")
+        return ProcessResult.failed(str(error))
+
+    async def _release_queued_handoff(self, msg: ReindexMsg) -> None:
         if msg.lock_handoff is not None:
             lock_guard = PathLockGuard(self._viking_fs._async_agfs)
             try:
@@ -196,4 +220,3 @@ class ReindexProcessor(DequeueHandlerBase):
                 logger.warning("[Reindex] Failed to release cancelled lock handoff: %s", exc)
             finally:
                 await lock_guard.close()
-        return ProcessResult.cancelled()

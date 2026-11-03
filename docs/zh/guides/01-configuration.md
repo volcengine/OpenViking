@@ -2388,6 +2388,22 @@ Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
 
 加密功能的详细说明见 [数据加密](../concepts/10-encryption.md)，完整使用流程见 [加密指南](./08-encryption.md)。
 
+## 队列 Worker 的重入队上限
+
+QueueFS 消费者使用同一份部署级配置，限制每条消息的替代投递链：
+
+```json
+{
+  "queue_workers": {
+    "max_requeues": -1
+  }
+}
+```
+
+`max_requeues` 对同一消息的所有显式 QueueFS 重入队累计计数，包括路径锁交接恢复、Semantic/Embedding 熔断延后、SessionCommit 和 ExternalTask 的重新调度。默认值为 `-1`，表示不启用全局上限，保留各路径原有行为。设为 `0` 时，首次正常执行仍会进行，但不允许创建替代消息。设为正整数 `n` 时，原本没有上限的路径最多替代投递 `n` 次；已有硬编码上限的路径使用其原上限与 `n` 中较小的值。它不影响进程崩溃后未 ACK 消息的后端恢复；SQLite 的恢复时机仍由 `storage.agfs.queuefs.recover_stale_sec` 配置。
+
+上限在写替代消息之前检查，内部累计次数 `_queue_requeue_count` 随替代消息持久化。因此重启不会清零，也不依赖 TaskTracker 元数据。首次执行和最后一次允许的重试都可以正常完成；需要继续重入队而超过上限时，处理器先执行失败清理、记录失败结果，再 ACK 原消息。新产生的子工作使用自己的预算；模型 Provider 内部的请求重试另行控制。
+
 ## storage.transaction 段
 
 `storage.transaction` 已废弃，仅保留为兼容旧配置。新配置请使用 `storage.agfs.pathlock` 配置 PathLock Provider 和过期时间；Redis key 名称来自顶层 `service_name`。若旧字段仍然出现，OpenViking 会在运行时给出 warning；其中 `lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射到新的 `pathlock` 配置，`redo_recovery_enabled` 则会被忽略。

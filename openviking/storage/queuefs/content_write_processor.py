@@ -33,9 +33,16 @@ logger = get_logger(__name__)
 
 
 class ContentWriteProcessor(DequeueHandlerBase):
-    def __init__(self, viking_fs: Any, vikingdb: Any = None) -> None:
+    def __init__(
+        self,
+        viking_fs: Any,
+        vikingdb: Any = None,
+        *,
+        max_requeues: int = -1,
+    ) -> None:
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
+        self._max_requeues = max_requeues
 
     @staticmethod
     def _ctx(msg: ContentWriteMsg) -> RequestContext:
@@ -92,14 +99,19 @@ class ContentWriteProcessor(DequeueHandlerBase):
         )
 
     async def _requeue_lock_handoff(self, msg: ContentWriteMsg, exc: Exception) -> bool:
-        payload = await prepare_handoff_retry(msg, exc, queue="ContentWrite")
+        payload = await prepare_handoff_retry(
+            msg,
+            exc,
+            queue="ContentWrite",
+            max_requeues=self._max_requeues,
+        )
         if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
         queue_manager = get_queue_manager()
-        await queue_manager.enqueue(queue_manager.CONTENT_WRITE, payload)
+        await queue_manager.requeue(queue_manager.CONTENT_WRITE, payload, source=msg.to_dict())
         logger.warning(
             "[ContentWrite] Requeued task %s after lock handoff failure: %s",
             msg.task_id,
@@ -138,6 +150,15 @@ class ContentWriteProcessor(DequeueHandlerBase):
             return ProcessResult.success()
         with bind_task_context_from_message(data):
             return await self._on_dequeue_bound(data)
+
+    async def on_requeue_exhausted(self, data, error) -> ProcessResult:
+        payload = data.get("data", data)
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        msg = ContentWriteMsg.from_dict(payload)
+        await self._release_orphaned_lock_handoff(msg)
+        unregister_telemetry(msg.telemetry_id or "")
+        return ProcessResult.failed(str(error))
 
     async def _on_dequeue_bound(self, data: Dict[str, Any]) -> ProcessResult:
         payload = data.get("data", data)

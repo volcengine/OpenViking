@@ -45,10 +45,13 @@ class AddResourceProcessor(DequeueHandlerBase):
         resource_service: Any,
         queue_name: str,
         viking_fs: Any,
+        *,
+        max_requeues: int = -1,
     ):
         self._resource_service = resource_service
         self._queue_name = queue_name
         self._viking_fs = viking_fs
+        self._max_requeues = max_requeues
 
     async def _load_lock(self, msg: AddResourceMsg, ctx: RequestContext) -> Any:
         """Adopt a pathlock handoff ref, returning an owned lease dict."""
@@ -142,13 +145,18 @@ class AddResourceProcessor(DequeueHandlerBase):
         await self._record_watch_execution(msg, "cancelled")
 
     async def _requeue_lock_handoff(self, msg: AddResourceMsg, exc: Exception) -> bool:
-        payload = await prepare_handoff_retry(msg, exc, queue="AddResource")
+        payload = await prepare_handoff_retry(
+            msg,
+            exc,
+            queue="AddResource",
+            max_requeues=self._max_requeues,
+        )
         if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
-        await get_queue_manager().enqueue(self._queue_name, payload)
+        await get_queue_manager().requeue(self._queue_name, payload, source=msg.to_dict())
         logger.warning(
             "[AddResource] Requeued task %s after lock handoff failure: %s",
             msg.task_id,
@@ -477,6 +485,23 @@ class AddResourceProcessor(DequeueHandlerBase):
         )
         unregister_telemetry(msg.telemetry_id or "")
         return ProcessResult.cancelled()
+
+    async def on_requeue_exhausted(self, data, error) -> ProcessResult:
+        payload = data.get("data", data)
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        msg = AddResourceMsg.from_dict(payload)
+        ctx = RequestContext(
+            user=UserIdentifier(msg.account_id, msg.user_id),
+            role=Role(msg.role),
+            group_ids=tuple(msg.group_ids),
+            actor_peer_id=msg.actor_peer_id,
+            bypass_acl=msg.bypass_acl,
+        )
+        await self._release_cancelled_resources(msg, ctx)
+        await self._record_watch_execution(msg, "failed", str(error))
+        unregister_telemetry(msg.telemetry_id or "")
+        return ProcessResult.failed(str(error))
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         if not data:

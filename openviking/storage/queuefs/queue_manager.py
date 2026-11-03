@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 8
+DEFAULT_MAX_REQUEUES = -1
 
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
@@ -41,6 +42,7 @@ def init_queue_manager(
     max_concurrent_reindex: int = 4,
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
     max_concurrent_external_task: int = 10,
+    max_requeues: int = DEFAULT_MAX_REQUEUES,
     *,
     middlewares: Sequence[QueueMiddleware] = (),
 ) -> "QueueManager":
@@ -56,6 +58,7 @@ def init_queue_manager(
         max_concurrent_add_resource: Max concurrent AddResource tasks.
         max_concurrent_reindex: Max concurrent Reindex tasks.
         max_concurrent_session_commit: Max concurrent SessionCommit tasks.
+        max_requeues: Max explicit replacements in one QueueFS message's retry chain.
         middlewares: Additional middleware, fixed at construction for all queues.
     """
     global _instance
@@ -70,6 +73,7 @@ def init_queue_manager(
         max_concurrent_reindex=max_concurrent_reindex,
         max_concurrent_session_commit=max_concurrent_session_commit,
         max_concurrent_external_task=max_concurrent_external_task,
+        max_requeues=max_requeues,
         middlewares=middlewares,
     )
     return _instance
@@ -116,6 +120,7 @@ class QueueManager:
         max_concurrent_reindex: int = 4,
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
         max_concurrent_external_task: int = 10,
+        max_requeues: int = DEFAULT_MAX_REQUEUES,
         *,
         middlewares: Sequence[QueueMiddleware] = (),
     ):
@@ -130,6 +135,7 @@ class QueueManager:
         self._max_concurrent_reindex = max_concurrent_reindex
         self._max_concurrent_session_commit = max_concurrent_session_commit
         self._max_concurrent_external_task = max_concurrent_external_task
+        self._max_requeues = max_requeues
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -251,6 +257,7 @@ class QueueManager:
             max_concurrent_llm=self._max_concurrent_semantic,
             embedding_worker_stopped=self._embedding_worker_stopped.is_set,
             vlm_resolver=self._vlm_resolver,
+            max_requeues=self._max_requeues,
         )
         self.get_queue(
             self.SEMANTIC,
@@ -276,6 +283,7 @@ class QueueManager:
                     max_concurrent_llm=self._max_concurrent_semantic,
                     embedding_worker_stopped=self._embedding_worker_stopped.is_set,
                     vlm_resolver=resolver,
+                    max_requeues=self._max_requeues,
                 )
             )
 
@@ -497,6 +505,7 @@ class QueueManager:
                     name,
                     dequeue_handler=dequeue_handler,
                     middlewares=self._middlewares,
+                    max_requeues=self._max_requeues,
                 )
             elif name == self.SEMANTIC:
                 self._queues[name] = SemanticQueue(
@@ -505,6 +514,7 @@ class QueueManager:
                     name,
                     dequeue_handler=dequeue_handler,
                     middlewares=self._middlewares,
+                    max_requeues=self._max_requeues,
                 )
             else:
                 self._queues[name] = NamedQueue(
@@ -513,6 +523,7 @@ class QueueManager:
                     name,
                     dequeue_handler=dequeue_handler,
                     middlewares=self._middlewares,
+                    max_requeues=self._max_requeues,
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])
@@ -529,6 +540,10 @@ class QueueManager:
     async def enqueue(self, queue_name: str, data: Union[str, Dict[str, Any]]) -> str:
         """Send message to queue (enqueue)."""
         return await self.get_queue(queue_name).enqueue(data)
+
+    async def requeue(self, queue_name: str, data: Any, *, source: Any = None) -> str:
+        """Replace the currently processed delivery, persisting its total count."""
+        return await self.get_queue(queue_name).requeue(data, source=source)
 
     async def dequeue(self, queue_name: str) -> Optional[Dict[str, Any]]:
         """Get message from specified queue."""

@@ -86,7 +86,7 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
     queued = []
 
     class _QueueManager:
-        async def enqueue(self, queue_name, data):
+        async def requeue(self, queue_name, data):
             queued.append((queue_name, data))
 
     processor = SessionCommitProcessor(

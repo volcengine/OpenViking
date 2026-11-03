@@ -2012,6 +2012,10 @@ class Session:
             error="session commit cancelled",
         )
 
+    async def finalize_failed_commit(self, archive_uri: str, error: str) -> None:
+        """Settle a denied Phase-2 retry without discarding its raw archive."""
+        await self._write_failed_marker(archive_uri, stage="requeue_exhausted", error=error)
+
     async def _activate_archive_recovery(self, msg: "SessionCommitMsg") -> None:
         """Verify recovery ownership and expose a failed archive to Phase 2."""
         recovery = msg.recovery

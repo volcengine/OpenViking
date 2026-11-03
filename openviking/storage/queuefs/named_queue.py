@@ -22,6 +22,16 @@ from openviking.storage.queuefs.queue_middleware import (
     ProcessContext,
     QueueMiddleware,
 )
+from openviking.storage.queuefs.requeue import (
+    REQUEUE_COUNT_FIELD,
+    QueueDelivery,
+    Replacement,
+    RequeueEnqueueError,
+    RequeueLimitExceeded,
+    current_delivery,
+    current_replacement,
+    requeue_count,
+)
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -65,6 +75,12 @@ class DequeueHandlerBase(abc.ABC):
         """Discard task work cancelled before its handler starts."""
         return ProcessResult.cancelled()
 
+    async def on_requeue_exhausted(
+        self, data: Dict[str, Any], error: RequeueLimitExceeded
+    ) -> ProcessResult:
+        """Settle a denied replacement as failure, with any business cleanup."""
+        return ProcessResult.failed(str(error))
+
     @abc.abstractmethod
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Complete this delivery, or raise to leave it unacknowledged."""
@@ -83,6 +99,8 @@ class NamedQueue:
         name: str,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
         middlewares: Sequence[QueueMiddleware] = (),
+        *,
+        max_requeues: int = -1,
     ):
         self.name = name
         self.path = f"{mount_point}/{name}"
@@ -91,6 +109,7 @@ class NamedQueue:
         self._dequeue_handler = dequeue_handler
         self._middlewares = tuple(middlewares)
         self._initialized = False
+        self._max_requeues = max_requeues
 
         # Status tracking
         self._lock = threading.Lock()
@@ -175,14 +194,70 @@ class NamedQueue:
     async def enqueue(self, data: Union[str, Dict[str, Any]]) -> EnqueueReceipt:
         """Send message to queue (enqueue)."""
         await self._ensure_initialized()
+        replacement = current_replacement.get()
+        if replacement is not None and replacement.path == self.path:
+            payload = json.loads(data) if isinstance(data, str) else dict(data)
+            if not isinstance(payload, dict):
+                raise TypeError("Replacement queue payload must be a JSON object")
+            payload[REQUEUE_COUNT_FIELD] = replacement.count
+            data = payload
         ctx = EnqueueContext(self.name, data)
         message_id = await self._run_middleware("enqueue", ctx, self._enqueue)
         return EnqueueReceipt(message_id, ctx.work_id)
+
+    async def requeue(
+        self,
+        data: Any,
+        *,
+        source: Any = None,
+        enqueue: Optional[Callable[[], Awaitable[Any]]] = None,
+    ) -> Any:
+        """Write a replacement with its count, checking the cap before any enqueue.
+
+        The optional callback preserves specialized queue serialization and lock
+        handoff. Ordinary child enqueues outside this call receive no retry count.
+        """
+        delivery = current_delivery.get()
+        owns_delivery = delivery is not None and delivery.path == self.path
+        count = (
+            delivery.count
+            if owns_delivery
+            else requeue_count(source if source is not None else data)
+        )
+        if self._max_requeues >= 0 and count >= self._max_requeues:
+            raise RequeueLimitExceeded(self.name, self._max_requeues)
+        if owns_delivery:
+            if delivery.replacement_started or delivery.replacement_committed:
+                raise RequeueEnqueueError("This delivery already started a replacement")
+            delivery.replacement_started = True
+        replacement = Replacement(self.path, count + 1)
+        token = current_replacement.set(replacement)
+        try:
+            try:
+                result = await enqueue() if enqueue is not None else await self.enqueue(data)
+            except RequeueLimitExceeded:
+                raise
+            except Exception as exc:
+                if replacement.committed:
+                    raise
+                raise RequeueEnqueueError(str(exc)) from exc
+            if not replacement.committed:
+                raise RequeueEnqueueError("Replacement enqueue returned without writing a message")
+            return result
+        finally:
+            if owns_delivery:
+                delivery.replacement_started = False
+                if replacement.committed:
+                    delivery.replacement_committed = True
+            current_replacement.reset(token)
 
     async def _enqueue(self, ctx: EnqueueContext) -> str:
         data = json.dumps(ctx.payload) if isinstance(ctx.payload, dict) else ctx.payload
         msg_id = await self._async_agfs.write(f"{self.path}/enqueue", data.encode("utf-8"))
         ctx.committed = True
+        replacement = current_replacement.get()
+        if replacement is not None and replacement.path == self.path:
+            replacement.committed = True
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
@@ -271,12 +346,16 @@ class NamedQueue:
         process_started = time.perf_counter()
 
         async def process(ctx: ProcessContext) -> ProcessResult:
-            return self._validate_result(await handler.on_dequeue(ctx.message))
+            try:
+                return self._validate_result(await handler.on_dequeue(ctx.message))
+            except RequeueLimitExceeded as error:
+                return self._validate_result(await handler.on_requeue_exhausted(ctx.message, error))
 
         async def cancel() -> ProcessResult:
             return self._validate_result(await handler.on_cancelled(ctx.message))
 
         ctx = ProcessContext(self.name, data, cancel=cancel)
+        token = current_delivery.set(QueueDelivery(self.path, requeue_count(data)))
         try:
             result = self._validate_result(await self._run_middleware("process", ctx, process))
         except asyncio.CancelledError:
@@ -286,6 +365,8 @@ class NamedQueue:
             self._record_error(str(exc), data)
             self._publish_duration(data, process_started, "exception")
             raise
+        finally:
+            current_delivery.reset(token)
         self._record_result(result, data)
         self._publish_duration(data, process_started, result.outcome.value)
         return result

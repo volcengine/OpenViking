@@ -37,6 +37,7 @@ from openviking.storage.queuefs.embedding_msg import (
 )
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
+from openviking.storage.queuefs.requeue import RequeueEnqueueError, RequeueLimitExceeded
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
@@ -1001,6 +1002,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
         except asyncio.CancelledError:
             raise
+        except (RequeueLimitExceeded, RequeueEnqueueError):
+            raise
         except Exception as e:
             error_msg = self._embedding_error_msg(
                 embedding_msg,
@@ -1046,7 +1049,18 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         return ProcessResult.cancelled()
 
     async def _reenqueue_embedding_msg(self, msg: EmbeddingMsg) -> None:
+        queue = self._vikingdb.embedding_queue
+        if queue is None:
+            raise RequeueEnqueueError("Embedding queue is not initialized")
         if msg.context_data.get("context_type") == ContextType.SKILL.value:
-            await run_to_completion(lambda: self._vikingdb.enqueue_embedding_msg(msg))
+            await run_to_completion(lambda: queue.requeue(msg))
         else:
-            await self._vikingdb.enqueue_embedding_msg(msg)
+            await queue.requeue(msg)
+
+    async def on_requeue_exhausted(self, data, error) -> ProcessResult:
+        payload = data.get("data", data)
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        msg = EmbeddingMsg.from_dict(payload)
+        self._merge_request_stats(msg.telemetry_id, error_count=1)
+        return self._embedding_failed(msg, str(error))

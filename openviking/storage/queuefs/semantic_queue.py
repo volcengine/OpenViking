@@ -4,7 +4,7 @@
 
 import threading
 import time
-from typing import Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from openviking_cli.utils.logger import get_logger
 
@@ -73,6 +73,20 @@ class SemanticQueue(NamedQueue):
         msg.queue_enqueued_at = time.time()
 
         return await super().enqueue(msg.to_dict())
+
+    async def requeue(
+        self,
+        msg: SemanticMsg,
+        *,
+        source: Any = None,
+        enqueue: Optional[Callable[[], Awaitable[Any]]] = None,
+    ) -> Any:
+        """A retry must bypass the memory-parent deduplication window."""
+        return await super().requeue(
+            msg,
+            source=source,
+            enqueue=enqueue or (lambda: self.enqueue(msg, deduplicate_memory=False)),
+        )
 
     async def dequeue(self) -> Optional[SemanticMsg]:
         """Get message from queue and deserialize to SemanticMsg object."""

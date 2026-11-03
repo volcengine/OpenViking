@@ -46,6 +46,11 @@ def semantic_env(monkeypatch):
         Mock(return_value=dag),
     )
     retry_queue = SimpleNamespace(enqueue=AsyncMock())
+
+    async def requeue(msg, *, enqueue=None):
+        return await enqueue() if enqueue is not None else await retry_queue.enqueue(msg)
+
+    retry_queue.requeue = AsyncMock(side_effect=requeue)
     manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda name: retry_queue)
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
     resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))

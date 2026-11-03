@@ -18,6 +18,7 @@ from openviking.service.task_work_index import (
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
+from openviking.storage.queuefs.requeue import RequeueEnqueueError
 
 
 class ExternalTaskProcessor(DequeueHandlerBase):
@@ -57,10 +58,16 @@ class ExternalTaskProcessor(DequeueHandlerBase):
             if metadata is not None:
                 replacement[TASK_WORK_ID_FIELD] = metadata.work_id
             try:
-                await get_queue_manager().enqueue(
+                await get_queue_manager().requeue(
                     QueueManager.EXTERNAL_TASK,
                     replacement,
+                    source=data,
                 )
+            except RequeueEnqueueError as exc:
+                if not isinstance(exc.__cause__, TaskWorkRejected):
+                    raise
+                await self._service.cancel_recovered(task_id, account_id, user_id)
+                return ProcessResult.cancelled()
             except TaskWorkRejected:
                 await self._service.cancel_recovered(task_id, account_id, user_id)
                 return ProcessResult.cancelled()
@@ -84,6 +91,11 @@ class ExternalTaskProcessor(DequeueHandlerBase):
             return ProcessResult.failed(str(exc))
         await self._service.cancel_recovered(task_id, account_id, user_id)
         return ProcessResult.cancelled()
+
+    async def on_requeue_exhausted(self, data, error) -> ProcessResult:
+        task_id, account_id, user_id = self._parse(data)
+        await self._service.cancel_recovered(task_id, account_id, user_id, failure=error)
+        return ProcessResult.failed(str(error))
 
 
 __all__ = ["ExternalTaskProcessor"]

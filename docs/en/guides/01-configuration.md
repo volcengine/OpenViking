@@ -2340,6 +2340,37 @@ Delivery is best-effort: sink errors and timeouts are logged, and phase-2 replay
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
+## Queue worker re-enqueue limit
+
+QueueFS consumers use one deployment-wide maximum re-enqueue count for each
+message's replacement chain:
+
+```json
+{
+  "queue_workers": {
+    "max_requeues": -1
+  }
+}
+```
+
+`max_requeues` is a per-message total across explicit QueueFS re-enqueues,
+including path-lock handoff recovery, Semantic/Embedding circuit-breaker
+deferral, SessionCommit, and ExternalTask rescheduling. Its default is `-1`,
+which disables the global cap and preserves each path's existing behavior. `0`
+settles the work on its first re-enqueue attempt. With a positive value `n`,
+unbounded paths allow at most `n` replacements, while paths with an existing
+hard cap use the smaller of that cap and `n`. It does not affect backend
+recovery of an unacknowledged message after a process crash; configure that
+timing with `storage.agfs.queuefs.recover_stale_sec` on SQLite backends.
+
+The limit is checked before writing a replacement. The internal
+`_queue_requeue_count` travels with the replacement payload, so the limit
+survives consumer restarts and works without TaskTracker metadata. An initial
+execution and its final permitted retry may complete normally. Once a
+replacement would exceed the limit, the handler performs failure cleanup and
+the original message is ACKed only after that failure is settled. New child
+work starts with its own budget. Provider request retries are independent.
+
 ## storage.transaction Section
 
 `storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` for the active PathLock provider and expiry configuration; Redis key names come from top-level `service_name`. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is ignored.

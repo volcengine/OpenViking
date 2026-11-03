@@ -14,6 +14,7 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context_from_message
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
+from openviking.storage.queuefs.requeue import RequeueEnqueueError, RequeueLimitExceeded
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking_cli.session.user_id import UserIdentifier
@@ -79,7 +80,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
             if not processed:
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
 
-                await get_queue_manager().enqueue(
+                await get_queue_manager().requeue(
                     QueueManager.SESSION_COMMIT,
                     msg.to_dict(),
                 )
@@ -127,6 +128,15 @@ class SessionCommitProcessor(DequeueHandlerBase):
         with bind_task_context_from_message(data):
             try:
                 processed = await self._process(msg, ctx)
+            except (RequeueLimitExceeded, RequeueEnqueueError):
+                raise
             except Exception as exc:
                 return ProcessResult.failed(str(exc))
         return ProcessResult.success() if processed else ProcessResult.requeued()
+
+    async def on_requeue_exhausted(self, data, error) -> ProcessResult:
+        msg, ctx = self._parse_message(data)
+        session = self._session_service.session(ctx, msg.session_id, session_uri=msg.session_uri)
+        if await session.exists():
+            await session.finalize_failed_commit(msg.archive_uri, str(error))
+        return ProcessResult.failed(str(error))

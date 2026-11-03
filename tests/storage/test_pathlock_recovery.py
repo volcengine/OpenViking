@@ -224,7 +224,7 @@ async def test_migration_blockage_is_requeued_even_after_previous_retry_limit(
         "Reindex": lambda: ReindexProcessor(fs),
         "ContentWrite": lambda: ContentWriteProcessor(fs),
     }
-    manager = SimpleNamespace(REINDEX="Reindex", CONTENT_WRITE="ContentWrite", enqueue=AsyncMock())
+    manager = SimpleNamespace(REINDEX="Reindex", CONTENT_WRITE="ContentWrite", requeue=AsyncMock())
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
     sleep = AsyncMock()
     monkeypatch.setattr("openviking.storage.pathlock_recovery.sleep", sleep)
@@ -239,13 +239,68 @@ async def test_migration_blockage_is_requeued_even_after_previous_retry_limit(
     assert requeued is (delay is not None)
     if delay is None:
         sleep.assert_not_awaited()
-        manager.enqueue.assert_not_awaited()
+        manager.requeue.assert_not_awaited()
         return
     sleep.assert_awaited_once_with(delay)
-    manager.enqueue.assert_awaited_once_with(
+    manager.requeue.assert_awaited_once_with(
         processor_name,
         {"task_id": "task", "_task_work_id": "work", "lock_handoff_retry": retry + 1},
+        source=msg.to_dict(),
     )
+
+
+@pytest.mark.asyncio
+async def test_prepare_handoff_retry_honors_configured_limits(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.storage.pathlock_recovery.sleep", sleep)
+    msg = SimpleNamespace(
+        task_id="task",
+        lock_handoff_retry=3,
+        to_dict=lambda: {"task_id": "task"},
+    )
+
+    assert (
+        await prepare_handoff_retry(
+            msg,
+            HandoffRecoveryBlocked("busy"),
+            queue="Reindex",
+            max_requeues=3,
+        )
+        is None
+    )
+    assert (
+        await prepare_handoff_retry(
+            msg,
+            HandoffRecoveryRequired("restart"),
+            queue="Reindex",
+            max_requeues=3,
+        )
+        is None
+    )
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type,original_limit", [(HandoffRecoveryBlocked, 8), (LockAcquisitionError, 2)]
+)
+@pytest.mark.parametrize("cap", [-1, 0, 1, 3, 100])
+async def test_global_cap_only_truncates_original_retry_limit(
+    monkeypatch, error_type, original_limit, cap
+):
+    monkeypatch.setattr("openviking.storage.pathlock_recovery.sleep", AsyncMock())
+    msg = SimpleNamespace(task_id="task", lock_handoff_retry=0, to_dict=lambda: {})
+    expected = original_limit if cap < 0 else min(original_limit, cap)
+    for _ in range(expected):
+        payload = await prepare_handoff_retry(
+            msg, error_type("busy"), queue="Test", max_requeues=cap
+        )
+        assert payload is not None
+        msg.lock_handoff_retry = payload["lock_handoff_retry"]
+    assert (
+        await prepare_handoff_retry(msg, error_type("busy"), queue="Test", max_requeues=cap) is None
+    )
+    assert msg.lock_handoff_retry == expected
 
 
 @pytest.mark.asyncio

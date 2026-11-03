@@ -58,6 +58,7 @@ from openviking.storage.pathlock_recovery import prepare_handoff_retry
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
+from openviking.storage.queuefs.requeue import RequeueEnqueueError, RequeueLimitExceeded
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
@@ -155,6 +156,7 @@ class SemanticProcessor(DequeueHandlerBase):
         *,
         embedding_worker_stopped: Optional[Callable[[], bool]] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
+        max_requeues: int = -1,
     ):
         """
         Initialize SemanticProcessor.
@@ -168,6 +170,7 @@ class SemanticProcessor(DequeueHandlerBase):
         self._breaker_lock = threading.Lock()
         self._embedding_worker_stopped = embedding_worker_stopped
         self._vlm_resolver = vlm_resolver
+        self._max_requeues = max_requeues
 
     def _account_breaker(self, account_id: str) -> CircuitBreaker:
         with self._breaker_lock:
@@ -303,18 +306,19 @@ class SemanticProcessor(DequeueHandlerBase):
 
         from openviking.storage.queuefs import get_queue_manager
 
-        # Throttle to prevent re-enqueue storm during OPEN window
-        wait = self._account_breaker(msg.account_id).retry_after
-        if wait > 0:
-            await asyncio.sleep(wait)
-
         queue_manager = get_queue_manager()
         if queue_manager is not None:
             semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
-            if enqueue is None:
-                await semantic_queue.enqueue(msg)
-            else:
-                await enqueue(semantic_queue, msg)
+
+            async def write_replacement():
+                wait = self._account_breaker(msg.account_id).retry_after
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                if enqueue is None:
+                    return await semantic_queue.enqueue(msg, deduplicate_memory=False)
+                return await enqueue(semantic_queue, msg)
+
+            await semantic_queue.requeue(msg, enqueue=write_replacement)
             logger.info(f"Re-enqueued semantic message: {msg.uri}")
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
@@ -364,24 +368,21 @@ class SemanticProcessor(DequeueHandlerBase):
         work: SemanticMessageWork,
     ) -> ProcessResult:
         if isinstance(error, HandoffRecoveryBlocked):
-            payload = await prepare_handoff_retry(msg, error, queue="Semantic")
+            payload = await prepare_handoff_retry(
+                msg,
+                error,
+                queue="Semantic",
+                max_requeues=self._max_requeues,
+            )
             if payload is None:
                 self._merge_request_stats(msg.telemetry_id, error_count=1)
                 await self._cleanup_local_artifact(msg)
                 return ProcessResult.failed(f"Pathlock recovery retry limit reached: {error}")
             msg.lock_handoff_retry = payload["lock_handoff_retry"]
-        try:
-            await work.reenqueue_after_error()
-            self._merge_request_stats(msg.telemetry_id, requeue_count=1)
-        except Exception as requeue_err:
-            if isinstance(error, HandoffRecoveryBlocked):
-                # No replacement is durable: propagate so the original delivery
-                # remains recoverable rather than being ACKed as failed.
-                raise
-            logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
-            self._merge_request_stats(msg.telemetry_id, error_count=1)
-            await self._cleanup_local_artifact(msg)
-            return ProcessResult.failed(str(error))
+        # Budget exhaustion is settled by the queue; write failures leave the
+        # original delivery unacknowledged instead of being converted to failure.
+        await work.reenqueue_after_error()
+        self._merge_request_stats(msg.telemetry_id, requeue_count=1)
         return ProcessResult.requeued()
 
     async def _enqueue_parent_refresh(
@@ -807,6 +808,8 @@ class SemanticProcessor(DequeueHandlerBase):
             if work is not None:
                 await work.cancel()
             raise
+        except (RequeueLimitExceeded, RequeueEnqueueError):
+            raise
         except Exception as e:
             if isinstance(e, LockAcquisitionError):
                 execute_status = "requeued"
@@ -903,6 +906,18 @@ class SemanticProcessor(DequeueHandlerBase):
         await self._message_work(msg).cancel_queued()
         await self._cleanup_local_artifact(msg)
         return ProcessResult.cancelled()
+
+    async def on_requeue_exhausted(self, data, error) -> ProcessResult:
+        import json
+
+        payload = data.get("data", data)
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        msg = SemanticMsg.from_dict(payload)
+        await self._message_work(msg).cancel_queued()
+        await self._cleanup_local_artifact(msg)
+        self._merge_request_stats(msg.telemetry_id, error_count=1)
+        return ProcessResult.failed(str(error))
 
     async def _release_cancelled_semantic_lock(self, msg: SemanticMsg) -> None:
         if msg.lock_handoff is not None:

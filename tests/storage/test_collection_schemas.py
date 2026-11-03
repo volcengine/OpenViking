@@ -817,6 +817,7 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
         def __init__(self):
             self.enqueued = []
+            self.embedding_queue = SimpleNamespace(requeue=self.enqueue_embedding_msg)
 
         async def enqueue_embedding_msg(self, msg):
             self.enqueued.append(msg)
