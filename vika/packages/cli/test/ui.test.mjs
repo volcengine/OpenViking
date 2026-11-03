@@ -190,16 +190,18 @@ test('going back takes the screen back: below a pinned header the questions are 
 
 test('a code too big for the window waits for the window to grow, then draws itself', () => {
   const url = `https://open.feishu.cn/page/cli?addons=${'x'.repeat(1500)}`;
-  const qrWidth = width(qrLines(url)[0]);
-  assert.ok(qrWidth > 120, `Feishu-sized codes are wide (${qrWidth})`);
+  const lines = qrLines(url);
+  const qrWidth = width(lines[0]);
+  assert.ok(qrWidth < 80, `2×2 packing should fit 80 columns (${qrWidth})`);
+  assert.ok(lines.length > 60, `Feishu-sized codes are still tall (${lines.length})`);
   const { output, written } = screen({ columns: 100, rows: 40 });
   const prompter = new Prompter({ input: new PassThrough(), output, env: {} });
   const scan = showScan(prompter, { url, title: '第 1 次扫码', env: {} });
   assert.match(stripAnsi(written()), /终端放不下这个二维码（要 \d+×\d+，现在 100×40）：缩小字体或拉大窗口，它会自动出现；也可以打开图片 \S+scan\.png/);
-  assert.doesNotMatch(written(), /[▀▄█]/);
+  assert.doesNotMatch(written(), /[▀▄█▌▐▖▗▘▝▚▞▛▜▙▟]/);
   Object.assign(output, { columns: 200, rows: 120 });
   output.emit('resize');
-  assert.match(written(), /[▀▄█]/);
+  assert.match(written(), /[▀▄█▌▐▖▗▘▝▚▞▛▜▙▟]/);
   scan.stop();
   assert.equal(output.listenerCount('resize'), 0);
 });

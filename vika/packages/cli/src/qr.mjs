@@ -12,8 +12,10 @@ import { qrMatrix, qrPng, terminalQr } from './qr-code.mjs';
 // A code to scan, drawn as soon as the window can hold it all and again when
 // it is resized to; a link and, where VS Code or a desktop can open it, a
 // PNG of the same code are the ways round a code that does not scan. Feishu's
-// app-creation link carries the whole permission set (~1700 characters), so
-// a link that long is shown only on request, never pushing the code away.
+// app-creation link carries the whole permission set (~1700 characters). 2×2
+// cells keep that code around 70 columns; a short window still gets the PNG
+// fallback below. A link that long is shown only on request, never pushing
+// the code away.
 
 const LONG_LINK = 300;
 
