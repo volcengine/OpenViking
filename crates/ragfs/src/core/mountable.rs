@@ -184,6 +184,14 @@ impl MountableFS {
         if let Some(stats) = any.downcast_ref::<StatsWrappedFS>() {
             return Self::encryption_handles_pathlock_ref(stats.inner_fs().as_ref());
         }
+        #[cfg(feature = "cache")]
+        if let Some(cache) = any.downcast_ref::<CachedFileSystem>() {
+            return Self::encryption_handles_pathlock_ref(cache.inner_fs());
+        }
+        #[cfg(feature = "cache")]
+        if let Some(arc) = any.downcast_ref::<ArcFileSystem>() {
+            return Self::encryption_handles_pathlock_ref(arc.0.as_ref());
+        }
         false
     }
 
@@ -1725,10 +1733,13 @@ mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn shutdown_reaches_cache_queuefs_through_stats_wrapper() {
-        use crate::cache_runtime::{CacheRuntime, MemoryMockProvider};
+        use crate::cache_runtime::{CacheRuntime, MemoryMockProvider, ScriptResult, ScriptValue};
         use crate::plugins::QueueFSPlugin;
 
         let provider = Arc::new(MemoryMockProvider::new().with_script_handler(|request| {
+            if request.script_id == "queuefs.release_recovery_leader.v1" {
+                return ScriptResult::encode(&ScriptValue::Integer(1));
+            }
             panic!(
                 "script execution is outside this shutdown test's scope: {}",
                 request.script_id
@@ -2270,5 +2281,30 @@ mod tests {
                 .is_some(),
             "single-backend encrypted mount should place encryption under stats"
         );
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn cached_multiwrite_mount_preserves_encryption_pathlock_detection() {
+        use crate::cache_runtime::CacheRuntime;
+        use crate::core::EncryptionConfig;
+        use crate::plugins::MemFSPlugin;
+
+        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::with_cache_runtime(
+            CacheRuntime::memory(),
+            "cached-mw-pathlock-test",
+        )))
+        .await;
+        mfs.register_plugin(MemFSPlugin).await;
+        mfs.set_encryption_config(Some([9u8; 32]), Some(1)).await;
+
+        let mut config = multiwrite_test_config("memfs", "memfs", "/local");
+        config.server_encryption_enabled = true;
+        config.primary_encryption_enabled = true;
+        config.backups.as_mut().unwrap().items[0].encryption =
+            Some(EncryptionConfig { enabled: true });
+        mfs.mount(config).await.unwrap();
+
+        assert!(mfs.encryption_handles_pathlock("/local/file.md").await);
     }
 }

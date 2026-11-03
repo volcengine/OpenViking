@@ -33,9 +33,12 @@ const UNLINK_RETRY_BASE_MS: u64 = 10;
 const PENDING_EPOCH_TTL_MS: u64 = 300_000;
 const BEGIN_FILL_SCRIPT_ID: &str = "ragfs.cache.query.begin_fill.v1";
 const FILL_SCRIPT_ID: &str = "ragfs.cache.query.fill_if_epoch.v1";
+const DELETE_BUCKET_SCRIPT_ID: &str = "ragfs.cache.query.delete_bucket.v1";
 const BEGIN_FILL_SCRIPT: &str = r#"
 local epoch = redis.call("HGET", KEYS[1], "__epoch")
 local created = 0
+local now_ms = tonumber(ARGV[5])
+local score
 if not epoch then
     epoch = ARGV[2]
     created = 1
@@ -45,9 +48,16 @@ local value = redis.call("HGET", KEYS[1], ARGV[1])
 local ttl = tonumber(ARGV[3])
 if ttl > 0 then
     redis.call("PEXPIRE", KEYS[1], ttl)
+    score = now_ms + ttl
 elseif created == 1 then
     redis.call("PEXPIRE", KEYS[1], ARGV[4])
+    score = now_ms + tonumber(ARGV[4])
+else
+    local pttl = redis.call("PTTL", KEYS[1])
+    if pttl >= 0 then score = now_ms + pttl
+    else score = tonumber(ARGV[6]) end
 end
+redis.call("ZADD", KEYS[2], score, KEYS[1])
 if value then return { epoch, 1, value } end
 return { epoch, 0 }
 "#;
@@ -55,8 +65,20 @@ const FILL_SCRIPT: &str = r#"
 if redis.call("HGET", KEYS[1], "__epoch") ~= ARGV[1] then return 0 end
 redis.call("HSET", KEYS[1], ARGV[2], ARGV[3])
 local ttl = tonumber(ARGV[4])
-if ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl)
-else redis.call("PERSIST", KEYS[1]) end
+local score
+if ttl > 0 then
+    redis.call("PEXPIRE", KEYS[1], ttl)
+    score = tonumber(ARGV[5]) + ttl
+else
+    redis.call("PERSIST", KEYS[1])
+    score = tonumber(ARGV[6])
+end
+redis.call("ZADD", KEYS[2], score, KEYS[1])
+return 1
+"#;
+const DELETE_BUCKET_SCRIPT: &str = r#"
+redis.call("UNLINK", KEYS[1])
+redis.call("ZREM", KEYS[2], KEYS[1])
 return 1
 "#;
 const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
@@ -67,6 +89,10 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
     ScriptDefinition {
         id: FILL_SCRIPT_ID,
         redis_lua: FILL_SCRIPT,
+    },
+    ScriptDefinition {
+        id: DELETE_BUCKET_SCRIPT_ID,
+        redis_lua: DELETE_BUCKET_SCRIPT,
     },
 ];
 
@@ -149,7 +175,7 @@ impl CachedFileSystem {
         }
     }
 
-    /// Capture the bucket epoch and atomically recheck one missed field.
+    /// Capture the bucket epoch, index the bucket, and recheck one missed field atomically.
     async fn begin_query_fill(
         &self,
         key: &str,
@@ -160,12 +186,14 @@ impl CachedFileSystem {
             .runtime
             .execute_script(ScriptRequest {
                 script_id: BEGIN_FILL_SCRIPT_ID.to_string(),
-                keys: vec![key.to_string()],
+                keys: vec![key.to_string(), self.query_index_key()],
                 args: vec![
                     Bytes::copy_from_slice(field.as_bytes()),
                     Bytes::from(Uuid::new_v4().to_string()),
                     Bytes::from(self.default_ttl_ms().to_string()),
                     Bytes::from(PENDING_EPOCH_TTL_MS.to_string()),
+                    Bytes::from(current_time_ms().to_string()),
+                    Bytes::from(u64::MAX.to_string()),
                 ],
             })
             .await
@@ -194,49 +222,34 @@ impl CachedFileSystem {
         .inspect_err(|_| self.metrics.error())
     }
 
-    /// Store one query field only when its captured epoch is still current.
+    /// Store one query field and final index score only when its epoch is still current.
     async fn cache_hash_put(&self, key: &str, epoch: Bytes, field: &str, value: Bytes) -> bool {
         let started = Instant::now();
         let result = self
             .runtime
             .execute_script(ScriptRequest {
                 script_id: FILL_SCRIPT_ID.to_string(),
-                keys: vec![key.to_string()],
+                keys: vec![key.to_string(), self.query_index_key()],
                 args: vec![
                     epoch,
                     Bytes::copy_from_slice(field.as_bytes()),
                     value,
                     Bytes::from(self.default_ttl_ms().to_string()),
+                    Bytes::from(current_time_ms().to_string()),
+                    Bytes::from(u64::MAX.to_string()),
                 ],
             })
             .await
             .and_then(|result| result.decode());
         self.metrics.put(started.elapsed());
         match result {
-            Ok(ScriptValue::Integer(1)) => {}
+            Ok(ScriptValue::Integer(1)) => return true,
             Ok(ScriptValue::Integer(0)) => return false,
             Ok(_) | Err(_) => {
                 self.metrics.error();
                 return false;
             }
         }
-        let expire_at_ms = match self.runtime.default_ttl() {
-            Some(ttl) => {
-                current_time_ms().saturating_add(ttl.as_millis().min(u128::from(u64::MAX)) as u64)
-            }
-            None => u64::MAX,
-        };
-        if self
-            .runtime
-            .zadd(&self.query_index_key(), expire_at_ms as f64, key)
-            .await
-            .is_err()
-        {
-            self.metrics.error();
-            return false;
-        }
-
-        true
     }
 
     /// Return the configured cache TTL in milliseconds, or zero when disabled.
@@ -247,7 +260,7 @@ impl CachedFileSystem {
             .unwrap_or(0)
     }
 
-    /// Delete query cache buckets and remove them from the provider index.
+    /// Delete query cache buckets and remove them from the provider index atomically.
     async fn delete_query_buckets(
         runtime: Arc<CacheRuntime>,
         metrics: Arc<CacheMetrics>,
@@ -262,12 +275,19 @@ impl CachedFileSystem {
         keys.dedup();
 
         let started = Instant::now();
-        let mut unlinked_keys = Vec::with_capacity(keys.len());
+        let mut deleted_count = 0_u64;
         for (index, key) in keys.iter().enumerate() {
             for attempt in 0..=UNLINK_MAX_RETRIES {
-                match runtime.unlink(std::slice::from_ref(key)).await {
+                let result = runtime
+                    .execute_script(ScriptRequest {
+                        script_id: DELETE_BUCKET_SCRIPT_ID.to_string(),
+                        keys: vec![key.clone(), index_key.clone()],
+                        args: Vec::new(),
+                    })
+                    .await;
+                match result {
                     Ok(_) => {
-                        unlinked_keys.push(key.clone());
+                        deleted_count += 1;
                         break;
                     }
                     Err(_) if attempt < UNLINK_MAX_RETRIES => {
@@ -283,7 +303,7 @@ impl CachedFileSystem {
                             bucket_index = index,
                             retry_count = UNLINK_MAX_RETRIES,
                             error = %error,
-                            "query cache invalidation unlink failed"
+                            "query cache invalidation delete failed"
                         );
                         break;
                     }
@@ -291,19 +311,8 @@ impl CachedFileSystem {
             }
         }
         metrics.delete(started.elapsed());
-        if unlinked_keys.is_empty() {
-            return;
-        }
-        metrics.invalidation();
-
-        if let Err(error) = runtime.zrem(&index_key, &unlinked_keys).await {
-            metrics.error();
-            warn!(
-                index_key = %index_key,
-                bucket_count = unlinked_keys.len(),
-                error = %error,
-                "query cache invalidation index cleanup failed"
-            );
+        if deleted_count > 0 {
+            metrics.invalidation();
         }
     }
 
@@ -595,7 +604,7 @@ impl CachedFileSystem {
     }
 
     fn query_index_key(&self) -> String {
-        format!("{}:ov:cacheidx:v1", self.service_name)
+        format!("{{{}}}:ov:cacheidx:v1", self.service_name)
     }
 }
 
@@ -958,7 +967,7 @@ fn current_time_ms() -> u64 {
 fn query_bucket_key(service_name: &str, path: &str, op: &str) -> String {
     let normalized = normalize_path(path);
     format!(
-        "{}:ov:cache:v1:{}:{}",
+        "{{{}}}:ov:cache:v1:{}:{}",
         service_name,
         encode_path_key(&normalized),
         op
@@ -969,10 +978,10 @@ fn query_bucket_key(service_name: &str, path: &str, op: &str) -> String {
 fn query_descendant_pattern(service_name: &str, path: &str) -> String {
     let normalized = normalize_path(path);
     if normalized == "/" {
-        return format!("{}:ov:cache:v1:*", service_name);
+        return format!("{{{}}}:ov:cache:v1:*", service_name);
     }
     format!(
-        "{}:ov:cache:v1:{}/*:*",
+        "{{{}}}:ov:cache:v1:{}/*:*",
         service_name,
         encode_path_key(&normalized)
     )

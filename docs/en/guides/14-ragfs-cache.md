@@ -232,7 +232,7 @@ RAGFS caches read-only query results. It no longer stores legacy path-object cac
 Each path and operation has one HASH bucket:
 
 ```text
-<service_name>:ov:cache:v1:<path_key>:<op>
+{<service_name>}:ov:cache:v1:<path_key>:<op>
 ```
 
 Each bucket reserves `__epoch` for a random generation token. Query fields use
@@ -256,10 +256,10 @@ Supported operations:
 All active buckets are registered in one ZSET:
 
 ```text
-<service_name>:ov:cacheidx:v1
+{<service_name>}:ov:cacheidx:v1
 ```
 
-The ZSET member is the bucket key. The score is `expire_at_ms`. This index lets writes delete affected buckets without scanning all Redis keys.
+The ZSET member is the bucket key. The score is `expire_at_ms`. The Redis hash tag keeps buckets and the index in the same cluster slot so CacheFS can update them in one Lua script. This index lets writes delete affected buckets without scanning all Redis keys.
 
 ## Consistency and Invalidation
 
@@ -271,17 +271,17 @@ For a normal path change, RAGFS builds the affected bucket list in memory:
 - parent bucket: `read_dir(parent)`
 - ancestor recursive buckets: `tree_directory`, `glob_directory`, `grep`
 
-It then sends one batched `UNLINK` for the bucket keys and one batched `ZREM` for the index.
+It then runs one script per bucket to `UNLINK` the bucket and `ZREM` its index member atomically.
 
 For recursive path operations such as `remove_all`, `rename`, and `replace`, RAGFS also scans the query index:
 
 ```text
-ZSCAN <service_name>:ov:cacheidx:v1 MATCH '<service_name>:ov:cache:v1:<path_key>/*:*' COUNT 1000
+ZSCAN {<service_name>}:ov:cacheidx:v1 MATCH '{<service_name>}:ov:cache:v1:<path_key>/*:*' COUNT 1000
 ```
 
-Matched descendant buckets are added to the same batched `UNLINK` and `ZREM` calls.
-After a miss, an atomic script captures `__epoch` before backend fallback.
-Another script fills the query field only when that epoch is still current.
+Matched descendant buckets are deleted by the same bucket/index script.
+After a miss, an atomic script captures `__epoch` and registers the bucket before backend fallback.
+Another script fills the query field and refreshes the index only when that epoch is still current.
 A successful `UNLINK` removes the epoch, so an older query cannot restore stale data.
 Pending no-TTL epochs expire after 300 seconds; successful fills remain persistent.
 
@@ -293,7 +293,7 @@ Apply backend change
 -> Return result
 Background task -> ZSCAN descendant buckets
 Background task -> Build exact-path and ancestor buckets
-Background task -> UNLINK bucket keys and ZREM index members
+Background task -> Run bucket/index delete script for each bucket
 ```
 
 If a Provider fails, RAGFS treats the backend as authoritative for the current request. It records the cache error and does not cache that result.

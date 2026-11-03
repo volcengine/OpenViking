@@ -223,7 +223,7 @@ RAGFS 缓存只读查询结果。不再存储旧的路径对象缓存。
 每个路径和操作对应一个 HASH bucket：
 
 ```text
-<service_name>:ov:cache:v1:<path_key>:<op>
+{<service_name>}:ov:cache:v1:<path_key>:<op>
 ```
 
 每个 bucket 保留 `__epoch` field，用于存储随机版本 token。查询 field 使用
@@ -247,10 +247,10 @@ RAGFS 返回缓存前会比较已存 `request` 和当前请求。这样可以防
 所有活跃 bucket 会注册到一个 ZSET：
 
 ```text
-<service_name>:ov:cacheidx:v1
+{<service_name>}:ov:cacheidx:v1
 ```
 
-ZSET member 是 bucket key。score 是 `expire_at_ms`。写入发生时，RAGFS 通过这个 index 找到受影响 bucket，不扫描全部 Redis key。
+ZSET member 是 bucket key。score 是 `expire_at_ms`。Redis hash tag 会让 bucket 和 index 落在同一个 cluster slot，CacheFS 可以用一个 Lua 脚本同时更新两者。写入发生时，RAGFS 通过这个 index 找到受影响 bucket，不扫描全部 Redis key。
 
 ## 一致性与失效
 
@@ -262,17 +262,17 @@ ZSET member 是 bucket key。score 是 `expire_at_ms`。写入发生时，RAGFS 
 - 父目录 bucket：`read_dir(parent)`
 - 祖先递归 bucket：`tree_directory`、`glob_directory`、`grep`
 
-然后对 bucket key 发送一次批量 `UNLINK`，对 index 发送一次批量 `ZREM`。
+然后对每个 bucket 执行一个脚本，原子完成 `UNLINK` bucket 和 `ZREM` index member。
 
 对递归路径操作，如 `remove_all`、`rename`、`replace`，RAGFS 还会扫描 query index：
 
 ```text
-ZSCAN <service_name>:ov:cacheidx:v1 MATCH '<service_name>:ov:cache:v1:<path_key>/*:*' COUNT 1000
+ZSCAN {<service_name>}:ov:cacheidx:v1 MATCH '{<service_name>}:ov:cache:v1:<path_key>/*:*' COUNT 1000
 ```
 
-命中的后代 bucket 会进入同一批量 `UNLINK` 和 `ZREM`。
-缓存 miss 后，原子脚本会在回源前取得 `__epoch`。
-另一个脚本只在 epoch 未变化时写入 query field。
+命中的后代 bucket 会通过同一个 bucket/index 脚本删除。
+缓存 miss 后，原子脚本会在回源前取得 `__epoch` 并注册 bucket。
+另一个脚本只在 epoch 未变化时写入 query field 并刷新 index。
 `UNLINK` 成功后会删除 epoch，因此旧查询无法重新写入陈旧数据。
 无 TTL 配置下，未完成回填的 epoch 在 300 秒后过期；成功回填仍永久保留。
 
@@ -284,7 +284,7 @@ ZSCAN <service_name>:ov:cacheidx:v1 MATCH '<service_name>:ov:cache:v1:<path_key>
 -> 返回结果
 后台任务 -> ZSCAN 获取后代 bucket
 后台任务 -> 构造精确路径和祖先 bucket
-后台任务 -> UNLINK bucket key 并 ZREM index member
+后台任务 -> 对每个 bucket 执行 bucket/index 删除脚本
 ```
 
 如果 Provider 失败，RAGFS 会以当前请求的 backend 结果为准，记录缓存错误，并且不缓存这次结果。
