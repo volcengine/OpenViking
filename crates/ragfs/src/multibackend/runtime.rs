@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -12,6 +12,7 @@ use tracing::{debug, error};
 use crate::core::context::{FsContextInner, FS_CTX};
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
+use crate::lock::types::PathLockError;
 use crate::multibackend::catch_up::{CatchUpTarget, CatchUpWorker};
 use crate::multibackend::checkpoint::{CheckpointReader, CheckpointWorker};
 use crate::multibackend::codec::{decode_segment, sha256_hex};
@@ -26,6 +27,10 @@ use crate::multibackend::router::AccountRouter;
 
 const CATCH_UP_INTERVAL_SECS: u64 = 300;
 const CATCH_UP_FULL_SCAN_TICKS: usize = 6;
+const FLUSH_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(100);
+const FLUSH_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
+const FLUSH_RETRY_MAX_ELAPSED: Duration = Duration::from_secs(180);
+const FLUSH_RETRY_MAX_ATTEMPTS: u32 = 32;
 
 /// Read active account ids from the encrypted or plain primary registry.
 pub(crate) async fn read_active_accounts(primary: &dyn FileSystem) -> Result<HashSet<String>> {
@@ -349,20 +354,87 @@ impl FlushWorker {
         mut receiver: mpsc::UnboundedReceiver<PendingEvent>,
         pending_events: Arc<AtomicUsize>,
     ) {
-        while let Some(first) = receiver.recv().await {
-            let mut batch = vec![first];
-            while let Ok(event) = receiver.try_recv() {
-                batch.push(event);
+        let mut retry_batch = Vec::new();
+        let mut retry_attempts = 0;
+        let mut retry_started_at = None;
+        let mut retry_delay = Duration::ZERO;
+        loop {
+            let fresh_batch = retry_batch.is_empty();
+            let mut batch = if fresh_batch {
+                let Some(first) = receiver.recv().await else {
+                    break;
+                };
+                vec![first]
+            } else {
+                tokio::time::sleep(retry_delay).await;
+                let elapsed =
+                    retry_started_at.map_or(Duration::ZERO, |start: Instant| start.elapsed());
+                if Self::retry_exhausted(retry_attempts, elapsed) {
+                    let dropped = retry_batch.len();
+                    pending_events.fetch_sub(dropped, Ordering::Relaxed);
+                    self.store.record_worker_error(MultiWriteWorker::Flush);
+                    error!(
+                        retry_attempts,
+                        elapsed_ms = elapsed.as_millis(),
+                        event_count = dropped,
+                        "multi-write account initialization retry limit exhausted"
+                    );
+                    retry_batch.clear();
+                    retry_attempts = 0;
+                    retry_started_at = None;
+                    retry_delay = Duration::ZERO;
+                    continue;
+                }
+                std::mem::take(&mut retry_batch)
+            };
+            if fresh_batch {
+                while let Ok(event) = receiver.try_recv() {
+                    batch.push(event);
+                }
             }
             let attempted = batch.len();
-            self.flush_batch(batch).await;
-            pending_events.fetch_sub(attempted, Ordering::Relaxed);
+            let retry = self.flush_batch(batch).await;
+            pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
+            if retry.is_empty() {
+                retry_attempts = 0;
+                retry_started_at = None;
+                retry_delay = Duration::ZERO;
+                continue;
+            }
+
+            let started_at = retry_started_at.get_or_insert_with(Instant::now);
+            let elapsed = started_at.elapsed();
+            if Self::retry_exhausted(retry_attempts, elapsed) {
+                pending_events.fetch_sub(retry.len(), Ordering::Relaxed);
+                self.store.record_worker_error(MultiWriteWorker::Flush);
+                error!(
+                    retry_attempts,
+                    elapsed_ms = elapsed.as_millis(),
+                    event_count = retry.len(),
+                    "multi-write account initialization retry limit exhausted"
+                );
+                retry_attempts = 0;
+                retry_started_at = None;
+                retry_delay = Duration::ZERO;
+                continue;
+            }
+
+            retry_attempts += 1;
+            retry_delay = Self::retry_delay(retry_attempts, elapsed);
+            debug!(
+                retry_attempts,
+                delay_ms = retry_delay.as_millis(),
+                event_count = retry.len(),
+                "multi-write account initialization deferred by PathLock contention"
+            );
+            retry_batch = retry;
         }
     }
 
-    /// Flush one batch while recording and dropping failed events.
-    async fn flush_batch(&mut self, batch: Vec<PendingEvent>) {
+    /// Flush one batch while returning events blocked by transient PathLock contention.
+    async fn flush_batch(&mut self, batch: Vec<PendingEvent>) -> Vec<PendingEvent> {
         let mut failed = false;
+        let mut retry = Vec::new();
         let mut accounts = HashMap::<String, Vec<PendingEvent>>::new();
         for event in batch {
             if matches!(event.kind, PendingEventKind::DeleteAccount) {
@@ -414,9 +486,13 @@ impl FlushWorker {
                         self.initialized_accounts.insert(account.clone());
                     }
                     Err(error) => {
-                        failed = true;
-                        error!(account = %account, error = %error,
-                            "multi-write account initialization failed");
+                        if Self::is_retryable_pathlock_error(&error) {
+                            retry.extend(events);
+                        } else {
+                            failed = true;
+                            error!(account = %account, error = %error,
+                                "multi-write account initialization failed");
+                        }
                         continue;
                     }
                 }
@@ -495,6 +571,30 @@ impl FlushWorker {
         if failed {
             self.store.record_worker_error(MultiWriteWorker::Flush);
         }
+        retry
+    }
+
+    fn is_retryable_pathlock_error(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::PathLock(
+                PathLockError::Conflict { .. }
+                    | PathLockError::Timeout { .. }
+                    | PathLockError::Busy { .. }
+            )
+        )
+    }
+
+    fn retry_delay(retry_attempt: u32, elapsed: Duration) -> Duration {
+        let exponent = retry_attempt.saturating_sub(1).min(31);
+        FLUSH_RETRY_INITIAL_DELAY
+            .saturating_mul(1u32 << exponent)
+            .min(FLUSH_RETRY_MAX_DELAY)
+            .min(FLUSH_RETRY_MAX_ELAPSED.saturating_sub(elapsed))
+    }
+
+    fn retry_exhausted(retry_attempts: u32, elapsed: Duration) -> bool {
+        retry_attempts >= FLUSH_RETRY_MAX_ATTEMPTS || elapsed >= FLUSH_RETRY_MAX_ELAPSED
     }
 
     /// Convert one account-root deletion into a durable system-scope marker.

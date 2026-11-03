@@ -511,7 +511,10 @@ class MySQLAccountStore(AccountStore):
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         _validate(account_id, validate_account_id, "account_id")
         _validate(admin_user_id, validate_user_id, "admin_user_id")
         try:
@@ -536,7 +539,10 @@ class MySQLAccountStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         _validate(account_id, validate_account_id, "account_id")
         _validate(admin_user_id, validate_user_id, "admin_user_id")
         try:
