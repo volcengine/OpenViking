@@ -1,5 +1,5 @@
-import { StatusBadge } from '@openviking/react';
-import '@openviking/react/style.css';
+import { StatusBadge } from '@openviking/react/components/status-badge';
+import '@openviking/react/components/style.css';
 
 export default function CustomLabelsExample() {
   return (
