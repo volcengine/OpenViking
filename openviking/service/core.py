@@ -9,6 +9,7 @@ Main service class that composes all sub-services and manages infrastructure lif
 import asyncio
 import inspect
 import os
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
@@ -1063,27 +1064,47 @@ class OpenVikingService:
             return 0
         return await self._directory_initializer.initialize_account_directories(ctx)
 
-    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
-        """Initialize a new account's workspace under one account Tree lease."""
+    @asynccontextmanager
+    async def account_workspace_lock(self, ctx: RequestContext):
+        """Hold one Tree lease for all account-scoped provisioning writes."""
         self._ensure_initialized()
-        if not self._directory_initializer:
-            return 0, 0
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
         agfs = self._viking_fs._async_agfs
         path = self._viking_fs._uri_to_path("viking://", ctx=ctx)
         guard = PathLockGuard(agfs)
         try:
             try:
-                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+                lease = await guard.acquire(
+                    lambda: agfs.pathlock_acquire_tree(path, timeout_secs=10.0)
+                )
             except LockAcquisitionError as exc:
                 raise ResourceBusyError(
                     f"Account workspace is busy and cannot be initialized now: {ctx.account_id}",
                     uri="viking://",
                 ) from exc
+            yield lease
+        finally:
+            await guard.close()
+
+    async def initialize_account_workspace(
+        self,
+        ctx: RequestContext,
+        *,
+        lease_ref: Any = None,
+    ) -> tuple[int, int]:
+        """Initialize a new account's workspace under one account Tree lease."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0, 0
+        if lease_ref is not None:
+            return await self._directory_initializer.initialize_account_workspace(
+                ctx, lease_ref=lease_ref
+            )
+        async with self.account_workspace_lock(ctx) as lease:
             return await self._directory_initializer.initialize_account_workspace(
                 ctx, lease_ref=lease
             )
-        finally:
-            await guard.close()
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""
