@@ -15,7 +15,7 @@ export default defineConfig({
             './src/components/status-badge/status-badge.tsx',
           'components/file-tree': './src/components/file-tree/file-tree.tsx',
           'components/file-preview':
-            './src/components/file-preview/file-preview.ts',
+            './src/components/file-preview/file-preview.tsx',
           'components/tui': './src/components/tui/tui.ts',
           'components/viking-bot': './src/components/viking-bot/viking-bot.ts',
           'components/scope-switcher':
