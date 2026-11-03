@@ -269,6 +269,9 @@ store.close()
 使用 `index=["items[*].text"]` 可以只索引数组中的指定字段，同时保留完整的存储值。
 已有条目的索引会在再次写入该条目时更新。
 
+空字段列表（`index=[]`）与 `index=False` 一样移除索引投影，构造时的默认值也遵循此规则；
+完整值仍可通过 `get()` 和非语义搜索读取。
+
 ### LangGraph middleware
 
 ```python

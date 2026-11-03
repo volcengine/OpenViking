@@ -233,7 +233,7 @@ class OpenVikingStore(BaseStore):
 
         effective_index = self.index if index is None else index
         index_uri = self._index_uri(namespace, key)
-        if effective_index is False:
+        if effective_index is False or effective_index == []:
             self._remove(index_uri)
             return
         self._write(index_uri, self._index_document(record, effective_index))
