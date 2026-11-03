@@ -345,10 +345,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         return kwargs
 
     def _should_send_dimensions(self) -> bool:
-        # Preserve existing behavior for official OpenAI embeddings: only custom
-        # OpenAI-compatible backends and Azure send explicit dimensions.
-        if self._provider == "openai":
-            return False
+        # Send ``dimensions`` whenever a custom endpoint is configured: official
+        # OpenAI endpoints only accept the model's native size, while custom
+        # OpenAI-compatible gateways and Azure honour an explicit dimension, so
+        # Matryoshka models can expose their full output size (#6930). The old
+        # ``provider == "openai"`` early return made the custom-gateway case
+        # unreachable.
         return bool(self.api_base)
 
     def _get_async_client(self):

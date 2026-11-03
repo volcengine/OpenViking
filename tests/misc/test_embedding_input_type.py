@@ -276,6 +276,53 @@ class TestOpenAIDenseEmbedderInputType:
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" not in call_kwargs
 
+    @patch("openai.OpenAI")
+    def test_custom_api_base_sends_dimensions(self, mock_openai_class):
+        """A custom OpenAI-compatible gateway must receive dimensions (#6930)."""
+        from openviking.models.embedder import OpenAIDenseEmbedder
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock(embedding=[0.1] * 4096)]
+        mock_client.embeddings.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="Qwen3-Embedding-8B",
+            api_key="sk-test",
+            api_base="https://gateway.example.com/v1",
+            dimension=4096,
+        )
+
+        embedder.embed("test query")
+
+        mock_client.embeddings.create.assert_called_once()
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["dimensions"] == 4096
+
+    @patch("openai.OpenAI")
+    def test_official_openai_endpoint_omits_dimensions(self, mock_openai_class):
+        """Official OpenAI endpoints keep the previous behavior (no dimensions kwarg)."""
+        from openviking.models.embedder import OpenAIDenseEmbedder
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock(embedding=[0.1] * 1536)]
+        mock_client.embeddings.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="sk-test",
+            dimension=1536,
+        )
+
+        embedder.embed("test query")
+
+        mock_client.embeddings.create.assert_called_once()
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert "dimensions" not in call_kwargs
+
 
 class TestJinaDenseEmbedderTask:
     """Test JinaDenseEmbedder task passthrough (already exists, verify behavior)."""
