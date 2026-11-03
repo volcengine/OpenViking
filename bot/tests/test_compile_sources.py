@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict
 from io import BytesIO
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock, call
 
 import httpx
@@ -31,6 +32,7 @@ from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.compile.sources import read_source, split_source
 from vikingbot.config import loader
 from vikingbot.config.schema import Config, SessionKey
+from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 from vikingbot.sandbox.backends.direct import DirectBackend
@@ -199,9 +201,7 @@ async def test_compile_image_reaches_chat_completion_wire(
     config_path.write_text(json.dumps({"vlm": selected}))
     monkeypatch.setattr(loader, "CONFIG_PATH", config_path)
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    pipeline.model.provider = _make_provider(
-        loader.load_config(), langfuse_client=SimpleNamespace(enabled=False)
-    )
+    pipeline.model.provider = _make_provider(loader.load_config(), langfuse_client=LangfuseClient())
     pipeline.model.model = model
     image = await seed(runtime)
 
@@ -214,7 +214,7 @@ async def test_compile_image_reaches_chat_completion_wire(
         },
     }
     files = [{"path": "image.md", "content": URI, "inputs": [image.record_id]}]
-    replies = [
+    replies: list[dict[str, Any]] = [
         {"role": "assistant", "content": None, "tool_calls": [call]},
         {"role": "assistant", "content": json.dumps({"files": files})},
     ]
@@ -283,25 +283,6 @@ async def test_compile_image_reaches_chat_completion_wire(
         if p["type"] == "image_url"
     ]
     assert images == [png]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["future-claude-vision", "deepseek/deepseek-chat"])
-async def test_undeclared_image_protocol_fails_before_download(runtime, model):
-    pipeline, _ = runtime
-    vlm = LiteLLMVLMProvider(
-        {
-            "provider": "litellm",
-            "model": model,
-            "api_base": "https://compat.invalid/v1",
-        }
-    )
-    provider = VLMProviderAdapter(vlm, vlm.model, langfuse_client=SimpleNamespace(enabled=False))
-    with pytest.raises(CompileFailure, match="provider/model") as caught:
-        await read_source(pipeline.client, URI, provider)
-    assert caught.value.code == "UNSUPPORTED_MEDIA"
-    pipeline.client.read_raw.assert_not_awaited()
-    pipeline.client.download_bytes.assert_not_awaited()
 
 
 async def test_pipeline_inventory_combines_full_files_and_every_diff_page(runtime):
@@ -470,6 +451,8 @@ async def test_pipeline_stages_can_reread_original_images(runtime, stage, schema
     "problem,code",
     [
         ("provider", "UNSUPPORTED_MEDIA"),
+        ("future-claude-vision", "UNSUPPORTED_MEDIA"),
+        ("deepseek/deepseek-chat", "UNSUPPORTED_MEDIA"),
         ("format", "INVALID_ARGUMENT"),
         ("size", "SOURCE_READ_FAILED"),
     ],
@@ -481,10 +464,15 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
         pipeline.model.provider.supports_tool_result_media.return_value = False
     elif problem == "format":
         uri = URI.replace(".png", ".svg")
-    else:
+    elif problem == "size":
         pipeline.client.stat.return_value = {
             "size": VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES + 1
         }
+    else:
+        vlm = LiteLLMVLMProvider(
+            {"provider": "litellm", "model": problem, "api_base": "https://compat.invalid/v1"}
+        )
+        pipeline.model.provider = VLMProviderAdapter(vlm, problem, langfuse_client=LangfuseClient())
     with pytest.raises(CompileFailure) as caught:
         await read_source(pipeline.client, uri, pipeline.model.provider)
     assert caught.value.code == code

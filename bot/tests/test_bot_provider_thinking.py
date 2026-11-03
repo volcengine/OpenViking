@@ -1,12 +1,14 @@
 import json
 from copy import deepcopy
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import litellm
 import pytest
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 from openviking.models.model_error import ModelError, ModelErrorKind
@@ -20,7 +22,7 @@ from openviking.models.vlm.base import VLMResponse
 def test_provider_names_do_not_grant_undeclared_media_capabilities():
     # A name alone must not grant a custom/unverified backend image support.
     unknown = SimpleNamespace(provider="openai")
-    adapter = VLMProviderAdapter(unknown, "vision", langfuse_client=SimpleNamespace())
+    adapter = VLMProviderAdapter(unknown, "vision", langfuse_client=LangfuseClient())
     assert adapter.supports_tool_result_media() is False
 
     primary = VLMFactory.create({"provider": "openai", "model": "gpt-4o"})
@@ -29,7 +31,7 @@ def test_provider_names_do_not_grant_undeclared_media_capabilities():
         FailoverVLM(primary, backup),
         MultiCredentialVLM([primary, backup], credential_ids=["primary", "backup"]),
     ):
-        adapter = VLMProviderAdapter(chain, "vision", langfuse_client=SimpleNamespace())
+        adapter = VLMProviderAdapter(chain, "vision", langfuse_client=LangfuseClient())
         assert adapter.supports_tool_result_media() is False
 
 
@@ -93,7 +95,7 @@ async def test_litellm_declared_media_survives_actual_conversion(
             "function": {"name": "read_image", "parameters": {"type": "object", "properties": {}}},
         }
     ]
-    messages = [
+    messages: list[dict[str, Any]] = [
         {"role": "user", "content": "Read the source image."},
         {
             "role": "assistant",
@@ -121,6 +123,8 @@ async def test_litellm_declared_media_survives_actual_conversion(
         config = ProviderConfigManager.get_provider_chat_config(
             model=raw_model, provider=LlmProviders(provider)
         )
+        assert config is not None
+        wire: Any
         if isinstance(config, litellm.VertexGeminiConfig):
             wire = config._transform_messages(messages=kwargs["messages"], model=raw_model)
         else:
@@ -135,7 +139,7 @@ async def test_litellm_declared_media_survives_actual_conversion(
         return "image delivered"
 
     monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", convert)
-    adapter = VLMProviderAdapter(vlm, model, langfuse_client=SimpleNamespace(enabled=False))
+    adapter = VLMProviderAdapter(vlm, model, langfuse_client=LangfuseClient())
     assert (await adapter.chat(messages, tools=tools)).content == "image delivered"
     serialized = json.dumps(captured[0])
     assert serialized.count(encoded) == 1 and "viking://resources/image.png" in serialized
@@ -157,7 +161,7 @@ def test_unverified_litellm_subclass_cannot_inherit_image_permission(monkeypatch
 @pytest.mark.parametrize("mixed", [False, True])
 @pytest.mark.parametrize("wrapper", ["credentials", "legacy"])
 async def test_vlm_adapter_preserves_native_media_and_adapts_mixed_credential_chains(
-    mixed, wrapper
+    monkeypatch, mixed, wrapper
 ):
     native = VLMFactory.create({"provider": "openai-codex", "model": "gpt-5.3-codex"})
     backup = (
@@ -165,27 +169,29 @@ async def test_vlm_adapter_preserves_native_media_and_adapts_mixed_credential_ch
         if mixed
         else VLMFactory.create({"provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"})
     )
-    native.get_completion_async = AsyncMock(
+    native_completion = AsyncMock(
         side_effect=ModelError(ModelErrorKind.AUTHENTICATION_ERROR, "expired", status_code=401)
         if mixed
         else None,
         return_value=VLMResponse(content="done"),
     )
-    backup.get_completion_async = AsyncMock(return_value=VLMResponse(content="done"))
+    backup_completion = AsyncMock(return_value=VLMResponse(content="done"))
+    monkeypatch.setattr(native, "get_completion_async", native_completion)
+    monkeypatch.setattr(backup, "get_completion_async", backup_completion)
     vlm = (
         MultiCredentialVLM([native, backup], credential_ids=["primary", "backup"])
         if wrapper == "credentials"
         else FailoverVLM(native, backup)
     )
-    provider = VLMProviderAdapter(vlm, "vision", langfuse_client=SimpleNamespace(enabled=False))
+    provider = VLMProviderAdapter(vlm, "vision", langfuse_client=LangfuseClient())
     image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
     messages = [{"role": "tool", "tool_call_id": "read", "content": [image]}]
 
     assert provider.supports_tool_result_media()
     assert (await provider.chat(messages)).content == "done"
-    sent = native.get_completion_async.await_args.kwargs["messages"]
+    sent = native_completion.await_args_list[-1].kwargs["messages"]
     if mixed:
-        assert backup.get_completion_async.await_args.kwargs["messages"] == sent
+        assert backup_completion.await_args_list[-1].kwargs["messages"] == sent
         assert [m["role"] for m in sent] == ["tool", "user"]
         assert sent[1]["content"][-1] == image
     else:

@@ -366,6 +366,7 @@ async def test_chat_completion_tool_images_require_compile_scope(
     make_loop, monkeypatch, compile_scope
 ):
     from vikingbot.compile.service import _CompileProvider
+    from vikingbot.integrations.langfuse import LangfuseClient
     from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
     from openviking.models.vlm import VLMFactory
@@ -380,8 +381,8 @@ async def test_chat_completion_tool_images_require_compile_scope(
             VLMResponse(content="done"),
         ]
     )
-    monkeypatch.setattr(vlm.inner, "get_completion_async", completion)
-    adapter = VLMProviderAdapter(vlm, vlm.model, langfuse_client=SimpleNamespace(enabled=False))
+    monkeypatch.setattr(vlm, "get_completion_async", completion)
+    adapter = VLMProviderAdapter(vlm, "kimi-k2", langfuse_client=LangfuseClient())
     provider = _CompileProvider(adapter, asyncio.Semaphore(1)) if compile_scope else adapter
     loop = make_loop(provider=provider, max_iterations=2)
     final, *_ = await loop._run_agent_loop(
@@ -391,7 +392,7 @@ async def test_chat_completion_tool_images_require_compile_scope(
         tool_registry=_ImageRegistry(),
     )
     assert final == "done"
-    sent = completion.await_args.kwargs["messages"]
+    sent = completion.await_args_list[-1].kwargs["messages"]
     tool = next(message for message in sent if message["role"] == "tool")
     images = [
         part

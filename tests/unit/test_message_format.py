@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -19,7 +20,7 @@ def test_tool_images_follow_all_parallel_results_with_source_attribution():
     }
     second = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AQ=="}}
     third = {"type": "image_url", "image_url": {"url": "data:image/png;base64,Ag=="}}
-    messages = [
+    messages: list[dict[str, Any]] = [
         {"role": "assistant", "tool_calls": [{"id": "read-a"}, {"id": "read-b"}, {"id": "read-c"}]},
         {
             "role": "tool",
@@ -68,7 +69,12 @@ def test_tool_images_follow_all_parallel_results_with_source_attribution():
 @pytest.mark.parametrize("case", ["tool_call_id", "text", "input_image"])
 def test_malformed_tool_images_report_context_without_image_bytes(case):
     part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,PRIVATE"}}
-    message = {"role": "tool", "name": "read_source", "tool_call_id": "read-1", "content": [part]}
+    message: dict[str, Any] = {
+        "role": "tool",
+        "name": "read_source",
+        "tool_call_id": "read-1",
+        "content": [part],
+    }
     if case == "tool_call_id":
         message.pop("tool_call_id")
     elif case == "text":
