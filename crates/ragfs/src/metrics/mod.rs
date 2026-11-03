@@ -69,6 +69,18 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
                 1.0,
             ));
         }
+        for (error_kind, count) in &stats.error_counts {
+            metrics.push(RagfsMetric::counter(
+                "ragfs_operation_errors_total",
+                &[
+                    ("plugin", plugin),
+                    ("operation", operation.as_str()),
+                    ("error_kind", error_kind),
+                ],
+                *count,
+                1.0,
+            ));
+        }
         if stats.count == 0 {
             continue;
         }
@@ -234,4 +246,31 @@ pub(crate) fn merge_metrics(mut metrics: Vec<RagfsMetric>) -> Result<Vec<RagfsMe
         }
     }
     Ok(merged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{operation_metrics, RagfsMetricValue};
+    use crate::core::{FilesystemStats, FsOperation};
+
+    #[test]
+    fn operation_metrics_export_stable_error_kind_counter() {
+        let mut stats = FilesystemStats::default();
+        stats
+            .operations
+            .get_mut(&FsOperation::Read)
+            .unwrap()
+            .error_counts
+            .insert("timeout".to_string(), 3);
+
+        let error = operation_metrics("tos", &stats)
+            .into_iter()
+            .find(|metric| {
+                metric.name == "ragfs_operation_errors_total"
+                    && metric.labels.get("operation") == Some(&"read".to_string())
+                    && metric.labels.get("error_kind") == Some(&"timeout".to_string())
+            })
+            .expect("error metric is exported");
+        assert!(matches!(error.value, RagfsMetricValue::Counter { value: 3, .. }));
+    }
 }

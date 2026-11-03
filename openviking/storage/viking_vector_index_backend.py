@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import re
 import threading
 import uuid
@@ -288,7 +289,34 @@ def _backend_operation(method):
     @wraps(method)
     async def call(self, *args, **kwargs):
         async with self.operation():
-            return await method(self, *args, **kwargs)
+            from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
+
+            owns_metric, token = VikingDBEventDataSource.enter_operation()
+            started_at = time.perf_counter()
+            try:
+                result = await method(self, *args, **kwargs)
+            except Exception as error:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        error=error,
+                    )
+                raise
+            else:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        result=result,
+                    )
+                return result
+            finally:
+                VikingDBEventDataSource.exit_operation(token)
 
     return call
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import openviking.metrics.datasources.encryption as enc
 import openviking.metrics.datasources.retrieval as retrieval
 import openviking.metrics.datasources.session as session
+import openviking.metrics.datasources.vikingdb as vikingdb
 from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.metrics.datasources.cache import CacheEventDataSource
 from openviking.metrics.datasources.http import HttpRequestLifecycleDataSource
@@ -116,6 +117,33 @@ def test_retrieval_stats_datasource_emits_completed_event(patch_event_emit):
             "rerank_fallback": False,
         },
     ) in patch_event_emit
+
+
+def test_vikingdb_datasource_emits_operation_and_retry_events(patch_event_emit):
+    vikingdb.VikingDBEventDataSource.record_operation(
+        backend="bytedviking",
+        access_mode="direct",
+        operation="upsert",
+        duration_seconds=0.2,
+        result="record-1",
+    )
+    vikingdb.VikingDBEventDataSource.record_retry(
+        backend="bytedviking",
+        operation="upsert",
+        error_source="http_status",
+        error_code="429",
+        delay_seconds=0.1,
+    )
+    assert ("vikingdb.operation", {
+        "backend": "bytedviking", "access_mode": "direct", "operation": "upsert",
+        "outcome": "success", "error_source": "none", "error_code": "OK",
+        "error_category": "none", "retryable": "false", "duration_seconds": 0.2,
+        "records": 1, "record_direction": "written",
+    }) in patch_event_emit
+    assert ("vikingdb.retry", {
+        "backend": "bytedviking", "operation": "upsert", "error_source": "http_status",
+        "error_code": "429", "delay_seconds": 0.1,
+    }) in patch_event_emit
 
 
 def test_retrieval_stats_datasource_normalizes_unknown_context_type(patch_event_emit):
