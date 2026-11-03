@@ -94,7 +94,7 @@ _PROVIDER_CODE_KINDS = {
         "1002": ModelErrorKind.RATE_LIMIT_ERROR,
         "1004": ModelErrorKind.AUTHENTICATION_ERROR,
         "1008": ModelErrorKind.QUOTA_EXHAUSTED,
-        "1013": ModelErrorKind.INVALID_REQUEST,
+        "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         "1026": ModelErrorKind.CONTENT_SAFETY,
         "1027": ModelErrorKind.CONTENT_SAFETY,
         "2013": ModelErrorKind.INVALID_REQUEST,
@@ -254,22 +254,39 @@ def _status_code(error: BaseException) -> int | None:
 
 
 def _structured_reason_code(value: object) -> str | None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"reason", "status"} and isinstance(item, str):
-                if _kind_from_code_value(item) is not None:
+    pending = [value]
+    seen: set[int] = set()
+    status_code: str | None = None
+
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            for key, item in current.items():
+                if not isinstance(item, str) or _kind_from_code_value(item) is None:
+                    continue
+                if key == "reason":
                     return item
-            nested = _structured_reason_code(item)
-            if nested is not None:
-                return nested
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            nested = _structured_reason_code(item)
-            if nested is not None:
-                return nested
-    elif hasattr(value, "model_dump"):
-        return _structured_reason_code(value.model_dump())
-    return None
+                if key == "status" and status_code is None:
+                    status_code = item
+            pending.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            pending.extend(current)
+        elif hasattr(current, "model_dump"):
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            try:
+                pending.append(current.model_dump())
+            except Exception:
+                continue
+
+    return status_code
 
 
 def _kind_from_code(error: BaseException) -> ModelErrorKind | None:
@@ -490,19 +507,27 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
     ) = None
 
     for item in model_exception_chain(error):
-        if isinstance(item, ModelError):
-            if item.kind is not ModelErrorKind.UNKNOWN:
-                candidate = (_EvidenceRank.EXPLICIT_KIND, item.kind, item.provider, item)
-            else:
-                kind, evidence = _best_kind(
-                    item,
-                    include_status=(
-                        item.provider != "gemini"
-                        or item.status_code != 429
-                        or _kind_from_code(item) is not None
-                    ),
-                )
-                candidate = (evidence, kind, item.provider, item)
+        carried_kind = getattr(item, "kind", None)
+        if isinstance(carried_kind, ModelErrorKind) and carried_kind is not ModelErrorKind.UNKNOWN:
+            provider = getattr(item, "provider", None)
+            candidate = (
+                _EvidenceRank.EXPLICIT_KIND,
+                carried_kind,
+                provider if isinstance(provider, str) else None,
+                item,
+            )
+        elif isinstance(item, ModelError):
+            kind, evidence = _best_kind(
+                item,
+                include_status=(
+                    item.provider != "gemini"
+                    or item.status_code != 429
+                    or _kind_from_code(item) is not None
+                ),
+            )
+            candidate = (evidence, kind, item.provider, item)
+        elif isinstance(carried_kind, ModelErrorKind):
+            candidate = (_EvidenceRank.FALLBACK, carried_kind, None, item)
         else:
             classified = _sdk_kind(item)
             if classified is None:

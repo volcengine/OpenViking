@@ -73,7 +73,7 @@ class TestEmbeddingModelConfig(unittest.TestCase):
 
 
 class TestMinimaxBusinessErrors(unittest.TestCase):
-    def test_business_error_uses_provider_scoped_kind(self):
+    def test_business_errors_use_provider_scoped_kind(self):
         embedder = MinimaxDenseEmbedder(
             model_name="embo-01",
             api_key="test-key",
@@ -82,16 +82,22 @@ class TestMinimaxBusinessErrors(unittest.TestCase):
         self.addCleanup(embedder.close)
         response = Mock()
         response.raise_for_status.return_value = None
-        response.json.return_value = {
-            "base_resp": {"status_code": 1004, "status_msg": "invalid API key"}
-        }
         embedder.session.post = Mock(return_value=response)
 
-        with self.assertRaises(ModelError) as raised:
-            embedder._call_api(["hello"])
+        cases = (
+            (1004, "invalid API key", ModelErrorKind.AUTHENTICATION_ERROR),
+            (1013, "service internal error", ModelErrorKind.TRANSIENT_SERVICE_ERROR),
+        )
+        for code, message, expected_kind in cases:
+            with self.subTest(code=code):
+                response.json.return_value = {
+                    "base_resp": {"status_code": code, "status_msg": message}
+                }
+                with self.assertRaises(ModelError) as raised:
+                    embedder._call_api(["hello"])
 
-        self.assertIs(raised.exception.kind, ModelErrorKind.AUTHENTICATION_ERROR)
-        self.assertEqual(raised.exception.code, "1004")
+                self.assertIs(raised.exception.kind, expected_kind)
+                self.assertEqual(raised.exception.code, str(code))
 
 
 if __name__ == "__main__":
