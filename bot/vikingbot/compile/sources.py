@@ -13,12 +13,6 @@ from openviking.parse.parsers.media.utils import get_media_type
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.compile.models import CompileFailure, CompileLimits
 
-IMAGE_EVIDENCE_SKIPPED = (
-    "This source is an image. The configured model provider cannot deliver image "
-    "content inside a tool result, so its pixels were not read. Cite the source by "
-    "URI and do not describe its visual content."
-)
-
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+\S")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _FRONTMATTER = re.compile(r"\A---\r?\n.*?\r?\n(?:---|\.\.\.)(?:\r?\n|$)", re.DOTALL)
@@ -65,12 +59,13 @@ class CompileSourceRange:
 
 
 async def read_source(
-    client, uri, provider, warnings: list[str] | None = None
-) -> str | CompileSourceRange:
+    client, uri, provider, skipped: list[str] | None = None
+) -> str | CompileSourceRange | None:
     """Keep text reads intact; consume image sources through multi-read's native reader.
 
-    ``warnings`` collects a note for every image the provider cannot deliver, so
-    a skipped image is reported instead of passing unnoticed.
+    Returns None for an image the configured model cannot read. The image then
+    stays out of the evidence entirely: a model that never saw the pixels must
+    not end up citing the image as if it had.
     """
     if get_media_type(urlsplit(uri).path, None) != "image":
         return await client.read_raw(uri)
@@ -79,14 +74,11 @@ async def read_source(
             "INVALID_ARGUMENT", f"Unsupported Compile image format: {uri}", stage="pipeline"
         )
     if not provider.supports_tool_result_media():
-        # The provider cannot carry the pixels, but the source still belongs in
-        # the evidence trail. Keep it as a cited reference so the compilation
-        # continues instead of failing on evidence nobody can deliver.
-        if warnings is not None:
-            warnings.append(
-                f"Image evidence skipped, the provider cannot deliver image content: {uri}"
-            )
-        return CompileSourceRange(uri, 0, 0, 0, 0, IMAGE_EVIDENCE_SKIPPED)
+        # The model cannot read this image, so it is left out of the evidence.
+        # Citing an image that was never seen would be a fabricated reference.
+        if skipped is not None:
+            skipped.append(uri)
+        return None
     result = await VikingMultiReadTool._read_image(client, uri)
     if not result["success"]:
         raise CompileFailure("SOURCE_READ_FAILED", f"{uri}: {result['content']}", stage="pipeline")

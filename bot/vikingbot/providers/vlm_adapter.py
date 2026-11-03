@@ -245,11 +245,14 @@ class VLMProviderAdapter(LLMProvider):
         vlm_instance,  # VLMBase
         default_model: str,
         langfuse_client: LangfuseClient | None = None,
+        vision: bool = True,
     ):
         super().__init__(api_key=None, api_base=None)
         self._vlm = vlm_instance
         self._default_model = default_model
         self._langfuse = langfuse_client or LangfuseClient.get_instance()
+        # Whether the model behind this provider can interpret image content.
+        self._vision = bool(vision)
 
     async def chat(
         self,
@@ -701,7 +704,14 @@ class VLMProviderAdapter(LLMProvider):
         return self._default_model
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
-        """Return true only for backends with native rich tool-result support."""
+        """Return true only for backends with native rich tool-result support.
+
+        The backend must be able to carry the media and the model must be able
+        to read it. A text-only model would produce citations it cannot back,
+        so the media is left out of the evidence instead.
+        """
+        if not self._vision:
+            return False
         return self._backend_supports_tool_result_media(self._vlm, model)
 
     @classmethod

@@ -14,7 +14,7 @@ Use the optional `--instruction` to specify this run's scope, audience, language
 
 The configured [Agent Runtime](../api/23-agent-runtime.md) runs the compilation; local deployments can use the built-in [VikingBot](../concepts/15-vikingbot.md). It reads the sources and Skill under the requesting user's identity, then organizes and writes content in a dedicated agent loop. The task runs asynchronously and returns a `task_id` for checking progress and results.
 
-Image sources reach the model as native tool-result media, so the configured VLM backend must support that request format. When the backend cannot carry an image part inside a tool result, Compile sends the request without the image and records a warning; when the model itself rejects the image, the request is retried once without it. Either way the image source stays in the citation trail and the compilation completes. The `anthropic`, `openai-codex`, and `volcengine` backends support the format natively.
+Image sources reach the model as native tool-result media, so the configured VLM backend must support that request format and the model behind it must be able to read images. A Bot that inherits the root `vlm` configuration runs on a vision model and takes part in image evidence. A Bot with an explicitly configured `bot.agents.model` is treated as text-only unless `bot.agents.vision` says otherwise, and image sources are then left out of the evidence: a model that never saw the pixels must not cite the image as if it had. The `anthropic`, `openai-codex`, and `volcengine` backends support the format natively.
 
 ## Run it in one command
 

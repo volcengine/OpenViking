@@ -918,7 +918,7 @@ class BotCompileService:
             source_skips: list[str] = []
             source_batches = (
                 await self._prepare_source_batches(
-                    client, request.from_, files=source_files, warnings=source_skips
+                    client, request.from_, files=source_files, skipped=source_skips
                 )
                 if registry.get("spawn") is not None
                 else None
@@ -1010,7 +1010,11 @@ class BotCompileService:
             )
             warnings = list(getattr(submit_tool, "warnings", []))
             warnings.extend(getattr(registry.get("wait_subagents"), "failures", []))
-            warnings.extend(source_skips)
+            if source_skips:
+                warnings.append(
+                    f"{len(source_skips)} image source(s) left out of this compilation "
+                    "because the configured model cannot read image content"
+                )
             preserve_workspace = preserve_workspace or bool(warnings)
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
@@ -1135,19 +1139,26 @@ class BotCompileService:
             update={"source_batch_chars": min(self.limits.source_batch_chars, 10_000)}
         )
 
+        skipped_images: list[str] = []
+
         async def source_batches():
             """Retain at most one read batch of source bodies while seeding task shards."""
             for start in range(0, len(ordered), 8):
                 uris = ordered[start : start + 8]
                 contents = await asyncio.gather(
                     *(
-                        read_source(client, uri, pipeline.model.provider, pipeline.warnings)
+                        read_source(client, uri, pipeline.model.provider, skipped_images)
                         for uri in uris
                     ),
                     return_exceptions=True,
                 )
                 readable = []
                 for uri, content in zip(uris, contents, strict=True):
+                    if content is None:
+                        manifest = await pipeline.files.get("inputs")
+                        manifest[uri] = "skipped"
+                        await pipeline.files.put("inputs", manifest)
+                        continue
                     if isinstance(content, Exception):
                         manifest = await pipeline.files.get("inputs")
                         manifest[uri] = "failed"
@@ -1169,6 +1180,11 @@ class BotCompileService:
                         readable.append((uri, content))
                 for batch in pack_source_batches(readable, source_limits):
                     yield batch
+            if skipped_images:
+                pipeline.warnings.append(
+                    f"{len(skipped_images)} image source(s) left out of this compilation "
+                    "because the configured model cannot read image content"
+                )
 
         try:
             try:
@@ -1612,7 +1628,7 @@ class BotCompileService:
         roots: list[str],
         *,
         files: list[str] | None = None,
-        warnings: list[str] | None = None,
+        skipped: list[str] | None = None,
     ) -> list[list[CompileSourceRange]]:
         """Read selected files (or inventory roots) eight at a time; read errors propagate."""
         sources: list[tuple[str, str | CompileSourceRange]] = []
@@ -1620,9 +1636,13 @@ class BotCompileService:
         for start in range(0, len(ordered), 8):
             uris = ordered[start : start + 8]
             contents = await asyncio.gather(
-                *(read_source(client, uri, self.agent_loop.provider, warnings) for uri in uris)
+                *(read_source(client, uri, self.agent_loop.provider, skipped) for uri in uris)
             )
-            sources.extend(zip(uris, contents, strict=True))
+            sources.extend(
+                (uri, content)
+                for uri, content in zip(uris, contents, strict=True)
+                if content is not None
+            )
         return pack_source_batches(sources, self.limits)
 
     def _configure_compile_subagents(

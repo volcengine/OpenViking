@@ -410,6 +410,12 @@ def _make_provider(config, langfuse_client: Any = None):
     if callable(inherits_root_vlm_getter):
         inherits_root_vlm = bool(inherits_root_vlm_getter())
 
+    vision = getattr(p, "vision", None)
+    if vision is None:
+        # A Bot that inherits the root VLM uses a vision model. An explicitly
+        # configured Bot model is treated as text-only until it says otherwise.
+        vision = inherits_root_vlm
+
     if inherits_root_vlm:
         from openviking_cli.utils.config.vlm_config import VLMConfig
         from vikingbot.providers.vlm_adapter import VLMProviderAdapter
@@ -435,6 +441,7 @@ def _make_provider(config, langfuse_client: Any = None):
             vlm_instance=effective_vlm.get_vlm_instance(),
             default_model=effective_vlm.model or model,
             langfuse_client=langfuse_client,
+            vision=bool(vision),
         )
 
     if credentials:
@@ -482,6 +489,7 @@ def _make_provider(config, langfuse_client: Any = None):
             vlm_instance=effective_vlm.get_vlm_instance(),
             default_model=effective_vlm.model or credentials[0].model or "",
             langfuse_client=langfuse_client,
+            vision=bool(vision),
         )
 
     # When provider is explicitly set, use VLMFactory to get the correct
@@ -514,6 +522,7 @@ def _make_provider(config, langfuse_client: Any = None):
             vlm_instance=vlm_instance,
             default_model=model,
             langfuse_client=langfuse_client,
+            vision=bool(vision),
         )
 
     raise RuntimeError(

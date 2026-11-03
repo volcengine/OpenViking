@@ -478,6 +478,16 @@ class AgentsConfig(BaseModel):
     _inherits_root_vlm: bool = PrivateAttr(default=False)
 
     model: str = "openai/doubao-seed-2-0-pro-260215"
+    vision: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the model behind these agents can interpret image content. "
+            "None derives it from the configuration: a Bot that inherits the root "
+            "VLM uses a vision model, an explicitly configured one is assumed to "
+            "be text-only until this says otherwise. Compile leaves image sources "
+            "out of the evidence when this is false."
+        ),
+    )
     temperature: Optional[float] = Field(
         default=None,
         ge=0.0,

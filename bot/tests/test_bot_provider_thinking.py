@@ -85,6 +85,17 @@ def test_volcengine_backend_delivers_native_tool_result_media():
     assert provider.supports_tool_result_media() is True
 
 
+def test_a_text_only_agent_never_carries_image_evidence():
+    """A text-only model must not receive image evidence it cannot read."""
+    provider = VLMProviderAdapter(
+        SimpleNamespace(provider="anthropic"),
+        default_model="claude-sonnet",
+        langfuse_client=SimpleNamespace(),
+        vision=False,
+    )
+    assert provider.supports_tool_result_media() is False
+
+
 def test_vlm_adapter_uses_litellm_resolved_provider_for_tool_result_media():
     vlm = OpenVikingLiteLLMVLMProvider(
         {

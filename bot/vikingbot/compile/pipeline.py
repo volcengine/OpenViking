@@ -97,9 +97,8 @@ class Pipeline:
         self.skill_target = classify_uri(self.target).context_type == "skill"
         self.files = TaskFiles(sandbox)
         self.metrics: Counter = Counter()
-        self.warnings: list[str] = []
         self.model = JsonModel(
-            provider, model, temperature, self.files, limits, usage, self.metrics, self.warnings
+            provider, model, temperature, self.files, limits, usage, self.metrics
         )
         self.resources = SkillResources(client, request.skill, self.files)
         self.model.resources = self.resources
@@ -112,6 +111,7 @@ class Pipeline:
         self.status: dict[str, str] = {}
         self.old: dict[str, str | bytes | None] = {}
         self.failures: list[str] = []
+        self.warnings: list[str] = []
         self.artifacts: list[str] = []  # Only fully accepted final-file submissions.
         self.catalog: dict[str, dict] = {}  # Accepted task outputs, never historical enumeration.
         # Each output path belongs to the group whose file is accepted last.
