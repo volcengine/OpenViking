@@ -49,6 +49,69 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 class TestCommit:
     """Test commit"""
 
+    async def test_account_extraction_gate_and_language_refresh_keep_working_memory(
+        self, service, client
+    ):
+        from openviking.server.identity import Role
+        from openviking_cli.session.user_id import UserIdentifier
+        from openviking_cli.utils.config import get_openviking_config
+
+        cluster = get_openviking_config()
+        original_language = cluster.output_language_override
+        manager = service.runtime_config_manager
+        await manager.patch_account(
+            "a", {"output_language_override": "en", "memory": {"extraction_enabled": False}}
+        )
+        await manager.patch_account(
+            "b", {"output_language_override": "zh-CN", "memory": {"extraction_enabled": True}}
+        )
+        prompts = []
+
+        async def complete(prompt="", **kwargs):
+            prompts.append(prompt or str(kwargs.get("messages")))
+            return "# Working Memory\n\nGenerated account summary."
+
+        vlm = SimpleNamespace(
+            is_available=lambda: True, max_tokens=4096, get_completion_async=complete
+        )
+        service.sessions._vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
+        extract = AsyncMock(return_value=[])
+        service.sessions._session_compressor.extract_long_term_memories = extract
+        sessions = {}
+        for account in ("a", "b"):
+            ctx = RequestContext(user=UserIdentifier(account, "default"), role=Role.ROOT)
+            session = await service.sessions.create(ctx)
+            await session.add_message_async("user", [TextPart("请记住我喜欢简洁的文档。")])
+            sessions[account] = session
+        results = await asyncio.gather(
+            *[
+                session.commit_async(
+                    memory_policy={"memory_types": ["profile"], "working_memory": {"enabled": True}}
+                )
+                for session in sessions.values()
+            ]
+        )
+        tasks = await asyncio.gather(*[_wait_for_task(result["task_id"]) for result in results])
+        assert all(task["status"] == "completed" for task in tasks), tasks
+        assert extract.await_count == 1
+        assert extract.await_args.kwargs["ctx"].account_id == "b"
+        assert any("Write all section content in en." in prompt for prompt in prompts)
+        assert any("Write all section content in zh-CN." in prompt for prompt in prompts)
+        assert await sessions["a"]._archives.read_overview(results[0]["archive_uri"])
+
+        await manager.patch_account(
+            "a", {"output_language_override": "zh-CN", "memory": {"extraction_enabled": True}}
+        )
+        await sessions["a"].add_message_async("user", [TextPart("我也喜欢自动化测试。")])
+        result = await sessions["a"].commit_async(
+            memory_policy={"memory_types": ["profile"], "working_memory": {"enabled": True}}
+        )
+        task = await _wait_for_task(result["task_id"])
+        assert task["status"] == "completed", task
+        assert extract.await_count == 2
+        assert extract.await_args.kwargs["ctx"].account_id == "a"
+        assert cluster.output_language_override == original_language
+
     async def test_memory_apply_failure_does_not_reextract(
         self, session_with_messages, monkeypatch
     ):
@@ -407,7 +470,7 @@ class TestCommit:
         wm_session_with_messages._agent_evolution_enabled_provider = lambda: False
         summary_called = False
 
-        async def fake_summary(_session, messages, latest_archive_overview=""):
+        async def fake_summary(_session, messages, latest_archive_overview="", **kwargs):
             nonlocal summary_called
             del messages, latest_archive_overview
             summary_called = True
@@ -519,7 +582,7 @@ class TestCommit:
 
         summary_called = False
 
-        async def fake_summary(messages, latest_archive_overview=""):
+        async def fake_summary(messages, latest_archive_overview="", **kwargs):
             nonlocal summary_called
             del messages, latest_archive_overview
             summary_called = True
@@ -565,7 +628,7 @@ class TestCommit:
         await session.ensure_exists()
         long_term_calls: list[dict] = []
 
-        async def fake_summary(messages, latest_archive_overview=""):
+        async def fake_summary(messages, latest_archive_overview="", **kwargs):
             del messages, latest_archive_overview
             return "Invoice support summary"
 
@@ -744,12 +807,13 @@ class TestCommit:
         session_type = type(session)
         original_generate = session_type._generate_archive_summary_async
 
-        async def capture_generate(self, messages, latest_archive_overview=""):
+        async def capture_generate(self, messages, latest_archive_overview="", **kwargs):
             seen["summary"] = latest_archive_overview
             return await original_generate(
                 self,
                 messages,
                 latest_archive_overview=latest_archive_overview,
+                **kwargs,
             )
 
         async def capture_extract(*args, **kwargs):

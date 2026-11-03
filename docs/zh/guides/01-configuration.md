@@ -102,11 +102,12 @@ OpenViking 的配置分为两个层级：
 | Cluster | `agent_evolution` | 动态配置 | ROOT 可通过 Admin API 修改，作为集群默认值使用。 |
 | Account | `feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。Agent Evolution 为兼容旧行为保留已废弃的 Cluster 整段回退。Feishu 默认值由业务解析器处理：Account 未设置时使用 Cluster；设置后仅 `domain` 来自 Cluster。 |
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
+| Account | `output_language_override`、`memory.extraction_enabled` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。生成内容使用任务所属 Account 的配置，未配置时由业务层使用 Cluster 默认值。 |
 | Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
-Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 不在当前 Account 配置 API 范围内。
+Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 仅开放 `extraction_enabled`。
 
 Account 与 Cluster 配置分别存储和发布。Account 未配置时是否使用 Cluster
 属于业务默认行为，不是配置框架中的隐式继承。VLM 业务解析器负责这项策略：
@@ -153,6 +154,35 @@ PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置�
 的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
+
+## Account 内容生成配置
+
+创建 Account 时应在 `settings` 中显式提供所需默认值，也可以通过 Account
+配置接口更新：
+
+```json
+{
+  "settings": {
+    "output_language_override": "en",
+    "memory": {"extraction_enabled": false}
+  }
+}
+```
+
+语言字段未配置或为 `null` 时使用 Cluster 语言；显式 `""` 启用自动语言判断，
+即使 Cluster 指定了语言也不使用它。语言标识沿用现有生成规则。这项配置覆盖
+文本资源摘要、目录 overview、Working Memory、记忆抽取和手动记忆整理。
+图片摘要提示词保持原有语言行为；音视频摘要优先使用媒体自身语言，仅在媒体语言
+无法识别时使用配置语言兜底。
+
+`memory` 整段未配置或为 `null` 时使用 Cluster 抽取开关。整段存在时使用其
+`extraction_enabled`，程序默认值为 `true`；`{}` 或删除最后一个字段会保留
+这个程序默认值。`false` 关闭 SessionCommit 长期记忆抽取；开启时仍遵守 user/peer
+策略。Working Memory 和手动 `compile --skill memory` 仍可使用。
+
+语言生成和抽取开关判断分别在需要时读取各自的 Account 配置；再次执行读取
+更新后的配置。排队任务保存 owner 身份，不保存这些配置值。
+显式 Account 配置不随 Cluster 默认值改变。
 
 ## Account Embedding 与 VectorDB
 

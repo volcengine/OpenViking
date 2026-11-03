@@ -2046,6 +2046,8 @@ async def test_create_account(
 ):
     """ROOT provisioning applies account settings before initializing storage."""
     settings = {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
         "embedding": {"max_retries": 5},
         "vectordb": {
             "backend": "vikingdb",
@@ -2107,6 +2109,50 @@ async def test_create_account(
     assert effective.embedding.max_retries == 5
     assert factory.call_args.args[0].vikingdb.host == "https://account.invalid"
     adapter.create_collection.assert_not_called()
+
+
+async def test_account_generation_configuration_permissions_and_validation(
+    lightweight_admin_client, lightweight_admin_app
+):
+    client = lightweight_admin_client
+    account = _uid()
+    settings = {"output_language_override": "en", "memory": {"extraction_enabled": False}}
+    created = await client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account, "admin_user_id": "default", "settings": settings},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+    url = f"/api/v1/admin/accounts/{account}/configuration"
+    assert (await client.get(url, headers=admin_headers)).json()["result"]["settings"] == settings
+    updated = await client.patch(
+        url,
+        headers=admin_headers,
+        json={"settings": {"output_language_override": "", "memory": {"extraction_enabled": True}}},
+    )
+    assert updated.status_code == 200, updated.text
+    expected = {"output_language_override": "", "memory": {"extraction_enabled": True}}
+    assert updated.json()["result"]["settings"] == expected
+    invalid = await client.patch(
+        url,
+        headers=admin_headers,
+        json={"settings": {"memory": {"extraction_enabled": "invalid"}}},
+    )
+    assert invalid.status_code == 400
+    assert (await client.get(url, headers=admin_headers)).json()["result"]["settings"] == expected
+    other = f"/api/v1/admin/accounts/{_uid()}/configuration"
+    assert (await client.get(other, headers=admin_headers)).status_code == 403
+    assert (
+        await client.patch(other, headers=admin_headers, json={"settings": settings})
+    ).status_code == 403
+    reset = await client.patch(
+        url,
+        headers=admin_headers,
+        json={"settings": {"output_language_override": None, "memory": None}},
+    )
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["result"]["settings"] == {}
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(

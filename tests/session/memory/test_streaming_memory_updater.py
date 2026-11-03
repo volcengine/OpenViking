@@ -1964,7 +1964,10 @@ async def test_force_merge_does_not_drop_add_only_delete():
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_uses_original_messages_for_output_language(monkeypatch):
+@pytest.mark.parametrize("override, expected", [(None, "zh-CN"), ("en", "en"), ("", "zh-CN")])
+async def test_patch_merge_uses_original_messages_for_output_language(
+    monkeypatch, override, expected
+):
     _patch_language_config(monkeypatch)
     existing_uri = "viking://user/u/memories/notes/code.md"
     old_file = MemoryFile(
@@ -2021,9 +2024,10 @@ async def test_patch_merge_uses_original_messages_for_output_language(monkeypatc
         ctx=_ctx(),
         registry=_registry(),
         vlm_resolver=_TestVLMResolver(),
+        output_language_override=override,
     )
 
-    assert captured_languages == ["zh-CN"]
+    assert captured_languages == [expected]
 
 
 class TestFilterValidLinksTransientErrors:
@@ -2045,8 +2049,12 @@ class TestFilterValidLinksTransientErrors:
             lambda: fs,
         )
         return await filter_valid_links(
-            [StoredLink(from_uri="viking://user/u/memories/cases/a.md",
-                        to_uri="viking://user/u/memories/cases/b.md")],
+            [
+                StoredLink(
+                    from_uri="viking://user/u/memories/cases/a.md",
+                    to_uri="viking://user/u/memories/cases/b.md",
+                )
+            ],
             upsert_operations=self._ops("viking://user/u/memories/cases/a.md"),
             delete_file_contents=[],
             ctx=_ctx(),

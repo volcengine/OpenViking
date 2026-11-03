@@ -102,11 +102,12 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Cluster | `agent_evolution` | Dynamic | ROOT can update it through the Admin API; it is used as the cluster default. |
 | Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
+| Account | `output_language_override`, `memory.extraction_enabled` | Dynamic | ROOT or the Account ADMIN can update them. Generation uses the owning Account's settings; absent values use business-level Cluster defaults. |
 | Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 
-Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` is not on the current Account configuration API surface.
+Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` exposes only `extraction_enabled`.
 
 Account and Cluster configurations are independently stored and published.
 Any use of Cluster settings when Account settings are absent is a business
@@ -153,6 +154,39 @@ The request body wraps a PATCH document in `settings`:
 ```
 
 PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains settings from that scope, not a business-effective Account/Cluster composition. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
+
+## Account generation settings
+
+Supply defaults explicitly in Account creation `settings`, or update them through
+the Account configuration endpoint:
+
+```json
+{
+  "settings": {
+    "output_language_override": "en",
+    "memory": {"extraction_enabled": false}
+  }
+}
+```
+
+An absent or `null` language override uses the Cluster language. An explicit `""`
+enables automatic language detection even when Cluster specifies a language.
+Language identifiers follow the existing generation rules. Text resource summaries,
+directory overviews, Working Memory, extraction and memory consolidation use this
+setting. Image-summary prompts keep their existing language behavior. Audio/video
+summaries prefer the media's primary language and use the configured language only
+when the media has no identifiable language.
+
+An absent or `null` `memory` section uses the Cluster extraction switch. A present
+section uses its own `extraction_enabled` (default `true`); `{}` or deleting its
+last field leaves that program default. `false` disables SessionCommit long-term
+extraction; user/peer policies still apply when enabled. Working Memory and manual
+`compile --skill memory` remain available.
+
+Language generation and the extraction gate independently read their own Account
+setting when needed. Subsequent executions read updated settings; queued tasks
+store their owner identity rather than configuration values.
+Explicit Account values do not change with Cluster defaults.
 
 ## Account Embedding and VectorDB
 

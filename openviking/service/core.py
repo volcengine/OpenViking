@@ -340,6 +340,7 @@ class OpenVikingService:
         self._session_service.set_runtime_config_manager(manager)
         self._vlm_resolver = AccountVLMProvider(manager)
         if self._queue_manager is not None:
+            self._queue_manager.set_runtime_config_manager(manager)
             self._queue_manager.set_vlm_resolver(self._vlm_resolver)
             self._queue_manager.setup_standard_queues(
                 self._vikingdb_manager,
@@ -588,6 +589,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             skill_processor=self._skill_processor,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
         )
 
         self._watch_manager = WatchManager(
@@ -675,7 +677,11 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
         )
-        self._compile_service.configure_memory_runner(vikingdb=self._vikingdb_manager)
+        self._compile_service.configure_memory_runner(
+            vikingdb=self._vikingdb_manager,
+            runtime_config_manager=self._runtime_config_manager,
+            vlm_resolver=self._vlm_resolver,
+        )
         self._rule_service.set_dependencies(
             fs=self._fs_service,
             resources=self._resource_service,

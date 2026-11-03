@@ -446,12 +446,12 @@ Content-Type: application/json
 `null` 表示删除当前层配置，具体值表示更新。
 
 当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
-`feishu`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
+`output_language_override`、`memory`、`feishu`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
 这些配置均可动态修改。Account 的
 `vlm`、`query_planner`、`embedding` 和 `vectordb` 仅 ROOT 可读写，ADMIN 的读取
 响应过滤这些配置，写入请求在读取配置前拒绝。每段已配置的 `vlm` 或
 `query_planner` 都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选。
-`memory` 不在当前 API 范围内。
+Account `memory` 仅开放 `extraction_enabled`。
 `vectordb` 只能随 Account 创建时的 `settings` 提交，创建后包括 ROOT 在内均不可
 新增、修改或重置。Cluster 的 `embedding`、`vlm`、`query_planner`、
 `memory`、`feishu`、存储、解析器和检索配置没有声明为运行时字段，因此仍然只能
@@ -649,6 +649,8 @@ PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 
 | 路径 | 类型和约束 | 含义 |
 | --- | --- | --- |
 | `acl.enabled` | boolean，默认 `false` | 是否启用该 Account 的 ACL |
+| `output_language_override` | string，可选 | 生成内容的语言；缺省或 `null` 使用 Cluster，`""` 启用自动判断 |
+| `memory.extraction_enabled` | boolean，section 内默认 `true` | SessionCommit 长期记忆抽取开关；`memory` 整段缺省或 `null` 使用 Cluster，显式空 section 使用 `true` |
 | `agent_evolution.enabled` | boolean，默认 `false` | 是否启用 Agent Evolution；Account 未设置整个 section 时，为兼容旧行为使用完整 Cluster `agent_evolution` section |
 | `github.token` | string，默认空字符串 | GitHub 访问 token；空字符串表示该 Account 未提供 token |
 | `feishu.app_id` | string，可选 | Account Feishu App ID |

@@ -117,6 +117,59 @@ class _ImageVLM:
         return "image summary"
 
 
+@pytest.mark.parametrize(
+    "kind,filename", [("image", "photo.png"), ("audio", "clip.mp3"), ("video", "clip.mp4")]
+)
+async def test_media_summary_preserves_language_policy(monkeypatch, kind, filename):
+    from openviking.prompts import render_prompt
+
+    prompts = []
+
+    class Client(_MediaVLM):
+        async def get_vision_completion_async(self, *, prompt, **kwargs):
+            prompts.append(prompt)
+            return "Account image summary."
+
+        async def get_media_completion_async(self, *, prompt, **kwargs):
+            prompts.append(prompt)
+            return "# Clip\n\nAccount media summary."
+
+    image = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(image, format="PNG")
+    client = Client()
+    monkeypatch.setattr(media_utils, "get_viking_fs", lambda: _FS(image.getvalue()))
+    config = _config(client)
+    config.output_language_override = "zh-CN"
+    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(media_utils, "render_prompt", render_prompt)
+    generate = getattr(media_utils, f"generate_{kind}_summary")
+    if kind == "image":
+        result = await generate(f"viking://resources/{filename}", filename, vlm=client)
+        assert result["summary"]
+        assert prompts == [
+            render_prompt("parsing.image_summary", {"context": "No additional context"})
+        ]
+        assert "Output Language:" not in prompts[0]
+        assert "Write all summary content in" not in prompts[0]
+        return
+    results = await asyncio.gather(
+        *[
+            generate(
+                f"viking://resources/{filename}",
+                filename,
+                vlm=client,
+                output_language_override=language,
+            )
+            for language in ("zh-CN", "en")
+        ]
+    )
+    assert all(result["summary"] for result in results)
+    assert any("use zh-CN." in prompt for prompt in prompts)
+    assert any("use en." in prompt for prompt in prompts)
+    assert all("primary language" in prompt for prompt in prompts)
+    assert all("Write all summary content in" not in prompt for prompt in prompts)
+
+
 def _config(model_config, *, max_chars=4000):
     if hasattr(model_config, "get_client_instance"):
         vlm = model_config.get_client_instance()

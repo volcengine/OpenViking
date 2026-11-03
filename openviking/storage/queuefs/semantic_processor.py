@@ -155,6 +155,7 @@ class SemanticProcessor(DequeueHandlerBase):
         *,
         embedding_worker_stopped: Optional[Callable[[], bool]] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
+        runtime_config_manager: Any = None,
     ):
         """
         Initialize SemanticProcessor.
@@ -168,6 +169,7 @@ class SemanticProcessor(DequeueHandlerBase):
         self._breaker_lock = threading.Lock()
         self._embedding_worker_stopped = embedding_worker_stopped
         self._vlm_resolver = vlm_resolver
+        self._runtime_config_manager = runtime_config_manager
 
     def _account_breaker(self, account_id: str) -> CircuitBreaker:
         with self._breaker_lock:
@@ -1357,9 +1359,15 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning("VLM not available, using empty summary")
             return result("")
 
+        from openviking.config.generation import get_output_language_override
         from openviking.session.memory.utils.language import resolve_output_language
 
-        output_language = resolve_output_language(content, config=config)
+        output_language_override = await get_output_language_override(
+            self._runtime_config_manager, active_ctx.account_id, cluster_config=config
+        )
+        output_language = resolve_output_language(
+            content, output_language_override=output_language_override
+        )
         prompt = render_prompt(
             prompt_id,
             {"file_name": file_name, "content": content, "output_language": output_language},
@@ -1413,6 +1421,11 @@ class SemanticProcessor(DequeueHandlerBase):
                     ctx=ctx,
                     vlm=vlm,
                 )
+            from openviking.config.generation import get_output_language_override
+
+            output_language_override = await get_output_language_override(
+                self._runtime_config_manager, (ctx or self._default_ctx).account_id
+            )
             if media_type == "audio":
                 return await generate_audio_summary(
                     file_path,
@@ -1420,6 +1433,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     llm_sem,
                     ctx=ctx,
                     vlm=vlm,
+                    output_language_override=output_language_override,
                 )
             return await generate_video_summary(
                 file_path,
@@ -1427,6 +1441,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 llm_sem,
                 ctx=ctx,
                 vlm=vlm,
+                output_language_override=output_language_override,
             )
         return await self._generate_text_summary(
             file_path, file_name, llm_sem, ctx=ctx, file_content=file_content
@@ -1634,7 +1649,14 @@ class SemanticProcessor(DequeueHandlerBase):
             language_source_parts.append(children_abstracts_str)
         if not language_source_parts:
             language_source_parts.append(dir_uri.split("/")[-1])
-        output_language = resolve_output_language("\n".join(language_source_parts), config=config)
+        from openviking.config.generation import get_output_language_override
+
+        output_language_override = await get_output_language_override(
+            self._runtime_config_manager, active_ctx.account_id, cluster_config=config
+        )
+        output_language = resolve_output_language(
+            "\n".join(language_source_parts), output_language_override=output_language_override
+        )
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)

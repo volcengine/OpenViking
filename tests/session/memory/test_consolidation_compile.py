@@ -477,6 +477,7 @@ def language_config(monkeypatch):
     config = SimpleNamespace(
         output_language_override="",
         memory=SimpleNamespace(
+            extraction_enabled=True,
             eager_prefetch=False,
             prefetch_search_topn=5,
             link_enabled=False,
@@ -487,7 +488,6 @@ def language_config(monkeypatch):
     )
     for module in (
         "openviking.service.memory_compile",
-        "openviking.session.memory.consolidation_context_provider",
         "openviking.session.memory.session_extract_context_provider",
         "openviking.session.memory.extract_loop",
         "openviking.session.memory.utils.language",
@@ -507,9 +507,12 @@ def language_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("override, expected", [("", "zh-CN"), ("ja", "ja")])
+@pytest.mark.parametrize(
+    "override, expected, account_override",
+    [("", "zh-CN", None), ("ja", "ja", None), ("en", "zh-CN", ""), ("en", "ja", "ja")],
+)
 async def test_compile_resolves_language_before_prompt_and_schema(
-    monkeypatch, language_config, override, expected
+    monkeypatch, language_config, override, expected, account_override
 ):
     language_config.output_language_override = override
     vlm = SimpleNamespace(
@@ -536,7 +539,23 @@ async def test_compile_resolves_language_before_prompt_and_schema(
         "openviking.service.memory_compile.acquire_memory_operation_lease",
         acquire_lease,
     )
-    runner = MemoryCompileRunner(SimpleNamespace(_ensure_initialized=lambda: viking_fs))
+    manager = None
+    if account_override is not None:
+        from openviking.config.binding import manager_over_source
+        from openviking.config.source import MemoryConfigSource
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        cluster = OpenVikingConfig.from_dict({"output_language_override": override})
+        monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
+        manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
+        await manager.patch_account(
+            "acc",
+            {"output_language_override": account_override, "memory": {"extraction_enabled": False}},
+        )
+    runner = MemoryCompileRunner(
+        SimpleNamespace(_ensure_initialized=lambda: viking_fs),
+        runtime_config_manager=manager,
+    )
 
     result = await runner._consolidate(
         target=directory,
@@ -555,7 +574,8 @@ async def test_compile_resolves_language_before_prompt_and_schema(
     assert result["errors"] == []
     apply.assert_awaited_once()
     acquire_lease.assert_awaited_once()
-    if override:
+    effective_override = account_override if account_override is not None else override
+    if effective_override:
         viking_fs.read.assert_not_awaited()
     else:
         viking_fs.read.assert_awaited_once_with(uri, size=4096, ctx=_ctx())

@@ -38,6 +38,12 @@ class AccountAclSettings(BaseModel):
     enabled: bool = RuntimeField(default=False)
 
 
+class AccountMemoryConfig(BaseModel):
+    """Account-owned SessionCommit long-term extraction switch."""
+
+    extraction_enabled: bool = RuntimeField(default=True)
+
+
 class AccountFeishuConfig(BaseModel):
     """Account-level Feishu settings.
 
@@ -106,9 +112,7 @@ class AccountVLMConfig(BaseModel):
         for index, credential in enumerate(self.credentials):
             provider = credential.provider.strip().lower() if credential.provider else ""
             if not provider:
-                raise ValueError(
-                    f"credentials[{index}].provider is required for Account VLM"
-                )
+                raise ValueError(f"credentials[{index}].provider is required for Account VLM")
             if not is_valid_provider(provider):
                 raise ValueError(
                     f"credentials[{index}].provider '{credential.provider}' is not supported"
@@ -117,9 +121,7 @@ class AccountVLMConfig(BaseModel):
             for field_name in ("model", "api_key", "api_base", "api_version"):
                 value = getattr(credential, field_name)
                 if value is not None and not value.strip():
-                    raise ValueError(
-                        f"credentials[{index}].{field_name} must not be blank"
-                    )
+                    raise ValueError(f"credentials[{index}].{field_name} must not be blank")
         self.to_vlm_config()
         return self
 
@@ -138,6 +140,8 @@ class AccountConfig(BaseModel):
     """
 
     # Account-level settings with active business consumers.
+    output_language_override: Optional[str] = RuntimeField(default=None)
+    memory: Optional[AccountMemoryConfig] = RuntimeField(default=None)
     feishu: Optional[AccountFeishuConfig] = RuntimeField(default=None)
     vlm: Optional[AccountVLMConfig] = RuntimeField(default=None)
     query_planner: Optional[AccountVLMConfig] = RuntimeField(default=None)

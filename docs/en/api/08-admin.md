@@ -532,13 +532,13 @@ three-state: an absent key is unchanged, `null` deletes that layer's value, and
 a concrete value updates it.
 
 The Cluster runtime surface currently contains `agent_evolution`. The Account
-surface contains `feishu`, `agent_evolution`, `github`, `acl`, `vlm`, and
+surface contains `output_language_override`, `memory`, `feishu`, `agent_evolution`, `github`, `acl`, `vlm`, and
 `query_planner`, all of which are dynamic. Account `vlm` and `query_planner`
 are visible and writable only to ROOT. Each configured section is complete:
 `model` and a non-empty `credentials` array are required, while `timeout` is
 optional. ADMIN responses omit both sections, and ADMIN PATCH requests
-containing either section are rejected. Account `memory` is not on the current API
-surface. Account `embedding` and `vectordb` are also ROOT-only, including reads.
+containing either section are rejected. Account `memory` exposes only
+`extraction_enabled`. Account `embedding` and `vectordb` are also ROOT-only, including reads.
 `vectordb` can only be supplied in Account creation `settings`; subsequent additions,
 changes and resets are rejected, including ROOT requests. Cluster
 `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, and
@@ -763,6 +763,8 @@ dynamic and both ROOT and the target Account's ADMIN can read and write them:
 | Path | Type and constraints | Meaning |
 | --- | --- | --- |
 | `acl.enabled` | Boolean, default `false` | Whether ACL is enabled for this Account |
+| `output_language_override` | Optional string | Output language for generation; absent or `null` uses Cluster, `""` enables automatic detection |
+| `memory.extraction_enabled` | Boolean, default `true` within a configured section | SessionCommit long-term extraction switch; absent or `null` `memory` uses Cluster, a present empty section uses `true` |
 | `agent_evolution.enabled` | Boolean, default `false` | Whether Agent Evolution is enabled; when the Account omits the whole section, the complete Cluster `agent_evolution` section is used for legacy compatibility |
 | `github.token` | String, default empty string | GitHub access token; an empty string means the Account provides no token |
 | `feishu.app_id` | String, optional | Account Feishu App ID |

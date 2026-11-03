@@ -15,6 +15,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -50,7 +51,9 @@ async def client(
         async def process_commit():
             message = SessionCommitMsg(**data)
             queued_session = service.sessions.session(
-                request_context,
+                RequestContext(
+                    user=UserIdentifier.from_dict(message.user), role=request_context.role
+                ),
                 session_id=message.session_id,
                 session_uri=message.session_uri,
             )

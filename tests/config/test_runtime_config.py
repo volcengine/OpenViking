@@ -368,7 +368,9 @@ def test_multi_field_patch_publishes_atomically():
             sections={"vlm", "memory"},
             consumer=consumer,
         )
-        await manager.patch_cluster({"vlm": {"model": "m2"}, "memory": {"extraction_enabled": False}})
+        await manager.patch_cluster(
+            {"vlm": {"model": "m2"}, "memory": {"extraction_enabled": False}}
+        )
         assert seen == [(False, "m2")]
 
     asyncio.run(run())
@@ -454,9 +456,7 @@ def test_account_storage_wait_does_not_block_unrelated_account_load():
     async def run():
         source = BlockingSource()
         manager, _ = _make_manager(source)
-        patch = asyncio.create_task(
-            manager.patch_account("ov-a", {"vlm": {"model": "slow"}})
-        )
+        patch = asyncio.create_task(manager.patch_account("ov-a", {"vlm": {"model": "slow"}}))
         await source.started.wait()
 
         other = asyncio.create_task(manager.get_account("ov-b", "vlm"))
@@ -503,7 +503,6 @@ def test_refresh_does_not_resurrect_unloaded_account():
         assert "ov-x" not in manager._accounts
 
     asyncio.run(run())
-
 
 
 def test_patch_waits_for_matching_consumers_and_filters_registration():
@@ -682,6 +681,70 @@ def test_refresh_does_not_resurrect_evicted_account():
 
 
 # -- AccountConfig field attributes + manager fallback ------------------------
+
+
+async def test_account_language_and_extraction_defaults_patch_and_refresh():
+    from openviking.config.binding import manager_over_source
+    from openviking.config.generation import (
+        get_memory_extraction_enabled,
+        get_output_language_override,
+    )
+    from openviking_cli.utils.config import set_openviking_config
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    cluster = OpenVikingConfig.from_dict(
+        {"output_language_override": "en", "memory": {"extraction_enabled": False}}
+    )
+    set_openviking_config(cluster)
+    source = MemoryConfigSource()
+    writer = manager_over_source(source, base_config=cluster)
+    reader = manager_over_source(source, base_config=cluster)
+    try:
+        assert await get_output_language_override(writer, "a") == "en"
+        assert await get_memory_extraction_enabled(writer, "a") is False
+        await writer.patch_account(
+            "a", {"output_language_override": "", "memory": {"extraction_enabled": False}}
+        )
+        assert await get_output_language_override(reader, "a") == ""
+        assert await get_memory_extraction_enabled(reader, "a") is False
+        await writer.patch_account("b", {"output_language_override": "zh-CN", "memory": {}})
+        assert await get_output_language_override(writer, "b") == "zh-CN"
+        assert await get_memory_extraction_enabled(writer, "b") is True
+
+        before = await writer.get_settings(ConfigScope.account("a"))
+        with pytest.raises(ValueError):
+            await writer.patch_account("a", {"memory": {"extraction_enabled": "invalid"}})
+        with pytest.raises(ValueError):
+            await writer.patch_account("a", {"output_language_override": 123})
+        assert await writer.get_settings(ConfigScope.account("a")) == before
+        assert await get_output_language_override(writer, "a") == ""
+        assert await get_memory_extraction_enabled(writer, "a") is False
+
+        await writer.patch_account("a", {"memory": {"extraction_enabled": None}})
+        assert await writer.get_settings(ConfigScope.account("a")) == {
+            "output_language_override": "",
+            "memory": {},
+        }
+        assert await get_memory_extraction_enabled(writer, "a") is True
+        assert await get_output_language_override(writer, "a") == ""
+        assert await get_memory_extraction_enabled(reader, "a") is False
+        await reader.refresh_once()
+        assert await get_memory_extraction_enabled(reader, "a") is True
+        assert await get_output_language_override(reader, "a") == ""
+
+        await writer.patch_account("a", {"output_language_override": None, "memory": None})
+        assert await writer.get_settings(ConfigScope.account("a")) == {}
+        assert await get_output_language_override(writer, "a") == "en"
+        assert await get_memory_extraction_enabled(writer, "a") is False
+        assert await get_output_language_override(writer, "b") == "zh-CN"
+        assert await get_memory_extraction_enabled(writer, "b") is True
+        assert cluster.output_language_override == "en"
+        assert cluster.memory.extraction_enabled is False
+    finally:
+        OpenVikingConfigSingleton.reset_instance()
 
 
 async def test_account_runtime_binding_and_updates_are_isolated():
@@ -946,9 +1009,7 @@ def test_real_agent_evolution_precedence_and_fallback():
             OpenVikingConfigSingleton,
         )
 
-        base = OpenVikingConfig.from_dict(
-            {"agent_evolution": {"enabled": False}}
-        )
+        base = OpenVikingConfig.from_dict({"agent_evolution": {"enabled": False}})
         set_openviking_config(base)
         manager = manager_over_source(MemoryConfigSource(), base_config=base)
         await manager.initialize()
@@ -958,9 +1019,7 @@ def test_real_agent_evolution_precedence_and_fallback():
             await manager.patch_cluster({"agent_evolution": {"enabled": True}})
             assert (await manager.get_account("ov-a", "agent_evolution")).enabled
 
-            await manager.patch_account(
-                "ov-a", {"agent_evolution": {"enabled": False}}
-            )
+            await manager.patch_account("ov-a", {"agent_evolution": {"enabled": False}})
             assert not (await manager.get_account("ov-a", "agent_evolution")).enabled
 
             await manager.patch_account("ov-a", {"agent_evolution": None})
@@ -988,9 +1047,7 @@ def test_real_feishu_account_override_and_cluster_fallback():
         manager = manager_over_source(MemoryConfigSource(), base_config=base)
         await manager.initialize()
         try:
-            assert (
-                await get_effective_feishu_config(manager, "ov-a")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-a")).app_id == "cluster-v1"
 
             await manager.patch_account(
                 "ov-a", {"feishu": {"app_id": "account-a", "app_secret": "a-secret"}}
@@ -998,14 +1055,10 @@ def test_real_feishu_account_override_and_cluster_fallback():
             effective_a = await get_effective_feishu_config(manager, "ov-a")
             assert effective_a.app_id == "account-a"
             assert effective_a.domain == base.feishu.domain
-            assert (
-                await get_effective_feishu_config(manager, "ov-b")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-b")).app_id == "cluster-v1"
 
             await manager.patch_account("ov-a", {"feishu": None})
-            assert (
-                await get_effective_feishu_config(manager, "ov-a")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-a")).app_id == "cluster-v1"
         finally:
             OpenVikingConfigSingleton.reset_instance()
 
@@ -1307,9 +1360,7 @@ def test_plugin_source_receives_params_without_kernel_dependencies():
         captured["ctx"] = ctx
         return MemoryConfigSource(ctx)
 
-    src = build_config_source(
-        {"source": "params-only-test", "params": {"namespace": "ns-1"}}
-    )
+    src = build_config_source({"source": "params-only-test", "params": {"namespace": "ns-1"}})
     assert isinstance(src, MemoryConfigSource)
     assert captured["ctx"].params == {"namespace": "ns-1"}
     assert not hasattr(captured["ctx"], "extras")
