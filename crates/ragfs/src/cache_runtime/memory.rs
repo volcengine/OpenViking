@@ -1095,7 +1095,14 @@ impl MemoryMockProvider {
             return ScriptResult::encode(&ScriptValue::Integer(0));
         }
 
+        let now = Instant::now();
+        let values = self.values.read().await;
+        let expirations = self.expirations.read().await;
+        let hashes = self.hashes.read().await;
+        let sets = self.sets.read().await;
         let mut zsets = self.zsets.write().await;
+        let lists = self.lists.read().await;
+        let zset_keys = zsets.keys().cloned().collect::<HashSet<_>>();
         let Some(index) = zsets.get_mut(index_key) else {
             return ScriptResult::encode(&ScriptValue::Integer(0));
         };
@@ -1112,7 +1119,16 @@ impl MemoryMockProvider {
         members.truncate(limit);
         let mut removed = 0_i64;
         for (member, _) in members {
-            if index.remove(&member).is_some() {
+            let exists = values.contains_key(&member)
+                || hashes.contains_key(&member)
+                || sets.contains_key(&member)
+                || zset_keys.contains(&member)
+                || lists.contains_key(&member);
+            let live = exists
+                && expirations
+                    .get(&member)
+                    .is_none_or(|deadline| *deadline > now);
+            if !live && index.remove(&member).is_some() {
                 removed += 1;
             }
         }

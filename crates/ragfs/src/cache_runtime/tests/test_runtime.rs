@@ -92,7 +92,7 @@ async fn zrangebyscore_returns_bounded_expired_members() {
     );
 }
 
-/// Verifies the CacheFS delete script can atomically clean a bounded expired index batch.
+/// Verifies bounded GC preserves live buckets even when their index scores are expired.
 #[tokio::test]
 async fn delete_bucket_script_cleans_expired_index_members_bounded() {
     let provider = Arc::new(MemoryMockProvider::new());
@@ -101,6 +101,15 @@ async fn delete_bucket_script_cleans_expired_index_members_bounded() {
     assert_eq!(runtime.zadd("idx", 10.0, "expired-a").await.unwrap(), 1);
     assert_eq!(runtime.zadd("idx", 20.0, "expired-b").await.unwrap(), 1);
     assert_eq!(runtime.zadd("idx", 30.0, "fresh").await.unwrap(), 1);
+    runtime
+        .hset("live", "query", Bytes::from_static(b"value"))
+        .await
+        .unwrap();
+    runtime
+        .expire("live", Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert_eq!(runtime.zadd("idx", 0.0, "live").await.unwrap(), 1);
 
     runtime
         .execute_script(ScriptRequest {
@@ -110,7 +119,7 @@ async fn delete_bucket_script_cleans_expired_index_members_bounded() {
                 Bytes::from_static(b"cleanup_expired"),
                 Bytes::from(f64::NEG_INFINITY.to_string()),
                 Bytes::from(20.0_f64.to_string()),
-                Bytes::from_static(b"1"),
+                Bytes::from_static(b"2"),
             ],
         })
         .await
@@ -121,6 +130,10 @@ async fn delete_bucket_script_cleans_expired_index_members_bounded() {
             .zrangebyscore("idx", f64::NEG_INFINITY, f64::INFINITY, 10)
             .await
             .unwrap(),
-        vec!["expired-b".to_string(), "fresh".to_string()]
+        vec![
+            "live".to_string(),
+            "expired-b".to_string(),
+            "fresh".to_string(),
+        ]
     );
 }

@@ -83,7 +83,14 @@ if #ARGV > 0 then
     end
     local members = redis.call("ZRANGEBYSCORE", KEYS[1], ARGV[2], ARGV[3], "LIMIT", 0, ARGV[4])
     if #members == 0 then return 0 end
-    return redis.call("ZREM", KEYS[1], unpack(members))
+    local expired = {}
+    for _, member in ipairs(members) do
+        if redis.call("EXISTS", member) == 0 then
+            expired[#expired + 1] = member
+        end
+    end
+    if #expired == 0 then return 0 end
+    return redis.call("ZREM", KEYS[1], unpack(expired))
 end
 redis.call("UNLINK", KEYS[1])
 redis.call("ZREM", KEYS[2], KEYS[1])
