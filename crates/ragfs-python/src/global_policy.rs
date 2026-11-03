@@ -10,6 +10,7 @@ use ragfs::global_policy::{
     validate_policy_path, GlobalPolicy, GlobalPolicyError as CoreGlobalPolicyError, PolicySnapshot,
     PolicyStatus,
 };
+use ragfs::write_hook::WriteHookError;
 
 create_exception!(ragfs_python, GlobalPolicyError, PyValueError);
 create_exception!(
@@ -245,19 +246,21 @@ fn map_error(error: CoreGlobalPolicyError) -> PyErr {
     }
 }
 
-/// Build the Python exception for a write-time policy validation failure.
+/// Build the Python exception for a write rejected by a registered write hook.
 ///
-/// The exception carries the same stable ``code`` attribute as snapshot errors,
-/// so callers can distinguish malformed content from an unsupported schema.
-pub(crate) fn policy_write_error(py: Python<'_>, error: CoreGlobalPolicyError) -> PyErr {
+/// Global-policy codes keep their dedicated exception types and stable ``code``
+/// attribute. Unknown hook codes fall back to ``AGFSInternalError`` so a future
+/// hook can reject a write without adding a Python-specific type.
+pub(crate) fn write_hook_error(py: Python<'_>, error: WriteHookError) -> PyErr {
     let code = error.code();
-    let message = format!("{code}: {error}");
-    let error = match error {
-        CoreGlobalPolicyError::UnsupportedSchema { .. } => {
+    let message = format!("{code}: {}", error.message());
+    let exception = match code {
+        CoreGlobalPolicyError::INVALID_CODE => GlobalPolicyError::new_err(message),
+        CoreGlobalPolicyError::UNSUPPORTED_SCHEMA_CODE => {
             UnsupportedGlobalPolicySchemaError::new_err(message)
         }
-        CoreGlobalPolicyError::Invalid(_) => GlobalPolicyError::new_err(message),
+        _ => return crate::new_py_err("AGFSInternalError", message),
     };
-    let _ = error.value(py).setattr("code", code);
-    error
+    let _ = exception.value(py).setattr("code", code);
+    exception
 }

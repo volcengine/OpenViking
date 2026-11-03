@@ -9,12 +9,14 @@ mod evaluate;
 mod frontmatter;
 mod path;
 mod snapshot;
+mod write;
 
 use std::fmt;
 
 pub use evaluate::is_global_policy_path_allowed;
 pub use path::{is_user_policy_file_path, validate_policy_path};
 pub use snapshot::{PolicySnapshot, PolicyStatus};
+pub use write::register_write_hooks;
 
 /// Reserved policy filename at a user root.
 pub const POLICY_FILENAME: &str = "GLOBAL_POLICY.md";

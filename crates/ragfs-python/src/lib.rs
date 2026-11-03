@@ -236,6 +236,7 @@ use ragfs::lock::{
     PathLockHandoffRef, PathLockKind, PathLockManager, PathLockRequest,
 };
 use ragfs::metrics::{RagfsMetric, RagfsMetricValue};
+use ragfs::write_hook::WriteHookRegistry;
 
 /// Parse an optional listing sort field and return the matching RagFS value.
 fn parse_list_sort_by(value: Option<&str>) -> PyResult<Option<ListSortBy>> {
@@ -1566,6 +1567,8 @@ struct RAGFSBindingClient {
     leader_leases: Arc<AsyncMutex<HashMap<String, LeaderLease>>>,
     /// Blocks leader operations during close and waits in-flight operations out.
     leader_closing: Arc<AsyncRwLock<bool>>,
+    /// Write-time hooks applied before any filesystem write.
+    write_hooks: WriteHookRegistry,
 }
 
 impl RAGFSBindingClient {
@@ -1767,6 +1770,9 @@ impl RAGFSBindingClient {
             },
         };
 
+        let mut write_hooks = WriteHookRegistry::new();
+        ragfs::global_policy::register_write_hooks(&mut write_hooks);
+
         Ok(Self {
             mountable: stack.mountable,
             top: stack.top,
@@ -1778,6 +1784,7 @@ impl RAGFSBindingClient {
             service_name: service_name.unwrap_or_else(|| "ragfs".to_string()),
             leader_leases: Arc::new(AsyncMutex::new(HashMap::new())),
             leader_closing: Arc::new(AsyncRwLock::new(false)),
+            write_hooks,
         })
     }
 
@@ -2079,9 +2086,9 @@ impl RAGFSBindingClient {
 
     /// Write data to file.
     ///
-    /// A write to ``/local/{account_id}/user/{owner_user_id}/GLOBAL_POLICY.md``
-    /// is parsed as a v1 GLOBAL policy before the filesystem is touched. Invalid
-    /// content raises ``GlobalPolicyError`` (``GLOBAL_POLICY_INVALID``) or
+    /// Registered write hooks run before the filesystem is touched. The
+    /// reserved GLOBAL policy path is validated as a v1 policy; invalid content
+    /// raises ``GlobalPolicyError`` (``GLOBAL_POLICY_INVALID``) or
     /// ``UnsupportedGlobalPolicySchemaError`` (``GLOBAL_POLICY_SCHEMA_UNSUPPORTED``).
     ///
     /// Args:
@@ -2098,10 +2105,9 @@ impl RAGFSBindingClient {
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let _ = max_retries; // not applicable for local binding
-        if ragfs::global_policy::is_user_policy_file_path(&path) {
-            ragfs::global_policy::validate_policy_write(&data)
-                .map_err(|error| global_policy::policy_write_error(py, error))?;
-        }
+        self.write_hooks
+            .check(&path, &data)
+            .map_err(|error| global_policy::write_hook_error(py, error))?;
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
         let len = data.len();

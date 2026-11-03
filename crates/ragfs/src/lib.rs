@@ -46,6 +46,7 @@ pub mod plugins;
 pub mod privacy_extractor;
 pub mod privacy_matcher;
 pub mod shape;
+pub mod write_hook;
 
 // Re-export core types for convenience
 pub use core::{
