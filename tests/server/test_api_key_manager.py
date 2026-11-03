@@ -204,6 +204,41 @@ async def test_management_writer_preserves_a_trusted_identity_from_another_insta
     }
 
 
+@pytest.mark.parametrize("missing_read", [False, True])
+async def test_registry_diagnostics_distinguish_missing_reads_without_exposing_keys(
+    manager: APIKeyManager, manager_service, monkeypatch: pytest.MonkeyPatch, missing_read: bool
+):
+    from openviking.server.account_stores import file
+
+    acct = _uid()
+    admin_key = await manager.create_account(acct, "admin")
+    agfs = manager_service.viking_fs.agfs
+    read = agfs.read
+    messages = []
+    monkeypatch.setattr(file.logger, "warning", lambda fmt, *args: messages.append(fmt % args))
+
+    if missing_read:
+
+        def injected_read(path, *args, **kwargs):
+            if path == f"/local/{acct}/_system/users.json":
+                raise AGFSNotFoundError("injected missing registry read")
+            return read(path, *args, **kwargs)
+
+        monkeypatch.setattr(agfs, "read", injected_read)
+
+    user_key = await manager.register_user(acct, "new-user")
+    diagnostics = "\n".join(messages)
+    assert f"registry_found={not missing_read}" in diagnostics
+    assert 'cached_members={"admin": "admin", "new-user": "user"}' in diagnostics
+    if missing_read:
+        assert "registry_missing" in diagnostics
+        assert "persisted_members={}" in diagnostics
+    else:
+        assert 'persisted_members={"admin": "admin"}' in diagnostics
+    assert "save_written" in diagnostics
+    assert all(key not in diagnostics for key in (ROOT_KEY, admin_key, user_key))
+
+
 async def test_concurrent_management_registration_of_same_user_rejects_second_writer(
     manager: APIKeyManager, manager_service
 ):

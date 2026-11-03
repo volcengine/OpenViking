@@ -1267,6 +1267,8 @@ class FileStore(AccountStore):
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             return json.loads(text)
         except AGFSNotFoundError:
+            if path.endswith("/_system/users.json"):
+                logger.warning("account_store_diag registry_missing path=%s", path)
             return None
 
     @staticmethod
@@ -1394,12 +1396,30 @@ class FileStore(AccountStore):
                 conflict_type="user_registry_busy",
             ) from exc
         try:
+            account = self._accounts.get(account_id)
+            cached_users = account.users if account is not None else {}
             if replace_existing:
                 users = copy.deepcopy(updated_users or {})
                 data = {"users": users}
+                registry_found = None
             else:
-                data = await self._read_json(path) or {"users": {}}
+                persisted = await self._read_json(path)
+                registry_found = persisted is not None
+                data = persisted or {"users": {}}
                 users = data.setdefault("users", {})
+            logger.warning(
+                "account_store_diag save_read account=%s replace_existing=%s "
+                "registry_found=%s persisted_members=%s cached_members=%s updated=%s deleted=%s",
+                account_id,
+                replace_existing,
+                registry_found,
+                json.dumps({uid: info.get("role") for uid, info in users.items()}, sort_keys=True),
+                json.dumps(
+                    {uid: info.get("role") for uid, info in cached_users.items()}, sort_keys=True
+                ),
+                sorted(updated_users or {}),
+                sorted(deleted_user_ids or set()),
+            )
             # Check persisted credentials while holding the cross-instance lease.
             # Request-time authentication and the local cache may already be stale.
             for user_id, expected_key in (expected_api_keys or {}).items():
@@ -1422,6 +1442,11 @@ class FileStore(AccountStore):
             for user_id in deleted_user_ids or set():
                 users.pop(user_id, None)
             await self._write_json(path, data, lease_ref=lease)
+            logger.warning(
+                "account_store_diag save_written account=%s members=%s",
+                account_id,
+                json.dumps({uid: info.get("role") for uid, info in users.items()}, sort_keys=True),
+            )
 
             account = self._accounts.get(account_id)
             if account is not None:
