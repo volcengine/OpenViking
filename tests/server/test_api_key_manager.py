@@ -214,6 +214,8 @@ async def test_registry_diagnostics_distinguish_missing_reads_without_exposing_k
     admin_key = await manager.create_account(acct, "admin")
     agfs = manager_service.viking_fs.agfs
     read = agfs.read
+    registry_path = f"/local/{acct}/_system/users.json"
+    original_registry = read(registry_path)
     messages = []
     monkeypatch.setattr(file.logger, "warning", lambda fmt, *args: messages.append(fmt % args))
 
@@ -226,7 +228,17 @@ async def test_registry_diagnostics_distinguish_missing_reads_without_exposing_k
 
         monkeypatch.setattr(agfs, "read", injected_read)
 
-    user_key = await manager.register_user(acct, "new-user")
+    if missing_read:
+        with pytest.raises(FailedPreconditionError, match="User registry is missing"):
+            await manager.register_user(acct, "new-user")
+        assert read(registry_path) == original_registry
+        monkeypatch.setattr(agfs, "read", read)
+        assert await manager.get_registered_user_role(acct, "admin") == Role.ADMIN
+        assert await manager.get_registered_user_role(acct, "new-user") is None
+        assert (await manager.resolve_identity(admin_key)).role == Role.ADMIN
+        user_key = "unused-test-credential"
+    else:
+        user_key = await manager.register_user(acct, "new-user")
     diagnostics = "\n".join(messages)
     assert f"registry_found={not missing_read}" in diagnostics
     assert 'cached_members={"admin": "admin", "new-user": "user"}' in diagnostics
@@ -235,8 +247,35 @@ async def test_registry_diagnostics_distinguish_missing_reads_without_exposing_k
         assert "persisted_members={}" in diagnostics
     else:
         assert 'persisted_members={"admin": "admin"}' in diagnostics
-    assert "save_written" in diagnostics
+    assert ("save_written" in diagnostics) is not missing_read
     assert all(key not in diagnostics for key in (ROOT_KEY, admin_key, user_key))
+
+
+async def test_first_default_user_has_an_initialized_registry(manager: APIKeyManager):
+    key = await manager.register_user("default", "admin", "admin")
+    assert (await manager.resolve_identity(key)).role == Role.ADMIN
+    assert await _list_users(manager, "default", expose_key=False) == [
+        {"user_id": "admin", "role": "admin"}
+    ]
+
+
+async def test_default_initialization_preserves_existing_users(
+    manager: APIKeyManager, manager_service, monkeypatch
+):
+    key = await manager.register_user("default", "admin", "admin")
+    agfs = manager_service.viking_fs.agfs
+    read = agfs.read
+    original_registry = read("/local/default/_system/users.json")
+
+    def missing_accounts(path, *args, **kwargs):
+        if path.endswith("/_system/accounts.json"):
+            raise AGFSNotFoundError("Injected missing account registry")
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(agfs, "read", missing_accounts)
+    await manager.load()
+    assert read("/local/default/_system/users.json") == original_registry
+    assert (await manager.resolve_identity(key)).role == Role.ADMIN
 
 
 async def test_concurrent_management_registration_of_same_user_rejects_second_writer(

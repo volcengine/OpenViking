@@ -188,6 +188,9 @@ class FileStore(AccountStore):
                 # First run: create default account
                 now = datetime.now(timezone.utc).isoformat()
                 accounts_data = {"accounts": {"default": {"created_at": now}}}
+                default_users_path = USERS_PATH_TEMPLATE.format(account_id="default")
+                if await self._read_json(default_users_path) is None:
+                    await self._write_json(default_users_path, {"users": {}})
                 await self._write_json(ACCOUNTS_PATH, accounts_data)
 
             accounts, prefix_index, user_group_ids = await self._build_state(
@@ -1420,6 +1423,10 @@ class FileStore(AccountStore):
                 sorted(updated_users or {}),
                 sorted(deleted_user_ids or set()),
             )
+            if registry_found is False:
+                raise FailedPreconditionError(
+                    "User registry is missing; refusing to overwrite it with user changes."
+                )
             # Check persisted credentials while holding the cross-instance lease.
             # Request-time authentication and the local cache may already be stale.
             for user_id, expected_key in (expected_api_keys or {}).items():
