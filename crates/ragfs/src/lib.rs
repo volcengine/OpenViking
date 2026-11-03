@@ -36,6 +36,7 @@ pub mod cache_runtime;
 pub mod core;
 pub mod crypto;
 pub mod git;
+pub mod global_policy;
 #[cfg(feature = "cache")]
 pub mod leader;
 pub mod lock;
