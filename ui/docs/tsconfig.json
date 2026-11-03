@@ -2,16 +2,7 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "baseUrl": ".",
-    "paths": {
-      "@openviking/ui": ["../packages/react/src/index.ts"]
-    },
     "types": ["node"]
   },
-  "include": [
-    "rspress.config.ts",
-    "docs/**/*.ts",
-    "docs/**/*.tsx",
-    "../packages/react/src/env.d.ts"
-  ]
+  "include": ["rspress.config.ts", "docs/**/*.ts", "docs/**/*.tsx"]
 }

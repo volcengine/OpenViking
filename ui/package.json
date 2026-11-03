@@ -12,7 +12,7 @@
   },
   "scripts": {
     "dev": "npm run dev --workspace @openviking/ui-docs --",
-    "check": "npm run check --workspaces --if-present",
+    "check": "npm run build:lib && npm run check --workspaces --if-present",
     "build:lib": "npm run build --workspace @openviking/ui",
     "build:docs": "npm run build --workspace @openviking/ui-docs",
     "build": "npm run build:lib && npm run build:docs",
