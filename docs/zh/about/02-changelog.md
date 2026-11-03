@@ -7,6 +7,12 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **Compile 图片与 LiteLLM 配置（不兼容变更）**：Compile 可通过明确的 Chat Completions
+  或原生多模态协议传递图片证据。依赖裸模型名推断的 LiteLLM 配置需要添加显式 provider
+  或已识别的路由前缀，例如 `claude-sonnet-4-5` → `anthropic/claude-sonnet-4-5`。
+  仅有裸模型名或 `api_base` 不再授予图片传输能力，包括普通 Bot 会话中的 LiteLLM
+  原生工具图片；旧有文本路由和普通 Bot 省略 Chat Completions 工具图片的行为保持不变。
+  详见 [Compile 图片说明](../context-compilation/01-overview.md#图片来源与模型)。
 - **移除旧会话迁移（不兼容变更）**：删除旧迁移实现、`ov admin migrate`（含 `--cleanup`）
   及 Python、TypeScript、Go SDK 的对应方法。保留仅 ROOT 可调用的
   `POST /api/v1/admin/migrate` 入口，当前返回 `400 / INVALID_ARGUMENT`，不创建任务。

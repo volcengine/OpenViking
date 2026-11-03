@@ -203,6 +203,10 @@ class LLMProvider(ABC):
         """Whether this provider can deliver media returned by a tool to the model."""
         return False
 
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Agent Loop policy; scoped providers can opt into adapted image delivery."""
+        return self.supports_tool_result_media(model)
+
     @abstractmethod
     def get_default_model(self) -> str:
         """Get the default model for this provider."""

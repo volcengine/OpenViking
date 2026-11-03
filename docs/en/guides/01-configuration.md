@@ -749,6 +749,13 @@ Two approaches are supported:
 
 ### vlm
 
+For Compile image sources, LiteLLM requires a declared provider or recognized
+`provider/model` route that matches its actual resolved route, plus a verified
+image-preserving converter. When upgrading bare image-model configurations, use
+an explicit route such as `anthropic/claude-sonnet-4-5`; a model name or `api_base`
+alone does not declare image transport. Legacy text routing is unchanged. See
+[image-source configuration and migration](../context-compilation/01-overview.md#image-sources-and-models).
+
 Vision Language Model for semantic extraction (L0/L1 generation).
 
 ```json

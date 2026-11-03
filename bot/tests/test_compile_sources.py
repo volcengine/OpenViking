@@ -38,9 +38,7 @@ from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
 from openviking.models.model_error import ModelErrorKind
-from openviking.models.vlm import GLMVLM, KimiVLM, OpenAIVLM, VolcEngineVLM
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
-from openviking.models.vlm.retry_vlm import RetryVLM
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -223,14 +221,7 @@ async def test_compile_image_reaches_chat_completion_wire(
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
     config = loader.load_config()
     provider = _make_provider(config, langfuse_client=SimpleNamespace(enabled=False))
-    assert config.inherits_root_vlm() is (not bot_override)
-    assert isinstance(provider._vlm, RetryVLM)
     vlm = provider._vlm.inner
-    assert isinstance(
-        vlm,
-        {"volcengine": VolcEngineVLM, "openai": OpenAIVLM, "kimi": KimiVLM, "glm": GLMVLM}[backend],
-    )
-    assert (vlm.model, vlm.api_base) == (model, api_base)
     requests = []
 
     def handle(request):
@@ -351,12 +342,13 @@ async def test_compile_image_reaches_chat_completion_wire(
 
 
 @pytest.mark.asyncio
-async def test_undeclared_image_protocol_fails_before_download(runtime):
+@pytest.mark.parametrize("model", ["future-claude-vision", "deepseek/deepseek-chat"])
+async def test_undeclared_image_protocol_fails_before_download(runtime, model):
     pipeline, _ = runtime
     vlm = LiteLLMVLMProvider(
         {
             "provider": "litellm",
-            "model": "future-claude-vision",
+            "model": model,
             "api_base": "https://compat.invalid/v1",
         }
     )

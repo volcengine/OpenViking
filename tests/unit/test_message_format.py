@@ -65,6 +65,24 @@ def test_tool_images_follow_all_parallel_results_with_source_attribution():
     assert tool_images_as_user_messages(converted) == converted
 
 
+@pytest.mark.parametrize("case", ["tool_call_id", "text", "input_image"])
+def test_malformed_tool_images_report_context_without_image_bytes(case):
+    part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,PRIVATE"}}
+    message = {"role": "tool", "name": "read_source", "tool_call_id": "read-1", "content": [part]}
+    if case == "tool_call_id":
+        message.pop("tool_call_id")
+    elif case == "text":
+        message["content"].append({"type": "text"})
+    else:
+        part["type"] = case
+    original = deepcopy(message)
+    with pytest.raises(ValueError) as caught:
+        tool_images_as_user_messages([message])
+    assert "read_source" in str(caught.value) and case in str(caught.value)
+    assert "PRIVATE" not in str(caught.value)
+    assert message == original
+
+
 def test_format_messages_renders_roles_and_content():
     rendered = format_messages(
         [

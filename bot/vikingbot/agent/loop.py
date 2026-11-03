@@ -2182,10 +2182,10 @@ class AgentLoop:
                         )
                     if isinstance(result, MultimodalToolResult):
                         result_media_bytes = _inline_media_bytes([{"content": result.content}])
-                        if not self.provider.supports_tool_result_media(self.model):
+                        if not self.provider.should_inline_tool_result_media(self.model):
                             model_result = (
-                                f"{result_text}\n\nMedia content was omitted because the configured "
-                                "model provider does not support media in tool results."
+                                f"{result_text}\n\nMedia content was omitted by the configured "
+                                "tool-result media policy."
                             )
                         else:
                             overflow = (

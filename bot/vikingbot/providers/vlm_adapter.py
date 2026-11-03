@@ -17,6 +17,7 @@ from loguru import logger
 
 from openviking.models.model_error import model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
+from openviking.models.vlm.base import ToolResultMediaMode
 from openviking.utils.message_format import tool_images_as_user_messages
 from openviking.utils.model_retry import effective_max_retries, retry_async
 from openviking.utils.multimodal import redact_image_data_urls
@@ -712,8 +713,12 @@ class VLMProviderAdapter(LLMProvider):
         """Whether every configured backend can deliver image evidence from tools."""
         return self._tool_result_media_mode(self._vlm) is not None
 
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Keep ordinary chats native-only; Compile's scoped providers opt in."""
+        return self._tool_result_media_mode(self._vlm) == "native"
+
     @staticmethod
-    def _tool_result_media_mode(vlm: Any) -> str | None:
+    def _tool_result_media_mode(vlm: Any) -> ToolResultMediaMode | None:
         """Backend declarations own capability; names cannot grant media support."""
         capability = getattr(vlm, "tool_result_media_mode", None)
         mode = capability() if callable(capability) else None

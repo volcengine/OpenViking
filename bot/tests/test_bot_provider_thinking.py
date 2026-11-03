@@ -1,7 +1,12 @@
+import json
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import litellm
 import pytest
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 from openviking.models.model_error import ModelError, ModelErrorKind
@@ -47,31 +52,45 @@ def test_provider_names_do_not_grant_undeclared_media_capabilities():
         assert adapter.supports_tool_result_media() is False
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model,mode",
     [
+        ("openai/future-claude-vision", "user_message"),
+        ("azure/deployment", "user_message"),
         ("dashscope/qwen3-vl-plus", "user_message"),
         ("moonshot/kimi-k2.5", "user_message"),
         ("zai/glm-4.6v", "user_message"),
         ("openrouter/qwen/qwen3-vl-32b-instruct", "user_message"),
+        ("databricks/databricks-meta-llama-3-3-70b-instruct", "user_message"),
         ("hosted_vllm/private-vision-model", "user_message"),
         ("nvidia_nim/nvidia/llama-3.2-nv-vision-90b-v1", "user_message"),
         ("gemini/gemini-2.5-flash", "user_message"),
         ("vertex_ai/gemini-2.5-flash", "user_message"),
+        ("anthropic/claude-sonnet-4-5", "native"),
         ("vertex_ai/claude-sonnet-4-5", "native"),
         ("azure_ai/claude-sonnet-4-5", "native"),
         ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", "user_message"),
         ("ollama/llava", "user_message"),
         ("ollama_chat/llama3.2-vision", "user_message"),
         ("github_copilot/gpt-4o", "user_message"),
-        # Transport support does not claim these models have vision support.
-        ("deepseek/deepseek-chat", "user_message"),
         ("minimax/MiniMax-M3", "user_message"),
+        ("mistral/pixtral-large-latest", "user_message"),
+        ("cohere/command-a-vision-07-2025", "user_message"),
+        ("groq/meta-llama/llama-4-scout-17b-16e-instruct", "user_message"),
+        ("deepseek/deepseek-chat", None),
+        ("sambanova/model", None),
+        ("heroku/model", None),
+        ("docker_model_runner/model", None),
         ("azure_text/deployment", None),
         ("sagemaker/custom", None),
+        ("custom/my-model", None),
+        ("gemini/future-claude-vision", None),
     ],
 )
-def test_litellm_media_protocols_use_only_local_metadata(monkeypatch, tmp_path, model, mode):
+async def test_litellm_declared_media_survives_actual_conversion(
+    monkeypatch, tmp_path, model, mode
+):
     def no_auth(*args, **kwargs):
         raise AssertionError("Capability checks must not resolve credentials or log in")
 
@@ -82,6 +101,92 @@ def test_litellm_media_protocols_use_only_local_metadata(monkeypatch, tmp_path, 
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
     vlm = OpenVikingLiteLLMVLMProvider({"provider": "litellm", "model": model})
     assert vlm.tool_result_media_mode() == mode
+    if mode is None:
+        return
+
+    encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5XsAAAAASUVORK5CYII="
+    image = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "read_image", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
+    messages = [
+        {"role": "user", "content": "Read the source image."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "read-1",
+                    "type": "function",
+                    "function": {"name": "read_image", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "read-1",
+            "name": "read_image",
+            "content": [{"type": "text", "text": "viking://resources/image.png"}, image],
+        },
+    ]
+    original = deepcopy(messages)
+    captured = []
+
+    async def convert(**kwargs):
+        provider, raw_model = kwargs["model"].split("/", 1)
+        config = ProviderConfigManager.get_provider_chat_config(
+            model=raw_model, provider=LlmProviders(provider)
+        )
+        if isinstance(config, litellm.VertexGeminiConfig):
+            wire = config._transform_messages(messages=kwargs["messages"], model=raw_model)
+        else:
+            wire = config.transform_request(
+                model=raw_model,
+                messages=kwargs["messages"],
+                optional_params={"tools": deepcopy(tools), "max_tokens": 512},
+                litellm_params={},
+                headers={},
+            )
+        captured.append(wire)
+        return "image delivered"
+
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", convert)
+    adapter = VLMProviderAdapter(vlm, model, langfuse_client=SimpleNamespace(enabled=False))
+    assert (await adapter.chat(messages, tools=tools)).content == "image delivered"
+    wire = captured[0]
+    serialized = json.dumps(wire)
+    assert serialized.count(encoded) == 1 and "viking://resources/image.png" in serialized
+    if mode == "native":
+        assert '"type": "image"' in serialized and f'"data": "{encoded}"' in serialized
+    elif model.startswith(("gemini/", "vertex_ai/")):
+        blobs = [p["inline_data"] for m in wire for p in m["parts"] if "inline_data" in p]
+        assert blobs == [{"data": encoded, "mime_type": "image/png"}]
+    elif model.startswith("ollama/"):
+        assert wire["images"] == [encoded]
+    elif model.startswith("ollama_chat/"):
+        assert wire["messages"][-1]["images"] == [encoded]
+    elif model.startswith("bedrock/"):
+        images = [p["image"] for m in wire["messages"] for p in m["content"] if "image" in p]
+        assert images == [{"format": "png", "source": {"bytes": encoded}}]
+    else:
+        assert wire["messages"][-1]["role"] == "user"
+        assert image in wire["messages"][-1]["content"]
+        assert isinstance(wire["messages"][-2]["content"], str)
+    assert messages == original
+
+
+def test_unverified_litellm_subclass_cannot_inherit_image_permission(monkeypatch):
+    class UnverifiedConfig(litellm.OpenAIGPTConfig):
+        pass
+
+    monkeypatch.setattr(
+        ProviderConfigManager, "get_provider_chat_config", lambda **kwargs: UnverifiedConfig()
+    )
+    vlm = OpenVikingLiteLLMVLMProvider({"provider": "litellm", "model": "openai/future-model"})
+    assert vlm.tool_result_media_mode() is None
 
 
 def test_vlm_adapter_uses_litellm_resolved_provider_for_tool_result_media():
@@ -206,9 +311,9 @@ def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
     ("backend", "model", "resolved_model"),
     [
         ("dashscope", "qwen-plus", "dashscope/qwen-plus"),
-        ("openai", "gpt-4o", "openai/gpt-4o"),
+        ("openai", "gpt-4o", "gpt-4o"),
         ("gemini", "gemini/gemini-2.5-pro", "gemini/gemini-2.5-pro"),
-        ("zhipu", "glm-4", "zai/glm-4"),
+        ("zhipu", "glm-4", "zhipu/glm-4"),
     ],
 )
 async def test_vlm_adapter_routes_litellm_thinking_parameters(

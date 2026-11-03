@@ -22,46 +22,6 @@ def _vlm(model: str) -> LiteLLMVLMProvider:
     return LiteLLMVLMProvider({"model": model, "provider": "litellm"})
 
 
-@pytest.mark.parametrize(
-    "model,mode",
-    [("glm-4.6v", None), ("zhipu/glm-4.6v", "user_message"), ("zai/glm-4.6v", "user_message")],
-)
-def test_zhipu_models_use_current_zai_route(model, mode):
-    vlm = _vlm(model)
-    assert vlm._resolve_model(model) == "zai/glm-4.6v"
-    assert vlm.resolved_provider() == "zai"
-    assert vlm.tool_result_media_mode() == mode
-
-
-@pytest.mark.parametrize("api_key", [None, "test-key"])
-@pytest.mark.parametrize(
-    "provider,model,expected",
-    [
-        ("litellm", "gemini/future-claude-vision", "gemini/future-claude-vision"),
-        ("litellm", "moonshot/future-claude-vision", "moonshot/future-claude-vision"),
-        ("openai", "future-qwen-vision", "openai/future-qwen-vision"),
-        ("openrouter", "anthropic/future-vision", "openrouter/anthropic/future-vision"),
-    ],
-)
-def test_declared_protocol_wins_over_model_keywords(
-    monkeypatch, provider, model, expected, api_key
-):
-    for name in (
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "DASHSCOPE_API_KEY",
-        "MOONSHOT_API_KEY",
-        "OPENROUTER_API_KEY",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    vlm = LiteLLMVLMProvider({"provider": provider, "model": model, "api_key": api_key})
-    assert vlm._resolve_model(model) == expected
-    kwargs = vlm._build_text_kwargs(prompt="read the image")
-    assert kwargs["model"] == expected
-    assert "enable_thinking" not in kwargs.get("extra_body", {})
-    assert vlm.tool_result_media_mode() is not None
-
-
 @pytest.mark.parametrize("api_base", [None, "https://compat.invalid/v1"])
 def test_new_model_needs_declared_image_protocol(api_base):
     implicit = LiteLLMVLMProvider(
@@ -71,8 +31,43 @@ def test_new_model_needs_declared_image_protocol(api_base):
     explicit = LiteLLMVLMProvider(
         {"provider": "litellm", "model": "openai/future-claude-vision", "api_base": api_base}
     )
-    assert explicit._resolve_model(explicit.model) == "openai/future-claude-vision"
     assert explicit.tool_result_media_mode() == "user_message"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,model,expected",
+    [
+        ("aihubmix", "gpt-4o", "gpt-4o"),
+        ("doubao", "doubao-seed-1.6", "openai/doubao-seed-1.6"),
+        ("litellm", "custom/my-model", "openai/custom/my-model"),
+        ("ollama", "ollama_chat/llama3.2-vision", "ollama_chat/llama3.2-vision"),
+        ("hosted_vllm", "openai/foo", "openai/foo"),
+        ("siliconflow", "Qwen/Qwen2.5-VL-72B", "dashscope/Qwen/Qwen2.5-VL-72B"),
+        ("lmstudio", "local-model", "openai/local-model"),
+        ("qwen", "qwen-plus", "dashscope/qwen-plus"),
+        ("litellm", "huggingface/facebook/opt-125m", "openai/huggingface/facebook/opt-125m"),
+        ("myproxy", "gpt-4o", "gpt-4o"),
+    ],
+)
+async def test_text_routes_keep_baseline_behavior(monkeypatch, provider, model, expected):
+    from openviking.models.vlm import VLMFactory
+
+    for name in ("OPENAI", "DASHSCOPE", "OLLAMA", "HOSTED_VLLM", "ANTHROPIC"):
+        monkeypatch.setenv(f"{name}_API_KEY", "original-key")
+    completion = AsyncMock(return_value="done")
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", completion)
+    vlm = VLMFactory.create(
+        {
+            "provider": provider,
+            "model": model,
+            "api_base": "https://proxy.invalid/v1",
+            "api_key": "test-key",
+        }
+    )
+    assert await vlm.get_completion_async(prompt="hello") == "done"
+    assert completion.await_args.kwargs["model"] == expected
+    assert completion.await_args.kwargs["api_base"] == "https://proxy.invalid/v1"
 
 
 class TestLiteLLMVLMProviderDetection:

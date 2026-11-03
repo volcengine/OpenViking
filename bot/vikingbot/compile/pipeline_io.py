@@ -279,8 +279,8 @@ class JsonModel:
             raise CompileFailure(
                 "UNSUPPORTED_MEDIA",
                 "Compile provider cannot deliver image evidence. The image transport is "
-                "unconfigured or unsupported; LiteLLM image inputs require an explicit "
-                "provider or a provider/model route such as openai/<model>.",
+                "unverified or unsupported; LiteLLM requires a matching provider/model "
+                "route and an image-preserving converter.",
                 stage=stage,
             )
         if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:

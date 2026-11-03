@@ -20,11 +20,15 @@
 
 图片传输方式由 VLM 后端声明，不按 provider 名称或模型名称放行。Anthropic 协议和 OpenAI Codex 使用原生多模态工具结果；OpenAI Chat Completions 后端及其方舟、Azure、Kimi、GLM 子类将工具结果保留为文本，并在同一请求中附带图片消息，通过工具调用 ID 和图片序号关联来源。
 
+传输能力与 Agent Loop 的图片内联策略分开处理。Compile 的作用域 provider 会启用图片消息适配，以完整保留来源证据；普通 Bot 会话保留原有策略：需要此适配的工具图片继续省略，并返回明确的文本提示，纯文本模型也不会因此新增图片请求；明确声明的原生多模态协议仍可传递工具图片。下文的 LiteLLM 路由要求也适用于普通 Bot 会话中的原生工具图片。用户主动附带的图片输入不受影响，不新增模型视觉能力名单或探测请求。
+
 失败策略分层处理：**协议明确、模型视觉能力未知时允许正常带图请求**，不要求新模型先进入名单，也不额外发探测请求；服务端明确拒绝图片时，编译报错。**协议或路由未明确、图片未完整传递时停止编译**，不会跳过图片后报告成功。允许尝试可能带来失败请求的延迟和费用；请求成功也不等于已验证模型正确理解了图片。
 
-LiteLLM 的显式 `provider` 优先；使用 `provider: "litellm"` 时，图片输入需要已识别的 `provider/model` 前缀，例如 `openai/future-vision-model`、`anthropic/claude-sonnet-4-5`。仅有裸模型名或 `api_base` 不足以声明图片协议，不能靠 `claude`、`qwen` 等名字片段授予传图能力。文本请求继续保留原有自动推断。已有依赖裸模型名自动推断的 LiteLLM 图片编译配置需要补上协议前缀。
+LiteLLM 图片输入需要显式 provider 或已识别的 `provider/model` 路由，并且与实际解析的路由一致，例如 `openai/future-vision-model`、`anthropic/claude-sonnet-4-5`。仅有裸模型名或 `api_base` 不足以声明图片协议，不能靠名字片段授予图片能力。文本路由、已有前缀优先级和 provider 别名保持基线行为；声明协议与实际路由不一致时拒绝图片证据。已有依赖裸模型名自动推断的 LiteLLM 图片配置需要补上协议前缀。
 
-LiteLLM 根据本地实际路由的协议适配器判断能力：OpenAI 兼容协议（如通义、Moonshot、智谱 `zai`、OpenRouter、NVIDIA NIM、vLLM）、Gemini/Vertex Gemini、Ollama 和 Bedrock Converse 使用图片消息；Anthropic 协议保留原生工具结果。智谱旧 `zhipu/` 前缀会规范为当前 LiteLLM 使用的 `zai/`。能力检查不调用凭据解析或登录流程。纯文本 Completion API 和尚未验证的协议继续拒绝图片证据，不能静默退回二进制文本。
+未识别的自定义 provider 标签保留旧有文本路由，包括 OpenAI 兼容 `api_base` 的回退行为；标签本身不能授予图片传输能力。裸模型名配置的升级要求另见[未发布升级说明](../about/02-changelog.md#未发布)。
+
+LiteLLM 根据实际路由的本地转换器与已验证实现匹配：OpenAI 兼容协议（如通义、Moonshot、智谱 `zai`、OpenRouter、NVIDIA NIM、vLLM、Databricks）、Gemini/Vertex Gemini、Ollama 和 Bedrock Converse 使用图片消息；Anthropic 协议保留原生工具结果。仅继承 OpenAI 配置类不足以授予能力：当前会把图片压平成文本的 DeepSeek、Sambanova、Heroku、Docker Model Runner 转换器，以及尚未验证的转换器类，都拒绝图片证据。沿用已验证转换器的新模型无需进入模型名单。能力检查不解析凭据、不登录、不发请求；纯文本 Completion API 仍不支持图片。
 
 图片消息会排在同一轮所有工具结果之后；转换仅发生在 provider 请求边界，不改写任务证据或会话历史。主备或多凭据链上的每个后端都必须支持图片证据传递；包含图片消息传输方式的混合链统一使用图片消息。
 

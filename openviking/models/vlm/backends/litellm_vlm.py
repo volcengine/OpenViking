@@ -88,7 +88,7 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
     "zhipu": {
         "keywords": ("glm", "zhipu"),
         "env_key": "ZHIPUAI_API_KEY",
-        "litellm_prefix": "zai",
+        "litellm_prefix": "zhipu",
     },
     "dashscope": {
         "keywords": ("qwen", "dashscope"),
@@ -178,46 +178,51 @@ class LiteLLMVLMProvider(VLMBase):
         litellm.drop_params = True
 
     def _declared_provider(self, model: str | None) -> str | None:
-        """Read explicit protocol declarations without guessing from model names."""
-        provider = str(self._provider_name or "").lower()
-        if provider and provider != "litellm":
-            return "zai" if provider == "zhipu" else provider
+        """Read a transport declaration without changing legacy text routing."""
         prefix, separator, _ = str(model or "").partition("/")
-        if not separator:
-            return None
-        prefix = "zai" if prefix.lower() == "zhipu" else prefix.lower()
-        try:
-            return LlmProviders(prefix).value
-        except ValueError:
-            return None
+        candidates = [str(self._provider_name or "").lower(), prefix.lower() if separator else ""]
+        if _has_litellm_prefix(
+            str(model or ""), (*EXPLICIT_LITELLM_PREFIXES, "openai/", *OLLAMA_LITELLM_PREFIXES)
+        ):
+            candidates.reverse()
+        for candidate in candidates:
+            if candidate and candidate != "litellm":
+                try:
+                    return LlmProviders(candidate).value
+                except ValueError:
+                    pass
+        return None
 
     def _setup_env(self, api_key: str, model: str | None) -> None:
         """Set environment variables based on detected provider."""
-        declared = self._declared_provider(model)
-        provider = declared or (detect_provider_by_model(model) if model else None)
-        metadata = (
-            PROVIDER_CONFIGS.get("zhipu" if provider == "zai" else provider) if provider else None
-        )
-        if metadata:
-            env_key = metadata["env_key"]
+        provider = self._provider_name
+        if (not provider or provider == "litellm") and model:
+            detected = detect_provider_by_model(model)
+            if detected:
+                provider = detected
+            elif _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
+                return
+
+        if provider and provider in PROVIDER_CONFIGS:
+            env_key = PROVIDER_CONFIGS[provider]["env_key"]
             os.environ[env_key] = api_key
             self._detected_provider = provider
-        elif declared is None:
+        else:
             os.environ["OPENAI_API_KEY"] = api_key
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider prefixes."""
-        declared = self._declared_provider(model)
-        if declared is not None:
-            prefix, separator, name = model.partition("/")
-            prefix = "zai" if prefix.lower() == "zhipu" else prefix.lower()
-            return f"{declared}/{name if separator and prefix == declared else model}"
+        if _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
+            return model
+        if model.lower().startswith(("openai/", *OLLAMA_LITELLM_PREFIXES)):
+            return model
 
         provider = self._detected_provider or detect_provider_by_model(model)
 
         if provider and provider in PROVIDER_CONFIGS:
             prefix = PROVIDER_CONFIGS[provider]["litellm_prefix"]
-            if prefix and not model.startswith(f"{prefix}/"):
+            is_zhipu_zai_model = provider == "zhipu" and model.startswith("zai/")
+            if prefix and not model.startswith(f"{prefix}/") and not is_zhipu_zai_model:
                 return f"{prefix}/{model}"
             return model
 
@@ -240,11 +245,12 @@ class LiteLLMVLMProvider(VLMBase):
         discovery must not use it. Unknown and text-only protocols fail closed.
         """
         provider = self._declared_provider(self.model)
-        if provider is None:
+        if provider is None or not self.model:
             return None
-        model = self._resolve_model(self.model or "gpt-4o-mini")
-        if provider and model.startswith(f"{provider}/"):
-            model = model.split("/", 1)[1]
+        resolved = self._resolve_model(self.model)
+        actual_provider, separator, model = resolved.partition("/")
+        if not separator or actual_provider != provider:
+            return None
         try:
             config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(provider)
@@ -254,18 +260,38 @@ class LiteLLMVLMProvider(VLMBase):
         config_type = config if isinstance(config, type) else type(config)
         if issubclass(config_type, BaseTextCompletionConfig):
             return None
-        if issubclass(config_type, litellm.AnthropicConfig):
-            return "native"
         image_protocols = (
-            litellm.OpenAIGPTConfig,
-            litellm.OpenAIConfig,
-            litellm.AzureOpenAIConfig,
-            litellm.VertexGeminiConfig,
-            litellm.OllamaConfig,
-            litellm.OllamaChatConfig,
-            litellm.AmazonConverseConfig,
+            "OpenAIGPTConfig",
+            "AzureOpenAIConfig",
+            "DashScopeChatConfig",
+            "MoonshotChatConfig",
+            "ZAIChatConfig",
+            "OpenrouterConfig",
+            "NvidiaNimConfig",
+            "HostedVLLMChatConfig",
+            "GithubCopilotConfig",
+            "DatabricksConfig",
+            "MinimaxChatConfig",
+            "MistralConfig",
+            "CohereV2ChatConfig",
+            "GroqChatConfig",
+            "VertexGeminiConfig",
+            "GoogleAIStudioGeminiConfig",
+            "OllamaConfig",
+            "OllamaChatConfig",
+            "AmazonConverseConfig",
         )
-        return "user_message" if issubclass(config_type, image_protocols) else None
+        # Subclasses may flatten images (DeepSeek, Sambanova, Heroku, Docker).
+        # Only audited converter implementations grant support, never inheritance.
+        # Databricks uses OpenAI conversion despite also inheriting AnthropicConfig.
+        if config_type in tuple(getattr(litellm, name, None) for name in image_protocols):
+            return "user_message"
+        native_protocols = ("AnthropicConfig", "AzureAnthropicConfig", "VertexAIAnthropicConfig")
+        return (
+            "native"
+            if config_type in tuple(getattr(litellm, name, None) for name in native_protocols)
+            else None
+        )
 
     def _should_forward_api_key(self, model: str) -> bool:
         if not self.api_key:
@@ -402,11 +428,7 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs["extra_body"] = extra
 
         # Only send enable_thinking to DashScope-compatible providers
-        provider = (
-            self._declared_provider(model)
-            or self._detected_provider
-            or detect_provider_by_model(model)
-        )
+        provider = self._detected_provider or detect_provider_by_model(model)
         if provider == "dashscope":
             extra = kwargs.get("extra_body", {})
             extra["enable_thinking"] = self._effective_thinking(thinking)
