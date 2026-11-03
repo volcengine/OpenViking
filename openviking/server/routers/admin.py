@@ -362,10 +362,17 @@ async def _write_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
+    *,
+    lease_ref: object | None = None,
 ) -> None:
     if not _has_initial_user_config(user_config):
         return
-    await write_user_config(service.viking_fs, user_ctx, user_config)
+    await write_user_config(
+        service.viking_fs,
+        user_ctx,
+        user_config,
+        lease_ref=lease_ref,
+    )
 
 
 async def _rollback_account_creation(
@@ -513,30 +520,42 @@ async def create_account(
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
     manager = _get_api_key_manager(request)
-    user_key = await manager.create_account(
-        body.account_id,
-        body.admin_user_id,
-        seed=body.seed,
-    )
+    user_key = None
+    account_created = False
     try:
-        if body.settings and runtime_config is not None:
-            # Persist the pre-validated override.
-            await runtime_config.patch_account(
+        async with service.account_workspace_lock(account_ctx) as lease:
+            user_key = await manager.create_account(
                 body.account_id,
-                body.settings,
-                creating=True,
+                body.admin_user_id,
+                seed=body.seed,
+                lease_ref=lease,
             )
-        await service.initialize_account_workspace(account_ctx)
-        await _write_initial_user_config(service, account_ctx, body.user_config)
+            account_created = True
+            if body.settings and runtime_config is not None:
+                # Persist the pre-validated override.
+                await runtime_config.patch_account(
+                    body.account_id,
+                    body.settings,
+                    creating=True,
+                    lease_ref=lease,
+                )
+            await service.initialize_account_workspace(account_ctx, lease_ref=lease)
+            await _write_initial_user_config(
+                service,
+                account_ctx,
+                body.user_config,
+                lease_ref=lease,
+            )
     except BaseException:
-        await _rollback_account_creation(
-            service,
-            manager,
-            body.account_id,
-            runtime_config,
-            deletion_service=getattr(request.app.state, "deletion_service", None),
-            actor=ctx,
-        )
+        if account_created:
+            await _rollback_account_creation(
+                service,
+                manager,
+                body.account_id,
+                runtime_config,
+                deletion_service=getattr(request.app.state, "deletion_service", None),
+                actor=ctx,
+            )
         raise
     result = {
         "account_id": body.account_id,

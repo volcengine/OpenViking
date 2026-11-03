@@ -770,7 +770,10 @@ class RedisMySQLAccountStore(AccountStore):
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         await self._mutate_account(
             account_id,
             lambda: self._mysql.create_account(account_id, admin_user_id),
@@ -781,7 +784,10 @@ class RedisMySQLAccountStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         await self._mutate_account(
             account_id,
             lambda: self._mysql.create_account_with_api_key(

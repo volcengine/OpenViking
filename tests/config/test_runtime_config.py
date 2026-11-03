@@ -1069,6 +1069,9 @@ class _FakeAGFS:
 
     def __init__(self):
         self.files: dict[str, bytes] = {}
+        self.acquired_paths: list[str] = []
+        self.released_leases: list[object] = []
+        self.write_contexts: dict[str, object] = {}
 
     async def read(self, path, *a, **k):
         from openviking.pyagfs import AGFSNotFoundError
@@ -1079,6 +1082,7 @@ class _FakeAGFS:
 
     async def write(self, path, data, *a, **k):
         self.files[path] = data if isinstance(data, bytes) else bytes(data)
+        self.write_contexts[path] = k.get("fs_ctx")
         return path
 
     async def ensure_parent_dirs(self, path, *a, **k):
@@ -1099,9 +1103,11 @@ class _FakeAGFS:
         return {"size": len(self.files[path]), "modTime": 1}
 
     async def pathlock_acquire_exact(self, path, *a, **k):
+        self.acquired_paths.append(path)
         return {"lease_ref": "lease-1"}
 
     async def pathlock_release(self, lease, *a, **k):
+        self.released_leases.append(lease)
         return None
 
 
@@ -1124,6 +1130,7 @@ def test_file_source_reads_and_writes_plaintext_json():
         assert agfs.files["/local/ov-a/_system/setting.backup.json"] == json.dumps(
             {"vlm": {"model": "legacy"}}
         ).encode("utf-8")
+        assert agfs.write_contexts["/local/ov-a/_system/setting.backup.json"] is None
         assert await source.load(scope) == {"vlm": {"model": "new"}}
 
     asyncio.run(run())
@@ -1138,6 +1145,27 @@ def test_file_source_cluster_scope_path_and_load():
         await source.update(scope, lambda cur: {"memory": {"extraction_enabled": False}})
         assert "/local/_system/runtime_config/cluster.json" in agfs.files
         assert await source.load(scope) == {"memory": {"extraction_enabled": False}}
+
+    asyncio.run(run())
+
+
+def test_file_source_reuses_outer_account_tree_lease():
+    async def run():
+        agfs = _FakeAGFS()
+        manager, _ = _make_manager(FileConfigSource(agfs))
+        lease = {"lease_ref": "account-tree"}
+
+        await manager.patch_account(
+            "ov-a",
+            {"memory": {"extraction_enabled": False}},
+            creating=True,
+            lease_ref=lease,
+        )
+
+        path = "/local/ov-a/_system/setting.json"
+        assert agfs.acquired_paths == []
+        assert agfs.released_leases == []
+        assert agfs.write_contexts[path]["lease_ref"] == "account-tree"
 
     asyncio.run(run())
 

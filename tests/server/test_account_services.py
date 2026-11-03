@@ -155,6 +155,48 @@ async def test_file_provider_keeps_existing_registry_paths():
         await manager.close()
 
 
+@pytest.mark.parametrize("use_outer_lease", [True, False], ids=["outer-tree", "own-exact"])
+async def test_file_account_creation_reuses_optional_outer_lease(use_outer_lease):
+    agfs = InMemoryAGFS()
+    manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs))
+    await manager.load()
+    acquired_paths = []
+    released_leases = []
+    store = manager._store
+    original_acquire = store._async_agfs.pathlock_acquire_exact
+    original_release = store._async_agfs.pathlock_release
+
+    async def record_acquire(path, *args, **kwargs):
+        acquired_paths.append(path)
+        return await original_acquire(path, *args, **kwargs)
+
+    async def record_release(lease):
+        released_leases.append(lease)
+        return await original_release(lease)
+
+    store._async_agfs.pathlock_acquire_exact = record_acquire
+    store._async_agfs.pathlock_release = record_release
+    outer_lease = {"lease_ref": "account-tree"}
+    try:
+        await manager.create_account(
+            "acme",
+            "alice",
+            lease_ref=outer_lease if use_outer_lease else None,
+        )
+    finally:
+        await manager.close()
+
+    assert acquired_paths[0] == "/local/_system/accounts.json"
+    assert len(released_leases) == len(acquired_paths)
+    if use_outer_lease:
+        assert acquired_paths == ["/local/_system/accounts.json"]
+    else:
+        assert acquired_paths == [
+            "/local/_system/accounts.json",
+            "/local/acme/_system/users.json",
+        ]
+
+
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
 @pytest.mark.parametrize("length", [255, 256, 1024])
 async def test_file_account_creation_respects_path_component_limit(issue_user_keys, length):
