@@ -18,7 +18,7 @@ use termimad::MadSkin;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
-use crate::base_client::api_error_from_body;
+use crate::base_client::{api_client_builder, api_error_from_body};
 use crate::config::Config;
 use crate::i18n::{Language, copy};
 use crate::theme;
@@ -162,13 +162,13 @@ impl ChatCommand {
     /// Execute the chat command
     pub async fn execute(&self) -> Result<()> {
         let language = Language::current();
-        let client = Client::builder()
+        let config = Config::load()?;
+        let endpoint = self.resolve_endpoint_from_config(&config);
+        let client = api_client_builder(&endpoint)
             .timeout(Duration::from_secs(300))
             .build()
             .map_err(|e| Error::from_reqwest("Failed to create HTTP client", e))?;
 
-        let config = Config::load()?;
-        let endpoint = self.resolve_endpoint_from_config(&config);
         let probe_auth = self.health_probe_auth_from_config(&config);
         let health = self
             .fetch_openviking_health(&client, &endpoint, Some(&probe_auth))

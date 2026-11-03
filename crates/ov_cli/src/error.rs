@@ -97,6 +97,16 @@ impl Error {
         }
     }
 
+    pub(crate) fn from_response_body(status: reqwest::StatusCode, error: reqwest::Error) -> Self {
+        let detail = with_sources(&error);
+        let message = format!("Failed to read response body (HTTP {status}): {detail}");
+        if error.is_timeout() {
+            Self::Timeout(message)
+        } else {
+            Self::Network(message)
+        }
+    }
+
     pub(crate) fn code(&self) -> &str {
         match self {
             Self::MissingConfig | Self::Config(_) => "FAILED_PRECONDITION",

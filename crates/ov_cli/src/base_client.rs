@@ -21,6 +21,23 @@ thread_local! {
     static LAST_TEST_PROGRESS: std::cell::RefCell<Option<ProgressBar>> = const { std::cell::RefCell::new(None) };
 }
 
+pub(crate) fn api_client_builder(base_url: &str) -> reqwest::ClientBuilder {
+    let builder = ReqwestClient::builder();
+    let is_loopback = reqwest::Url::parse(base_url)
+        .ok()
+        .is_some_and(|url| match url.host() {
+            Some(url::Host::Domain(host)) => matches!(host, "localhost" | "localhost."),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        });
+    if is_loopback {
+        builder.no_proxy()
+    } else {
+        builder
+    }
+}
+
 pub(crate) fn progress_spinner(message: impl Into<String>) -> ProgressBar {
     let progress = ProgressBar::new_spinner();
     progress.set_message(message.into());
@@ -280,14 +297,15 @@ impl BaseClient {
         profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
-        let http = ReqwestClient::builder()
+        let base_url = base_url.into();
+        let http = api_client_builder(&base_url)
             .timeout(std::time::Duration::from_secs_f64(timeout_secs))
             .build()
             .expect("Failed to build HTTP client");
 
         Self {
             http,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             account,
             user,
@@ -507,7 +525,7 @@ impl BaseClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::from_reqwest("Failed to read response body", e))?;
+            .map_err(|error| Error::from_response_body(status, error))?;
 
         if !status.is_success() {
             return Err(api_error_from_body(&bytes, status));
@@ -546,7 +564,7 @@ impl BaseClient {
         connect_timeout: std::time::Duration,
         timeout: std::time::Duration,
     ) -> Result<ReqwestClient> {
-        ReqwestClient::builder()
+        api_client_builder(&self.base_url)
             .connect_timeout(connect_timeout)
             .timeout(timeout)
             .build()

@@ -110,3 +110,115 @@ fn connected_status_uses_the_same_profile_as_the_request() {
     assert!(text.contains("selected") && text.contains(&url), "{text}");
     assert!(!text.contains("Unreachable"), "{text}");
 }
+
+#[test]
+fn reindex_bypasses_proxy_for_loopback_and_reports_truncated_http_bodies() {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+        time::Duration,
+    };
+
+    for (remote, status, body, missing_bytes, code) in [
+        (
+            false,
+            "403 Forbidden",
+            r#"{"error":{"code":"PERMISSION_DENIED","message":"denied"}}"#,
+            0,
+            "PERMISSION_DENIED",
+        ),
+        (
+            false,
+            "500 Internal Server Error",
+            "truncated",
+            10,
+            "UNAVAILABLE",
+        ),
+        (
+            true,
+            "500 Internal Server Error",
+            "proxy failed",
+            0,
+            "INTERNAL",
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_url = format!("http://{}", listener.local_addr().unwrap());
+        let base_url = if remote {
+            "http://ov-test.invalid"
+        } else {
+            &proxy_url
+        };
+        let request_target = if remote {
+            "POST http://ov-test.invalid/api/v1/content/reindex HTTP/1.1"
+        } else {
+            "POST /api/v1/content/reindex HTTP/1.1"
+        };
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request_line = String::new();
+            let mut reader = BufReader::new(&mut stream);
+            reader.read_line(&mut request_line).unwrap();
+            // Drain the request before closing the connection.
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse::<u64>().unwrap();
+                    }
+                }
+            }
+            std::io::copy(
+                &mut std::io::Read::take(reader, content_length),
+                &mut std::io::sink(),
+            )
+            .unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len() + missing_bytes,
+            )
+            .unwrap();
+            request_line
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ovcli.conf");
+        fs::write(&config, json!({"url": base_url, "timeout": 3}).to_string()).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_ov"))
+            .env("OPENVIKING_CLI_CONFIG_FILE", config)
+            .env("OPENVIKING_LANG", "en")
+            .env("HTTP_PROXY", &proxy_url)
+            .env("http_proxy", &proxy_url)
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .args([
+                "-o",
+                "json",
+                "reindex",
+                "viking://resources/demo",
+                "--wait",
+                "false",
+            ])
+            .output()
+            .unwrap();
+        let data: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(data["error"]["code"], code, "{data}");
+        assert_eq!(peer.join().unwrap().trim_end(), request_target);
+        if missing_bytes > 0 {
+            let message = data["error"]["message"].as_str().unwrap();
+            assert!(
+                message.contains("Failed to read response body (HTTP 500"),
+                "{message}"
+            );
+        }
+    }
+}
