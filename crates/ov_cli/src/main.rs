@@ -208,7 +208,7 @@ struct Cli {
     #[arg(long = "actor-peer-id", global = true, hide = true)]
     actor_peer_id: Option<String>,
 
-    /// Use root API key (trusted mode only for reindex)
+    /// Use root API key for admin, system, task status/list, and reindex (trusted mode only)
     #[arg(long, global = true, hide = true)]
     sudo: bool,
 
