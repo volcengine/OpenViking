@@ -104,6 +104,7 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
 | Account | `output_language_override`, `memory.extraction_enabled` | Dynamic | ROOT or the Account ADMIN can update them. Generation uses the owning Account's settings; absent values use business-level Cluster defaults. |
 | Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
+| Account | `parser_api.api_key` | Dynamic | ROOT-only. A configured section requires a nonblank key; external parser operations use the owning Account's credential. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 
@@ -1120,7 +1121,7 @@ The top-level `parser_api` section routes selected formats to the external Under
 | `enable` | `false` | Enable external parsing. |
 | `extensions` | `[]` | File extensions to route externally; normalized to lowercase without the leading dot. |
 | `host` | `""` | API host including scheme, such as `https://parser.example.com`; required when enabled. |
-| `api_key` | `""` | External API credential; required when enabled. |
+| `api_key` | `""` | Legacy standalone credential, used only when the Account has no `parser_api` section. A usable key must be available when an external parser operation starts. |
 | `enable_feishu_url` | `false` | Allow direct Feishu URL parsing when credentials are available. Feishu documents already normalized to Markdown by the accessor bypass external parsing; file attachments still use extension routing. |
 | `enable_resumable_upload` | `false` | Enable resumable uploads. |
 | `upload_simple_max_bytes` | `536870912` (512 MiB) | Simple-upload size threshold. |
@@ -1130,6 +1131,29 @@ The top-level `parser_api` section routes selected formats to the external Under
 | `poll_interval_ms` | `3000` | Response polling interval. |
 
 All size, timeout, and polling values must be greater than zero.
+
+Shared deployments should provision `settings.parser_api.api_key` for every Account
+through `POST /api/v1/admin/accounts`, or update it through
+`PATCH /api/v1/admin/accounts/{account_id}/configuration`. Only ROOT can read or
+write this section; ADMIN responses omit it, and ADMIN updates, including `null`,
+are rejected. Account settings contain only the credential; host, routing, upload
+and timeout settings remain Cluster-owned. A configured Account never falls back
+to the Cluster key after a remote authentication failure. Ordinary add-resource
+`args.api_key` and `args.parser_api` are rejected.
+
+Uploads, submission, polling, directory imports (including nested ZIP archives)
+and task recovery use the owning
+Account. Queue messages store the owner and remote file/response IDs, without the
+parser key. A running parser call keeps the key it acquired; a later call or
+recovery reads the current key. Rotation must preserve access to previously
+created remote IDs under the same remote identity. Permission failures propagate
+without resubmission or another credential attempt. Result ZIP URLs are fetched
+without attaching the parser Authorization header.
+
+The built-in file configuration source persists Account settings through AGFS.
+They use existing file encryption when `encryption.enabled=true`; encryption is
+off by default. This change does not encrypt the host's `ov.conf` file or alter
+encryption behavior for custom configuration sources.
 
 ### rerank
 

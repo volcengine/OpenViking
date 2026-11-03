@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,7 @@ from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
 from openviking.storage.queuefs import QueueManager
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -101,16 +103,19 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         "status": "success",
         "root_uri": "viking://resources/manual",
         "task_id": "task-1",
+        "source_path": "https://example.com/download?id=1",
     }
     _, message = queue_manager.enqueue.await_args.args
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     queued = AddResourceMsg.from_dict(message)
+    assert queued.account_id == ctx.account_id
+    assert ctx.api_key not in json.dumps(message)
     assert "parser_backend" not in queued.args
     assert queued.args["resolved_extension"] == ".pdf"
     assert queued.understanding_response_id == "response-1"
     assert queued.source_name == "manual.pdf"
     assert not downloaded.exists()
-    processor.submit_understanding.assert_awaited_once_with(prepared)
+    processor.submit_understanding.assert_awaited_once_with(prepared, ctx=ctx)
     processor.process_resource.assert_not_awaited()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
     agfs.pathlock_handoff.assert_awaited_once_with(lock)
@@ -194,10 +199,11 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         "status": "success",
         "root_uri": "viking://resources/video/sample",
         "task_id": "task-1",
+        "source_path": "https://example.com/video/sample.ts?sign=1",
     }
     processor.prepare_durable_source.assert_awaited_once()
     processor.process_resource.assert_not_awaited()
-    processor.submit_understanding.assert_awaited_once_with(prepared)
+    processor.submit_understanding.assert_awaited_once_with(prepared, ctx=ctx)
     resolve_target_uri.assert_awaited_once()
     assert resolve_target_uri.await_args.kwargs["source_format"] == "video"
     _, message = queue_manager.enqueue.await_args.args
@@ -297,10 +303,13 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
         "status": "success",
         "root_uri": "viking://resources/audio",
         "task_id": "task-1",
+        "source_path": "audio.m4a",
     }
     _, message = queue_manager.enqueue.await_args.args
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     queued = AddResourceMsg.from_dict(message)
+    assert queued.account_id == ctx.account_id
+    assert ctx.api_key not in json.dumps(message)
     assert queued.understanding_file_id == "file-1"
     assert queued.understanding_response_id is None
     assert queued.staged_source is None
@@ -308,11 +317,24 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     assert queued.path == "audio.m4a"
     assert queued.source_name == "audio.m4a"
     assert not uploaded.exists()
-    processor.upload_understanding_file.assert_awaited_once_with(prepared)
+    processor.upload_understanding_file.assert_awaited_once_with(prepared, ctx=ctx)
     processor.submit_understanding.assert_not_called()
     processor.process_resource.assert_not_awaited()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
     agfs.pathlock_handoff.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["api_key", "parser_api"])
+async def test_add_resource_rejects_parser_credential_overrides(field):
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    service = ResourceService()
+    with pytest.raises(InvalidArgumentError, match="args cannot contain") as failure:
+        await service._normalize_add_resource_args(
+            {field: "private-key"}, watch_interval=0, ctx=ctx
+        )
+    assert failure.value.code == "INVALID_ARGUMENT"
+    assert "private-key" not in str(failure.value)
 
 
 @pytest.mark.asyncio

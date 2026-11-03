@@ -20,6 +20,7 @@ from openviking.parse.understanding_api import UnderstandingAPI, UnderstandingAP
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils.config.open_viking_config import ParserApiConfig
 
 
 class _FakeVikingFS:
@@ -104,8 +105,15 @@ def _fake_understanding_parse(calls: list[Path]):
 
 
 @pytest.mark.asyncio
-async def test_materialized_html_webpage_routes_to_understanding(monkeypatch, tmp_path: Path):
-    _configure_understanding(monkeypatch, ["html"])
+@pytest.mark.parametrize("account_id", ["a", "b"])
+@pytest.mark.parametrize("source_kind", ["directory", "zip"])
+async def test_materialized_html_webpage_routes_to_understanding(
+    monkeypatch, tmp_path: Path, account_id, source_kind
+):
+    config = _configure_understanding(monkeypatch, ["html"])
+    parser_api_config = ParserApiConfig(**vars(config.parser_api)).model_copy(
+        update={"api_key": f"key-{account_id}"}
+    )
     site_dir = tmp_path / "example.com"
     nested_dir = site_dir / "articles"
     nested_dir.mkdir(parents=True)
@@ -114,8 +122,14 @@ async def test_materialized_html_webpage_routes_to_understanding(monkeypatch, tm
         "<html><h1>Detail</h1></html>",
         encoding="utf-8",
     )
+    source_path = site_dir
+    if source_kind == "zip":
+        source_path = tmp_path / "pages.zip"
+        with zipfile.ZipFile(source_path, "w") as archive:
+            archive.write(site_dir / "index.html", "example.com/index.html")
+            archive.write(nested_dir / "detail.html", "example.com/articles/detail.html")
     resource = LocalResource(
-        path=site_dir,
+        path=source_path,
         source_type=SourceType.HTTP,
         original_source="https://example.com/",
         meta={"web_import": True, "original_filename": "example.com"},
@@ -123,19 +137,25 @@ async def test_materialized_html_webpage_routes_to_understanding(monkeypatch, tm
     )
     calls: list[Path] = []
     fake_fs = _FakeVikingFS()
+    parse_file = _fake_understanding_parse(calls)
+
+    async def parse_api(api, source, **kwargs):
+        assert api._api_key == f"key-{account_id}"
+        return await parse_file(api, source, **kwargs)
 
     with (
         patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs),
-        patch.object(UnderstandingAPI, "parse", new=_fake_understanding_parse(calls)),
+        patch.object(UnderstandingAPI, "parse", new=parse_api),
         patch.object(DirectoryParser, "_merge_temp", new=AsyncMock(return_value=True)),
     ):
         result = await UnifiedResourceProcessor(vlm_processor=object()).process(
             "https://example.com/",
             prepared_resource=resource,
             strict=True,
+            parser_api_config=parser_api_config,
         )
 
-    assert {path.relative_to(site_dir).as_posix() for path in calls} == {
+    assert {path.as_posix().split("example.com/", 1)[1] for path in calls} == {
         "articles/detail.html",
         "index.html",
     }
@@ -830,14 +850,18 @@ async def test_nested_zip_leaf_failures_are_promoted_with_remote_ids(
     monkeypatch,
     tmp_path: Path,
 ):
-    _configure_understanding(monkeypatch, ["pdf"])
+    config = _configure_understanding(monkeypatch, ["pdf"])
+    parser_api_config = ParserApiConfig(**vars(config.parser_api)).model_copy(
+        update={"api_key": "zip-key"}
+    )
     archive_path = tmp_path / "bundle.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("good.md", "# good\n")
         archive.writestr("bad.pdf", b"%PDF-1.7")
 
-    async def parse(_self, source, **_kwargs):
+    async def parse(api, source, **kwargs):
         assert Path(source).name == "bad.pdf"
+        assert api._api_key == "zip-key"
         raise UnderstandingAPIError(
             "remote parse failed",
             {"file_id": "file-bad", "response_id": "response-bad"},
@@ -845,10 +869,12 @@ async def test_nested_zip_leaf_failures_are_promoted_with_remote_ids(
 
     with (
         patch.object(BaseParser, "_get_viking_fs", return_value=_FakeVikingFS()),
-        patch.object(ParserRouter, "parse", new=parse),
+        patch.object(UnderstandingAPI, "parse", new=parse),
         patch.object(DirectoryParser, "_merge_parser_result", new=AsyncMock()),
     ):
-        result = await DirectoryParser().parse(str(tmp_path), strict=True)
+        result = await DirectoryParser().parse(
+            str(tmp_path), strict=True, parser_api_config=parser_api_config
+        )
 
     assert result.meta["processed_files"] == [{"path": "bundle.zip", "parser": "ZipParser"}]
     assert result.meta["failed_files"] == [

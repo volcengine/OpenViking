@@ -1,4 +1,7 @@
+import asyncio
+import io
 import json
+import zipfile
 from email.parser import BytesParser
 from email.policy import default
 from unittest.mock import AsyncMock, Mock
@@ -6,15 +9,25 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
+from openviking.config.binding import manager_over_source
+from openviking.config.parser_api import get_effective_parser_api_config
+from openviking.config.source import MemoryConfigSource
 from openviking.parse.accessors.base import LocalResource, SourceType
+from openviking.parse.output import LocalParseOutputStore
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.understanding_api import (
     PREPARED_FILE_ID_ARG,
     UnderstandingAPI,
     UnderstandingAPIError,
 )
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.utils.media_processor import UnifiedResourceProcessor
+from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.open_viking_config import ParserApiConfig
 
 
 @pytest.mark.asyncio
@@ -235,13 +248,230 @@ async def test_parse_failure_preserves_observed_remote_ids(monkeypatch, tmp_path
     assert isinstance(exc_info.value, RuntimeError)
     warning.assert_called_once_with(
         "[UnderstandingAPI] Parse failed: %s; meta=%s",
-        exc_info.value.__cause__,
+        str(exc_info.value),
         exc_info.value.meta,
     )
 
 
 async def _return(value):
     return value
+
+
+@pytest.fixture
+def account_parser_manager(monkeypatch):
+    config = get_openviking_config().model_copy(
+        update={
+            "parser_api": ParserApiConfig(
+                enable=True,
+                host="https://parser.example.test",
+                extensions=["pdf"],
+                poll_interval_ms=1,
+            )
+        }
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config", lambda: config
+    )
+    monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: config)
+    monkeypatch.setattr("openviking.config.binding.set_openviking_config", lambda _config: None)
+    return manager_over_source(MemoryConfigSource(), base_config=config)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prepared_kind", ["file", "response"])
+async def test_account_parser_auth_rotation_and_recovery(
+    account_parser_manager, monkeypatch, tmp_path, prepared_kind
+):
+    """Real HTTP contracts: concurrent owners, persisted IDs and current keys on recovery."""
+    manager = account_parser_manager
+    contexts = {
+        name: RequestContext(user=UserIdentifier(name, "alice"), role=Role.USER)
+        for name in ("a", "b")
+    }
+    for account_id in contexts:
+        await manager.patch_account(account_id, {"parser_api": {"api_key": f"key-{account_id}"}})
+    requests = []
+    uploaded = {}
+    responses = {}
+    started = asyncio.Event()
+    release = asyncio.Event()
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zipped:
+        zipped.writestr("report/0.md", "parsed content")
+
+    async def handler(request):
+        # Yield so calls from the two accounts overlap on the same processor.
+        await asyncio.sleep(0)
+        auth = request.headers.get("Authorization")
+        requests.append((request.method, request.url.path, auth))
+        if request.url.path == "/result.zip":
+            assert auth is None  # Result URLs carry their own access, not the parser key.
+            return httpx.Response(200, content=archive.getvalue())
+        account_id = auth.removeprefix("Bearer key-").split("-")[0]
+        if request.method == "POST" and request.url.path.endswith("/files"):
+            file_id = f"file-{account_id}"
+            uploaded[file_id] = account_id
+            if len(uploaded) == 2:
+                started.set()
+            await release.wait()
+            return httpx.Response(200, json={"id": file_id})
+        if request.method == "POST":
+            file_id = json.loads(request.content)["input"][0]["content"][0]["file"]["file_id"]
+            assert uploaded[file_id] == account_id
+            response_id = f"response-{account_id}"
+            responses[response_id] = account_id
+            return httpx.Response(200, json={"id": response_id})
+        response_id = request.url.path.rsplit("/", 1)[-1]
+        assert responses[response_id] == account_id
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "result": {"zip_url": "https://downloads.example.test/result.zip"},
+            },
+        )
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        "openviking.parse.understanding_api.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    processor = ResourceProcessor(object(), runtime_config_manager=manager)
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.7")
+    if prepared_kind == "file":
+        operations = [
+            processor.upload_understanding_file(source, ctx=ctx) for ctx in contexts.values()
+        ]
+    else:
+        operations = [processor.submit_understanding(source, ctx=ctx) for ctx in contexts.values()]
+    tasks = [asyncio.create_task(operation) for operation in operations]
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        await manager.patch_account("a", {"parser_api": {"api_key": "key-a-rotated"}})
+    finally:
+        release.set()
+    remote_ids = await asyncio.gather(*tasks)
+    messages = [
+        AddResourceMsg(
+            task_id=f"task-{name}",
+            path="/removed/report.pdf",
+            root_uri="viking://resources/report",
+            account_id=name,
+            user_id="alice",
+            role="user",
+            **{f"understanding_{prepared_kind}_id": remote_id},
+        ).to_dict()
+        for name, remote_id in zip(contexts, remote_ids, strict=True)
+    ]
+    assert "key-" not in json.dumps(messages)
+    assert {auth for _, _, auth in requests} == {"Bearer key-a", "Bearer key-b"}
+
+    requests.clear()
+    # A new manager simulates a worker restart over the same persisted source;
+    # the worker resolves the message owner's current config for each job.
+    restored_manager = manager_over_source(manager._source)
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    output_store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+    configs = [
+        await get_effective_parser_api_config(restored_manager, message["account_id"])
+        for message in messages
+    ]
+    results = await asyncio.gather(
+        *(
+            processor.process(
+                message["path"],
+                parser_api_config=config,
+                parse_output_store=output_store,
+                **{
+                    f"understanding_{prepared_kind}_id": message[
+                        f"understanding_{prepared_kind}_id"
+                    ]
+                },
+            )
+            for message, config in zip(messages, configs, strict=True)
+        )
+    )
+    assert all(
+        result.meta["response_id"] == f"response-{name}"
+        for name, result in zip(contexts, results, strict=True)
+    )
+    assert {auth for _, _, auth in requests if auth} == {"Bearer key-a-rotated", "Bearer key-b"}
+    assert not any(path.endswith("/files") for _, path, _ in requests)
+    assert sum(method == "POST" for method, _, _ in requests) == (
+        2 if prepared_kind == "file" else 0
+    )
+    assert "key-" not in str([result.meta for result in results])
+    for result in results:
+        await output_store.cleanup(result.artifact_ref)
+
+
+@pytest.mark.asyncio
+async def test_account_parser_missing_context_key_and_remote_denial(
+    account_parser_manager, monkeypatch, tmp_path, caplog
+):
+    manager = account_parser_manager
+    processor = ResourceProcessor(object(), runtime_config_manager=manager)
+    ctx = RequestContext(user=UserIdentifier("a", "alice"), role=Role.USER)
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.7")
+    with pytest.raises(ValueError, match="api_key is required"):
+        await processor.upload_understanding_file(source, ctx=ctx)
+    manager._get_config().parser_api.api_key = "cluster-private-key"
+    key = "key-a-private"
+    await manager.patch_account("a", {"parser_api": {"api_key": key}})
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.headers["Authorization"] == f"Bearer {key}"
+        return httpx.Response(403, json={"message": f"credential {key} cannot access response"})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        "openviking.parse.understanding_api.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    with pytest.raises(UnderstandingAPIError, match="cannot access response") as failure:
+        await ParserRouter(object()).parse(
+            source,
+            parser_api_config=await get_effective_parser_api_config(manager, ctx.account_id),
+            understanding_response_id="response-old",
+            parser_backend="understanding",
+        )
+    assert failure.value.meta["response_id"] == "response-old"
+    assert key not in str(failure.value)
+    assert key not in caplog.text
+    assert len(requests) == 1 and requests[0].method == "GET"
+    assert isinstance(failure.value.__cause__, httpx.HTTPStatusError)
+
+
+@pytest.mark.asyncio
+async def test_absent_account_parser_keeps_legacy_cluster_key(
+    account_parser_manager, monkeypatch, tmp_path
+):
+    manager = account_parser_manager
+    manager._get_config().parser_api.api_key = "legacy-key"
+    ctx = RequestContext(user=UserIdentifier("legacy", "alice"), role=Role.USER)
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.7")
+    credentials = []
+
+    def handler(request):
+        credentials.append(request.headers["Authorization"])
+        return httpx.Response(200, json={"id": "file-1"})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        "openviking.parse.understanding_api.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    processor = ResourceProcessor(object(), runtime_config_manager=manager)
+    assert await processor.upload_understanding_file(source, ctx=ctx) == "file-1"
+    await manager.patch_account("legacy", {"parser_api": {"api_key": "account-key"}})
+    assert await processor.upload_understanding_file(source, ctx=ctx) == "file-1"
+    assert await ParserRouter(object()).upload_file(source) == "file-1"
+    assert credentials == ["Bearer legacy-key", "Bearer account-key", "Bearer legacy-key"]
 
 
 def _api_with_transport(monkeypatch, handler):

@@ -104,6 +104,7 @@ OpenViking 的配置分为两个层级：
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
 | Account | `output_language_override`、`memory.extraction_enabled` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。生成内容使用任务所属 Account 的配置，未配置时由业务层使用 Cluster 默认值。 |
 | Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
+| Account | `parser_api.api_key` | 动态配置 | 仅 ROOT 可读写。已配置的段必须包含非空白 Key；外部解析使用任务所属 Account 的凭证。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
@@ -1108,7 +1109,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `enable` | `false` | 启用外部解析。 |
 | `extensions` | `[]` | 交给外部解析的扩展名；转为小写并去掉开头的点。 |
 | `host` | `""` | 带协议的 API 地址，如 `https://parser.example.com`；启用时必填。 |
-| `api_key` | `""` | 外部 API 凭证；启用时必填。 |
+| `api_key` | `""` | 兼容旧独享部署的凭证，仅在 Account 未配置 `parser_api` 段时使用；启动外部解析操作时必须有可用 Key。 |
 | `enable_feishu_url` | `false` | 有可用凭证时允许直接解析飞书 URL。已由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析；文件附件仍按扩展名路由。 |
 | `enable_resumable_upload` | `false` | 启用断点续传。 |
 | `upload_simple_max_bytes` | `536870912`（512 MiB） | 简单上传的大小阈值。 |
@@ -1118,6 +1119,24 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `poll_interval_ms` | `3000` | 结果轮询间隔，单位毫秒。 |
 
 大小、超时和轮询参数都必须大于零。
+
+共享部署应通过 `POST /api/v1/admin/accounts` 为每个 Account 配置
+`settings.parser_api.api_key`，或通过
+`PATCH /api/v1/admin/accounts/{account_id}/configuration` 更新。该段仅 ROOT
+可读写；ADMIN 响应不返回该段，ADMIN 修改请求（包括 `null`）均被拒绝。
+Account 只拥有凭证，host、路由、上传和超时参数仍由 Cluster 维护。
+Account 已配置时，远端认证失败不会回退到 Cluster Key。普通 add-resource
+`args.api_key` 和 `args.parser_api` 均被拒绝。
+
+上传、提交、轮询、目录导入（包括嵌套 ZIP）和任务恢复都使用任务所属 Account。队列消息仅保存 owner
+和远端 file/response ID，不保存解析 Key。执行中的一次解析调用使用已取得的 Key，
+下一次调用或恢复读取最新 Key。轮换必须保持同一远端身份，并确保新 Key 能访问已有
+远端 ID；权限错误直接失败，不重新提交或尝试其他凭证。结果 ZIP URL 的下载不附带
+解析服务的 Authorization 头。
+
+内置文件配置源通过 AGFS 持久化 Account 配置，开启 `encryption.enabled=true`
+时沿用现有文件加密；该开关默认关闭。本次改动不会加密宿主机上的 `ov.conf`，
+也不改变自定义配置源的加密行为。
 
 ### rerank
 
