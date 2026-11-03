@@ -23,7 +23,7 @@ from openviking.service.compile_scheduler import CompileScheduler, build_credent
 from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
 from openviking.service.debug_service import DebugService
-from openviking.service.external_task_service import ExternalTaskService
+from openviking.service.external_task_service import ExternalTaskService, set_external_task_service
 from openviking.service.fs_service import FSService
 from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
@@ -142,7 +142,9 @@ class OpenVikingService:
         self._session_service = SessionService()
         self._debug_service = DebugService()
         self._agent_evolution_service = AgentEvolutionService()
-        self._external_task_service = ExternalTaskService()
+        self._external_task_service = ExternalTaskService(
+            credential_encryptor=build_credential_encryptor(config.encryption)
+        )
         self._compile_service = CompileService(
             config.compile_api,
             self._external_task_service,
@@ -227,6 +229,7 @@ class OpenVikingService:
 
         # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client, service_name=service_name))
+        set_external_task_service(self._external_task_service)
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
@@ -624,6 +627,7 @@ class OpenVikingService:
             resource_memory_link_service=self._resource_memory_link_service,
             runtime_config_manager=self._runtime_config_manager,
         )
+        self._external_task_service.register(self._resource_service._connector)
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
@@ -696,8 +700,8 @@ class OpenVikingService:
                 compile_store,
                 self._viking_fs,
             )
-            self._compile_scheduler.credential_encryptor = build_credential_encryptor(
-                self._config.encryption
+            self._compile_scheduler.credential_encryptor = (
+                self._external_task_service.credential_encryptor
             )
             self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
             self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule

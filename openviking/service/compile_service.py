@@ -18,7 +18,9 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.service.compile_targets import CompileLifecycle, UpdateSchedule, split_control_args
 from openviking.service.external_task_service import (
+    ExternalTaskCancellation,
     ExternalTaskError,
+    ExternalTaskRetryExhaustedError,
     ExternalTaskService,
     ExternalTaskSnapshot,
 )
@@ -513,14 +515,11 @@ class CompileService:
             private_payload=private_payload,
             connection=connection,
             ctx=ctx,
-            **(
-                {"idempotency_key": idempotency_key, "submission_payload": submitted}
-                if idempotency_key
-                else {}
-            ),
+            idempotency_key=idempotency_key,
+            submission_payload=submitted if idempotency_key else None,
         )
         if locked_record is not None:
-            await self._lifecycle.record_queued(task, locked_record=locked_record)
+            await self._require_lifecycle().record_queued(task, locked_record=locked_record)
         else:
             self._schedule_history(task, preparation=preparation)
         return task
@@ -547,15 +546,23 @@ class CompileService:
         self._history_tasks.add(background)
         background.add_done_callback(self._history_tasks.discard)
 
-    async def on_start(self, task: TaskRecord) -> Any:
+    async def on_start(self, task: TaskRecord) -> str | ExternalTaskSnapshot | None:
         if self._lifecycle is None:
             return "proceed"
         return await self._lifecycle.on_start(task)
 
-    async def on_finish(self, task: TaskRecord, snapshot: ExternalTaskSnapshot) -> Any:
+    async def on_finish(
+        self,
+        task: TaskRecord,
+        snapshot: ExternalTaskSnapshot,
+    ) -> ExternalTaskSnapshot:
         if self._lifecycle is None:
             return snapshot
         return await self._lifecycle.on_finish(task, snapshot)
+
+    @staticmethod
+    def submission_meta(_external_task_id: str) -> dict[str, Any]:
+        return {}
 
     async def submit(
         self,
@@ -614,6 +621,55 @@ class CompileService:
                 connection=connection,
                 args=self._merge_args(payload, private_payload),
             )
+        )
+
+    async def on_cancel(
+        self,
+        task: TaskRecord,
+        *,
+        external_task_id: str | None,
+        payload: Mapping[str, Any],
+        private_payload: Mapping[str, Any],
+        connection: Mapping[str, Any],
+        failure: Exception | None,
+    ) -> ExternalTaskCancellation:
+        """Recover an uncertain Compile submission, then stop its Runtime session."""
+        outcome = (
+            ExternalTaskSnapshot(
+                status="failed",
+                error_code=getattr(failure, "code", None) or "INTERNAL",
+                error_message=str(failure) or type(failure).__name__,
+            )
+            if failure is not None
+            else ExternalTaskSnapshot(status="cancelled")
+        )
+        rejected = (
+            task.stage == "submitting"
+            and isinstance(failure, ExternalTaskError)
+            and not isinstance(failure, ExternalTaskRetryExhaustedError)
+            and not failure.transient
+            and failure.code
+            in {"INVALID_ARGUMENT", "NOT_FOUND", "PERMISSION_DENIED", "UNAUTHENTICATED"}
+        )
+        if external_task_id is None and (task.stage in {None, "queued"} or rejected):
+            return ExternalTaskCancellation(None, outcome)
+        if external_task_id is None:
+            external_task_id = await self.submit(
+                task.task_id,
+                payload,
+                private_payload,
+                connection,
+            )
+        snapshot = await self.cancel(
+            external_task_id,
+            connection,
+            payload=payload,
+            private_payload=private_payload,
+        )
+        return ExternalTaskCancellation(
+            external_task_id,
+            snapshot,
+            terminal_snapshot=outcome if failure is not None else None,
         )
 
     # ---------- update settings and run history ----------
