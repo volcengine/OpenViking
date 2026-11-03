@@ -3508,12 +3508,12 @@ async def test_session_storage_uses_canonical_uri(
     ctx = RequestContext(user=UserIdentifier("default", "admin_user"), role=Role.USER)
     await _agfs_write(
         admin_service,
-        "/local/default/session/old-session/messages.jsonl",
+        "/local/default/user/admin_user/sessions/old-session/messages.jsonl",
         '{"role":"user"}\n',
     )
     await _agfs_write(
         admin_service,
-        "/local/default/session/old-session/.meta.json",
+        "/local/default/user/admin_user/sessions/old-session/.meta.json",
         '{"created_by_user_id":"admin_user"}',
     )
 
