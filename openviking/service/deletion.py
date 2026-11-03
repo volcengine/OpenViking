@@ -70,7 +70,8 @@ class DeletionService:
         service_loop: asyncio.AbstractEventLoop,
         oauth_store: Any = None,
         usage_audit_runtime: Any = None,
-        gateway_app: Any = None,
+        gateway_store: Any = None,
+        gateway_management: Any = None,
         require_registered_identity: bool = True,
     ) -> None:
         self._service = service
@@ -79,7 +80,8 @@ class DeletionService:
         self._manager_dispatcher = OwnerLoopDispatcher(service_loop)
         self._oauth_store = oauth_store
         self._usage_audit_runtime = usage_audit_runtime
-        self._gateway_app = gateway_app
+        self._gateway_store = gateway_store
+        self._gateway_management = gateway_management
         self._require_registered_identity = require_registered_identity
         self._request_lock = asyncio.Lock()
 
@@ -339,10 +341,21 @@ class DeletionService:
         try:
             # Settle each started operation before propagating cancellation;
             # the durable message can then resume cleanup after restart.
-            if self._gateway_app is not None:
-                from openviking_gateway.app import delete_data
+            if self._gateway_management is not None:
+                from openviking_gateway.storage import delete_account_data, delete_user_data
 
-                await run_to_completion(lambda: delete_data(self._gateway_app, account_id, user_id))
+                if user_id is None:
+                    await run_to_completion(
+                        lambda: delete_account_data(
+                            self._gateway_management, self._gateway_store, account_id
+                        )
+                    )
+                else:
+                    await run_to_completion(
+                        lambda: delete_user_data(
+                            self._gateway_management, self._gateway_store, account_id, user_id
+                        )
+                    )
             watches = getattr(self._service, "watch_manager", None)
             if watches is not None:
                 await run_to_completion(lambda: watches.delete_tasks(account_id, user_id))
@@ -552,7 +565,8 @@ async def setup_deletion(
     manager: Any,
     oauth_store: Any = None,
     usage_audit_runtime: Any = None,
-    gateway_app: Any = None,
+    gateway_store: Any = None,
+    gateway_management: Any = None,
     require_registered_identity: bool = True,
 ) -> Optional[DeletionService]:
     """Create the deletion service after storage and authentication are ready."""
@@ -564,7 +578,8 @@ async def setup_deletion(
         service_loop=asyncio.get_running_loop(),
         oauth_store=oauth_store,
         usage_audit_runtime=usage_audit_runtime,
-        gateway_app=gateway_app,
+        gateway_store=gateway_store,
+        gateway_management=gateway_management,
         require_registered_identity=require_registered_identity,
     )
     await deletion_service.initialize()

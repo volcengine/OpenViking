@@ -349,7 +349,10 @@ class AccountStoreConfig(BaseModel):
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
-    workers: int = 1
+    workers: int = Field(default=1, ge=1)
+    roles: List[Literal["api", "queue_worker", "scheduler"]] = Field(
+        default_factory=lambda: ["api", "queue_worker", "scheduler"], min_length=1
+    )
     executor_threads: int = Field(
         default=0,
         ge=0,
@@ -409,6 +412,11 @@ class ServerConfig(BaseModel):
     @classmethod
     def normalize_user_config_defaults(cls, value: Any) -> Any:
         return value.model_dump() if isinstance(value, UserConfig) else value
+
+    @field_validator("roles")
+    @classmethod
+    def unique_roles(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.

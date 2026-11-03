@@ -41,14 +41,30 @@ def default_storage_path(workspace: str) -> str:
     return str(current)
 
 
-def create_embedded_gateway(openviking_config, server_config, service_source):
+def embedded_gateway_config(openviking_config, server_config):
+    """Resolve the gateway settings shared by HTTP and headless hosts."""
     config = openviking_config.gateway
-    if not config.enabled:
+    from openviking_gateway.config import normalize_url
+
+    # The embedded gateway ships with this server, so the minimum-version gate never applies.
+    update = {"min_server_version": "0"}
+    # Without its own public_url the gateway shares the server's public address, which
+    # MCP upload links already use (env first, then ov.conf).
+    if not config.public_url and (
+        public := os.environ.get("OPENVIKING_PUBLIC_BASE_URL") or server_config.public_base_url
+    ):
+        update["public_url"] = normalize_url(public)
+    if "storage_path" not in config.model_fields_set:
+        update["storage_path"] = default_storage_path(openviking_config.storage.workspace)
+    return config.model_copy(update=update)
+
+
+def create_embedded_gateway(openviking_config, server_config, service_source):
+    if not openviking_config.gateway.enabled:
         return None
     from openviking.crypto.config import bootstrap_encryption
     from openviking.utils.agfs_utils import _run_coro_blocking
     from openviking_gateway.app import create_app
-    from openviking_gateway.config import normalize_url
 
     async def vlm_source(account_id):
         from openviking.server.gateway_vlm import vlm_upstreams
@@ -60,18 +76,8 @@ def create_embedded_gateway(openviking_config, server_config, service_source):
 
     # The gateway shares the server's encryption settings; None when OV encryption is disabled.
     encryption = {"encryption": openviking_config.encryption.model_dump()}
-    # The embedded gateway ships with this server, so the minimum-version gate never applies.
-    update = {"min_server_version": "0"}
-    # Without its own public_url the gateway shares the server's public address, which
-    # MCP upload links already use (env first, then ov.conf).
-    if not config.public_url and (
-        public := os.environ.get("OPENVIKING_PUBLIC_BASE_URL") or server_config.public_base_url
-    ):
-        update["public_url"] = normalize_url(public)
-    if "storage_path" not in config.model_fields_set:
-        update["storage_path"] = default_storage_path(openviking_config.storage.workspace)
     return create_app(
-        config.model_copy(update=update),
+        embedded_gateway_config(openviking_config, server_config),
         openviking_url=get_server_url_from_server_data(server_config),
         vlm_source=vlm_source,
         encryptor=_run_coro_blocking(bootstrap_encryption(encryption)),

@@ -215,6 +215,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         worker_env.delenv(app_module.WORKER_PORT_ENV, raising=False)
         worker_env.delenv(app_module.WORKER_WITH_BOT_ENV, raising=False)
         worker_env.delenv(app_module.WORKER_BOT_API_URL_ENV, raising=False)
+        worker_env.delenv(app_module.WORKER_ROLES_ENV, raising=False)
 
         bootstrap.main()
 
@@ -224,6 +225,77 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         assert os.environ[app_module.WORKER_PORT_ENV] == str(config.port)
         assert os.environ[app_module.WORKER_WITH_BOT_ENV] == "1"
         assert os.environ[app_module.WORKER_BOT_API_URL_ENV] == "http://127.0.0.1:19000"
+        assert os.environ[app_module.WORKER_ROLES_ENV] == "api,queue_worker,scheduler"
+
+
+@pytest.mark.parametrize("roles", ["api", "queue_worker", "scheduler", "queue_worker,scheduler"])
+@pytest.mark.parametrize("workers", [1, 2])
+def test_role_launcher_selects_http_headless_and_publisher(monkeypatch, roles, workers):
+    import sys
+
+    from openviking.server import headless
+
+    config = ServerConfig(ttl_adapter={"enabled": True})
+    ov_config = SimpleNamespace(
+        memory=SimpleNamespace(session_auto_commit=SessionAutoCommitConfig(enabled=False)),
+        expiry=ExpiryConfig(),
+    )
+    events = []
+    monkeypatch.setattr(
+        sys, "argv", ["openviking-server", "--roles", roles, "--workers", str(workers)]
+    )
+    monkeypatch.setattr(bootstrap, "load_server_config", lambda path: config)
+    monkeypatch.setattr(bootstrap, "resolve_config_path", lambda *args: Path("/tmp/roles.conf"))
+    monkeypatch.setattr(
+        OpenVikingConfigSingleton, "initialize", classmethod(lambda cls, **kw: ov_config)
+    )
+    monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
+    monkeypatch.setattr(
+        "openviking_cli.utils.ollama.detect_ollama_in_config", lambda c: (False, "", 0)
+    )
+    monkeypatch.setattr(
+        bootstrap, "_start_expiry_publisher", lambda path: events.append("publisher") or "child"
+    )
+    monkeypatch.setattr(
+        bootstrap, "_stop_expiry_publisher", lambda child: events.append("publisher-stop")
+    )
+    monkeypatch.setattr(bootstrap, "create_app", lambda *args, **kw: events.append("app") or "app")
+    monkeypatch.setattr(
+        bootstrap, "_run_restartable_server", lambda *args, **kw: events.append("http")
+    )
+    monkeypatch.setattr(bootstrap.uvicorn, "run", lambda *args, **kw: events.append("http-workers"))
+
+    def run_headless(selected, *, config_path):
+        assert selected.roles == roles.split(",")
+        assert selected.workers == workers
+        assert config_path == "/tmp/roles.conf"
+        events.append("headless")
+
+    monkeypatch.setattr(headless, "run_headless", run_headless)
+    for name in (
+        app_module.WORKER_HOST_ENV,
+        app_module.WORKER_PORT_ENV,
+        app_module.WORKER_WITH_BOT_ENV,
+        app_module.WORKER_BOT_API_URL_ENV,
+        app_module.WORKER_ROLES_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    bootstrap.main()
+    if roles == "api":
+        assert events == (["app", "http"] if workers == 1 else ["http-workers"])
+        if workers == 2:
+            assert os.environ[app_module.WORKER_ROLES_ENV] == "api"
+    elif "scheduler" in roles:
+        assert events == ["publisher", "headless", "publisher-stop"]
+    else:
+        assert events == ["headless"]
+
+
+def test_worker_factory_replays_roles(monkeypatch):
+    monkeypatch.setattr(app_module, "load_server_config", lambda path: ServerConfig())
+    monkeypatch.setattr(app_module, "create_app", lambda config, **kw: config)
+    monkeypatch.setenv(app_module.WORKER_ROLES_ENV, "api,scheduler")
+    assert app_module.create_worker_app().roles == ["api", "scheduler"]
 
 
 def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys):
@@ -288,13 +360,15 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "create_app",
-        lambda worker_config, config_path: captured.update(
-            {
-                "app_config": worker_config,
-                "app_config_path": config_path,
-            }
-        )
-        or worker_config,
+        lambda worker_config, config_path: (
+            captured.update(
+                {
+                    "app_config": worker_config,
+                    "app_config_path": config_path,
+                }
+            )
+            or worker_config
+        ),
     )
 
     worker_config = app_module.create_worker_app()

@@ -67,5 +67,8 @@ class DevAuthPlugin(AuthPlugin):
         """Dev mode does not need an APIKeyManager."""
         app.state.api_key_manager = None
 
+    async def initialize_runtime(self, service, config, *, service_name: str):
+        return None
+
     def can_skip_api_key_for_bot_proxy(self) -> bool:
         return True

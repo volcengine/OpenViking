@@ -130,6 +130,9 @@ class TTLAdapter(Protocol):
         None alone does not imply TTL disabled or permanent retention.
         """
 
+    async def start_reporting(self) -> None:
+        """Start local registration retries without enabling maintenance."""
+
     async def start(self) -> None:
         """Start background consumers/connections after the service is ready."""
 
