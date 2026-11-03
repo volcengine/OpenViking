@@ -20,6 +20,10 @@ A scaffold example displaying a resource or operation state with a text label an
 
 A flattened file tree. The host supplies ordered rows; the component renders them and reports selection, expansion and pagination intent.
 
+### [FilePreview](./file-preview)
+
+A tabbed file preview. Each tab either hands a file source to the component or renders a host-owned node; the component owns the tab row, header row and view switching.
+
 ## Reserved modules
 
-`file-preview`, `tui`, `viking-bot`, `scope-switcher`, `agent-connect`, and `resource-import` publish their props types from their JS subpaths; component implementations and styles are still to be migrated. The same props serve every host; hosts differ in flow and data access but share the interaction and UI. See [Getting started](../guide/getting-started) for entry and stylesheet choices.
+`tui`, `viking-bot`, `scope-switcher`, `agent-connect`, and `resource-import` publish their props types from their JS subpaths; component implementations and styles are still to be migrated. The same props serve every host; hosts differ in flow and data access but share the interaction and UI. See [Getting started](../guide/getting-started) for entry and stylesheet choices.

@@ -51,6 +51,7 @@ export default defineConfig({
                 { text: 'Icons', link: '/components/icons' },
                 { text: 'StatusBadge', link: '/components/status-badge' },
                 { text: 'FileTree', link: '/components/file-tree' },
+                { text: 'FilePreview', link: '/components/file-preview' },
               ],
             },
           ],
@@ -83,6 +84,10 @@ export default defineConfig({
                   link: '/zh/components/status-badge',
                 },
                 { text: 'FileTree 文件树', link: '/zh/components/file-tree' },
+                {
+                  text: 'FilePreview 文件预览',
+                  link: '/zh/components/file-preview',
+                },
               ],
             },
           ],
