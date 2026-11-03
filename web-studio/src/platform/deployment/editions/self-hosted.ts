@@ -13,23 +13,34 @@ export function selfHostedExperience(
 ): StudioExperience {
   return {
     edition: StudioEdition.SelfHosted,
+    preview: {
+      enabled: config.environment === StudioEnvironment.Staging,
+      selected: StudioEdition.SelfHosted,
+    },
     auth: {
-      defaultMethod: AuthMethod.ApiKey,
+      defaultPage: AuthMethod.ApiKey,
+      allowEmailSwitch: false,
+      termsUrl:
+        'https://docs.volcengine.com/docs/vector-database-vikingdb/openviking-personal-product-service-terms',
       apiKey: {
         title: 'apiLogin.title',
         description: 'apiLogin.description',
+        showEndpoint: true,
         services: [
-          {
-            entry: LoginEntry.OpenVikingApiKey,
-            provider: ServiceProvider.OpenSource,
-            endpoint: { kind: 'custom' },
-            keyHelp: 'apiLogin.keyHelp',
-          },
           {
             entry: LoginEntry.VolcengineApiKey,
             provider: ServiceProvider.Volcengine,
             endpoint: { kind: 'fixed', url: config.hostedApiBaseUrl },
             keyHelp: 'hostedKeyHelp',
+            termsUrl:
+              'https://docs.volcengine.com/docs/vector-database-vikingdb/openviking-personal-product-service-terms',
+          },
+          {
+            entry: LoginEntry.OpenVikingApiKey,
+            provider: ServiceProvider.OpenSource,
+            endpoint: { kind: 'custom' },
+            keyHelp: 'apiLogin.keyHelp',
+            termsUrl: null,
           },
         ],
       },

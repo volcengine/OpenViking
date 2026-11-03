@@ -21,8 +21,8 @@ export function AuthEntry({
       : '')
   return (
     <PublicAuthPage
-      page={page ?? auth.defaultMethod}
-      apiKeyConfig={auth.apiKey}
+      page={page ?? auth.defaultPage}
+      config={auth}
       initialAddress={initialAddress}
       onComplete={
         onComplete ??

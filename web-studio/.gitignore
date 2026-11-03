@@ -26,3 +26,6 @@ script/gen-server-client/generate
 # Frontend feature libraries are source, not Python build artifacts.
 !src/**/lib/
 !src/**/lib/**
+
+# Generated UI review evidence; keep source design records tracked.
+.impeccable/review/

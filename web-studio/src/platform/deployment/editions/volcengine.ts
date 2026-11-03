@@ -1,8 +1,8 @@
 import {
-  AuthMethod,
   LoginEntry,
   ServiceProvider,
   StudioEdition,
+  StudioEnvironment,
 } from '../../studio-contract'
 import { StudioEntry } from '../../entry/paths'
 import type { StudioDeploymentConfig, StudioExperience } from '../types'
@@ -12,17 +12,27 @@ export function volcengineExperience(
 ): StudioExperience {
   return {
     edition: StudioEdition.Volcengine,
+    preview: {
+      enabled: config.environment === StudioEnvironment.Staging,
+      selected: StudioEdition.Volcengine,
+    },
     auth: {
-      defaultMethod: AuthMethod.Email,
+      defaultPage: 'welcome',
+      allowEmailSwitch: true,
+      termsUrl:
+        'https://docs.volcengine.com/docs/vector-database-vikingdb/viking-product-service-terms',
       apiKey: {
         title: 'apiLogin.cloudTitle',
         description: 'apiLogin.cloudDescription',
+        showEndpoint: false,
         services: [
           {
             entry: LoginEntry.VolcengineApiKey,
             provider: ServiceProvider.Volcengine,
             endpoint: { kind: 'fixed', url: config.hostedApiBaseUrl },
             keyHelp: 'hostedKeyHelp',
+            termsUrl:
+              'https://docs.volcengine.com/docs/vector-database-vikingdb/viking-product-service-terms',
           },
         ],
       },

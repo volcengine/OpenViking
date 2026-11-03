@@ -2,15 +2,17 @@ import { StudioEntry } from '#/platform/entry/paths'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { EyeOffIcon } from 'lucide-react'
+import { EyeOffIcon, KeyRoundIcon, MailIcon, InfoIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AuthPage } from '#/features/auth/lib/auth-routes'
-import type { ApiKeyLoginConfig } from '#/platform/deployment/types'
+import type { StudioAuthConfig } from '#/platform/deployment/types'
 import { isValidEmail, isValidPassword } from '#/features/auth/lib/auth-routes'
 import type { ConnectionLoginResult } from '#/features/connection/login'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
 import { ApiKeyLogin } from './api-key-login'
+import { AuthConsent } from './auth-consent'
+import { AuthBackLink } from './auth-back-link'
 import { AuthLayout } from './auth-layout'
 import eyeIcon from '#/assets/workbench/eye.svg'
 import styles from './auth-layout.module.css'
@@ -20,12 +22,12 @@ import styles from './auth-layout.module.css'
 // API Key login remains the only path that can authenticate into Studio.
 export function PublicAuthPage({
   page,
-  apiKeyConfig,
+  config,
   initialAddress,
   onComplete,
 }: {
   page: AuthPage
-  apiKeyConfig: ApiKeyLoginConfig
+  config: StudioAuthConfig
   initialAddress: string
   onComplete: (result: ConnectionLoginResult) => void
 }) {
@@ -35,29 +37,55 @@ export function PublicAuthPage({
   const hash = new URLSearchParams((location.hash || '').replace(/^#/, ''))
   const search = new URLSearchParams(location.searchStr || '')
 
+  if (page === 'welcome')
+    return (
+      <AuthLayout>
+        <Heading title={t('accountAuth.loginTitle')}>
+          {t('accountAuth.loginDescription')}
+        </Heading>
+        <div className={styles.welcomeActions}>
+          <Link to={StudioEntry.EmailLogin} className={styles.primaryLink}>
+            {t('accountAuth.enterpriseLogin')}
+          </Link>
+          <Link to={StudioEntry.ApiKeyLogin} className={styles.outlineLink}>
+            <KeyRoundIcon size={18} />
+            {t('accountAuth.apiKeyLogin')}
+          </Link>
+        </div>
+        <p className={styles.welcomeHelp}>
+          <InfoIcon size={14} />
+          {t('accountAuth.keyEntryHelp')}
+        </p>
+      </AuthLayout>
+    )
+
   if (page === 'api-key')
     return (
       <ApiKeyLogin
-        config={apiKeyConfig}
+        config={config.apiKey}
+        back={config.allowEmailSwitch ? <AuthBackLink /> : undefined}
         initialAddress={initialAddress}
         onComplete={onComplete}
         alternative={
-          <div className={styles.alternative}>
+          config.allowEmailSwitch ? (
             <Link to={StudioEntry.EmailLogin} className={styles.link}>
-              {t('accountAuth.emailLogin')}
+              <MailIcon size={16} />
+              {t('accountAuth.switchEmail')}
             </Link>
-          </div>
+          ) : undefined
         }
       />
     )
 
   return (
     <AuthLayout>
+      {page === 'email' && config.allowEmailSwitch && <AuthBackLink />}
       {page === 'email' || page === 'forgot' ? (
         <EmailForm
           key={page}
           forgot={page === 'forgot'}
           initialEmail={initialEmail}
+          termsUrl={config.termsUrl}
         />
       ) : page === 'reset' ? (
         <ResetPasswordForm
@@ -157,11 +185,14 @@ function ServiceNotice({ submitted = false }: { submitted?: boolean }) {
 function EmailForm({
   forgot,
   initialEmail,
+  termsUrl,
 }: {
   forgot: boolean
   initialEmail: string
+  termsUrl: string
 }) {
   const { t } = useTranslation('onboarding')
+  const [consent, setConsent] = useState(false)
   const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ email?: string; password?: string }>(
@@ -193,7 +224,7 @@ function EmailForm({
                 : undefined,
           }
           setErrors(next)
-          if (next.email || next.password) return
+          if (next.email || next.password || (!forgot && !consent)) return
           setPassword('')
           setSubmitted(true)
         }}
@@ -206,6 +237,7 @@ function EmailForm({
               type="email"
               required
               value={email}
+              placeholder={t('accountAuth.emailPlaceholder')}
               autoComplete={forgot ? 'email' : 'username'}
               autoCapitalize="none"
               spellCheck={false}
@@ -242,10 +274,29 @@ function EmailForm({
             />
           )}
         </div>
+        {!forgot && (
+          <AuthConsent
+            termsUrl={termsUrl}
+            checked={consent}
+            onChange={setConsent}
+          />
+        )}
+        <div className={styles.actions}>
+          <Button
+            type="submit"
+            className={styles.submit}
+            disabled={!forgot && !consent}
+          >
+            {t(forgot ? 'accountAuth.sendReset' : 'accountAuth.signIn')}
+          </Button>
+          {!forgot && (
+            <Link to={StudioEntry.ApiKeyLogin} className={styles.link}>
+              <KeyRoundIcon size={16} />
+              {t('accountAuth.switchApiKey')}
+            </Link>
+          )}
+        </div>
         <ServiceNotice submitted={submitted} />
-        <Button type="submit" className={styles.submit}>
-          {t(forgot ? 'accountAuth.sendReset' : 'accountAuth.signIn')}
-        </Button>
       </form>
       <div className={styles.alternative}>
         {forgot && (
@@ -257,9 +308,11 @@ function EmailForm({
             {t('accountAuth.backToLogin')}
           </Link>
         )}
-        <Link to={StudioEntry.ApiKeyLogin} className={styles.link}>
-          {t('accountAuth.apiKeyLogin')}
-        </Link>
+        {forgot && (
+          <Link to={StudioEntry.ApiKeyLogin} className={styles.link}>
+            {t('accountAuth.apiKeyLogin')}
+          </Link>
+        )}
       </div>
     </>
   )

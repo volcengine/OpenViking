@@ -4,6 +4,7 @@ import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react'
 import { lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { StudioPreviewControl } from '#/app/composition/studio-preview-control'
 import { StudioRouteLayout } from '#/app/router/studio-route-layout'
 import { AppShell } from '#/app/layouts/app-shell'
 import { CredentialStorageNotice } from '#/features/connection/components/credential-storage-notice'
@@ -38,6 +39,7 @@ export function RootComponent() {
       </AppShell>
       <Toaster />
       <CredentialStorageNotice />
+      <StudioPreviewControl />
       <DevtoolsSlot />
     </>
   )

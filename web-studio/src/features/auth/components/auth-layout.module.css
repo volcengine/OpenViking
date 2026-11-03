@@ -38,7 +38,7 @@
   min-width: 0;
   align-items: center;
   justify-content: center;
-  padding: 40px clamp(32px, 8.333vw, 120px);
+  padding: 88px clamp(32px, 8.333vw, 120px);
 }
 .form {
   width: 100%;
@@ -115,35 +115,35 @@
 .services {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  padding: 4px;
+  gap: 8px;
   margin-top: 8px;
-  border-radius: 10px;
-  background: var(--muted);
 }
 .service {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 8px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
   cursor: pointer;
 }
 .service:has(:checked) {
-  background: var(--background);
-  border-color: var(--border);
-  color: var(--primary);
+  background: var(--wb-subtle);
+  border-color: var(--foreground);
+  color: var(--foreground);
 }
 .service:has(:focus-visible) {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 .service input {
-  accent-color: var(--primary);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 }
 .password {
   position: relative;
@@ -251,6 +251,128 @@
   }
   .link,
   .labelRow .link {
+    min-height: 44px;
+  }
+}
+
+.back {
+  gap: 6px;
+  margin-bottom: 24px;
+  color: var(--muted-foreground);
+}
+.welcomeActions {
+  display: grid;
+  gap: 12px;
+  margin-top: 40px;
+}
+.primaryLink,
+.outlineLink {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.primaryLink {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.primaryLink:hover {
+  background: var(--wb-hover);
+}
+.outlineLink {
+  border: 1px solid var(--border);
+  color: var(--foreground);
+}
+.outlineLink:hover {
+  background: var(--wb-subtle);
+}
+.primaryLink:focus-visible,
+.outlineLink:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+.welcomeHelp {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--muted-foreground);
+}
+.welcomeHelp svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-top: 24px;
+}
+.actions .submit {
+  margin-top: 0;
+}
+.link {
+  gap: 6px;
+}
+.consent {
+  margin-top: 24px;
+}
+.fields .consent {
+  margin-top: 0;
+}
+.consentRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-size: 12px;
+  line-height: 22px;
+}
+.consentLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  cursor: pointer;
+}
+.consentRow .link {
+  font-size: inherit;
+}
+.pendingPolicy {
+  color: var(--muted-foreground);
+}
+.apiKey {
+  position: relative;
+}
+.apiKey input {
+  padding-right: 126px;
+}
+.keyActions {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.keyActions button {
+  min-width: 44px;
+  height: 44px;
+  color: var(--muted-foreground);
+}
+.keyActions .paste {
+  padding-inline: 8px;
+  gap: 4px;
+}
+@media (max-width: 760px) {
+  .consentLabel {
     min-height: 44px;
   }
 }

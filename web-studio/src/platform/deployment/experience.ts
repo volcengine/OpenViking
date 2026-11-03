@@ -1,5 +1,9 @@
 import { identifyServiceProvider } from '../connection/service-provider'
-import { ServiceProvider, StudioEdition } from '../studio-contract'
+import {
+  ServiceProvider,
+  StudioEdition,
+  StudioEnvironment,
+} from '../studio-contract'
 import { getStudioDeployment } from './config'
 import { selfHostedExperience } from './editions/self-hosted'
 import { volcengineExperience } from './editions/volcengine'
@@ -23,8 +27,28 @@ let startupExperience: StudioExperience | undefined
 
 // Production selects its edition once, before rendering routes. The fallback
 // keeps isolated consumers/tests usable without initializing the whole app.
-export function initializeStudioExperience(): StudioExperience {
-  return (startupExperience ??= resolveStudioExperience(getStudioDeployment()))
+export function resolveStudioStartup(
+  config: StudioDeploymentConfig,
+  previewSelection?: unknown,
+): StudioExperience {
+  if (config.environment !== StudioEnvironment.Staging)
+    return resolveStudioExperience(config)
+  // Domain STG starts in the official experience. A tab-local preview can select
+  // the open-source experience; the release environment and endpoint stay STG.
+  const edition =
+    previewSelection === StudioEdition.SelfHosted
+      ? StudioEdition.SelfHosted
+      : StudioEdition.Volcengine
+  return resolveStudioExperience({ ...config, edition })
+}
+
+export function initializeStudioExperience(
+  previewSelection?: unknown,
+): StudioExperience {
+  return (startupExperience ??= resolveStudioStartup(
+    getStudioDeployment(),
+    previewSelection,
+  ))
 }
 
 export function getStudioExperience(): StudioExperience {

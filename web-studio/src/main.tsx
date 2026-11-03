@@ -1,3 +1,4 @@
+import { readStudioPreview } from '#/app/composition/studio-preview'
 import { initializeStudioExperience } from '#/platform/deployment/experience'
 import { registerServiceWorker } from '#/app/lib/service-worker'
 import { queryClient } from '#/app/providers/query-client'
@@ -43,7 +44,7 @@ const rootElement = document.getElementById('app')!
 
 async function start() {
   try {
-    initializeStudioExperience()
+    initializeStudioExperience(readStudioPreview())
   } catch {
     rootElement.textContent = i18n.t('onboarding:apiLogin.deploymentError')
     return

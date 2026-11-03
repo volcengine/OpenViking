@@ -33,16 +33,20 @@ it('keeps hosted API Key login identical in official and self-hosted deployments
       hostedApiBaseUrl,
     }),
   )
-  expect(self.auth.defaultMethod).toBe(AuthMethod.ApiKey)
-  expect(cloud.auth.defaultMethod).toBe(AuthMethod.Email)
+  expect(self.auth.defaultPage).toBe(AuthMethod.ApiKey)
+  expect(cloud.auth.defaultPage).toBe('welcome')
   expect(self.auth.apiKey.services.map((service) => service.entry)).toEqual([
-    LoginEntry.OpenVikingApiKey,
     LoginEntry.VolcengineApiKey,
+    LoginEntry.OpenVikingApiKey,
   ])
   expect(cloud.auth.apiKey.services.map((service) => service.entry)).toEqual([
     LoginEntry.VolcengineApiKey,
   ])
-  expect(self.auth.apiKey.services[1]).toEqual(cloud.auth.apiKey.services[0])
+  expect(self.auth.apiKey.services[0].endpoint).toEqual(
+    cloud.auth.apiKey.services[0].endpoint,
+  )
+  expect(self.auth.apiKey.services[0].termsUrl).toContain('openviking-personal')
+  expect(cloud.auth.apiKey.services[0].termsUrl).toContain('/viking-product')
   expect(cloud.auth.apiKey.services[0].endpoint).toEqual({
     kind: 'fixed',
     url: hostedApiBaseUrl,
@@ -93,5 +97,5 @@ it('selects the production profile once at startup, independent of later global 
   window.__OV_STUDIO_CONFIG__ = { edition: StudioEdition.SelfHosted }
   expect(getStudioExperience()).toBe(startup)
   expect(initializeStudioExperience()).toBe(startup)
-  expect(startup.auth.defaultMethod).toBe(AuthMethod.Email)
+  expect(startup.auth.defaultPage).toBe('welcome')
 })

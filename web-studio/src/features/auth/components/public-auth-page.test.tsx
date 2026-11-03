@@ -1,12 +1,6 @@
 import { getStudioExperience } from '#/platform/deployment/experience'
 // @vitest-environment jsdom
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import {
   createMemoryHistory,
@@ -47,7 +41,7 @@ async function open(path: string, basepath = '') {
         <AuthEntry
           page={resolveAuthPage(
             pathname,
-            getStudioExperience().auth.defaultMethod,
+            getStudioExperience().auth.defaultPage,
           )}
           onComplete={complete}
         />
@@ -72,34 +66,36 @@ async function open(path: string, basepath = '') {
   return router
 }
 
-it.each(['self-hosted', 'volcengine'] as const)(
-  'chooses the %s default and allows switching login methods',
-  async (edition) => {
-    window.__OV_STUDIO_CONFIG__ = { edition }
-    const router = await open('/login', '/studio')
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
-      edition === 'self-hosted'
-        ? 'Connect to OpenViking'
-        : 'Sign in to OpenViking',
-    )
-    fireEvent.click(
-      screen.getByRole('link', {
-        name:
-          edition === 'self-hosted'
-            ? 'Sign in with email'
-            : 'Sign in with API Key',
-      }),
-    )
-    await waitFor(() =>
-      expect(router.state.location.pathname).toBe(
-        edition === 'self-hosted' ? '/login/email' : '/login/api-key',
-      ),
-    )
-    expect(router.history.location.pathname).toBe(
-      `/studio${router.state.location.pathname}`,
-    )
-  },
-)
+it('official welcome opens email and API Key forms with a way back', async () => {
+  window.__OV_STUDIO_CONFIG__ = { edition: 'volcengine' }
+  const router = await open('/login', '/studio')
+  expect(screen.queryByLabelText('Work email')).toBeNull()
+  fireEvent.click(screen.getByRole('link', { name: 'Enterprise sign-in' }))
+  await screen.findByLabelText('Work email')
+  expect(router.history.location.pathname).toBe('/studio/login/email')
+  fireEvent.click(screen.getByRole('link', { name: 'Use an API Key instead' }))
+  await screen.findByLabelText('API Key')
+  expect(screen.queryByLabelText('Service Address')).toBeNull()
+  fireEvent.click(screen.getByRole('link', { name: 'Back' }))
+  await screen.findByRole('link', { name: 'Enterprise sign-in' })
+  expect(router.state.location.pathname).toBe('/login')
+})
+
+it('private login defaults to hosted with personal terms and no email switch', async () => {
+  await open('/login')
+  expect(
+    screen.getByRole<HTMLInputElement>('radio', { name: 'Volcengine hosted' })
+      .checked,
+  ).toBe(true)
+  expect(screen.queryByRole('link', { name: /email|enterprise/i })).toBeNull()
+  expect(
+    screen.getByRole('link', { name: 'Service terms' }).getAttribute('href'),
+  ).toContain('/openviking-personal')
+  expect(screen.getByText('Privacy policy (coming soon)')).toBeTruthy()
+  expect(screen.queryByRole('link', { name: /Privacy/ })).toBeNull()
+  fireEvent.click(screen.getByRole('radio', { name: 'Self-hosted' }))
+  expect(screen.queryByRole('checkbox')).toBeNull()
+})
 
 it('carries email through recovery and back without putting it in a URL or storing a password', async () => {
   const router = await open('/login/email', '/studio')
@@ -116,7 +112,7 @@ it('carries email through recovery and back without putting it in a URL or stori
   )
   expect(router.history.location.href).not.toContain('alice')
   fireEvent.click(screen.getByRole('link', { name: 'Back to email sign-in' }))
-  await screen.findByRole('heading', { name: 'Sign in to OpenViking' })
+  await screen.findByRole('heading', { name: 'Enterprise sign-in' })
   expect(screen.getByLabelText<HTMLInputElement>('Work email').value).toBe(
     'alice@example.com',
   )
@@ -138,6 +134,7 @@ it.each(['/login/email', '/forgot-password'])(
     const submit = screen.getByRole('button', {
       name: path === '/forgot-password' ? 'Send reset link' : 'Sign in',
     })
+    if (path === '/login/email') fireEvent.click(screen.getByRole('checkbox'))
     fireEvent.click(submit)
     expect(screen.getByText('Enter a valid email address.')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Work email'), {

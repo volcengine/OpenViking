@@ -1,7 +1,28 @@
 export default {
+  preview: {
+    trigger: 'STG edition preview',
+    title: 'Preview Studio edition',
+    description: 'Switching returns to sign-in and clears the current form.',
+    official: 'Volcengine edition',
+    private: 'Open-source edition',
+    failed: 'Could not save the preview. Allow tab storage and try again.',
+  },
+  consent: {
+    agree: 'I have read and agree to',
+    terms: 'Service terms',
+    privacyPending: 'Privacy policy (coming soon)',
+  },
   accountAuth: {
-    loginTitle: 'Sign in to OpenViking',
-    loginDescription: 'Sign in with your work email to open your workspace.',
+    enterpriseLogin: 'Enterprise sign-in',
+    switchEmail: 'Use enterprise sign-in',
+    switchApiKey: 'Use an API Key instead',
+    back: 'Back',
+    emailPlaceholder: 'Enter your sign-in email',
+    keyEntryHelp:
+      'For Agents, service accounts and members who use an API Key.',
+    loginTitle: 'Enterprise sign-in',
+    loginDescription:
+      'Enter your context workspace, the external brain for your AI Agent.',
     emailLogin: 'Sign in with email',
     apiKeyLogin: 'Sign in with API Key',
     email: 'Work email',
@@ -39,6 +60,9 @@ export default {
       'You can register or sign in and choose whether to join after the invitation is verified. Opening this link does not add you to a team.',
   },
   apiLogin: {
+    paste: 'Paste',
+    pasteFailed: 'Could not read the clipboard. Paste the API Key manually.',
+    keyPlaceholder: 'Paste or enter your API Key',
     tagline: 'Keep every team member’s Agent in sync.',
     title: 'Connect to OpenViking',
     cloudTitle: 'Sign in with API Key',

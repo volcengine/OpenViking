@@ -10,6 +10,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import i18n from '#/i18n'
+import * as loginModule from '#/features/connection/login'
 import { ApiKeyLogin } from './api-key-login'
 import {
   getStudioExperience,
@@ -32,6 +33,7 @@ beforeEach(async () => {
 })
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   delete window.__OV_STUDIO_CONFIG__
 })
 
@@ -71,6 +73,7 @@ it.each(['root', 'admin', 'user'] as const)(
           onComplete={complete}
         />,
       )
+      fireEvent.click(screen.getByRole('radio', { name: 'Self-hosted' }))
       fireEvent.change(screen.getByLabelText('Service Address'), {
         target: { value: url },
       })
@@ -117,12 +120,11 @@ it('official deployment fixes the hosted endpoint and omits private service sele
     />,
   )
   expect(screen.queryByRole('radio')).toBeNull()
+  expect(screen.queryByLabelText('Service Address')).toBeNull()
+  expect(screen.getByRole('checkbox')).toBeTruthy()
   expect(
-    screen.getByLabelText<HTMLInputElement>('Service Address').readOnly,
-  ).toBe(true)
-  expect(screen.getByLabelText<HTMLInputElement>('Service Address').value).toBe(
-    'https://cloud.example/ov',
-  )
+    screen.getByRole('link', { name: 'Service terms' }).getAttribute('href'),
+  ).toContain('/viking-product')
 })
 
 it('renders the injected entry configuration without reading global deployment or location', () => {
@@ -135,7 +137,8 @@ it('renders the injected entry configuration without reading global deployment o
       onComplete={vi.fn()}
     />,
   )
-  expect(screen.getByRole('radio', { name: 'Self-hosted' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('radio', { name: 'Self-hosted' }))
+  expect(screen.queryByRole('checkbox')).toBeNull()
   expect(screen.getByLabelText<HTMLInputElement>('Service Address').value).toBe(
     'https://private.example',
   )
@@ -147,4 +150,101 @@ it('renders the injected entry configuration without reading global deployment o
     screen.getByLabelText<HTMLInputElement>('Service Address').readOnly,
   ).toBe(true)
   expect(screen.getByLabelText<HTMLInputElement>('API Key').value).toBe('')
+})
+
+it('gates hosted login by consent and submits the fixed endpoint with Bearer service selection', async () => {
+  const login = vi
+    .spyOn(loginModule, 'loginAndActivate')
+    .mockRejectedValue(new Error('Synthetic verification failure'))
+  window.__OV_STUDIO_CONFIG__ = {
+    edition: 'volcengine',
+    hostedApiBaseUrl: 'https://cloud.example/ov',
+  }
+  render(
+    <ApiKeyLogin
+      config={getStudioExperience().auth.apiKey}
+      onComplete={vi.fn()}
+    />,
+  )
+  const submit = screen.getByRole<HTMLButtonElement>('button', {
+    name: 'Sign in',
+  })
+  fireEvent.change(screen.getByLabelText('API Key'), {
+    target: { value: ' synthetic- key ' },
+  })
+  expect(submit.disabled).toBe(true)
+  fireEvent.click(screen.getByRole('checkbox'))
+  expect(submit.disabled).toBe(false)
+  fireEvent.click(submit)
+  await waitFor(() => expect(login).toHaveBeenCalledOnce())
+  expect(login.mock.calls[0][0]).toMatchObject({
+    baseUrl: 'https://cloud.example/ov',
+    serviceSelection: 'volcengine',
+    apiKey: 'synthetic-key',
+  })
+})
+
+it('clears consent, key and visibility when switching services', () => {
+  render(
+    <ApiKeyLogin
+      config={getStudioExperience().auth.apiKey}
+      onComplete={vi.fn()}
+    />,
+  )
+  fireEvent.change(screen.getByLabelText('API Key'), {
+    target: { value: 'synthetic-key' },
+  })
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('button', { name: 'Show API Key' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Self-hosted' }))
+  expect(screen.getByLabelText<HTMLInputElement>('API Key').value).toBe('')
+  expect(screen.getByLabelText<HTMLInputElement>('API Key').type).toBe(
+    'password',
+  )
+  expect(screen.queryByRole('checkbox')).toBeNull()
+  fireEvent.click(screen.getByRole('radio', { name: 'Volcengine hosted' }))
+  expect(screen.getByRole('checkbox').getAttribute('aria-checked')).toBe(
+    'false',
+  )
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Sign in' }).disabled,
+  ).toBe(true)
+})
+
+it('pastes a synthetic Key, handles denied clipboard access, and discards stale paste results', async () => {
+  const readText = vi.fn().mockResolvedValue(' synthetic- key ')
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { readText },
+  })
+  render(
+    <ApiKeyLogin
+      config={getStudioExperience().auth.apiKey}
+      onComplete={vi.fn()}
+    />,
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+  await waitFor(() =>
+    expect(screen.getByLabelText<HTMLInputElement>('API Key').value).toBe(
+      'synthetic-key',
+    ),
+  )
+  readText.mockRejectedValueOnce(new Error('Permission denied'))
+  fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+  await screen.findByText(
+    'Could not read the clipboard. Paste the API Key manually.',
+  )
+  let finish!: (value: string) => void
+  readText.mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = resolve
+      }),
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Self-hosted' }))
+  finish('stale-synthetic-key')
+  await waitFor(() =>
+    expect(screen.getByLabelText<HTMLInputElement>('API Key').value).toBe(''),
+  )
 })

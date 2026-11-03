@@ -1,6 +1,6 @@
 # OV Workbench → Studio 局部 UX 样式迁移
 
-记录日期：2026-11-02。状态：样式、公共认证页面与路由已交付；登录主按钮焦点修正已视觉复查；真实账号服务及邀请完整流程待联调。
+记录日期：2026-11-02；登录组合及 STG 预览更新：2026-11-03。状态：样式、公共认证页面与路由已交付；真实账号服务及邀请完整流程待联调。
 
 ## 范围与来源
 
@@ -25,7 +25,7 @@
 
 认证插画在宽度不超过 760px 时隐藏。文件系统在 1280px 及以上可显示三栏，768–1279px 默认两栏，手机上下排列目录与文档；窄屏的终端/助手通过全屏面板进入。
 
-## 本地验证与证据边界
+## 初次样式迁移验证与证据边界（2026-11-02）
 
 | 检查 | 结果与限制 |
 | --- | --- |
@@ -58,20 +58,20 @@
 
 ## 公共认证页面补齐
 
-用户确认先交付页面和路由，保留私有化默认 API Key、火山默认邮箱，真实账号接口后续联调。本节是后续增量，前述样式迁移及登录入口修正的验证范围保持不变。
+用户确认先交付页面和路由，真实账号接口后续联调。下表按 2026-11-03 已确认组合更新；本节末尾保留初次公共页面交付时的验证，前述样式迁移及登录入口修正的验证范围保持不变。
 
 | 路径 | 当前行为 |
 | --- | --- |
-| `/login` | 按部署版本选择默认入口：私有化为 API Key，火山为邮箱。 |
-| `/login/api-key` | 独立 API Key 登录；“使用其他 Key 登录”菜单指向此处。 |
-| `/login/email` | 邮箱、密码前端校验及服务暂不可用提示。 |
+| `/login` | 官方为企业登录 / API Key 选择页；私有化为 API Key，默认火山托管服务，自部署服务排第二。 |
+| `/login/api-key` | 独立 API Key 登录；官方隐藏服务选择与固定地址，提供返回选择页；“使用其他 Key 登录”菜单指向此处。 |
+| `/login/email` | 邮箱、密码前端校验及服务暂不可用提示；官方提供返回选择页。 |
 | `/forgot-password` | 邮箱前端校验及服务暂不可用提示，不发送邮件。 |
 | `/reset-password?token=…` | 有 token 时提供新密码与确认密码校验；缺少 token 时提示链接不完整。 |
 | `/invite#token=…` | 有 token 时仅显示待验证及服务暂不可用状态；缺少 token 时提示链接不完整。 |
 
 全部路径均由 AppShell 独立渲染，不挂载已连接业务 provider；已有或离线连接不阻止访问。邮箱登录与忘记密码通过 `history.state` 传递邮箱，不写入 URL。密码仅保存在组件内，离开页面或通过前端校验提交后清空。邮箱、密码恢复与邀请页面不发送账号请求、不创建 session、不伪造成功；邀请注册、接受、拒绝分支尚未实现，不能视为邀请全链路交付。
 
-本次增量验证：
+初次公共页面交付验证（2026-11-02）：
 
 - `npm run build` 通过（`/tmp/ov-auth-pages-build.log`），包含 lint 与 `test:i18n`（5 个文件、48 个测试）；仍有 lint warning 与构建体积提示。
 - 9 个文件、109 个测试通过（`/tmp/ov-auth-pages-tests.log`），覆盖公共页面、路由、版本默认入口及 ROOT/Admin/User 角色入口与权限回归。其中 `api-key-login.test.tsx` 使用本机 HTTP fixture、真实 HTTP client 与 onboarding validator，检查三种角色的 health/admin/fs 请求范围；这是本地协议回归，不是真实部署验收。该轮测试不是全量重跑。
@@ -79,6 +79,28 @@
 - 浏览器走查桌面（1280px）、手机（390px）、平板（820px），本次走查 console error 为空。截图保存在前述 `studio-ux/`：`email-login-desktop.jpg`、`email-login-mobile.jpg`、`forgot-password-mobile.jpg`、`reset-password-mobile.jpg`、`invite-tablet.jpg`。
 
 该验证覆盖本地前端与已有 API Key 权限行为，不证明托管账号服务、生产部署或完整邀请流程已经可用。
+
+## 登录组合与 STG 预览（2026-11-03）
+
+官方入口选择页沿用认证分栏、插画与现有按钮层级；企业登录为主要入口，API Key 为次要入口。私有化 API Key 服务选择先火山托管、后自部署；托管地址只读且要求协议勾选，自部署地址可编辑且不显示协议勾选。切换服务会清空 Key、显隐状态、协议勾选和旧错误。API Key 继续走真实验证与连接保存，不改变 ROOT/Admin/User 的现有行为。
+
+- 官方邮箱/API Key 使用[企业服务协议](https://docs.volcengine.com/docs/vector-database-vikingdb/viking-product-service-terms)。
+- 私有化连接火山使用[个人服务协议](https://docs.volcengine.com/docs/vector-database-vikingdb/openviking-personal-product-service-terms)，用户说明该文档尚待发布；URL 已配置不等于文档已上线。
+- 隐私政策 URL 待用户提供，页面显示待补充文字，不设置虚构链接。
+
+STG 浮动控件切换整个入口组合，选择仅保存在当前标签页 `sessionStorage`；切换后整页重载到保留 Vite base 的 `/login`。STG 默认官方，两种预览的托管地址均为 `https://api.vikingdb-stg.cn-beijing.volces.com/openviking`。生产不显示该控件并忽略预览选择，源码默认私有化；官方生产需显式配置版本。构建及检查步骤见[部署配置](all-ov-studio-stage-0.md#部署配置)。
+
+本轮验证与证据：
+
+| 检查 | 结果与限制 |
+| --- | --- |
+| Vitest | 全量 227 个文件、1991 个测试通过，日志 `/tmp/ov-auth-full-tests.log`；含协议勾选、服务切换、STG base 与生产忽略预览、ROOT/Admin/User 本地 HTTP fixture 回归。 |
+| 构建 | `npm run build` 通过，日志 `/tmp/ov-auth-build-production.log`，包含 lint/i18n 检查；STG base 构建通过，日志 `/tmp/ov-auth-build-stg.log`。仍保留 8 条既有 lint warning 与大 chunk 提示。 |
+| 类型检查 | `/tmp/ov-auth-tsc-final.log` 与 `/tmp/ov-stage0-baseline-tsc.log` 逐字节一致；未新增基线诊断，`tsc` 仍失败。 |
+| 浏览器 | `.impeccable/review/` 保存实际页面截图：官方选择、邮箱、API Key 和私有化托管/自部署的桌面及手机页面，以及桌面 STG 控件。截图不含真实服务登录验收。 |
+| 构建产物浏览器检查 | 本地 3018 端口的正式官方构建 `/login` 不显示 STG 控件；3019 端口的 STG 构建 `/workbench-stg/login` 默认官方，点击切为私有化后 URL 保持 `/workbench-stg/login`，刷新仍为私有化，托管地址保持 STG。未提交真实凭据，不代表线上部署验收。 |
+
+上述结果是本地实现、测试和页面证据，不等同于 CI、线上部署、托管账号服务或真实 Key 全链路验收。初次迁移的截图与测试数量属于历史记录，不与本轮数量合并。
 
 ## 后续验收
 

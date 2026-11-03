@@ -19,18 +19,28 @@ export type LoginService = {
   provider: KnownServiceProvider
   endpoint: { kind: 'custom' } | { kind: 'fixed'; url: string }
   keyHelp: 'apiLogin.keyHelp' | 'hostedKeyHelp'
+  termsUrl: string | null
 }
 
 export type ApiKeyLoginConfig = {
   title: 'apiLogin.title' | 'apiLogin.cloudTitle'
   description: 'apiLogin.description' | 'apiLogin.cloudDescription'
+  showEndpoint: boolean
   services: readonly [LoginService, ...LoginService[]]
+}
+
+export type StudioAuthConfig = {
+  defaultPage: AuthMethod | 'welcome'
+  allowEmailSwitch: boolean
+  termsUrl: string
+  apiKey: ApiKeyLoginConfig
 }
 
 // Product decisions only. A profile never grants runtime permissions.
 export type StudioExperience = {
   edition: StudioEdition
-  auth: { defaultMethod: AuthMethod; apiKey: ApiKeyLoginConfig }
+  auth: StudioAuthConfig
+  preview: { enabled: boolean; selected: StudioEdition }
   connections:
     | { kind: 'selectable'; hostedEndpoint?: string }
     | { kind: 'fixed'; provider: KnownServiceProvider; endpoint: string }

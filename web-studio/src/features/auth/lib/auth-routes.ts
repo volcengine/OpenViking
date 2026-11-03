@@ -11,7 +11,7 @@ export const AUTH_PATHS = [
 ] as const
 
 export type AuthPath = (typeof AUTH_PATHS)[number]
-export type AuthPage = AuthMethod | 'forgot' | 'reset' | 'invite'
+export type AuthPage = AuthMethod | 'welcome' | 'forgot' | 'reset' | 'invite'
 
 export function isAuthPath(path: string): path is AuthPath {
   return AUTH_PATHS.some((candidate) => candidate === path)
@@ -19,11 +19,11 @@ export function isAuthPath(path: string): path is AuthPath {
 
 export function resolveAuthPage(
   path: AuthPath,
-  defaultMethod: AuthMethod,
+  defaultPage: AuthMethod | 'welcome',
 ): AuthPage {
   switch (path) {
     case StudioEntry.Login:
-      return defaultMethod
+      return defaultPage
     case StudioEntry.EmailLogin:
       return AuthMethod.Email
     case StudioEntry.ApiKeyLogin:

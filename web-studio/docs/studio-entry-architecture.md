@@ -1,6 +1,6 @@
 # Studio 入口分层与枚举
 
-日期：2026-11-02。范围：部署入口、认证页面组装、管理能力与默认落点的现有策略收口。
+日期：2026-11-02；登录组合与 STG 预览更新：2026-11-03。范围：部署入口、认证页面组装、管理能力与默认落点的现有策略收口。
 
 本次不改变火山 ROOT 的跳转与管理接入。其产品目标是验证 ROOT 后进入管理后台，但用户已将这部分延后，当前保留原有托管行为。邮箱账号服务仍待联调。
 
@@ -50,16 +50,18 @@ src/app/composition/auth-entry.tsx # 将配置和地址默认值传给认证页�
 
 开发、测试、生产是发布环境，不通过这些枚举隐式授予权限。私有化部署绑定域名仍然是 `self-hosted`。
 
-2026-11-03：新增独立的 `StudioEnvironment`（`production` / `stg`）。入口配置在 Vite base 为 `/workbench-stg/` 时选择 STG；可由运行时 `environment` 或构建 `VITE_STUDIO_ENVIRONMENT` 显式覆盖。该维度只选择火山服务地址，不改变 `StudioEdition`。默认 STG API 为 `https://api.vikingdb-stg.cn-beijing.volces.com/openviking`。服务识别同时支持生产与 STG 官方域名，使用 Bearer 认证。STG 恢复及激活火山连接时要求匹配其配置地址，不将生产 Key 自动搬到 STG。旧向导也复用入口配置的地址。
+2026-11-03：新增独立的 `StudioEnvironment`（`production` / `stg`）。原始部署配置在 Vite base 为 `/workbench-stg/` 时选择 STG；可由运行时 `environment` 或构建 `VITE_STUDIO_ENVIRONMENT` 显式覆盖。环境决定默认火山地址，不改写原始发布配置的 `edition`；仅 STG 的启动预览可以覆盖实际入口组合。默认 STG API 为 `https://api.vikingdb-stg.cn-beijing.volces.com/openviking`。服务识别同时支持生产与 STG 官方域名，使用 Bearer 认证。STG 恢复及激活火山连接时要求匹配其配置地址，不将生产 Key 自动搬到 STG。旧向导也复用入口配置的地址。
+
+`platform/deployment/experience.ts` 的 `resolveStudioStartup` 仅在 STG 选择预览组合：默认官方，允许私有化，保持原环境与托管地址；生产忽略预览选择。`app/composition/studio-preview.ts` 负责读取标签页 `sessionStorage`，切换时保存选择并整页重载到保留 Vite base 的 `/login`；浮动控件由同目录的 `studio-preview-control.tsx` 组装。
 
 ## 登录配置
 
 | 部署     | 默认登录 | API Key 候选    | 地址规则                    |
 | -------- | -------- | --------------- | --------------------------- |
-| 私有化   | API Key  | 自部署 OV、火山 | OV 地址可输入，火山地址固定 |
-| 官方火山 | 邮箱     | 仅火山          | 固定为部署配置中的火山地址  |
+| 私有化   | API Key，默认火山托管 | 火山托管、自部署 OV | 火山地址只读，OV 地址可输入 |
+| 官方火山 | 企业登录 / API Key 选择页 | 仅火山 | 固定为部署配置中的火山地址，API Key 页隐藏地址 |
 
-两个部署中的火山 API Key 候选具有相同的服务及地址语义。官方入口在邮箱和火山 API Key 间切换，自部署 OV API Key 选项只在私有化出现。既有邮箱、密码恢复和邀请公共页面保留兼容访问；页面可访问不表示邮箱服务已接入。
+两个部署中的火山 API Key 候选具有相同的服务及地址语义。官方选择页进入 `/login/email` 或 `/login/api-key`，两页均可返回选择页；官方 API Key 页隐藏服务选择，自部署 OV API Key 选项只在私有化出现。既有邮箱、密码恢复和邀请公共页面保留兼容访问；页面可访问不表示邮箱服务已接入。
 
 `ApiKeyLogin` 接收 `ApiKeyLoginConfig` 和 `initialAddress`，不访问部署配置、环境变量或当前 URL。它按候选展示服务选项，按地址规则呈现可编辑或只读字段，并在切换服务时清空 Key。
 
