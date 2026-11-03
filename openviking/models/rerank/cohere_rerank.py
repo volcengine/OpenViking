@@ -57,8 +57,8 @@ class CohereRerankClient(RerankBase):
         if not documents:
             return []
 
+        started = time.monotonic()
         try:
-            started = time.monotonic()
             resp = self._client.post(
                 "/v2/rerank",
                 json={
@@ -72,14 +72,6 @@ class CohereRerankClient(RerankBase):
             resp.raise_for_status()
             data = resp.json()
 
-            # Update token usage tracking
-            self._extract_and_update_token_usage(
-                data,
-                query,
-                documents,
-                duration_seconds=time.monotonic() - started,
-            )
-
             # Cohere returns results sorted by score desc with index field
             # We need to map back to original order
             scores = [0.0] * len(documents)
@@ -87,13 +79,22 @@ class CohereRerankClient(RerankBase):
                 idx = result["index"]
                 scores[idx] = result["relevance_score"]
 
+            self._extract_and_update_token_usage(
+                data,
+                query,
+                documents,
+                duration_seconds=time.monotonic() - started,
+            )
+
             logger.debug(f"[CohereRerank] Reranked {len(documents)} documents")
             return scores
 
         except httpx.HTTPStatusError as e:
+            self.record_failed_call(duration_seconds=time.monotonic() - started, error=e)
             logger.error(f"[CohereRerank] API error: {e.response.status_code} {e.response.text}")
             return None
         except Exception as e:
+            self.record_failed_call(duration_seconds=time.monotonic() - started, error=e)
             logger.error(f"[CohereRerank] Rerank failed: {e}")
             return None
 

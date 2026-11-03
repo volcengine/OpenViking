@@ -60,27 +60,16 @@ class LiteLLMRerankClient(RerankBase):
         if not documents:
             return []
 
+        started = time.monotonic()
         try:
             import litellm
 
-            started = time.monotonic()
             response = litellm.rerank(
                 model=self.model_name,
                 query=query,
                 documents=documents,
                 api_key=self.api_key,
                 api_base=self.api_base,
-            )
-
-            # Update token usage tracking (estimate from response or input)
-            response_dict = (
-                response.model_dump() if hasattr(response, "model_dump") else response.__dict__
-            )
-            self._extract_and_update_token_usage(
-                response_dict,
-                query,
-                documents,
-                duration_seconds=time.monotonic() - started,
             )
 
             results = response.results
@@ -108,10 +97,21 @@ class LiteLLMRerankClient(RerankBase):
             sorted_results = sorted(results, key=lambda x: _result_field(x, "index"))
             scores = [_result_field(item, "relevance_score", 0.0) for item in sorted_results]
 
+            response_dict = (
+                response.model_dump() if hasattr(response, "model_dump") else response.__dict__
+            )
+            self._extract_and_update_token_usage(
+                response_dict,
+                query,
+                documents,
+                duration_seconds=time.monotonic() - started,
+            )
+
             logger.debug(f"[LiteLLMRerankClient] Reranked {len(documents)} documents")
             return scores
 
         except Exception as e:
+            self.record_failed_call(duration_seconds=time.monotonic() - started, error=e)
             logger.error(f"[LiteLLMRerankClient] Rerank failed: {e}")
             return None
 

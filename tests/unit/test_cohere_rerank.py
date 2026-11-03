@@ -51,14 +51,37 @@ class TestCohereRerankClient:
         mock_response = MagicMock()
         mock_response.status_code = 401
         mock_response.text = "Unauthorized"
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        error = httpx.HTTPStatusError(
             "401", request=MagicMock(), response=mock_response
         )
+        mock_response.raise_for_status.side_effect = error
         mock_client.post.return_value = mock_response
 
         client = CohereRerankClient(api_key="bad-key")
-        result = client.rerank_batch("query", ["doc"])
+        with patch.object(client, "record_failed_call") as record_failed_call:
+            result = client.rerank_batch("query", ["doc"])
+
         assert result is None
+        record_failed_call.assert_called_once()
+        assert record_failed_call.call_args.kwargs["error"] is error
+        assert record_failed_call.call_args.kwargs["duration_seconds"] >= 0
+
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
+    def test_parse_exception_records_only_failed_call(self, mock_client_class):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "results": [{"index": 0}]
+        }
+        mock_client_class.return_value.post.return_value = mock_response
+
+        client = CohereRerankClient(api_key="test-key")
+        with patch.object(client, "record_failed_call") as record_failed_call, patch.object(
+            client, "_extract_and_update_token_usage"
+        ) as update_token_usage:
+            assert client.rerank_batch("query", ["doc"]) is None
+
+        record_failed_call.assert_called_once()
+        update_token_usage.assert_not_called()
 
     @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_rerank_preserves_original_order(self, mock_client_class):

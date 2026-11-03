@@ -86,3 +86,16 @@ class TestLiteLLMRerankClient:
         client = LiteLLMRerankClient(api_key="k", api_base=None, model_name="voyage/rerank-2.5")
         assert client.rerank_batch("q", []) == []
         mock_rerank.assert_not_called()
+
+    @patch("litellm.rerank")
+    def test_provider_exception_records_failed_call_before_fallback(self, mock_rerank):
+        error = TimeoutError("provider timeout")
+        mock_rerank.side_effect = error
+        client = LiteLLMRerankClient(api_key="k", api_base=None, model_name="voyage/rerank-2.5")
+
+        with patch.object(client, "record_failed_call") as record_failed_call:
+            assert client.rerank_batch("q", ["doc"]) is None
+
+        record_failed_call.assert_called_once()
+        assert record_failed_call.call_args.kwargs["error"] is error
+        assert record_failed_call.call_args.kwargs["duration_seconds"] >= 0

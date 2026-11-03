@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Retry decorator for ordinary VLM requests."""
 
+import asyncio
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.utils.model_retry import effective_max_retries, retry_async, retry_sync
 from openviking_cli.utils import get_logger
@@ -11,6 +13,7 @@ from openviking_cli.utils import get_logger
 from .base import VLMBase, VLMResponse
 
 logger = get_logger(__name__)
+T = TypeVar("T")
 
 
 class RetryVLM(VLMBase):
@@ -41,6 +44,46 @@ class RetryVLM(VLMBase):
     def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
         self.inner.record_failed_call(duration_seconds=duration_seconds, error=error)
 
+    def _record_failed_attempt(self, *, duration_seconds: float, error: Exception) -> None:
+        """Keep best-effort metrics independent from the provider failure."""
+        try:
+            self.inner.record_failed_call(
+                duration_seconds=duration_seconds,
+                error=error,
+            )
+        except Exception as metrics_error:
+            logger.debug(
+                "vlm failed-attempt metrics emit failed provider=%s model=%s err=%s: %s",
+                self.provider,
+                self.model,
+                type(metrics_error).__name__,
+                metrics_error,
+            )
+
+    def _recording_call(self, call: Callable[[], T]) -> T:
+        started_at = time.perf_counter()
+        try:
+            return call()
+        except Exception as error:
+            self._record_failed_attempt(
+                duration_seconds=time.perf_counter() - started_at,
+                error=error,
+            )
+            raise
+
+    async def _recording_call_async(self, call: Callable[[], Awaitable[T]]) -> T:
+        started_at = time.perf_counter()
+        try:
+            return await call()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._record_failed_attempt(
+                duration_seconds=time.perf_counter() - started_at,
+                error=error,
+            )
+            raise
+
     def get_completion(
         self,
         prompt: str = "",
@@ -51,13 +94,15 @@ class RetryVLM(VLMBase):
         **kwargs: Any,
     ) -> Union[str, VLMResponse]:
         return retry_sync(
-            lambda: self.inner.get_completion(
-                prompt=prompt,
-                thinking=thinking,
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-                **kwargs,
+            lambda: self._recording_call(
+                lambda: self.inner.get_completion(
+                    prompt=prompt,
+                    thinking=thinking,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    messages=messages,
+                    **kwargs,
+                )
             ),
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
@@ -76,14 +121,16 @@ class RetryVLM(VLMBase):
         **kwargs: Any,
     ) -> Union[str, VLMResponse]:
         return await retry_async(
-            lambda: self.inner.get_completion_async(
-                prompt=prompt,
-                thinking=thinking,
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-                max_tokens=max_tokens,
-                **kwargs,
+            lambda: self._recording_call_async(
+                lambda: self.inner.get_completion_async(
+                    prompt=prompt,
+                    thinking=thinking,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                )
             ),
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
@@ -102,14 +149,16 @@ class RetryVLM(VLMBase):
         **kwargs: Any,
     ) -> Union[str, VLMResponse]:
         return retry_sync(
-            lambda: self.inner.get_vision_completion(
-                prompt=prompt,
-                images=images,
-                thinking=thinking,
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-                **kwargs,
+            lambda: self._recording_call(
+                lambda: self.inner.get_vision_completion(
+                    prompt=prompt,
+                    images=images,
+                    thinking=thinking,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    messages=messages,
+                    **kwargs,
+                )
             ),
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
@@ -128,14 +177,16 @@ class RetryVLM(VLMBase):
         **kwargs: Any,
     ) -> Union[str, VLMResponse]:
         return await retry_async(
-            lambda: self.inner.get_vision_completion_async(
-                prompt=prompt,
-                images=images,
-                thinking=thinking,
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-                **kwargs,
+            lambda: self._recording_call_async(
+                lambda: self.inner.get_vision_completion_async(
+                    prompt=prompt,
+                    images=images,
+                    thinking=thinking,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    messages=messages,
+                    **kwargs,
+                )
             ),
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
@@ -164,11 +215,13 @@ class RetryVLM(VLMBase):
         filename: str,
         media_type: str,
     ) -> str:
-        return await self.inner.get_media_completion_async(
-            prompt=prompt,
-            media_path=media_path,
-            filename=filename,
-            media_type=media_type,
+        return await self._recording_call_async(
+            lambda: self.inner.get_media_completion_async(
+                prompt=prompt,
+                media_path=media_path,
+                filename=filename,
+                media_type=media_type,
+            )
         )
 
     def is_available(self) -> bool:

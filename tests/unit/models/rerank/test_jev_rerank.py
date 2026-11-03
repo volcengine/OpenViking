@@ -153,7 +153,12 @@ class TestJevRerankClient:
         client = JevRerankClient(
             api_key="bad-key", mode=MODE_NOUL, candidates_visible=candidates_visible
         )
-        assert client.rerank_batch("query", ["doc"]) is None
+        with patch.object(client, "record_failed_call") as record_failed_call:
+            assert client.rerank_batch("query", ["doc"]) is None
+
+        record_failed_call.assert_called_once()
+        assert record_failed_call.call_args.kwargs["error"] is error
+        assert record_failed_call.call_args.kwargs["duration_seconds"] >= 0
 
     @pytest.mark.parametrize("candidates_visible", [True, False])
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")

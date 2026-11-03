@@ -19,7 +19,7 @@ from openviking.utils.embedding_input import (
     truncate_embedding_input,
 )
 from openviking.utils.exceptions import AllCredentialsFailedError
-from openviking.utils.model_retry import OrderedCredentialSwitcher
+from openviking.utils.model_retry import OrderedCredentialSwitcher, extract_metric_error_code
 from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
@@ -457,6 +457,33 @@ class EmbedderBase(ABC):
         if self._active_call_started_at is None:
             return 0.0
         return max(time.monotonic() - self._active_call_started_at, 0.0)
+
+    def record_failed_call(
+        self,
+        error: BaseException,
+        duration_seconds: float = 0.0,
+    ) -> None:
+        """Best-effort emission for one failed embedding provider attempt."""
+        try:
+            from openviking.metrics.datasources import EmbeddingEventDataSource
+            from openviking.observability.context import get_root_observability_context
+            from openviking.telemetry import get_ingestion_source_type
+
+            root_context = get_root_observability_context()
+            EmbeddingEventDataSource.record_call(
+                provider=str(self.provider),
+                model_name=str(self.model_name),
+                duration_seconds=self._resolve_metrics_duration_seconds(duration_seconds),
+                prompt_tokens=0,
+                completion_tokens=0,
+                error_code=extract_metric_error_code(error),
+                account_id=getattr(self, "_account_id", None)
+                or (root_context.account_id if root_context is not None else None),
+                source_type=get_ingestion_source_type(),
+            )
+        except Exception:
+            # Metrics must never replace or otherwise alter the provider error.
+            return
 
     def update_token_usage(
         self,

@@ -5,6 +5,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from openviking.models.rerank.volcengine_rerank import RerankClient
 
@@ -82,3 +83,33 @@ def test_empty_input_does_not_call_provider(client):
     with patch("openviking.models.rerank.volcengine_rerank.requests.request") as request:
         assert client.rerank_batch("query", []) == []
     request.assert_not_called()
+
+
+def test_non_json_exception_records_failed_call_once(client):
+    error = ValueError("invalid json")
+    response = Mock(status_code=502, text="bad gateway")
+    response.json.side_effect = error
+
+    with patch(
+        "openviking.models.rerank.volcengine_rerank.requests.request", return_value=response
+    ), patch.object(client, "record_failed_call") as record_failed_call:
+        assert client.rerank_batch("query", ["doc"]) is None
+
+    record_failed_call.assert_called_once()
+    assert record_failed_call.call_args.kwargs["error"] is error
+    assert record_failed_call.call_args.kwargs["duration_seconds"] >= 0
+
+
+def test_http_error_records_failed_call_before_parsing_body(client):
+    response = Mock(status_code=503, text='{"error":"unavailable"}')
+    error = requests.HTTPError("service unavailable", response=response)
+    response.raise_for_status.side_effect = error
+
+    with patch(
+        "openviking.models.rerank.volcengine_rerank.requests.request", return_value=response
+    ), patch.object(client, "record_failed_call") as record_failed_call:
+        assert client.rerank_batch("query", ["doc"]) is None
+
+    record_failed_call.assert_called_once()
+    assert record_failed_call.call_args.kwargs["error"] is error
+    response.json.assert_not_called()

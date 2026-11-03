@@ -254,11 +254,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_client()
         t0 = time.perf_counter()
-        try:
-            response = self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
+        response = self._create_chat_completion(client, **kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         if tools is not None:
@@ -318,11 +314,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            try:
-                response = await self._create_chat_completion(client, **kwargs)
-            except Exception as error:
-                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-                raise
+            response = await self._create_chat_completion(client, **kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             if tools is not None:
@@ -491,11 +483,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_client()
         t0 = time.perf_counter()
-        try:
-            response = self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
+        response = self._create_chat_completion(client, **kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         if tools is not None:
@@ -545,11 +533,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_async_client()
         t0 = time.perf_counter()
-        try:
-            response = await self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
+        response = await self._create_chat_completion(client, **kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         if tools is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import re
@@ -56,6 +57,7 @@ ERROR_CLASS_TRANSIENT = "transient"
 ERROR_CLASS_UNKNOWN = "unknown"
 
 _METRIC_ERROR_CODE_MAX_LENGTH = 64
+_METRIC_ERROR_BODY_MAX_LENGTH = 16_384
 
 
 def _normalize_metric_error_code(value: object) -> str | None:
@@ -74,6 +76,38 @@ def _normalize_metric_error_code(value: object) -> str | None:
     return code
 
 
+def _metric_error_code_from_body(value: object) -> str | None:
+    """Extract a bounded code from a structured or JSON-encoded response body."""
+    if isinstance(value, (bytes, bytearray)):
+        if len(value) > _METRIC_ERROR_BODY_MAX_LENGTH:
+            return None
+        try:
+            value = bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(value, str):
+        if len(value) > _METRIC_ERROR_BODY_MAX_LENGTH:
+            return None
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, dict):
+        return None
+
+    candidates = [value.get("status_code"), value.get("error_code"), value.get("code")]
+    nested = value.get("error")
+    if isinstance(nested, dict):
+        candidates.extend(
+            [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
+        )
+    for candidate in candidates:
+        normalized = _normalize_metric_error_code(candidate)
+        if normalized is not None:
+            return normalized
+    return None
+
+
 def extract_metric_error_code(error: BaseException) -> str:
     """Extract a low-cardinality provider error code for model-call metrics.
 
@@ -82,21 +116,28 @@ def extract_metric_error_code(error: BaseException) -> str:
     """
     error_chain = _iter_exception_chain(error)
     for exc in error_chain:
-        for attr in ("status_code", "error_code", "code"):
-            normalized = _normalize_metric_error_code(getattr(exc, attr, None))
+        response = getattr(exc, "response", None)
+        for value in (
+            getattr(exc, "status_code", None),
+            getattr(response, "status_code", None),
+            getattr(exc, "error_code", None),
+            getattr(exc, "code", None),
+        ):
+            normalized = _normalize_metric_error_code(value)
             if normalized is not None:
                 return normalized
 
-        body = getattr(exc, "body", None)
-        if isinstance(body, dict):
-            candidates = [body.get("status_code"), body.get("error_code"), body.get("code")]
-            nested = body.get("error")
-            if isinstance(nested, dict):
-                candidates.extend(
-                    [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
-                )
-            for value in candidates:
-                normalized = _normalize_metric_error_code(value)
+        normalized = _metric_error_code_from_body(getattr(exc, "body", None))
+        if normalized is not None:
+            return normalized
+
+        if response is not None:
+            try:
+                response_json = response.json()
+            except Exception:
+                response_json = None
+            for body in (response_json, getattr(response, "body", None)):
+                normalized = _metric_error_code_from_body(body)
                 if normalized is not None:
                     return normalized
 

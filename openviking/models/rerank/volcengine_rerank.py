@@ -110,8 +110,8 @@ class RerankClient(RerankBase):
             "instruction": "Whether the Document answers the Query or matches the content retrieval intent",
         }
 
+        started = time.monotonic()
         try:
-            started = time.monotonic()
             req = self._prepare_request(
                 method="POST",
                 path="/api/vikingdb/rerank",
@@ -125,10 +125,12 @@ class RerankClient(RerankBase):
                 data=req.body,
                 timeout=30,
             )
+            response.raise_for_status()
 
             try:
                 result = response.json()
-            except Exception:
+            except Exception as e:
+                self.record_failed_call(duration_seconds=time.monotonic() - started, error=e)
                 logger.warning(
                     "[RerankClient] Non-JSON response: status=%s body=%s",
                     response.status_code,
@@ -163,14 +165,6 @@ class RerankClient(RerankBase):
                 )
                 return None
 
-            # Update token usage tracking (estimate, VikingDB doesn't provide token info)
-            self._extract_and_update_token_usage(
-                result,
-                query,
-                documents,
-                duration_seconds=time.monotonic() - started,
-            )
-
             # The response is ranked by relevance; ids refer to input document groups.
             data = result_payload["data"]
             if not isinstance(data, list):
@@ -200,10 +194,18 @@ class RerankClient(RerankBase):
                 seen.add(index)
                 scores[index] = score
 
+            self._extract_and_update_token_usage(
+                result,
+                query,
+                documents,
+                duration_seconds=time.monotonic() - started,
+            )
+
             logger.debug(f"[RerankClient] Reranked {len(documents)} documents")
             return scores
 
         except Exception as e:
+            self.record_failed_call(duration_seconds=time.monotonic() - started, error=e)
             logger.error(f"[RerankClient] Rerank failed: {e}")
             return None
 

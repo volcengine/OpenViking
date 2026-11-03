@@ -259,9 +259,10 @@ class RerankEventDataSource(EventMetricDataSource):
         duration_seconds: float,
         prompt_tokens: int,
         completion_tokens: int,
+        error_code: str = "OK",
         account_id: str | None = None,
     ) -> None:
-        """Emit one rerank provider call with tokens, latency, and optional account context."""
+        """Emit one rerank provider call with tokens, latency, error code, and account context."""
         EventMetricDataSource._emit(
             "rerank.call",
             {
@@ -270,6 +271,7 @@ class RerankEventDataSource(EventMetricDataSource):
                 "duration_seconds": float(duration_seconds),
                 "prompt_tokens": int(prompt_tokens),
                 "completion_tokens": int(completion_tokens),
+                "error_code": str(error_code or "unknown"),
                 "account_id": None if account_id is None else str(account_id),
             },
         )

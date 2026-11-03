@@ -177,6 +177,7 @@ class JevRerankClient(RerankBase):
         if not documents:
             return []
 
+        started = time.monotonic()
         try:
             state: dict[str, object] = {"query": query}
             # Only Noul uses the visibility option; Choice always compares all candidates.
@@ -193,7 +194,6 @@ class JevRerankClient(RerankBase):
                     len(documents),
                     json.dumps(body, ensure_ascii=False),
                 )
-            started = time.monotonic()
             resp = self._client.post(self.api_url, json=body)
             duration_seconds = time.monotonic() - started
             resp.raise_for_status()
@@ -230,9 +230,11 @@ class JevRerankClient(RerankBase):
             return scores
 
         except httpx.HTTPStatusError as e:
+            self.record_failed_call(duration_seconds=time.monotonic() - started, error=e)
             logger.error(f"[JevRerank] API error: {e.response.status_code} {e.response.text}")
             return None
         except Exception as e:
+            self.record_failed_call(duration_seconds=time.monotonic() - started, error=e)
             logger.error(f"[JevRerank] Rerank failed: {e}")
             return None
 

@@ -9,6 +9,7 @@ Provides common token usage tracking functionality.
 import logging
 from typing import Any, Dict
 
+from openviking.utils.model_retry import extract_metric_error_code
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils import get_logger
 
@@ -106,6 +107,7 @@ class RerankBase:
                 duration_seconds=max(float(duration_seconds), 0.0),
                 prompt_tokens=int(prompt_tokens),
                 completion_tokens=int(completion_tokens),
+                error_code="OK",
                 account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as e:
@@ -117,6 +119,33 @@ class RerankBase:
                     model_name,
                     type(e).__name__,
                     e,
+                )
+
+    def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
+        """Best-effort record of one failed provider attempt without token usage."""
+        try:
+            from openviking.metrics.datasources import RerankEventDataSource
+            from openviking.observability.context import get_root_observability_context
+
+            root_context = get_root_observability_context()
+            model_name = getattr(self, "model_name", None) or getattr(self, "model", None)
+            RerankEventDataSource.record_call(
+                provider=str(self.provider),
+                model_name=str(model_name or "unknown"),
+                duration_seconds=max(float(duration_seconds), 0.0),
+                prompt_tokens=0,
+                completion_tokens=0,
+                error_code=extract_metric_error_code(error),
+                account_id=root_context.account_id if root_context is not None else None,
+            )
+        except Exception as metrics_error:
+            # Metrics must never change the existing None/fallback behavior.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "rerank failed-call metrics emit failed provider=%s err=%s: %s",
+                    getattr(self, "provider", "unknown"),
+                    type(metrics_error).__name__,
+                    metrics_error,
                 )
 
     def _extract_and_update_token_usage(

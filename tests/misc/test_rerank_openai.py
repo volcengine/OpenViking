@@ -145,14 +145,18 @@ class TestOpenAIRerankClient:
 
     def test_rerank_batch_http_error_returns_none(self):
         client = self._make_client()
+        error = ConnectionError("connection error")
 
         with patch(
             "openviking.models.rerank.openai_rerank.requests.post",
-            side_effect=Exception("connection error"),
-        ):
+            side_effect=error,
+        ), patch.object(client, "record_failed_call") as record_failed_call:
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
+        record_failed_call.assert_called_once()
+        assert record_failed_call.call_args.kwargs["error"] is error
+        assert record_failed_call.call_args.kwargs["duration_seconds"] >= 0
 
     def test_rerank_batch_sends_correct_request(self):
         client = self._make_client()

@@ -36,6 +36,7 @@ class FakeVLM(VLMBase):
         self.outcomes = list(outcomes)
         self.media_outcomes = list(media_outcomes or ["media"])
         self.calls = []
+        self.failed_calls = []
         self.closed = False
 
     def _next(self, method, kwargs):
@@ -67,6 +68,9 @@ class FakeVLM(VLMBase):
             raise outcome
         return outcome
 
+    def record_failed_call(self, *, duration_seconds, error):
+        self.failed_calls.append((duration_seconds, error))
+
     def close(self):
         self.closed = True
 
@@ -88,13 +92,34 @@ def no_retry_sleep(monkeypatch):
     ],
 )
 def test_retry_vlm_retries_sync_transient_failures(method, expected_method):
-    inner = FakeVLM([ProviderError(503), "ok"])
+    error = ProviderError(503)
+    inner = FakeVLM([error, "ok"])
     vlm = RetryVLM(inner)
 
     result = getattr(vlm, method)(prompt="hello")
 
     assert result == "ok"
     assert [name for name, _kwargs in inner.calls] == [expected_method, expected_method]
+    assert len(inner.failed_calls) == 1
+    assert inner.failed_calls[0][0] >= 0
+    assert inner.failed_calls[0][1] is error
+
+
+@pytest.mark.parametrize("method", ["get_completion", "get_vision_completion"])
+def test_retry_vlm_times_every_sync_failed_attempt(monkeypatch, method):
+    errors = [ProviderError(503) for _ in range(3)]
+    inner = FakeVLM(errors)
+    clock = iter([1.0, 1.25, 2.0, 2.5, 3.0, 3.75])
+    monkeypatch.setattr(
+        "openviking.models.vlm.retry_vlm.time.perf_counter", lambda: next(clock)
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        getattr(RetryVLM(inner), method)(prompt="hello")
+
+    assert raised.value is errors[-1]
+    assert [duration for duration, _error in inner.failed_calls] == [0.25, 0.5, 0.75]
+    assert [error for _duration, error in inner.failed_calls] == errors
 
 
 @pytest.mark.asyncio
@@ -107,7 +132,8 @@ def test_retry_vlm_retries_sync_transient_failures(method, expected_method):
 )
 async def test_retry_vlm_scoped_failure_restores_async_retries(method, expected_method):
     error = ProviderError(503)
-    inner = FakeVLM([error, ProviderError(503), "ok"])
+    retry_error = ProviderError(503)
+    inner = FakeVLM([error, retry_error, "ok"])
     vlm = RetryVLM(inner)
 
     async with model_retry_scope(0):
@@ -120,6 +146,30 @@ async def test_retry_vlm_scoped_failure_restores_async_retries(method, expected_
 
     assert result == "ok"
     assert [name for name, _kwargs in inner.calls] == [expected_method] * 3
+    assert [failed_error for _duration, failed_error in inner.failed_calls] == [
+        error,
+        retry_error,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method", ["get_completion_async", "get_vision_completion_async"]
+)
+async def test_retry_vlm_times_every_async_failed_attempt(monkeypatch, method):
+    errors = [ProviderError(503) for _ in range(3)]
+    inner = FakeVLM(errors)
+    clock = iter([1.0, 1.25, 2.0, 2.5, 3.0, 3.75])
+    monkeypatch.setattr(
+        "openviking.models.vlm.retry_vlm.time.perf_counter", lambda: next(clock)
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await getattr(RetryVLM(inner), method)(prompt="hello")
+
+    assert raised.value is errors[-1]
+    assert [duration for duration, _error in inner.failed_calls] == [0.25, 0.5, 0.75]
+    assert [error for _duration, error in inner.failed_calls] == errors
 
 
 @pytest.mark.parametrize("status_code", [400, 401])
@@ -143,6 +193,22 @@ def test_retry_vlm_honors_zero_retries():
     with pytest.raises(ProviderError):
         vlm.get_completion(prompt="hello")
 
+    assert len(inner.calls) == 1
+
+
+def test_retry_vlm_metric_failure_does_not_replace_provider_error():
+    error = ProviderError(400)
+    inner = FakeVLM([error])
+
+    def fail_metric_emission(*, duration_seconds, error):
+        raise RuntimeError("metrics unavailable")
+
+    inner.record_failed_call = fail_metric_emission
+
+    with pytest.raises(ProviderError) as raised:
+        RetryVLM(inner).get_completion(prompt="hello")
+
+    assert raised.value is error
     assert len(inner.calls) == 1
 
 
@@ -176,6 +242,7 @@ async def test_retry_vlm_does_not_retry_cancelled_request():
         await task
 
     assert len(inner.calls) == 1
+    assert inner.failed_calls == []
 
 
 @pytest.mark.asyncio
@@ -199,6 +266,9 @@ async def test_retry_vlm_forwards_extension_kwargs_and_does_not_retry_media(tmp_
 
     assert raised.value is media_error
     assert [name for name, _kwargs in inner.calls].count("media") == 1
+    assert len(inner.failed_calls) == 1
+    assert inner.failed_calls[0][0] >= 0
+    assert inner.failed_calls[0][1] is media_error
 
 
 def test_retry_vlm_delegates_token_tracker_and_close():

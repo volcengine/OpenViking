@@ -104,8 +104,19 @@ def no_retry_sleep(monkeypatch):
     monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
 
 
-def test_retry_embedder_retries_transient_and_preserves_capabilities():
+@pytest.fixture
+def embedding_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.EmbeddingEventDataSource.record_call",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    return calls
+
+
+def test_retry_embedder_retries_transient_and_preserves_capabilities(embedding_calls):
     inner = FakeDenseEmbedder([ProviderError(503), [0.1, 0.2]])
+    inner._account_id = "account-a"
     embedder = RetryEmbedder(inner)
 
     result = embedder.embed("query", is_query=True)
@@ -118,12 +129,54 @@ def test_retry_embedder_retries_transient_and_preserves_capabilities():
     assert embedder.is_sparse is False
     assert embedder.is_hybrid is False
     assert embedder.supports_multimodal is True
+    assert len(embedding_calls) == 1
+    assert embedding_calls[0]["provider"] == "fake"
+    assert embedding_calls[0]["model_name"] == "fake-dense"
+    assert embedding_calls[0]["account_id"] == "account-a"
+    assert embedding_calls[0]["prompt_tokens"] == 0
+    assert embedding_calls[0]["completion_tokens"] == 0
+    assert embedding_calls[0]["error_code"] == "503"
+    assert embedding_calls[0]["duration_seconds"] >= 0
+
+
+def test_retry_embedder_records_every_attempt_when_retries_are_exhausted(embedding_calls):
+    errors = [ProviderError(503) for _ in range(3)]
+    inner = FakeDenseEmbedder(errors, max_retries=2)
+
+    with pytest.raises(ProviderError) as raised:
+        RetryEmbedder(inner).embed("query")
+
+    assert raised.value is errors[-1]
+    assert inner.calls == 3
+    assert [call["error_code"] for call in embedding_calls] == ["503", "503", "503"]
 
 
 @pytest.mark.parametrize("status_code", [400, 401])
-def test_retry_embedder_does_not_retry_permanent_or_auth_errors(status_code):
+def test_retry_embedder_does_not_retry_permanent_or_auth_errors(
+    status_code, embedding_calls
+):
     error = ProviderError(status_code)
     inner = FakeDenseEmbedder([error, [0.1, 0.2]])
+
+    with pytest.raises(ProviderError) as raised:
+        RetryEmbedder(inner).embed("query")
+
+    assert raised.value is error
+    assert inner.calls == 1
+    assert [call["error_code"] for call in embedding_calls] == [str(status_code)]
+
+
+def test_metric_emission_failure_does_not_replace_embedding_error(monkeypatch):
+    error = ProviderError(400)
+    inner = FakeDenseEmbedder([error])
+
+    def fail_metric_emission(**_kwargs):
+        raise RuntimeError("metrics unavailable")
+
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.EmbeddingEventDataSource.record_call",
+        fail_metric_emission,
+    )
 
     with pytest.raises(ProviderError) as raised:
         RetryEmbedder(inner).embed("query")
@@ -189,7 +242,9 @@ async def test_scoped_failure_restores_retries_and_releases_semaphore(monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_query", [False, True])
-async def test_cancelled_attempt_releases_only_acquired_permits(is_query):
+async def test_cancelled_attempt_releases_only_acquired_permits(
+    is_query, embedding_calls
+):
     started = asyncio.Event()
 
     class BlockingDenseEmbedder(FakeDenseEmbedder):
@@ -210,6 +265,27 @@ async def test_cancelled_attempt_releases_only_acquired_permits(is_query):
 
     assert inner.calls == 1
     assert semaphore._value == 1
+    assert embedding_calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_retry_records_each_failed_attempt_before_success(
+    monkeypatch, embedding_calls
+):
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", no_sleep)
+    inner = FakeDenseEmbedder(
+        [ProviderError(503), ProviderError(503), [0.1, 0.2]],
+        max_retries=2,
+    )
+
+    result = await RetryEmbedder(inner).embed_async("query", is_query=True)
+
+    assert result.dense_vector == [0.1, 0.2]
+    assert inner.calls == 3
+    assert [call["error_code"] for call in embedding_calls] == ["503", "503"]
 
 
 @pytest.mark.asyncio

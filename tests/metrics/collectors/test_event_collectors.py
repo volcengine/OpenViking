@@ -194,11 +194,11 @@ def test_rerank_collector_maps_calls_duration_and_tokens():
     text = PrometheusExporter(registry=registry).render()
 
     assert re.search(
-        r'openviking_rerank_calls_total\{(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
+        r'openviking_rerank_calls_total\{(?=[^}]*error_code="OK")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
         text,
     )
     assert re.search(
-        r'openviking_rerank_call_duration_seconds_count\{(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
+        r'openviking_rerank_call_duration_seconds_count\{(?=[^}]*error_code="OK")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
         text,
     )
     assert re.search(
@@ -209,6 +209,38 @@ def test_rerank_collector_maps_calls_duration_and_tokens():
         r'openviking_rerank_tokens_total\{(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 9(?:\.0)?',
         text,
     )
+
+
+def test_rerank_collector_records_failed_call_without_token_families():
+    from openviking.metrics.core.registry import MetricRegistry
+    from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+    registry = MetricRegistry()
+    RerankCollector().receive(
+        "rerank.call",
+        {
+            "provider": "cohere",
+            "model_name": "rerank-v3.5",
+            "duration_seconds": 0.12,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "error_code": "429",
+        },
+        registry,
+    )
+    text = PrometheusExporter(registry=registry).render()
+
+    assert re.search(
+        r'openviking_rerank_calls_total\{(?=[^}]*error_code="429")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
+        text,
+    )
+    assert re.search(
+        r'openviking_rerank_call_duration_seconds_count\{(?=[^}]*error_code="429")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
+        text,
+    )
+    assert "openviking_rerank_tokens_input_total" not in text
+    assert "openviking_rerank_tokens_output_total" not in text
+    assert "openviking_rerank_tokens_total" not in text
 
 
 def test_telemetry_bridge_collector_records_basic_operation_metrics(registry, render_prometheus):

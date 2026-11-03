@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Retry decorator for one concrete embedding provider."""
 
+import asyncio
+import time
 from typing import Any, Dict
 
 from openviking.models.embedder.base import EmbedderBase, EmbeddingInput, EmbedResult
@@ -35,8 +37,19 @@ class RetryEmbedder(EmbedderBase):
         is_query: bool = False,
         **kwargs: Any,
     ) -> EmbedResult:
+        def _attempt() -> EmbedResult:
+            started = time.monotonic()
+            try:
+                return self.inner.embed(content, is_query=is_query, **kwargs)
+            except Exception as error:
+                self._record_failed_attempt(
+                    error,
+                    duration_seconds=time.monotonic() - started,
+                )
+                raise
+
         return retry_sync(
-            lambda: self.inner.embed(content, is_query=is_query, **kwargs),
+            _attempt,
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} embedding",
@@ -49,13 +62,41 @@ class RetryEmbedder(EmbedderBase):
         is_query: bool = False,
         **kwargs: Any,
     ) -> EmbedResult:
+        async def _attempt() -> EmbedResult:
+            started = time.monotonic()
+            try:
+                return await self.inner.embed_async(content, is_query=is_query, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._record_failed_attempt(
+                    error,
+                    duration_seconds=time.monotonic() - started,
+                )
+                raise
+
         return await retry_async(
-            lambda: self.inner.embed_async(content, is_query=is_query, **kwargs),
+            _attempt,
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} async embedding",
             model_errors_only=True,
         )
+
+    def _record_failed_attempt(
+        self,
+        error: Exception,
+        *,
+        duration_seconds: float,
+    ) -> None:
+        try:
+            self.inner.record_failed_call(
+                error,
+                duration_seconds=duration_seconds,
+            )
+        except Exception:
+            # Keep retries and the original provider exception independent of metrics.
+            return
 
     def prepare_embedding_input(self, content: EmbeddingInput) -> EmbeddingInput:
         return self.inner.prepare_embedding_input(content)

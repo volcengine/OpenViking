@@ -90,13 +90,34 @@ def test_classify_api_error_treats_bare_timeout_as_transient(error_type, wrapped
     assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
+class _ProviderResponse:
+    def __init__(self, *, status_code=None, json_body=None, body=None):
+        self.status_code = status_code
+        self._json_body = json_body
+        self.body = body
+
+    def json(self):
+        if self._json_body is None:
+            raise ValueError("response has no JSON body")
+        return self._json_body
+
+
 class _ProviderError(RuntimeError):
-    def __init__(self, *, status_code=None, error_code=None, code=None, body=None):
+    def __init__(
+        self,
+        *,
+        status_code=None,
+        error_code=None,
+        code=None,
+        body=None,
+        response=None,
+    ):
         super().__init__("provider request failed")
         self.status_code = status_code
         self.error_code = error_code
         self.code = code
         self.body = body
+        self.response = response
 
 
 def test_extract_metric_error_code_prefers_structured_provider_code():
@@ -107,6 +128,35 @@ def test_extract_metric_error_code_prefers_structured_provider_code():
     assert extract_metric_error_code(
         _ProviderError(body={"error": {"code": "InvalidParameter"}})
     ) == ("InvalidParameter")
+
+
+def test_extract_metric_error_code_reads_response_status_before_response_body():
+    response = _ProviderResponse(
+        status_code=429,
+        json_body={"error": {"code": "RateLimitExceeded"}},
+    )
+    assert extract_metric_error_code(_ProviderError(response=response)) == "429"
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (
+            _ProviderResponse(json_body={"error": {"code": "InvalidParameter"}}),
+            "InvalidParameter",
+        ),
+        (_ProviderResponse(body=b'{"error_code":"RequestRejected"}'), "RequestRejected"),
+    ],
+)
+def test_extract_metric_error_code_reads_response_json_or_body(response, expected):
+    assert extract_metric_error_code(_ProviderError(response=response)) == expected
+
+
+def test_extract_metric_error_code_rejects_free_form_response_body_values():
+    response = _ProviderResponse(
+        json_body={"error": {"code": "request-specific code with spaces"}}
+    )
+    assert extract_metric_error_code(_ProviderError(response=response)) == "unknown"
 
 
 def test_extract_metric_error_code_uses_safe_fallbacks_only():
