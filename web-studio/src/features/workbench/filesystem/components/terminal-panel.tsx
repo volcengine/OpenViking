@@ -2029,7 +2029,10 @@ export function TerminalPanel({
             ) : null}
           </div>
         </div>
-        <div className="border-t bg-background p-3">
+        <div
+          data-fs-slot="terminal-composer"
+          className="border-t bg-background p-3"
+        >
           <form
             className="relative rounded-xl border bg-background px-3 py-2 focus-within:border-ring"
             onSubmit={(event) => {
@@ -2447,7 +2450,7 @@ function TerminalQuickStart({
   title: string
 }) {
   return (
-    <section className="py-10">
+    <section data-fs-slot="terminal-welcome" className="py-10">
       <h2 className="font-mono text-xl font-normal tracking-tight text-foreground">
         {heading}
         <span

@@ -88,16 +88,24 @@ import {
 
 const routeApi = getRouteApi('/filesystem')
 
-export function FilesystemRoute() {
+export function FilesystemRoute({
+  appearance = 'studio',
+}: {
+  appearance?: 'console' | 'studio'
+}) {
   const { provider } = useStudioService()
   return (
     <ResourceUploadProvider enabled={provider === 'opensource'}>
-      <FilesystemWorkbench />
+      <FilesystemWorkbench appearance={appearance} />
     </ResourceUploadProvider>
   )
 }
 
-function FilesystemWorkbench() {
+function FilesystemWorkbench({
+  appearance,
+}: {
+  appearance: 'console' | 'studio'
+}) {
   const { t } = useTranslation(['filesystem', 'resources'])
   const { provider } = useStudioService()
   const canUseLocalTools = provider === 'opensource'
@@ -565,10 +573,11 @@ function FilesystemWorkbench() {
   }, [])
 
   return (
-    <div className={styles.workspace}>
+    <div className={styles.workspace} data-fs-slot="workspace">
       <div ref={layoutRef} className={styles.panels} style={layoutStyle}>
-        <aside className={styles.explorer}>
+        <aside className={styles.explorer} data-fs-slot="explorer">
           <ContextExplorerHeader
+            appearance={appearance}
             activeTaskCount={activeTaskCount}
             hasActiveTasks={hasActiveTasks}
             hasTasks={canUseLocalTools && tasks.length > 0}
@@ -600,8 +609,8 @@ function FilesystemWorkbench() {
           onPointerDown={(event) => handleResizeStart('context', event)}
         />
 
-        <main className={styles.document}>
-          <div className={styles.toolbar}>
+        <main className={styles.document} data-fs-slot="document">
+          <div className={styles.toolbar} data-fs-slot="document-toolbar">
             <button
               type="button"
               className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
@@ -737,7 +746,7 @@ function FilesystemWorkbench() {
         ) : null}
 
         {!isCompactLayout && canUseCliPanel && !rightCollapsed ? (
-          <aside className={styles.assistant}>
+          <aside className={styles.assistant} data-fs-slot="assistant">
             <FilesystemActionPanel
               activePanel={activePanel}
               currentUri={currentUri}
@@ -883,7 +892,10 @@ function FilesystemActionPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-3">
+      <div
+        data-fs-slot="action-header"
+        className="flex h-14 shrink-0 items-center gap-2 border-b px-3"
+      >
         <FilesystemActionTabs
           activePanel={activePanel}
           onPanelChange={onPanelChange}
@@ -1006,7 +1018,10 @@ function FilesystemActionTabs({
   const { t } = useTranslation('filesystem')
 
   return (
-    <div className="inline-flex rounded-lg border bg-background p-1">
+    <div
+      data-fs-slot="action-tabs"
+      className="inline-flex rounded-lg border bg-background p-1"
+    >
       <PanelTab
         active={activePanel === 'terminal'}
         icon={TerminalIcon}

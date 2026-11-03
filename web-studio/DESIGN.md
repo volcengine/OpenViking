@@ -97,7 +97,7 @@ components:
 
 本文件记录用户指定参考的局部继承，不定义 Studio 全站的新品牌。浅色背景、紫蓝色操作、细分隔线和紧凑内容区来自已有 Workbench；保留 Studio 的组件、身份权限和连接语义。该名称用于说明继承关系，不是新创作的视觉主题。
 
-适用范围由各文件路由的 `staticData.studioTheme` 标记决定，`src/app/layouts/app-shell.tsx` 消费标记应用主题：公共认证路径 `/login`、`/login/email`、`/login/api-key`、`/forgot-password`、`/reset-password`、`/invite`，以及兼容入口 `/onboarding`、`/filesystem`、`/settings`、`/connections/*` 启用。公共认证路径以 `src/features/auth/lib/auth-routes.ts` 为准；`/onboarding` 转到 `/login`，已有连接也能独立访问这些页面。文件系统顶栏与面板布局还受独立标记限制。其他页面继续使用既有 Studio 样式。
+适用范围由各文件路由的 `staticData.studioTheme` 标记决定，`src/app/layouts/app-shell.tsx` 消费标记应用主题：公共认证路径 `/login`、`/login/email`、`/login/api-key`、`/forgot-password`、`/reset-password`、`/invite`，以及兼容入口 `/onboarding`、`/filesystem`、`/settings`、`/connections/*` 启用。公共认证路径以 `src/features/auth/lib/auth-routes.ts` 为准；`/onboarding` 转到 `/login`，已有连接也能独立访问这些页面。文件系统顶栏与面板布局还受独立标记限制。官方文件系统通过平台配置 `presentation.filesystem = console` 叠加 Figma Console 的局部呈现；私有化使用 `studio`，保留既有呈现。其他页面继续使用既有 Studio 样式。
 
 **Key Characteristics:**
 
@@ -128,6 +128,8 @@ components:
 认证页宽屏左右等分，表单最大宽度（480px），顶部品牌栏高（60px）；表单外边距随屏宽变化。宽度不超过（760px）时隐藏装饰插画，表单改单栏，提交按钮占满可用宽度。（761–900px）压缩左右留白与插画间距。
 
 文件系统在宽度至少（1280px）时可展示目录、文档、助手/终端三栏，右栏可收起；（768–1279px）默认两栏，通过工具栏进入全屏操作面板；不超过（767px）时目录与文档上下排列，终端/助手以全屏面板打开。文件系统顶栏在手机上换行，内容两侧留出（8px）。连接管理内容区最大宽度（960px）。
+
+官方 Console 变体延续上述断点：桌面初始目录约（352px）、终端约（360px），中间阅读区弹性伸展；实际宽度仍受现有拖动宽度、最小宽度与视口比例约束。顶栏高（60px），工作区桌面左右留白（16px）。折叠时不常驻导航窄轨，顶栏按钮仍可展开相同导航；展开导航覆盖工作区，不挤占三栏。
 
 目录与文档保留各自滚动区，长路径允许截断；侧栏导航及 Studio 的上下文切换保持可用。
 
@@ -161,9 +163,13 @@ API Key、邮箱登录、忘记密码、重置密码和邀请页共用认证布�
 
 文件系统保留 Studio 导航和账户/空间切换；以主题语义色表达选中项。目录条目高（36px），文字（13px）；展开与选择按钮各自保留可见焦点。手机上顶栏换行，品牌文字按空间隐藏。
 
+官方 Console 目录行改为（32px），选中项使用中性底色；非根级条目的辅助摘要仅在实际数据包含 `abstract` 时显示，使用辅助文字层级，不补造描述。搜索与刷新沿用原有操作，使用紧凑入口。
+
 ### Cards / Containers
 
 目录底色使用 subtle，文档与助手面板使用 surface，外边框使用 divider。三栏布局与圆角来自本次适配；窗口尺寸变化时优先保持操作入口可达。
+
+官方 Console 目录也使用 surface。阅读正文直接落在面板上，不再套独立卡片，正文为（13px / 24px），一级标题为（16px / 24px，500），二级标题为（14px / 22px，600）。目录 L0/L1 仍为独立开关，各自使用下划线显示启用状态。CLI 欢迎区与圆角输入区只调整外观，保留现有终端及命令行为。
 
 ### Chips
 
@@ -174,6 +180,8 @@ API Key、邮箱登录、忘记密码、重置密码和邀请页共用认证布�
 ### Auth Illustration
 
 `src/assets/workbench/team.png` 复用已有认证插画，像素不变并包含来源元数据；来源说明见同目录 `README.md`。插画为装饰内容，对辅助技术隐藏，在手机上不显示。
+
+官方 Console 文件系统的搜索、刷新及空文档插画来源见 `src/assets/console/README.md`。空文档原图带中文，仅用于中文浅色模式；英文与深色模式显示已有翻译文字。
 
 ## Do's and Don'ts
 

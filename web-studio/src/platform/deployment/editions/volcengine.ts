@@ -16,6 +16,7 @@ export function volcengineExperience(
       enabled: config.environment === StudioEnvironment.Staging,
       selected: StudioEdition.Volcengine,
     },
+    presentation: { filesystem: 'console' },
     auth: {
       defaultPage: 'welcome',
       allowEmailSwitch: true,

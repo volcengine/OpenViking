@@ -1,3 +1,4 @@
+import emptyPreviewImage from '#/assets/console/empty-preview.png'
 import i18n from '#/i18n/core'
 import { formatDateTime } from '#/i18n/format'
 import { useQuery } from '@tanstack/react-query'
@@ -1645,8 +1646,17 @@ export function FilePreview({
 
   if (!file) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {t('filePreview.emptyPrompt')}
+      <div
+        data-fs-slot="preview-empty"
+        className="flex h-full items-center justify-center text-sm text-muted-foreground"
+      >
+        <img
+          data-fs-slot="empty-illustration"
+          src={emptyPreviewImage}
+          alt=""
+          aria-hidden="true"
+        />
+        <span data-fs-slot="empty-label">{t('filePreview.emptyPrompt')}</span>
       </div>
     )
   }
@@ -1831,7 +1841,10 @@ export function FilePreview({
         </div>
       ) : (
         <ScrollArea className="min-h-0 flex-1">
-          <div className="mx-auto min-h-full w-full max-w-5xl p-4">
+          <div
+            data-fs-slot="preview-body"
+            className="mx-auto min-h-full w-full max-w-5xl p-4"
+          >
             {isMarkdown && !editing ? (
               <div className="mb-3 inline-flex overflow-hidden rounded-md border">
                 <button
@@ -1854,7 +1867,10 @@ export function FilePreview({
             {file.isDir ? (
               <div className="grid gap-4">
                 {availableDirectoryLevels.length > 0 ? (
-                  <div className="flex flex-wrap gap-2 border-b pb-3">
+                  <div
+                    data-fs-slot="directory-levels"
+                    className="flex flex-wrap gap-2 border-b pb-3"
+                  >
                     {availableDirectoryLevels.map((level) => {
                       const active = activeDirectoryLevels.has(level.id)
                       return (

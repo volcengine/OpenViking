@@ -17,6 +17,7 @@ export function selfHostedExperience(
       enabled: config.environment === StudioEnvironment.Staging,
       selected: StudioEdition.SelfHosted,
     },
+    presentation: { filesystem: 'studio' },
     auth: {
       defaultPage: AuthMethod.ApiKey,
       allowEmailSwitch: false,

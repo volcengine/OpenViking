@@ -33,6 +33,8 @@ it('keeps hosted API Key login identical in official and self-hosted deployments
       hostedApiBaseUrl,
     }),
   )
+  expect(self.presentation.filesystem).toBe('studio')
+  expect(cloud.presentation.filesystem).toBe('console')
   expect(self.auth.defaultPage).toBe(AuthMethod.ApiKey)
   expect(cloud.auth.defaultPage).toBe('welcome')
   expect(self.auth.apiKey.services.map((service) => service.entry)).toEqual([

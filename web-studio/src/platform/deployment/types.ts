@@ -39,6 +39,7 @@ export type StudioAuthConfig = {
 // Product decisions only. A profile never grants runtime permissions.
 export type StudioExperience = {
   edition: StudioEdition
+  presentation: { filesystem: 'console' | 'studio' }
   auth: StudioAuthConfig
   preview: { enabled: boolean; selected: StudioEdition }
   connections:

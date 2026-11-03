@@ -67,6 +67,10 @@ src/app/composition/auth-entry.tsx # 将配置和地址默认值传给认证页�
 
 `AuthEntry` 选择默认登录页并注入配置及地址默认值。`PublicAuthPage` 负责公共跳转和表单组装，不判断部署版本。
 
+## 文件系统呈现
+
+`presentation.filesystem` 是独立的视觉配置：官方版为 `console`，私有化版为 `studio`。`app/composition/filesystem-entry.tsx` 将它注入文件系统页面；`studio-layout.tsx` 使用同一配置限定官方外壳 CSS。该配置只选择现有控件的呈现，不授予功能或权限，不改变 API、认证或终端命令行为。局部调整及验证边界见[官方文件系统视觉记录](all-ov-studio-filesystem-visual.md)。
+
 ## 后续约束
 
 - 配置表达产品支持范围，不是认证凭证。角色权限仍需身份及接口校验。

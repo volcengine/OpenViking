@@ -1,3 +1,5 @@
+import searchIcon from '#/assets/console/search.svg'
+import refreshIcon from '#/assets/console/refresh.svg'
 import {
   ChevronRightIcon,
   ClipboardListIcon,
@@ -32,6 +34,7 @@ const TREE_CONTROL_SIZE = 16
 const TREE_CONTROL_GAP = 6
 
 export function ContextExplorerHeader({
+  appearance = 'studio',
   activeTaskCount,
   hasActiveTasks,
   hasTasks,
@@ -42,6 +45,7 @@ export function ContextExplorerHeader({
   onOpenSearch,
   onRefresh,
 }: {
+  appearance?: 'console' | 'studio'
   activeTaskCount: number
   hasActiveTasks: boolean
   hasTasks: boolean
@@ -54,6 +58,52 @@ export function ContextExplorerHeader({
 }) {
   const { t } = useTranslation(['filesystem', 'resources'])
   const showProcessingTasks = hasTasks || isRefreshingTasks
+
+  if (appearance === 'console')
+    return (
+      <div data-fs-slot="explorer-header">
+        <div data-fs-slot="explorer-title">
+          <FolderTreeIcon className="size-4" />
+          {t('explorer.title')}
+        </div>
+        <div data-fs-slot="explorer-search-row">
+          <Button
+            type="button"
+            variant="outline"
+            data-fs-slot="explorer-search"
+            onClick={onOpenSearch}
+          >
+            <img src={searchIcon} alt="" />
+            <span>{t('console.search')}</span>
+            <kbd>{t('console.shortcut')}</kbd>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={t('explorer.refresh')}
+            onClick={onRefresh}
+          >
+            <img
+              src={refreshIcon}
+              alt=""
+              className={isRefreshing ? 'animate-spin' : undefined}
+            />
+          </Button>
+          {showProcessingTasks && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t('processingTasks.title', { ns: 'resources' })}
+              onClick={onOpenProcessingTasks}
+            >
+              <ClipboardListIcon className="size-4" />
+            </Button>
+          )}
+        </div>
+      </div>
+    )
 
   return (
     <div className="border-b border-border/60 px-4 py-4">
@@ -185,7 +235,7 @@ export function ContextTree({
   )
 
   return (
-    <div className="h-full overflow-auto px-3 py-3">
+    <div data-fs-slot="tree" className="h-full overflow-auto px-3 py-3">
       {rootQuery.isLoading ? (
         <div className="flex h-7 items-center gap-2 px-1.5 text-xs text-muted-foreground">
           <Loader2Icon className="size-3 animate-spin" />
@@ -338,6 +388,8 @@ export function ContextTreeNode({
       <TreeIndentGuides level={level} />
       <div
         ref={rowRef}
+        data-fs-slot="tree-row"
+        data-selected={isSelected}
         className={cn(
           'group relative z-10 h-9 select-none rounded-lg text-[13px] transition-colors',
           isSelected
@@ -390,6 +442,7 @@ export function ContextTreeNode({
             />
           )}
           <span
+            data-fs-slot="tree-name"
             className={cn(
               'truncate',
               namespaceHint ? 'shrink-0 text-foreground' : 'min-w-0 flex-1',
@@ -402,6 +455,14 @@ export function ContextTreeNode({
               {namespaceHint}
             </span>
           ) : null}
+          {level > 0 && entry.abstract && (
+            <span
+              data-fs-slot="tree-detail"
+              className="hidden min-w-0 flex-1 truncate font-sans text-muted-foreground"
+            >
+              {entry.abstract}
+            </span>
+          )}
           {entry.name === '_abstract.md' ? (
             <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
               {t('explorer.abstractLevel')}

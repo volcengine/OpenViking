@@ -1,3 +1,5 @@
+import { getStudioExperience } from '#/platform/deployment/experience'
+import consoleStyles from './console-filesystem.module.css'
 import type { NavItem, NavSubItem } from '#/app/navigation/workbench-navigation'
 import { StudioHeader } from '#/app/layouts/studio-header'
 import { StudioManagementNavigation } from '#/app/navigation/studio-management-navigation'
@@ -55,6 +57,10 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
+  const filesystemAppearance = getStudioExperience().presentation.filesystem
+  const consoleFilesystem =
+    filesystemAppearance === 'console' &&
+    pathname.replace(/\/+$/, '') === '/filesystem'
   const filesystemLayout = pathname.replace(/\/+$/, '') === '/filesystem'
   const [filesystemNavOpen, setFilesystemNavOpen] = React.useState(false)
   const currentLanguage = resolveLanguage(
@@ -149,7 +155,10 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
       open={filesystemLayout ? filesystemNavOpen : undefined}
       onOpenChange={filesystemLayout ? setFilesystemNavOpen : undefined}
       data-ux-filesystem={filesystemLayout ? 'true' : undefined}
-      className="flex h-svh min-h-0 flex-col overflow-hidden bg-sidebar"
+      data-filesystem-appearance={
+        filesystemLayout ? filesystemAppearance : undefined
+      }
+      className={`flex h-svh min-h-0 flex-col overflow-hidden bg-sidebar ${consoleFilesystem ? consoleStyles.console : ''}`}
     >
       <StudioHeader
         managementMode={managementMode}
