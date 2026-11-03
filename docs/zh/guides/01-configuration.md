@@ -742,21 +742,6 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 
 ### vlm
 
-Compile 图片来源使用 LiteLLM 时，需要显式 provider 或已识别的 `provider/model`
-路由，与实际解析路由一致，并使用已验证保留图片的转换器。升级裸模型名图片配置时，
-需要补上协议前缀，例如 `anthropic/claude-sonnet-4-5`；仅有模型名或 `api_base`
-不能声明图片传输能力。文本路由保持基线行为。详见[图片配置与迁移说明](../context-compilation/01-overview.md#图片来源与模型)。
-
-Compile 图片支持的 vLLM 路径是 HTTP 路由 `hosted_vllm/<served-model>`，也可指向
-本机服务器。LiteLLM 的 `vllm/` 路由尚不支持，会拒绝图片证据。
-
-即使显式指定 provider，裸模型名的旧有路由仍可能与之不一致：
-
-| `provider` | 裸 `model` → 实际路由（拒绝图片） | 协议匹配的 `model` 路由 |
-| --- | --- | --- |
-| `zai` | `glm-4.6v` → `zhipu/glm-4.6v` | `zai/glm-4.6v` |
-| `vertex_ai` | `gemini-2.5-flash` → `gemini/gemini-2.5-flash` | `vertex_ai/gemini-2.5-flash` |
-
 用于语义提取（L0/L1 生成）的视觉语言模型。
 
 ```json

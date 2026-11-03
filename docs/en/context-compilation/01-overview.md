@@ -14,28 +14,6 @@ Use the optional `--instruction` to specify this run's scope, audience, language
 
 The configured [Agent Runtime](../api/23-agent-runtime.md) runs the compilation; local deployments can use the built-in [VikingBot](../concepts/15-vikingbot.md). It reads the sources and Skill under the requesting user's identity, then organizes and writes content in a dedicated agent loop. The task runs asynchronously and returns a `task_id` for checking progress and results.
 
-### Image sources and models
-
-For PNG, JPEG, GIF, and WebP sources, the built-in VikingBot retains the original image, source URI, and content hash and delivers image evidence on demand. It does not compile image bytes as text. Choose a model that accepts images; tool-calling support alone does not imply vision support.
-
-The VLM backend declares the image transport; provider and model names do not grant support. Anthropic protocols and OpenAI Codex use native multimodal tool results. OpenAI Chat Completions backends, including the Ark, Azure, Kimi, and GLM subclasses, keep tool results as text and attach images in the same request, linked by tool-call ID and image number.
-
-Transport capability and Agent Loop inlining policy are separate. Compile's scoped providers opt into image-message adaptation because source evidence must remain complete. Ordinary Bot conversations retain their existing policy: tool images requiring this adaptation are omitted with an explicit text notice, including for text-only models; native tool-result transports remain available on declared routes. The LiteLLM route requirement below also applies to native tool images in ordinary Bot conversations. User-supplied image inputs are unaffected. This does not add a model-vision allowlist or a probe.
-
-Failure handling is layered: **a declared protocol with unknown model vision capability permits the normal image-bearing request**, without a model allowlist or an extra probe. An explicit provider rejection fails compilation. **An undeclared protocol/route or incomplete image delivery stops compilation**; images are never skipped to report success. An attempted request can incur failure latency and cost, and a successful request alone does not prove the model understood the image correctly.
-
-LiteLLM image inputs require an explicit provider or a recognized `provider/model` route, such as `openai/future-vision-model` or `anthropic/claude-sonnet-4-5`, matching the actual resolved route. A bare model name or `api_base` alone does not declare an image protocol; name fragments cannot grant image support. Legacy text routing, prefix precedence and provider aliases are unchanged. Ambiguous configurations whose declaration differs from the resolved route reject image evidence. Existing LiteLLM image configurations relying on bare-name detection must add a protocol prefix.
-
-Unrecognized custom provider labels retain legacy text routing, including the OpenAI-compatible `api_base` fallback, but the label alone cannot declare image transport. See the [upgrade note](../about/02-changelog.md#unreleased) for the bare-model configuration change.
-
-LiteLLM checks the actual local converter against verified implementations: OpenAI-compatible protocols (including DashScope, Moonshot, Zhipu `zai`, OpenRouter, NVIDIA NIM, `hosted_vllm/` and Databricks), Gemini/Vertex Gemini, Ollama, and Bedrock Converse use image messages; Anthropic protocols retain native tool results. Inheriting an OpenAI configuration class is insufficient: converters that flatten away images, including the current DeepSeek, Sambanova, Heroku and Docker Model Runner adapters, and unverified converter classes reject image evidence. New models using a verified converter do not need a model allowlist. Capability checks do not resolve credentials, log in or issue requests. Text Completion APIs remain unsupported.
-
-The supported vLLM transport is the HTTP `hosted_vllm/` route, which can target a local server. LiteLLM's `vllm/` route rejects Compile image evidence. See the [configuration examples](../guides/01-configuration.md#vlm) for bare-model route mismatches and their explicit alternatives.
-
-Image messages follow all tool results from the same turn. Conversion happens only at the provider request boundary, preserving stored evidence and conversation history. Every backend in a fallback or credential chain must support image evidence delivery; mixed chains containing an image-message transport use image messages throughout.
-
-This adaptation adds no model request, download, or dependency, only local protocol metadata checks and small attribution labels. Image inputs still incur the model's image-token cost. Existing format, count, byte-budget, and source-hash checks remain in force. Image transport support does not imply that a particular model accepts images, especially for text-only models.
-
 ## Run it in one command
 
 First import the sources and install the Skill using the [LLM Wiki example](02-llm-wiki.md), then run:

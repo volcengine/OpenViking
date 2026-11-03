@@ -14,28 +14,6 @@
 
 编译由服务端配置的 [Agent Runtime](../api/23-agent-runtime.md) 执行，本地部署可使用内置 [VikingBot](../concepts/15-vikingbot.md)。它以请求用户的身份读取来源和 Skill，在独立的 Agent Loop 中整理并写入内容。任务异步运行，返回 `task_id` 后可查询进度和结果。
 
-### 图片来源与模型
-
-来源目录包含 PNG、JPEG、GIF 或 WebP 时，内置 VikingBot 会保留原图、来源 URI 和内容哈希，按需将图片证据交给模型；不会把图片二进制当文本编译。需要选择支持图片输入的模型，不能仅凭 provider 支持工具调用判断模型能看图。
-
-图片传输方式由 VLM 后端声明，不按 provider 名称或模型名称放行。Anthropic 协议和 OpenAI Codex 使用原生多模态工具结果；OpenAI Chat Completions 后端及其方舟、Azure、Kimi、GLM 子类将工具结果保留为文本，并在同一请求中附带图片消息，通过工具调用 ID 和图片序号关联来源。
-
-传输能力与 Agent Loop 的图片内联策略分开处理。Compile 的作用域 provider 会启用图片消息适配，以完整保留来源证据；普通 Bot 会话保留原有策略：需要此适配的工具图片继续省略，并返回明确的文本提示，纯文本模型也不会因此新增图片请求；明确声明的原生多模态协议仍可传递工具图片。下文的 LiteLLM 路由要求也适用于普通 Bot 会话中的原生工具图片。用户主动附带的图片输入不受影响，不新增模型视觉能力名单或探测请求。
-
-失败策略分层处理：**协议明确、模型视觉能力未知时允许正常带图请求**，不要求新模型先进入名单，也不额外发探测请求；服务端明确拒绝图片时，编译报错。**协议或路由未明确、图片未完整传递时停止编译**，不会跳过图片后报告成功。允许尝试可能带来失败请求的延迟和费用；请求成功也不等于已验证模型正确理解了图片。
-
-LiteLLM 图片输入需要显式 provider 或已识别的 `provider/model` 路由，并且与实际解析的路由一致，例如 `openai/future-vision-model`、`anthropic/claude-sonnet-4-5`。仅有裸模型名或 `api_base` 不足以声明图片协议，不能靠名字片段授予图片能力。文本路由、已有前缀优先级和 provider 别名保持基线行为；声明协议与实际路由不一致时拒绝图片证据。已有依赖裸模型名自动推断的 LiteLLM 图片配置需要补上协议前缀。
-
-未识别的自定义 provider 标签保留旧有文本路由，包括 OpenAI 兼容 `api_base` 的回退行为；标签本身不能授予图片传输能力。裸模型名配置的升级要求另见[未发布升级说明](../about/02-changelog.md#未发布)。
-
-LiteLLM 根据实际路由的本地转换器与已验证实现匹配：OpenAI 兼容协议（如通义、Moonshot、智谱 `zai`、OpenRouter、NVIDIA NIM、`hosted_vllm/`、Databricks）、Gemini/Vertex Gemini、Ollama 和 Bedrock Converse 使用图片消息；Anthropic 协议保留原生工具结果。仅继承 OpenAI 配置类不足以授予能力：当前会把图片压平成文本的 DeepSeek、Sambanova、Heroku、Docker Model Runner 转换器，以及尚未验证的转换器类，都拒绝图片证据。沿用已验证转换器的新模型无需进入模型名单。能力检查不解析凭据、不登录、不发请求；纯文本 Completion API 仍不支持图片。
-
-支持的 vLLM 传输方式是 HTTP `hosted_vllm/` 路由，也可指向本机服务器；LiteLLM 的 `vllm/` 路由会拒绝 Compile 图片证据。裸模型名导致协议不匹配的具体示例与显式路由配置，见[配置说明](../guides/01-configuration.md#vlm)。
-
-图片消息会排在同一轮所有工具结果之后；转换仅发生在 provider 请求边界，不改写任务证据或会话历史。主备或多凭据链上的每个后端都必须支持图片证据传递；包含图片消息传输方式的混合链统一使用图片消息。
-
-此适配不增加模型请求、下载或依赖，只增加本地协议元数据检查和少量关联文字；模型仍会按图片输入计费。现有图片格式、数量、字节预算和来源哈希校验继续生效。传输协议支持图片不代表具体模型支持图片，尤其不能据此给纯文本模型宣称视觉能力。
-
 ## 一条命令跑起来
 
 先按 [LLM Wiki 示例](02-llm-wiki.md) 导入来源、安装 Skill，再执行：

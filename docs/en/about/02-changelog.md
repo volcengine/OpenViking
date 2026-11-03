@@ -7,13 +7,6 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
-- **Compile images and LiteLLM configuration (breaking change)**: Compile can deliver
-  image evidence through declared Chat Completions and native multimodal protocols.
-  LiteLLM configurations relying on bare-model inference must add an explicit provider
-  or a recognized route, for example `claude-sonnet-4-5` → `anthropic/claude-sonnet-4-5`.
-  A bare model or `api_base` alone no longer grants image transport, including native
-  LiteLLM tool images in ordinary Bot conversations. Legacy text routing and ordinary
-  Bot omission of Chat Completions tool images remain unchanged. See [Compile images](../context-compilation/01-overview.md#image-sources-and-models).
 - **Legacy session migration removed (breaking change)**: Removed the legacy
   implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
   Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`
