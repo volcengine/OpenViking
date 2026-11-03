@@ -275,6 +275,8 @@ when `root_uri` uses a peer home alias such as `viking://~/peers/support/memorie
 Filter keys `eq`, `ne`, `gt`, `gte`, `lt`, `lte` and `in` are reserved operator aliases at every nesting level.
 Use `index=["items[*].text"]` to index selected array fields while retaining the complete
 stored value. Existing index projections are updated when the item is written again.
+An empty field list (`index=[]`), including a constructor default, removes the projection
+like `index=False`; the value remains available to `get()` and nonsemantic search.
 
 ### LangGraph middleware
 

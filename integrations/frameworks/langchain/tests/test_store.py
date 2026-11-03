@@ -213,10 +213,35 @@ def test_store_keeps_existing_nonpositive_namespace_depth_behavior(stores, max_d
     )
 
 
-def test_store_keeps_namespace_validation_and_persisted_values(stores):
+@pytest.mark.parametrize("operation", ["put", "aput", "batch", "abatch"])
+@pytest.mark.parametrize("use_default", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_store_keeps_namespace_validation_and_persisted_values(
+    stores, operation, use_default, existing
+):
     store, _ = stores
     with pytest.raises(InvalidNamespaceError, match="Namespace cannot be empty"):
         store.put((), "root", {"number": -1})
     assert store.list_namespaces() == sorted(NAMESPACES)
     for number, namespace in enumerate(NAMESPACES):
         assert store.get(namespace, "item").value == {"number": number}
+
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client, index=[] if use_default else None)
+    namespace, key = ("memory",), "excluded-note"
+    if existing:
+        store.put(namespace, key, {"text": "old"}, index=["text"])
+    value = {"text": "still stored"}
+    index: list[str] | None = None if use_default else []
+    if operation == "put":
+        store.put(namespace, key, value, index=index)
+    elif operation == "aput":
+        asyncio.run(store.aput(namespace, key, value, index=index))
+    else:
+        ops = [PutOp(namespace, key, value, index=index)]
+        asyncio.run(store.abatch(ops)) if operation == "abatch" else store.batch(ops)
+
+    assert store.get(namespace, key).value == value
+    assert [item.key for item in store.search(namespace)] == [key]
+    assert not any("/index/" in uri for uri in client.records)
+    assert store.search(namespace, query=key) == []
