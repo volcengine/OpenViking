@@ -13,7 +13,7 @@ export default defineConfig({
           icons: './src/icons/index.tsx',
           'components/status-badge':
             './src/components/status-badge/status-badge.tsx',
-          'components/file-tree': './src/components/file-tree/file-tree.ts',
+          'components/file-tree': './src/components/file-tree/file-tree.tsx',
           'components/file-preview':
             './src/components/file-preview/file-preview.ts',
           'components/tui': './src/components/tui/tui.ts',
