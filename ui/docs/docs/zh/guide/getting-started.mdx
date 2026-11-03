@@ -31,7 +31,7 @@ export default function Example() {
 
 React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
 
-开发服务器将公开包名解析到源码，以支持实时更新。生产文档构建消费实际的包产物，验证应用将使用的 JavaScript 和样式入口。组件库构建会将 ESM JavaScript、TypeScript 类型声明和 `style.css` 输出到 `packages/react/dist/`。
+官方 workspace 开发插件会在文档服务器启动前运行组件库的 Rslib watch。开发与生产示例都通过公开包入口消费构建产物，验证应用将使用的 JavaScript 和样式。Rslib 将 ESM JavaScript、TypeScript 类型声明和 `index.css` 输出到 `packages/react/dist/`；公开样式入口仍为 `@openviking/ui/style.css`。
 
 ## 构建与检查
 
@@ -42,7 +42,7 @@ npm run build
 npm run preview
 ```
 
-静态站点输出到 `ui/docs/doc_build/`。也可以通过 `npm run build:lib` 单独构建组件库。
+静态站点输出到 `ui/docs/doc_build/`。也可以通过 `npm run build:lib` 单独构建组件库。`npm run check` 会先构建组件库，再使用生成的声明检查组件库、示例和构建配置的类型。
 
 ## 样式
 
