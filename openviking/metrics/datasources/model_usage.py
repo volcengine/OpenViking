@@ -156,6 +156,7 @@ class VLMEventDataSource(EventMetricDataSource):
         prompt_tokens: int,
         completion_tokens: int,
         error_code: str = "OK",
+        attempt_type: str = "initial",
         account_id: str | None = None,
         source_type: str | None = None,
     ) -> None:
@@ -174,6 +175,7 @@ class VLMEventDataSource(EventMetricDataSource):
                 "prompt_tokens": int(prompt_tokens),
                 "completion_tokens": int(completion_tokens),
                 "error_code": str(error_code or "unknown"),
+                "attempt_type": str(attempt_type or "initial"),
                 "account_id": None if account_id is None else str(account_id),
                 "source_type": source_type,
             },
@@ -197,6 +199,7 @@ class EmbeddingEventDataSource(EventMetricDataSource):
         prompt_tokens: int,
         completion_tokens: int,
         error_code: str = "OK",
+        attempt_type: str = "initial",
         account_id: str | None = None,
         source_type: str | None = None,
     ) -> None:
@@ -210,6 +213,7 @@ class EmbeddingEventDataSource(EventMetricDataSource):
                 "prompt_tokens": int(prompt_tokens),
                 "completion_tokens": int(completion_tokens),
                 "error_code": str(error_code or "unknown"),
+                "attempt_type": str(attempt_type or "initial"),
                 "account_id": None if account_id is None else str(account_id),
                 "source_type": source_type,
             },
@@ -260,6 +264,7 @@ class RerankEventDataSource(EventMetricDataSource):
         prompt_tokens: int,
         completion_tokens: int,
         error_code: str = "OK",
+        attempt_type: str = "initial",
         account_id: str | None = None,
     ) -> None:
         """Emit one rerank provider call with tokens, latency, error code, and account context."""
@@ -272,6 +277,7 @@ class RerankEventDataSource(EventMetricDataSource):
                 "prompt_tokens": int(prompt_tokens),
                 "completion_tokens": int(completion_tokens),
                 "error_code": str(error_code or "unknown"),
+                "attempt_type": str(attempt_type or "initial"),
                 "account_id": None if account_id is None else str(account_id),
             },
         )

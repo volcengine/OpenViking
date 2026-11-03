@@ -27,6 +27,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_UNKNOWN,
     classify_api_error,
     extract_metric_error_code,
+    get_retry_attempt_type,
     retry_async,
     retry_sync,
 )
@@ -206,6 +207,121 @@ def test_retry_sync_retries_transient_error_until_success(monkeypatch):
 
     assert retry_sync(_call, max_retries=3, model_errors_only=True) == "ok"
     assert attempts["count"] == 3
+
+
+def test_retry_sync_sets_attempt_type_until_success():
+    attempt_types = []
+
+    def _call():
+        attempt_types.append(get_retry_attempt_type())
+        if len(attempt_types) == 1:
+            raise RuntimeError("503 service unavailable")
+        return "ok"
+
+    assert retry_sync(_call, max_retries=1, base_delay=0, jitter=False) == "ok"
+    assert attempt_types == ["initial", "retry"]
+    assert get_retry_attempt_type() == "initial"
+
+
+@pytest.mark.asyncio
+async def test_retry_async_sets_attempt_type_until_success():
+    attempt_types = []
+
+    async def _call():
+        attempt_types.append(get_retry_attempt_type())
+        if len(attempt_types) == 1:
+            raise RuntimeError("503 service unavailable")
+        return "ok"
+
+    assert (
+        await retry_async(_call, max_retries=1, base_delay=0, jitter=False)
+        == "ok"
+    )
+    assert attempt_types == ["initial", "retry"]
+    assert get_retry_attempt_type() == "initial"
+
+
+def test_retry_sync_non_retryable_attempt_is_initial_and_restores_context():
+    attempt_types = []
+    error = RuntimeError("invalid request")
+
+    def _call():
+        attempt_types.append(get_retry_attempt_type())
+        raise error
+
+    with pytest.raises(RuntimeError) as raised:
+        retry_sync(_call, max_retries=3, is_retryable=lambda _error: False)
+
+    assert raised.value is error
+    assert attempt_types == ["initial"]
+    assert get_retry_attempt_type() == "initial"
+
+
+def test_nested_retry_preserves_parent_attempt_and_restores_context():
+    observations = []
+    outer_calls = 0
+    inner_calls = 0
+
+    def _outer_call():
+        nonlocal outer_calls, inner_calls
+        outer_calls += 1
+        observations.append(("outer", get_retry_attempt_type()))
+        if outer_calls == 1:
+            raise RuntimeError("503 outer failure")
+
+        def _inner_call():
+            nonlocal inner_calls
+            inner_calls += 1
+            observations.append(("inner", get_retry_attempt_type()))
+            if inner_calls == 1:
+                raise RuntimeError("503 inner failure")
+            return "ok"
+
+        result = retry_sync(_inner_call, max_retries=1, base_delay=0, jitter=False)
+        observations.append(("outer_after_inner", get_retry_attempt_type()))
+        return result
+
+    assert retry_sync(_outer_call, max_retries=1, base_delay=0, jitter=False) == "ok"
+    assert observations == [
+        ("outer", "initial"),
+        ("outer", "retry"),
+        ("inner", "retry"),
+        ("inner", "retry"),
+        ("outer_after_inner", "retry"),
+    ]
+    assert get_retry_attempt_type() == "initial"
+
+
+@pytest.mark.asyncio
+async def test_retry_async_cancellation_restores_attempt_context():
+    retry_started = asyncio.Event()
+    attempt_types = []
+    restored_types = []
+
+    async def _call():
+        attempt_types.append(get_retry_attempt_type())
+        if len(attempt_types) == 1:
+            raise RuntimeError("503 service unavailable")
+        retry_started.set()
+        await asyncio.Event().wait()
+
+    async def _run():
+        try:
+            await retry_async(_call, max_retries=1, base_delay=0, jitter=False)
+        except asyncio.CancelledError:
+            restored_types.append(get_retry_attempt_type())
+            raise
+
+    task = asyncio.create_task(_run())
+    await retry_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert attempt_types == ["initial", "retry"]
+    assert restored_types == ["initial"]
+    assert get_retry_attempt_type() == "initial"
 
 
 @pytest.mark.asyncio

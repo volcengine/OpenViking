@@ -71,6 +71,7 @@ class RerankCollector(EventMetricCollector):
             prompt_tokens=int(payload["prompt_tokens"]),
             completion_tokens=int(payload["completion_tokens"]),
             error_code=str(payload.get("error_code") or "OK"),
+            attempt_type=str(payload.get("attempt_type") or "initial"),
             account_id=(
                 None if payload.get("account_id") is None else str(payload.get("account_id"))
             ),
@@ -86,6 +87,7 @@ class RerankCollector(EventMetricCollector):
         prompt_tokens: int,
         completion_tokens: int,
         error_code: str = "OK",
+        attempt_type: str = "initial",
         account_id: str | None = None,
     ) -> None:
         """Record one rerank call as calls/tokens counters plus a latency histogram sample."""
@@ -93,18 +95,19 @@ class RerankCollector(EventMetricCollector):
             "provider": str(provider),
             "model_name": str(model_name),
             "error_code": str(error_code or "unknown"),
+            "attempt_type": str(attempt_type or "initial"),
         }
         registry.inc_counter(
             self.CALLS_TOTAL,
             labels=labels,
-            label_names=("provider", "model_name", "error_code"),
+            label_names=("provider", "model_name", "error_code", "attempt_type"),
             account_id=account_id,
         )
         registry.observe_histogram(
             self.CALL_DURATION_SECONDS,
             float(duration_seconds),
             labels=labels,
-            label_names=("provider", "model_name", "error_code"),
+            label_names=("provider", "model_name", "error_code", "attempt_type"),
             account_id=account_id,
         )
         if labels["error_code"] != "OK":

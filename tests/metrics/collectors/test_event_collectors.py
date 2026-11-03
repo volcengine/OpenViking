@@ -15,6 +15,11 @@ from openviking.metrics.collectors.retrieval import RetrievalCollector
 from openviking.metrics.collectors.session import SessionCollector
 from openviking.metrics.collectors.telemetry_bridge import TelemetryBridgeCollector
 from openviking.metrics.collectors.vlm import VLMCollector
+from openviking.metrics.datasources import (
+    EmbeddingEventDataSource,
+    RerankEventDataSource,
+    VLMEventDataSource,
+)
 
 
 class _DummyEventCollector(EventMetricCollector):
@@ -41,6 +46,26 @@ def test_event_metric_collector_uses_supported_events_and_receive_hook(registry)
 
     assert collector.SUPPORTED_EVENTS == frozenset({"demo.hit"})
     assert collector.seen == [("demo.hit", "ok", "registry")]
+
+
+def test_model_call_datasources_default_attempt_type_to_initial(patch_event_emit):
+    common = {
+        "provider": "provider",
+        "model_name": "model",
+        "duration_seconds": 0.1,
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+    }
+
+    VLMEventDataSource.record_call(**common)
+    EmbeddingEventDataSource.record_call(**common)
+    RerankEventDataSource.record_call(**common)
+
+    assert [(event_name, payload["attempt_type"]) for event_name, payload in patch_event_emit] == [
+        ("vlm.call", "initial"),
+        ("embedding.call", "initial"),
+        ("rerank.call", "initial"),
+    ]
 
 
 def test_cache_collector_uses_supported_events_and_receive_hook_routing(
@@ -175,6 +200,66 @@ def test_session_collector_ignores_malformed_payloads_instead_of_raising(
     assert "openviking_session_archive_total" not in text
 
 
+def test_model_call_collectors_split_attempt_series_without_splitting_tokens():
+    from openviking.metrics.core.registry import MetricRegistry
+    from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+    cases = (
+        (VLMCollector, "vlm.call", "vlm"),
+        (EmbeddingCollector, "embedding.call", "embedding"),
+        (RerankCollector, "rerank.call", "rerank"),
+    )
+    for collector_type, event_name, domain in cases:
+        registry = MetricRegistry()
+        collector = collector_type()
+        base_payload = {
+            "provider": "provider",
+            "model_name": "model",
+            "duration_seconds": 0.1,
+            "prompt_tokens": 3,
+            "completion_tokens": 1,
+        }
+        # A legacy payload without attempt_type belongs to the initial series.
+        collector.receive(event_name, base_payload, registry)
+        collector.receive(
+            event_name,
+            {
+                **base_payload,
+                "attempt_type": "retry",
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+            },
+            registry,
+        )
+
+        lines = PrometheusExporter(registry=registry).render().splitlines()
+        call_lines = [
+            line for line in lines if line.startswith(f"openviking_{domain}_calls_total{{")
+        ]
+        duration_count_lines = [
+            line
+            for line in lines
+            if line.startswith(f"openviking_{domain}_call_duration_seconds_count{{")
+        ]
+        token_lines = [
+            line for line in lines if line.startswith(f"openviking_{domain}_tokens_")
+        ]
+
+        assert len(call_lines) == 2
+        assert any('attempt_type="initial"' in line for line in call_lines)
+        assert any('attempt_type="retry"' in line for line in call_lines)
+        assert len(duration_count_lines) == 2
+        assert any('attempt_type="initial"' in line for line in duration_count_lines)
+        assert any('attempt_type="retry"' in line for line in duration_count_lines)
+        assert token_lines
+        assert all("attempt_type=" not in line for line in token_lines)
+        assert any(
+            line.startswith(f"openviking_{domain}_tokens_input_total{{")
+            and line.endswith(" 8")
+            for line in token_lines
+        )
+
+
 def test_rerank_collector_maps_calls_duration_and_tokens():
     from openviking.metrics.core.registry import MetricRegistry
     from openviking.metrics.exporters.prometheus import PrometheusExporter
@@ -222,20 +307,21 @@ def test_rerank_collector_records_failed_call_without_token_families():
             "provider": "cohere",
             "model_name": "rerank-v3.5",
             "duration_seconds": 0.12,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
+            "prompt_tokens": 9,
+            "completion_tokens": 2,
             "error_code": "429",
+            "attempt_type": "retry",
         },
         registry,
     )
     text = PrometheusExporter(registry=registry).render()
 
     assert re.search(
-        r'openviking_rerank_calls_total\{(?=[^}]*error_code="429")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
+        r'openviking_rerank_calls_total\{(?=[^}]*attempt_type="retry")(?=[^}]*error_code="429")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
         text,
     )
     assert re.search(
-        r'openviking_rerank_call_duration_seconds_count\{(?=[^}]*error_code="429")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
+        r'openviking_rerank_call_duration_seconds_count\{(?=[^}]*attempt_type="retry")(?=[^}]*error_code="429")(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
         text,
     )
     assert "openviking_rerank_tokens_input_total" not in text
@@ -387,22 +473,25 @@ def test_embedding_collector_records_failed_call_duration_with_error_code(
             "provider": "volcengine",
             "model_name": "doubao-embedding",
             "duration_seconds": 0.12,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
             "error_code": "429",
+            "attempt_type": "retry",
         },
         registry,
     )
     text = render_prometheus(registry)
 
     assert re.search(
-        r'openviking_embedding_calls_total\{(?=[^}]*error_code="429")(?=[^}]*model_name="doubao-embedding")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
+        r'openviking_embedding_calls_total\{(?=[^}]*attempt_type="retry")(?=[^}]*error_code="429")(?=[^}]*model_name="doubao-embedding")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
         text,
     )
     assert re.search(
-        r'openviking_embedding_call_duration_seconds_count\{(?=[^}]*error_code="429")(?=[^}]*model_name="doubao-embedding")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
+        r'openviking_embedding_call_duration_seconds_count\{(?=[^}]*attempt_type="retry")(?=[^}]*error_code="429")(?=[^}]*model_name="doubao-embedding")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
         text,
     )
+    assert "openviking_embedding_tokens_input_total" not in text
+    assert "openviking_embedding_tokens_output_total" not in text
     assert "openviking_embedding_tokens_total" not in text
 
 
@@ -413,22 +502,25 @@ def test_vlm_collector_records_error_code_on_calls_and_duration_only(registry, r
             "provider": "volcengine",
             "model_name": "doubao-vlm",
             "duration_seconds": 0.12,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
+            "prompt_tokens": 11,
+            "completion_tokens": 4,
             "error_code": "timeout",
+            "attempt_type": "retry",
         },
         registry,
     )
     text = render_prometheus(registry)
 
     assert re.search(
-        r'openviking_vlm_calls_total\{(?=[^}]*error_code="timeout")(?=[^}]*model_name="doubao-vlm")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
+        r'openviking_vlm_calls_total\{(?=[^}]*attempt_type="retry")(?=[^}]*error_code="timeout")(?=[^}]*model_name="doubao-vlm")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
         text,
     )
     assert re.search(
-        r'openviking_vlm_call_duration_seconds_count\{(?=[^}]*error_code="timeout")(?=[^}]*model_name="doubao-vlm")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
+        r'openviking_vlm_call_duration_seconds_count\{(?=[^}]*attempt_type="retry")(?=[^}]*error_code="timeout")(?=[^}]*model_name="doubao-vlm")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
         text,
     )
+    assert "openviking_vlm_tokens_input_total" not in text
+    assert "openviking_vlm_tokens_output_total" not in text
     assert "openviking_vlm_tokens_total" not in text
 
 

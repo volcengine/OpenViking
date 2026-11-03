@@ -232,23 +232,23 @@ The telemetry bridge also recognizes legacy summary keys for `request`, `process
 |---------------|------|---------------|---------|
 | `openviking_model_calls_total` | Counter | `model_type, provider, model_name` | unified model call count |
 | `openviking_model_tokens_total` | Counter | `model_type, provider, model_name, token_type` | unified model token count |
-| `openviking_vlm_calls_total` | Counter | `account_id, provider, model_name, error_code` | VLM provider call count; `OK` means success and failures use normalized error codes |
+| `openviking_vlm_calls_total` | Counter | `account_id, provider, model_name, error_code, attempt_type` | VLM provider call count; `OK` means success and failures use normalized error codes |
 | `openviking_vlm_tokens_input_total` | Counter | `account_id, provider, model_name` | VLM input tokens |
 | `openviking_vlm_tokens_output_total` | Counter | `account_id, provider, model_name` | VLM output tokens |
 | `openviking_vlm_tokens_total` | Counter | `account_id, provider, model_name` | VLM total tokens |
 | `openviking_vlm_ingestion_tokens_total` | Counter | `account_id, source_type` | VLM total tokens during resource ingestion; `source_type` is `repository` or `document` |
-| `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code` | VLM provider call duration distribution |
+| `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code, attempt_type` | VLM provider call duration distribution |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding request count |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding latency distribution |
 | `openviking_embedding_errors_total` | Counter | `account_id, error_code` | embedding error count |
-| `openviking_embedding_calls_total` | Counter | `account_id, provider, model_name, error_code` | embedding provider call count; `OK` means success and failures use normalized error codes |
-| `openviking_embedding_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code` | embedding provider call duration distribution (per-call) |
+| `openviking_embedding_calls_total` | Counter | `account_id, provider, model_name, error_code, attempt_type` | embedding provider call count; `OK` means success and failures use normalized error codes |
+| `openviking_embedding_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code, attempt_type` | embedding provider call duration distribution (per-call) |
 | `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding input tokens (per-call aggregate) |
 | `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding output tokens (per-call aggregate; may not appear if always 0) |
 | `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding total tokens (per-call aggregate) |
 | `openviking_embedding_ingestion_tokens_total` | Counter | `account_id, source_type` | embedding total tokens during resource ingestion; `source_type` is `repository` or `document` |
-| `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name, error_code` | rerank provider call count; `OK` means success and failures use normalized error codes |
-| `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code` | rerank provider call duration distribution (per-call) |
+| `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name, error_code, attempt_type` | rerank provider call count; `OK` means success and failures use normalized error codes |
+| `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code, attempt_type` | rerank provider call duration distribution (per-call) |
 | `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank input tokens (per-call aggregate) |
 | `openviking_rerank_tokens_output_total` | Counter | `account_id, provider, model_name` | rerank output tokens (per-call aggregate; may not appear if always 0) |
 | `openviking_rerank_tokens_total` | Counter | `account_id, provider, model_name` | rerank total tokens (per-call aggregate) |
@@ -259,6 +259,8 @@ Notes:
 - `openviking_model_*` gives a unified cross-model view for embedding and VLM usage
 - `openviking_vlm_*` and `openviking_embedding_*` are better suited for workload-specific dashboards
 - provider call counts and durations use `error_code="OK"` for success; failed retries are counted once per actual provider call
+- `attempt_type="initial"` identifies the first attempt in one concrete provider/credential retry loop and is the default for legacy payloads; `attempt_type="retry"` identifies each subsequent attempt in that same loop
+- `attempt_type` applies only to provider call counts and durations; token families remain aggregated across attempts, and failed attempts do not add tokens
 - `*_requests_*` represents business requests; `*_calls_*`, call duration, and token families represent provider calls
 - `openviking_operation_tokens_total` has no pre-aggregated `token_type="all/total"`; aggregate totals in TSDB queries
 

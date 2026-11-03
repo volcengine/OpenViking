@@ -227,23 +227,23 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 |--------|------|----------|------|
 | `openviking_model_calls_total` | Counter | `model_type, provider, model_name` | 模型调用总量（统一视角） |
 | `openviking_model_tokens_total` | Counter | `model_type, provider, model_name, token_type` | 模型 token 累计量 |
-| `openviking_vlm_calls_total` | Counter | `account_id, provider, model_name, error_code` | VLM provider 调用次数；成功为 `OK`，失败为归一化错误码 |
+| `openviking_vlm_calls_total` | Counter | `account_id, provider, model_name, error_code, attempt_type` | VLM provider 调用次数；成功为 `OK`，失败为归一化错误码 |
 | `openviking_vlm_tokens_input_total` | Counter | `account_id, provider, model_name` | VLM 输入 token |
 | `openviking_vlm_tokens_output_total` | Counter | `account_id, provider, model_name` | VLM 输出 token |
 | `openviking_vlm_tokens_total` | Counter | `account_id, provider, model_name` | VLM 总 token |
 | `openviking_vlm_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 VLM 总 token，`source_type` 区分 `repository` / `document` |
-| `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code` | VLM provider 调用耗时分布 |
+| `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code, attempt_type` | VLM provider 调用耗时分布 |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding 请求数 |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding 耗时分布 |
 | `openviking_embedding_errors_total` | Counter | `account_id, error_code` | embedding 错误次数 |
-| `openviking_embedding_calls_total` | Counter | `account_id, provider, model_name, error_code` | embedding provider 调用次数；成功为 `OK`，失败为归一化错误码 |
-| `openviking_embedding_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code` | embedding provider 调用耗时分布（per-call） |
+| `openviking_embedding_calls_total` | Counter | `account_id, provider, model_name, error_code, attempt_type` | embedding provider 调用次数；成功为 `OK`，失败为归一化错误码 |
+| `openviking_embedding_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code, attempt_type` | embedding provider 调用耗时分布（per-call） |
 | `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding 输入 token（per-call 聚合） |
 | `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding 输出 token（per-call 聚合；若长期为 0 可能不出现） |
 | `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding 总 token（per-call 聚合） |
 | `openviking_embedding_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 embedding 总 token，`source_type` 区分 `repository` / `document` |
-| `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name, error_code` | rerank provider 调用次数；成功为 `OK`，失败为归一化错误码 |
-| `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code` | rerank provider 调用耗时分布（per-call） |
+| `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name, error_code, attempt_type` | rerank provider 调用次数；成功为 `OK`，失败为归一化错误码 |
+| `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name, error_code, attempt_type` | rerank provider 调用耗时分布（per-call） |
 | `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank 输入 token（per-call 聚合） |
 | `openviking_rerank_tokens_output_total` | Counter | `account_id, provider, model_name` | rerank 输出 token（per-call 聚合；若长期为 0 可能不出现） |
 | `openviking_rerank_tokens_total` | Counter | `account_id, provider, model_name` | rerank 总 token（per-call 聚合） |
@@ -254,6 +254,8 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 - `openviking_model_*` 是统一模型视角，便于同时看 embedding / vlm
 - `openviking_vlm_*` 和 `openviking_embedding_*` 更适合业务侧针对性看板
 - provider 调用计数与耗时使用 `error_code="OK"` 表示成功；失败重试会按每次实际 provider 调用分别计数
+- `attempt_type="initial"` 表示一个具体 provider/credential 重试循环中的首次尝试，也是旧 payload 缺少该字段时的默认值；`attempt_type="retry"` 表示同一循环内之后的每次重试
+- `attempt_type` 只用于 provider 调用计数与耗时；token 指标不按尝试类型拆分，失败尝试也不会增加 token
   - `*_requests_*` 更偏“业务请求视角”
   - `*_calls_* / *_call_duration_* / *_tokens_*` 更偏“模型调用视角”（按 `provider/model_name` 聚合）
 - `openviking_operation_tokens_total` 不存 `token_type="all/total"` 这类预聚合标签，总账建议在 TSDB 查询侧用 `sum(...)` 聚合得到

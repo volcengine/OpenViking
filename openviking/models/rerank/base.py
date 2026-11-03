@@ -9,7 +9,7 @@ Provides common token usage tracking functionality.
 import logging
 from typing import Any, Dict
 
-from openviking.utils.model_retry import extract_metric_error_code
+from openviking.utils.model_retry import extract_metric_error_code, get_retry_attempt_type
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils import get_logger
 
@@ -109,6 +109,7 @@ class RerankBase:
                 completion_tokens=int(completion_tokens),
                 error_code="OK",
                 account_id=root_context.account_id if root_context is not None else None,
+                attempt_type=get_retry_attempt_type(),
             )
         except Exception as e:
             # Metrics must never break rerank execution.
@@ -137,6 +138,7 @@ class RerankBase:
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
                 account_id=root_context.account_id if root_context is not None else None,
+                attempt_type=get_retry_attempt_type(),
             )
         except Exception as metrics_error:
             # Metrics must never change the existing None/fallback behavior.

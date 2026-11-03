@@ -37,7 +37,7 @@ class ProviderError(ModelError):
 
 
 class FakeDenseEmbedder(DenseEmbedderBase):
-    def __init__(self, outcomes, *, max_retries: int = 2):
+    def __init__(self, outcomes, *, max_retries: int = 2, record_success: bool = False):
         super().__init__(
             "fake-dense",
             {"provider": "fake", "max_retries": max_retries, "max_concurrent": 1},
@@ -46,12 +46,20 @@ class FakeDenseEmbedder(DenseEmbedderBase):
         self.outcomes = list(outcomes)
         self.calls = 0
         self.closed = False
+        self.record_success = record_success
 
     def _next(self):
         self.calls += 1
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
+        if self.record_success:
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider=self.provider,
+                prompt_tokens=1,
+                completion_tokens=0,
+            )
         return EmbedResult(dense_vector=outcome)
 
     def embed(self, content, is_query=False, **kwargs):
@@ -115,7 +123,10 @@ def embedding_calls(monkeypatch):
 
 
 def test_retry_embedder_retries_transient_and_preserves_capabilities(embedding_calls):
-    inner = FakeDenseEmbedder([ProviderError(503), [0.1, 0.2]])
+    inner = FakeDenseEmbedder(
+        [ProviderError(503), [0.1, 0.2]],
+        record_success=True,
+    )
     inner._account_id = "account-a"
     embedder = RetryEmbedder(inner)
 
@@ -129,7 +140,7 @@ def test_retry_embedder_retries_transient_and_preserves_capabilities(embedding_c
     assert embedder.is_sparse is False
     assert embedder.is_hybrid is False
     assert embedder.supports_multimodal is True
-    assert len(embedding_calls) == 1
+    assert len(embedding_calls) == 2
     assert embedding_calls[0]["provider"] == "fake"
     assert embedding_calls[0]["model_name"] == "fake-dense"
     assert embedding_calls[0]["account_id"] == "account-a"
@@ -137,6 +148,9 @@ def test_retry_embedder_retries_transient_and_preserves_capabilities(embedding_c
     assert embedding_calls[0]["completion_tokens"] == 0
     assert embedding_calls[0]["error_code"] == "503"
     assert embedding_calls[0]["duration_seconds"] >= 0
+    assert embedding_calls[0]["attempt_type"] == "initial"
+    assert embedding_calls[1].get("error_code", "OK") == "OK"
+    assert embedding_calls[1]["attempt_type"] == "retry"
 
 
 def test_retry_embedder_records_every_attempt_when_retries_are_exhausted(embedding_calls):

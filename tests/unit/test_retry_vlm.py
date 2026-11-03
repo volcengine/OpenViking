@@ -75,6 +75,22 @@ class FakeVLM(VLMBase):
         self.closed = True
 
 
+class MetricFakeVLM(FakeVLM):
+    def _next(self, method, kwargs):
+        result = super()._next(method, kwargs)
+        self.update_token_usage(
+            model_name=self.model,
+            provider=self.provider,
+            prompt_tokens=3,
+            completion_tokens=2,
+            duration_seconds=0.01,
+        )
+        return result
+
+    def record_failed_call(self, *, duration_seconds, error):
+        VLMBase.record_failed_call(self, duration_seconds=duration_seconds, error=error)
+
+
 @pytest.fixture(autouse=True)
 def no_retry_sleep(monkeypatch):
     async def _no_sleep(_delay):
@@ -103,6 +119,51 @@ def test_retry_vlm_retries_sync_transient_failures(method, expected_method):
     assert len(inner.failed_calls) == 1
     assert inner.failed_calls[0][0] >= 0
     assert inner.failed_calls[0][1] is error
+
+
+def test_retry_vlm_labels_initial_failure_and_successful_retry(monkeypatch):
+    recorded_calls = []
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.VLMEventDataSource.record_call",
+        lambda **kwargs: recorded_calls.append(kwargs),
+    )
+    inner = MetricFakeVLM([ProviderError(503), "ok"])
+
+    assert RetryVLM(inner).get_completion(prompt="hello") == "ok"
+
+    assert [call["attempt_type"] for call in recorded_calls] == ["initial", "retry"]
+    assert recorded_calls[0]["error_code"] == "503"
+    assert "error_code" not in recorded_calls[1]
+
+
+@pytest.mark.asyncio
+async def test_retry_vlm_labels_async_success_after_retry(monkeypatch):
+    recorded_calls = []
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.VLMEventDataSource.record_call",
+        lambda **kwargs: recorded_calls.append(kwargs),
+    )
+    inner = MetricFakeVLM([ProviderError(503), "ok"])
+
+    assert await RetryVLM(inner).get_completion_async(prompt="hello") == "ok"
+
+    assert [call["attempt_type"] for call in recorded_calls] == ["initial", "retry"]
+
+
+def test_retry_vlm_labels_non_retryable_failure_as_initial(monkeypatch):
+    recorded_calls = []
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.VLMEventDataSource.record_call",
+        lambda **kwargs: recorded_calls.append(kwargs),
+    )
+    error = ProviderError(400)
+
+    with pytest.raises(ProviderError) as raised:
+        RetryVLM(MetricFakeVLM([error])).get_completion(prompt="hello")
+
+    assert raised.value is error
+    assert len(recorded_calls) == 1
+    assert recorded_calls[0]["attempt_type"] == "initial"
 
 
 @pytest.mark.parametrize("method", ["get_completion", "get_vision_completion"])

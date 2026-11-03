@@ -15,6 +15,7 @@ from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     PrimaryBackupSwitcher,
     extract_metric_error_code,
+    get_retry_attempt_type,
 )
 from openviking_cli.utils import get_logger
 
@@ -282,6 +283,7 @@ class VLMBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
+                attempt_type=get_retry_attempt_type(),
             )
         except Exception as e:
             # Metrics must never break model inference.
@@ -309,6 +311,7 @@ class VLMBase(ABC):
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
                 account_id=root_context.account_id if root_context is not None else None,
+                attempt_type=get_retry_attempt_type(),
             )
         except Exception as metrics_error:
             if logger.isEnabledFor(logging.DEBUG):

@@ -27,6 +27,10 @@ _max_retries_override: ContextVar[int | None] = ContextVar(
     "model_max_retries_override",
     default=None,
 )
+_retry_attempt_index: ContextVar[int] = ContextVar(
+    "model_retry_attempt_index",
+    default=0,
+)
 
 
 @asynccontextmanager
@@ -45,6 +49,11 @@ def effective_max_retries(configured_max_retries: int) -> int:
     """Return the request override when set, otherwise the configured value."""
     override = _max_retries_override.get()
     return configured_max_retries if override is None else override
+
+
+def get_retry_attempt_type() -> str:
+    """Return a low-cardinality label for the current model attempt."""
+    return "retry" if _retry_attempt_index.get() > 0 else "initial"
 
 
 # Error classification categories returned by classify_api_error()
@@ -511,7 +520,12 @@ def retry_sync(
 
     while True:
         try:
-            return func()
+            parent_attempt = _retry_attempt_index.get()
+            token = _retry_attempt_index.set(max(parent_attempt, attempt))
+            try:
+                return func()
+            finally:
+                _retry_attempt_index.reset(token)
         except Exception as e:
             retry_limit = _retry_limit(
                 e,
@@ -558,7 +572,12 @@ async def retry_async(
 
     while True:
         try:
-            return await func()
+            parent_attempt = _retry_attempt_index.get()
+            token = _retry_attempt_index.set(max(parent_attempt, attempt))
+            try:
+                return await func()
+            finally:
+                _retry_attempt_index.reset(token)
         except Exception as e:
             retry_limit = _retry_limit(
                 e,
