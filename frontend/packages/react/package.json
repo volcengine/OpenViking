@@ -1,7 +1,9 @@
 {
   "name": "@openviking/react",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "React UI modules for OpenViking applications.",
   "type": "module",
   "license": "AGPL-3.0-only",
