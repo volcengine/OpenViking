@@ -28,11 +28,14 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: private `@openviking/ui` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
-- `packages/react/src/patterns/{file-tree,file-preview,command-console,viking-bot}`: reserved composition entries; see the [module map](./packages/react/README.md#模块目录). These entries have no component exports yet.
+- `packages/react/src/components/{file-tree,file-preview,command-console,viking-bot}`: reserved view component entries; see the [module map](./packages/react/README.md#模块目录) and [component constraints](./packages/react/src/components/AGENTS.md). These entries have no component exports yet. `StatusBadge` is a scaffold example.
+- `packages/react/src/pages`: page composition layer; see its [README](./packages/react/src/pages/README.md) and [constraints](./packages/react/src/pages/AGENTS.md). It currently contains documentation only.
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
 - `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.
 - `docs/docs/_demos`: runnable examples using the public package exports.
+
+Components receive prepared view data and state through props and report user intent through callbacks. The `pages/` layer combines components into complete pages, fetches and processes data, and passes the results to components. Routing and host navigation are supplied by the consuming application.
 
 Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. `npm run check` builds the library first so documentation type-checking can resolve its declarations on a clean checkout. Import `@openviking/ui/style.css` once in applications; it resolves to `dist/index.css`. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. The package is private until a separate publication change establishes its release policy.
 

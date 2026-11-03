@@ -24,19 +24,19 @@
       "import": "./dist/index.js"
     },
     "./tree": {
-      "types": "./dist/patterns/file-tree/file-tree.d.ts",
+      "types": "./dist/components/file-tree/file-tree.d.ts",
       "import": "./dist/tree.js"
     },
     "./preview": {
-      "types": "./dist/patterns/file-preview/file-preview.d.ts",
+      "types": "./dist/components/file-preview/file-preview.d.ts",
       "import": "./dist/preview.js"
     },
     "./console": {
-      "types": "./dist/patterns/command-console/command-console.d.ts",
+      "types": "./dist/components/command-console/command-console.d.ts",
       "import": "./dist/console.js"
     },
     "./viking-bot": {
-      "types": "./dist/patterns/viking-bot/viking-bot.d.ts",
+      "types": "./dist/components/viking-bot/viking-bot.d.ts",
       "import": "./dist/viking-bot.js"
     },
     "./style.css": "./dist/index.css",
