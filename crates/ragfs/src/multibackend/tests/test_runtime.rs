@@ -169,6 +169,98 @@ async fn flush_worker_retries_account_initialization_after_tree_lock_release() {
     assert!(primary.stat(&manifest).await.is_ok());
 }
 
+/// Verifies one account's initialization retry does not block another account.
+#[tokio::test]
+async fn flush_worker_processes_other_accounts_while_one_account_retries() {
+    let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
+    primary
+        .ensure_parent_dirs("/_system/accounts.json", 0o755)
+        .await
+        .unwrap();
+    primary
+        .write(
+            "/_system/accounts.json",
+            br#"{"accounts":{"blocked":{},"ready":{}}}"#,
+            0,
+            WriteFlag::Create,
+        )
+        .await
+        .unwrap();
+
+    let manager = Arc::new(PathLockManager::new(
+        primary.clone(),
+        Arc::new(MemoryPathLockProvider::new()),
+        PathLockConfig::default(),
+    ));
+    let tree_lease = manager
+        .acquire_tree("/local/blocked", Duration::ZERO, None)
+        .await
+        .unwrap();
+    let store = Arc::new(MetadataStore::new(primary.clone(), manager.clone(), "/local").unwrap());
+    let provider = Arc::new(FilesystemProvider::new(store.clone()));
+    let mut worker = FlushWorker::new(
+        store.clone(),
+        provider,
+        1,
+        Vec::new(),
+        Some(primary.clone()),
+        Vec::new(),
+        Arc::new(MultiWriteMetricsSnapshot::default()),
+    );
+    let blocked_event = PendingEvent {
+        operation_id: uuid::Uuid::from_u128(3),
+        account_id: "blocked".to_string(),
+        kind: PendingEventKind::Data(SegmentEventType::Remove),
+        path: "/local/blocked/file.md".to_string(),
+        destination_path: None,
+        route_hint: None,
+    };
+    let started_at = Instant::now();
+    let mut retries = HashMap::from([(
+        "blocked".to_string(),
+        FlushRetryState {
+            events: vec![blocked_event],
+            attempts: 1,
+            started_at,
+            retry_at: started_at + FLUSH_RETRY_INITIAL_DELAY,
+        },
+    )]);
+    let pending = AtomicUsize::new(2);
+    worker
+        .flush_fresh_events(
+            vec![PendingEvent {
+                operation_id: uuid::Uuid::from_u128(4),
+                account_id: "ready".to_string(),
+                kind: PendingEventKind::Data(SegmentEventType::Remove),
+                path: "/local/ready/file.md".to_string(),
+                destination_path: None,
+                route_hint: None,
+            }],
+            &mut retries,
+            &pending,
+        )
+        .await;
+
+    let ready_manifest = store.paths().account_manifest("ready").unwrap().1;
+    assert!(primary.stat(&ready_manifest).await.is_ok());
+    assert_eq!(pending.load(Ordering::Relaxed), 1);
+    assert_eq!(retries["blocked"].events.len(), 1);
+    let blocked_manifest = store.paths().account_manifest("blocked").unwrap().1;
+    assert!(matches!(
+        primary.stat(&blocked_manifest).await.unwrap_err(),
+        Error::NotFound(_)
+    ));
+
+    manager.release(&tree_lease).await.unwrap();
+    let state = retries.remove("blocked").unwrap();
+    worker
+        .flush_retry("blocked", state, &mut retries, &pending)
+        .await;
+    assert!(retries.is_empty());
+    assert_eq!(pending.load(Ordering::Relaxed), 0);
+    assert!(primary.stat(&blocked_manifest).await.is_ok());
+}
+
 #[test]
 fn only_transient_pathlock_errors_are_retryable() {
     assert!(FlushWorker::is_retryable_pathlock_error(&Error::PathLock(
