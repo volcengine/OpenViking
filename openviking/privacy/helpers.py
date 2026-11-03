@@ -6,10 +6,14 @@ import json
 import re
 from typing import Any
 
+from openviking.privacy.validation import validate_privacy_identifier
+
 _VERSION_RE = re.compile(r"^version_(\d+)\.json$")
 
 
 def config_root_uri(user_space: str, category: str, target_key: str) -> str:
+    validate_privacy_identifier(category, "category")
+    validate_privacy_identifier(target_key, "target_key")
     return f"viking://user/{user_space}/privacy/{category}/{target_key}"
 
 

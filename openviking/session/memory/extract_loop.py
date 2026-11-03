@@ -134,7 +134,7 @@ class ExtractLoop:
         ctx: Optional[RequestContext] = None,
         context_provider: Optional[Any] = None,  # ExtractContextProvider
         isolation_handler: MemoryIsolationHandler = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         max_output_tokens: Optional[int] = None,
     ):
         """
@@ -147,7 +147,9 @@ class ExtractLoop:
             max_iterations: Maximum number of ReAct iterations (default: 5)
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
-            thinking: Whether to explicitly enable model thinking for this extraction loop.
+            thinking: Per-call thinking override for this extraction loop. True/False
+                force the mode for every call; None (default) defers to the VLM
+                backend's configured thinking policy.
             max_output_tokens: Per-call output cap for the extraction LLM. When None, the
                 configured vlm.max_tokens is used, falling back to a value large enough for
                 full memory rewrites so providers do not apply a small server-side default
@@ -159,7 +161,7 @@ class ExtractLoop:
         self.max_iterations = max_iterations
         self.ctx = ctx
         self.context_provider = context_provider
-        self.thinking = bool(thinking)
+        self.thinking = thinking
         self.max_output_tokens = max_output_tokens
         # Resolved in run() via _resolve_effective_max_output_tokens(); default to
         # the extraction floor so a direct _call_llm() before run() stays safe.
@@ -271,16 +273,14 @@ class ExtractLoop:
             self.context_provider.instruction()
         )
         output_contract = self._output_protocol.render_contract(self._output_context)
+        context_rules = self._output_protocol.render_context_rules(self._output_context)
         messages.append(
             {
                 "role": "system",
                 "content": f"""
 {provider_instruction}
 {reference_rules}
-## Read Format Rules
-- The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`.
-- Read content is returned in Claude Code format: each visible line is prefixed with `line_number<TAB>`.
-- When you copy text from read results into SEARCH/REPLACE or DELETE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search`, `replace`, or `delete`.
+{context_rules}
 {output_contract}
         """,
             }
@@ -404,6 +404,13 @@ class ExtractLoop:
             parse_error = self._last_parse_error
             # Add format error message if parse failed (max 1 retry). This may raise
             # max_iterations, granting one more attempt after this failure.
+            if failure_kind == "budget_exhausted":
+                # Truncation is not an ordinary format mistake: a same-cap format
+                # retry would only hit the budget again, and replaying the
+                # truncated output just grows the prompt. Fail fast with the
+                # dedicated error recorded by _call_llm().
+                raise RuntimeError(f"Memory extraction aborted: {parse_error or failure_kind}")
+
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
@@ -481,6 +488,23 @@ class ExtractLoop:
             configured if configured is not None else _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS
         )
 
+    def _budget_exhausted_error(self, response: Any, content: str) -> str:
+        """Build the dedicated, actionable error for a truncated response.
+
+        Truncation is detected only from the backend's explicit
+        ``finish_reason == "length"``; token counters are never used to infer it.
+        """
+        usage = getattr(response, "usage", None)
+        completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        details = f"finish_reason='length', output cap={self._effective_max_output_tokens} tokens"
+        if completion_tokens:
+            details += f", completion_tokens={completion_tokens}"
+        return (
+            "Response was cut off by the output-token budget "
+            f"({details}), response_preview={_preview_text(content)!r}. "
+            "Raise vlm.max_tokens in ov.conf or reduce the memory context before retrying."
+        )
+
     def _retryable_resolution_issues(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
         issues: List[Dict[str, Any]] = []
         for operation in operations.upsert_operations:
@@ -492,10 +516,11 @@ class ExtractLoop:
                 or resolution_skip.reason_code not in _EVENT_RETRYABLE_RESOLUTION_SKIP_CODES
             ):
                 continue
-            if resolution_skip.reason_code == MemoryOperationSkipCode.NO_WRITABLE_TARGET and (
-                not self.ctx or not self.ctx.user
-            ):
-                continue
+            if resolution_skip.reason_code == MemoryOperationSkipCode.NO_WRITABLE_TARGET:
+                if not self.ctx or not self.ctx.user:
+                    continue
+                if not self._has_writable_message_target():
+                    continue
             issue = {
                 "memory_type": operation.memory_type,
                 "page_id": operation.page_id,
@@ -506,15 +531,23 @@ class ExtractLoop:
             issues.append(issue)
         return issues
 
+    def _has_writable_message_target(self) -> bool:
+        """Preserve legacy retries if the isolation handler cannot answer the check."""
+        handler = self._isolation_handler
+        has_writable_target = getattr(handler, "has_writable_message_target", None)
+        if not callable(has_writable_target):
+            return True
+        try:
+            return bool(has_writable_target())
+        except Exception:
+            logger.warning(
+                "Unable to determine writable message targets; preserving resolution repair",
+                exc_info=True,
+            )
+            return True
+
     def _build_resolution_repair_instruction(self, issues: List[Dict[str, Any]]) -> str:
         return self._output_protocol.render_resolution_repair(issues)
-
-    @staticmethod
-    def _is_event_schema(schema: Any) -> bool:
-        return (
-            getattr(schema, "memory_type", None) == "events"
-            and getattr(schema, "operation_mode", None) == "add_only"
-        )
 
     def _uri_belongs_to_schema(self, uri: str, schema: Any) -> Optional[bool]:
         """Return a path-based ownership result without trusting file metadata."""
@@ -724,43 +757,40 @@ class ExtractLoop:
             if value is None:
                 continue
             items = value if isinstance(value, list) else [value]
-            is_event = self._is_event_schema(schema)
+            is_add_only = getattr(schema, "operation_mode", "upsert") == "add_only"
             for item_index, item in enumerate(items):
                 requested_page_id = dict(item).get("page_id")
-                entries.append((schema_index, item_index, requested_page_id, is_event))
+                entries.append((schema_index, item_index, requested_page_id, is_add_only))
 
         assigned_page_ids: Dict[Tuple[int, int], int] = {}
         page_id_assignments: Dict[int, List[int]] = {}
         page_id_allocator = None
 
-        # Preserve non-Event behavior where possible. Events are always new and therefore
-        # allocate after every other memory type has claimed its response-local ID.
-        for event_phase in (False, True):
-            for schema_index, item_index, requested_page_id, is_event in entries:
-                if is_event != event_phase:
-                    continue
-                existing_uri = None
-                if requested_page_id is not None and page_id_map is not None:
-                    existing_uri = page_id_map.resolve(requested_page_id)
-                if not is_event and existing_uri is not None:
-                    page_id = requested_page_id
-                else:
-                    if page_id_allocator is None:
-                        allocator_factory = getattr(
-                            page_id_map,
-                            "new_page_id_allocator",
-                            None,
-                        )
-                        page_id_allocator = (
-                            allocator_factory()
-                            if callable(allocator_factory)
-                            else ResponsePageIdAllocator()
-                        )
-                    page_id = page_id_allocator.allocate(requested_page_id)
+        # Keep upsert IDs stable before allocating IDs for add_only operations.
+        entries.sort(key=lambda entry: entry[3])
+        for schema_index, item_index, requested_page_id, is_add_only in entries:
+            existing_uri = None
+            if not is_add_only and requested_page_id is not None and page_id_map is not None:
+                existing_uri = page_id_map.resolve(requested_page_id)
+            if existing_uri is not None:
+                page_id = requested_page_id
+            else:
+                if page_id_allocator is None:
+                    allocator_factory = getattr(
+                        page_id_map,
+                        "new_page_id_allocator",
+                        None,
+                    )
+                    page_id_allocator = (
+                        allocator_factory()
+                        if callable(allocator_factory)
+                        else ResponsePageIdAllocator()
+                    )
+                page_id = page_id_allocator.allocate(requested_page_id)
 
-                assigned_page_ids[(schema_index, item_index)] = page_id
-                if requested_page_id is not None:
-                    page_id_assignments.setdefault(requested_page_id, []).append(page_id)
+            assigned_page_ids[(schema_index, item_index)] = page_id
+            if requested_page_id is not None:
+                page_id_assignments.setdefault(requested_page_id, []).append(page_id)
 
         return assigned_page_ids, page_id_assignments
 
@@ -782,6 +812,7 @@ class ExtractLoop:
 
         for schema_index, schema in enumerate(schemas):
             memory_type = schema.memory_type
+            is_add_only = getattr(schema, "operation_mode", "upsert") == "add_only"
             value = getattr(operations, memory_type, None)
             if value is None:
                 continue
@@ -824,7 +855,6 @@ class ExtractLoop:
 
                 requested_page_id = item_dict.pop("page_id", None)
                 page_id = assigned_page_ids[(schema_index, item_index)]
-                is_event = self._is_event_schema(schema)
                 resolved_op = ResolvedOperation(
                     old_memory_file_content=None,
                     memory_fields=item_dict,
@@ -834,16 +864,14 @@ class ExtractLoop:
                     resolution_skip=identity_resolution_skip,
                 )
 
-                if is_event:
-                    # Event page_ids are temporary link anchors. They must never select an
-                    # existing memory file; URI collision handling remains unchanged downstream.
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
-                    )
-                elif requested_page_id is not None and page_id_map is not None:
-                    resolved_uri = page_id_map.resolve(requested_page_id)
+                try:
+                    resolved_uri = None
+                    if (
+                        not is_add_only
+                        and requested_page_id is not None
+                        and page_id_map is not None
+                    ):
+                        resolved_uri = page_id_map.resolve(requested_page_id)
                     if resolved_uri:
                         old_content = self.context_provider.read_file_contents.get(resolved_uri)
                         belongs_to_schema = self._uri_belongs_to_schema(resolved_uri, schema)
@@ -894,11 +922,18 @@ class ExtractLoop:
                             operation=resolved_op,
                             extract_context=self._extract_context,
                         )
-                else:
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
+                except ValueError as exc:
+                    resolved_op.uris = []
+                    resolved_op.resolution_skip = MemoryOperationSkip(
+                        reason_code=MemoryOperationSkipCode.INVALID_URI_TEMPLATE_VARS,
+                        reason=str(exc),
+                    )
+                    logger.warning(
+                        "Skipping memory operation with unrenderable URI: "
+                        "memory_type=%s page_id=%s error=%s",
+                        memory_type,
+                        page_id,
+                        exc,
                     )
 
                 upsert_operations.append(resolved_op)
@@ -1175,8 +1210,11 @@ class ExtractLoop:
         Returns:
             Tuple of (tool_calls, operations) - one will be None, the other set
         """
-        # Call LLM with tools - use tools from strategy
-        tools = None
+        # Call LLM with tools - use tools from strategy. Pass tools=[] (not None)
+        # when tools are disabled so backends following the OpenAI backend's
+        # `tools is not None` convention still return a VLMResponse carrying
+        # finish_reason and usage instead of a bare string.
+        tools: Optional[List[Dict[str, Any]]] = []
         tool_choice = None
         if not self._disable_tools_for_iteration and self._tool_schemas:
             tools = self._tool_schemas
@@ -1221,6 +1259,21 @@ class ExtractLoop:
                     f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}"
                 )
 
+        # Reject explicit truncation before handling tool calls or parsing:
+        # neither a partial tool call nor a parseable program is safe to use.
+        # run() treats budget_exhausted as terminal, without a format retry.
+        if getattr(response, "finish_reason", None) == "length":
+            content = getattr(response, "content", None) or ""
+            self._last_llm_failure_kind = "budget_exhausted"
+            self._last_llm_failure_content = content
+            self._last_parse_error = self._budget_exhausted_error(response, content)
+            tracer.set("memory.extraction.parse_error", self._last_parse_error)
+            logger.debug(
+                "Response truncated by output-token budget "
+                f"failure_kind=budget_exhausted error={self._last_parse_error}"
+            )
+            return (None, None)
+
         # Case 0: Handle string response (when tools are not provided) or None
         if response is None:
             content = ""
@@ -1237,6 +1290,9 @@ class ExtractLoop:
         else:
             # Case 2: VLMResponse without tool calls - get content from response
             content = response.content or ""
+
+        # No tool calls (Case 0 & 2): strip reasoning tags in the text before parsing.
+        content = VLMBase._clean_response(content)
 
         # Parse operations from content
         if content:
@@ -1327,13 +1383,21 @@ class ExtractLoop:
         )
         from openviking.session.memory.merge_op.patch_handler import unescape_markers
 
+        def field_value(memory_file: MemoryFile, field_name: str) -> str:
+            value = (
+                memory_file.plain_content()
+                if field_name == "content"
+                else memory_file.extra_fields.get(field_name)
+            )
+            # Other memory types can use the same field name for non-string data.
+            return value if isinstance(value, str) else ""
+
         errors = []
         patch_op = PatchOp(FieldType.STRING)
         read_files = self.context_provider.read_file_contents or {}
         for operation in operations.upsert_operations:
             if operation.old_memory_file_content is None:
                 continue
-            current_content = operation.old_memory_file_content.plain_content() or ""
             target_uri = (
                 operation.uris[0] if operation.uris else operation.old_memory_file_content.uri
             )
@@ -1349,7 +1413,7 @@ class ExtractLoop:
                             blocks.extend(StrPatch.model_validate({"blocks": [raw_block]}).blocks)
                 if not blocks:
                     continue
-                working_content = current_content
+                working_content = field_value(operation.old_memory_file_content, field_name)
                 for block_index, block in enumerate(blocks, start=1):
                     search = block.search or ""
                     if not search or search == block.replace:
@@ -1379,7 +1443,7 @@ class ExtractLoop:
                     found_in = [
                         uri
                         for uri, memory_file in read_files.items()
-                        if uri != target_uri and search in (memory_file.plain_content() or "")
+                        if uri != target_uri and search in field_value(memory_file, field_name)
                     ]
                     errors.append(
                         {

@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 import yaml
 from fastapi import APIRouter, Depends, Request
 from fastapi import Path as ApiPath
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
@@ -69,7 +69,11 @@ class UpdateSkillRequest(BaseModel):
     temp_file_id: Optional[str] = None
     from_source: bool = False
     wait: bool = False
-    timeout: Optional[float] = None
+    timeout: float | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    )
     source_metadata: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
     target_uri: Optional[str] = None
@@ -983,7 +987,6 @@ async def update_skill(
                     data=preparation,
                     ctx=_ctx,
                     wait=request.wait,
-                    timeout=request.timeout,
                     allow_local_path_resolution=False,
                     source_path_hint=source_path_hint,
                     apply_privacy=False,

@@ -6,6 +6,7 @@ import math
 import time
 from typing import Optional
 
+from openviking.core.retrieval_types import SearchType
 from openviking.models.embedder.base import embed_compat
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
 from openviking.retrieve.retrieval_stats import get_stats_collector
@@ -32,6 +33,7 @@ class SkillPackageRetriever(HierarchicalRetriever):
         score_gte: bool = False,
         level: Optional[list[int]] = None,
         scope_dsl=None,
+        search_type: SearchType = "semantic",
     ) -> QueryResult:
         started = time.monotonic()
         telemetry = get_current_telemetry()
@@ -40,9 +42,10 @@ class SkillPackageRetriever(HierarchicalRetriever):
         if limit <= 0 or not await proxy.collection_exists_bound():
             return QueryResult(query=query, matched_contexts=[], searched_directories=target_dirs)
 
+        # Package search never reranks, so only an explicit threshold filters vector scores.
         threshold = self._resolve_threshold(score_threshold)
         query_vector = sparse_vector = None
-        if self.embedder:
+        if search_type == "semantic" and self.embedder:
             with telemetry.measure("search.embed_query"):
                 embedded = await embed_compat(self.embedder, query.query, is_query=True)
                 query_vector, sparse_vector = embedded.dense_vector, embedded.sparse_vector
@@ -54,16 +57,27 @@ class SkillPackageRetriever(HierarchicalRetriever):
         matches = []
         while True:
             with telemetry.measure("search.vector_retrieval"):
-                page = await proxy.search_in_tenant(
-                    query_vector=query_vector,
-                    sparse_query_vector=sparse_vector,
-                    context_type="skill",
-                    target_directories=target_dirs,
-                    extra_filter=scope_dsl,
-                    level=level,
-                    limit=page_size,
-                    offset=offset,
-                )
+                if search_type == "keywords":
+                    page = await proxy.search_by_keywords_in_tenant(
+                        query=query.query,
+                        context_type="skill",
+                        target_directories=target_dirs,
+                        extra_filter=scope_dsl,
+                        level=level,
+                        limit=page_size,
+                        offset=offset,
+                    )
+                else:
+                    page = await proxy.search_in_tenant(
+                        query_vector=query_vector,
+                        sparse_query_vector=sparse_vector,
+                        context_type="skill",
+                        target_directories=target_dirs,
+                        extra_filter=scope_dsl,
+                        level=level,
+                        limit=page_size,
+                        offset=offset,
+                    )
             telemetry.count("vector.searches", 1)
             telemetry.count("vector.scored", len(page))
             telemetry.count("vector.scanned", len(page))

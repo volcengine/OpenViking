@@ -337,8 +337,8 @@ class HttpCollection(ICollection):
         fetch_result = FetchDataInCollectionResult()
 
         if isinstance(data, dict):
-            if "fetch" in data:
-                fetch = data.get("fetch", [])
+            if "items" in data:
+                fetch = data.get("items", [])
                 fetch_result.items = [
                     DataItem(
                         id=item.get("id"),
@@ -565,6 +565,8 @@ class HttpCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         url = self.url_prefix + "api/vikingdb/data/search/keywords"
         payload = {
@@ -573,6 +575,8 @@ class HttpCollection(ICollection):
             "index_name": index_name,
             "keywords": json.dumps(keywords) if keywords else None,
             "query": query,
+            "mode": mode,
+            "fields": json.dumps(fields) if fields else None,
             "filter": json.dumps(filters) if filters else None,
             "output_fields": json.dumps(output_fields) if output_fields else None,
             "limit": limit,

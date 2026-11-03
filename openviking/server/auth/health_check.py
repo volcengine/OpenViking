@@ -359,19 +359,29 @@ class TrustedAuthChecker(AuthHealthChecker):
         return "trusted"
 
     async def run_checks(self, config: ServerConfig) -> List[HealthCheckResult]:
-        from time import time
-        results: List[HealthCheckResult] = []
+        from openviking.server.auth.plugins.trusted import TrustedAuthPlugin
 
-        # Basic config check
-        start_time = time()
-        results.append(HealthCheckResult(
-            name="trusted_config_valid",
-            status=HealthStatus.PASS,
-            message="Trusted mode configuration is valid",
-            duration_seconds=time() - start_time,
-        ))
-
-        return results
+        try:
+            TrustedAuthPlugin().validate_config(config)
+        except SystemExit:
+            return [
+                HealthCheckResult(
+                    name="trusted_config_valid",
+                    status=HealthStatus.FAIL,
+                    message=(
+                        "Trusted mode requires a non-empty server.root_api_key, including on "
+                        "localhost. Set it in the server's ov.conf, restart, and configure "
+                        "clients to use the same key."
+                    ),
+                )
+            ]
+        return [
+            HealthCheckResult(
+                name="trusted_config_valid",
+                status=HealthStatus.PASS,
+                message="Trusted mode configuration is valid",
+            )
+        ]
 
 
 class DevAuthChecker(AuthHealthChecker):

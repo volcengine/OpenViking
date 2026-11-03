@@ -1,6 +1,7 @@
 """Studio channel persistence, isolation and real delivery boundaries."""
 
 import asyncio
+import hashlib
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,7 +10,8 @@ import pytest
 from fastapi import HTTPException
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import FeishuChannelConfig, SessionKey
+from vikingbot.channels.manager import ChannelManager
+from vikingbot.config.schema import Config, FeishuChannelConfig, OpenVikingConfig, SessionKey
 from vikingbot.studio.providers.feishu.channel import StudioFeishuChannel
 from vikingbot.studio.providers.registry import get_provider
 from vikingbot.studio.service import StudioService
@@ -80,6 +82,7 @@ def channel(tmp_path):
         FeishuChannelConfig(app_id="cli_test", bot_name="Old name"),
         MessageBus(),
         record=record(),
+        openviking_connection=record()["identity"],
         store=StudioStore(tmp_path / "s.db"),
     )
     result._running = True
@@ -129,6 +132,88 @@ async def test_group_identity_and_peer_are_separate_from_installer(channel):
     assert event.actor_peer_id.startswith("feishu-")
     assert event.actor_peer_id != "sender"
     assert channel.store.history("connection")[0]["sender"] == "Alice"
+
+
+@pytest.mark.parametrize(
+    "auth_mode,legacy_key", [("trusted", False), ("trusted", True), ("api_key", True)]
+)
+async def test_trusted_identity_uses_server_root_key_only_at_runtime(
+    tmp_path, auth_mode, legacy_key
+):
+    item = record()
+    item["identity"] = {
+        "account_id": "a",
+        "user_id": "group-user",
+        "role": "user",
+    }
+    if legacy_key:
+        item["identity"].update(api_key_type="user", api_key="private")
+    config = Config(storage_workspace=str(tmp_path))
+    config.ov_server.set_effective_auth_mode(auth_mode)
+    config.ov_server.api_key = "runtime-root-key"
+    service = StudioService(config, ChannelManager(MessageBus()))
+    service.store.save(item)
+
+    # Restart through the production installation path, including old saved connections.
+    service = StudioService(config, ChannelManager(MessageBus()))
+    runtime = service.runtime(item)
+    runtime._running = True
+    await runtime._handle_message("sender", "group", "hello", metadata={"message_id": "m1"})
+    event = await runtime.bus.consume_inbound()
+
+    connection = event.openviking_connection
+    assert connection["account_id"] == "a"
+    assert connection["user_id"] == "group-user"
+    assert connection["role"] == "user"
+    assert connection["api_key_type"] == ("root" if auth_mode == "trusted" else "user")
+    assert connection["api_key"] == ("runtime-root-key" if auth_mode == "trusted" else "private")
+    assert runtime.record["identity"] == item["identity"]
+    assert service.store.connections("a")[0]["identity"] == item["identity"]
+    assert b"runtime-root-key" not in (config.bot_data_path / "studio.sqlite3").read_bytes()
+
+
+async def test_trusted_image_read_uses_runtime_root_key_and_chat_peer(tmp_path, monkeypatch):
+    from vikingbot.openviking_mount.ov_server import VikingClient
+
+    item = record()
+    item["identity"] = {
+        "account_id": "a",
+        "user_id": "group-user",
+        "role": "user",
+        "api_key_type": "root",
+    }
+    config = Config(storage_workspace=str(tmp_path))
+    config.ov_server.set_effective_auth_mode("trusted")
+    config.ov_server.api_key = "runtime-root-key"
+    service = StudioService(config, ChannelManager(MessageBus()))
+    runtime = service.install(item)
+    image = b"\x89PNG\r\n\x1a\nfake-png"
+    client = SimpleNamespace(
+        stat=AsyncMock(return_value={"size": len(image)}),
+        download_bytes=AsyncMock(return_value=image),
+        close=AsyncMock(),
+    )
+    create = AsyncMock(return_value=client)
+    monkeypatch.setattr(VikingClient, "create", create)
+    message = OutboundMessage(
+        SessionKey(type="feishu", channel_id="cli_test", chat_id="group"),
+        "answer",
+    )
+
+    assert await runtime._download_viking_image("viking://resources/image.png", message) == image
+    create.assert_awaited_once_with(
+        connection={
+            "account_id": "a",
+            "user_id": "group-user",
+            "role": "user",
+            "api_key_type": "root",
+            "api_key": "runtime-root-key",
+        },
+        actor_peer_id="feishu-" + hashlib.sha256(b"group").hexdigest()[:24],
+        config=runtime._bot_config,
+    )
+    client.close.assert_awaited_once()
+    assert "api_key" not in item["identity"]
 
 
 async def test_pause_drops_new_inbound_messages(channel):
@@ -283,7 +368,9 @@ async def test_reply_settings_persist_apply_immediately_and_keep_revision_guard(
     provider = get_provider({"type": "feishu"})
     service = StudioService(
         SimpleNamespace(
-            bot_data_path=tmp_path, channels=[{"type": "feishu", "app_id": "cli_test"}]
+            bot_data_path=tmp_path,
+            channels=[{"type": "feishu", "app_id": "cli_test"}],
+            ov_server=OpenVikingConfig(),
         ),
         SimpleNamespace(channels={provider.runtime_key(record()): channel}),
     )
@@ -321,7 +408,7 @@ async def test_reply_settings_persist_apply_immediately_and_keep_revision_guard(
     service.manager.bus = None
     service.manager.add_channel = lambda channel: None
     service.config.workspace_path = tmp_path
-    provider.install(service, persisted)
+    service.install(persisted)
     assert captured == [False]
 
 
@@ -342,7 +429,12 @@ async def test_recreated_connection_isolates_sessions_and_rejects_old_replies(
     monkeypatch.setattr(FeishuChannel, "send", delivery)
     bus = MessageBus()
     service = StudioService(
-        SimpleNamespace(bot_data_path=tmp_path, workspace_path=tmp_path, channels=[]),
+        SimpleNamespace(
+            bot_data_path=tmp_path,
+            workspace_path=tmp_path,
+            channels=[],
+            ov_server=OpenVikingConfig(),
+        ),
         ChannelManager(bus),
     )
 

@@ -34,10 +34,11 @@ class FindOptions(_ExtraOptions, total=False):
 
 
 class SearchOptions(FindOptions, total=False):
-    pass
+    search_type: Literal["semantic", "keywords"]
 
 
 class SearchContextOptions(_ExtraOptions, total=False):
+    search_type: Literal["semantic", "keywords"]
     image: Any
     node_limit: int
     score_threshold: float
@@ -93,6 +94,7 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
+    edit_source: Literal["manual", "agent", "compile"]
     acl: Dict[str, Any]
     telemetry: Any
     processing_mode: ProcessingMode
@@ -101,12 +103,38 @@ class WriteOptions(_ExtraOptions, total=False):
 
 
 class BatchWriteOptions(_ExtraOptions, total=False):
+    edit_source: Literal["manual", "agent", "compile"]
     telemetry: Any
+    processing_mode: ProcessingMode
+    # Return target-state conflicts without overwriting them or blocking compatible writes.
+    skip_conflicts: bool
+    # Save content without scheduling semantic or vector work.
+    defer_processing: bool
 
 
 class CompileOptions(_ExtraOptions, total=False):
     instruction: str
     args: Dict[str, Any]
+
+
+class RuleCompileSource(AddResourceOptions, total=False):
+    resource_uri: str
+    path: str
+    temp_file_id: str
+    to: str
+    parent: str
+    wait: bool
+    internal_task: bool
+    source_name: str
+    is_active: bool
+
+
+class RuleCompileOptions(_ExtraOptions, total=False):
+    sources: List[Union[str, RuleCompileSource]]
+
+
+class RuleSearchOptions(_ExtraOptions, total=False):
+    rule_probability_threshold: float
 
 
 class SetTagsOptions(_ExtraOptions, total=False):
@@ -171,6 +199,7 @@ class BatchAddMessagesOptions(_ExtraOptions, total=False):
 
 
 class CommitSessionOptions(_ExtraOptions, total=False):
+    enable_working_memory: Optional[bool]
     retention_mode: Literal["turn_budget"]
     keep_recent_turn_count: int
     retained_message_token_budget: int

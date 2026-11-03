@@ -1,4 +1,4 @@
-# OpenClaw Plugin
+# OpenClaw
 
 Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically remembers important facts from conversations and recalls relevant context before every reply.
 
@@ -29,7 +29,7 @@ bash cleanup-memory-openviking.sh
 
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --json
 openclaw gateway restart
 ```
 
@@ -42,7 +42,7 @@ If ClawHub is unavailable:
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
-ov-install --base-url http://your-server:1933
+ov-install --base-url https://openviking.example.com
 ```
 
 Key parameters:
@@ -74,10 +74,10 @@ For example:
 
 ```bash
 # Alice is the OpenViking user; separate memories by OpenClaw assistant.
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role assistant --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role assistant --json
 
 # support-agent is the OpenViking user; separate memories by human sender.
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role sender --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role sender --json
 ```
 
 Setup and the installer accept only `sender`; existing `peer_role=person` configurations remain compatible and are treated as `sender`. OpenViking initializes the managed `peers/` container for every user, so `none` means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
@@ -95,7 +95,7 @@ The main branch calls `getSessionContext(tokenBudget)` and builds:
 ```text
 summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
 messages = [summaryMessage] + OV active messages
-systemPromptAddition = Session Context Guide (when archives exist) + recalled context (when available)
+systemPromptAddition = Session Context Guide (when archives exist) + user profile (when profile.md exists) + recalled context (when available)
 ```
 
 `latest_archive_overview` is the summary text returned by the server; `[Session History Summary]` is the literal heading prepended by the plugin. This synthetic user message is inserted only when the overview is nonempty. Active messages provide recent uncompressed conversation. The host adds the pending `prompt` to the turn. The plugin uses it for recall without appending a second copy to the returned history. Recalled context belongs to this request and is not directly captured as new conversation in OV.
@@ -118,6 +118,26 @@ The history branch falls back to host messages when OV has no data, has fewer me
 
 A **session commit** archives conversation and processes memory. It is separate from a [snapshot commit](../guides/15-snapshot.md), which versions resource files.
 
+## Agent experience recall configuration
+
+The plugin still accepts `agentExperience` in its plugin configuration with these defaults:
+
+```json
+{
+  "agentExperience": {
+    "enabled": false,
+    "recallLimit": 3,
+    "scoreThreshold": 0.35,
+    "maxInjectedChars": 6000,
+    "minQueryChars": 12
+  }
+}
+```
+
+These fields remain in the configuration schema, but the current assemble path does not consume them. Recall uses the shared `searchContext` path and the general `autoRecall`, `recallLimit`, `recallScoreThreshold`, and `recallMaxInjectedChars` settings. Setting `agentExperience.enabled` does not enable a separate experience search or a separate experience section.
+
+The retained `shouldRecallAgentExperience` helper scores execution, write, failure, and engineering terms, plus intent words such as “经验”, “踩坑”, “best practice”, and “pitfall”. It has no caller in the current recall path. Its keyword rules and `minQueryChars` must not be treated as active recall controls. Injected context uses `<openviking-context>`; capture strips that wrapper and its content before saving user text, so recalled material is not captured again as user input.
+
 ## Verify
 
 ```bash
@@ -136,7 +156,7 @@ openclaw config get plugins.slots.contextEngine
 # expect: openviking
 ```
 
-For an end-to-end pipeline test:
+From the OpenViking checkout, run the end-to-end test below after enabling the Gateway `/v1/responses` endpoint described in HEALTHCHECK.md. It sends real model requests and writes test conversations:
 
 ```bash
 python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
@@ -160,7 +180,7 @@ Plugin config lives under `plugins.entries.openviking.config`. Setup usually wri
 | `autoRecallTimeoutMs` | `5000` | Outer timeout (ms) for the whole auto-recall flow; increase for slow local embedding hardware (clamped 1000–300000) |
 
 ```bash
-openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
+openclaw config set plugins.entries.openviking.config.baseUrl https://openviking.example.com
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
 ```
 

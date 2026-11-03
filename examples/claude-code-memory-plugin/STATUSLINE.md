@@ -1,6 +1,6 @@
 # Reading and Personalizing the OpenViking Statusline
 
-A guide for an AI assistant (or you) to read the OpenViking statusline and **customize** it beyond the defaults the installer sets up. The "What each segment means" section below is the canonical glossary; the rest covers personalization recipes that env vars don't cover. For the environment-variable reference, see `$REPO/docs/en/agent-integrations/02-claude-code.md`.
+A guide for an AI assistant (or you) to read the OpenViking statusline and **customize** it beyond the defaults the installer sets up. The "What each segment means" section below is the canonical glossary; the rest covers personalization recipes that env vars don't cover. For the environment-variable reference, see [docs/en/agent-integrations/02-claude-code.md](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/02-claude-code.md).
 
 When a user asks for something the env vars don't cover, prefer the smallest local edit over inventing a new configurable knob.
 
@@ -8,13 +8,12 @@ When a user asks for something the env vars don't cover, prefer the smallest loc
 
 ## Where everything lives
 
-The OpenViking repo and plugin code are checked out to a known location by the installer. Throughout this doc:
+The statusline runs from the plugin copy Claude Code installed. Throughout this doc:
 
-- **`$REPO`** = the OpenViking repo root. Default: `~/.openviking/openviking-repo` (override via `OPENVIKING_REPO_DIR` at install time). Verify with `ls "$REPO/examples/claude-code-memory-plugin"` — if that path is wrong, find the real one with `jq -r '.statusLine.command' ~/.claude/settings.json` (the registered command points into the plugin) or `find ~ -path '*/claude-code-memory-plugin/scripts/statusline.mjs' 2>/dev/null`.
-- **`$PLUGIN`** = `$REPO/examples/claude-code-memory-plugin`. The plugin's own root.
+- **`$PLUGIN`** = the installed plugin's root. Find it with `jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claude/plugins/installed_plugins.json` (under `$CLAUDE_CONFIG_DIR` when that is set). The command the installer registers looks this path up on every run, so the statusline follows plugin updates. Claude Code installs each update into a new directory, so a local edit under `$PLUGIN` lasts until the next plugin update.
 - **`$STATE`** = `~/.openviking/state` (override via `OPENVIKING_HOME`). Where hook-written JSON snapshots live.
 
-Resolve `$REPO` once before editing anything — every relative path below is anchored to it.
+Resolve `$PLUGIN` once before editing anything — every relative path below is anchored to it.
 
 | Concern                                    | File                                              |
 |--------------------------------------------|---------------------------------------------------|

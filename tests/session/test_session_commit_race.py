@@ -62,7 +62,7 @@ class TestCommitRace:
 
         async def commit_and_add():
             """Start commit, then add a message after Phase 1 completes."""
-            commit_task = asyncio.create_task(session.commit_async())
+            commit_task = asyncio.create_task(session.commit_async(enable_working_memory=True))
             # Wait until Phase 1 is done (lock released, messages cleared)
             await phase1_done.wait()
             # Add message while commit is in Phase 2 (after lock released)

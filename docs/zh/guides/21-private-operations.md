@@ -4,7 +4,7 @@ description: 私有交付的配置生效、升级验收、回滚准备和故障�
 
 # 企业私有化部署：升级与排障
 
-使用 ovadmin 和 Operator 维护[企业私有化部署](20-private-deployment.md)，包括配置更新、版本升级和故障排查。开源服务的容器更新见[服务端部署](03-deployment.md)，OpenViking 数据模型迁移见[迁移指南](../migration/01-user-peer-model.md)。交付包版本和 runtime 版本分别核对。
+使用 ovadmin 和 Operator 维护[企业私有化部署](20-private-deployment.md)，包括配置更新、版本升级和故障排查。开源服务的容器更新见[服务端部署](03-deployment.md)。交付包版本和 runtime 版本分别核对。
 
 ## 配置修改如何生效
 

@@ -78,7 +78,7 @@ export function parseToolResultRef(value: unknown): ToolResultRef | null {
   if (!raw) {
     return null;
   }
-  const match = raw.match(/^viking:\/\/session\/([^/]+)\/tool-results\/([^/?#]+)(?:[?#].*)?$/);
+  const match = raw.match(/^viking:\/\/(?:user\/[^/]+|~)\/sessions\/([^/]+)\/tool-results\/([^/?#]+)(?:[?#].*)?$/);
   if (!match) {
     return null;
   }
@@ -90,7 +90,7 @@ export function parseToolResultRef(value: unknown): ToolResultRef | null {
   return {
     sessionId,
     toolResultId,
-    ref: `viking://session/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}`,
+    ref: raw.split(/[?#]/, 1)[0]!,
   };
 }
 
@@ -120,14 +120,14 @@ export function registerOpenVikingToolResultTools({
       description:
         "Restore the full original content of a tool result that was externalized by OpenViking. " +
         "Use when a previous tool result was externalized and only a preview is visible — " +
-        "the preview contains a [tool-result-ref] or viking://session/.../tool-results/... URI. " +
+        "the preview contains a [tool-result-ref] or viking://user/.../sessions/.../tool-results/... URI. " +
         "\"Read\" tool returns the same truncated preview; this tool returns the complete content. " +
         "To read all content: pass offset=0 and a limit large enough to cover the whole result " +
         "(e.g. limit=100000). Use offset/limit for paging only when you need a specific section.",
       parameters: Type.Object({
         tool_output_ref: Type.String({
           description:
-            "Exact OV URI from the preview, e.g. viking://session/<session_id>/tool-results/<tool_result_id>",
+            "Exact OV URI from the preview, e.g. viking://user/<user_id>/sessions/<session_id>/tool-results/<tool_result_id>",
         }),
         offset: Type.Optional(Type.Number({ description: "Unicode character offset. Default: 0" })),
         limit: Type.Optional(Type.Number({ description: "Maximum Unicode characters to read. Default: 20000" })),
@@ -147,7 +147,7 @@ export function registerOpenVikingToolResultTools({
         const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
         if (!parsed) {
           return {
-            content: [{ type: "text", text: "Error: tool_output_ref must be a viking://session/.../tool-results/... URI." }],
+            content: [{ type: "text", text: "Error: tool_output_ref must be a viking://user/.../sessions/.../tool-results/... URI." }],
             details: { error: "invalid_tool_output_ref" },
           };
         }
@@ -221,7 +221,7 @@ export function registerOpenVikingToolResultTools({
       parameters: Type.Object({
         tool_output_ref: Type.String({
           description:
-            "Exact OV URI from the preview, e.g. viking://session/<session_id>/tool-results/<tool_result_id>",
+            "Exact OV URI from the preview, e.g. viking://user/<user_id>/sessions/<session_id>/tool-results/<tool_result_id>",
         }),
         query: Type.String({ description: "Keyword or exact text to search for" }),
         limit: Type.Optional(Type.Number({ description: "Maximum matches. Default: 20" })),
@@ -242,7 +242,7 @@ export function registerOpenVikingToolResultTools({
         const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
         if (!parsed) {
           return {
-            content: [{ type: "text", text: "Error: tool_output_ref must be a viking://session/.../tool-results/... URI." }],
+            content: [{ type: "text", text: "Error: tool_output_ref must be a viking://user/.../sessions/.../tool-results/... URI." }],
             details: { error: "invalid_tool_output_ref" },
           };
         }

@@ -131,7 +131,7 @@ export async function withAgentHookLock(clientId, nativeSessionId, callback) {
     }
   }
   try {
-    return await callback();
+    return await callback(file);
   } finally {
     await rm(lock, { recursive: true, force: true }).catch(() => {});
   }
@@ -277,6 +277,7 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
     // Passing the OV session id is what turns on server-side query expansion
     // and the cross-turn dedup ledger for these thin harnesses.
     sessionId: options.sessionId || "",
+    excludeUris: cfg.recallExcludeUris,
     log,
   });
 }

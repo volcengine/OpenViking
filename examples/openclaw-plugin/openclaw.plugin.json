@@ -353,6 +353,12 @@
       "timeoutMs": {
         "type": "number"
       },
+      "contextManagementMode": {
+        "type": "string",
+        "enum": ["native", "openviking"],
+        "default": "native",
+        "description": "Use host history and compaction; openviking explicitly enables Working Memory context management."
+      },
       "autoCapture": {
         "type": "boolean"
       },

@@ -180,7 +180,12 @@ export class OVClient {
         headers: { ...this.headers(), ...(init?.headers as Record<string, string> || {}) },
         signal: controller.signal,
       });
-      const body = await resp.json().catch(() => ({}));
+      // A complete non-JSON body falls back to `{}`; a body cut off after the
+      // headers rejects into the status-0 branch below so writes stay retryable.
+      const body = await resp.json().catch((error: unknown) => {
+        if (!(error instanceof SyntaxError)) throw error;
+        return {};
+      });
       const traceId = body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
       if (!resp.ok || body.status === "error") {
         return {
@@ -318,11 +323,8 @@ export class OVClient {
    * Session root URI, e.g. `viking://user/default/sessions/pi-abc`.
    *
    * Reads the canonical `uri` from `GET /api/v1/sessions/{id}` and caches it.
-   * When the server does not answer (or answers without a `viking://` uri) this
-   * falls back to the legacy alias `viking://session/{id}`, which the target
-   * server still accepts. The fallback is deliberately NOT cached so a later
-   * call can still pick up the canonical URI. Note the `viking://~` alias is
-   * rejected by the server ("Invalid scope '~'") and is never produced here.
+   * If the metadata request fails, use the current user's home alias. The
+   * fallback is not cached so a later call can still pick up the canonical URI.
    */
   async sessionRootUri(sessionId: string): Promise<string> {
     const id = String(sessionId ?? "");
@@ -336,9 +338,9 @@ export class OVClient {
         return uri;
       }
     } catch {
-      // fall through to the legacy alias
+      // fall through to the home alias
     }
-    return `viking://session/${id}`;
+    return `viking://~/sessions/${id}`;
   }
 
   /** Strip `/history/archive_NNN` off a commit's `archive_uri` to get the session root. */

@@ -1,0 +1,972 @@
+{
+  "client": "codex-cli",
+  "version": "0.146.0",
+  "recorded_at": "2026-10-02",
+  "requests": [
+    {
+      "path": "/v1/responses",
+      "headers": {
+        "session-id": "<redacted-08670242d7>"
+      },
+      "body": {
+        "model": "model",
+        "instructions": "<redacted-ac8ae107a0>",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_<redacted-77263cda42>",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "<redacted-29dad5ed69>"
+              },
+              {
+                "type": "input_text",
+                "text": "<redacted-ad46abf6fd>"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "msg_<redacted-250613125a>",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "<environment_context>\n  <cwd>/synthetic/client-workspace</cwd>\n  <shell>bash</shell>\n  <current_date>2026-10-02</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/synthetic/client-workspace</root></workspace_roots><permission_profile type=\"managed\"><file_system type=\"restricted\"><entry access=\"read\"><special>:root</special></entry></file_system></permission_profile></filesystem>\n</environment_context>"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "msg_<redacted-fe00fd1ddb>",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Do not use tools. What is the deployment cluster for the Aurora acceptance project? Use supplied reference context and answer briefly. Test run fc921a8d938d4f048f8107c07412c372"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "update_plan",
+            "description": "<redacted-3a8105e2fa>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "explanation": {
+                  "type": "string",
+                  "description": "<redacted-737e75b18a>"
+                },
+                "plan": {
+                  "type": "array",
+                  "description": "<redacted-c9b01b525d>",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "type": "string",
+                        "description": "<redacted-47231c8a82>",
+                        "enum": [
+                          "pending",
+                          "in_progress",
+                          "completed"
+                        ]
+                      },
+                      "step": {
+                        "type": "string",
+                        "description": "<redacted-74766d7e3e>"
+                      }
+                    },
+                    "required": [
+                      "step",
+                      "status"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "request_user_input",
+            "description": "<redacted-a81ea423cf>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "autoResolutionMs": {
+                  "type": "number",
+                  "description": "<redacted-71e34acb50>"
+                },
+                "questions": {
+                  "type": "array",
+                  "description": "<redacted-4894fc2bc3>",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "header": {
+                        "type": "string",
+                        "description": "<redacted-6057575714>"
+                      },
+                      "id": {
+                        "type": "string",
+                        "description": "<redacted-1fb3609873>"
+                      },
+                      "options": {
+                        "type": "array",
+                        "description": "<redacted-56f25e7ff4>",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "description": {
+                              "type": "string",
+                              "description": "<redacted-57464ec2b2>"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "<redacted-0e478f6b1f>"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "description"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "question": {
+                        "type": "string",
+                        "description": "<redacted-d853d3efce>"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "header",
+                      "question",
+                      "options"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "questions"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "view_image",
+            "description": "<redacted-0a5b48aa38>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "<redacted-d33ceabb45>"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "<redacted-c839c56b2b>",
+            "tools": [
+              {
+                "type": "function",
+                "name": "close_agent",
+                "description": "<redacted-4800ade915>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "target": {
+                      "type": "string",
+                      "description": "<redacted-267152bea7>"
+                    }
+                  },
+                  "required": [
+                    "target"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "resume_agent",
+                "description": "<redacted-9798082b37>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "<redacted-df48a85f0e>"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "send_input",
+                "description": "<redacted-e12fce5364>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "interrupt": {
+                      "type": "boolean",
+                      "description": "<redacted-d719a91975>"
+                    },
+                    "items": {
+                      "type": "array",
+                      "description": "<redacted-920f14c09e>",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "audio_url": {
+                            "type": "string",
+                            "description": "<redacted-26027135bf>"
+                          },
+                          "image_url": {
+                            "type": "string",
+                            "description": "<redacted-dcf86b75ec>"
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "<redacted-a6613fae36>"
+                          },
+                          "path": {
+                            "type": "string",
+                            "description": "<redacted-988067ced9>"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "<redacted-a0b359c466>"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "<redacted-9b5afbd7cf>"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "<redacted-ff84c7ff22>"
+                    },
+                    "target": {
+                      "type": "string",
+                      "description": "<redacted-2841a3fc15>"
+                    }
+                  },
+                  "required": [
+                    "target"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "spawn_agent",
+                "description": "<redacted-5ec67941b0>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "fork_context": {
+                      "type": "boolean",
+                      "description": "<redacted-9d2cd440d5>"
+                    },
+                    "items": {
+                      "type": "array",
+                      "description": "<redacted-920f14c09e>",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "audio_url": {
+                            "type": "string",
+                            "description": "<redacted-26027135bf>"
+                          },
+                          "image_url": {
+                            "type": "string",
+                            "description": "<redacted-dcf86b75ec>"
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "<redacted-a6613fae36>"
+                          },
+                          "path": {
+                            "type": "string",
+                            "description": "<redacted-988067ced9>"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "<redacted-a0b359c466>"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "<redacted-9b5afbd7cf>"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "<redacted-ab812d8ca7>"
+                    },
+                    "model": {
+                      "type": "string",
+                      "description": "<redacted-18dda5c69e>"
+                    },
+                    "reasoning_effort": {
+                      "type": "string",
+                      "description": "<redacted-11276086f9>"
+                    },
+                    "service_tier": {
+                      "type": "string",
+                      "description": "<redacted-8b782122e4>"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "wait_agent",
+                "description": "<redacted-4ee4cd26ef>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "targets": {
+                      "type": "array",
+                      "description": "<redacted-ed99253d3f>",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "timeout_ms": {
+                      "type": "number",
+                      "description": "<redacted-31542173bb>"
+                    }
+                  },
+                  "required": [
+                    "targets"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            ]
+          },
+          {
+            "type": "function",
+            "name": "get_goal",
+            "description": "<redacted-d86378be07>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "create_goal",
+            "description": "<redacted-b16e439914>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "objective": {
+                  "type": "string",
+                  "description": "<redacted-b4280c5595>"
+                },
+                "token_budget": {
+                  "type": "integer",
+                  "description": "<redacted-b2947c93d5>"
+                }
+              },
+              "required": [
+                "objective"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "update_goal",
+            "description": "<redacted-905e44e63b>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "description": "<redacted-e35f97559d>",
+                  "enum": [
+                    "complete",
+                    "blocked"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "low",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "fixture-cache-key",
+        "client_metadata": {
+          "x-codex-turn-metadata": "<redacted-2d7c326d8b>",
+          "session_id": "<redacted-2e52546ed1>",
+          "thread_id": "<redacted-2e52546ed1>",
+          "x-codex-window-id": "<redacted-b177e65b7c>",
+          "x-codex-installation-id": "<redacted-ef7587f9cc>",
+          "turn_id": "<redacted-0424f3bbed>"
+        }
+      }
+    },
+    {
+      "path": "/v1/responses",
+      "headers": {
+        "session-id": "<redacted-08670242d7>"
+      },
+      "body": {
+        "model": "model",
+        "instructions": "<redacted-ac8ae107a0>",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_<redacted-77263cda42>",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "<redacted-29dad5ed69>"
+              },
+              {
+                "type": "input_text",
+                "text": "<redacted-ad46abf6fd>"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "msg_<redacted-250613125a>",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "<environment_context>\n  <cwd>/synthetic/client-workspace</cwd>\n  <shell>bash</shell>\n  <current_date>2026-10-02</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/synthetic/client-workspace</root></workspace_roots><permission_profile type=\"managed\"><file_system type=\"restricted\"><entry access=\"read\"><special>:root</special></entry></file_system></permission_profile></filesystem>\n</environment_context>"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "msg_<redacted-fe00fd1ddb>",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Do not use tools. What is the deployment cluster for the Aurora acceptance project? Use supplied reference context and answer briefly. Test run fc921a8d938d4f048f8107c07412c372"
+              }
+            ]
+          },
+          {
+            "type": "reasoning",
+            "id": "rs_02179091369267000000000000000000000ffffac15223893ad7b",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "The user asks: deployment cluster for Aurora acceptance project. Reference says cluster cobalt-zebra-731. Answer briefly. No tools."
+              }
+            ],
+            "content": null,
+            "encrypted_content": null
+          },
+          {
+            "type": "message",
+            "id": "msg_02179091369278800000000000000000000ffffac152238590a8a",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "The Aurora acceptance project deploys to cluster `cobalt-zebra-731`."
+              }
+            ],
+            "phase": "final_answer"
+          },
+          {
+            "type": "message",
+            "id": "msg_<redacted-149fc2b5e0>",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Do not use tools. Repeat that deployment cluster name only."
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "update_plan",
+            "description": "<redacted-3a8105e2fa>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "explanation": {
+                  "type": "string",
+                  "description": "<redacted-737e75b18a>"
+                },
+                "plan": {
+                  "type": "array",
+                  "description": "<redacted-c9b01b525d>",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "type": "string",
+                        "description": "<redacted-47231c8a82>",
+                        "enum": [
+                          "pending",
+                          "in_progress",
+                          "completed"
+                        ]
+                      },
+                      "step": {
+                        "type": "string",
+                        "description": "<redacted-74766d7e3e>"
+                      }
+                    },
+                    "required": [
+                      "step",
+                      "status"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "request_user_input",
+            "description": "<redacted-a81ea423cf>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "autoResolutionMs": {
+                  "type": "number",
+                  "description": "<redacted-71e34acb50>"
+                },
+                "questions": {
+                  "type": "array",
+                  "description": "<redacted-4894fc2bc3>",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "header": {
+                        "type": "string",
+                        "description": "<redacted-6057575714>"
+                      },
+                      "id": {
+                        "type": "string",
+                        "description": "<redacted-1fb3609873>"
+                      },
+                      "options": {
+                        "type": "array",
+                        "description": "<redacted-56f25e7ff4>",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "description": {
+                              "type": "string",
+                              "description": "<redacted-57464ec2b2>"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "<redacted-0e478f6b1f>"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "description"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "question": {
+                        "type": "string",
+                        "description": "<redacted-d853d3efce>"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "header",
+                      "question",
+                      "options"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "questions"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "view_image",
+            "description": "<redacted-0a5b48aa38>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "<redacted-d33ceabb45>"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "<redacted-c839c56b2b>",
+            "tools": [
+              {
+                "type": "function",
+                "name": "close_agent",
+                "description": "<redacted-4800ade915>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "target": {
+                      "type": "string",
+                      "description": "<redacted-267152bea7>"
+                    }
+                  },
+                  "required": [
+                    "target"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "resume_agent",
+                "description": "<redacted-9798082b37>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "<redacted-df48a85f0e>"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "send_input",
+                "description": "<redacted-e12fce5364>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "interrupt": {
+                      "type": "boolean",
+                      "description": "<redacted-d719a91975>"
+                    },
+                    "items": {
+                      "type": "array",
+                      "description": "<redacted-920f14c09e>",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "audio_url": {
+                            "type": "string",
+                            "description": "<redacted-26027135bf>"
+                          },
+                          "image_url": {
+                            "type": "string",
+                            "description": "<redacted-dcf86b75ec>"
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "<redacted-a6613fae36>"
+                          },
+                          "path": {
+                            "type": "string",
+                            "description": "<redacted-988067ced9>"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "<redacted-a0b359c466>"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "<redacted-9b5afbd7cf>"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "<redacted-ff84c7ff22>"
+                    },
+                    "target": {
+                      "type": "string",
+                      "description": "<redacted-2841a3fc15>"
+                    }
+                  },
+                  "required": [
+                    "target"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "spawn_agent",
+                "description": "<redacted-5ec67941b0>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "fork_context": {
+                      "type": "boolean",
+                      "description": "<redacted-9d2cd440d5>"
+                    },
+                    "items": {
+                      "type": "array",
+                      "description": "<redacted-920f14c09e>",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "audio_url": {
+                            "type": "string",
+                            "description": "<redacted-26027135bf>"
+                          },
+                          "image_url": {
+                            "type": "string",
+                            "description": "<redacted-dcf86b75ec>"
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "<redacted-a6613fae36>"
+                          },
+                          "path": {
+                            "type": "string",
+                            "description": "<redacted-988067ced9>"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "<redacted-a0b359c466>"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "<redacted-9b5afbd7cf>"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "<redacted-ab812d8ca7>"
+                    },
+                    "model": {
+                      "type": "string",
+                      "description": "<redacted-18dda5c69e>"
+                    },
+                    "reasoning_effort": {
+                      "type": "string",
+                      "description": "<redacted-11276086f9>"
+                    },
+                    "service_tier": {
+                      "type": "string",
+                      "description": "<redacted-8b782122e4>"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "function",
+                "name": "wait_agent",
+                "description": "<redacted-4ee4cd26ef>",
+                "strict": false,
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "targets": {
+                      "type": "array",
+                      "description": "<redacted-ed99253d3f>",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "timeout_ms": {
+                      "type": "number",
+                      "description": "<redacted-31542173bb>"
+                    }
+                  },
+                  "required": [
+                    "targets"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            ]
+          },
+          {
+            "type": "function",
+            "name": "get_goal",
+            "description": "<redacted-d86378be07>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "create_goal",
+            "description": "<redacted-b16e439914>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "objective": {
+                  "type": "string",
+                  "description": "<redacted-b4280c5595>"
+                },
+                "token_budget": {
+                  "type": "integer",
+                  "description": "<redacted-b2947c93d5>"
+                }
+              },
+              "required": [
+                "objective"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "update_goal",
+            "description": "<redacted-905e44e63b>",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "description": "<redacted-e35f97559d>",
+                  "enum": [
+                    "complete",
+                    "blocked"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "low",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "fixture-cache-key",
+        "client_metadata": {
+          "x-codex-installation-id": "<redacted-ef7587f9cc>",
+          "x-codex-turn-metadata": "<redacted-1e7e56fad8>",
+          "thread_id": "<redacted-2e52546ed1>",
+          "session_id": "<redacted-2e52546ed1>",
+          "x-codex-window-id": "<redacted-b177e65b7c>",
+          "turn_id": "<redacted-f0d6ca6fef>"
+        }
+      }
+    }
+  ]
+}

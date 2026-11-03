@@ -91,10 +91,12 @@ async def test_rest_and_mcp_reject_invalid_search_requests():
 
     with pytest.raises(ValidationError, match="events_time_decay_protection"):
         SearchRequest(query="q", events_time_decay_protection="-1d")
-    with pytest.raises(Exception, match="events_time_decay_protection"):
-        await mcp_endpoint.mcp.call_tool(
-            "search", {"query": "q", "events_time_decay_protection": "-1d"}
-        )
+    result = await mcp_endpoint.mcp.call_tool(
+        "search", {"query": "q", "events_time_decay_protection": "-1d"}
+    )
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"
+    assert "events_time_decay_protection" in result.structuredContent["error"]["message"]
     with pytest.raises(ValidationError, match="semantic query or image"):
         FindRequest(
             filter={"op": "must", "field": "level", "conds": [2]}, events_time_decay_protection="0"

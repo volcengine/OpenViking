@@ -1,22 +1,8 @@
-import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
-import LanguageDetector from 'i18next-browser-languagedetector'
+import i18n from './core'
 
-import { defaultLanguage, resources, supportedLanguages } from './resources'
-
-i18n
-  .use(LanguageDetector)
-  .use(initReactI18next)
-  .init({
-    defaultNS: 'common',
-    fallbackLng: defaultLanguage,
-    interpolation: {
-      escapeValue: false,
-    },
-    ns: Object.keys(resources[defaultLanguage]),
-    resources,
-    returnNull: false,
-    supportedLngs: supportedLanguages,
-  })
+// The framework-independent instance is also used by API and formatting helpers.
+// Attach the React adapter once at the application entry point.
+initReactI18next.init(i18n)
 
 export default i18n

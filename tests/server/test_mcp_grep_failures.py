@@ -44,15 +44,15 @@ def _identity():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "exc",
+    ("exc", "code"),
     [
-        NotFoundError(URI, "file"),
-        PermissionDeniedError("access denied"),
-        RuntimeError("vector store unreachable"),
+        (NotFoundError(URI, "file"), "NOT_FOUND"),
+        (PermissionDeniedError("access denied"), "PERMISSION_DENIED"),
+        (RuntimeError("vector store unreachable"), "RuntimeError"),
     ],
     ids=["not-found", "permission-denied", "backend-error"],
 )
-async def test_a_failure_is_not_reported_as_no_matches(exc):
+async def test_a_failure_is_not_reported_as_no_matches(exc, code):
     async def grep(uri, pattern, **kwargs):
         raise exc
 
@@ -61,7 +61,7 @@ async def test_a_failure_is_not_reported_as_no_matches(exc):
     out = await mcp_endpoint.grep(uri=URI, pattern="anything")
 
     assert "No matches found" not in out
-    assert type(exc).__name__ in out
+    assert code in out
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,7 @@ from mcp.types import CallToolRequest, CallToolRequestParams
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -34,68 +34,26 @@ async def _call_tool(name: str, arguments: dict) -> dict:
     return (await handler(request)).root.model_dump(by_alias=True, exclude_none=True)
 
 
-@pytest.mark.parametrize(
-    ("name", "arguments", "service", "message"),
-    [
-        pytest.param(
-            "add_resource",
-            {"path": "space:home", "add_type": "feishu"},
-            SimpleNamespace(),
-            "Error: add_type requires an exact 'to' target.",
-            id="validation",
-        ),
-        pytest.param(
-            "list_watches",
-            {},
-            SimpleNamespace(watch_scheduler=None),
-            "Error: Watch scheduler not running",
-            id="watch-list-unavailable",
-        ),
-        pytest.param(
-            "cancel_watch",
-            {"to_uri": "viking://resources/project"},
-            SimpleNamespace(watch_scheduler=None),
-            "Error: Watch scheduler not running",
-            id="watch-cancel-unavailable",
-        ),
-        pytest.param(
-            "glob",
-            {"pattern": "**/*.md"},
-            SimpleNamespace(
-                fs=SimpleNamespace(glob=AsyncMock(side_effect=RuntimeError("storage offline")))
-            ),
-            "Error: storage offline",
-            id="glob-backend",
-        ),
-        pytest.param(
-            "add_skill",
-            {},
-            SimpleNamespace(),
-            "Error: provide 'data' (full SKILL.md text) or 'path' (Git URL or local path).",
-            id="skill-validation",
-        ),
-        pytest.param(
-            "grep",
-            {"uri": "viking://resources", "pattern": "needle"},
-            SimpleNamespace(
-                fs=SimpleNamespace(grep=AsyncMock(side_effect=RuntimeError("storage offline")))
-            ),
-            "grep failed for every pattern:\n  needle: RuntimeError: storage offline",
-            id="grep-all-failed",
-        ),
-    ],
-)
-async def test_whole_call_failure_sets_error_result(monkeypatch, name, arguments, service, message):
+async def test_whole_call_failure_sets_error_result(monkeypatch):
+    uri = "viking://resources/a.md"
+    service = SimpleNamespace(
+        fs=SimpleNamespace(
+            write=AsyncMock(
+                side_effect=PermissionDeniedError("write permission required", resource=uri)
+            )
+        )
+    )
     monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
-
-    direct_result = await getattr(mcp_endpoint, name)(**arguments)
-    result = await _call_tool(name, arguments)
-
-    assert type(direct_result) is str
-    assert direct_result == message
+    result = await _call_tool("write", {"uri": uri, "content": "denied"})
     assert result["isError"] is True
-    assert result["content"] == [{"type": "text", "text": message}]
-    assert result["structuredContent"] == {"result": message}
+    assert result["content"] == [
+        {"type": "text", "text": "PERMISSION_DENIED: write permission required"}
+    ]
+    assert result["structuredContent"]["error"] == {
+        "code": "PERMISSION_DENIED",
+        "message": "write permission required",
+        "details": {"resource": uri},
+    }
 
 
 async def test_remote_resource_business_failure_sets_error_result(monkeypatch):
@@ -160,7 +118,7 @@ async def test_grep_partial_failure_without_matches_stays_partial(monkeypatch):
 
 
 async def test_read_all_failures_set_error_result(monkeypatch):
-    read_visible = AsyncMock(side_effect=InvalidArgumentError("not readable"))
+    read_visible = AsyncMock(side_effect=PermissionDeniedError("read permission required"))
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
@@ -178,11 +136,11 @@ async def test_read_all_failures_set_error_result(monkeypatch):
 
     assert type(direct_result) is str
     assert direct_result == (
-        "=== viking://resources/a.md ===\nnot readable\n\n"
-        "=== viking://resources/b.md ===\nnot readable"
+        "=== viking://resources/a.md ===\nPERMISSION_DENIED: read permission required\n\n"
+        "=== viking://resources/b.md ===\nPERMISSION_DENIED: read permission required"
     )
     assert result["isError"] is True
-    assert "not readable" in result["content"][0]["text"]
+    assert "PERMISSION_DENIED: read permission required" in result["content"][0]["text"]
     assert "structuredContent" not in result
 
 

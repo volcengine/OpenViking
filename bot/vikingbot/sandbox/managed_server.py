@@ -51,11 +51,29 @@ def restrict_published_ports(api_client_class) -> None:
     api_client_class.create_host_config = create_host_config
 
 
+def preserve_proxy_headers() -> None:
+    """Keep upstream header bytes intact for downloads with Unicode filenames."""
+    import httpx
+    from starlette.responses import StreamingResponse
+
+    original = StreamingResponse.init_headers
+
+    @wraps(original)
+    def init_headers(self, headers=None):
+        if isinstance(headers, httpx.Headers):
+            self.raw_headers = list(headers.raw)
+        else:
+            original(self, headers)
+
+    StreamingResponse.init_headers = init_headers
+
+
 def main() -> None:
     import docker
 
     restrict_published_ports(docker.APIClient)
     use_workspace_owner(docker.APIClient)
+    preserve_proxy_headers()
     entrypoint = next(
         entry
         for entry in distribution("opensandbox-server").entry_points

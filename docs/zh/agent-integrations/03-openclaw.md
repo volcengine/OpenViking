@@ -1,4 +1,4 @@
-# OpenClaw 插件
+# OpenClaw
 
 为 [OpenClaw](https://github.com/openclaw/openclaw) 添加长效记忆。安装完成后，OpenClaw 会自动记住对话中的重要信息，并在每次回复前召回相关上下文。
 
@@ -29,7 +29,7 @@ bash cleanup-memory-openviking.sh
 
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --json
 openclaw gateway restart
 ```
 
@@ -42,7 +42,7 @@ openclaw gateway restart
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
-ov-install --base-url http://your-server:1933
+ov-install --base-url https://openviking.example.com
 ```
 
 常用参数：
@@ -74,10 +74,10 @@ ov-install --base-url http://your-server:1933
 
 ```bash
 # Alice 是 OpenViking user；按 OpenClaw 助手分开 peer 记忆。
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role assistant --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role assistant --json
 
 # support-agent 是 OpenViking user；按给它发消息的人分开 peer 记忆。
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role sender --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role sender --json
 ```
 
 安装和 setup 只接受 `sender`；已有的 `peer_role=person` 配置仍兼容，并按 `sender` 处理。OpenViking 会为每个用户初始化受管的 `peers/` 容器，因此 `none` 的含义是不使用具体的 `peers/<peer_id>/memories` 子树。Actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换 scope 不会搬迁已有记忆。
@@ -95,7 +95,7 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 ```text
 summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
 messages = [summaryMessage] + OV active messages
-systemPromptAddition = Session Context Guide（有归档时）+ 本轮召回结果（有命中时）
+systemPromptAddition = Session Context Guide（有归档时）+ 用户 profile（profile.md 存在时）+ 本轮召回结果（有命中时）
 ```
 
 `latest_archive_overview` 是服务端返回的摘要正文，`[Session History Summary]` 是插件加在正文前的固定文本标题。仅在 overview 非空时插入这条合成 user 消息；active messages 保留近期未压缩对话。当前 `prompt` 由宿主加入本轮；插件只用它查询记忆，不把它重复追加到返回的历史中。召回结果属于本次请求的上下文，不直接作为新对话写回 OV。
@@ -118,6 +118,26 @@ OV 无数据、无归档且消息数少于宿主输入、转换后为空或读�
 
 这里的 **session commit** 负责会话归档和记忆处理，与保存资源文件版本的 [snapshot commit](../guides/15-snapshot.md) 是不同操作。
 
+## Agent experience 召回配置
+
+插件配置仍接受 `agentExperience`，默认值如下：
+
+```json
+{
+  "agentExperience": {
+    "enabled": false,
+    "recallLimit": 3,
+    "scoreThreshold": 0.35,
+    "maxInjectedChars": 6000,
+    "minQueryChars": 12
+  }
+}
+```
+
+这些字段仍在配置 Schema 中，但当前 assemble 链路不读取它们。召回使用统一的 `searchContext` 路径，以及通用的 `autoRecall`、`recallLimit`、`recallScoreThreshold` 和 `recallMaxInjectedChars` 配置。设置 `agentExperience.enabled` 不会启用独立的经验检索，也不会生成单独的经验区块。
+
+代码保留的 `shouldRecallAgentExperience` 函数会对执行、写操作、失败、工程对象等词，以及“经验”“踩坑”“best practice”“pitfall”等意图词打分，但当前召回链路没有调用它。不能把这些关键词规则和 `minQueryChars` 当作生效的召回控制项。注入内容使用 `<openviking-context>` 包裹；捕获用户文本时会剥离该标记及其内容，避免把召回材料再次当作用户输入保存。
+
 ## 验证
 
 ```bash
@@ -136,7 +156,7 @@ openclaw config get plugins.slots.contextEngine
 # 期望输出：openviking
 ```
 
-全链路健康检查：
+先按 HEALTHCHECK.md 启用 Gateway 的 `/v1/responses` 端点，再从 OpenViking 源码目录执行全链路检查。该命令会发起真实模型请求并写入测试对话：
 
 ```bash
 python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
@@ -160,7 +180,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 | `autoRecallTimeoutMs` | `5000` | 整个 auto-recall 流程的外层超时（毫秒）；本地嵌入硬件较慢时可调大（取值范围 1000–300000） |
 
 ```bash
-openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
+openclaw config set plugins.entries.openviking.config.baseUrl https://openviking.example.com
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
 ```
 

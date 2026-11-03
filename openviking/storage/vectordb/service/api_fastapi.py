@@ -659,6 +659,12 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
                 index_name=index_name,
                 keywords=keywords,
                 query=query,
+                mode=request.mode,
+                fields=(
+                    data_utils.convert_dict(request.fields)
+                    if request.fields is not None
+                    else None
+                ),
                 limit=limit,
                 offset=offset,
                 filters=filters,

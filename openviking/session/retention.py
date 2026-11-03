@@ -146,6 +146,11 @@ def _message_tokens(messages: Iterable[Message]) -> int:
     return sum(int(message.estimated_tokens or 0) for message in messages)
 
 
+def _fit_message_group_to_budget(messages: List[Message], token_budget: int) -> List[Message]:
+    fitted, _ = _truncate_message_group(messages, token_budget)
+    return fitted or list(messages)
+
+
 def _truncate_message_group(
     messages: List[Message],
     token_budget: int,
@@ -154,7 +159,7 @@ def _truncate_message_group(
 
     Durable messages are never mutated. Text/context bodies and tool outputs are
     the only fields shortened. Tool IDs, names and result pairing remain intact;
-    oversized tool inputs are replaced only when their fixed serialized cost
+    oversized tool inputs are omitted only when their fixed serialized cost
     would otherwise make the whole atomic Step impossible to return.
     """
     if token_budget <= 0 or not messages:
@@ -186,7 +191,7 @@ def _truncate_message_group(
             for part in message.parts:
                 if not isinstance(part, ToolPart) or not part.tool_input:
                     continue
-                part.tool_input = {}
+                part.tool_input = None
                 truncated_ids.add(message.id)
                 if _message_tokens(cloned) <= token_budget:
                     break
@@ -203,7 +208,7 @@ def _truncate_message_group(
         remaining = max(0, token_budget - used)
         if remaining <= 0:
             break
-        fitted = truncate_text_to_token_budget(original, remaining)
+        fitted = truncate_text_to_token_budget(original, remaining, head_ratio=0.5)
         setattr(part, attribute, fitted)
 
     # Record every cleared/shortened slot, including older fields that received
@@ -412,6 +417,22 @@ def _partial_latest_turn_plan(
     retained_messages.extend(message for step in retained_steps for message in step.messages)
 
     archive_messages = _flatten_turns(older_turns)
+    if retained_tokens > token_budget and retained_steps:
+        retained_source_messages = [
+            message for step in retained_steps for message in step.messages
+        ]
+        archived_source_messages = [*archived_source_messages, *retained_source_messages]
+        retained_budget = max(
+            1,
+            token_budget - (int(anchor.estimated_tokens or 0) if anchor else 0),
+        )
+        retained_messages = []
+        if anchor is not None:
+            retained_messages.append(anchor)
+        retained_messages.extend(
+            _fit_message_group_to_budget(retained_source_messages, retained_budget)
+        )
+
     if archived_source_messages:
         # A copy of the anchor (same message id) makes the partial archive
         # understandable during Phase 2. Context assembly stable-deduplicates it

@@ -8,7 +8,7 @@ import json
 import re
 from typing import Any, Iterable
 
-from openviking.core.namespace import uri_parts
+from openviking.core.namespace import resolve_request_uri, uri_parts
 from openviking.message import Message, ToolPart
 from openviking.server.identity import RequestContext
 from openviking.utils.tags import normalize_search_tag
@@ -138,7 +138,12 @@ def collect_read_experience_uris(
             texts = list(_iter_text_fields(output))
             for raw_uri in candidates:
                 uri = str(raw_uri or "").strip()
-                canonical_uri = canonical_experience_uri(uri, ctx)
+                if "?" in uri or "#" in uri:
+                    continue
+                try:
+                    canonical_uri = canonical_experience_uri(resolve_request_uri(uri, ctx), ctx)
+                except ValueError:
+                    continue
                 if (
                     not canonical_uri
                     or canonical_uri in seen

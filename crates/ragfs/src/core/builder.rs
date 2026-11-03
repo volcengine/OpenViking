@@ -16,18 +16,18 @@ use super::stats_wrapper::StatsWrappedFS;
 
 use super::errors::{Error, Result};
 #[cfg(feature = "cache")]
-use crate::cache::{CacheNamespace, CachePolicy};
+use crate::cache::CachePolicy;
 #[cfg(feature = "cache")]
 use crate::cache_runtime::{
     CacheOperation, CacheRuntime, DynamicProviderConfig, RedisProviderConfig,
 };
 
-use crate::lock::{
-    FilesystemPathLockProvider, MemoryPathLockProvider, PathLockConfig, PathLockManager,
-    PathLockProvider, PathLockWrappedFS,
-};
 #[cfg(feature = "cache")]
 use crate::lock::RedisPathLockProvider;
+use crate::lock::{
+    FilesystemPathLockProvider, MemoryPathLockProvider, PathLockConfig, PathLockManager,
+    PathLockProvider, PathLockWrappedFS, SQLitePathLockProvider,
+};
 
 #[cfg(feature = "s3")]
 use crate::plugins::S3FSPlugin;
@@ -79,8 +79,8 @@ pub enum CacheRuntimeProviderConfig {
 pub struct CacheFsConfig {
     /// Whether mounted data filesystems are wrapped by CachedFileSystem.
     pub enabled: bool,
-    /// CacheFS key namespace.
-    pub namespace: String,
+    /// OpenViking instance name used by CacheFS keys.
+    pub service_name: String,
     /// Existing CacheFS policy and traversal settings.
     pub policy: CachePolicy,
 }
@@ -90,7 +90,7 @@ impl Default for CacheFsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            namespace: "openviking".into(),
+            service_name: String::new(),
             policy: CachePolicy::default(),
         }
     }
@@ -156,11 +156,12 @@ pub async fn build_configured_stack(
                 .to_string(),
         ));
     }
-    if pathlock_uses_cache
-        && !matches!(
-            &cache.provider,
-            Some(CacheRuntimeProviderConfig::Redis(_))
-        )
+    if cache.cachefs.enabled && cache.cachefs.service_name.trim().is_empty() {
+        return Err(Error::config(
+            "cachefs service_name is required when CacheFS is enabled".to_string(),
+        ));
+    }
+    if pathlock_uses_cache && !matches!(&cache.provider, Some(CacheRuntimeProviderConfig::Redis(_)))
     {
         return Err(Error::config(
             "cache-backed PathLock requires the shared cache provider to be redis".to_string(),
@@ -197,9 +198,11 @@ pub async fn build_configured_stack(
                 .as_ref()
                 .expect("cache provider is validated")
                 .clone(),
-            CacheNamespace::new(&cache.cachefs.namespace),
+            cache.cachefs.service_name,
             cache.cachefs.policy,
         ))
+    } else if let Some(runtime) = runtime.as_ref() {
+        Arc::new(MountableFS::with_shared_cache_runtime(runtime.clone()))
     } else {
         Arc::new(MountableFS::new())
     };
@@ -230,23 +233,52 @@ async fn build_stack_with_mountable_and_runtime(
             config.pathlock.lock_expire_secs,
         )),
         "memory" => Arc::new(MemoryPathLockProvider::new()),
+        "sqlite" => {
+            let path = config.pathlock.sqlite_path.as_deref().ok_or_else(|| {
+                Error::config("pathlock.sqlite_path is required for SQLite PathLock")
+            })?;
+            let namespace = config.pathlock.service_name.as_deref().ok_or_else(|| {
+                Error::config("pathlock.service_name is required for SQLite PathLock")
+            })?;
+            let path = path.to_string();
+            let namespace = namespace.to_string();
+            let provider = tokio::task::spawn_blocking(move || {
+                let database = std::path::Path::new(&path);
+                if !database.is_absolute() || namespace.trim().is_empty() {
+                    return Err(crate::lock::types::PathLockError::InvalidRequest(
+                        "SQLite PathLock requires an absolute sqlite_path and nonempty service_name"
+                            .to_string(),
+                    ));
+                }
+                if let Some(parent) = database.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        crate::lock::types::PathLockError::Io(format!(
+                            "failed to create SQLite PathLock parent directory: {error}"
+                        ))
+                    })?;
+                }
+                SQLitePathLockProvider::new(&path, &namespace)
+            })
+            .await
+            .map_err(|error| Error::config(format!("SQLite PathLock worker failed: {error}")))?
+            .map_err(|error| {
+                Error::config(format!("SQLite PathLock initialization failed: {error}"))
+            })?;
+            Arc::new(provider)
+        }
         #[cfg(feature = "cache")]
         "cache" => {
             let runtime = runtime.clone().ok_or_else(|| {
                 Error::config("cache provider is required for cache-backed PathLock".to_string())
             })?;
-            let namespace = config.pathlock.namespace.as_deref().ok_or_else(|| {
-                Error::config("pathlock namespace is required for cache-backed PathLock".to_string())
+            let service_name = config.pathlock.service_name.as_deref().ok_or_else(|| {
+                Error::config("pathlock service_name is required for cache-backed PathLock".to_string())
             })?;
             Arc::new(
-                RedisPathLockProvider::new(
-                    runtime,
-                    namespace,
-                    config.pathlock.lock_expire_secs,
-                )
-                .map_err(|error| {
-                    Error::config(format!("Redis PathLock initialization failed: {error}"))
-                })?,
+                RedisPathLockProvider::new(runtime, service_name, config.pathlock.lock_expire_secs)
+                    .map_err(|error| {
+                        Error::config(format!("Redis PathLock initialization failed: {error}"))
+                    })?,
             )
         }
         #[cfg(not(feature = "cache"))]
@@ -353,7 +385,8 @@ mod tests {
             }),
             pathlock: PathLockConfig {
                 provider: "filesystem".to_string(),
-                namespace: None,
+                service_name: None,
+                sqlite_path: None,
                 lock_timeout_secs: 0.0,
                 lock_expire_secs: 30.0,
             },
@@ -536,6 +569,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_stack_builds_sqlite_pathlock_without_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "sqlite".into(),
+                service_name: Some("builder-test".into()),
+                sqlite_path: Some(dir.path().join("locks.db").to_str().unwrap().into()),
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+        let stack = build_default_stack(config).await.unwrap();
+        let lease = stack
+            .pathlock_manager
+            .acquire_tree("/missing", std::time::Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert_eq!(lease.lease.lock_paths, vec!["/missing"]);
+        stack.pathlock_manager.release(&lease).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn default_stack_rejects_sqlite_pathlock_without_shared_database() {
+        let config = RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "sqlite".into(),
+                service_name: Some("builder-test".into()),
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+        let error = match build_default_stack(config).await {
+            Ok(_) => panic!("SQLite PathLock unexpectedly built without database"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("sqlite_path"));
+    }
+
+    #[tokio::test]
     async fn default_stack_rejects_unknown_pathlock_provider() {
         let config = RagfsConfig {
             pathlock: PathLockConfig {
@@ -559,7 +631,7 @@ mod tests {
         let config = RagfsConfig {
             pathlock: PathLockConfig {
                 provider: "cache".to_string(),
-                namespace: Some("builder-test".to_string()),
+                service_name: Some("builder-test".to_string()),
                 ..PathLockConfig::default()
             },
             ..RagfsConfig::default()
@@ -579,11 +651,11 @@ mod tests {
         let Ok(endpoint) = std::env::var("REDIS_URL") else {
             return;
         };
-        let namespace = format!("builder-pathlock-test-{}", std::process::id());
+        let service_name = format!("builder-pathlock-test-{}", std::process::id());
         let config = RagfsConfig {
             pathlock: PathLockConfig {
                 provider: "cache".to_string(),
-                namespace: Some(namespace),
+                service_name: Some(service_name),
                 lock_expire_secs: 3.0,
                 ..PathLockConfig::default()
             },
@@ -662,7 +734,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("backend".into(), ConfigValue::String("cache".into()));
         params.insert(
-            "cache_key_prefix".into(),
+            "service_name".into(),
             ConfigValue::String(format!("builder-test-{}", uuid::Uuid::new_v4())),
         );
 

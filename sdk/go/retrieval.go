@@ -71,6 +71,7 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 		return nil, err
 	}
 	payload := map[string]any{"query": queryText}
+	setString(payload, "search_type", opts.SearchType)
 	if opts.TargetURI != nil {
 		payload["target_uri"] = normalizeTarget(opts.TargetURI)
 	}
@@ -110,6 +111,7 @@ func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchCo
 		"query": query,
 		"mode":  "context",
 	}
+	setString(payload, "search_type", opts.SearchType)
 	imageURL, err := normalizeImageInput(opts.Image)
 	if err != nil {
 		return nil, err

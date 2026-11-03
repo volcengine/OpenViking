@@ -1,0 +1,39 @@
+OpenViking 0.5.2 / VikingBot 0.5.2 / doubao-seed-2.1-lite
+Verified 2026-10-28. Real example output; wording can vary.
+
+---
+type: entity
+title: Lighthouse
+description: The fictional v1 pilot project running on an isolated network without internet access, including its offline installation, local feedback workflow, and undecided items.
+tags: [lighthouse, pilot, isolated-network]
+---
+
+# Lighthouse
+
+Lighthouse is a fictional tutorial sample (version 1) that runs as a pilot on an isolated network without internet access. It is the central project of this Wiki: its offline setup, weekly feedback loop, and preparation steps are documented below, while several dates and scope items remain unknown or undecided in the sources.
+
+## Identity and setup
+
+- Fictional tutorial sample v1; the first version runs in a pilot on an isolated network without internet access ([Lighthouse project](viking://resources/onboarding-en-v1/project/project.md)).
+- The pilot administrator prepares an offline installation package and a local storage directory ([Lighthouse project](viking://resources/onboarding-en-v1/project/project.md)).
+
+## Feedback workflow
+
+- User feedback is saved to local files; version one has no cloud synchronization, and support for it in a later version is undecided ([Feedback collection](viking://resources/onboarding-en-v1/feedback/feedback.md)).
+- Every Friday, the pilot administrator exports the feedback and gives it to the project owner ([Feedback collection](viking://resources/onboarding-en-v1/feedback/feedback.md)).
+
+## Preparation and undecided items
+
+- The project owner confirmed that a feedback registration template must be prepared before the pilot, and the administrator will rehearse an offline export once ([Pilot preparation meeting](viking://resources/onboarding-en-v1/meeting/meeting.md)).
+- The pilot end date, budget, and next release date are undecided ([Pilot preparation meeting](viking://resources/onboarding-en-v1/meeting/meeting.md)). No start date is stated in the sources; it is unknown.
+
+## Scope limits
+
+- The sample covers only the first pilot version. The sources provide no production capacity, security certification conclusions, or performance test results ([Scope limits](viking://resources/onboarding-en-v1/limits/limits.md)).
+
+## Sources
+
+- [Lighthouse project](viking://resources/onboarding-en-v1/project/project.md)
+- [Feedback collection](viking://resources/onboarding-en-v1/feedback/feedback.md)
+- [Pilot preparation meeting](viking://resources/onboarding-en-v1/meeting/meeting.md)
+- [Scope limits](viking://resources/onboarding-en-v1/limits/limits.md)

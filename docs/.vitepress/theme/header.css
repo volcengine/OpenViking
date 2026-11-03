@@ -1,0 +1,54 @@
+/* One-row header. Collapse section navigation before translated labels crowd the brand. */
+:root { --vp-nav-height: 65px; }
+.VPNav { --ov-header-ink: var(--vp-c-text-1); --ov-header-muted: var(--vp-c-text-2); --ov-header-bg: var(--vp-c-bg); --ov-header-soft: var(--vp-c-bg-soft); --ov-header-line: var(--vp-c-divider); --ov-header-focus: var(--vp-c-brand-1); --ov-header-font: var(--vp-font-family-base); }
+.VPNav .VPNavBar { background: color-mix(in oklab, var(--vp-c-bg) 92%, transparent) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: none; }
+.VPNav .VPNavBar > .wrapper > .container { position: relative; width: 100%; max-width: 1280px; padding: 0 24px; }
+.VPNav .VPNavBar > .wrapper > .container > .title, .VPNav .VPNavBar .content-body { height: 64px; }
+.VPNav .VPNavBar > .wrapper > .container > .content { padding-left: 16px; }
+.VPNav .VPNavBar .content-body { position: static !important; gap: 6px; }
+.VPNav .VPNavBarMenu { position: static; order: 0; flex-shrink: 0; height: 64px; gap: 20px; }
+.VPNav .VPNavBarMenuLink { padding: 0; height: 64px; line-height: 64px; font-size: 14px; }
+.VPNav .VPNavBarMenuLink.active { box-shadow: inset 0 -2px var(--vp-c-brand-1); }
+.VPNav .ov-docs-search { order: 2; flex-shrink: 0; margin: 0; }
+.VPNav .ov-docs-search-trigger { display: grid; place-items: center; width: 36px; min-width: 36px; height: 36px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--vp-c-text-2); }
+.VPNav .ov-docs-search-trigger:hover { background: var(--vp-c-bg-soft); color: var(--vp-c-text-1); }
+.VPNav .ov-locale-switch { order: 3; margin: 0; }
+.ov-mode-toggle { order: 4; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 36px; height: 36px; background: transparent; border: 0; border-radius: 6px; color: var(--vp-c-text-1); cursor: pointer; transition: background-color .12s; }
+.ov-mode-toggle:hover { background: var(--vp-c-bg-soft); }
+.ov-mode-toggle:focus-visible, .VPNav .ov-docs-search-trigger:focus-visible, .ov-drawer-github:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 3px; }
+.VPNav .VPNavBarAppearance, .VPNav .VPNavBarExtra, .VPNav .VPNavScreenAppearance, .VPNav .VPNavScreenSocialLinks { display: none; }
+.VPNav .VPNavBarSocialLinks { display: none; }
+.VPNav .VPNavBarSocialLinks::before { display: none; }
+.VPNav .VPNavScreen { padding-inline: 24px; }
+.VPNav .VPNavScreen > .container { max-width: 560px; padding: 16px 0 48px; }
+.VPNav .VPNavScreenMenuLink { min-height: 48px; padding: 0 8px; }
+.VPNav .VPNavScreenMenuLink.active { border-left: 2px solid var(--vp-c-brand-1); background: var(--vp-c-brand-soft); }
+.ov-drawer-github { display: flex; align-items: center; min-height: 48px; padding-inline: 8px; margin-top: 16px; font-size: 13px; color: var(--vp-c-text-2); }
+@media (max-width: 1279px) {
+  :root { --vp-nav-height: 65px; }
+  .VPNav .VPNavBarMenu, .VPNav .VPNavBarSocialLinks { display: none; }
+  .VPNav .VPNavBarHamburger { display: flex; order: 5; width: 36px; flex-shrink: 0; }
+  .VPNav .VPNavScreen { display: block; }
+}
+@media (max-width: 720px) {
+  :root { --vp-nav-height: 57px; }
+  .VPNav .VPNavBar > .wrapper > .container { padding-inline: 16px; }
+  .VPNav .VPNavBar > .wrapper > .container > .title, .VPNav .VPNavBar .content-body { height: 56px; }
+  .VPNav .VPNavBar > .wrapper > .container > .content { padding-left: 4px; }
+  .VPNav .VPNavBar .content-body { gap: 4px; }
+  .VPNav .ov-docs-search-trigger { width: 32px; min-width: 32px; }
+  .VPNav .ov-mode-toggle { width: 34px; height: 34px; }
+  .VPNav .VPNavBarHamburger { width: 32px; }
+  .VPNav .VPNavScreen { padding-inline: 16px; }
+}
+@media (max-width: 374px) { .ov-language > summary > svg:first-child { display: none; } }
+
+/* Blog Kami/Washi header palette; reading-content tokens remain independent. */
+.VPNav { --vp-c-bg: #f5f4ed; --vp-c-bg-soft: #eceae0; --vp-c-bg-elv: #f5f4ed; --vp-c-text-1: #1a1a1a; --vp-c-text-2: #8c8578; --vp-c-divider: #d8d4c8; --vp-c-brand-1: #1B365D; --vp-nav-screen-bg-color: #f5f4ed; --vp-font-family-base: 'IBM Plex Sans', 'LXGW Neo XiHei Screen Full', system-ui, sans-serif; --vp-font-family-mono: 'OV Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-family: var(--vp-font-family-base); }
+.dark .VPNav { --vp-c-bg: #1a1917; --vp-c-bg-soft: #242320; --vp-c-bg-elv: #1a1917; --vp-c-text-1: #e8e4da; --vp-c-text-2: #8c8578; --vp-c-divider: #3a3834; --vp-c-brand-1: #7b9ec4; --vp-nav-screen-bg-color: #1a1917; }
+@media (min-width: 1280px) { .VPNav .ov-docs-search { margin-left: 18px; } }
+@media (max-width: 374px) { .VPNav .ov-language > summary { padding-inline: 4px; } }
+
+.VPNav .VPNavBar { z-index: 2; }
+.VPNav .VPNavScreen { z-index: 1; }
+.VPNav .VPNavScreenMenuLink:focus-visible, .VPNav .VPNavBarHamburger:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 2px; border-radius: 4px; }

@@ -1,5 +1,7 @@
 # VikingBot 安装与配置
 
+先了解 [VikingBot 的用途与架构](../concepts/15-vikingbot.md)，再按本页完成安装。
+
 VikingBot 是 OpenViking 内置的多渠道 AI Agent。它既可以和 OpenViking 一起启动，也可以在本地独立调试，或作为长期运行的 Gateway 接入聊天平台。
 
 本指南介绍安装方式，以及三种主要使用场景的配置和启动方法。Agent 工具、聊天渠道、架构等完整说明请参见 [VikingBot 中文文档](https://github.com/volcengine/OpenViking/blob/main/bot/README_CN.md)。
@@ -19,7 +21,7 @@ uv tool install "openviking[bot]" --upgrade
 ```
 
 ```bash [pip]
-pip install "openviking[bot]" --upgrade --force-reinstall
+pip install "openviking[bot]" --upgrade
 ```
 
 ```bash [pipx]
@@ -37,6 +39,8 @@ pipx upgrade openviking
 ```bash
 vikingbot --version
 ```
+
+使用 pip 时先激活虚拟环境。源码安装还需要准备[开发构建依赖](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md)。
 
 ### 从源码安装
 
@@ -94,6 +98,8 @@ openviking-server doctor
 
 详细配置见 [OpenViking 配置指南](01-configuration.md)。VikingBot 默认继承根级 `vlm` 作为 Agent 模型，因此通常不需要重复配置 `bot.agents`。
 
+Server 使用 `api_key` 模式时，先注册 User/Admin Key 并写入 `bot.ov_server.api_key`；不能把 root API 密钥当作用户 Key 使用。操作见[认证指南](04-authentication.md)。继承 `trusted` 模式时，Bot 使用服务端的可信身份配置。
+
 ### 2. 一体启动
 
 ```bash
@@ -112,6 +118,8 @@ ov find "我的回答偏好"
 ```
 
 `ov config` 中的 URL 应指向当前 OpenViking Server，默认是 `http://127.0.0.1:1933`。如果 Server 开启了鉴权，还需要配置当前调用者的 User/Admin API Key。
+
+记忆在 commit 后异步提取，立即运行 `ov find` 可能还没有结果。用检索验证记忆是否保存前，先确认记忆任务已完成。
 
 ## 场景 B：本地调试 Agent
 
@@ -185,7 +193,9 @@ vikingbot chat
 vikingbot chat --session my-session
 ```
 
-没有可用的 OpenViking Server 时，VikingBot 会以 standalone 方式运行。本地文件、Shell、Web 和 Skill 等能力仍可使用，但不会提供 OpenViking 资源检索和长期记忆能力。
+本地 chat 未显式配置 `bot.ov_server.server_url` 时，连接继承的服务失败可降级为 standalone。显式配置的服务不可用时停止启动。继承的认证模式不匹配也会停止启动；显式配置远端服务时，Bot 会采用服务端报告的模式，再验证凭据。认证失败或收到不健康的 HTTP 响应都会停止启动。一体启动由服务端管理时，Bot 会保留继承的上游配置并等待服务启动。
+
+standalone 模式下，本地文件、Shell、Web 和 Skill 等能力仍可使用，但不会提供 OpenViking 资源检索和长期记忆能力。
 
 ## 场景 C：Gateway 统一入口
 
@@ -209,6 +219,7 @@ vikingbot chat --session my-session
     },
     "ov_server": {
       "server_url": "https://openviking.example.com",
+      "api_key_type": "user",
       "api_key": "<bot-openviking-user-api-key>"
     }
   }
@@ -250,6 +261,20 @@ ov find "项目发布流程"
 Gateway 默认只监听 `127.0.0.1`。如果改为 `0.0.0.0` 或其他非 localhost 地址，必须配置 `bot.gateway.token`，并在客户端设置对应的 `gateway_token`。
 
 聊天平台的凭证和权限配置见 [VikingBot 渠道配置](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/concepts/05-channel.md)。
+
+## 通过 Web Studio 管理
+
+打开 Web Studio 的 `/vikingbot` 页面，可使用网页对话或管理 Server 受管 Bot 的飞书连接。渠道管理和飞书历史仅允许 ROOT 访问，并按 Studio 当前选择的 account 隔离；Account ADMIN Key 不具备该权限。Studio 使用 `GET /api/v1/admin/bot/capabilities`，以及 `/api/v1/admin/accounts/{account_id}/bot` 下的连接、会话、验证和接入任务接口。
+
+飞书扫码接入分三步：
+
+1. 选择同账户普通用户作为连接的运行身份。服务端绑定可用凭证，浏览器无需接收该用户的 API Key。
+2. 飞书扫码，创建应用、配置权限和事件并提交发布。已有应用可改用手动凭证配置。
+3. 将机器人加入群，验证消息接收和回复。发送 API 接受回复不代表群内可见，接入时仍需在群里确认。
+
+连接和捕获的消息保存在 Bot 数据目录的 `studio.sqlite3`，文件权限为 `0600`。数据库含应用和绑定用户的凭证，备份需按服务端配置处理。Studio 管理的飞书会话只开放绑定身份允许的 OpenViking 查询和记忆工具；Shell、本地文件、定时任务和未批准的 MCP 工具不可用。
+
+暂停连接保留历史。删除连接会移除本地记录，不会删除飞书应用或飞书中的消息。飞书历史在 Studio 中只读，从该 Studio 连接捕获的消息开始；不会自动迁入 `ov.conf` 中已有的渠道及其旧历史。同一连接暂停恢复或重启后保留上下文；删除并重建连接会创建新的上下文。
 
 ## 更多文档
 

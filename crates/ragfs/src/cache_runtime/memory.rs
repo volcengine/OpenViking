@@ -3,15 +3,17 @@
 use super::provider::{CacheOperation, CacheProvider};
 use super::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, SetCondition, SetOptions, SetResult,
+    ListMoveRequest, ScriptRequest, ScriptResult, SetCondition, SetOptions, SetResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+
+type ScriptHandler = dyn Fn(ScriptRequest) -> CacheResult<ScriptResult> + Send + Sync + 'static;
 
 /// Controllable in-memory provider for tests and smoke validation.
 pub struct MemoryMockProvider {
@@ -33,6 +35,7 @@ pub struct MemoryMockProvider {
     active_sets: AtomicU64,
     max_active_sets: AtomicU64,
     next_set_failure: Mutex<Option<String>>,
+    script_handler: Option<Arc<ScriptHandler>>,
 }
 
 struct ActiveSetGuard<'a> {
@@ -67,7 +70,17 @@ impl MemoryMockProvider {
             active_sets: AtomicU64::new(0),
             max_active_sets: AtomicU64::new(0),
             next_set_failure: Mutex::new(None),
+            script_handler: None,
         }
+    }
+
+    /// Install a deterministic script handler for tests that need to advertise script support.
+    pub fn with_script_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(ScriptRequest) -> CacheResult<ScriptResult> + Send + Sync + 'static,
+    {
+        self.script_handler = Some(Arc::new(handler));
+        self
     }
 
     /// Delay individual get calls to exercise inflight and concurrency behavior.
@@ -231,9 +244,9 @@ impl Default for MemoryMockProvider {
 
 #[async_trait]
 impl CacheProvider for MemoryMockProvider {
-    /// Rejects script execution because the in-memory provider has no Lua engine.
+    /// Reject script-dependent consumers unless a test explicitly installs a handler.
     fn validate_operations(&self, operations: &[CacheOperation]) -> CacheResult<()> {
-        if operations.contains(&CacheOperation::ExecuteScript) {
+        if operations.contains(&CacheOperation::ExecuteScript) && self.script_handler.is_none() {
             return Err(CacheError::UnsupportedOperation(
                 CacheOperation::ExecuteScript.name().to_string(),
             ));
@@ -618,6 +631,15 @@ impl CacheProvider for MemoryMockProvider {
         Ok(Some(value))
     }
 
+    async fn execute_script(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        self.ensure_open()?;
+        let handler = self
+            .script_handler
+            .as_ref()
+            .ok_or_else(|| CacheError::UnsupportedScript(request.script_id.clone()))?;
+        handler(request)
+    }
+
     async fn close(&self) -> CacheResult<()> {
         self.closed.store(true, Ordering::Release);
         self.values.write().await.clear();
@@ -676,4 +698,38 @@ fn list_range(list: &VecDeque<Bytes>, start: i64, stop: i64) -> Vec<Bytes> {
         .take((stop - start + 1) as usize)
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn configured_script_handler_is_advertised_and_invoked() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed_calls = Arc::clone(&calls);
+        let provider = MemoryMockProvider::new().with_script_handler(move |request| {
+            assert_eq!(request.script_id, "test.script.v1");
+            observed_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(ScriptResult {
+                payload: Bytes::from_static(b"handled"),
+            })
+        });
+
+        provider
+            .validate_operations(&[CacheOperation::ExecuteScript])
+            .unwrap();
+        let result = provider
+            .execute_script(ScriptRequest {
+                script_id: "test.script.v1".to_string(),
+                keys: Vec::new(),
+                args: Vec::new(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.payload, Bytes::from_static(b"handled"));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
 }

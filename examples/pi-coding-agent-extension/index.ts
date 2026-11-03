@@ -10,7 +10,7 @@
  * (most mature, production-hardened), Hermes (anti-pattern: stale prefetch).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { createLogger } from "./shared/debug-log.mjs";
@@ -38,6 +38,12 @@ export default async function (pi: ExtensionAPI) {
   // Shared key (`shared/config-schema.mjs`), already honoured by opencode: the
   // MCP tool surface is off, while recall, sync and takeover carry on.
   const mcpEnabled = (config as any).mcpEnabled !== false;
+
+  // Installed as an extension rather than a package, so pi does not scan
+  // skills/ on its own. The skills teach the MCP tools, so they follow them.
+  if (mcpEnabled) {
+    pi.on("resources_discover", async () => ({ skillPaths: [join(EXTENSION_DIR, "skills")] }));
+  }
 
   // Env overrides
 
@@ -182,7 +188,7 @@ export default async function (pi: ExtensionAPI) {
         : [];
       if (config.takeoverEnabled) {
         takeover.restore(branch);
-        sync.restoreWatermark(takeover.state.syncedEntryCount);
+        sync.restoreWatermark(takeover.state.syncedEntryCount, branch);
       }
 
       await sync.replayPending();
@@ -193,7 +199,7 @@ export default async function (pi: ExtensionAPI) {
       // Profile injection
       profileBlock = await buildSessionProfileBlock(client, config);
 
-      if (!config.takeoverEnabled && sync.sessionId) {
+      if (!config.takeoverEnabled && config.resumeArchiveInject && sync.sessionId) {
         // Resume rehydration — fetch archive overview if session was previously committed.
         archiveOverview = await fetchArchiveOverview(client, sync.sessionId, config);
       }
@@ -269,7 +275,7 @@ export default async function (pi: ExtensionAPI) {
     // Compose system prompt additions
     const parts: string[] = [];
     if (profileBlock) parts.push(profileBlock);
-    if (!config.takeoverEnabled && archiveOverview && (compacted || archiveOverview.trim())) {
+    if (!config.takeoverEnabled && config.resumeArchiveInject && archiveOverview && (compacted || archiveOverview.trim())) {
       parts.push(archiveOverview);
     }
     // Generated from what actually registered, so it can never name a tool the
@@ -374,7 +380,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- session_before_compact ---
   pi.on("session_before_compact", async (event, ctx) => {
-    if (!connected || bypassed) return;
+    if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
     if (config.takeoverEnabled) {
       const deadline = Date.now() + HANDLER_BUDGET_MS;
@@ -392,7 +398,7 @@ export default async function (pi: ExtensionAPI) {
     compacted = true;
 
     // Cache archive overview for rehydration after compaction
-    if (archiveId && sync.sessionId) {
+    if (config.resumeArchiveInject && archiveId && sync.sessionId) {
       archiveOverview = await fetchArchiveOverview(
         client, sync.sessionId, config,
       );
@@ -420,7 +426,7 @@ export default async function (pi: ExtensionAPI) {
     await sync.shutdown();
     if (config.takeoverEnabled) {
       await takeover.shutdown();
-    } else {
+    } else if (isCaptureEnabled(config)) {
       await sync.commit();
     }
   });
@@ -468,7 +474,7 @@ export default async function (pi: ExtensionAPI) {
           const reason = config.takeoverEnabled
             ? takeover.lastFailure
             : skipped
-              ? describeSkip(String(commitResult?.reason || ""), config.commitKeepRecentCount)
+              ? describeSkip(String(commitResult?.reason || ""))
               : sync.lastCommitError;
           logger.log("commit", { ok: false, manual: true, reason: reason || "unknown" });
           if (reason.startsWith("nothing")) {

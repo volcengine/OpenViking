@@ -10,7 +10,14 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import content as content_router
-from openviking.server.routers.content import ReindexRequest, WriteContentRequest, reindex
+from openviking.server.routers.content import (
+    BatchWriteOperation,
+    BatchWriteRequest,
+    ReindexRequest,
+    WriteContentRequest,
+    batch_write,
+    reindex,
+)
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -54,6 +61,73 @@ def test_write_content_request_accepts_clear_without_tags():
     assert request.tag_mode == "clear"
 
 
+def test_batch_write_request_accepts_write_parity_options():
+    request = BatchWriteRequest(
+        root_uri="viking://resources/demo",
+        processing_mode="vectors_only",
+        operations=[
+            BatchWriteOperation(
+                uri="viking://resources/demo/a.md",
+                content="updated",
+                tags=["team=search"],
+                tag_mode="append",
+                acl={
+                    "acl_mode": "restricted",
+                    "entries": [{"principal": "group:engineering", "level": "write"}],
+                },
+            )
+        ],
+    )
+
+    assert request.processing_mode == "vectors_only"
+    assert request.defer_processing is False
+    assert request.operations[0].tags == ["team=search"]
+    assert request.operations[0].tag_mode == "append"
+    assert request.operations[0].acl.acl_mode == "restricted"
+
+
+async def test_batch_write_forwards_processing_mode_and_operation_metadata(monkeypatch):
+    seen = {}
+
+    async def fake_batch_write(**kwargs):
+        seen.update(kwargs)
+        return {"updated": [kwargs["operations"][0]["uri"]]}
+
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(batch_write=fake_batch_write)),
+    )
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    await batch_write(
+        BatchWriteRequest(
+            root_uri="viking://resources/demo",
+            processing_mode="vectors_only",
+            defer_processing=True,
+            operations=[
+                BatchWriteOperation(
+                    uri="viking://resources/demo/a.md",
+                    content="updated",
+                    tags=["team=search"],
+                    tag_mode="append",
+                    acl={"acl_mode": "restricted", "entries": []},
+                )
+            ],
+        ),
+        ctx,
+    )
+
+    assert seen["processing_mode"] == "vectors_only"
+    assert seen["defer_processing"] is True
+    assert seen["edit_source"] == "manual"
+    operation = seen["operations"][0]
+    assert operation["tags"] == ["team=search"]
+    assert operation["tag_mode"] == "append"
+    assert operation["acl"]["acl_mode"] == "restricted"
+    assert list(operation["acl"]["entries"]) == []
+
+
 async def test_write_forwards_processing_mode_to_service(monkeypatch):
     seen = {}
 
@@ -76,6 +150,7 @@ async def test_write_forwards_processing_mode_to_service(monkeypatch):
 
     assert response["status"] == "ok"
     assert seen["processing_mode"] == "vectors_only"
+    assert seen["edit_source"] == "manual"
 
 
 async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):
@@ -278,10 +353,47 @@ async def test_reindex_missing_uri(client):
     assert resp.status_code == 400
 
 
-async def test_reindex_endpoint_registered(client):
-    """Test the reindex endpoint is registered (GET returns 405, not 404)."""
-    resp = await client.get("/api/v1/content/reindex")
-    assert resp.status_code == 405  # Method Not Allowed, not 404
+async def test_directory_index_preserves_summaries_and_tags(client, service):
+    """Directory indexing preserves content; Compile tags belong only to the target root."""
+    from openviking.storage.expr import PathScope
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    uri = "viking://resources/compile"
+    await service.viking_fs.mkdir(f"{uri}/child", ctx=ctx)
+    seeded = await client.post(
+        "/api/v1/content/ensure_directory_index",
+        json={"uri": uri, "fallback_abstract": "Compile output"},
+    )
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json()["result"]["created_abstract"] is True
+    assert seeded.json()["result"]["indexed_levels"] == [0]
+    await service.fs.write(f"{uri}/child/note.md", "Content", ctx=ctx, wait=True)
+    await service.resources.wait_processed()
+    original = await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx)
+    await service.fs.set_tags(uri, ["team=search"], mode="append", recursive=False, ctx=ctx)
+    await service.fs.finalize_compile_directories(uri, ctx)
+    repeated = await client.post(
+        "/api/v1/content/ensure_directory_index",
+        json={"uri": uri, "fallback_abstract": "Do not replace stored summaries"},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["result"]["created_abstract"] is False
+    assert await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx) == original
+    assert await service.fs.read(f"{uri}/child/note.md", ctx) == "Content"
+    records = await service.vikingdb_manager.filter(
+        filter=PathScope("uri", uri), output_fields=["uri", "level", "search_tags"], ctx=ctx
+    )
+    root_records = [record for record in records if record["uri"] == uri and record["level"] < 2]
+    assert any(record["level"] == 0 for record in root_records)
+    assert all(
+        {"compile_target=true", "team=search"} <= set(record["search_tags"])
+        for record in root_records
+    )
+    assert all(
+        "compile_target=true" not in (record.get("search_tags") or [])
+        for record in records
+        if record not in root_records
+    )
 
 
 async def test_reindex_request_validation(client):

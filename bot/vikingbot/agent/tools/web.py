@@ -103,7 +103,9 @@ class WebFetchTool(Tool):
         # Validate URL before fetching
         is_valid, error_msg = _validate_url(url)
         if not is_valid:
-            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url})
+            return "Error: " + json.dumps(
+                {"error": f"URL validation failed: {error_msg}", "url": url}
+            )
 
         try:
             async with httpx.AsyncClient(
@@ -146,7 +148,7 @@ class WebFetchTool(Tool):
                 }
             )
         except Exception as e:
-            return json.dumps({"error": str(e), "url": url})
+            return "Error: " + json.dumps({"error": str(e), "url": url})
 
     def _to_markdown(self, html: str) -> str:
         """Convert HTML to markdown."""

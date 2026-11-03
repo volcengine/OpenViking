@@ -86,7 +86,13 @@ class VikingDBCollection(ICollection):
         except json.JSONDecodeError:
             return {}
 
-    def _console_get(self, params: Optional[Dict[str, Any]], action: str):
+    def _console_get(
+        self,
+        params: Optional[Dict[str, Any]],
+        action: str,
+        *,
+        raise_on_error: bool = False,
+    ):
         if params is None:
             params = {}
         path, method = VIKINGDB_APIS[action]
@@ -94,12 +100,16 @@ class VikingDBCollection(ICollection):
         response = self.client.do_req(method, path=path, req_body=params)
 
         if response.status_code != 200:
+            if raise_on_error:
+                raise self._build_response_error(response, action)
             logger.error(f"Request to {action} failed: {response.text}")
             return {}
         try:
             result = response.json()
             return result.get("Result", {})
         except json.JSONDecodeError:
+            if raise_on_error:
+                raise self._build_response_error(response, action)
             return {}
 
     def _data_post(self, path: str, data: Dict[str, Any]):
@@ -136,12 +146,16 @@ class VikingDBCollection(ICollection):
 
         return self._console_post(data, action="UpdateVikingdbCollection")
 
-    def get_meta_data(self):
+    def get_meta_data(self, *, raise_on_error: bool = False):
         params = {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
         }
-        return self._console_get(params, action="GetVikingdbCollection")
+        return self._console_get(
+            params,
+            action="GetVikingdbCollection",
+            raise_on_error=raise_on_error,
+        )
 
     def close(self):
         pass
@@ -373,6 +387,8 @@ class VikingDBCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
@@ -381,6 +397,8 @@ class VikingDBCollection(ICollection):
             "index_name": index_name,
             "keywords": keywords,
             "query": query,
+            "mode": mode,
+            "fields": fields,
             "filter": filters,
             "output_fields": output_fields,
             "limit": limit,

@@ -28,9 +28,19 @@ openviking-server --config ~/.openviking/ov.conf
 curl http://localhost:1933/health
 ```
 
-## 安装方式一：发布包安装
+## 安装方式一：一键安装（推荐）
 
-普通用户推荐通过 OpenCode 的 package plugin 机制启用：
+OpenCode 与其他记忆插件共用同一个安装器。它会询问要安装的宿主和 OpenViking 凭据：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+```
+
+安装器会把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
+
+## 安装方式二：发布包安装
+
+也可以通过 OpenCode 的 package plugin 机制启用：
 
 ```json
 {
@@ -40,7 +50,7 @@ curl http://localhost:1933/health
 
 这份 `plugin` 配置同时兼容 v1 和 v2；v2 会在加载时规范化为原生的 `plugins`，无需手工迁移配置。
 
-## 安装方式二：源码安装
+## 安装方式三：源码安装
 
 用于开发调试或 PR 测试。OpenCode 推荐插件目录：
 
@@ -113,7 +123,6 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
       "recallTokenBudget": 2000,
       "minQueryLength": 3,
       "commitTokenThreshold": 20000,
-      "commitKeepRecentCount": 10,
       "profileTokenBudget": 10000,
       "skillCatalog": true,
       "skillCatalogTokenBudget": 1200,
@@ -169,7 +178,7 @@ OpenCode 的 `mcp.openviking` 配置。
 进入新的 OpenCode session 后，可以让 agent 浏览 OpenViking memory，或搜索一个已索引的资源。插件应暴露 OpenViking MCP server，OpenCode 中的工具名会带 `openviking_` 前缀：
 
 - `openviking_search`、`openviking_find`
-- `openviking_read`、`openviking_list`、`openviking_tree`、`openviking_grep`、`openviking_glob`
+- `openviking_read`、`openviking_download`、`openviking_list`、`openviking_tree`、`openviking_grep`、`openviking_glob`
 - `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 
@@ -194,6 +203,7 @@ curl http://localhost:1933/health
 - `openviking_find`：快速语义检索
 - `openviking_remember`：存储重要事实或决策，供记忆提取
 - `openviking_read`：读取一个或多个 `viking://` 文件
+- `openviking_download`：获取一次性 URL，用 `curl` 下载文件原始字节
 - `openviking_list`：列出 `viking://` 目录
 - `openviking_tree`：展示 `viking://` 目录树
 - `openviking_grep`：精确文本或正则搜索

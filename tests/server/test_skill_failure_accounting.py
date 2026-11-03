@@ -30,7 +30,7 @@ def _fail_package_summaries(monkeypatch, name):
 async def _assert_failed_package_settled(client, failed_paths):
     # Resource follow-up work may include a separate parent refresh. Wait for
     # the whole queue, including that work, before checking its final counts.
-    waited = await client.post("/api/v1/system/wait", json={"timeout": 5})
+    waited = await client.post("/api/v1/system/wait", json={})
     assert waited.status_code == 200, waited.text
     assert waited.json()["result"]["Semantic"]["error_count"] == 1
     queue_manager = get_queue_manager()
@@ -58,7 +58,7 @@ async def test_failed_skill_files_do_not_break_global_wait_or_followup_work(
         {"references/a.md": "First attachment", "references/b.md": "Second attachment"},
     )
     response = await client.post(
-        "/api/v1/skills", json={"temp_file_id": upload, "wait": True, "timeout": 5}
+        "/api/v1/skills", json={"temp_file_id": upload, "wait": True}
     )
     assert response.status_code == 500, response.text
     # The request still reports every failed file, not merely the first failure.
@@ -99,7 +99,7 @@ async def test_update_with_multiple_file_failures_restores_package_and_settles_q
 
     response = await client.put(
         f"/api/v1/skills/{name}",
-        json={"temp_file_id": upload, "wait": True, "timeout": 5},
+        json={"temp_file_id": upload, "wait": True},
     )
     assert response.status_code == 500, response.text
     for path in failed_paths:

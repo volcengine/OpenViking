@@ -65,11 +65,11 @@ export interface TakeoverIo {
   syncBranch?: (branch: any[]) => Promise<SyncBranchResult> | SyncBranchResult;
   /** Drain this session's queue within `budgetMs`; true once nothing of it is undelivered. */
   flush?: (budgetMs?: number) => Promise<boolean> | boolean;
-  commit?: (opts?: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number }) => Promise<unknown> | unknown;
+  commit?: (opts?: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean }) => Promise<unknown> | unknown;
   /** Read one archive's `.overview.md` by its uri; null until it is ready. */
-  readArchiveOverview?: (archiveUri: string) => Promise<string | null> | string | null;
+  readArchiveOverview?: (archiveUri: string, timeoutMs?: number) => Promise<string | null> | string | null;
   /** An archive's terminal state from its `.done` / `.failed.json` markers; null when unknown. */
-  archiveState?: (archiveUri: string) => Promise<"completed" | "failed" | "pending" | null> | string | null;
+  archiveState?: (archiveUri: string, timeoutMs?: number) => Promise<"completed" | "failed" | "pending" | null> | string | null;
   /** Exact server keep_recent_count for a retained tail (message count). */
   captureCount?: (branchSlice: any[]) => number;
   persistEntry?: (customType: string, data: TakeoverPersistedState) => void;
@@ -163,6 +163,6 @@ export class TakeoverCore {
   recordCaptureGap(): void;
   persistedState(): TakeoverPersistedState;
   persist(): void;
-  readOverviewOnce(archiveUri: string): Promise<string>;
-  pollArchiveOverview(archiveUri: string, signal?: AbortSignal, until?: number): Promise<string>;
+  readOverviewOnce(archiveUri: string, timeoutMs?: number): Promise<string>;
+  pollArchiveOverview(archiveUri: string, signal?: AbortSignal, until?: number): Promise<{ overview: string; terminal: boolean }>;
 }

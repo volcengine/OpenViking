@@ -1,53 +1,75 @@
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
+from scrapy import Request, Spider
+from scrapy.crawler import Crawler
+from scrapy.downloadermiddlewares.httpproxy import HttpProxyMiddleware
+from scrapy.downloadermiddlewares.redirect import RedirectMiddleware
 from scrapy.exceptions import IgnoreRequest
+from scrapy.http import Response
+from scrapy.settings import Settings
 
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
-from openviking.parse.accessors.web_crawler.middlewares import RequestValidatorMiddleware
+from openviking.parse.accessors.web_crawler.middlewares import (
+    ParserNetworkProxyMiddleware,
+    RequestValidatorMiddleware,
+)
 
 
-def _make_spider(validator):
-    spider = MagicMock()
-    spider.config = CrawlConfig(request_validator=validator)
-    return spider
-
-
-def _make_request(url):
-    request = MagicMock()
-    request.url = url
-    return request
-
-
-class TestRequestValidatorMiddleware:
-    def test_passes_through_when_validator_accepts(self):
-        mw = RequestValidatorMiddleware()
-        spider = _make_spider(validator=lambda _url: None)
-        request = _make_request("https://example.com/")
-        assert mw.process_request(request, spider) is None
-
+class TestParserRequestRouting:
     def test_raises_ignore_when_validator_rejects(self):
-        mw = RequestValidatorMiddleware()
-
         def reject(url):
             raise ValueError(f"private address: {url}")
 
-        spider = _make_spider(validator=reject)
-        request = _make_request("http://169.254.169.254/latest/meta-data/")
-        with pytest.raises(IgnoreRequest) as exc_info:
-            mw.process_request(request, spider)
-        assert "private address" in str(exc_info.value)
+        spider = SimpleNamespace(config=CrawlConfig(request_validator=reject))
+        request = Request("http://169.254.169.254/latest/meta-data/")
+        with pytest.raises(IgnoreRequest, match="private address"):
+            RequestValidatorMiddleware().process_request(request, spider)
 
-    def test_no_op_when_validator_unset(self):
-        mw = RequestValidatorMiddleware()
-        spider = _make_spider(validator=None)
-        request = _make_request("https://example.com/")
-        assert mw.process_request(request, spider) is None
+    def test_redirects_revalidate_and_select_proxy_or_direct_route(self):
+        environment = {
+            "HTTP_PROXY": "http://http-proxy.example:8118",
+            "HTTPS_PROXY": "http://https-proxy.example:8118",
+            "NO_PROXY": "93.184.0.0/16",
+        }
+        seen = []
+        spider = SimpleNamespace(
+            config=CrawlConfig(request_validator=seen.append),
+            network_env=environment,
+        )
+        validator = RequestValidatorMiddleware()
+        routing = ParserNetworkProxyMiddleware()
+        redirects = RedirectMiddleware.from_crawler(Crawler(Spider, Settings()))
 
-    def test_validator_receives_request_url(self):
-        mw = RequestValidatorMiddleware()
-        seen: list[str] = []
-        spider = _make_spider(validator=lambda url: seen.append(url))
-        request = _make_request("https://example.com/redirected-target")
-        mw.process_request(request, spider)
-        assert seen == ["https://example.com/redirected-target"]
+        with patch.dict("os.environ", environment, clear=True):
+            native_proxy = HttpProxyMiddleware()
+            request = Request("http://example.com/start")
+            validator.process_request(request, spider)
+            routing.process_request(request, spider)
+            native_proxy.process_request(request, spider)
+            assert request.meta["proxy"] == environment["HTTP_PROXY"]
+
+            response = Response(
+                request.url, status=301, headers={"Location": "https://example.com/final"}
+            )
+            request = redirects.process_response(request, response, spider)
+            validator.process_request(request, spider)
+            routing.process_request(request, spider)
+            native_proxy.process_request(request, spider)
+            assert request.meta["proxy"] == environment["HTTPS_PROXY"]
+
+            response = Response(
+                request.url, status=302, headers={"Location": "http://93.184.216.34/article"}
+            )
+            request = redirects.process_response(request, response, spider)
+            validator.process_request(request, spider)
+            routing.process_request(request, spider)
+            native_proxy.process_request(request, spider)
+            assert request.meta["proxy"] is None
+
+        assert seen == [
+            "http://example.com/start",
+            "https://example.com/final",
+            "http://93.184.216.34/article",
+        ]

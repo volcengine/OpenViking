@@ -13,10 +13,11 @@ from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs._base import logger
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.grep_config import GrepEngine
 
 _GREP_LS_PAGE_SIZE = 1000
+_FULLTEXT_UNSUPPORTED_CACHE_TTL = 60.0
 
 
 def _pkg():
@@ -41,6 +42,7 @@ class _GrepMixin:
         include_tags: bool = False,
         before_context: int = 0,
         after_context: int = 0,
+        force_fs: bool = False,
     ) -> Dict:
         """Content search by pattern or keywords.
 
@@ -68,7 +70,7 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        await self._ensure_access(uri, ctx)
+        # stat() authorizes the requested path.
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
         await self.stat(uri, ctx=ctx, skip_count=True)
@@ -83,24 +85,24 @@ class _GrepMixin:
         # persisted raw content, so it cannot safely recall projected results.
         resolved_engine = (
             "fs"
-            if content_transform is not None or is_session_uri(uri)
+            if force_fs or content_transform is not None or is_session_uri(uri)
             else await self._resolve_grep_engine(engine, uri, ctx, switch_to_remote_threshold)
         )
         tags_by_uri: Dict[str, List[str]] = {}
-        if tag_filter is not None and resolved_engine == "fs":
+        if tag_filter is not None and resolved_engine in {"fs", "opengauss_fs"}:
             vector_store = self._get_vector_store()
             if vector_store is None:
                 return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
-            records = await vector_store.filter(
-                filter=And(
+            records = await self._grep_tag_records(
+                vector_store,
+                And(
                     [
                         PathScope("uri", uri, depth=level_limit),
                         RawDSL(tag_filter),
                     ]
                 ),
-                limit=100000,
-                output_fields=["uri", "search_tags"],
-                ctx=ctx,
+                ctx,
+                ordered=resolved_engine == "opengauss_fs",
             )
             allowed_uris = {str(record["uri"]) for record in records if record.get("uri")}
             if not allowed_uris:
@@ -111,35 +113,42 @@ class _GrepMixin:
                 if record.get("uri")
             }
 
-        if resolved_engine == "fs":
-            result = await self._grep_fs(
-                uri=uri,
-                pattern=pattern,
-                exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                ctx=ctx,
-                content_transform=content_transform,
-                allowed_uris=allowed_uris,
-                before_context=before_context,
-                after_context=after_context,
-            )
-        else:  # "vikingdb_then_fs"
-            result = await self._grep_vikingdb_then_fs(
-                uri=uri,
-                pattern=pattern,
-                exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                ctx=ctx,
-                allowed_uris=allowed_uris,
-                tag_filter=tag_filter,
-                include_tags=include_tags,
-                before_context=before_context,
-                after_context=after_context,
-            )
+        try:
+            if resolved_engine in {"fs", "opengauss_fs"}:
+                result = await self._grep_fs(
+                    uri=uri,
+                    pattern=pattern,
+                    exclude_uri=exclude_uri,
+                    case_insensitive=case_insensitive,
+                    node_limit=node_limit,
+                    level_limit=level_limit,
+                    ctx=ctx,
+                    content_transform=content_transform,
+                    allowed_uris=allowed_uris,
+                    before_context=before_context,
+                    after_context=after_context,
+                )
+            else:  # BM25 candidates followed by precise filesystem matching.
+                route_kwargs = (
+                    {"engine": resolved_engine} if resolved_engine == "opengauss_then_fs" else {}
+                )
+                result = await self._grep_vikingdb_then_fs(
+                    uri=uri,
+                    pattern=pattern,
+                    exclude_uri=exclude_uri,
+                    case_insensitive=case_insensitive,
+                    node_limit=node_limit,
+                    level_limit=level_limit,
+                    ctx=ctx,
+                    allowed_uris=allowed_uris,
+                    tag_filter=tag_filter,
+                    include_tags=include_tags,
+                    before_context=before_context,
+                    after_context=after_context,
+                    **route_kwargs,
+                )
+        except re.error as exc:
+            raise InvalidArgumentError(f"Invalid grep pattern: {exc}") from exc
         return self._attach_grep_tags(result, tags_by_uri)
 
     async def _resolve_grep_engine(
@@ -161,31 +170,34 @@ class _GrepMixin:
             backend_type = getattr(vector_store, "_backend_type", "unknown")
         # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
         # only these backends store the ``content`` field required for full-text grep.
-        if backend_type not in ("volcengine", "vikingdb"):
+        if backend_type not in ("volcengine", "vikingdb", "opengauss"):
             return "fs"
 
+        fallback_engine = "opengauss_fs" if backend_type == "opengauss" else "fs"
         # Check collection has content field and FullText config
         if not await self._collection_has_fulltext(vector_store, ctx):
-            return "fs"
+            return fallback_engine
 
         # switch_to_remote_threshold=0 means always use vikingdb
         if switch_to_remote_threshold == 0:
-            return "vikingdb_then_fs"
+            return "opengauss_then_fs" if backend_type == "opengauss" else "vikingdb_then_fs"
 
         # Check data volume threshold
         try:
             count = await self._get_cached_count(uri, ctx)
             if count < switch_to_remote_threshold:
-                return "fs"
+                return fallback_engine
         except Exception:
             logger.debug(
                 "grep engine=auto: count() check failed, falling back to fs", exc_info=True
             )
-            return "fs"
+            return fallback_engine
 
-        return "vikingdb_then_fs"
+        return "opengauss_then_fs" if backend_type == "opengauss" else "vikingdb_then_fs"
 
-    async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
+    async def _collection_has_fulltext(
+        self, vector_store, ctx, supported_modes=None, raise_on_error: bool = False
+    ) -> bool:
         """Check if collection has content field and FullText config.
 
         The cache is scoped by Account and collection identity because one
@@ -203,15 +215,23 @@ class _GrepMixin:
             str(getattr(backend, "collection_name", getattr(backend, "_collection_name", ""))),
             str(getattr(backend, "index_name", getattr(backend, "_index_name", ""))),
         )
-        if cache_key in self._fulltext_available:
-            return self._fulltext_available[cache_key]
+        if supported_modes is not None and getattr(backend, "_mode", None) not in supported_modes:
+            return False
+        cached = self._fulltext_available.get(cache_key)
+        if cached is not None:
+            supported, expires_at = cached
+            if expires_at is None or time.monotonic() < expires_at:
+                return supported
+            del self._fulltext_available[cache_key]
         try:
             meta = None
             if hasattr(vector_store, "get_collection_meta"):
-                meta = await vector_store.get_collection_meta(ctx=ctx)
-            if not meta:
-                self._fulltext_available[cache_key] = False
-                return False
+                meta = await vector_store.get_collection_meta(
+                    ctx=ctx,
+                    raise_on_error=raise_on_error,
+                )
+            if not isinstance(meta, dict) or not isinstance(meta.get("Fields"), list):
+                raise RuntimeError("Vector backend returned invalid collection metadata")
             fields = meta.get("Fields", [])
             has_content = any(
                 f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
@@ -219,9 +239,21 @@ class _GrepMixin:
             fulltext = meta.get("FullText") or []
             has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
             result = has_content and has_content_fulltext
-            self._fulltext_available[cache_key] = result
+            expires_at = None if result else time.monotonic() + _FULLTEXT_UNSUPPORTED_CACHE_TTL
+            self._fulltext_available[cache_key] = (result, expires_at)
             return result
         except Exception:
+            if raise_on_error:
+                logger.error(
+                    "Failed to check collection fulltext config: "
+                    "account_id=%s backend=%s collection=%s index=%s",
+                    account_id,
+                    cache_key[1],
+                    cache_key[2],
+                    cache_key[3],
+                    exc_info=True,
+                )
+                raise
             logger.debug(
                 "Failed to check collection fulltext config, assuming no fulltext", exc_info=True
             )
@@ -265,11 +297,7 @@ class _GrepMixin:
         after_context=0,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
-        native_safe = (
-            content_transform is None
-            and allowed_uris is None
-            and await self._session_native_grep_safe(uri, ctx)
-        )
+        native_safe = content_transform is None and allowed_uris is None
         if native_safe:
             try:
                 # Session grep historically used the Python fallback, where
@@ -309,37 +337,6 @@ class _GrepMixin:
             after_context=after_context,
         )
 
-    async def _session_native_grep_safe(self, uri: str, ctx: Optional[RequestContext]) -> bool:
-        """Return whether native grep sees every visible path for ``uri``.
-
-        Canonical session reads merge the current user namespace with two
-        historical storage layouts. Native AGFS grep accepts one physical
-        root, so it is complete only when no visible legacy candidate exists.
-        """
-        legacy_uri = self._legacy_session_alias(uri)
-        if legacy_uri is None:
-            return True
-
-        real_ctx = self._ctx_or_default(ctx)
-        if self._is_session_root_uri(uri):
-            primary_path = self._uri_to_path(uri, ctx=ctx)
-            if not await self._agfs_path_exists(primary_path):
-                return False
-            legacy_path = self._legacy_session_path(legacy_uri, ctx=ctx)
-            owner_user_id = self._safe_uri_parts(uri)[1]
-            legacy_items = await self._legacy_session_root_items(
-                legacy_path, real_ctx, uri.rstrip("/"), owner_user_id
-            )
-            return not legacy_items
-
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        for path in self._read_paths(uri, ctx=ctx)[1:]:
-            if not await self._agfs_path_exists(path):
-                continue
-            if await self._read_path_visible(uri, path, primary_path, real_ctx):
-                return False
-        return True
-
     async def _grep_vikingdb_then_fs(
         self,
         uri,
@@ -354,6 +351,7 @@ class _GrepMixin:
         include_tags=False,
         before_context=0,
         after_context=0,
+        engine="vikingdb_then_fs",
     ):
         """VikingDB bm25 recall + local fs precise matching."""
         vector_store = self._get_vector_store()
@@ -411,16 +409,16 @@ class _GrepMixin:
             logger.warning(f"grep vikingdb step failed, falling back to fs: {e}")
             if tag_filter is not None and allowed_uris is None:
                 try:
-                    records = await vector_store.filter(
-                        filter=And(
+                    records = await self._grep_tag_records(
+                        vector_store,
+                        And(
                             [
                                 PathScope("uri", uri, depth=level_limit),
                                 RawDSL(tag_filter),
                             ]
                         ),
-                        limit=100000,
-                        output_fields=["uri", "search_tags"],
-                        ctx=ctx,
+                        ctx,
+                        ordered=engine in {"opengauss_then_fs", "opengauss_fs"},
                     )
                 except Exception as filter_error:
                     logger.warning(
@@ -486,6 +484,33 @@ class _GrepMixin:
                 if record.get("uri")
             },
         )
+
+    async def _grep_tag_records(self, vector_store, filter, ctx, ordered=False):
+        if not ordered:
+            return await vector_store.filter(
+                filter=filter,
+                limit=100000,
+                output_fields=["uri", "search_tags"],
+                ctx=ctx,
+            )
+
+        # Unordered OG filters dispatch to random ANN sampling, not a full tag listing.
+        records = []
+        offset = 0
+        while True:
+            page = await vector_store.filter(
+                filter=filter,
+                limit=100000,
+                offset=offset,
+                order_by="id",
+                order_desc=False,
+                output_fields=["uri", "search_tags"],
+                ctx=ctx,
+            )
+            records.extend(page)
+            if len(page) < 100000:
+                return records
+            offset += len(page)
 
     @staticmethod
     def _attach_grep_tags(result: Dict, tags_by_uri: Dict[str, List[str]]) -> Dict:

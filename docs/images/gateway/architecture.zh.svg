@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100">
+<rect x="0" y="0" width="1600" height="1100" rx="20" fill="#FFFFFF" stroke="none" stroke-width="0"/>
+<text x="40" y="52" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="24" font-weight="700" fill="#1F2329" text-anchor="start">OpenViking 网关在哪里运行，数据存在哪里</text>
+<text x="40" y="142" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#3370FF" text-anchor="start">客户端</text>
+<rect x="40" y="160" width="220" height="64" rx="10" fill="#EAF2FF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="150" y="198" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#1F2329" text-anchor="middle">Claude Code · Codex</text>
+<polyline points="260,192 274,192" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<rect x="40" y="242" width="220" height="64" rx="10" fill="#EAF2FF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="150" y="280" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#1F2329" text-anchor="middle">聊天应用 · SDK 应用</text>
+<polyline points="260,274 274,274" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<rect x="40" y="324" width="220" height="64" rx="10" fill="#EAF2FF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="150" y="362" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#1F2329" text-anchor="middle">低代码平台 · 其他 Agent</text>
+<polyline points="260,356 274,356" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<rect x="40" y="412" width="220" height="90" rx="10" fill="#F5F9FF" stroke="#3370FF" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="56" y="438" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">只改两项设置</text>
+<text x="56" y="463" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">Base URL → 网关</text>
+<text x="56" y="487" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">API Key → 网关密钥</text>
+<polyline points="274,192 274,715" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="274,274 341,274" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="350,274 340,278 340,270" fill="#646A73"/>
+<polyline points="274,715 341,715" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="350,715 340,719 340,711" fill="#646A73"/>
+<rect x="320" y="90" width="890" height="455" rx="14" fill="#FCFBFF" stroke="#B7A3F0" stroke-width="1.5" stroke-dasharray="8 6"/>
+<text x="340" y="122" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#6425D0" text-anchor="start">嵌入 · 网关运行在 OpenViking Server 内</text>
+<text x="340" y="146" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">同一进程、同一端口（:1933）· 用 gateway.enabled 开启</text>
+<rect x="350" y="170" width="170" height="340" rx="10" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.5"/>
+<text x="435" y="204" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#1F2329" text-anchor="middle">Server 端口</text>
+<text x="435" y="227" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="600" fill="#6425D0" text-anchor="middle">:1933</text>
+<text x="435" y="266" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="middle">网关路径</text>
+<text x="435" y="288" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="700" fill="#1F2329" text-anchor="middle">/gateway/</text>
+<text x="435" y="308" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">模型 API</text>
+<text x="435" y="328" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">工具上传</text>
+<text x="435" y="348" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">管理 API</text>
+<text x="435" y="418" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#646A73" text-anchor="middle">其他路径</text>
+<text x="435" y="440" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#646A73" text-anchor="middle">OpenViking 接口</text>
+<text x="435" y="460" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#646A73" text-anchor="middle">和 Studio</text>
+<polyline points="520,250 561,250" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="570,250 560,254 560,246" fill="#646A73"/>
+<polyline points="520,470 561,470" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="570,470 560,474 560,466" fill="#646A73"/>
+<rect x="570" y="170" width="330" height="170" rx="10" fill="#F3EEFF" stroke="#7F3BF5" stroke-width="2.5"/>
+<text x="590" y="206" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="700" fill="#1F2329" text-anchor="start">OpenViking 网关</text>
+<rect x="588" y="222" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="662.0" y="243.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">召回记忆</text>
+<rect x="748" y="222" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="822.0" y="243.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">原样回放</text>
+<rect x="588" y="262" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="662.0" y="283.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">保存对话</text>
+<rect x="748" y="262" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="822.0" y="283.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">压缩历史</text>
+<text x="590" y="322" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">可选：执行 OpenViking 工具</text>
+<polyline points="650,352 650,418" fill="none" stroke="#7F3BF5" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="650,430 644.5,418 655.5,418" fill="#7F3BF5"/>
+<polygon points="650,340 655.5,352 644.5,352" fill="#7F3BF5"/>
+<text x="664" y="362" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="start">本机回环 HTTP，以用户身份、</text>
+<text x="664" y="380.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="start">使用其本人的 OpenViking 密钥</text>
+<text x="664" y="399" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#7F3BF5" text-anchor="start">① 检索 ≤ 2 秒 · ② 保存 · ③ 工具</text>
+<rect x="570" y="430" width="330" height="90" rx="10" fill="#E6DCFF" stroke="#6425D0" stroke-width="2"/>
+<text x="590" y="460" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="start">OpenViking Server 核心</text>
+<text x="590" y="484" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">检索 · 会话 · 记忆提取</text>
+<text x="590" y="505" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">Studio · 会话和记忆的唯一来源</text>
+<polyline points="900,322 1065,344" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round" stroke-dasharray="2 5"/>
+<ellipse cx="1065.0" cy="516" rx="125.0" ry="16" fill="#FAF8FF" stroke="#7F3BF5" stroke-width="1.5"/>
+<rect x="940" y="362" width="250" height="154" rx="0" fill="#FAF8FF" stroke="none" stroke-width="0"/>
+<line x1="940" y1="362" x2="940" y2="516" stroke="#7F3BF5" stroke-width="1.5"/>
+<line x1="1190" y1="362" x2="1190" y2="516" stroke="#7F3BF5" stroke-width="1.5"/>
+<ellipse cx="1065.0" cy="362" rx="125.0" ry="16" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
+<text x="1065" y="400" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">网关本地状态</text>
+<text x="1065" y="421" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">默认 SQLite，也可用 Redis</text>
+<text x="1065" y="446" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">管理库：上游、密钥、</text>
+<text x="1065" y="465" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">上下文配置、请求日志</text>
+<text x="1065" y="490" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">对话状态库：补充的记忆、</text>
+<text x="1065" y="509" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">摘要、未保存的轮次</text>
+<rect x="320" y="575" width="890" height="440" rx="14" fill="#FCFBFF" stroke="#B7A3F0" stroke-width="1.5" stroke-dasharray="8 6"/>
+<text x="340" y="607" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#6425D0" text-anchor="start">独立 · openviking-gateway 连接已有的 OpenViking</text>
+<text x="340" y="631" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">自己的端口（:1935）和 Studio · 开源版或商业版均可 · 无需修改服务端</text>
+<rect x="350" y="655" width="170" height="200" rx="10" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.5"/>
+<text x="435" y="690" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#1F2329" text-anchor="middle">网关端口</text>
+<text x="435" y="713" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="600" fill="#7F3BF5" text-anchor="middle">:1935</text>
+<text x="435" y="752" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">模型 API、</text>
+<text x="435" y="772" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">上传、</text>
+<text x="435" y="792" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">管理 API</text>
+<text x="435" y="812" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">和 Studio</text>
+<polyline points="520,715 561,715" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="570,715 560,719 560,711" fill="#646A73"/>
+<rect x="570" y="655" width="330" height="150" rx="10" fill="#F3EEFF" stroke="#7F3BF5" stroke-width="2.5"/>
+<text x="590" y="691" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="700" fill="#1F2329" text-anchor="start">OpenViking 网关</text>
+<rect x="588" y="707" width="294" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="735.0" y="728.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">召回、回放、保存、压缩与嵌入相同</text>
+<rect x="588" y="747" width="294" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="735.0" y="768.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Studio：只有网关相关页面</text>
+<polyline points="650,817 650,863" fill="none" stroke="#7F3BF5" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="650,875 644.5,863 655.5,863" fill="#7F3BF5"/>
+<polygon points="650,805 655.5,817 644.5,817" fill="#7F3BF5"/>
+<text x="664" y="832" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="start">HTTP(S)，以用户身份、</text>
+<text x="664" y="851" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="start">使用其本人的 OpenViking 密钥</text>
+<rect x="570" y="875" width="330" height="110" rx="10" fill="#E6DCFF" stroke="#6425D0" stroke-width="2"/>
+<text x="590" y="905" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="start">已有的 OpenViking 服务</text>
+<text x="590" y="929" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">开源版或 OpenViking 商业版</text>
+<text x="590" y="950" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">服务端配置无需修改</text>
+<text x="590" y="971" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">会话和记忆的唯一来源</text>
+<polyline points="900,795 1065,814" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round" stroke-dasharray="2 5"/>
+<ellipse cx="1065.0" cy="960" rx="125.0" ry="16" fill="#FAF8FF" stroke="#7F3BF5" stroke-width="1.5"/>
+<rect x="940" y="830" width="250" height="130" rx="0" fill="#FAF8FF" stroke="none" stroke-width="0"/>
+<line x1="940" y1="830" x2="940" y2="960" stroke="#7F3BF5" stroke-width="1.5"/>
+<line x1="1190" y1="830" x2="1190" y2="960" stroke="#7F3BF5" stroke-width="1.5"/>
+<ellipse cx="1065.0" cy="830" rx="125.0" ry="16" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
+<text x="1065" y="868" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">网关本地状态</text>
+<text x="1065" y="896" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">相同的存储选项：</text>
+<text x="1065" y="915" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">本地 SQLite 或共享 Redis</text>
+<text x="1260" y="142" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#FF8800" text-anchor="start">上游模型服务商</text>
+<rect x="1260" y="160" width="300" height="620" rx="10" fill="#FFF3E8" stroke="#FF8800" stroke-width="1.5"/>
+<text x="1410" y="420" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">Anthropic · OpenAI · DeepSeek</text>
+<text x="1410" y="450" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">火山方舟</text>
+<text x="1410" y="480" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">BytePlus ModelArk</text>
+<text x="1410" y="510" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">兼容的自建 API</text>
+<text x="1260" y="808" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">能看到完整的模型输入，</text>
+<text x="1260" y="830" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">包括补充的记忆</text>
+<polyline points="900,200 1251,200" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1260,200 1250,204 1250,196" fill="#646A73"/>
+<rect x="969.6" y="176" width="220.8" height="21" rx="3" fill="#FCFBFF" stroke="#FCFBFF" stroke-width="0"/>
+<text x="1080" y="192" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">同一种 API：原始请求 + 记忆</text>
+<polyline points="1260,290 909,290" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="900,290 910,286 910,294" fill="#646A73"/>
+<rect x="1029.0" y="300" width="102" height="21" rx="3" fill="#FCFBFF" stroke="#FCFBFF" stroke-width="0"/>
+<text x="1080" y="316" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">回复流式返回</text>
+<polyline points="900,680 1251,680" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1260,680 1250,684 1250,676" fill="#646A73"/>
+<rect x="969.6" y="656" width="220.8" height="21" rx="3" fill="#FCFBFF" stroke="#FCFBFF" stroke-width="0"/>
+<text x="1080" y="672" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">同一种 API：原始请求 + 记忆</text>
+<polyline points="1260,750 909,750" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="900,750 910,746 910,754" fill="#646A73"/>
+<rect x="1029.0" y="760" width="102" height="21" rx="3" fill="#FCFBFF" stroke="#FCFBFF" stroke-width="0"/>
+<text x="1080" y="776" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">回复流式返回</text>
+<polyline points="40,1056 68,1056" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<text x="76" y="1061" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">每个请求</text>
+<text x="146" y="1061" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">  ·  </text>
+<polyline points="172,1056 200,1056" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<text x="208" y="1061" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">其他 OpenViking 流量</text>
+<text x="371.59999999999997" y="1061" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">  ·  </text>
+<circle cx="403.59999999999997" cy="1056" r="6" fill="#FF8800"/>
+<text x="415.59999999999997" y="1061" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">OpenViking 不可用：对话继续，只是没有记忆</text>
+<text x="736.3999999999999" y="1061" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">  ·  </text>
+<circle cx="768.3999999999999" cy="1056" r="6" fill="#F54A45"/>
+<text x="780.3999999999999" y="1061" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">网关不可用：经过它的模型调用全部失败</text>
+</svg>

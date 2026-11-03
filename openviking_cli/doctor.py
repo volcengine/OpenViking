@@ -544,8 +544,7 @@ def check_vikingbot() -> CheckResult:
                 return (
                     "warn",
                     "server.auth_mode=trusted without server.root_api_key",
-                    "Configure server.root_api_key for VikingBot trusted OpenViking calls "
-                    "outside localhost",
+                    "Configure server.root_api_key; trusted mode requires it even on localhost",
                 )
             return (
                 "warn",
