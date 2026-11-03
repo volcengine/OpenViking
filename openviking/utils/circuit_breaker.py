@@ -114,6 +114,7 @@ class CircuitBreaker:
             return
 
         with self._lock:
+            previous_state = self._state
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
 
@@ -142,7 +143,8 @@ class CircuitBreaker:
                     f"Circuit breaker tripped after {self._failure_count} consecutive "
                     f"failures: {error}"
                 )
-            if self._state == _STATE_OPEN:
+            if previous_state != _STATE_OPEN and self._state == _STATE_OPEN:
                 # Keep the failure available to consumers of subsequent blocked
-                # calls; the breaker itself does not decide its API status.
+                # calls. Failures already in flight must not replace the reason
+                # that actually opened the breaker.
                 self._opening_error = error

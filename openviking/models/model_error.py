@@ -7,7 +7,7 @@ from __future__ import annotations
 import functools
 import inspect
 import re
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import Any, Callable, TypeVar, cast
 
 
@@ -58,10 +58,12 @@ _CODE_KINDS = {
     "ACCOUNTQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "MODELQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "QUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
+    "BILLINGDISABLED": ModelErrorKind.QUOTA_EXHAUSTED,
     "BILLINGHARDLIMITREACHED": ModelErrorKind.QUOTA_EXHAUSTED,
     "ACCOUNTOVERDUE": ModelErrorKind.QUOTA_EXHAUSTED,
     # Request rate limits.
     "RATELIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
+    "SERVINGCAPACITYEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "REQUESTLIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "REQUESTBURSTTOOFAST": ModelErrorKind.RATE_LIMIT_ERROR,
     "TOOMANYREQUESTS": ModelErrorKind.RATE_LIMIT_ERROR,
@@ -82,28 +84,80 @@ _CODE_KINDS = {
     "UNSUPPORTEDVALUE": ModelErrorKind.UNSUPPORTED,
 }
 
+# MiniMax returns endpoint-specific business codes in an HTTP 200 response.
+# Keep numeric codes provider-scoped: the same number has no portable meaning
+# across model APIs. These are the codes documented for the embedding endpoint.
+_PROVIDER_CODE_KINDS = {
+    "minimax": {
+        "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+        "1002": ModelErrorKind.RATE_LIMIT_ERROR,
+        "1004": ModelErrorKind.AUTHENTICATION_ERROR,
+        "1008": ModelErrorKind.QUOTA_EXHAUSTED,
+        "1013": ModelErrorKind.INVALID_REQUEST,
+        "1026": ModelErrorKind.CONTENT_SAFETY,
+        "1027": ModelErrorKind.CONTENT_SAFETY,
+        "2013": ModelErrorKind.INVALID_REQUEST,
+        "2049": ModelErrorKind.AUTHENTICATION_ERROR,
+    }
+}
+
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
+_METRIC_ERROR_CODE_MAX_LENGTH = 64
 
-def _exception_chain(error: BaseException) -> list[BaseException]:
+
+class _EvidenceRank(IntEnum):
+    FALLBACK = 0
+    HTTP_STATUS = 1
+    SDK_CLASS = 2
+    PROVIDER_CODE = 3
+    EXPLICIT_KIND = 4
+
+
+def model_exception_chain(error: BaseException) -> list[BaseException]:
+    """Return every reachable cause/context exception once, outermost first."""
     chain: list[BaseException] = []
     seen: set[int] = set()
-    current: BaseException | None = error
-    while current is not None and id(current) not in seen:
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop(0)
+        if id(current) in seen:
+            continue
         chain.append(current)
         seen.add(id(current))
-        current = current.__cause__ or current.__context__
+        for nested in (current.__cause__, current.__context__):
+            if nested is not None and id(nested) not in seen:
+                pending.append(nested)
     return chain
 
 
 def _normalized_code(value: object) -> str | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return str(value)
     if not isinstance(value, str) or not value:
         return None
     return "".join(character for character in value.upper() if character.isalnum())
 
 
-def _body(error: BaseException) -> dict[str, Any]:
+def _kind_from_code_value(
+    value: object,
+    provider: str | None = None,
+) -> ModelErrorKind | None:
+    normalized = _normalized_code(value)
+    if normalized is None:
+        return None
+    if provider:
+        kind = _PROVIDER_CODE_KINDS.get(provider.lower(), {}).get(normalized)
+        if kind is not None:
+            return kind
+    return _CODE_KINDS.get(normalized)
+
+
+def _response_body(error: BaseException) -> dict[str, Any]:
     value = getattr(error, "body", None)
     if not isinstance(value, dict):
         response = getattr(error, "response", None)
@@ -111,12 +165,63 @@ def _body(error: BaseException) -> dict[str, Any]:
             value = response.json() if response is not None else None
         except Exception:
             value = None
-    if isinstance(value, dict):
-        nested = value.get("error")
+    return value if isinstance(value, dict) else {}
+
+
+def _body(error: BaseException) -> dict[str, Any]:
+    value = _response_body(error)
+    nested = value.get("error")
+    if isinstance(nested, dict):
+        return {**value, **nested}
+    return value
+
+
+def _normalize_metric_error_code(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, int) and 100 <= value <= 599:
+        return str(value)
+    if not isinstance(value, str):
+        return None
+    code = value.strip()
+    if not code or len(code) > _METRIC_ERROR_CODE_MAX_LENGTH:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", code):
+        return None
+    return code
+
+
+def extract_model_error_code(error: BaseException) -> str:
+    """Extract a bounded structured code without parsing free-form messages."""
+    error_chain = model_exception_chain(error)
+    for item in error_chain:
+        for attr in ("status_code", "error_code", "code"):
+            normalized = _normalize_metric_error_code(getattr(item, attr, None))
+            if normalized is not None:
+                return normalized
+
+        response = getattr(item, "response", None)
+        normalized = _normalize_metric_error_code(getattr(response, "status_code", None))
+        if normalized is not None:
+            return normalized
+
+        body = _response_body(item)
+        candidates = [body.get("status_code"), body.get("error_code"), body.get("code")]
+        nested = body.get("error")
         if isinstance(nested, dict):
-            return {**value, **nested}
-        return value
-    return {}
+            candidates.extend(
+                [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
+            )
+        for value in candidates:
+            normalized = _normalize_metric_error_code(value)
+            if normalized is not None:
+                return normalized
+
+    if any(isinstance(item, TimeoutError) for item in error_chain):
+        return "timeout"
+    if any(isinstance(item, ConnectionError) for item in error_chain):
+        return "connection_error"
+    return "unknown"
 
 
 def _error_code(error: BaseException) -> str | None:
@@ -130,6 +235,10 @@ def _error_code(error: BaseException) -> str | None:
     ):
         if isinstance(value, str) and value:
             return value
+    for value in (getattr(error, "details", None), _response_body(error)):
+        reason = _structured_reason_code(value)
+        if reason is not None:
+            return reason
     return None
 
 
@@ -144,37 +253,32 @@ def _status_code(error: BaseException) -> int | None:
     return None
 
 
-def _structured_reasons(value: object) -> set[str]:
-    reasons: set[str] = set()
+def _structured_reason_code(value: object) -> str | None:
     if isinstance(value, dict):
         for key, item in value.items():
             if key in {"reason", "status"} and isinstance(item, str):
-                normalized = _normalized_code(item)
-                if normalized:
-                    reasons.add(normalized)
-            reasons.update(_structured_reasons(item))
+                if _kind_from_code_value(item) is not None:
+                    return item
+            nested = _structured_reason_code(item)
+            if nested is not None:
+                return nested
     elif isinstance(value, (list, tuple)):
         for item in value:
-            reasons.update(_structured_reasons(item))
+            nested = _structured_reason_code(item)
+            if nested is not None:
+                return nested
     elif hasattr(value, "model_dump"):
-        reasons.update(_structured_reasons(value.model_dump()))
-    return reasons
+        return _structured_reason_code(value.model_dump())
+    return None
 
 
 def _kind_from_code(error: BaseException) -> ModelErrorKind | None:
-    normalized = _normalized_code(_error_code(error))
-    if normalized in _CODE_KINDS:
-        return _CODE_KINDS[normalized]
-
-    details = getattr(error, "details", None)
-    reasons = _structured_reasons(details)
-    if reasons & {"QUOTAEXCEEDED", "BILLINGDISABLED"}:
-        return ModelErrorKind.QUOTA_EXHAUSTED
-    if reasons & {"RATELIMITEXCEEDED", "SERVINGCAPACITYEXCEEDED"}:
-        return ModelErrorKind.RATE_LIMIT_ERROR
-    if reasons & {"APIKEYINVALID", "UNAUTHENTICATED"}:
-        return ModelErrorKind.AUTHENTICATION_ERROR
-    return None
+    provider = getattr(error, "provider", None)
+    kind = _kind_from_code_value(
+        _error_code(error),
+        provider if isinstance(provider, str) else None,
+    )
+    return kind
 
 
 def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
@@ -186,6 +290,8 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
         return ModelErrorKind.AUTHENTICATION_ERROR
     if status_code == 403:
         return ModelErrorKind.PERMISSION_DENIED
+    if status_code == 404:
+        return ModelErrorKind.MODEL_NOT_FOUND
     if status_code == 405 or status_code == 501:
         return ModelErrorKind.UNSUPPORTED
     if status_code == 413:
@@ -199,15 +305,46 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
     return None
 
 
-def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
+def _best_kind(
+    error: BaseException,
+    *,
+    class_kind: ModelErrorKind | None = None,
+    include_status: bool = True,
+    extra_kind: ModelErrorKind | None = None,
+) -> tuple[ModelErrorKind, _EvidenceRank]:
+    code_kind = _kind_from_code(error)
+    if code_kind is not None:
+        return code_kind, _EvidenceRank.PROVIDER_CODE
+    if extra_kind is not None:
+        return extra_kind, _EvidenceRank.PROVIDER_CODE
+    if class_kind is not None:
+        return class_kind, _EvidenceRank.SDK_CLASS
+    if include_status:
+        status_kind = _kind_from_status(_status_code(error))
+        if status_kind is not None:
+            return status_kind, _EvidenceRank.HTTP_STATUS
+    return ModelErrorKind.UNKNOWN, _EvidenceRank.FALLBACK
+
+
+def _sdk_kind(
+    error: BaseException,
+) -> tuple[ModelErrorKind, str, _EvidenceRank] | None:
     module = type(error).__module__
     name = type(error).__name__
     mro_names = {base.__name__ for base in type(error).__mro__}
 
     if isinstance(error, TimeoutError):
-        return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
+        return (
+            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+            "network",
+            _EvidenceRank.SDK_CLASS,
+        )
     if isinstance(error, ConnectionError):
-        return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
+        return (
+            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+            "network",
+            _EvidenceRank.SDK_CLASS,
+        )
 
     if module.startswith("openai"):
         provider = "openai"
@@ -219,8 +356,8 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "NotFoundError": ModelErrorKind.MODEL_NOT_FOUND,
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
-        kind = _kind_from_code(error)
-        if kind is None and _status_code(error) == 500:
+        extra_kind = None
+        if _kind_from_code(error) is None and _status_code(error) == 500:
             # llama.cpp reports inputs above its physical batch capacity as
             # HTTP 500 without a business code. Retrying the same input cannot help.
             message = _body(error).get("message")
@@ -229,9 +366,13 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
                 r"increase the physical batch size \(current batch size: \d+\)",
                 message,
             ):
-                kind = ModelErrorKind.INPUT_TOO_LARGE
-        kind = kind or class_kinds.get(name) or _kind_from_status(_status_code(error))
-        return kind or ModelErrorKind.UNKNOWN, provider
+                extra_kind = ModelErrorKind.INPUT_TOO_LARGE
+        kind, evidence = _best_kind(
+            error,
+            class_kind=class_kinds.get(name),
+            extra_kind=extra_kind,
+        )
+        return kind, provider, evidence
 
     if module.startswith("volcenginesdkarkruntime"):
         provider = "volcengine"
@@ -244,12 +385,8 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "ArkInternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             "ArkContentFilterFinishReasonError": ModelErrorKind.CONTENT_SAFETY,
         }
-        kind = (
-            _kind_from_code(error)
-            or class_kinds.get(name)
-            or _kind_from_status(_status_code(error))
-        )
-        return kind or ModelErrorKind.UNKNOWN, provider
+        kind, evidence = _best_kind(error, class_kind=class_kinds.get(name))
+        return kind, provider, evidence
 
     if module.startswith("litellm"):
         provider = "litellm"
@@ -266,35 +403,42 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "ServiceUnavailableError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
-        return _kind_from_code(error) or class_kinds.get(name, ModelErrorKind.UNKNOWN), provider
+        kind, evidence = _best_kind(error, class_kind=class_kinds.get(name))
+        return kind, provider, evidence
 
     if module.startswith("google.genai"):
-        kind = _kind_from_code(error)
         status_code = _status_code(error)
         # RESOURCE_EXHAUSTED is ambiguous unless Google supplies a reason.
-        if status_code == 429 and kind is None:
-            kind = ModelErrorKind.UNKNOWN
-        return kind or _kind_from_status(status_code) or ModelErrorKind.UNKNOWN, "gemini"
+        kind, evidence = _best_kind(
+            error,
+            include_status=status_code != 429 or _kind_from_code(error) is not None,
+        )
+        return kind, "gemini", evidence
 
     if module.startswith("httpx"):
         if name == "HTTPStatusError":
-            kind = _kind_from_code(error) or _kind_from_status(_status_code(error))
+            kind, evidence = _best_kind(error)
         elif "TimeoutException" in mro_names:
             kind = ModelErrorKind.TRANSIENT_NETWORK_ERROR
+            evidence = _EvidenceRank.SDK_CLASS
         elif mro_names & {"NetworkError", "TransportError", "ProtocolError", "ProxyError"}:
             kind = ModelErrorKind.TRANSIENT_NETWORK_ERROR
+            evidence = _EvidenceRank.SDK_CLASS
         else:
-            kind = None
-        return kind or ModelErrorKind.UNKNOWN, "http"
+            kind = ModelErrorKind.UNKNOWN
+            evidence = _EvidenceRank.FALLBACK
+        return kind, "http", evidence
 
     if module.startswith("requests"):
         if name == "HTTPError":
-            kind = _kind_from_code(error) or _kind_from_status(_status_code(error))
+            kind, evidence = _best_kind(error)
         elif mro_names & {"Timeout", "ConnectTimeout", "ReadTimeout", "ConnectionError"}:
             kind = ModelErrorKind.TRANSIENT_NETWORK_ERROR
+            evidence = _EvidenceRank.SDK_CLASS
         else:
-            kind = None
-        return kind or ModelErrorKind.UNKNOWN, "http"
+            kind = ModelErrorKind.UNKNOWN
+            evidence = _EvidenceRank.FALLBACK
+        return kind, "http", evidence
 
     return None
 
@@ -307,8 +451,7 @@ def model_error_from_status(
     code: str | None = None,
 ) -> ModelError:
     """Build a model error from a structured HTTP or provider status."""
-    normalized = _normalized_code(code)
-    kind = _CODE_KINDS.get(normalized) if normalized else None
+    kind = _kind_from_code_value(code, provider)
     return ModelError(
         kind or _kind_from_status(status_code) or ModelErrorKind.UNKNOWN,
         message,
@@ -318,31 +461,75 @@ def model_error_from_status(
     )
 
 
+def model_error_from_code(
+    code: str | int | None,
+    message: str,
+    *,
+    provider: str,
+) -> ModelError:
+    """Build a model error from a provider-scoped business error code."""
+    code_text = str(code) if code is not None else None
+    return ModelError(
+        _kind_from_code_value(code_text, provider) or ModelErrorKind.UNKNOWN,
+        message,
+        provider=provider,
+        code=code_text,
+    )
+
+
 def model_error_from_exception(error: BaseException) -> ModelError | None:
-    """Convert a recognized SDK/API exception at the provider boundary."""
-    for item in _exception_chain(error):
+    """Convert the strongest structured evidence in an exception graph."""
+    selected: (
+        tuple[
+            _EvidenceRank,
+            ModelErrorKind,
+            str | None,
+            BaseException,
+        ]
+        | None
+    ) = None
+
+    for item in model_exception_chain(error):
         if isinstance(item, ModelError):
-            return item
-        classified = _sdk_kind(item)
-        if classified is None:
-            continue
-        kind, provider = classified
-        return ModelError(
-            kind,
-            str(error),
-            provider=provider,
-            status_code=_status_code(item),
-            code=_error_code(item),
-        )
-    return None
+            if item.kind is not ModelErrorKind.UNKNOWN:
+                candidate = (_EvidenceRank.EXPLICIT_KIND, item.kind, item.provider, item)
+            else:
+                kind, evidence = _best_kind(
+                    item,
+                    include_status=(
+                        item.provider != "gemini"
+                        or item.status_code != 429
+                        or _kind_from_code(item) is not None
+                    ),
+                )
+                candidate = (evidence, kind, item.provider, item)
+        else:
+            classified = _sdk_kind(item)
+            if classified is None:
+                continue
+            kind, provider, evidence = classified
+            candidate = (evidence, kind, provider, item)
+
+        if selected is None or candidate[0] > selected[0]:
+            selected = candidate
+
+    if selected is None:
+        return None
+
+    _, kind, provider, source = selected
+    if isinstance(source, ModelError) and source.kind is kind:
+        return source
+    return ModelError(
+        kind,
+        str(error),
+        provider=provider,
+        status_code=_status_code(source),
+        code=_error_code(source),
+    )
 
 
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
-    for item in _exception_chain(error):
-        kind = getattr(item, "kind", None)
-        if isinstance(kind, ModelErrorKind):
-            return kind
     converted = model_error_from_exception(error)
     return converted.kind if converted is not None else None
 
@@ -365,7 +552,7 @@ def model_error_boundary(func: F) -> F:
                     raise
                 if args and isinstance(getattr(args[0], "provider", None), str):
                     converted.provider = args[0].provider
-                if any(item is converted for item in _exception_chain(error)):
+                if any(item is converted for item in model_exception_chain(error)):
                     raise converted
                 raise converted from error
 
@@ -381,7 +568,7 @@ def model_error_boundary(func: F) -> F:
                 raise
             if args and isinstance(getattr(args[0], "provider", None), str):
                 converted.provider = args[0].provider
-            if any(item is converted for item in _exception_chain(error)):
+            if any(item is converted for item in model_exception_chain(error)):
                 raise converted
             raise converted from error
 
