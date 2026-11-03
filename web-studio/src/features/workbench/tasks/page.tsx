@@ -1,4 +1,5 @@
-import { DEFAULT_ACCOUNT_ID } from '#/features/connection/lib/admin-options'
+import { adminTaskHeaders } from '#/features/connection/lib/admin-console-headers'
+import { createConnectionRoleProbeKey } from '#/features/connection/lib/connection-runtime'
 import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -104,16 +105,17 @@ export function TasksRoute({
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
     null,
   )
-  const taskScopeUnavailable =
-    management &&
-    serverMode === 'api_key' &&
-    connectionRole === 'root' &&
-    !connection.apiKey.trim() &&
-    connection.accountId !== DEFAULT_ACCOUNT_ID
+  const taskHeaders = management
+    ? adminTaskHeaders(connection, connectionRole, serverMode)
+    : undefined
+  const taskScopeUnavailable = taskHeaders === null
+  const taskIdentityScopeKey = management
+    ? `management/${createConnectionRoleProbeKey(connection, serverMode)}`
+    : `workbench/${identityScopeKey}`
   const tasksQuery = useQuery({
     enabled: !taskScopeUnavailable,
-    queryFn: () => fetchTasks(taskType, statusFilter),
-    queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
+    queryFn: () => fetchTasks(taskType, statusFilter, taskHeaders ?? undefined),
+    queryKey: ['tasks', taskIdentityScopeKey, taskType, statusFilter],
     refetchInterval: 10_000,
   })
   const rawTasks = tasksQuery.data ?? []
@@ -137,11 +139,7 @@ export function TasksRoute({
   const hasNext = page < totalPages
   const hasActiveFilters = taskType !== 'all' || statusFilter !== 'all'
 
-  const canRetry =
-    !management ||
-    Boolean(connection.apiKey.trim()) ||
-    (serverMode === 'trusted' &&
-      Boolean(connection.userId && connection.adminApiKey))
+  const canRetry = !taskScopeUnavailable
   const retryMutation = useMutation({
     mutationFn: async (task: TaskRecord) => {
       if (task.task_id?.startsWith('mock_task_')) {
@@ -153,7 +151,11 @@ export function TasksRoute({
 
       // ── 1. task_type 精确匹配优先（不受 URI 前缀干扰）──────────────────────
       if (task.task_type === 'session_commit') {
-        const res = await commitSession(task.resource_id)
+        const res = await commitSession(
+          task.resource_id,
+          undefined,
+          taskHeaders ?? undefined,
+        )
         if (res.status === 'skipped' || res.reason === 'no_messages') {
           return { res, task, skippedReason: res.reason ?? 'skipped' }
         }
@@ -162,10 +164,11 @@ export function TasksRoute({
       const resourceUri = task.resource_id || ''
 
       if (resourceUri.startsWith('viking://')) {
-        const resp = await ovClient.instance.post('/api/v1/content/reindex', {
-          uri: resourceUri,
-          wait: false,
-        })
+        const resp = await ovClient.instance.post(
+          '/api/v1/content/reindex',
+          { uri: resourceUri, wait: false },
+          { headers: taskHeaders ?? undefined },
+        )
         const json = resp.data
         if (json.status === 'error' || json.error) {
           throw new Error(
@@ -181,6 +184,7 @@ export function TasksRoute({
       ) {
         const res = await getOvResult(
           postResources({
+            ...(taskHeaders ? { headers: taskHeaders } : {}),
             body: {
               path: resourceUri,
               reason: `Re-queued task: ${task.task_id}`,
@@ -190,10 +194,11 @@ export function TasksRoute({
         return { res, task }
       }
 
-      const resp = await ovClient.instance.post('/api/v1/content/reindex', {
-        uri: resourceUri,
-        wait: false,
-      })
+      const resp = await ovClient.instance.post(
+        '/api/v1/content/reindex',
+        { uri: resourceUri, wait: false },
+        { headers: taskHeaders ?? undefined },
+      )
       const json = resp.data
       if (json.status === 'error' || json.error) {
         throw new Error(
@@ -1039,7 +1044,8 @@ export function TasksRoute({
       )}
 
       <TaskDetailSheet
-        identityScopeKey={identityScopeKey}
+        headers={taskHeaders ?? undefined}
+        identityScopeKey={taskIdentityScopeKey}
         open={Boolean(selectedTaskId)}
         taskId={selectedTaskId}
         onOpenChange={(open) => {

@@ -27,6 +27,8 @@ import {
 } from 'vitest'
 
 import { commitSession } from '#/features/workbench/sessions/lib/api'
+import { TasksRoute } from '#/features/workbench/tasks/page'
+import { ovClient } from '#/shared/api/ov-client/index'
 import type { TaskRecord } from '#/features/workbench/tasks/lib/task-record'
 import { postResources } from '#/gen/ov-client'
 import { Route } from '#/routes/tasks/route'
@@ -43,7 +45,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 vi.mock('#/shared/api/ov-client/index', () => ({
   getOvResult: async (value: unknown) => value,
   getTasks: clientMocks.getTasks,
-  ovClient: { instance: { post: vi.fn() } },
+  ovClient: {
+    getOptions: () => ({ baseUrl: 'http://localhost:1933' }),
+    instance: { post: vi.fn() },
+  },
 }))
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
@@ -53,8 +58,20 @@ vi.mock('#/features/workbench/sessions/lib/api', () => ({
 vi.mock('sonner', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
 }))
+const connectionState = vi.hoisted(() => ({
+  identityScopeKey: 'test/test',
+  connection: {
+    accountId: 'default',
+    adminApiKey: 'management-key',
+    apiKey: 'user-key',
+    baseUrl: 'http://localhost:1933',
+    userId: 'alice',
+  },
+  connectionRole: 'root' as 'root' | 'admin' | 'unknown',
+  serverMode: 'api_key' as 'api_key' | 'trusted',
+}))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
-  useAppConnection: () => ({ identityScopeKey: 'test/test' }),
+  useAppConnection: () => connectionState,
 }))
 vi.mock('#/features/workbench/monitoring/components/queue-status-card', () => ({
   QueueStatusCard: () => null,
@@ -83,21 +100,27 @@ function runningTasks(count: number): TaskRecord[] {
   }))
 }
 
-async function renderPage(lng = 'en') {
+async function renderPage(
+  lng = 'en',
+  management = false,
+  existingClient?: QueryClient,
+) {
   const i18n = createInstance()
   await i18n.init({
     lng,
     resources: { en, 'zh-CN': zh },
     interpolation: { escapeValue: false },
   })
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
+  const queryClient =
+    existingClient ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
   queryClients.push(queryClient)
   render(
     <QueryClientProvider client={queryClient}>
       <I18nextProvider i18n={i18n}>
-        <TaskPage />
+        {management ? <TasksRoute management /> : <TaskPage />}
       </I18nextProvider>
     </QueryClientProvider>,
   )
@@ -119,6 +142,11 @@ function expectRunningRows(count: number) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  connectionState.connection.accountId = 'default'
+  connectionState.connection.adminApiKey = 'management-key'
+  connectionState.connection.apiKey = 'user-key'
+  connectionState.connectionRole = 'root'
+  connectionState.serverMode = 'api_key'
   records = runningTasks(12)
   clientMocks.getTasks.mockReset()
   // Model the API contract: filtering precedes ordering and the result limit.
@@ -277,7 +305,11 @@ describe('session commit re-trigger feedback', () => {
         ),
       )
       await waitFor(() => expect(toast.info).toHaveBeenCalledWith(message))
-      expect(commitSession).toHaveBeenCalledWith('session-1')
+      expect(commitSession).toHaveBeenCalledWith(
+        'session-1',
+        undefined,
+        undefined,
+      )
       expect(toast.info).toHaveBeenCalledTimes(1)
       expect(toast.success).not.toHaveBeenCalled()
       expect(toast.error).not.toHaveBeenCalled()
@@ -358,27 +390,153 @@ it('groups processing and total time without inventing legacy timing', async () 
   expect(within(legacy).getByText('Not recorded')).toBeDefined()
 })
 
-it('retries a URL import using the resource API path field', async () => {
-  records = [
-    {
-      task_id: 'failed-import',
-      task_type: 'add_resource',
-      resource_id: 'https://example.com/article',
-      status: 'failed',
-      created_at: 100,
+describe('management task scope', () => {
+  it.each([
+    ['default', ''],
+    ['default', 'user-key'],
+    ['other-space', ''],
+    ['other-space', 'user-key'],
+  ])(
+    'does not query Root tasks for space %s with data key %s',
+    async (account, apiKey) => {
+      connectionState.connection.accountId = account
+      connectionState.connection.apiKey = apiKey
+      await renderPage('en', true)
+      expect(screen.getByRole('status').textContent).toBe(
+        en.appShell.adminNavigation.scopeUnavailable,
+      )
+      expect(clientMocks.getTasks).not.toHaveBeenCalled()
+      expect(taskRows()).toHaveLength(0)
     },
-  ]
-  vi.mocked(postResources).mockResolvedValue(
-    {} as Awaited<ReturnType<typeof postResources>>,
   )
-  const user = await renderPage()
-  await user.click(await screen.findByTitle('Re-trigger Task'))
-  await waitFor(() =>
-    expect(postResources).toHaveBeenCalledWith({
-      body: {
-        path: 'https://example.com/article',
-        reason: 'Re-queued task: failed-import',
+
+  it('uses the Account Admin credential even when a data key is present', async () => {
+    connectionState.connectionRole = 'admin'
+    await renderPage('en', true)
+    await screen.findByRole('row', { name: 'View details for task task-1' })
+    expect(clientMocks.getTasks).toHaveBeenCalledWith({
+      headers: { 'X-API-Key': 'management-key' },
+      query: { limit: 200 },
+    })
+  })
+
+  it('does not reuse management task data after changing only the management key', async () => {
+    connectionState.connectionRole = 'admin'
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    records = [
+      { task_id: 'first-admin-task', status: 'completed', created_at: 100 },
+    ]
+    await renderPage('en', true, client)
+    await screen.findByRole('row', {
+      name: 'View details for task first-admin-task',
+    })
+    cleanup()
+
+    connectionState.connection.adminApiKey = 'other-management-key'
+    records = [
+      { task_id: 'second-admin-task', status: 'completed', created_at: 200 },
+    ]
+    await renderPage('en', true, client)
+    await screen.findByRole('row', {
+      name: 'View details for task second-admin-task',
+    })
+    expect(
+      screen.queryByRole('row', {
+        name: 'View details for task first-admin-task',
+      }),
+    ).toBeNull()
+    expect(clientMocks.getTasks).toHaveBeenLastCalledWith({
+      headers: { 'X-API-Key': 'other-management-key' },
+      query: { limit: 200 },
+    })
+  })
+
+  it('uses the same trusted admin identity to list and retry resource tasks', async () => {
+    connectionState.serverMode = 'trusted'
+    connectionState.connection.apiKey = ''
+    records = [
+      {
+        task_id: 'failed-import',
+        task_type: 'add_resource',
+        resource_id: 'viking://resources/article',
+        status: 'failed',
+        created_at: 100,
       },
-    }),
-  )
+    ]
+    vi.mocked(ovClient.instance.post).mockResolvedValue({
+      data: { status: 'ok' },
+    })
+    const user = await renderPage('en', true)
+    await user.click(await screen.findByTitle('Re-trigger Task'))
+    const headers = {
+      'X-API-Key': 'management-key',
+      'X-OpenViking-Role': 'admin',
+    }
+    expect(clientMocks.getTasks).toHaveBeenCalledWith({
+      headers,
+      query: { limit: 200 },
+    })
+    expect(ovClient.instance.post).toHaveBeenCalledWith(
+      '/api/v1/content/reindex',
+      { uri: 'viking://resources/article', wait: false },
+      { headers },
+    )
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps the trusted admin identity when retrying a session commit', async () => {
+    connectionState.serverMode = 'trusted'
+    records = [
+      {
+        task_id: 'failed-commit',
+        task_type: 'session_commit',
+        resource_id: 'session-1',
+        status: 'failed',
+        created_at: 100,
+      },
+    ]
+    vi.mocked(commitSession).mockResolvedValue({
+      status: 'accepted',
+      task_id: 'new-task',
+    } as Awaited<ReturnType<typeof commitSession>>)
+    const user = await renderPage('en', true)
+    await user.click(await screen.findByTitle('Re-trigger Task'))
+    expect(commitSession).toHaveBeenCalledWith('session-1', undefined, {
+      'X-API-Key': 'management-key',
+      'X-OpenViking-Role': 'admin',
+    })
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+  })
 })
+
+it.each([false, true])(
+  'retries a URL import in management mode %s using its credential',
+  async (management) => {
+    connectionState.connectionRole = 'admin'
+    records = [
+      {
+        task_id: 'failed-import',
+        task_type: 'add_resource',
+        resource_id: 'https://example.com/article',
+        status: 'failed',
+        created_at: 100,
+      },
+    ]
+    vi.mocked(postResources).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof postResources>>,
+    )
+    const user = await renderPage('en', management)
+    await user.click(await screen.findByTitle('Re-trigger Task'))
+    await waitFor(() =>
+      expect(postResources).toHaveBeenCalledWith({
+        ...(management ? { headers: { 'X-API-Key': 'management-key' } } : {}),
+        body: {
+          path: 'https://example.com/article',
+          reason: 'Re-queued task: failed-import',
+        },
+      }),
+    )
+  },
+)
