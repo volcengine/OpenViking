@@ -904,64 +904,29 @@ impl CacheProvider for MemoryMockProvider {
 }
 
 impl MemoryMockProvider {
-    /// Capture a CacheFS epoch, index its bucket, and recheck one query field atomically.
+    /// Capture a CacheFS epoch and recheck one query field atomically.
     async fn begin_query_fill(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
-        let [key, index_key] = request.keys.as_slice() else {
+        let [key] = request.keys.as_slice() else {
             return Err(CacheError::InvalidArgument(
-                "begin-fill requires two keys".into(),
+                "begin-fill requires one key".into(),
             ));
         };
-        let [field, candidate, ttl, pending_ttl, now_ms, _permanent_score] =
-            request.args.as_slice()
-        else {
+        let [field, candidate, _ttl, _pending_ttl] = request.args.as_slice() else {
             return Err(CacheError::InvalidArgument(
-                "begin-fill requires six arguments".into(),
+                "begin-fill requires four arguments".into(),
             ));
         };
         let field = std::str::from_utf8(field)
             .map_err(|error| CacheError::InvalidArgument(error.to_string()))?;
-        let ttl = parse_u64_arg(ttl, "ttl")?;
-        let pending_ttl = parse_u64_arg(pending_ttl, "pending ttl")?;
-        let now_ms = parse_u64_arg(now_ms, "now")?;
         self.purge_expired_key(key).await;
         self.remove_non_hash_values(key).await;
         let mut hashes = self.hashes.write().await;
         let hash = hashes.entry(key.clone()).or_default();
-        let created = !hash.contains_key("__epoch");
         let epoch = hash
             .entry("__epoch".to_string())
             .or_insert_with(|| candidate.clone())
             .clone();
         let value = hash.get(field).cloned();
-        drop(hashes);
-
-        let score = if ttl > 0 {
-            self.expirations.write().await.insert(
-                key.clone(),
-                expiration_deadline(Duration::from_millis(ttl))?,
-            );
-            now_ms.saturating_add(ttl) as f64
-        } else if created {
-            self.expirations.write().await.insert(
-                key.clone(),
-                expiration_deadline(Duration::from_millis(pending_ttl))?,
-            );
-            now_ms.saturating_add(pending_ttl) as f64
-        } else if let Some(deadline) = self.expirations.read().await.get(key).copied() {
-            now_ms.saturating_add(
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis() as u64,
-            ) as f64
-        } else {
-            u64::MAX as f64
-        };
-        self.zsets
-            .write()
-            .await
-            .entry(index_key.clone())
-            .or_default()
-            .insert(key.clone(), score);
         let mut values = vec![
             ScriptValue::Bytes(epoch.to_vec()),
             ScriptValue::Integer(value.is_some() as i64),
@@ -972,20 +937,18 @@ impl MemoryMockProvider {
         ScriptResult::encode(&ScriptValue::Array(values))
     }
 
-    /// Store a CacheFS query field and final index score while its epoch remains current.
+    /// Store a CacheFS query field only while its captured epoch remains current.
     async fn fill_query_if_epoch(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
-        let [key, index_key] = request.keys.as_slice() else {
-            return Err(CacheError::InvalidArgument("fill requires two keys".into()));
+        let [key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument("fill requires one key".into()));
         };
-        let [epoch, field, value, ttl, now_ms, _permanent_score] = request.args.as_slice() else {
+        let [epoch, field, value, _ttl] = request.args.as_slice() else {
             return Err(CacheError::InvalidArgument(
-                "fill requires six arguments".into(),
+                "fill requires four arguments".into(),
             ));
         };
         let field = std::str::from_utf8(field)
             .map_err(|error| CacheError::InvalidArgument(error.to_string()))?;
-        let ttl = parse_u64_arg(ttl, "ttl")?;
-        let now_ms = parse_u64_arg(now_ms, "now")?;
         let _guard = self.enter_set();
         if !self.set_delay.is_zero() {
             tokio::time::sleep(self.set_delay).await;
@@ -999,34 +962,8 @@ impl MemoryMockProvider {
             return ScriptResult::encode(&ScriptValue::Integer(0));
         }
         hash.insert(field.to_string(), value.clone());
-        drop(hashes);
-
-        let score = if ttl > 0 {
-            self.expirations.write().await.insert(
-                key.clone(),
-                expiration_deadline(Duration::from_millis(ttl))?,
-            );
-            now_ms.saturating_add(ttl) as f64
-        } else {
-            self.expirations.write().await.remove(key);
-            u64::MAX as f64
-        };
-        self.zsets
-            .write()
-            .await
-            .entry(index_key.clone())
-            .or_default()
-            .insert(key.clone(), score);
         ScriptResult::encode(&ScriptValue::Integer(1))
     }
-}
-
-/// Parse one integer script argument.
-fn parse_u64_arg(value: &Bytes, name: &str) -> CacheResult<u64> {
-    std::str::from_utf8(value)
-        .map_err(|error| CacheError::InvalidArgument(error.to_string()))?
-        .parse()
-        .map_err(|error| CacheError::InvalidArgument(format!("invalid {name}: {error}")))
 }
 
 fn expiration_deadline(duration: Duration) -> CacheResult<Instant> {
