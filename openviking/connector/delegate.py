@@ -59,11 +59,14 @@ from openviking.resource.processing_mode import (
 )
 from openviking.server.identity import RequestContext
 from openviking.service.task_domain import TaskPatch
+from openviking.service.task_store import StoreOperationCode
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_ENDED_TASK_CODES = frozenset({StoreOperationCode.ALREADY_TERMINAL, StoreOperationCode.NOT_FOUND})
 
 _TOS_BUCKET_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
 CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG = "resource_config"
@@ -92,10 +95,7 @@ def _validate_tos_uri(
         not isinstance(value, str)
         or value != value.strip()
         or not value.startswith("tos://")
-        or any(
-            char in "?#%" or ord(char) < 0x20 or ord(char) == 0x7F
-            for char in value
-        )
+        or any(char in "?#%" or ord(char) < 0x20 or ord(char) == 0x7F for char in value)
     ):
         raise error
 
@@ -216,11 +216,10 @@ class ConnectorDelegate:
 
     @classmethod
     def is_watch_auth_state(cls, auth_state: Optional[Dict[str, Any]]) -> bool:
-        return (
-            isinstance(auth_state, dict)
-            and auth_state.get("provider")
-            in {cls._WATCH_AUTH_PROVIDER, cls._WATCH_PLAINTEXT_AUTH_PROVIDER}
-        )
+        return isinstance(auth_state, dict) and auth_state.get("provider") in {
+            cls._WATCH_AUTH_PROVIDER,
+            cls._WATCH_PLAINTEXT_AUTH_PROVIDER,
+        }
 
     async def restore_watch_request(
         self,
@@ -266,8 +265,10 @@ class ConnectorDelegate:
                 or not isinstance(add_type, str)
                 or not add_type
                 or not isinstance(connector_args, dict)
-                or (connector_auth_config is not None
-                    and not isinstance(connector_auth_config, dict))
+                or (
+                    connector_auth_config is not None
+                    and not isinstance(connector_auth_config, dict)
+                )
             ):
                 raise ValueError("invalid watch request")
             return (
@@ -531,6 +532,8 @@ class ConnectorDelegate:
         on_complete: Optional[
             Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
         ] = None,
+        task_id: Optional[str] = None,
+        on_task_created: Optional[Callable[[Any], Awaitable[None]]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Route add_resource to the external Connector service."""
@@ -703,8 +706,11 @@ class ConnectorDelegate:
             resource_id=task_resource_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            task_id=task_id,
         )
         try:
+            if on_task_created is not None:
+                await on_task_created(task)
             submit_kwargs: Dict[str, Any] = {
                 "add_type": add_type,
                 "api_key": ctx.api_key,
@@ -912,12 +918,23 @@ class ConnectorDelegate:
                     )
                     last_status = status
 
-                await task_tracker.patch_task(
+                patched = await task_tracker.patch_task(
                     ov_task_id,
                     TaskPatch(stage=f"connector:{status}"),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
+                if patched.code in _ENDED_TASK_CODES:
+                    # Another party (identity cleanup, a Watch deletion) ended
+                    # or removed the OV Task; its result must not be applied.
+                    logger.info(
+                        "[ConnectorDelegate] Stopped monitoring connector task %s: "
+                        "ov_task_id=%s %s",
+                        connector_task_key,
+                        ov_task_id,
+                        patched.code.value,
+                    )
+                    return {"status": "failed", "error": "OV task ended before the import"}
 
                 if status in terminal_statuses:
                     if status == "succeeded":

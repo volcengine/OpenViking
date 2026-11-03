@@ -84,6 +84,7 @@ async def test_semantic_lock_reacquires_unicode_coverage_after_provider_change(m
     lease = {"id": "reacquired-lock"}
     pathlock = SimpleNamespace(
         pathlock_adopt=AsyncMock(side_effect=HandoffRecoveryRequired("provider_changed")),
+        pathlock_reacquire_batch=AsyncMock(return_value=lease),
         pathlock_acquire_batch=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
     )
@@ -100,9 +101,11 @@ async def test_semantic_lock_reacquires_unicode_coverage_after_provider_change(m
     scope = await SemanticLockScope.resolve(handoff, ctx=SimpleNamespace(account_id="default"))
 
     assert scope.lock == lease
-    pathlock.pathlock_acquire_batch.assert_awaited_once_with(
-        handoff["covered_paths"], fs_ctx={"account_id": "default"}
+    pathlock.pathlock_adopt.assert_awaited_once_with(handoff, fs_ctx={"account_id": "default"})
+    pathlock.pathlock_reacquire_batch.assert_awaited_once_with(
+        handoff["covered_paths"], "legacy-owner", fs_ctx={"account_id": "default"}
     )
+    pathlock.pathlock_acquire_batch.assert_not_awaited()
     await scope.close()
     pathlock.pathlock_release.assert_awaited_once_with(lease)
 

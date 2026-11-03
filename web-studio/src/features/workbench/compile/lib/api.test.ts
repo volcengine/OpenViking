@@ -2,13 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   BUILTIN_SKILLS_ROOT,
+  createCompile,
+  fetchCompileConfig,
+  fetchCompileConfigs,
   fetchCompileSkills,
+  updateCompileConfig,
   fetchCompileTask,
   fetchCompileTasks,
 } from '#/features/workbench/compile/lib/api'
 
 const clientMocks = vi.hoisted(() => ({
   get: vi.fn(),
+  post: vi.fn(),
 }))
 
 vi.mock('#/shared/api/ov-client/index', () => ({
@@ -31,6 +36,56 @@ const taskWithoutSources = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+describe('Compile scheduling APIs', () => {
+  it('accepts a saved configuration without inventing a task ID', async () => {
+    const config = {
+      to: 'viking://resources/wiki',
+      auto_update: true,
+      next_run_at: '2026-11-03T09:00:00+08:00',
+    }
+    clientMocks.post.mockResolvedValueOnce(config)
+    const result = await createCompile(
+      {
+        from: ['viking://resources/source'],
+        to: config.to,
+        skill: 'viking://agent/skills/wiki',
+        args: { auto_update: true },
+      },
+      'schedule-save-key',
+    )
+    expect(result).toEqual(config)
+    expect(result).not.toHaveProperty('task_id')
+  })
+
+  it('passes target cursors and URI query values without changing them', async () => {
+    const cursor = 'viking://resources/a folder?value=1'
+    await fetchCompileConfigs(cursor)
+    expect(clientMocks.get).toHaveBeenLastCalledWith({
+      url: '/api/v1/compile/configs',
+      signal: undefined,
+      query: { limit: 30, cursor },
+    })
+    await fetchCompileConfig(cursor)
+    expect(clientMocks.get).toHaveBeenLastCalledWith({
+      url: '/api/v1/compile/config',
+      signal: undefined,
+      query: { to: cursor },
+    })
+    const body = {
+      to: cursor,
+      from: ['viking://resources/source'],
+      skill: 'viking://agent/skills/wiki',
+      auto_update: false,
+      update_schedule: null,
+    }
+    await updateCompileConfig(body)
+    expect(clientMocks.post).toHaveBeenLastCalledWith({
+      url: '/api/v1/compile/config/update',
+      body,
+    })
+  })
 })
 
 describe('compile task API normalization', () => {

@@ -1,3 +1,4 @@
+import { CompileSelect } from '#/features/workbench/compile/components/compile-select'
 import { parseArgs } from '#/features/workbench/compile/lib/commands'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
@@ -174,33 +175,32 @@ export function ArgsEditor({
                 value={row.key}
                 onChange={(e) => patch(row.id, { key: e.target.value })}
               />
-              <select
-                aria-label={`${t('argType')} ${index + 1}`}
-                className="h-9 rounded-md border bg-background px-2 text-sm"
+              <CompileSelect
+                label={`${t('argType')} ${index + 1}`}
+                className="w-full"
                 value={row.type}
-                onChange={(e) =>
+                onValueChange={(type) =>
                   patch(row.id, {
-                    type: e.target.value,
-                    value: e.target.value === 'boolean' ? 'false' : row.value,
+                    type,
+                    value: type === 'boolean' ? 'false' : row.value,
                   })
                 }
-              >
-                {TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {t(`argTypes.${type}`)}
-                  </option>
-                ))}
-              </select>
+                options={TYPES.map((type) => ({
+                  value: type,
+                  label: t(`argTypes.${type}`),
+                }))}
+              />
               {row.type === 'boolean' ? (
-                <select
-                  aria-label={`${t('argValue')} ${index + 1}`}
-                  className="h-9 rounded-md border bg-background px-2 text-sm"
+                <CompileSelect
+                  label={`${t('argValue')} ${index + 1}`}
+                  className="w-full"
                   value={row.value}
-                  onChange={(e) => patch(row.id, { value: e.target.value })}
-                >
-                  <option value="true">{String(true)}</option>
-                  <option value="false">{String(false)}</option>
-                </select>
+                  onValueChange={(next) => patch(row.id, { value: next })}
+                  options={[true, false].map((boolean) => ({
+                    value: String(boolean),
+                    label: String(boolean),
+                  }))}
+                />
               ) : (
                 <Input
                   aria-label={`${t('argValue')} ${index + 1}`}

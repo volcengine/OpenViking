@@ -19,20 +19,20 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-it.each([
-  ['plaintext', 'credentialStorage.plaintext'],
-  ['session', 'credentialStorage.sessionOnly'],
-])('discloses the actual storage limitation in %s mode', (mode, message) => {
-  mocks.mode = mode
+it('warns when connections cannot survive a page reload', () => {
+  mocks.mode = 'session'
   render(<CredentialStorageNotice />)
-  expect(mocks.warning).toHaveBeenCalledWith(message, {
+  expect(mocks.warning).toHaveBeenCalledWith('credentialStorage.sessionOnly', {
     id: 'credential-storage-mode',
     duration: Infinity,
   })
 })
 
-it('does not warn when credentials are encrypted', () => {
-  mocks.mode = 'persistent'
-  render(<CredentialStorageNotice />)
-  expect(mocks.warning).not.toHaveBeenCalled()
-})
+it.each(['persistent', 'plaintext'])(
+  'does not warn when connections can be restored in %s mode',
+  (mode) => {
+    mocks.mode = mode
+    render(<CredentialStorageNotice />)
+    expect(mocks.warning).not.toHaveBeenCalled()
+  },
+)
