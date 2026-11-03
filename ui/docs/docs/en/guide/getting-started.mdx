@@ -33,7 +33,7 @@ export default function Example() {
 
 React and ReactDOM are peer dependencies. The declared range supports React 18.2 and React 19; the documentation application uses React 19.
 
-The development server resolves the public package name to its source for live updates. The production documentation build consumes the built package exports, checking the same JavaScript and stylesheet applications will use. The library build emits ESM JavaScript, TypeScript declarations, and `style.css` into `packages/react/dist/`.
+The official workspace development plugin starts the library's Rslib watcher before the documentation server. Development and production demos both consume the built package exports, checking the same JavaScript and stylesheet applications will use. Rslib emits ESM JavaScript, TypeScript declarations, and `index.css` into `packages/react/dist/`; the public stylesheet entry remains `@openviking/ui/style.css`.
 
 ## Build and check
 
@@ -44,7 +44,7 @@ npm run build
 npm run preview
 ```
 
-The static site is generated in `ui/docs/doc_build/`. The library can also be built separately with `npm run build:lib`.
+The static site is generated in `ui/docs/doc_build/`. The library can also be built separately with `npm run build:lib`. `npm run check` builds the library first, then type-checks the library, demos, and build configuration using the generated declarations.
 
 ## Styling
 

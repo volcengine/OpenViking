@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from '@rspress/core';
 import { pluginPreview } from '@rspress/plugin-preview';
+import { pluginWorkspaceDev } from 'rsbuild-plugin-workspace-dev';
 
 export default defineConfig({
   root: fileURLToPath(new URL('./docs', import.meta.url)),
@@ -13,22 +14,7 @@ export default defineConfig({
   globalStyles: fileURLToPath(new URL('./styles.css', import.meta.url)),
   plugins: [pluginPreview()],
   builderConfig: {
-    resolve: {
-      alias:
-        process.env.NODE_ENV === 'production'
-          ? {}
-          : {
-              '@openviking/ui/style.css': fileURLToPath(
-                new URL(
-                  '../packages/react/src/components/status-badge/status-badge.module.css',
-                  import.meta.url,
-                ),
-              ),
-              '@openviking/ui': fileURLToPath(
-                new URL('../packages/react/src/index.ts', import.meta.url),
-              ),
-            },
-    },
+    plugins: [pluginWorkspaceDev()],
   },
   themeConfig: {
     socialLinks: [
