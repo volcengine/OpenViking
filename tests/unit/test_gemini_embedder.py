@@ -229,6 +229,30 @@ class TestGeminiValidation:
 
 
 class TestGeminiErrorMessages:
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_api_key_reason_overrides_http_400(self, mock_client):
+        from google.genai.errors import ClientError
+
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client.return_value.models.embed_content.side_effect = ClientError(
+            400,
+            {
+                "error": {
+                    "status": "INVALID_ARGUMENT",
+                    "details": [{"reason": "API_KEY_INVALID"}],
+                }
+            },
+        )
+        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="k")
+
+        with pytest.raises(ModelError) as raised:
+            embedder.embed("hello")
+
+        assert raised.value.kind is ModelErrorKind.AUTHENTICATION_ERROR
+        assert raised.value.status_code == 400
+        assert raised.value.code == "API_KEY_INVALID"
+
     @pytest.mark.parametrize(
         "reason,expected_kind",
         [

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VikingDB non-symmetric embedding support."""
 
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -10,6 +10,7 @@ from openviking.models.embedder.vikingdb_embedders import (
     VikingDBDenseEmbedder,
     VikingDBHybridEmbedder,
 )
+from openviking.models.model_error import ModelError, ModelErrorKind
 
 
 @pytest.fixture
@@ -58,3 +59,18 @@ def test_dense_backward_compat_no_params():
     embedder.dimension = 1024
     # Should not raise
     assert embedder._resolve_input_type(is_query=True) is None
+
+
+def test_http_200_business_error_is_structured():
+    embedder = VikingDBDenseEmbedder.__new__(VikingDBDenseEmbedder)
+    response = Mock(status_code=200)
+    response.json.return_value = {"code": 429, "message": "rate limited"}
+    embedder.client = Mock()
+    embedder.client.do_req.return_value = response
+
+    with pytest.raises(ModelError) as raised:
+        embedder._call_api(["hello"])
+
+    assert raised.value.kind is ModelErrorKind.RATE_LIMIT_ERROR
+    assert raised.value.status_code == 429
+    assert raised.value.code == "429"

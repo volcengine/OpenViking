@@ -115,6 +115,10 @@ def test_extract_metric_error_code_uses_safe_fallbacks_only():
     wrapped_timeout = RuntimeError("request failed")
     wrapped_timeout.__cause__ = TimeoutError("request timed out")
     assert extract_metric_error_code(wrapped_timeout) == "timeout"
+    branched = RuntimeError("request failed")
+    branched.__cause__ = RuntimeError("primary failure")
+    branched.__context__ = TimeoutError("secondary timeout")
+    assert extract_metric_error_code(branched) == "timeout"
     assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
 
 
