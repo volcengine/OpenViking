@@ -101,22 +101,6 @@ def user_global_policy_from_file(fs: Any, path: str) -> Any:
         raise GlobalPolicyError(str(exc)) from exc
 
 
-def user_global_policy_from_loader(loader: Any) -> Any:
-    """Create a native ``UserGlobalPolicy`` backed by a zero-argument loader.
-
-    ``loader`` is called once and must return the policy text as
-    ``str``/``bytes`` or ``None`` when no policy exists. The returned snapshot is
-    immutable; reuse and expiry are managed by the caller.
-    """
-    NativePolicy, NativeInvalid, NativeUnsupported = _native_types()
-    try:
-        return NativePolicy.from_loader(loader)
-    except NativeUnsupported as exc:
-        raise UnsupportedGlobalPolicySchemaError(str(exc)) from exc
-    except NativeInvalid as exc:
-        raise GlobalPolicyError(str(exc)) from exc
-
-
 def is_global_policy_path_allowed(policy: GlobalAccessPolicy | Any | None, path: str) -> bool:
     """Evaluate ordinary-content rules for one owner-relative path, failing closed."""
     if policy is None:

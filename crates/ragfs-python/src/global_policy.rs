@@ -20,7 +20,7 @@ create_exception!(
 
 /// Immutable parsed policy exposed to Python as ``UserGlobalPolicy``.
 ///
-/// A file- or loader-backed instance reads its source once at construction.
+/// A file-backed instance reads its source once at construction.
 /// Reuse, expiry and eviction are managed by the caller.
 #[pyclass(name = "UserGlobalPolicy", module = "ragfs_python", frozen)]
 pub(crate) struct PyUserGlobalPolicy {
@@ -63,19 +63,6 @@ impl PyUserGlobalPolicy {
         }
         Ok(Self {
             snapshot: snapshot_from_source(read_policy_file(py, &fs, &path)),
-        })
-    }
-
-    /// Call ``loader`` once and capture the result as a snapshot.
-    ///
-    /// The loader must return ``str``, UTF-8 ``bytes`` or ``None``.
-    #[staticmethod]
-    fn from_loader(py: Python<'_>, loader: Py<PyAny>) -> PyResult<Self> {
-        if !loader.bind(py).is_callable() {
-            return Err(GlobalPolicyError::new_err("loader must be callable"));
-        }
-        Ok(Self {
-            snapshot: snapshot_from_source(call_loader(py, &loader)),
         })
     }
 
@@ -190,14 +177,6 @@ fn extract_string(value: &Bound<'_, PyAny>, message: &'static str) -> PyResult<S
             .map_err(|_| GlobalPolicyError::new_err(message)),
         Err(_) => Err(GlobalPolicyError::new_err(message)),
     }
-}
-
-fn call_loader(py: Python<'_>, loader: &Py<PyAny>) -> Result<Option<String>, String> {
-    let value = loader
-        .bind(py)
-        .call0()
-        .map_err(|error| format!("policy loader failed: {error}"))?;
-    optional_policy_text(&value)
 }
 
 fn read_policy_file(py: Python<'_>, fs: &Py<PyAny>, path: &str) -> Result<Option<String>, String> {

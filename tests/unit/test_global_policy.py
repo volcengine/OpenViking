@@ -13,7 +13,6 @@ from openviking.core.global_policy import (
     is_global_policy_path_allowed,
     parse_global_policy,
     user_global_policy_from_file,
-    user_global_policy_from_loader,
     validate_global_policy_path,
 )
 from openviking.pyagfs.exceptions import AGFSNotFoundError
@@ -294,10 +293,7 @@ def test_missing_policy_error_carries_a_stable_code():
 
 
 def test_unreadable_policy_error_carries_a_stable_code():
-    def loader():
-        raise RuntimeError("boom")
-
-    policy = user_global_policy_from_loader(loader)
+    policy = user_global_policy_from_file(_FakeFS(RuntimeError("boom")), _POLICY_PATH)
     with pytest.raises(ValueError) as error:
         policy.policy_hash()
     assert error.value.code == "GLOBAL_POLICY_UNAVAILABLE"
@@ -320,40 +316,6 @@ def test_unsupported_schema_is_reported_distinctly():
     assert policy.status == "unsupported_schema"
     with pytest.raises(ValueError):
         _ = policy.schema_version
-
-
-def test_loader_reads_the_source_once():
-    calls = {"count": 0}
-
-    def loader():
-        calls["count"] += 1
-        return _POLICY
-
-    policy = user_global_policy_from_loader(loader)
-    assert policy.allows_path("resources/public") is True
-    assert policy.allows_path("resources/public") is True
-    assert calls["count"] == 1
-
-
-def test_loader_returning_none_is_missing():
-    policy = user_global_policy_from_loader(lambda: None)
-    assert policy.allows_path("resources/public") is False
-    assert policy.status == "missing"
-
-
-def test_loader_exception_is_captured_as_unreadable():
-    calls = {"count": 0}
-
-    def loader():
-        calls["count"] += 1
-        raise RuntimeError("boom")
-
-    policy = user_global_policy_from_loader(loader)
-    assert policy.allows_path("resources/public") is False
-    assert policy.status == "unreadable"
-    assert calls["count"] == 1
-    assert policy.allows_path("resources/public") is False
-    assert calls["count"] == 1
 
 
 def test_static_policy_is_always_valid():
@@ -387,8 +349,3 @@ def test_native_snapshot_works_with_the_facade_helper():
 def test_from_file_requires_a_readable_filesystem():
     with pytest.raises(ValueError):
         user_global_policy_from_file(object(), _POLICY_PATH)
-
-
-def test_from_loader_requires_a_callable():
-    with pytest.raises(ValueError):
-        user_global_policy_from_loader("not callable")
