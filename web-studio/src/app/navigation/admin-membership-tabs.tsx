@@ -1,5 +1,8 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { fetchAdminGroups, fetchAdminUsersPage } from '#/shared/api/admin'
+import {
+  adminGroupsQuery,
+  adminUsersQuery,
+} from '#/shared/api/admin-membership-queries'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { UserRoundIcon, UsersRoundIcon } from 'lucide-react'
@@ -22,22 +25,13 @@ export function AdminMembershipTabs() {
   const enabled = Boolean(accountId && apiKey)
   const users = useQuery({
     enabled,
-    queryKey: ['managed-users', baseUrl, apiKey, accountId, 1, 20, ''],
-    queryFn: () =>
-      fetchAdminUsersPage(adminConnection, accountId, {
-        page: 1,
-        pageSize: 20,
-        search: '',
-      }),
+    ...adminUsersQuery(adminConnection),
     select: (page) => page.accountTotal,
-    retry: false,
   })
   const groups = useQuery({
     enabled,
-    queryKey: ['managed-groups', baseUrl, accountId, apiKey],
-    queryFn: () => fetchAdminGroups(adminConnection),
+    ...adminGroupsQuery(adminConnection),
     select: (items) => items.length,
-    retry: false,
   })
   return (
     <nav

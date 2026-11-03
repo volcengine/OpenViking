@@ -1,3 +1,4 @@
+import { adminUsersQuery } from '#/shared/api/admin-membership-queries'
 import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { ErrorMessage } from '#/shared/components/error-message'
 import { showErrorToast } from '#/shared/lib/error-toast'
@@ -37,7 +38,6 @@ import type {
 } from '#/shared/api/admin'
 import {
   createAdminUser,
-  fetchAdminUsersPage,
   regenerateAdminUserKey,
   removeAdminUser,
   updateAdminUserRole,
@@ -183,22 +183,11 @@ export function UserManagementPanel({
       canManageUsers &&
       Boolean(connection.accountId) &&
       searchQuery === userList.search,
-    queryFn: () =>
-      fetchAdminUsersPage(adminConnection, connection.accountId, {
-        page: userList.page,
-        pageSize: userList.pageSize,
-        search: searchQuery,
-      }),
-    queryKey: [
-      'managed-users',
-      adminConnection.baseUrl,
-      adminConnection.apiKey,
-      connection.accountId,
-      userList.page,
-      userList.pageSize,
-      searchQuery,
-    ],
-    retry: false,
+    ...adminUsersQuery(adminConnection, {
+      page: userList.page,
+      pageSize: userList.pageSize,
+      search: searchQuery,
+    }),
   })
   const memberships = useUserGroupMemberships(
     adminConnection,

@@ -1,6 +1,7 @@
 const workspace = {
   appShell: {
     adminNavigation: {
+      scopeUnavailable: '当前管理凭据无法查询这个数据空间。',
       spaceScope: '这一页只显示这个数据空间的数据',
       overview: '概览',
       currentSpace: '当前数据空间：{{space}}',

@@ -150,6 +150,7 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider
       defaultOpen
+      desktopToggleEnabled={!managementMode}
       data-management={managementMode}
       data-workbench={filesystemMode}
       style={

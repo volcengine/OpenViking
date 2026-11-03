@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from '#/features/connection/lib/admin-options'
 import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -91,7 +92,8 @@ export function TasksRoute({
 }: { management?: boolean } = {}) {
   const navigate = useNavigate()
   const { t } = useTranslation(['tasksPage', 'appShell'])
-  const { identityScopeKey, connection } = useAppConnection()
+  const { identityScopeKey, connection, connectionRole, serverMode } =
+    useAppConnection()
   const queryClient = useQueryClient()
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
@@ -102,7 +104,14 @@ export function TasksRoute({
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
     null,
   )
+  const taskScopeUnavailable =
+    management &&
+    serverMode === 'api_key' &&
+    connectionRole === 'root' &&
+    !connection.apiKey.trim() &&
+    connection.accountId !== DEFAULT_ACCOUNT_ID
   const tasksQuery = useQuery({
+    enabled: !taskScopeUnavailable,
     queryFn: () => fetchTasks(taskType, statusFilter),
     queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
     refetchInterval: 10_000,
@@ -128,6 +137,11 @@ export function TasksRoute({
   const hasNext = page < totalPages
   const hasActiveFilters = taskType !== 'all' || statusFilter !== 'all'
 
+  const canRetry =
+    !management ||
+    Boolean(connection.apiKey.trim()) ||
+    (serverMode === 'trusted' &&
+      Boolean(connection.userId && connection.adminApiKey))
   const retryMutation = useMutation({
     mutationFn: async (task: TaskRecord) => {
       if (task.task_id?.startsWith('mock_task_')) {
@@ -300,24 +314,26 @@ export function TasksRoute({
         {status === 'running' && (
           <span className="font-mono font-semibold ml-0.5">{pct}%</span>
         )}
-        {status === 'failed' && (
-          <button
-            type="button"
-            disabled={isRetrying}
-            className="ml-1 inline-flex items-center justify-center rounded p-0.5 hover:bg-white/25 active:scale-95 transition-all cursor-pointer text-destructive-foreground disabled:opacity-50"
-            title={t('actions.retrigger')}
-            onClick={(e) => {
-              e.stopPropagation()
-              retryMutation.mutate(task)
-            }}
-          >
-            {isRetrying ? (
-              <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
-            ) : (
-              <RotateCcwIcon className="size-3 shrink-0" />
-            )}
-          </button>
-        )}
+        {status === 'failed' &&
+          canRetry &&
+          (!management || task.resource_id) && (
+            <button
+              type="button"
+              disabled={isRetrying}
+              className="ml-1 inline-flex items-center justify-center rounded p-0.5 hover:bg-white/25 active:scale-95 transition-all cursor-pointer text-destructive-foreground disabled:opacity-50"
+              title={t('actions.retrigger')}
+              onClick={(e) => {
+                e.stopPropagation()
+                retryMutation.mutate(task)
+              }}
+            >
+              {isRetrying ? (
+                <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+              ) : (
+                <RotateCcwIcon className="size-3 shrink-0" />
+              )}
+            </button>
+          )}
       </Badge>
     )
   }
@@ -586,6 +602,9 @@ export function TasksRoute({
       typeRows,
     }
   }, [allTasks, t])
+
+  if (taskScopeUnavailable)
+    return <p role="status">{t('appShell:adminNavigation.scopeUnavailable')}</p>
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">

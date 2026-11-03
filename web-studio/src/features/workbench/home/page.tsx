@@ -1,3 +1,4 @@
+import { adminConsoleHeaders } from '#/features/connection/lib/admin-console-headers'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -32,53 +33,74 @@ function hashSecret(value: string): string {
 function getMetricsScopeKey(
   connection: ConnectionDraft,
   connectionRole: ConnectionRole,
+  management: boolean,
 ) {
-  const metricsKey = connection.apiKey
+  const metricsKey = management ? connection.adminApiKey : connection.apiKey
   return {
     accountId: connection.accountId,
     baseUrl: connection.baseUrl,
     keyHash: metricsKey ? hashSecret(metricsKey) : 'none',
-    keySource: connection.apiKey ? 'api' : 'none',
+    keySource: management ? 'admin' : 'data',
     role: connectionRole,
     userId: connection.userId,
   }
 }
 
-export function HomePage() {
-  const { t } = useTranslation('home')
-  const { connection, connectionRole, isConnectionRoleLoading } =
+export function HomePage({
+  management = false,
+}: { management?: boolean } = {}) {
+  const { t } = useTranslation(['home', 'appShell'])
+  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
     useAppConnection()
+  const headers = management
+    ? adminConsoleHeaders(connection, connectionRole, serverMode)
+    : undefined
   const canQueryMetrics =
-    !isConnectionRoleLoading && connectionRole !== 'unknown'
-  const metricsScopeKey = getMetricsScopeKey(connection, connectionRole)
+    !isConnectionRoleLoading && connectionRole !== 'unknown' && headers !== null
+  const metricsScopeKey = getMetricsScopeKey(
+    connection,
+    connectionRole,
+    management,
+  )
 
   const dashboard = useQuery({
     enabled: canQueryMetrics,
-    queryFn: fetchConsoleDashboardSummary,
-    queryKey: ['console-dashboard-summary', metricsScopeKey],
+    queryFn: () => fetchConsoleDashboardSummary(headers ?? undefined),
+    queryKey: ['console-dashboard-summary', metricsScopeKey, serverMode],
     refetchInterval: 30_000,
   })
 
   const tokenSeries = useQuery({
     enabled: canQueryMetrics,
-    queryFn: fetchConsoleTokenSeries,
-    queryKey: ['console-token-series', 'last-14-days', metricsScopeKey],
+    queryFn: () => fetchConsoleTokenSeries(headers ?? undefined),
+    queryKey: [
+      'console-token-series',
+      'last-14-days',
+      metricsScopeKey,
+      serverMode,
+    ],
     refetchInterval: 60_000,
   })
 
   const contextCommits = useQuery({
     enabled: canQueryMetrics,
-    queryFn: fetchConsoleContextCommits,
-    queryKey: ['console-context-commits', 'last-365-days', metricsScopeKey],
+    queryFn: () => fetchConsoleContextCommits(headers ?? undefined),
+    queryKey: [
+      'console-context-commits',
+      'last-365-days',
+      metricsScopeKey,
+      serverMode,
+    ],
     refetchInterval: 60_000,
   })
 
   const summary = dashboard.data
-  const identityUnavailable =
-    !isConnectionRoleLoading && connectionRole === 'unknown'
+  const identityUnavailable = !isConnectionRoleLoading && !canQueryMetrics
   const metricsUnavailable = identityUnavailable || isDisabledPayload(summary)
   const unavailableMessage = identityUnavailable
-    ? t('usageAccessRequired')
+    ? headers === null
+      ? t('appShell:adminNavigation.scopeUnavailable')
+      : t('usageAccessRequired')
     : t('usageDisabled')
   const isMetricsLoading =
     isConnectionRoleLoading || (canQueryMetrics && dashboard.isPending)

@@ -1,6 +1,8 @@
 const workspace = {
   appShell: {
     adminNavigation: {
+      scopeUnavailable:
+        'The current management credential cannot query this space.',
       spaceScope: 'This page shows data for this space only.',
       overview: 'Overview',
       currentSpace: 'Current space: {{space}}',

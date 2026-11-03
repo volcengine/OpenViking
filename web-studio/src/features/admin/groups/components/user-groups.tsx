@@ -1,9 +1,9 @@
+import { adminGroupsQuery } from '#/shared/api/admin-membership-queries'
 import type { AdminConnection } from '#/shared/api/admin'
 import {
   createAdminGroup,
   deleteAdminGroup,
   fetchAdminGroupMembers,
-  fetchAdminGroups,
   fetchAdminUsersPage,
   updateAdminGroupMember,
 } from '#/shared/api/admin'
@@ -75,13 +75,9 @@ export function UserGroups({
 }) {
   const { t } = useTranslation('settings')
   const client = useQueryClient()
-  const scope = [connection.baseUrl, connection.accountId, connection.apiKey]
-  const queryKey = ['managed-groups', ...scope]
-  const groups = useQuery({
-    queryKey,
-    queryFn: () => fetchAdminGroups(connection),
-    retry: false,
-  })
+  const groupsOptions = adminGroupsQuery(connection)
+  const { queryKey } = groupsOptions
+  const groups = useQuery(groupsOptions)
   const [search, setSearch] = useState('')
   const [creating, setCreating] = useState(false)
   const [groupId, setGroupId] = useState('')
