@@ -330,8 +330,8 @@ async def test_context_build_messages_can_skip_system_prompt(temp_dir: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("supports_media", [False, True])
-async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, supports_media: bool):
+@pytest.mark.parametrize("scope", ["disabled", "native", "chat", "compile"])
+async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, monkeypatch, scope):
     content = [
         {"type": "text", "text": "Source: viking://resources/image.png"},
         {
@@ -340,7 +340,29 @@ async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, support
         },
     ]
 
-    provider = _MediaProvider([[_image_call("call-1")]], supports_media=supports_media)
+    provider: LLMProvider
+    if scope in {"chat", "compile"}:
+        from vikingbot.compile.service import _CompileProvider
+        from vikingbot.integrations.langfuse import LangfuseClient
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        from openviking.models.vlm import VLMFactory
+        from openviking.models.vlm.base import ToolCall, VLMResponse
+
+        vlm = VLMFactory.create({"provider": "kimi", "model": "kimi-k2"})
+        completion = AsyncMock(
+            side_effect=[
+                VLMResponse(tool_calls=[ToolCall("call-1", "read_image", {})]),
+                VLMResponse(content="done"),
+            ]
+        )
+        monkeypatch.setattr(vlm, "get_completion_async", completion)
+        adapter = VLMProviderAdapter(vlm, "kimi-k2", langfuse_client=LangfuseClient())
+        provider = (
+            _CompileProvider(adapter, asyncio.Semaphore(1)) if scope == "compile" else adapter
+        )
+    else:
+        provider = _MediaProvider([[_image_call("call-1")]], supports_media=scope == "native")
     loop = make_loop(provider=provider, max_iterations=2)
 
     final, _reasoning, tools_used, _usage, _iteration = await loop._run_agent_loop(
@@ -351,58 +373,19 @@ async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, support
     )
 
     assert final == "done"
-    tool_message = next(message for message in provider.calls[1] if message["role"] == "tool")
-    if supports_media:
+    sent = (
+        provider.calls[1]
+        if isinstance(provider, _MediaProvider)
+        else completion.await_args_list[-1].kwargs["messages"]
+    )
+    tool_message = next(message for message in sent if message["role"] == "tool")
+    assert bool(loop_module._inline_media_bytes(sent)) == (scope in {"native", "compile"})
+    if scope == "native":
         assert tool_message["content"] == content
-    else:
+    elif scope != "compile":
         assert tool_message["content"].startswith("Image resource.")
         assert "tool-result media policy" in tool_message["content"]
     assert tools_used[0]["result"] == "Image resource."
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("compile_scope", [False, True], ids=["ordinary-bot", "compile"])
-async def test_chat_completion_tool_images_require_compile_scope(
-    make_loop, monkeypatch, compile_scope
-):
-    from vikingbot.compile.service import _CompileProvider
-    from vikingbot.integrations.langfuse import LangfuseClient
-    from vikingbot.providers.vlm_adapter import VLMProviderAdapter
-
-    from openviking.models.vlm import VLMFactory
-    from openviking.models.vlm.base import ToolCall, VLMResponse
-
-    vlm = VLMFactory.create({"provider": "kimi", "model": "kimi-k2"})
-    completion = AsyncMock(
-        side_effect=[
-            VLMResponse(
-                content="", tool_calls=[ToolCall(id="call-1", name="read_image", arguments={})]
-            ),
-            VLMResponse(content="done"),
-        ]
-    )
-    monkeypatch.setattr(vlm, "get_completion_async", completion)
-    adapter = VLMProviderAdapter(vlm, "kimi-k2", langfuse_client=LangfuseClient())
-    provider = _CompileProvider(adapter, asyncio.Semaphore(1)) if compile_scope else adapter
-    loop = make_loop(provider=provider, max_iterations=2)
-    final, *_ = await loop._run_agent_loop(
-        messages=[{"role": "user", "content": "read it"}],
-        session_key=SessionKey(type="cli", channel_id="default", chat_id="scoped-images"),
-        publish_events=False,
-        tool_registry=_ImageRegistry(),
-    )
-    assert final == "done"
-    sent = completion.await_args_list[-1].kwargs["messages"]
-    tool = next(message for message in sent if message["role"] == "tool")
-    images = [
-        part
-        for message in sent
-        if message["role"] == "user" and isinstance(message.get("content"), list)
-        for part in message["content"]
-        if part.get("type") == "image_url"
-    ]
-    assert bool(images) == compile_scope
-    assert ("Media content was omitted" in tool["content"]) != compile_scope
 
 
 @pytest.mark.asyncio

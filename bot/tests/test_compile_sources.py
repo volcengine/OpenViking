@@ -269,12 +269,8 @@ async def test_compile_image_reaches_chat_completion_wire(
             assert result.files[0].inputs == [image.record_id]
 
     sent = requests[-1]["messages"]
-    tool = next(m for m in sent if m["role"] == "tool")
-    assert (
-        isinstance(tool["content"], str)
-        and URI in tool["content"]
-        and "base64," not in tool["content"]
-    )
+    serialized = json.dumps(sent)
+    assert URI in serialized and serialized.count(base64.b64encode(png).decode()) == 1
     images = [
         base64.b64decode(p["image_url"]["url"].split(",", 1)[1])
         for m in sent
