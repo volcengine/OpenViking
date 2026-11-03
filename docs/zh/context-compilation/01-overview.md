@@ -14,7 +14,7 @@
 
 编译由服务端配置的 [Agent Runtime](../api/23-agent-runtime.md) 执行，本地部署可使用内置 [VikingBot](../concepts/15-vikingbot.md)。它以请求用户的身份读取来源和 Skill，在独立的 Agent Loop 中整理并写入内容。任务异步运行，返回 `task_id` 后可查询进度和结果。
 
-图片来源会以原生 tool result 媒体的形式投喂给模型，因此所配置的 VLM 后端必须支持该请求格式。无法在 tool 结果中携带图片 part 的后端，会在发出任何模型请求之前就以 `UNSUPPORTED_MEDIA` 终止编译。`anthropic`、`openai-codex` 与 `volcengine` 后端支持该格式。
+图片来源会以原生 tool result 媒体的形式投喂给模型，因此所配置的 VLM 后端需要支持该请求格式。后端无法在 tool 结果中携带图片 part 时，Compile 会去掉图片后继续发送请求并记录一条告警；模型本身拒绝该图片时，请求会去掉图片重试一次。两种情况下图片来源都保留在引用链里，编译照常完成。`anthropic`、`openai-codex` 与 `volcengine` 后端原生支持该格式。
 
 ## 一条命令跑起来
 

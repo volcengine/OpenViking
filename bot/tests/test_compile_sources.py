@@ -32,7 +32,7 @@ from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
-from openviking.models.model_error import ModelErrorKind
+from openviking.models.model_error import ModelError, ModelErrorKind
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -335,7 +335,6 @@ async def test_pipeline_stages_can_reread_original_images(runtime, stage, schema
 @pytest.mark.parametrize(
     "problem,code",
     [
-        ("provider", "UNSUPPORTED_MEDIA"),
         ("format", "INVALID_ARGUMENT"),
         ("size", "SOURCE_READ_FAILED"),
     ],
@@ -343,9 +342,7 @@ async def test_pipeline_stages_can_reread_original_images(runtime, stage, schema
 async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem, code):
     pipeline, _ = runtime
     uri = URI
-    if problem == "provider":
-        pipeline.model.provider.supports_tool_result_media.return_value = False
-    elif problem == "format":
+    if problem == "format":
         uri = URI.replace(".png", ".svg")
     else:
         pipeline.client.stat.return_value = {
@@ -354,6 +351,20 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
     with pytest.raises(CompileFailure) as caught:
         await read_source(pipeline.client, uri, pipeline.model.provider)
     assert caught.value.code == code
+    pipeline.client.read_raw.assert_not_awaited()
+    pipeline.client.download_bytes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_unsupported_provider_keeps_the_image_as_a_cited_reference(runtime):
+    """A provider that cannot carry the image keeps the source instead of failing."""
+    pipeline, _ = runtime
+    pipeline.model.provider.supports_tool_result_media.return_value = False
+    source = await read_source(pipeline.client, URI, pipeline.model.provider)
+    assert source.uri == URI
+    assert source.image is None
+    assert "image" in source.content.lower()
+    assert "cite" in source.content.lower()
     pipeline.client.read_raw.assert_not_awaited()
     pipeline.client.download_bytes.assert_not_awaited()
 
@@ -562,6 +573,45 @@ async def test_runtime_memory_child_fetches_native_image_from_reference(runtime,
     finally:
         await loop.subagents.cancel_all()
         await sandbox.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_provider_without_media_support_sends_the_request_without_media(runtime):
+    """A provider that cannot carry the image still gets the request."""
+    pipeline, png = runtime
+    tool = VikingMultiReadTool()
+    tool._get_client, tool._release_client = AsyncMock(return_value=pipeline.client), AsyncMock()
+    result = await tool.execute(ToolContext(), [URI])
+    pipeline.model.provider.supports_tool_result_media.return_value = False
+    pipeline.model.provider.chat.return_value = LLMResponse(content="ok")
+    response = await pipeline.model.call(
+        "compile", [{"content": result.content}], [], max_tokens=100
+    )
+    assert response.content == "ok"
+    sent = pipeline.model.provider.chat.await_args.kwargs["messages"]
+    assert _inline_media_bytes(sent) == 0
+    assert any("cannot deliver image content" in warning for warning in pipeline.warnings)
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_rejects_the_image_retries_without_media(runtime):
+    """A model without vision capability degrades instead of failing the task."""
+    pipeline, png = runtime
+    tool = VikingMultiReadTool()
+    tool._get_client, tool._release_client = AsyncMock(return_value=pipeline.client), AsyncMock()
+    result = await tool.execute(ToolContext(), [URI])
+    pipeline.model.provider.chat.side_effect = [
+        ModelError(ModelErrorKind.INVALID_REQUEST, "image content is not supported"),
+        LLMResponse(content="ok"),
+    ]
+    response = await pipeline.model.call(
+        "compile", [{"content": result.content}], [], max_tokens=100
+    )
+    assert response.content == "ok"
+    assert pipeline.model.provider.chat.await_count == 2
+    retried = pipeline.model.provider.chat.await_args_list[1].kwargs["messages"]
+    assert _inline_media_bytes(retried) == 0
+    assert any("rejected the image evidence" in warning for warning in pipeline.warnings)
 
 
 @pytest.mark.asyncio

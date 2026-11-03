@@ -1149,7 +1149,12 @@ class BotCompileService:
                             isinstance(content, CompileFailure)
                             and content.code == "UNSUPPORTED_MEDIA"
                         ):
-                            raise content
+                            manifest[uri] = "skipped"
+                            await pipeline.files.put("inputs", manifest)
+                            pipeline.warnings.append(
+                                f"Image evidence skipped: {uri}: {str(content)[:400]}"
+                            )
+                            continue
                         pipeline.failures.append(f"Source read failed: {uri}: {str(content)[:400]}")
                     elif isinstance(content, BaseException):
                         raise content

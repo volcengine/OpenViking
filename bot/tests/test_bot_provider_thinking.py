@@ -48,14 +48,14 @@ def test_vlm_adapter_honors_backend_tool_result_media_declaration():
     """A backend that declares its own capability decides the result."""
 
     declared_true = VLMProviderAdapter(
-        SimpleNamespace(provider="openai", supports_tool_result_media=lambda: True),
+        SimpleNamespace(provider="openai", supports_tool_result_media=lambda model=None: True),
         default_model="gpt-4o",
         langfuse_client=SimpleNamespace(),
     )
     assert declared_true.supports_tool_result_media() is True
 
     declared_false = VLMProviderAdapter(
-        SimpleNamespace(provider="anthropic", supports_tool_result_media=lambda: False),
+        SimpleNamespace(provider="anthropic", supports_tool_result_media=lambda model=None: False),
         default_model="claude-sonnet",
         langfuse_client=SimpleNamespace(),
     )

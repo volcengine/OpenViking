@@ -702,29 +702,29 @@ class VLMProviderAdapter(LLMProvider):
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
         """Return true only for backends with native rich tool-result support."""
-        return self._backend_supports_tool_result_media(self._vlm)
+        return self._backend_supports_tool_result_media(self._vlm, model)
 
     @classmethod
-    def _backend_supports_tool_result_media(cls, vlm: Any) -> bool:
+    def _backend_supports_tool_result_media(cls, vlm: Any, model: str | None = None) -> bool:
         instances = getattr(vlm, "_vlm_instances", None)
         if instances is not None:
             return bool(instances) and all(
-                cls._backend_supports_tool_result_media(item) for item in instances
+                cls._backend_supports_tool_result_media(item, model) for item in instances
             )
 
         primary = getattr(vlm, "primary", None)
         backup = getattr(vlm, "backup", None)
         if primary is not None and backup is not None:
             return cls._backend_supports_tool_result_media(
-                primary
-            ) and cls._backend_supports_tool_result_media(backup)
+                primary, model
+            ) and cls._backend_supports_tool_result_media(backup, model)
 
         # A backend may declare its own native tool-result media support. The
         # declaration is authoritative: it is the only way a backend can state
         # that its request format carries media inside a tool result.
         declared = getattr(vlm, "supports_tool_result_media", None)
         if callable(declared):
-            return bool(declared())
+            return bool(declared(model))
 
         resolve_provider = getattr(vlm, "resolved_provider", None)
         provider = (

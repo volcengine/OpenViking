@@ -210,6 +210,13 @@ class VolcEngineVLM(OpenAIVLM):
         part in a ``role="tool"`` message, so Compile can deliver native image
         evidence to this backend. OpenAI's own Chat Completions API restricts
         tool messages to text parts, so that backend stays excluded.
+
+        This states a protocol fact only. Whether the selected model can read
+        the image is a separate question: Ark exposes no model metadata API and
+        deployments commonly address a model through a custom endpoint alias,
+        so the model cannot be classified from its name. Compile therefore
+        delivers the image and degrades when the model rejects it, rather than
+        blocking the whole task.
         """
         return True
 

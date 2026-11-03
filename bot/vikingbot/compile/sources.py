@@ -13,6 +13,12 @@ from openviking.parse.parsers.media.utils import get_media_type
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.compile.models import CompileFailure, CompileLimits
 
+IMAGE_EVIDENCE_SKIPPED = (
+    "This source is an image. The configured model provider cannot deliver image "
+    "content inside a tool result, so its pixels were not read. Cite the source by "
+    "URI and do not describe its visual content."
+)
+
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+\S")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _FRONTMATTER = re.compile(r"\A---\r?\n.*?\r?\n(?:---|\.\.\.)(?:\r?\n|$)", re.DOTALL)
@@ -67,11 +73,10 @@ async def read_source(client, uri, provider) -> str | CompileSourceRange:
             "INVALID_ARGUMENT", f"Unsupported Compile image format: {uri}", stage="pipeline"
         )
     if not provider.supports_tool_result_media():
-        raise CompileFailure(
-            "UNSUPPORTED_MEDIA",
-            f"Compile provider cannot deliver image evidence: {uri}",
-            stage="pipeline",
-        )
+        # The provider cannot carry the pixels, but the source still belongs in
+        # the evidence trail. Keep it as a cited reference so the compilation
+        # continues instead of failing on evidence nobody can deliver.
+        return CompileSourceRange(uri, 0, 0, 0, 0, IMAGE_EVIDENCE_SKIPPED)
     result = await VikingMultiReadTool._read_image(client, uri)
     if not result["success"]:
         raise CompileFailure("SOURCE_READ_FAILED", f"{uri}: {result['content']}", stage="pipeline")
