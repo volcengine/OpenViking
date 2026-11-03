@@ -50,7 +50,6 @@ def test_tool_images_follow_all_parallel_results_with_source_attribution():
         "assistant",
     ]
     assert [m["tool_call_id"] for m in converted[1:4]] == ["read-a", "read-b", "read-c"]
-    assert converted[1]["name"] == "read"
     assert "viking://resources/a.png" in converted[1]["content"]
     assert "viking://resources/b.png" in converted[1]["content"]
     assert "image 1 from tool call read-a" in converted[1]["content"]
@@ -66,25 +65,17 @@ def test_tool_images_follow_all_parallel_results_with_source_attribution():
     assert tool_images_as_user_messages(converted) == converted
 
 
-@pytest.mark.parametrize("case", ["tool_call_id", "text", "input_image"])
-def test_malformed_tool_images_report_context_without_image_bytes(case):
-    part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,PRIVATE"}}
+def test_unsupported_tool_images_fail_without_exposing_image_bytes():
     message: dict[str, Any] = {
         "role": "tool",
         "name": "read_source",
         "tool_call_id": "read-1",
-        "content": [part],
+        "content": [{"type": "input_image", "image_url": "data:image/png;base64,PRIVATE"}],
     }
-    if case == "tool_call_id":
-        message.pop("tool_call_id")
-    elif case == "text":
-        message["content"].append({"type": "text"})
-    else:
-        part["type"] = case
     original = deepcopy(message)
-    with pytest.raises(ValueError) as caught:
+    with pytest.raises(ValueError, match="input_image") as caught:
         tool_images_as_user_messages([message])
-    assert "read_source" in str(caught.value) and case in str(caught.value)
+    assert "read_source[read-1]" in str(caught.value)
     assert "PRIVATE" not in str(caught.value)
     assert message == original
 

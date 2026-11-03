@@ -65,7 +65,7 @@ def test_provider_names_do_not_grant_undeclared_media_capabilities():
         ("heroku/model", None),
         ("docker_model_runner/model", None),
         ("azure_text/deployment", None),
-        ("sagemaker/custom", None),
+        ("future-claude-vision", None),
         ("custom/my-model", None),
         ("gemini/future-claude-vision", None),
     ],
