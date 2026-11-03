@@ -2079,6 +2079,11 @@ impl RAGFSBindingClient {
 
     /// Write data to file.
     ///
+    /// A write to ``/local/{account_id}/user/{owner_user_id}/GLOBAL_POLICY.md``
+    /// is parsed as a v1 GLOBAL policy before the filesystem is touched. Invalid
+    /// content raises ``GlobalPolicyError`` (``GLOBAL_POLICY_INVALID``) or
+    /// ``UnsupportedGlobalPolicySchemaError`` (``GLOBAL_POLICY_SCHEMA_UNSUPPORTED``).
+    ///
     /// Args:
     ///     path: File path
     ///     data: File content as bytes
@@ -2093,6 +2098,10 @@ impl RAGFSBindingClient {
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let _ = max_retries; // not applicable for local binding
+        if ragfs::global_policy::is_user_policy_file_path(&path) {
+            ragfs::global_policy::validate_policy_write(&data)
+                .map_err(|error| global_policy::policy_write_error(py, error))?;
+        }
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
         let len = data.len();

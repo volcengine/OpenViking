@@ -265,3 +265,20 @@ fn map_error(error: CoreGlobalPolicyError) -> PyErr {
         CoreGlobalPolicyError::Invalid(_) => GlobalPolicyError::new_err(message),
     }
 }
+
+/// Build the Python exception for a write-time policy validation failure.
+///
+/// The exception carries the same stable ``code`` attribute as snapshot errors,
+/// so callers can distinguish malformed content from an unsupported schema.
+pub(crate) fn policy_write_error(py: Python<'_>, error: CoreGlobalPolicyError) -> PyErr {
+    let code = error.code();
+    let message = format!("{code}: {error}");
+    let error = match error {
+        CoreGlobalPolicyError::UnsupportedSchema { .. } => {
+            UnsupportedGlobalPolicySchemaError::new_err(message)
+        }
+        CoreGlobalPolicyError::Invalid(_) => GlobalPolicyError::new_err(message),
+    };
+    let _ = error.value(py).setattr("code", code);
+    error
+}

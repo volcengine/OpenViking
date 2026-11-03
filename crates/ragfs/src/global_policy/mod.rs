@@ -13,7 +13,7 @@ mod snapshot;
 use std::fmt;
 
 pub use evaluate::is_global_policy_path_allowed;
-pub use path::validate_policy_path;
+pub use path::{is_user_policy_file_path, validate_policy_path};
 pub use snapshot::{PolicySnapshot, PolicyStatus};
 
 /// Reserved policy filename at a user root.
@@ -162,4 +162,16 @@ impl GlobalPolicy {
     pub fn allows_path(&self, path: &str) -> bool {
         is_global_policy_path_allowed(Some(self), path)
     }
+}
+
+/// Validate the complete bytes written to a user's reserved policy file.
+///
+/// This is the write-time counterpart of [`GlobalPolicy::parse`]. It rejects
+/// non-UTF-8 content, malformed frontmatter, schema violations and unsupported
+/// schema versions before the write reaches the filesystem, so a caller can
+/// surface the error instead of leaving a fail-closed but silently invalid file.
+pub fn validate_policy_write(data: &[u8]) -> Result<(), GlobalPolicyError> {
+    let text = std::str::from_utf8(data)
+        .map_err(|_| GlobalPolicyError::invalid("policy content must be UTF-8 text"))?;
+    GlobalPolicy::parse(text).map(|_| ())
 }

@@ -1,6 +1,6 @@
 //! Canonical path validation for policy rules and evaluation targets.
 
-use super::{GlobalPolicyError, PROTECTED_ROOTS};
+use super::{GlobalPolicyError, POLICY_FILENAME, PROTECTED_ROOTS};
 
 /// Validate a canonical, literal path relative to one user's root.
 ///
@@ -35,6 +35,22 @@ pub fn validate_policy_path(path: &str) -> Result<&str, GlobalPolicyError> {
         ));
     }
     Ok(path)
+}
+
+/// Return whether an absolute AGFS path addresses a user's reserved policy file.
+///
+/// The only accepted shape is `/local/{account_id}/user/{owner_user_id}/GLOBAL_POLICY.md`.
+/// Files with the same name below another directory are ordinary content and are
+/// not validated as policies.
+pub fn is_user_policy_file_path(path: &str) -> bool {
+    let mut parts = path.split('/');
+    parts.next() == Some("")
+        && parts.next() == Some("local")
+        && parts.next().is_some()
+        && parts.next() == Some("user")
+        && parts.next().is_some()
+        && parts.next() == Some(POLICY_FILENAME)
+        && parts.next().is_none()
 }
 
 /// Return whether the first path segment is a permanent protected root.
