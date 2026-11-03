@@ -836,7 +836,18 @@ impl FileSystem for LocalFileSystem {
         let local_path = self.resolve_path(path)?;
 
         // Check if exists and is not a directory
-        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
+        let metadata = fs::metadata(&local_path).map_err(|error| {
+            if path.ends_with("/_system/users.json") {
+                tracing::warn!(
+                    path,
+                    local_path = %local_path.display(),
+                    error_kind = ?error.kind(),
+                    errno = ?error.raw_os_error(),
+                    "account_store_diag local_registry_metadata_failed"
+                );
+            }
+            Error::NotFound(path.to_string())
+        })?;
 
         if metadata.is_dir() {
             return Err(Error::plugin(format!("is a directory: {}", path)));
