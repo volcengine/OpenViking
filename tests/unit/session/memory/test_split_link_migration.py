@@ -179,18 +179,11 @@ def _build_replacement_operations(delete_replacements, deleted_uris_with_links=N
     profile_uri = "viking://user/u/memories/profile.md"
     event_uri = "viking://user/u/memories/events/2026/01/02/audit.md"
 
-    deleted_uris = [uri for uri in (source_uri, *delete_replacements.keys())]
+    deleted_uris = [source_uri, *delete_replacements]
     deleted_uris = [uri for uri in dict.fromkeys(deleted_uris) if uri != final_uri]
     if deleted_uris_with_links is None:
         deleted_uris_with_links = set(deleted_uris)
 
-    source_file = MemoryFile(
-        uri=source_uri,
-        content="old hobby preferences",
-        memory_type="preferences",
-        links=[_link(source_uri, profile_uri)],
-        backlinks=[_link(event_uri, source_uri)],
-    )
     profile_file = MemoryFile(
         uri=profile_uri,
         content="profile",
@@ -341,38 +334,35 @@ async def test_chained_replacement_inherits_links_on_terminal_target():
 
 
 @pytest.mark.asyncio
-async def test_delete_without_replacement_removes_referenced_links():
-    """A pure delete removes references instead of publishing dangling links."""
+async def test_replacement_and_delete_keep_only_live_links():
+    """A replacement preserves live relations and drops links to deleted files."""
     source_uri = "viking://user/u/memories/preferences/Evan/hobby_preferences.md"
-    other_uri = "viking://user/u/memories/preferences/Evan/summary.md"
     (
         updater,
         operations,
-        _files,
-        source_uri,
-        _new_uris,
-        _profile_uri,
-        _event_uri,
-    ) = _build_split_operations()
-    # No derived_from signal: the upsert is unrelated content, not a split.
-    operations.resolved_links = [
-        StoredLink(
-            from_uri=other_uri,
-            to_uri=source_uri,
-            link_type="related_to",
-            weight=0.9,
-            description="still points at the deleted file",
-        )
-    ]
+        files,
+        final_uri,
+        profile_uri,
+        event_uri,
+    ) = _build_replacement_operations(
+        {source_uri: "viking://user/u/memories/preferences/Evan/hobby_final.md"}
+    )
+    operations.delete_file_contents.append(MemoryFileUtils.read(files[profile_uri], uri=profile_uri))
+    operations.resolved_links = [StoredLink(from_uri=final_uri, to_uri=profile_uri)]
+    updater._apply_delete.side_effect = lambda uri, ctx, **kwargs: files.pop(uri)
 
     result = await updater.apply_operations(operations, MagicMock())
 
-    assert result.deleted_uris == [source_uri]
+    assert set(result.deleted_uris) == {source_uri, profile_uri}
     assert result.errors == []
     assert operations.resolved_links == []
-    for uri in (_profile_uri, _event_uri):
-        memory_file = MemoryFileUtils.read(_files[uri], uri=uri)
+    for uri, raw in files.items():
+        memory_file = MemoryFileUtils.read(raw, uri=uri)
         assert all(
-            source_uri not in (link["from_uri"], link["to_uri"])
+            link["from_uri"] in files and link["to_uri"] in files
             for link in memory_file.links + memory_file.backlinks
         )
+    final_file = MemoryFileUtils.read(files[final_uri], uri=final_uri)
+    event = MemoryFileUtils.read(files[event_uri], uri=event_uri)
+    assert any(link["from_uri"] == event_uri for link in final_file.backlinks)
+    assert any(link["to_uri"] == final_uri for link in event.links)

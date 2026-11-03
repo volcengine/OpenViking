@@ -1855,6 +1855,10 @@ class MemoryUpdater:
                 unlink_neighbors.add(neighbor_uri)
                 inherited_by_uri.setdefault(neighbor_uri, {"links": [], "backlinks": []})
             for target_uri in targets:
+                if neighbor_uri in pure_delete_uris:
+                    unlink_neighbors.add(target_uri)
+                    inherited_by_uri.setdefault(target_uri, {"links": [], "backlinks": []})
+                    continue
                 record = dict(remapped)
                 if record.get("from_uri") == deleted_uri:
                     record["from_uri"] = target_uri

@@ -1882,46 +1882,6 @@ def _first_context_uri(contexts: list[Context]) -> str:
     return ""
 
 
-def _case_experience_links_via_trajectories(
-    *,
-    case_uri: str,
-    trajectory_uris: set[str],
-    plan: PolicyUpdatePlan,
-    apply_result: PolicyApplyResult,
-) -> list[StoredLink]:
-    if not trajectory_uris:
-        return []
-    touched = set(getattr(apply_result, "written_uris", []) or [])
-    touched.update(getattr(apply_result, "edited_uris", []) or [])
-    result: list[StoredLink] = []
-    seen: set[str] = set()
-    root_uri = getattr(getattr(apply_result, "updated_policy_set", None), "root_uri", "")
-    if not root_uri:
-        raise ValueError(
-            "PolicyApplyResult.updated_policy_set.root_uri is required for case-to-experience links"
-        )
-    for item in getattr(plan, "items", []) or []:
-        if item.memory_type != "experiences" or item.kind != "upsert":
-            continue
-        if not _plan_item_has_source_trajectory(item, trajectory_uris):
-            continue
-        uri = _experience_plan_item_uri(item, root_uri)
-        if uri not in touched:
-            continue
-        if uri in seen:
-            continue
-        seen.add(uri)
-        result.append(
-            _stored_link(
-                from_uri=case_uri,
-                target_uri=uri,
-                link_type="related_to",
-                description="",
-            )
-        )
-    return result
-
-
 def _plan_item_has_source_trajectory(item: PolicyPlanItem, trajectory_uris: set[str]) -> bool:
     return bool(_plan_item_source_trajectory_uris(item, trajectory_uris))
 
@@ -2037,24 +1997,6 @@ def _experience_snapshot_provenance(
         plan=persisted_result.plan,
         apply_result=apply_result,
         trajectory_uris=trajectory_uris,
-    )
-
-
-def _stored_link(
-    *,
-    from_uri: str,
-    target_uri: str,
-    link_type: str,
-    description: str,
-) -> StoredLink:
-    return StoredLink(
-        from_uri=from_uri,
-        to_uri=target_uri,
-        link_type=link_type,
-        weight=1.0,
-        match_text=None,
-        description=description,
-        created_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
