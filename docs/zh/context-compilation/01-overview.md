@@ -14,6 +14,22 @@
 
 编译由服务端配置的 [Agent Runtime](../api/23-agent-runtime.md) 执行，本地部署可使用内置 [VikingBot](../concepts/15-vikingbot.md)。它以请求用户的身份读取来源和 Skill，在独立的 Agent Loop 中整理并写入内容。任务异步运行，返回 `task_id` 后可查询进度和结果。
 
+### 图片来源与模型
+
+来源目录包含 PNG、JPEG、GIF 或 WebP 时，内置 VikingBot 会保留原图、来源 URI 和内容哈希，按需将图片证据交给模型；不会把图片二进制当文本编译。需要选择支持图片输入的模型，不能仅凭 provider 支持工具调用判断模型能看图。
+
+图片传输方式由 VLM 后端声明，不按 provider 名称或模型名称放行。Anthropic 协议和 OpenAI Codex 使用原生多模态工具结果；OpenAI Chat Completions 后端及其方舟、Azure、Kimi、GLM 子类将工具结果保留为文本，并在同一请求中附带图片消息，通过工具调用 ID 和图片序号关联来源。
+
+失败策略分层处理：**协议明确、模型视觉能力未知时允许正常带图请求**，不要求新模型先进入名单，也不额外发探测请求；服务端明确拒绝图片时，编译报错。**协议或路由未明确、图片未完整传递时停止编译**，不会跳过图片后报告成功。允许尝试可能带来失败请求的延迟和费用；请求成功也不等于已验证模型正确理解了图片。
+
+LiteLLM 的显式 `provider` 优先；使用 `provider: "litellm"` 时，图片输入需要已识别的 `provider/model` 前缀，例如 `openai/future-vision-model`、`anthropic/claude-sonnet-4-5`。仅有裸模型名或 `api_base` 不足以声明图片协议，不能靠 `claude`、`qwen` 等名字片段授予传图能力。文本请求继续保留原有自动推断。已有依赖裸模型名自动推断的 LiteLLM 图片编译配置需要补上协议前缀。
+
+LiteLLM 根据本地实际路由的协议适配器判断能力：OpenAI 兼容协议（如通义、Moonshot、智谱 `zai`、OpenRouter、NVIDIA NIM、vLLM）、Gemini/Vertex Gemini、Ollama 和 Bedrock Converse 使用图片消息；Anthropic 协议保留原生工具结果。智谱旧 `zhipu/` 前缀会规范为当前 LiteLLM 使用的 `zai/`。能力检查不调用凭据解析或登录流程。纯文本 Completion API 和尚未验证的协议继续拒绝图片证据，不能静默退回二进制文本。
+
+图片消息会排在同一轮所有工具结果之后；转换仅发生在 provider 请求边界，不改写任务证据或会话历史。主备或多凭据链上的每个后端都必须支持图片证据传递；包含图片消息传输方式的混合链统一使用图片消息。
+
+此适配不增加模型请求、下载或依赖，只增加本地协议元数据检查和少量关联文字；模型仍会按图片输入计费。现有图片格式、数量、字节预算和来源哈希校验继续生效。传输协议支持图片不代表具体模型支持图片，尤其不能据此给纯文本模型宣称视觉能力。
+
 ## 一条命令跑起来
 
 先按 [LLM Wiki 示例](02-llm-wiki.md) 导入来源、安装 Skill，再执行：

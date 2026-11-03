@@ -200,7 +200,7 @@ class LLMProvider(ABC):
         yield LLMStreamEvent(type="response", response=response)
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
-        """Whether this provider can preserve media inside a tool result."""
+        """Whether this provider can deliver media returned by a tool to the model."""
         return False
 
     @abstractmethod

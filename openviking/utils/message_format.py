@@ -1,9 +1,50 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Human-readable formatting for LLM message lists (shared by memory and VLM layers)."""
+"""Request preparation and human-readable formatting for LLM message lists."""
 
 import json
 from typing import Any, Dict, List
+
+
+def tool_images_as_user_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deliver tool images through Chat Completions' user-image content format.
+
+    Keep tool replies contiguous, then attach their images with per-call labels.
+    Text and image positions remain identifiable without duplicating source text
+    or image bodies. Only request messages are rebuilt; stored history is untouched.
+    """
+    converted: List[Dict[str, Any]] = []
+    images: List[Dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") != "tool" and images:
+            converted.append({"role": "user", "content": images})
+            images = []
+        content = message.get("content")
+        if message.get("role") != "tool" or not isinstance(content, list):
+            converted.append(message)
+            continue
+        if not any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+            converted.append(message)
+            continue
+
+        text = []
+        image_number = 0
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                image_number += 1
+                label = f"Tool output image {image_number} from tool call {message['tool_call_id']}"
+                text.append(f"[{label}; attached after tool results.]")
+                images.extend([{"type": "text", "text": label}, part])
+            elif isinstance(part, dict) and part.get("type") == "text":
+                text.append(part["text"])
+            else:
+                raise ValueError(
+                    "Chat Completions tool image results must contain text/image parts"
+                )
+        converted.append({**message, "content": "\n".join(text)})
+    if images:
+        converted.append({"role": "user", "content": images})
+    return converted
 
 
 def sanitize_openai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

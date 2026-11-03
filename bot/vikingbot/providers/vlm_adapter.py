@@ -17,6 +17,7 @@ from loguru import logger
 
 from openviking.models.model_error import model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
+from openviking.utils.message_format import tool_images_as_user_messages
 from openviking.utils.model_retry import effective_max_retries, retry_async
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
@@ -296,8 +297,13 @@ class VLMProviderAdapter(LLMProvider):
                 if reasoning_effort is not None and self._vlm.provider == "volcengine"
                 else {}
             )
+            request_messages = (
+                tool_images_as_user_messages(messages)
+                if self._tool_result_media_mode(self._vlm) == "user_message"
+                else messages
+            )
             result = await self._vlm.get_completion_async(
-                messages=messages,
+                messages=request_messages,
                 thinking=thinking if thinking is not None else getattr(self._vlm, "thinking", None),
                 tools=response_tools,
                 tool_choice="auto" if response_tools else None,
@@ -556,6 +562,8 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None,
         temperature: float | None,
     ) -> dict[str, Any]:
+        if self._tool_result_media_mode(vlm) == "user_message":
+            messages = tool_images_as_user_messages(messages)
         provider = getattr(vlm, "provider", None)
         configured_max_tokens = getattr(vlm, "max_tokens", None)
         effective_max_tokens = max_tokens if max_tokens is not None else configured_max_tokens
@@ -701,30 +709,15 @@ class VLMProviderAdapter(LLMProvider):
         return self._default_model
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
-        """Return true only for backends with native rich tool-result support."""
-        return self._backend_supports_tool_result_media(self._vlm)
+        """Whether every configured backend can deliver image evidence from tools."""
+        return self._tool_result_media_mode(self._vlm) is not None
 
-    @classmethod
-    def _backend_supports_tool_result_media(cls, vlm: Any) -> bool:
-        instances = getattr(vlm, "_vlm_instances", None)
-        if instances is not None:
-            return bool(instances) and all(
-                cls._backend_supports_tool_result_media(item) for item in instances
-            )
-
-        primary = getattr(vlm, "primary", None)
-        backup = getattr(vlm, "backup", None)
-        if primary is not None and backup is not None:
-            return cls._backend_supports_tool_result_media(
-                primary
-            ) and cls._backend_supports_tool_result_media(backup)
-
-        resolve_provider = getattr(vlm, "resolved_provider", None)
-        provider = (
-            resolve_provider() if callable(resolve_provider) else getattr(vlm, "provider", "")
-        )
-        provider = str(provider or "").lower()
-        return provider in {"anthropic", "openai-codex"}
+    @staticmethod
+    def _tool_result_media_mode(vlm: Any) -> str | None:
+        """Backend declarations own capability; names cannot grant media support."""
+        capability = getattr(vlm, "tool_result_media_mode", None)
+        mode = capability() if callable(capability) else None
+        return mode if mode in ("native", "user_message") else None
 
     # ------------------------------------------------------------------
     # Langfuse helpers

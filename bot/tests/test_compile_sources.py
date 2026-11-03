@@ -9,6 +9,7 @@ from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
+import httpx
 import pytest
 from PIL import Image, ImageDraw
 from vikingbot.agent.loop import AgentLoop, _inline_media_bytes
@@ -23,16 +24,21 @@ from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCom
 from vikingbot.compile.ops.common import pack, payload
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import ChildProvider, complete_tool_result
+from vikingbot.compile.pipeline_io import ModelCallError
 from vikingbot.compile.results import CombineResponse, FileResponse, RecordResponse
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.compile.sources import read_source, split_source
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
 from openviking.models.model_error import ModelErrorKind
+from openviking.models.vlm import GLMVLM, KimiVLM, OpenAIVLM, VolcEngineVLM
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+from openviking.models.vlm.retry_vlm import RetryVLM
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -168,6 +174,148 @@ async def test_preloaded_image_fact_reaches_output_with_source_identity(runtime,
         result = await pipeline.model.ask("compile", "Inspect original images.", data, FileResponse)
         assert "Retry limit: 7" in result.files[0].content and URI in result.files[0].content
         assert result.files[0].inputs == [image.record_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "backend,accepts_images",
+    [("volcengine", True), ("openai", True), ("kimi", True), ("glm", True), ("openai", False)],
+)
+async def test_compile_image_reaches_chat_completion_wire(
+    runtime, monkeypatch, backend, accepts_images
+):
+    """Use real Ark/OpenAI SDK serialization, with HTTP and model replies controlled."""
+    from openai import AsyncOpenAI
+    from volcenginesdkarkruntime import AsyncArk
+
+    pipeline, png = runtime
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        if len(requests) > 1 and not accepts_images:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "unsupported_image",
+                        "message": "This model does not support image inputs.",
+                    }
+                },
+            )
+        if len(requests) == 1:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "read-image",
+                        "type": "function",
+                        "function": {
+                            "name": "read_evidence",
+                            "arguments": json.dumps({"source_range": image.record_id}),
+                        },
+                    }
+                ],
+            }
+        else:
+            message = {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "files": [
+                            {
+                                "path": "cedar.md",
+                                "content": f"Retry limit: 7. [Source]({URI})",
+                                "inputs": [image.record_id],
+                            }
+                        ]
+                    }
+                ),
+            }
+        return httpx.Response(
+            200,
+            json={
+                "id": "compile-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "doubao-seed-2-1-lite-260915",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": message,
+                        "finish_reason": "tool_calls" if len(requests) == 1 else "stop",
+                    }
+                ],
+            },
+        )
+
+    vlm_type = {"volcengine": VolcEngineVLM, "openai": OpenAIVLM, "kimi": KimiVLM, "glm": GLMVLM}[
+        backend
+    ]
+    sdk_type = AsyncArk if backend == "volcengine" else AsyncOpenAI
+    vlm = vlm_type({"provider": backend, "model": "doubao-seed-2-1-lite-260915"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        async with sdk_type(
+            api_key="test-key",
+            base_url="https://compile.invalid/v1",
+            http_client=http,
+            max_retries=0,
+        ) as sdk:
+            monkeypatch.setattr(vlm, "get_async_client", lambda: sdk)
+            pipeline.model.provider = VLMProviderAdapter(
+                RetryVLM(vlm),
+                default_model=vlm.model,
+                langfuse_client=SimpleNamespace(enabled=False),
+            )
+            image = await seed(runtime)
+            response = pipeline.model.ask(
+                "compile",
+                "Inspect original images.",
+                {"inputs": [await payload(pipeline, image)]},
+                FileResponse,
+            )
+            if accepts_images:
+                result = await response
+                assert result.files[0].inputs == [image.record_id]
+                assert URI in result.files[0].content
+            else:
+                with pytest.raises(ModelCallError, match="does not support image"):
+                    await response
+
+    assert len(requests) == 2
+    messages = requests[-1]["messages"]
+    tool = next(m for m in messages if m["role"] == "tool")
+    assert tool["tool_call_id"] == "read-image" and URI in tool["content"]
+    assert isinstance(tool["content"], str) and "base64," not in tool["content"]
+    images = [
+        p
+        for m in messages
+        if m["role"] == "user" and isinstance(m["content"], list)
+        for p in m["content"]
+        if p["type"] == "image_url"
+    ]
+    assert len(images) == 1
+    assert base64.b64decode(images[0]["image_url"]["url"].split(",")[1]) == png
+    pipeline.client.read_raw.assert_awaited_once_with(TEXT)
+
+
+@pytest.mark.asyncio
+async def test_undeclared_image_protocol_fails_before_download(runtime):
+    pipeline, _ = runtime
+    vlm = LiteLLMVLMProvider(
+        {
+            "provider": "litellm",
+            "model": "future-claude-vision",
+            "api_base": "https://compat.invalid/v1",
+        }
+    )
+    provider = VLMProviderAdapter(vlm, vlm.model, langfuse_client=SimpleNamespace(enabled=False))
+    with pytest.raises(CompileFailure, match="provider/model") as caught:
+        await read_source(pipeline.client, URI, provider)
+    assert caught.value.code == "UNSUPPORTED_MEDIA"
+    pipeline.client.read_raw.assert_not_awaited()
+    pipeline.client.download_bytes.assert_not_awaited()
 
 
 async def test_pipeline_inventory_combines_full_files_and_every_diff_page(runtime):

@@ -75,6 +75,27 @@ def make_adapter(vlm, default_model: str) -> VLMProviderAdapter:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["openai", "volcengine"])
+async def test_stream_delivers_tool_images_in_user_content(backend):
+    vlm_type = OpenAIVLM if backend == "openai" else VolcEngineVLM
+    vlm = vlm_type({"provider": backend, "model": "vision-model"})
+    completions = FakeCompletions(chunks=[stream_chunk("seen", finish_reason="stop")])
+    attach_client(vlm, completions)
+    provider = make_adapter(vlm, vlm.model)
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    messages = [{"role": "tool", "tool_call_id": "read", "content": [image]}]
+
+    events = [event async for event in provider.chat_stream(messages)]
+
+    assert events[-1].response.content == "seen"
+    sent = completions.calls[0]["messages"]
+    assert [m["role"] for m in sent] == ["tool", "user"]
+    assert isinstance(sent[0]["content"], str)
+    assert sent[1]["content"][-1] == image
+    assert messages[0]["content"] == [image]
+
+
+@pytest.mark.asyncio
 async def test_vlm_adapter_streams_openai_content_deltas():
     usage = SimpleNamespace(
         prompt_tokens=3,

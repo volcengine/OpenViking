@@ -277,7 +277,11 @@ class JsonModel:
         media_bytes = _inline_media_bytes(messages)
         if media_bytes and not self.provider.supports_tool_result_media(self.model):
             raise CompileFailure(
-                "UNSUPPORTED_MEDIA", "Compile provider cannot deliver image evidence", stage=stage
+                "UNSUPPORTED_MEDIA",
+                "Compile provider cannot deliver image evidence. The image transport is "
+                "unconfigured or unsupported; LiteLLM image inputs require an explicit "
+                "provider or a provider/model route such as openai/<model>.",
+                stage=stage,
             )
         if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:
             raise CompileFailure(

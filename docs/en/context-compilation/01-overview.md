@@ -14,6 +14,22 @@ Use the optional `--instruction` to specify this run's scope, audience, language
 
 The configured [Agent Runtime](../api/23-agent-runtime.md) runs the compilation; local deployments can use the built-in [VikingBot](../concepts/15-vikingbot.md). It reads the sources and Skill under the requesting user's identity, then organizes and writes content in a dedicated agent loop. The task runs asynchronously and returns a `task_id` for checking progress and results.
 
+### Image sources and models
+
+For PNG, JPEG, GIF, and WebP sources, the built-in VikingBot retains the original image, source URI, and content hash and delivers image evidence on demand. It does not compile image bytes as text. Choose a model that accepts images; tool-calling support alone does not imply vision support.
+
+The VLM backend declares the image transport; provider and model names do not grant support. Anthropic protocols and OpenAI Codex use native multimodal tool results. OpenAI Chat Completions backends, including the Ark, Azure, Kimi, and GLM subclasses, keep tool results as text and attach images in the same request, linked by tool-call ID and image number.
+
+Failure handling is layered: **a declared protocol with unknown model vision capability permits the normal image-bearing request**, without a model allowlist or an extra probe. An explicit provider rejection fails compilation. **An undeclared protocol/route or incomplete image delivery stops compilation**; images are never skipped to report success. An attempted request can incur failure latency and cost, and a successful request alone does not prove the model understood the image correctly.
+
+LiteLLM's explicit `provider` takes priority. With `provider: "litellm"`, image inputs require a recognized `provider/model` route, such as `openai/future-vision-model` or `anthropic/claude-sonnet-4-5`. A bare model name or `api_base` alone does not declare an image protocol; name fragments such as `claude` and `qwen` cannot grant image transport support. Text requests retain legacy automatic detection. Existing LiteLLM image-compilation configurations relying on bare-name detection must add a protocol prefix.
+
+LiteLLM checks the protocol adapter for its actual local route: OpenAI-compatible protocols (including DashScope, Moonshot, Zhipu `zai`, OpenRouter, NVIDIA NIM, and vLLM), Gemini/Vertex Gemini, Ollama, and Bedrock Converse use image messages; Anthropic protocols retain native tool results. The legacy Zhipu `zhipu/` prefix is normalized to LiteLLM's current `zai/` route. Capability checks do not invoke credential resolution or login. Text Completion APIs and unverified protocols continue to reject image evidence instead of falling back to binary text.
+
+Image messages follow all tool results from the same turn. Conversion happens only at the provider request boundary, preserving stored evidence and conversation history. Every backend in a fallback or credential chain must support image evidence delivery; mixed chains containing an image-message transport use image messages throughout.
+
+This adaptation adds no model request, download, or dependency, only local protocol metadata checks and small attribution labels. Image inputs still incur the model's image-token cost. Existing format, count, byte-budget, and source-hash checks remain in force. Image transport support does not imply that a particular model accepts images, especially for text-only models.
+
 ## Run it in one command
 
 First import the sources and install the Skill using the [LLM Wiki example](02-llm-wiki.md), then run:

@@ -14,7 +14,9 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
 from litellm import acompletion, completion
-from litellm.types.utils import all_litellm_params
+from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.types.utils import LlmProviders, all_litellm_params
+from litellm.utils import ProviderConfigManager
 
 from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import tracer
@@ -22,7 +24,7 @@ from openviking.utils.message_format import format_messages, sanitize_openai_mes
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, ToolResultMediaMode, VLMBase, VLMResponse
 
 logger = get_logger(__name__)
 
@@ -86,7 +88,7 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
     "zhipu": {
         "keywords": ("glm", "zhipu"),
         "env_key": "ZHIPUAI_API_KEY",
-        "litellm_prefix": "zhipu",
+        "litellm_prefix": "zai",
     },
     "dashscope": {
         "keywords": ("qwen", "dashscope"),
@@ -175,36 +177,47 @@ class LiteLLMVLMProvider(VLMBase):
         litellm.suppress_debug_info = True
         litellm.drop_params = True
 
+    def _declared_provider(self, model: str | None) -> str | None:
+        """Read explicit protocol declarations without guessing from model names."""
+        provider = str(self._provider_name or "").lower()
+        if provider and provider != "litellm":
+            return "zai" if provider == "zhipu" else provider
+        prefix, separator, _ = str(model or "").partition("/")
+        if not separator:
+            return None
+        prefix = "zai" if prefix.lower() == "zhipu" else prefix.lower()
+        try:
+            return LlmProviders(prefix).value
+        except ValueError:
+            return None
+
     def _setup_env(self, api_key: str, model: str | None) -> None:
         """Set environment variables based on detected provider."""
-        provider = self._provider_name
-        if (not provider or provider == "litellm") and model:
-            detected = detect_provider_by_model(model)
-            if detected:
-                provider = detected
-            elif _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
-                return
-
-        if provider and provider in PROVIDER_CONFIGS:
-            env_key = PROVIDER_CONFIGS[provider]["env_key"]
+        declared = self._declared_provider(model)
+        provider = declared or (detect_provider_by_model(model) if model else None)
+        metadata = (
+            PROVIDER_CONFIGS.get("zhipu" if provider == "zai" else provider) if provider else None
+        )
+        if metadata:
+            env_key = metadata["env_key"]
             os.environ[env_key] = api_key
             self._detected_provider = provider
-        else:
+        elif declared is None:
             os.environ["OPENAI_API_KEY"] = api_key
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider prefixes."""
-        if _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
-            return model
-        if model.lower().startswith(("openai/", *OLLAMA_LITELLM_PREFIXES)):
-            return model
+        declared = self._declared_provider(model)
+        if declared is not None:
+            prefix, separator, name = model.partition("/")
+            prefix = "zai" if prefix.lower() == "zhipu" else prefix.lower()
+            return f"{declared}/{name if separator and prefix == declared else model}"
 
         provider = self._detected_provider or detect_provider_by_model(model)
 
         if provider and provider in PROVIDER_CONFIGS:
             prefix = PROVIDER_CONFIGS[provider]["litellm_prefix"]
-            is_zhipu_zai_model = provider == "zhipu" and model.startswith("zai/")
-            if prefix and not model.startswith(f"{prefix}/") and not is_zhipu_zai_model:
+            if prefix and not model.startswith(f"{prefix}/"):
                 return f"{prefix}/{model}"
             return model
 
@@ -219,6 +232,40 @@ class LiteLLMVLMProvider(VLMBase):
         if "/" in resolved_model:
             return resolved_model.split("/", 1)[0].lower()
         return self._detected_provider or detect_provider_by_model(resolved_model) or self.provider
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        """Use the actual local protocol adapter, without credential resolution.
+
+        get_llm_provider() can trigger authentication (e.g. Copilot); capability
+        discovery must not use it. Unknown and text-only protocols fail closed.
+        """
+        provider = self._declared_provider(self.model)
+        if provider is None:
+            return None
+        model = self._resolve_model(self.model or "gpt-4o-mini")
+        if provider and model.startswith(f"{provider}/"):
+            model = model.split("/", 1)[1]
+        try:
+            config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(provider)
+            )
+        except ValueError:
+            return None
+        config_type = config if isinstance(config, type) else type(config)
+        if issubclass(config_type, BaseTextCompletionConfig):
+            return None
+        if issubclass(config_type, litellm.AnthropicConfig):
+            return "native"
+        image_protocols = (
+            litellm.OpenAIGPTConfig,
+            litellm.OpenAIConfig,
+            litellm.AzureOpenAIConfig,
+            litellm.VertexGeminiConfig,
+            litellm.OllamaConfig,
+            litellm.OllamaChatConfig,
+            litellm.AmazonConverseConfig,
+        )
+        return "user_message" if issubclass(config_type, image_protocols) else None
 
     def _should_forward_api_key(self, model: str) -> bool:
         if not self.api_key:
@@ -355,7 +402,11 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs["extra_body"] = extra
 
         # Only send enable_thinking to DashScope-compatible providers
-        provider = self._detected_provider or detect_provider_by_model(model)
+        provider = (
+            self._declared_provider(model)
+            or self._detected_provider
+            or detect_provider_by_model(model)
+        )
         if provider == "dashscope":
             extra = kwargs.get("extra_body", {})
             extra["enable_thinking"] = self._effective_thinking(thinking)

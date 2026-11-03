@@ -69,7 +69,9 @@ async def read_source(client, uri, provider) -> str | CompileSourceRange:
     if not provider.supports_tool_result_media():
         raise CompileFailure(
             "UNSUPPORTED_MEDIA",
-            f"Compile provider cannot deliver image evidence: {uri}",
+            f"Compile provider cannot deliver image evidence: {uri}. "
+            "The image transport is unconfigured or unsupported. For LiteLLM, "
+            "set an explicit provider or a provider/model route such as openai/<model>.",
             stage="pipeline",
         )
     result = await VikingMultiReadTool._read_image(client, uri)
