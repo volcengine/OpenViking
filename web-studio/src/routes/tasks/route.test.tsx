@@ -76,8 +76,12 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
 vi.mock('#/features/workbench/monitoring/components/queue-status-card', () => ({
   QueueStatusCard: () => null,
 }))
+const detailMocks = vi.hoisted(() => ({ render: vi.fn() }))
 vi.mock('#/features/workbench/tasks/components/task-detail-sheet', () => ({
-  TaskDetailSheet: () => null,
+  TaskDetailSheet: (props: unknown) => {
+    detailMocks.render(props)
+    return null
+  },
 }))
 
 const TaskPage = Route.options.component as ComponentType & {
@@ -391,6 +395,40 @@ it('groups processing and total time without inventing legacy timing', async () 
 })
 
 describe('management task scope', () => {
+  it.each(['click', 'Enter', 'Space'])(
+    'opens compile details with the management credential via %s',
+    async (action) => {
+      connectionState.connectionRole = 'admin'
+      records = [
+        {
+          task_id: 'manager-compile',
+          task_type: 'compile',
+          resource_id: 'same-source',
+          status: 'completed',
+          created_at: 200,
+        },
+      ]
+      const user = await renderPage('en', true)
+      const row = await screen.findByRole('row', {
+        name: 'View details for task manager-compile',
+      })
+      if (action === 'click') await user.click(row)
+      else {
+        row.focus()
+        await user.keyboard(action === 'Enter' ? '{Enter}' : ' ')
+      }
+      expect(navigationMocks.navigate).not.toHaveBeenCalled()
+      expect(detailMocks.render).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          open: true,
+          taskId: 'manager-compile',
+          identityScopeKey: expect.stringMatching(/^management\//),
+          headers: { 'X-API-Key': 'management-key' },
+        }),
+      )
+    },
+  )
+
   it.each([
     ['default', ''],
     ['default', 'user-key'],

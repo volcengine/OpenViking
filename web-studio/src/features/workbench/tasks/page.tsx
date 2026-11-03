@@ -901,7 +901,7 @@ export function TasksRoute({
                       )}
                       onClick={() => {
                         if (taskId) {
-                          if (task.task_type === 'compile') {
+                          if (!management && task.task_type === 'compile') {
                             void navigate({
                               to: '/compile/tasks/$taskId',
                               params: { taskId },
@@ -915,7 +915,7 @@ export function TasksRoute({
                           (event.key === 'Enter' || event.key === ' ')
                         ) {
                           event.preventDefault()
-                          if (task.task_type === 'compile') {
+                          if (!management && task.task_type === 'compile') {
                             void navigate({
                               to: '/compile/tasks/$taskId',
                               params: { taskId },
