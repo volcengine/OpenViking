@@ -197,7 +197,8 @@ test('a code too big for the window waits for the window to grow, then draws its
   const { output, written } = screen({ columns: 100, rows: 40 });
   const prompter = new Prompter({ input: new PassThrough(), output, env: {} });
   const scan = showScan(prompter, { url, title: '第 1 次扫码', env: {} });
-  assert.match(stripAnsi(written()), /终端放不下这个二维码（要 \d+×\d+，现在 100×40）：缩小字体或拉大窗口，它会自动出现；也可以打开图片 \S+scan\.png/);
+  assert.match(stripAnsi(written()), /终端放不下这个二维码（要 \d+×\d+，现在 100×40）：缩小字体或拉大窗口，它会自动出现/);
+  assert.match(stripAnsi(written()), /按 i 打开图片扫|也可以打开图片 \S+scan\.png/);
   assert.doesNotMatch(written(), /[▀▄█▌▐▖▗▘▝▚▞▛▜▙▟]/);
   Object.assign(output, { columns: 200, rows: 120 });
   output.emit('resize');
@@ -208,6 +209,8 @@ test('a code too big for the window waits for the window to grow, then draws its
 
 test('a link opens in a browser only where there is a desktop', () => {
   assert.equal(opener({}, 'darwin'), 'open');
+  assert.equal(opener({}, 'win32'), 'cmd');
   assert.equal(opener({ DISPLAY: ':0' }, 'linux'), 'xdg-open');
+  assert.equal(opener({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux'), 'xdg-open');
   assert.equal(opener({}, 'linux'), null, 'a server over ssh');
 });

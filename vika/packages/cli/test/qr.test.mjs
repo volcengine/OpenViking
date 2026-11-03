@@ -126,12 +126,14 @@ test('a code too big for the window says what it needs and where its private ima
   t.after(() => scan.stop());
   assert.equal(fs.statSync(scan.imagePath).mode & 0o777, 0o600);
   assert.equal(fs.statSync(scan.imagePath.slice(0, scan.imagePath.lastIndexOf('/'))).mode & 0o777, 0o700);
-  assert.match(s.text(), /终端放不下这个二维码（要 \d+×\d+，现在 100×40）[\s\S]*也可以打开图片 \S+scan\.png/);
+  assert.match(s.text(), /终端放不下这个二维码（要 \d+×\d+，现在 100×40）/);
+  assert.match(s.text(), /按 i 打开图片扫|也可以打开图片 \S+scan\.png/);
   assert.doesNotMatch(s.text(), BLOCK);
   Object.assign(s.output, { columns: 200, rows: 120 }); s.output.emit('resize');
   assert.match(s.text(), /\x1b\[0;48;2;255;255;255m/);
-  const first = s.text(); s.output.emit('resize');
-  assert.ok(s.text().length > first.length, 'redraw even after a QR was already shown');
+  const copies = (s.text().match(/\x1b\[0;48;2;255;255;255m/g) || []).length;
+  s.output.emit('resize');
+  assert.equal((s.text().match(/\x1b\[0;48;2;255;255;255m/g) || []).length, copies, 'do not stack another copy on resize');
   scan.stop();
   assert.equal(fs.existsSync(scan.imagePath), false);
   assert.equal(s.output.listenerCount('resize'), 0);
@@ -163,5 +165,5 @@ test('a link too long to print waits for l, and the page speaks the run\'s langu
   assert.match(stripAnsi(s.text()), new RegExp(`Can't scan it\\? Open in Lark: ${FEISHU.replace(/[?.]/g, '\\$&')}`));
   const small = screen(100, 40);
   showScan(small.prompter, { url: FEISHU, title: 'Create', env: {} }).stop();
-  assert.match(small.text(), /This code needs a \d+×\d+ terminal \(now 100×40\): shrink the font or enlarge the window/);
+  assert.match(small.text(), /This code needs a \d+×\d+ terminal \(now 100×40\): shrink the font or enlarge the window and it appears/);
 });
