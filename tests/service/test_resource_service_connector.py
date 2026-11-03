@@ -2649,6 +2649,49 @@ async def test_connector_provider_returns_external_stream_states(
 
 
 @pytest.mark.asyncio
+async def test_connector_provider_polls_remote_before_deadline_timeout(
+    monkeypatch,
+    connector_config,
+    ctx,
+):
+    client = SimpleNamespace(get_task_info=AsyncMock(return_value={"Status": "succeeded"}))
+    provider = ConnectorDelegate(viking_fs=None)
+    monkeypatch.setattr(provider, "_client", lambda _account_id: client)
+
+    outcome = await provider.get(
+        "connector-1",
+        {"account_id": ctx.account_id},
+        payload={"deadline": time.time() - 1, "timeout_seconds": 1},
+        private_payload={"api_key": ctx.api_key},
+    )
+
+    client.get_task_info.assert_awaited_once()
+    assert outcome.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_connector_provider_times_out_after_poll_if_remote_still_active(
+    monkeypatch,
+    connector_config,
+    ctx,
+):
+    client = SimpleNamespace(get_task_info=AsyncMock(return_value={"Status": "running"}))
+    provider = ConnectorDelegate(viking_fs=None)
+    monkeypatch.setattr(provider, "_client", lambda _account_id: client)
+
+    outcome = await provider.get(
+        "connector-1",
+        {"account_id": ctx.account_id},
+        payload={"deadline": time.time() - 1, "timeout_seconds": 1},
+        private_payload={"api_key": ctx.api_key},
+    )
+
+    client.get_task_info.assert_awaited_once()
+    assert outcome.status == "failed"
+    assert outcome.error_code == "DEADLINE_EXCEEDED"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "cleanup", ["cancelling", "failed-open-work", "failed", "task-deleted", "none"]
 )

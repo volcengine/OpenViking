@@ -834,9 +834,6 @@ class ConnectorDelegate:
     async def on_start(self, task: TaskRecord) -> ExternalTaskSnapshot | None:
         if task.auth.get("external_terminal_snapshot") is not None:
             return None
-        deadline = task.meta["request"].get("deadline")
-        if deadline is not None and time.time() >= deadline:
-            return self._timeout(task.meta["request"])
         return None
 
     async def submit(
@@ -909,8 +906,12 @@ class ConnectorDelegate:
         private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot:
         assert payload is not None and private_payload is not None
-        if time.time() >= payload["deadline"]:
-            return self._timeout(payload)
+
+        def active(status: str, *, stage: str | None = None) -> ExternalTaskSnapshot:
+            if time.time() >= payload["deadline"]:
+                return self._timeout(payload)
+            return ExternalTaskSnapshot(status=status, stage=stage)
+
         try:
             info = await self._client(connection["account_id"]).get_task_info(
                 external_task_id, private_payload["api_key"]
@@ -927,15 +928,15 @@ class ConnectorDelegate:
                 retrying,
             )
             if retrying:
-                return ExternalTaskSnapshot(status="running")
+                return active("running")
             raise ExternalTaskError(
                 "CONNECTOR_POLL_FAILED", "connector task monitoring failed", transient=False
             ) from exc
         except httpx.RequestError:
-            return ExternalTaskSnapshot(status="running")
+            return active("running")
         status = str(info.get("Status") or info.get("status") or "").lower()
         if status in {"pending", "running"}:
-            return ExternalTaskSnapshot(status=status, stage=f"connector:{status}")
+            return active(status, stage=f"connector:{status}")
         if status == "succeeded":
             result: Dict[str, Any] = {
                 "connector_status": status,
