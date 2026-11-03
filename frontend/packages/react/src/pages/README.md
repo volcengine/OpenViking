@@ -13,6 +13,8 @@
 
 ## 当前状态与开发入口
 
-当前仅预留目录和约定，尚无页面实现、公开导出或独立构建入口。后续每个页面使用独立的 kebab-case 目录，入口文件与目录同名。
+当前仅预留目录和约定，尚未定义首个页面；没有页面实现、公开导出或独立构建入口。后续每个页面使用独立的 kebab-case 目录，入口文件与目录同名。
 
-开发命令和构建入口见 [UI workspace README](../../../../README.md)，包结构见[包说明](../../README.md)，实施约束见本目录 [AGENTS.md](./AGENTS.md)。
+开发命令和构建入口见 [前端工作区 README](../../../../README.md)，包结构见[包说明](../../README.md)，实施约束见本目录 [AGENTS.md](./AGENTS.md)。
+
+有实际实现后再开放 `@openviking/react/pages/<页面>`，不提供分类聚合 JS 入口。页面 CSS 同时提供 `@openviking/react/pages/style.css` 与 `@openviking/react/pages/<页面>/style.css`；单页面 CSS 包含页面自身及所需组件样式，整包 CSS 也须包含页面样式。

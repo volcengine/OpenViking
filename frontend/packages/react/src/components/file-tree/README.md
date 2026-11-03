@@ -2,7 +2,9 @@
 
 接收节点、展开和选中状态，负责树行渲染、键盘交互和事件回传。目录加载、搜索定位和预览联动由宿主或资源浏览器管理。
 
-`file-tree.ts` 对应 `@openviking/react/tree`，当前为空模块，尚未提供组件或类型。
+`file-tree.ts` 对应 `@openviking/react/components/file-tree`，当前为空模块，尚未提供组件或类型。
 迁移时补充公开接口、示例及加载、失败、身份切换的验证。
 
 开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
+
+独立样式入口为 `@openviking/react/components/file-tree/style.css`，迁入实现前为空样式。
