@@ -5,6 +5,14 @@ export const StudioEdition = {
 } as const
 export type StudioEdition = (typeof StudioEdition)[keyof typeof StudioEdition]
 
+// Release environment is independent of the product edition.
+export const StudioEnvironment = {
+  Production: 'production',
+  Staging: 'stg',
+} as const
+export type StudioEnvironment =
+  (typeof StudioEnvironment)[keyof typeof StudioEnvironment]
+
 export const ServiceProvider = {
   OpenSource: 'opensource',
   Volcengine: 'volcengine',

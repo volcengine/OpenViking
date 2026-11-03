@@ -23,6 +23,8 @@ describe('service and permission boundaries', () => {
     'http://203.0.113.1:1933',
     'https://custom.company.example/openviking',
     'https://api.vikingdb.cn-beijing.volces.com.evil.example/openviking',
+    'https://api.vikingdb-stg.cn-beijing.volces.com.evil.example/openviking',
+    'https://api.vikingdb-stg-other.cn-beijing.volces.com/openviking',
   ])(
     'defaults non-hosted deployment %s to open source with header authentication',
     (url) => {
@@ -55,6 +57,14 @@ describe('service and permission boundaries', () => {
       identifyServiceProvider('https://custom.company.example/openviking'),
     ).toBe('opensource')
     expect(identifyServiceProvider('http://localhost:1933')).toBe('opensource')
+  })
+  it('uses hosted bearer authentication for the STG API without native identity headers', () => {
+    const url = 'https://api.vikingdb-stg.cn-beijing.volces.com/openviking'
+    expect(identifyServiceProvider(url)).toBe('volcengine')
+    expect(resolveApiKeyAuth(url)).toBe('bearer')
+    expect(resolveConfiguredServiceProvider(url, 'opensource')).toBe(
+      'volcengine',
+    )
   })
   it.each(['volcengine', 'unknown'] as const)(
     'never maps %s admin/root data identity into native management',

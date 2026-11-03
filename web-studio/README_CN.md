@@ -216,6 +216,13 @@ VITE_STUDIO_EDITION=volcengine npm run build
 
 可使用 `VITE_STUDIO_HOSTED_API_URL` 覆盖固定的 HTTPS 托管服务地址。官方版只接受该地址，
 不提供管理后台；私有化版可连接自部署或火山托管服务。
+发布环境独立于部署版本：构建 base 为 `/workbench-stg/` 时，火山登录、连接编辑和请求默认使用
+`https://api.vikingdb-stg.cn-beijing.volces.com/openviking`；根路径默认使用生产地址。
+也可显式设置 `VITE_STUDIO_ENVIRONMENT=stg`，或通过运行时配置 `environment: 'stg'` 选择环境。
+运行时环境优先于构建环境，显式环境优先于 base 推导；显式托管地址覆盖仍然优先。
+STG 的火山连接只接受其配置地址，已有生产连接需重新按 STG 验证，自部署服务仍可配置。
+这不会根据前缀改变私有化/官方版本，也不会授予角色权限。
+
 运行时覆盖方式与本阶段验收范围见[部署配置与登录验收记录](docs/all-ov-studio-stage-0.md)。
 公共认证路由已补齐：`/login`、`/login/api-key`、`/login/email`、`/forgot-password`、
 `/reset-password`、`/invite`；已有连接也可直接访问。`/login` 在私有化版默认显示

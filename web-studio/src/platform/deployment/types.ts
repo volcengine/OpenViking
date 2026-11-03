@@ -4,11 +4,13 @@ import type {
   LoginEntry,
   ServiceProvider,
   StudioEdition,
+  StudioEnvironment,
 } from '../studio-contract'
 import type { WorkbenchEntry } from '../entry/paths'
 
 export type StudioDeploymentConfig = {
   edition: StudioEdition
+  environment: StudioEnvironment
   hostedApiBaseUrl: string
 }
 
@@ -30,7 +32,7 @@ export type StudioExperience = {
   edition: StudioEdition
   auth: { defaultMethod: AuthMethod; apiKey: ApiKeyLoginConfig }
   connections:
-    | { kind: 'selectable' }
+    | { kind: 'selectable'; hostedEndpoint?: string }
     | { kind: 'fixed'; provider: KnownServiceProvider; endpoint: string }
   startup: { discoverGatewayHost: boolean }
   entry: {

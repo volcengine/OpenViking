@@ -216,6 +216,18 @@ VITE_STUDIO_EDITION=volcengine npm run build
 ```
 
 `VITE_STUDIO_HOSTED_API_URL` optionally overrides the fixed HTTPS hosted API endpoint.
+
+Release environment is independent of the product edition. Building with
+`--base /workbench-stg/` selects
+`https://api.vikingdb-stg.cn-beijing.volces.com/openviking` for hosted login,
+connection editing and requests; the root base defaults to production.
+`VITE_STUDIO_ENVIRONMENT=stg` or runtime `environment: 'stg'` can select it explicitly.
+Runtime environment overrides build environment, which overrides base inference;
+explicit hosted endpoint overrides still take precedence. STG hosted connections
+must use their configured endpoint, so saved production connections need fresh STG
+verification. Self-hosted services remain configurable. The prefix does not select
+the product edition or grant permissions.
+
 The official edition only accepts that endpoint and does not expose administration.
 The self-hosted edition can connect to either a self-hosted or hosted service.
 Runtime overrides and the current API Key scope are documented in

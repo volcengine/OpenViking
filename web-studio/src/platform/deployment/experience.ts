@@ -1,3 +1,4 @@
+import { identifyServiceProvider } from '../connection/service-provider'
 import { ServiceProvider, StudioEdition } from '../studio-contract'
 import { getStudioDeployment } from './config'
 import { selfHostedExperience } from './editions/self-hosted'
@@ -35,11 +36,19 @@ export function isStudioConnectionAllowed(
   experience = getStudioExperience(),
 ): boolean {
   const policy = experience.connections
-  if (policy.kind === 'selectable') return true
+  if (
+    policy.kind === 'selectable' &&
+    (!policy.hostedEndpoint ||
+      (connection.serviceSelection !== ServiceProvider.Volcengine &&
+        identifyServiceProvider(connection.baseUrl) !==
+          ServiceProvider.Volcengine))
+  )
+    return true
   try {
     return (
       connection.serviceSelection !== ServiceProvider.OpenSource &&
-      new URL(connection.baseUrl).href.replace(/\/+$/, '') === policy.endpoint
+      new URL(connection.baseUrl).href.replace(/\/+$/, '') ===
+        (policy.kind === 'fixed' ? policy.endpoint : policy.hostedEndpoint)
     )
   } catch {
     return false

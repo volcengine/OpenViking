@@ -14,9 +14,6 @@ export {
   completeStudioSetup,
 } from './profile-bootstrap'
 
-export const CLOUD_SETUP_URL =
-  'https://api.vikingdb.cn-beijing.volces.com/openviking'
-
 export function studioSetupDestination(
   connection: ConnectionDraft,
 ): '/filesystem' | '/admin' | '/home' {

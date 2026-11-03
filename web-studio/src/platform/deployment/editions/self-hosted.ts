@@ -3,6 +3,7 @@ import {
   LoginEntry,
   ServiceProvider,
   StudioEdition,
+  StudioEnvironment,
 } from '../../studio-contract'
 import { StudioEntry } from '../../entry/paths'
 import type { StudioDeploymentConfig, StudioExperience } from '../types'
@@ -33,7 +34,12 @@ export function selfHostedExperience(
         ],
       },
     },
-    connections: { kind: 'selectable' },
+    connections: {
+      kind: 'selectable',
+      ...(config.environment === StudioEnvironment.Staging
+        ? { hostedEndpoint: config.hostedApiBaseUrl }
+        : {}),
+    },
     startup: { discoverGatewayHost: true },
     entry: {
       management: 'enabled',

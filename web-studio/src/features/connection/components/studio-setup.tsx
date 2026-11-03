@@ -1,9 +1,9 @@
+import { getStudioExperience } from '#/platform/deployment/experience'
 import { ErrorMessage } from '#/shared/components/error-message'
 import { SetupIdentityDirectory } from '#/features/connection/components/setup-identity-directory'
 import type { ConnectionDraft } from '#/features/connection/lib/connection-runtime'
 import { readCredentialStorage } from '#/features/connection/lib/credential-storage'
 import {
-  CLOUD_SETUP_URL,
   StudioSetupError,
   StudioSetupRequestError,
   completeStudioSetup,
@@ -79,11 +79,14 @@ function savedConnectionLabel(
 function newConnectionDraft(
   provider: (typeof PROVIDERS)[number][0],
 ): ConnectionDraft {
+  const service = getStudioExperience().auth.apiKey.services.find(
+    (entry) => entry.provider === provider,
+  )
   return {
     serviceSelection: provider,
     baseUrl:
-      provider === 'volcengine'
-        ? CLOUD_SETUP_URL
+      service?.endpoint.kind === 'fixed'
+        ? service.endpoint.url
         : window.location.pathname.startsWith('/studio')
           ? window.location.origin
           : '',

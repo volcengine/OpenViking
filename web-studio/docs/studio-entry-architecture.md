@@ -50,6 +50,8 @@ src/app/composition/auth-entry.tsx # 将配置和地址默认值传给认证页�
 
 开发、测试、生产是发布环境，不通过这些枚举隐式授予权限。私有化部署绑定域名仍然是 `self-hosted`。
 
+2026-11-03：新增独立的 `StudioEnvironment`（`production` / `stg`）。入口配置在 Vite base 为 `/workbench-stg/` 时选择 STG；可由运行时 `environment` 或构建 `VITE_STUDIO_ENVIRONMENT` 显式覆盖。该维度只选择火山服务地址，不改变 `StudioEdition`。默认 STG API 为 `https://api.vikingdb-stg.cn-beijing.volces.com/openviking`。服务识别同时支持生产与 STG 官方域名，使用 Bearer 认证。STG 恢复及激活火山连接时要求匹配其配置地址，不将生产 Key 自动搬到 STG。旧向导也复用入口配置的地址。
+
 ## 登录配置
 
 | 部署     | 默认登录 | API Key 候选    | 地址规则                    |

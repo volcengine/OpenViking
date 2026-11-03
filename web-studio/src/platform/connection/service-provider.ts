@@ -8,7 +8,7 @@ export function identifyServiceProvider(baseUrl: string): ServiceProvider {
   try {
     const { hostname, protocol } = new URL(baseUrl)
     if (!['http:', 'https:'].includes(protocol)) return 'unknown'
-    if (/^api\.vikingdb\.[a-z0-9-]+\.volces\.com$/.test(hostname)) {
+    if (/^api\.vikingdb(?:-stg)?\.[a-z0-9-]+\.volces\.com$/.test(hostname)) {
       return 'volcengine'
     }
     // All other HTTP deployments default to open source; hosted proxies can override this.
