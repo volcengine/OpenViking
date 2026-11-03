@@ -259,6 +259,34 @@ users and keys when participants need separate access.
 
 ## Memory writes and deletes
 
+### Approval boundary
+
+Hermes's `memory.write_approval` gates mutations through its built-in `memory`
+tool to `MEMORY.md` and `USER.md`. With the gate enabled, foreground CLI
+writes can prompt inline; other writes stage for `/memory pending` and
+`/memory approve <id>` or `/memory reject <id>`. After a successful local write,
+Hermes notifies this provider for native mirroring. Failed, denied, or still-staged
+writes do not trigger a mirror. The mirror's own context and connection checks
+still apply, and local success is not confirmation of remote success.
+
+The gate does **not** cover every OpenViking write:
+
+| Path | Control boundary |
+|------|------------------|
+| Built-in `memory` mutation and subsequent native mirror | When enabled, built-in approval precedes local mutation; mirror follows only a committed write and is asynchronous. |
+| Automatic primary-conversation upload | Provider lifecycle capture, not the built-in approval queue. |
+| Active-session, session-end/switch and shutdown-time commits; pending-session recovery | Provider lifecycle and recovery rules, not `memory.write_approval`. A commit requests extraction; it is not approval of each extracted memory. |
+| Explicit `viking_remember`, `viking_forget`, `viking_add_resource` | Session tool availability, provider validation and server authorization; not the built-in staging gate. |
+
+For example, with OpenViking selected and normal primary-conversation capture
+active, setting `memory.write_approval: true` can leave a built-in write awaiting
+review while conversation uploads and extraction continue. Rejecting that
+built-in proposal does not retract an independently captured conversation or
+its extracted memories. This setting alone neither freezes the external store
+nor makes persistence approval-only.
+
+### Explicit remember and extraction
+
 `viking_remember` creates a separate `hermes-remember-<random>` OpenViking
 session, adds the fact as one message and commits all its messages. The session
 remains available in OpenViking for audit. OpenViking then
@@ -266,6 +294,16 @@ classifies the source and can add, merge, or skip a memory through its normal
 extraction pipeline. The tool returns the separate session ID and the
 extraction task ID when the server provides one. Extraction continues
 asynchronously after the tool returns.
+
+Treat these as separate observations: a successful upload confirms submitted
+conversation material; a successful commit requests extraction; extraction may
+then create or update records, or skip the fact. To confirm a particular change,
+read the exact resulting memory URI with `viking_read` (`level: full`) or the
+supported OpenViking interface using the same authorized identity. A session ID,
+task ID, archive, or search summary alone does not establish that a specific
+memory file contains the intended text. Search visibility also does not grant
+permission to read or mutate a peer's exact record; report an access denial
+rather than changing identity or credentials to bypass it.
 
 The tool returns `status: submitted` because extraction can add a memory, merge
 the fact into an existing memory, or produce no memory operation. It does not
@@ -372,6 +410,11 @@ The plugin checks OpenViking's `pending_tokens` after each successful
 turn upload. At **20,000 tokens** by default, it requests a background commit
 without ending the Hermes session. Memory extraction then runs on the server.
 Session-end and session-switch commits still flush messages below this threshold.
+Shutdown/session finalization attempts to drain pending work and commit eligible
+sessions; interrupted or failed work can leave pending-session markers for a
+later primary context to recover. Neither those lifecycle attempts nor recovery
+consults the built-in `memory.write_approval` queue. They are not a guarantee that
+all work finished before exit.
 
 Set a different threshold in the active Hermes profile's `config.yaml`:
 
@@ -401,7 +444,11 @@ or `flush`, recall and profile reads keep working. Automatic turn uploads,
 session-end/switch commits, and native memory mirroring are skipped for that
 context. Startup recovery also skips commits in these contexts. Pending messages
 remain available for recovery when the next primary context starts.
-Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
+Explicit `viking_*` tools keep their normal behavior, including writes and deletes,
+**if exposed and authorized by the host**. Hermes's memory toolset selection and
+per-session tool restrictions are separate from this automatic-write guard;
+server credentials, actor identity and access controls still apply. A context
+with automatic capture disabled is not necessarily a read-only tool session.
 Interactive sessions (and hosts that predate `agent_context`) keep the previous
 automatic write behavior.
 
