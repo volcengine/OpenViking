@@ -10,12 +10,11 @@ lifecycle:
 - the routing decision (:meth:`ConnectorDelegate.should_delegate`): a
   three-state verdict — delegate, degrade to the standard pipeline, or raise;
 - payload construction and queue publication (:meth:`ConnectorDelegate.create`);
-- durable hand-off to the ExternalTask queue, which owns submission and monitoring.
+- synchronous submission followed by durable monitoring in the ExternalTask queue.
 """
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import re
@@ -46,6 +45,7 @@ from openviking.connector.routing import (
 from openviking.core.namespace import NamespaceShapeError
 from openviking.core.uri_validation import matches_content_kind
 from openviking.crypto.encryptor import MAGIC as ENCRYPTED_ENVELOPE_MAGIC
+from openviking.crypto.encryptor import build_credential_encryptor
 from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.observability.http_error_context import (
     sanitize_public_error_details,
@@ -153,6 +153,7 @@ class ConnectorDelegate:
     ) -> None:
         self._viking_fs = viking_fs
         self._resource_memory_link_service = resource_memory_link_service
+        self._watch_credential_encryptor: Any = None
 
     _WATCH_AUTH_PROVIDER = "connector_encrypted"
     _WATCH_PLAINTEXT_AUTH_PROVIDER = "connector_plaintext"
@@ -160,10 +161,11 @@ class ConnectorDelegate:
     def _watch_encryptor(self) -> Any:
         encryptor = getattr(self._viking_fs, "_encryptor", None)
         if encryptor is None:
-            raise InvalidArgumentError(
-                "Connector watch requires encryption.enabled=true so credentials are "
-                "encrypted at rest."
-            )
+            if self._watch_credential_encryptor is None:
+                self._watch_credential_encryptor = build_credential_encryptor(
+                    get_openviking_config().encryption
+                )
+            encryptor = self._watch_credential_encryptor
         return encryptor
 
     async def create_watch_auth_state(
@@ -190,19 +192,13 @@ class ConnectorDelegate:
         # auth_config is resolved anew each round so refreshed tokens stay current.
         if connector_auth_config:
             payload["connector_auth_config"] = dict(connector_auth_config)
-        encryptor = getattr(self._viking_fs, "_encryptor", None)
-        if encryptor is None:
-            return {
-                "provider": self._WATCH_PLAINTEXT_AUTH_PROVIDER,
-                "request": payload,
-            }
         try:
             plaintext = json.dumps(
                 payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
-            ciphertext = await encryptor.encrypt(account_id, plaintext)
+            ciphertext = await self._watch_encryptor().encrypt(account_id, plaintext)
         except InvalidArgumentError:
             raise
         except Exception as exc:
@@ -524,7 +520,7 @@ class ConnectorDelegate:
         on_task_created: Optional[Callable[[TaskRecord], Awaitable[None]]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Enqueue an import and return its durable submission receipt."""
+        """Submit an import, enqueue monitoring, and return its durable receipt."""
         task = await run_to_completion(
             lambda: self._enqueue(
                 path,
@@ -537,19 +533,9 @@ class ConnectorDelegate:
         )
         tracker = get_task_tracker()
         owner = {"account_id": task.account_id, "user_id": task.user_id}
-        while True:
-            current = await tracker.get(task.task_id, **owner)
-            if current is not None:
-                key = current.meta.get("connector_task_key")
-                if key:
-                    break
-                if current.error or current.status in {
-                    TaskStatus.FAILED,
-                    TaskStatus.CANCELLED,
-                    TaskStatus.COMPLETED,
-                }:
-                    raise InternalError(current.error or "Connector submission was cancelled")
-            await asyncio.sleep(self.poll_interval_seconds)
+        key = task.meta.get("connector_task_key")
+        if not key:
+            raise InternalError("Connector submission did not persist its task key")
         response = {
             "status": "accepted",
             "task_id": task.task_id,
@@ -581,7 +567,7 @@ class ConnectorDelegate:
         acl_update: Optional[AclUpdate] = None,
         **kwargs: Any,
     ) -> TaskRecord:
-        """Validate and persist request data before queue-owned execution."""
+        """Persist the request and submit before publishing its monitoring Work."""
         config = get_openviking_config().connector
         if not ctx.api_key:
             raise InvalidArgumentError("Connector import requires an API key in the request.")
@@ -747,30 +733,76 @@ class ConnectorDelegate:
         }
         if connector_states is not None:
             submit_kwargs["stream_states"] = connector_states
+        payload = {
+            "submit": submit_kwargs,
+            "reason": reason,
+            "acl_update": (
+                acl_update.model_dump(mode="json", exclude_none=True)
+                if acl_update is not None
+                else None
+            ),
+            "identity": {
+                "role": str(ctx.role),
+                "group_ids": list(ctx.group_ids),
+                "actor_peer_id": ctx.actor_peer_id,
+                "bypass_acl": ctx.bypass_acl,
+            },
+            "deadline": None,
+            "timeout_seconds": config.timeout_seconds,
+        }
+        private_payload = {"api_key": ctx.api_key, "auth_config": auth_config}
+
+        async def submit_before_enqueue(task: TaskRecord) -> None:
+            # Register the Watch/run before Connector can call back into OV.
+            if on_task_created is not None:
+                await on_task_created(task)
+            if task.meta.get("connector_task_key"):
+                return
+            tracker = get_task_tracker()
+            owner = {"account_id": task.account_id, "user_id": task.user_id}
+            try:
+                await tracker.start(task.task_id, stage="submitting", **owner)
+                current = await tracker.get(task.task_id, **owner)
+                if (
+                    current is None
+                    or current.is_terminal()
+                    or current.status == TaskStatus.CANCELLING
+                    or current.error
+                ):
+                    raise InternalError("Connector Task ended before submission")
+                key = await self.submit(
+                    task.task_id, payload, private_payload, {"account_id": ctx.account_id}
+                )
+                request = {**payload, "deadline": time.time() + config.timeout_seconds}
+                patched = await tracker.patch_task(
+                    task.task_id,
+                    TaskPatch(
+                        auth={"external_task_id": key},
+                        meta={**self.submission_meta(key), "request": request},
+                    ),
+                    **owner,
+                )
+                if not patched.is_applied:
+                    raise InternalError("Connector Task ended before submission was persisted")
+            except BaseException as exc:
+                await tracker.fail(
+                    task.task_id,
+                    sanitize_public_http_error(
+                        code="CONNECTOR_SUBMISSION_FAILED",
+                        message=str(exc) or "connector task submission cancelled",
+                    ).message,
+                    **owner,
+                )
+                raise
+
         return await get_external_task_service().create(
             self.task_type,
             resource_id=task_resource_id,
-            payload={
-                "submit": submit_kwargs,
-                "reason": reason,
-                "acl_update": (
-                    acl_update.model_dump(mode="json", exclude_none=True)
-                    if acl_update is not None
-                    else None
-                ),
-                "identity": {
-                    "role": str(ctx.role),
-                    "group_ids": list(ctx.group_ids),
-                    "actor_peer_id": ctx.actor_peer_id,
-                    "bypass_acl": ctx.bypass_acl,
-                },
-                "deadline": time.time() + config.timeout_seconds,
-                "timeout_seconds": config.timeout_seconds,
-            },
-            private_payload={"api_key": ctx.api_key, "auth_config": auth_config},
+            payload=payload,
+            private_payload=private_payload,
             ctx=ctx,
             task_id=task_id,
-            on_task_created=on_task_created,
+            on_task_created=submit_before_enqueue,
         )
 
     @property
@@ -802,7 +834,8 @@ class ConnectorDelegate:
     async def on_start(self, task: TaskRecord) -> ExternalTaskSnapshot | None:
         if task.auth.get("external_terminal_snapshot") is not None:
             return None
-        if time.time() >= task.meta["request"]["deadline"]:
+        deadline = task.meta["request"].get("deadline")
+        if deadline is not None and time.time() >= deadline:
             return self._timeout(task.meta["request"])
         return None
 
@@ -813,7 +846,7 @@ class ConnectorDelegate:
         private_payload: Mapping[str, Any],
         connection: Mapping[str, Any],
     ) -> str:
-        """Submit a queued import; the framework persists the returned key."""
+        """Submit an import; the caller persists the returned key before monitoring."""
         request = {
             **payload["submit"],
             "api_key": private_payload["api_key"],

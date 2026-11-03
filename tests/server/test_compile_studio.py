@@ -442,7 +442,9 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     )
     assert retry.json()["result"]["task_id"] == first
     assert "private-runtime-key" not in retry.text and "submission_hash" not in retry.text
-    auth = await tracker.get_task_auth(first, **owner)
+    stored_auth = await tracker.get_task_auth(first, **owner)
+    assert "private-runtime-key" not in json.dumps(stored_auth)
+    auth = await service.compile._tasks._task_auth(first, **owner)
     assert auth["openviking_connection"]["request_id"] == "original-request-id"
     await service.compile._tasks.execute(first, **owner)
     assert (await tracker.get(first, **owner)).status == "completed", (

@@ -22,6 +22,7 @@ from openviking.service.task_tracker import TaskTracker
 from openviking.storage.queuefs import QueueManager
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.encryption_config import EncryptionConfig
 
 TARGET = "viking://resources/connector"
 OWNER = {"account_id": "default", "user_id": "default"}
@@ -51,7 +52,12 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
     )
     resources._watch_manager = service
     await service.initialize()
-    external_tasks = ExternalTaskService()
+    from openviking.crypto.encryptor import build_credential_encryptor
+
+    encryption = EncryptionConfig(local={"root_key": "42" * 32})
+    external_tasks = ExternalTaskService(
+        credential_encryptor=build_credential_encryptor(encryption)
+    )
     external_tasks.register(resources._connector)
     monkeypatch.setattr(external_task_module, "_instance", external_tasks)
     transport = ragfs_python.RAGFSBindingClient()
@@ -78,7 +84,20 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
         try:
             await asyncio.wait_for(published.wait(), 5)
             published.clear()
-            receipt, _ = await asyncio.wait_for(asyncio.gather(submission, queue.dequeue()), 5)
+            # The public receipt must not wait for a monitoring worker to dequeue.
+            receipt = await asyncio.wait_for(submission, 5)
+            task_id = receipt["task_id"] if isinstance(receipt, dict) else receipt.task_id
+            record = await tracker.get(task_id, **OWNER)
+            stored_auth = await tracker.get_task_auth(record.task_id, **OWNER)
+            assert "test-key" not in json.dumps(stored_auth)
+            assert record.meta["connector_task_key"] == f"external-{len(submitted)}"
+            # A fresh monitor can recover credentials using the configured key.
+            recovered = ExternalTaskService(
+                credential_encryptor=build_credential_encryptor(encryption)
+            )
+            recovered.register(resources._connector)
+            queue.set_dequeue_handler(ExternalTaskProcessor(recovered))
+            await asyncio.wait_for(queue.dequeue(), 5)
             return receipt
         finally:
             if not submission.done():
@@ -150,12 +169,12 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
     )
     monkeypatch.setattr(
         "openviking_cli.utils.config.open_viking_config.get_openviking_config",
-        lambda: SimpleNamespace(connector=config),
+        lambda: SimpleNamespace(connector=config, encryption=encryption),
     )
     monkeypatch.setattr(
         connector_delegate_module,
         "get_openviking_config",
-        lambda: SimpleNamespace(connector=config),
+        lambda: SimpleNamespace(connector=config, encryption=encryption),
     )
     await runtime.start()
     try:

@@ -142,7 +142,9 @@ class OpenVikingService:
         self._session_service = SessionService()
         self._debug_service = DebugService()
         self._agent_evolution_service = AgentEvolutionService()
-        self._external_task_service = ExternalTaskService()
+        self._external_task_service = ExternalTaskService(
+            credential_encryptor=build_credential_encryptor(config.encryption)
+        )
         self._compile_service = CompileService(
             config.compile_api,
             self._external_task_service,
@@ -698,8 +700,8 @@ class OpenVikingService:
                 compile_store,
                 self._viking_fs,
             )
-            self._compile_scheduler.credential_encryptor = build_credential_encryptor(
-                self._config.encryption
+            self._compile_scheduler.credential_encryptor = (
+                self._external_task_service.credential_encryptor
             )
             self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
             self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule

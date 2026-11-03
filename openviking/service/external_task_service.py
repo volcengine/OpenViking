@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol
 from uuid import uuid4
 
+from openviking.crypto.encryptor import MAGIC, build_credential_encryptor
 from openviking.pyagfs import GitConcurrentCommitError
 from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSNetworkError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
@@ -23,12 +25,14 @@ from openviking.service.task_tracker_concurrency import (
 )
 from openviking.service.task_work_index import bind_task_context
 from openviking.storage.errors import ResourceBusyError
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, FailedPreconditionError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
+_CREDENTIAL_PROVIDER = "encrypted_external_task"
+_PRIVATE_AUTH_FIELDS = ("openviking_connection", "external_request_private")
 _instance: ExternalTaskService | None = None
 
 
@@ -131,7 +135,8 @@ class ExternalTaskProvider(Protocol):
 class ExternalTaskService:
     """Own OV task state while registered providers perform the actual work."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, credential_encryptor: Any = None) -> None:
+        self.credential_encryptor = credential_encryptor
         self._providers: dict[str, ExternalTaskProvider] = {}
         # Restored before workers start, then accessed only by the ExternalTask
         # queue's loop. Restored owners may include multiple
@@ -140,6 +145,34 @@ class ExternalTaskService:
         self._executing: set[str] = set()
         self._submission_locks = KeyedAsyncLockPool[str]()
         self._submission_dispatcher = OwnerLoopDispatcher()
+
+    def _credential_encryptor(self) -> Any:
+        if self.credential_encryptor is None:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            self.credential_encryptor = build_credential_encryptor(
+                get_openviking_config().encryption
+            )
+        return self.credential_encryptor
+
+    async def _encrypt_auth(self, account_id: str, auth: Mapping[str, Any]) -> dict[str, Any]:
+        encrypted = dict(auth)
+        try:
+            for field in _PRIVATE_AUTH_FIELDS:
+                value = self._mapping(auth.get(field))
+                if not value:
+                    continue
+                plaintext = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+                ciphertext = await self._credential_encryptor().encrypt(account_id, plaintext)
+                encrypted[field] = {
+                    "provider": _CREDENTIAL_PROVIDER,
+                    "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+                }
+        except Exception as exc:
+            raise FailedPreconditionError(
+                "Cannot encrypt external task credentials; check encryption key configuration"
+            ) from exc
+        return encrypted
 
     def register(self, provider: ExternalTaskProvider) -> None:
         if provider.task_type in self._providers:
@@ -268,10 +301,13 @@ class ExternalTaskService:
                     else {}
                 ),
             },
-            auth={
-                "openviking_connection": dict(connection),
-                "external_request_private": dict(private_payload or {}),
-            },
+            auth=await self._encrypt_auth(
+                ctx.account_id,
+                {
+                    "openviking_connection": dict(connection),
+                    "external_request_private": dict(private_payload or {}),
+                },
+            ),
         )
         if idempotency_key and task.meta.get("submission_hash") != request_hash:
             raise ConflictError("Idempotency-Key was already used with different parameters")
@@ -309,12 +345,18 @@ class ExternalTaskService:
                 task = current
         except BaseException:
             if not enqueued:
-                await tracker.fail(
+                current = await tracker.get(
                     task.task_id,
-                    "Failed to enqueue external task",
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
+                if current is not None and not current.is_terminal() and not current.error:
+                    await tracker.fail(
+                        task.task_id,
+                        "Failed to enqueue external task",
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
             raise
         return task
 
@@ -708,13 +750,31 @@ class ExternalTaskService:
                 private_payload=private_payload,
             )
 
-    @staticmethod
-    async def _task_auth(task_id: str, account_id: str, user_id: str) -> dict[str, Any]:
-        return await get_task_tracker().get_task_auth(
+    async def _task_auth(self, task_id: str, account_id: str, user_id: str) -> dict[str, Any]:
+        auth = await get_task_tracker().get_task_auth(
             task_id,
             account_id=account_id,
             user_id=user_id,
         )
+        try:
+            for field in _PRIVATE_AUTH_FIELDS:
+                value = auth.get(field)
+                # Read tasks persisted before credential encryption was introduced.
+                if not isinstance(value, dict) or value.get("provider") != _CREDENTIAL_PROVIDER:
+                    continue
+                ciphertext = base64.b64decode(value["ciphertext"], validate=True)
+                if not ciphertext.startswith(MAGIC):
+                    raise ValueError("Invalid encrypted credential envelope")
+                plaintext = await self._credential_encryptor().decrypt(account_id, ciphertext)
+                decoded = json.loads(plaintext)
+                if not isinstance(decoded, dict):
+                    raise ValueError("Invalid external task credentials")
+                auth[field] = decoded
+        except Exception as exc:
+            raise FailedPreconditionError(
+                "Cannot decrypt external task credentials; check encryption key configuration"
+            ) from exc
+        return auth
 
     @staticmethod
     def _mapping(value: Any) -> dict[str, Any]:

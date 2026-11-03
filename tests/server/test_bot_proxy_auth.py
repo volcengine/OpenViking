@@ -490,7 +490,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert restored is not None
     listed = (await tracker.list_tasks(**owner))[0]
     assert restored.to_dict() == listed.to_dict() == task.to_dict()
-    auth = await tracker.get_task_auth(task.task_id, **owner)
+    stored_auth = await tracker.get_task_auth(task.task_id, **owner)
+    assert "active-user-key" not in json.dumps(stored_auth)
+    auth = await tasks._task_auth(task.task_id, **owner)
     assert auth["external_request_private"] == private_payload
     assert auth["openviking_connection"] == connection
     external_task_id = await service.submit(

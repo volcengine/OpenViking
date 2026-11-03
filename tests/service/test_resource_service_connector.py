@@ -31,8 +31,7 @@ from openviking.service.external_task_service import (
     ExternalTaskSnapshot,
 )
 from openviking.service.resource_service import ResourceService
-from openviking.service.task_domain import TaskPatch
-from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_store import PersistentTaskStore, StoreOperationResult
 from openviking.service.task_tracker import TaskRecord, TaskStatus, TaskTracker
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg, AddResourcePhase
 from openviking.storage.viking_fs import VikingFS
@@ -42,6 +41,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.encryption_config import EncryptionConfig
 from tests.server.account_store_fakes import InMemoryAGFS
 from tests.utils.mock_agfs import MockLocalAGFS
 from tests.utils.watch_fixtures import shape_watch
@@ -79,7 +79,9 @@ def connector_config(monkeypatch):
     monkeypatch.setattr(
         config_module,
         "get_openviking_config",
-        lambda: SimpleNamespace(connector=config),
+        lambda: SimpleNamespace(
+            connector=config, encryption=EncryptionConfig(local={"root_key": "42" * 32})
+        ),
     )
     monkeypatch.setattr(
         "openviking.connector.routing.is_git_repo_url",
@@ -180,7 +182,7 @@ class _Tracker:
             record.meta.update(patch.meta)
         if patch.auth:
             record.auth.update(patch.auth)
-        return SimpleNamespace(code=SimpleNamespace(value="applied"))
+        return StoreOperationResult.applied()
 
     async def _complete(self, task_id, result, **_kwargs):
         self.finish(task_id, "completed", result=result)
@@ -247,41 +249,15 @@ def _install_connector_dependencies(
             try:
                 await on_task_created(record)
             except BaseException:
-                await tracker.fail(
-                    record.task_id,
-                    "Failed to enqueue external task",
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
+                if not record.is_terminal() and not record.error:
+                    await tracker.fail(
+                        record.task_id,
+                        "Failed to enqueue external task",
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
                 raise
         provider = ConnectorDelegate(viking_fs=None)
-        try:
-            key = await provider.submit(
-                record.task_id,
-                payload,
-                private_payload,
-                {"account_id": ctx.account_id},
-            )
-        except BaseException as exc:
-            await tracker.fail(
-                record.task_id,
-                connector_delegate_module.sanitize_public_http_error(
-                    code="CONNECTOR_SUBMISSION_FAILED",
-                    message=str(exc) or "connector task submission cancelled",
-                ).message,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            raise
-        await tracker.patch_task(
-            record.task_id,
-            TaskPatch(
-                meta=provider.submission_meta(key),
-                auth={"external_task_id": key},
-            ),
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-        )
         if not discard_monitor and hasattr(connector_client, "get_task_info"):
             external_tasks = ExternalTaskService()
             external_tasks.register(provider)
@@ -294,7 +270,9 @@ def _install_connector_dependencies(
                 tracker.connector_tasks = tasks
             tasks.add(background)
             background.add_done_callback(tasks.discard)
-        return record
+        return await tracker.get(
+            record.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+        )
 
     monkeypatch.setattr(
         connector_delegate_module,
@@ -929,7 +907,7 @@ async def test_git_connector_watch_keeps_args_only_in_encrypted_state(
 
 
 @pytest.mark.asyncio
-async def test_connector_watch_allows_plaintext_private_state_without_encryption(
+async def test_connector_watch_encrypts_private_state_without_file_encryption(
     connector_config,
     ctx,
     watch_service,
@@ -957,16 +935,8 @@ async def test_connector_watch_allows_plaintext_private_state_without_encryption
 
     task = await _watch_at(service, "viking://resources/x/y")
     assert task is not None
-    assert task.auth_state == {
-        "provider": "connector_plaintext",
-        "request": {
-            "api_key": "secret",
-            "account_id": "acct",
-            "add_type": "tos",
-            "path": "tos://bucket/docs/",
-            "connector_args": {},
-        },
-    }
+    assert task.auth_state["provider"] == "connector_encrypted"
+    assert "secret" not in json.dumps(task.auth_state)
     assert "auth_state" not in task.to_dict()
     assert await service._connector.restore_watch_request(
         task.auth_state,
