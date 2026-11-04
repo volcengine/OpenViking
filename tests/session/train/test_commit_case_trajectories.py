@@ -207,10 +207,10 @@ def commit_runtime(monkeypatch):
     case_uris = {case.name: f"viking://user/u/memories/cases/{case.name}.md" for case in cases}
     for case in cases:
         uri = case_uris[case.name]
+        # Match the CaseSpec writer, which does not persist memory_type.
         fs.files[uri] = MemoryFileUtils.write(
             MemoryFile(
                 uri=uri,
-                memory_type="cases",
                 content=case.name,
                 extra_fields={"case_name": case.name},
             )

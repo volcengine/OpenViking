@@ -178,7 +178,10 @@ async def write_stored_links(
 
 
 def _write_linked_memory(memory_file: MemoryFile) -> str:
-    schema = get_default_registry().get("cases") if memory_file.memory_type == "cases" else None
+    memory_type = memory_file.memory_type
+    if not memory_type and memory_file.uri:
+        memory_type = MemoryUpdater.memory_type_from_uri(memory_file.uri)
+    schema = get_default_registry().get("cases") if memory_type == "cases" else None
     return MemoryFileUtils.write(
         memory_file, content_template=schema.content_template if schema else None
     )
