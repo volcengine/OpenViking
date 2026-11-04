@@ -13,8 +13,33 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from openviking.observability.http_error_context import sanitize_public_http_error
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.registry import ToolRegistry
+
+# MCP SDK client-side failures used when no server answer arrived.
+_MCP_NO_ANSWER_CODES = frozenset((-32000, -32001))
+
+
+def _mcp_server_rejection_result(exc: BaseException) -> str | None:
+    """Return a safe model-facing result for a JSON-RPC error answer."""
+    try:
+        error = getattr(exc, "error", None)
+        code = getattr(error, "code", None)
+        message = getattr(error, "message", None)
+    except Exception:
+        return None
+
+    if isinstance(code, bool) or not isinstance(code, int) or code in _MCP_NO_ANSWER_CODES:
+        return None
+
+    if not isinstance(message, str) or not message.strip():
+        message = "The server returned an error response."
+    safe_message = sanitize_public_http_error(
+        code="MCP_SERVER_REJECTION",
+        message=message,
+    ).message
+    return f"(MCP server rejected the tool call (JSON-RPC {code}): {safe_message})"
 
 
 def _extract_nullable_branch(options: Any) -> tuple[dict[str, Any], bool] | None:
@@ -131,6 +156,9 @@ class MCPToolWrapper(Tool):
                 type(exc).__name__,
                 exc,
             )
+            rejection = _mcp_server_rejection_result(exc)
+            if rejection is not None:
+                return rejection
             return f"(MCP tool call failed: {type(exc).__name__})"
 
         parts = []
