@@ -68,7 +68,7 @@ Shared by both kinds:
 | `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.             |
 | `disabled`           | `boolean`                    | `false`   | Disables the tab.                                  |
 | `onOpenParent`       | `(path: string) => void`     | —         | Back entry on the path breadcrumb.                 |
-| `onCopyPath`         | `(path: string) => void`     | —         | Copy-path button; needs `source.path`.             |
+| `onCopyPath`         | `(path: string) => void`     | —         | Called after path copying succeeds.                |
 | `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.             |
 | `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                           |
 
@@ -80,7 +80,7 @@ File tabs add:
 | `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.     |
 | `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only. |
 | `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.         |
-| `onCopyContent` | `(text: string) => void`        | —        | Copy-content button.                    |
+| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.  |
 | `onDownload`    | `() => void`                    | —        | Download button.                        |
 | `onOpenUri`     | `(uri: string) => void`         | —        | Navigate to a URI in the content.       |
 
@@ -88,6 +88,8 @@ File tabs add:
 import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
+
+Copying is handled by the component. File tabs with `source.path` show the copy-path button. The content-copy button is disabled when no copyable text is available. Both callbacks receive the value already copied, run only on success, and are optional; omitting them does not affect copying. Hosts do not perform another copy.
 
 ## Accessibility
 

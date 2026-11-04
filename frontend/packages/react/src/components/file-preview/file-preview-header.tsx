@@ -21,6 +21,15 @@ export interface FilePreviewHeaderProps {
   onEditSave: () => void;
 }
 
+async function copyText(value: string, onCopied?: (text: string) => void) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    return;
+  }
+  onCopied?.(value);
+}
+
 /** 内容区标题行：路径面包屑、复制、视图切换、编辑与页签级插槽。 */
 export function FilePreviewHeader({
   activeTab,
@@ -57,13 +66,13 @@ export function FilePreviewHeader({
           <span className={styles.breadcrumb}>{activeTab.key}</span>
         )}
 
-        {fileTab?.onCopyPath && path ? (
+        {path ? (
           <button
             type="button"
             className={styles.action}
             aria-label={text.copyPath}
             title={text.copyPath}
-            onClick={() => fileTab.onCopyPath?.(path)}
+            onClick={() => void copyText(path, fileTab.onCopyPath)}
           >
             <CopyIcon />
           </button>
@@ -96,7 +105,7 @@ export function FilePreviewHeader({
           </span>
         ) : null}
 
-        {fileTab?.onCopyContent ? (
+        {fileTab ? (
           <button
             type="button"
             className={styles.action}
@@ -109,7 +118,7 @@ export function FilePreviewHeader({
             disabled={!readCopyableText(fileTab)}
             onClick={() => {
               const value = readCopyableText(fileTab);
-              if (value) fileTab.onCopyContent?.(value);
+              if (value) void copyText(value, fileTab.onCopyContent);
             }}
           >
             <CopyIcon />
