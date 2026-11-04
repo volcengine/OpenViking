@@ -12,7 +12,7 @@ import { MailArchive, chunkOffset, needsChunks, readTarget } from '../src/email/
 import { accountTag, credentialSource, loadAccount } from '../src/email/account.mjs';
 import { EmailClient } from '../src/email/client.mjs';
 import { EmailState } from '../src/email/state.mjs';
-import { ImapAuthError, ImapConnection, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
+import { ImapAuthError, ImapConnection, MailboxUnavailableError, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
 import { refreshAccessToken, requestDeviceCode, waitForDeviceCode } from '../src/email/oauth2.mjs';
 import { safeError } from '../src/logger.mjs';
 import { verifySmtp } from '../src/email/smtp.mjs';
@@ -88,24 +88,23 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
           continue;
         }
         if (pendingAuth) {
-          if (pendingAuth.cancel) {
-            if (line === '') {
-              socket.write(`${pendingAuth.tag} NO ${refusal}\r\n`);
-              state.authCancelled += 1;
-              pendingAuth = null;
-            }
-            continue;
-          }
-          // The empty line ends a rejected two-step exchange: answer it with
-          // the tagged NO, since answer() would send another continuation.
+          // The empty line ends a rejected exchange — whether it was ended by
+          // answer() or not; the tagged NO only follows it.
           if (line === '') {
             socket.write(`${pendingAuth.tag} NO ${refusal}\r\n`);
             state.authCancelled += 1;
             pendingAuth = null;
             continue;
           }
-          if (closeDuringAuth) { socket.destroy(); return; }
-          if (badAuth) { socket.write(`${pendingAuth.tag} BAD ${badAuth}\r\n`); pendingAuth = null; continue; }
+          // A continuation that never gets read: the two cases below model a
+          // server that dies or rejects the command instead of the token.
+          if (!pendingAuth.cancel && closeDuringAuth) { socket.destroy(); return; }
+          if (!pendingAuth.cancel && badAuth) {
+            socket.write(`${pendingAuth.tag} BAD ${badAuth}\r\n`);
+            pendingAuth = null;
+            continue;
+          }
+          if (pendingAuth.cancel) continue;
           answer(pendingAuth.tag, line);
           pendingAuth = null;
           continue;
@@ -1333,7 +1332,9 @@ describe('a mailbox that signs in but refuses IMAP', () => {
 
     const error = await client.preflight().catch((caught) => caught);
     assert.ok(error, 'the check must fail');
-    // The owner is told the mailbox setting, not "authentication failed".
+    // A kind of its own: neither a refused credential nor a broken connection,
+    // so a caller can tell the owner which setting to change.
+    assert.ok(error instanceof MailboxUnavailableError, `expected MailboxUnavailableError, got ${error.name}`);
     assert.match(error.message, /enable IMAP|grant/i);
     // And the credential was never refreshed for it: the token was fine.
     assert.equal(endpoint.calls.length, 1, 'the token must not be refreshed for a mailbox setting');
@@ -1346,8 +1347,8 @@ describe('a mailbox that signs in but refuses IMAP', () => {
     await connection.authenticate(ME, 'token-1');
     const error = await connection.examine('INBOX').catch((caught) => caught);
     connection.close();
+    assert.ok(error instanceof MailboxUnavailableError, `expected MailboxUnavailableError, got ${error.name}`);
     assert.ok(!(error instanceof ImapAuthError), 'a BAD answer is not a refused credential');
-    assert.match(error.message, /enable IMAP|grant/i);
   });
 
   it('still refreshes once when the credential itself is refused', async (t) => {
