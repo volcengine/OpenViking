@@ -153,7 +153,14 @@ export class OpenVikingTransport {
     let envelope: ResponseEnvelope<T> = {};
     if (text) {
       try {
-        envelope = JSON.parse(text) as ResponseEnvelope<T>;
+        const parsed: unknown = JSON.parse(text);
+        if (
+          parsed === null ||
+          typeof parsed !== "object" ||
+          Array.isArray(parsed)
+        )
+          throw new TypeError("Expected a JSON object response envelope");
+        envelope = parsed as ResponseEnvelope<T>;
       } catch (cause) {
         throw new OpenVikingError(`HTTP ${response.status}: ${text}`, {
           statusCode: response.status,
