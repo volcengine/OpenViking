@@ -17,12 +17,29 @@ stop-tool reply survives both guards (and that the filler still applies when
 no stop tool ran).
 """
 
-import inspect
+# This test lives at the root of ``tests/api_test`` because that is the directory the
+# api-test workflow collects (``cd tests/api_test && pytest .``); ``bot/tests`` is not
+# reached by any workflow.  ``vikingbot`` lives under ``bot/`` and is not installed by
+# the repo-wide test environment.  At this depth ``parents[2]`` is the repository root.
+import sys
+from pathlib import Path
 
-from vikingbot.agent.loop import AgentLoop
-from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import Config, SessionKey
-from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_REPO_ROOT, _REPO_ROOT / "bot"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+
+import inspect  # noqa: E402
+
+from vikingbot.agent.loop import AgentLoop  # noqa: E402
+from vikingbot.bus.queue import MessageBus  # noqa: E402
+from vikingbot.config.schema import Config, SessionKey  # noqa: E402
+from vikingbot.providers.base import (  # noqa: E402
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+)
 
 
 def _stop_reply_preserved(final_content, tools_used, stop_tools):
