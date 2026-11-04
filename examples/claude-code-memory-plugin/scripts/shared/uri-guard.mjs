@@ -164,12 +164,185 @@ export const DEFAULT_TOOL_HINTS = {
   },
 };
 
-// Tools whose argument is a command line rather than a location. A viking:// URI
-// in one is data (an `ov` argument, an HTTP payload, a grep pattern) as often as
-// a path the model hoped to open, so the command runs and the model gets a notice.
+// Tools whose argument is a command line rather than a location. When a shell
+// command carries a viking:// URI as legitimate data (an `ov` argument, an HTTP
+// payload, a search pattern, or a heredoc), no notice is necessary. When it
+// attempts to access the URI as a local filesystem path (cat, ls, etc.), the
+// command still runs but the model receives a notice.
 // Only a name the host's hint table lists is guarded at all, so the PowerShell
 // names reach no host that does not map them (dsh's Windows `pwsh` tool does).
 const SHELL_TOOL_NAMES = new Set(["bash", "shell", "runcommand", "pwsh", "powershell"]);
+
+const DATA_CARRIER_COMMANDS = new Set([
+  "ov",
+  "ovcli",
+  "curl",
+  "wget",
+  "http",
+  "httpx",
+]);
+
+const SEARCH_COMMANDS = new Set([
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "ag",
+  "ack",
+]);
+
+function normalizeBinary(token) {
+  if (!token) return "";
+  const base = token.split(/[\/\\]/).pop() || "";
+  return base.replace(/\.exe$/i, "").toLowerCase();
+}
+
+function isInsideHeredoc(command, uri) {
+  const heredocRegex = /<<-?\s*['"\\]?(\w+)['"]?([\s\S]*?)(?:\n[ \t]*\1\b|$)/g;
+  let match;
+  while ((match = heredocRegex.exec(command)) !== null) {
+    if (match[2] && match[2].includes(uri)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSearchPattern(tokens, uri) {
+  let patternFound = false;
+  let optionsEnded = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!optionsEnded) {
+      if (token === "--") {
+        optionsEnded = true;
+        continue;
+      }
+      if (token === "-e" || token === "--regexp") {
+        patternFound = true;
+        if (i + 1 < tokens.length) {
+          if (tokens[i + 1].includes(uri)) return true;
+          i++;
+        }
+        continue;
+      }
+      if (token.startsWith("-e=") || token.startsWith("--regexp=")) {
+        patternFound = true;
+        const val = token.slice(token.indexOf("=") + 1);
+        if (val) {
+          if (val.includes(uri)) return true;
+        } else if (i + 1 < tokens.length) {
+          if (tokens[i + 1].includes(uri)) return true;
+          i++;
+        }
+        continue;
+      }
+      if (
+        token === "-f" || token === "--file" ||
+        token === "-m" || token === "--max-count" ||
+        token === "-C" || token === "--context" ||
+        token === "-B" || token === "--before-context" ||
+        token === "-A" || token === "--after-context" ||
+        token === "-g" || token === "--glob" ||
+        token === "-t" || token === "--type" ||
+        token === "-T" || token === "--type-not" ||
+        token === "--exclude" || token === "--include" ||
+        token === "--exclude-dir"
+      ) {
+        i++;
+        continue;
+      }
+      if (token.startsWith("-")) {
+        continue;
+      }
+    }
+    if (!patternFound) {
+      patternFound = true;
+      if (token.includes(uri)) return true;
+    }
+  }
+  return false;
+}
+
+function tokenizeShellSegment(seg) {
+  const tokens = [];
+  const regex = /[^\s"']+|"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'/g;
+  let match;
+  while ((match = regex.exec(seg)) !== null) {
+    tokens.push(match[1] !== undefined ? match[1] : (match[2] !== undefined ? match[2] : match[0]));
+  }
+  return tokens;
+}
+
+function isTokensDataCarrier(tokens, uri) {
+  if (!tokens || tokens.length === 0) return false;
+  let cmdIdx = 0;
+  while (cmdIdx < tokens.length) {
+    const tok = tokens[cmdIdx];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok) || tok === "sudo" || tok === "env" || tok === "nohup") {
+      cmdIdx++;
+    } else {
+      break;
+    }
+  }
+  if (cmdIdx >= tokens.length) return false;
+
+  const binary = normalizeBinary(tokens[cmdIdx]);
+  if (DATA_CARRIER_COMMANDS.has(binary)) return true;
+  if (SEARCH_COMMANDS.has(binary)) {
+    return isSearchPattern(tokens.slice(cmdIdx + 1), uri);
+  }
+  return false;
+}
+
+export function isShellDataCarrier(command, uri) {
+  if (!command || !uri) return false;
+
+  if (Array.isArray(command)) {
+    return isTokensDataCarrier(command, uri);
+  }
+
+  const str = String(command);
+  if (isInsideHeredoc(str, uri)) return true;
+
+  const segments = str.split(/(?:&&|\|\||[;\n|&])/);
+  let uriSegmentCount = 0;
+  for (const seg of segments) {
+    if (!seg.includes(uri)) continue;
+    uriSegmentCount++;
+    const tokens = tokenizeShellSegment(seg);
+    if (!isTokensDataCarrier(tokens, uri)) {
+      return false;
+    }
+  }
+
+  return uriSegmentCount > 0;
+}
+
+function findCarrierCommand(input, uri) {
+  if (typeof input === "string") {
+    return input.includes(uri) ? input : null;
+  }
+  if (Array.isArray(input)) {
+    return input.some((item) => typeof item === "string" && item.includes(uri)) ? input : null;
+  }
+  if (!input || typeof input !== "object") return null;
+
+  if (input.command !== undefined) {
+    const found = findCarrierCommand(input.command, uri);
+    if (found) return found;
+  }
+  if (input.cmd !== undefined) {
+    const found = findCarrierCommand(input.cmd, uri);
+    if (found) return found;
+  }
+  for (const [k, v] of Object.entries(input)) {
+    if (k === "command" || k === "cmd") continue;
+    const found = findCarrierCommand(v, uri);
+    if (found) return found;
+  }
+  return null;
+}
 
 // `pattern` is where glob looks but what grep looks for: a grep for the text
 // "viking://" in a local tree is not a path. The generic sweep still reaches
@@ -211,6 +384,8 @@ export function evaluateUriGuard(toolName, input = {}, opts = {}) {
 export function evaluateUriNotice(toolName, input = {}, opts = {}) {
   const match = resolveGuardedUri(toolName, input, opts);
   if (!match?.shell) return null;
+  const cmd = findCarrierCommand(input, match.uri);
+  if (cmd && isShellDataCarrier(cmd, match.uri)) return null;
   return { uri: match.uri, reason: buildGuardNotice(match.uri, match.hint) };
 }
 

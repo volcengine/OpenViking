@@ -9,6 +9,7 @@ import {
   evaluateUriNotice,
   findVikingUri,
   findVikingUriInValue,
+  isShellDataCarrier,
   isSkillUri,
   noticeHookSpecificOutput,
   normalizeToolName,
@@ -57,11 +58,11 @@ test("evaluateUriGuard denies a guarded tool and passes everything else", () => 
   assert.equal(evaluateUriGuard("Write", { file_path: "/tmp/a.md", content: "see viking://resources/a.md" }), null)
 })
 
-test("a shell command that carries a viking:// URI gets a notice, never a deny", () => {
+test("a shell command that carries a viking:// URI as a file target gets a notice, never a deny", () => {
   for (const [tool, input] of [
-    ["Bash", { command: "ov read viking://resources/a.md" }],
     ["RunCommand", { command: "cat viking://resources/a.md" }],
-    ["shell", { command: ["curl", "-d", "{\"uri\":\"viking://resources/a.md\"}", "http://127.0.0.1:1933"] }],
+    ["Bash", { command: "grep needle viking://resources/a.md" }],
+    ["shell", { command: ["ls", "viking://resources/a.md"] }],
   ]) {
     assert.equal(evaluateUriGuard(tool, input), null, tool)
     const notice = evaluateUriNotice(tool, input)
@@ -69,6 +70,27 @@ test("a shell command that carries a viking:// URI gets a notice, never a deny",
     assert.match(notice?.reason ?? "", /ignore this notice/, tool)
   }
   assert.equal(evaluateUriNotice("Bash", { command: "cat /tmp/a.md" }), null)
+})
+
+test("a shell command using viking:// as data (ov, curl, heredoc, grep pattern) gets no notice", () => {
+  for (const [tool, input] of [
+    ["Bash", { command: "ov read viking://resources/a.md" }],
+    ["RunCommand", { command: 'curl -s "https://host/api?uri=viking://resources/a.md"' }],
+    ["shell", { command: ["curl", "-d", "{\"uri\":\"viking://resources/a.md\"}", "http://127.0.0.1:1933"] }],
+    ["shell", { command: ["ov", "read", "viking://resources/a.md"] }],
+    ["Bash", { command: "python3 - <<'PY'\nuri='viking://resources/a.md'\nprint(uri)\nPY" }],
+    ["Bash", { command: "grep -rn 'viking://' README.md" }],
+    ["Bash", { command: "rg 'viking://' src/" }],
+    ["Bash", { cmd: "ov read viking://resources/a.md" }],
+    ["Bash", { args: { command: "ov read viking://resources/a.md" } }],
+    ["Bash", { command: "grep -- 'viking://' README.md" }],
+    ["Bash", { command: "grep -e 'viking://' README.md" }],
+    ["Bash", { command: "grep --regexp='viking://' README.md" }],
+    ["Bash", { command: "grep -C 2 'viking://' README.md" }],
+  ]) {
+    assert.equal(evaluateUriGuard(tool, input), null, tool)
+    assert.equal(evaluateUriNotice(tool, input), null, tool)
+  }
 })
 
 test("PowerShell tools are shell tools for a host that maps them, and unguarded otherwise", () => {
@@ -145,10 +167,11 @@ test("preToolUseOutput denies file paths, notices shell commands, and passes the
   const denied = preToolUseOutput({ tool_name: "Read", tool_input: { file_path: "viking://resources/a.md" } })
   assert.equal(denied.hookSpecificOutput?.permissionDecision, "deny")
 
-  const noticed = preToolUseOutput({ tool_name: "Bash", tool_input: { command: "ov read viking://resources/a.md" } })
+  const noticed = preToolUseOutput({ tool_name: "Bash", tool_input: { command: "cat viking://resources/a.md" } })
   assert.equal(noticed.hookSpecificOutput?.permissionDecision, undefined)
   assert.match(noticed.hookSpecificOutput?.additionalContext ?? "", /ignore this notice/)
 
+  assert.deepEqual(preToolUseOutput({ tool_name: "Bash", tool_input: { command: "ov read viking://resources/a.md" } }), {})
   assert.deepEqual(preToolUseOutput({ tool_name: "Bash", tool_input: { command: "ls" } }), {})
   assert.deepEqual(preToolUseOutput({ tool_name: "Task", tool_input: { prompt: "viking://resources/a.md" } }), {})
   assert.deepEqual(preToolUseOutput(), {})
