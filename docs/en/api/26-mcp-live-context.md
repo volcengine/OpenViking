@@ -29,7 +29,7 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 | POST | `/api/v1/mcps` | Register a server and publish its tool catalog |
 | GET | `/api/v1/mcps` | List registered servers |
 | GET | `/api/v1/mcps/{name}` | Read a server and its current tool definitions |
-| GET | `/api/v1/mcps/status?name=...` | Check whether a server is reachable |
+| GET | `/api/v1/mcps/status` | Check whether a server is reachable by `name` |
 | POST | `/api/v1/mcps/{name}/sync` | Synchronize tools and report affected mounts |
 | DELETE | `/api/v1/mcps/{name}` | Remove a server and its tool catalog |
 | POST | `/api/v1/mcps/find` | Search tools semantically |
