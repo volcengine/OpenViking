@@ -7,6 +7,7 @@ Original implementation:
 """
 
 import asyncio
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -15,6 +16,9 @@ from loguru import logger
 
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.registry import ToolRegistry
+
+# MCP SDK 1.10+ exports this reserved code; keep compatibility with earlier 1.x releases.
+_MCP_CONNECTION_CLOSED = -32000
 
 
 def _extract_nullable_branch(options: Any) -> tuple[dict[str, Any], bool] | None:
@@ -81,14 +85,23 @@ def _normalize_schema_for_openai(schema: Any) -> dict[str, Any]:
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as a nanobot Tool."""
 
-    def __init__(self, session, server_name: str, tool_def, tool_timeout: int = 30):
+    def __init__(
+        self,
+        session,
+        server_name: str,
+        tool_def,
+        tool_timeout: int = 30,
+        on_transport_error: Callable[[str], None] | None = None,
+    ):
         self._session = session
+        self._server_name = server_name
         self._original_name = tool_def.name
         self._name = f"mcp_{server_name}_{tool_def.name}"
         self._description = tool_def.description or tool_def.name
         raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
         self._tool_timeout = tool_timeout
+        self._on_transport_error = on_transport_error
 
     @property
     def name(self) -> str:
@@ -131,6 +144,8 @@ class MCPToolWrapper(Tool):
                 type(exc).__name__,
                 exc,
             )
+            if self._on_transport_error is not None and _is_transport_error(exc):
+                self._on_transport_error(self._server_name)
             return f"(MCP tool call failed: {type(exc).__name__})"
 
         parts = []
@@ -142,30 +157,73 @@ class MCPToolWrapper(Tool):
         return "\n".join(parts) or "(no output)"
 
 
+def _is_transport_error(exc: Exception) -> bool:
+    """Return whether an MCP call failed because its transport is no longer usable."""
+    from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
+    from mcp.shared.exceptions import McpError
+
+    if isinstance(exc, McpError):
+        return exc.error.code == _MCP_CONNECTION_CLOSED
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return False
+    if isinstance(
+        exc,
+        (
+            ConnectionError,
+            BrokenResourceError,
+            ClosedResourceError,
+            EndOfStream,
+            httpx.TransportError,
+        ),
+    ):
+        return True
+    nested = getattr(exc, "exceptions", ())
+    return bool(nested) and any(
+        isinstance(item, Exception) and _is_transport_error(item) for item in nested
+    )
+
+
 async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
-) -> None:
-    """Connect to configured MCP servers and register their tools."""
+    mcp_servers: dict,
+    registry: ToolRegistry,
+    on_transport_error: Callable[[str], None] | None = None,
+) -> dict[str, tuple[AsyncExitStack, set[str]]]:
+    """Connect configured MCP servers and return their independently owned resources."""
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
 
-    for name, cfg in mcp_servers.items():
+    async def close_connection(
+        server_name: str, stack: AsyncExitStack, tool_names: set[str]
+    ) -> None:
+        for tool_name in tool_names:
+            registry.unregister(tool_name)
         try:
-            transport_type = cfg.type
-            if not transport_type:
-                if cfg.command:
-                    transport_type = "stdio"
-                elif cfg.url:
-                    # Convention: URLs ending with /sse use SSE transport; others use streamableHttp
-                    transport_type = (
-                        "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
-                    )
-                else:
-                    logger.warning("MCP server '{}': no command or url configured, skipping", name)
-                    continue
+            await stack.aclose()
+        except Exception as close_error:
+            logger.debug("MCP server '{}': failed to clean up: {}", server_name, close_error)
 
+    connections: dict[str, tuple[AsyncExitStack, set[str]]] = {}
+    for name, cfg in mcp_servers.items():
+        transport_type = cfg.type
+        if not transport_type:
+            if cfg.command:
+                transport_type = "stdio"
+            elif cfg.url:
+                # Convention: URLs ending with /sse use SSE transport; others use streamableHttp
+                transport_type = "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
+            else:
+                logger.warning("MCP server '{}': no command or url configured, skipping", name)
+                continue
+        if transport_type not in {"stdio", "sse", "streamableHttp"}:
+            logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
+            continue
+
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        registered_names: set[str] = set()
+        try:
             if transport_type == "stdio":
                 params = StdioServerParameters(
                     command=cfg.command, args=cfg.args, env=cfg.env or None
@@ -208,10 +266,6 @@ async def connect_mcp_servers(
                 read, write, _ = await stack.enter_async_context(
                     streamable_http_client(cfg.url, http_client=http_client)
                 )
-            else:
-                logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
-                continue
-
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
 
@@ -235,8 +289,15 @@ async def connect_mcp_servers(
                         name,
                     )
                     continue
-                wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
+                wrapper = MCPToolWrapper(
+                    session,
+                    name,
+                    tool_def,
+                    tool_timeout=cfg.tool_timeout,
+                    on_transport_error=on_transport_error,
+                )
                 registry.register(wrapper)
+                registered_names.add(wrapper.name)
                 logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
                 registered_count += 1
                 if enabled_tools:
@@ -258,5 +319,13 @@ async def connect_mcp_servers(
                     )
 
             logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
+            connections[name] = (stack, registered_names)
+        except asyncio.CancelledError:
+            await close_connection(name, stack, registered_names)
+            for connected_name, (connected_stack, tool_names) in reversed(connections.items()):
+                await close_connection(connected_name, connected_stack, tool_names)
+            raise
         except Exception as e:
             logger.error("MCP server '{}': failed to connect: {}", name, e)
+            await close_connection(name, stack, registered_names)
+    return connections
