@@ -338,9 +338,20 @@ class CompileService:
     def lifecycle(self) -> CompileLifecycle | None:
         return self._lifecycle
 
-    def configure_memory_runner(self, vikingdb: Any = None) -> None:
+    def configure_memory_runner(
+        self,
+        vikingdb: Any = None,
+        *,
+        runtime_config_manager: Any = None,
+        vlm_resolver=None,
+    ) -> None:
         """Install the in-process memory-consolidation runner for `--skill memory`."""
-        self._memory_runner = MemoryCompileRunner(self._fs, vikingdb=vikingdb)
+        self._memory_runner = MemoryCompileRunner(
+            self._fs,
+            vikingdb=vikingdb,
+            runtime_config_manager=runtime_config_manager,
+            vlm_resolver=vlm_resolver,
+        )
 
     @property
     def poll_interval_seconds(self) -> float:
@@ -955,9 +966,7 @@ class CompileService:
         )
         for source in sources:
             if classify_uri(source).is_system:
-                raise InvalidArgumentError(
-                    "Compile source must not be in the system namespace"
-                )
+                raise InvalidArgumentError("Compile source must not be in the system namespace")
         skill = request.skill.removesuffix("/SKILL.md")
         skill = validate_request_viking_uri(
             resolve_path_variables(skill), ctx, field_name="skill"

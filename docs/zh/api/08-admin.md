@@ -446,12 +446,13 @@ Content-Type: application/json
 `null` 表示删除当前层配置，具体值表示更新。
 
 当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
-`feishu`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
+`output_language_override`、`memory`、`feishu`、`parser_api`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
 这些配置均可动态修改。Account 的
-`vlm`、`query_planner`、`embedding` 和 `vectordb` 仅 ROOT 可读写，ADMIN 的读取
+`vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 仅 ROOT 可读写，ADMIN 的读取
 响应过滤这些配置，写入请求在读取配置前拒绝。每段已配置的 `vlm` 或
 `query_planner` 都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选。
-`memory` 不在当前 API 范围内。
+Account `memory` 仅开放 `extraction_enabled`。
+Account `parser_api` 必须包含非空白 `api_key`；ADMIN 修改该段（包括 `null`）均被拒绝。
 `vectordb` 只能随 Account 创建时的 `settings` 提交，创建后包括 ROOT 在内均不可
 新增、修改或重置。Cluster 的 `embedding`、`vlm`、`query_planner`、
 `memory`、`feishu`、存储、解析器和检索配置没有声明为运行时字段，因此仍然只能
@@ -630,8 +631,8 @@ Account 配置通过创建接口的 `settings` 初始化，并通过 configurati
 | `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 该 Account 显式持久化的 `settings` |
 | `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 合并后的显式 `settings` |
 
-`vlm`、`query_planner`、`embedding` 和 `vectordb` 是敏感基础设施配置：只有 ROOT
-可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这四段；若
+`vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 是敏感基础设施配置：只有 ROOT
+可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这些段；若
 PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 也不能管理
 其他 Account。所有结构或业务校验错误返回 `400 INVALID_ARGUMENT`，不存在的 Account
 返回 `404 NOT_FOUND`。
@@ -641,14 +642,31 @@ PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 
 持久化任何部分更新。创建请求会在创建账号目录前校验 `settings`；后续 PATCH 则先合并
 当前 Account 显式值，再校验完整有效配置。
 
+**Account 解析凭证**
+
+`settings.parser_api` 可动态修改，仅包含必填且非空白的 `api_key`。
+只有 ROOT 可以读取、修改或重置：
+
+```json
+{"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
+```
+
+外部解析的上传、提交、轮询和恢复使用任务所属 Account 的 Key，运行参数仍由
+Cluster `parser_api` 维护。Account 未配置该段时保留旧 Cluster Key 兼容路径。
+队列保存 owner 和远端 ID，不保存凭证。一次执行保持已取得的 Key，下次执行或恢复
+读取最新 Key。轮换必须保持同一远端身份并可访问已有 ID；远端失败不触发凭证回退
+或重新提交。配置沿用现有配置源，开启 AGFS 文件加密时加密存储；这不加密 `ov.conf`。
+
 **其他 Account 配置段**
 
-除模型与向量配置外，以下 `settings` object 均为动态字段，ROOT 和目标 Account 的 ADMIN
+除模型、向量和解析配置外，以下 `settings` object 均为动态字段，ROOT 和目标 Account 的 ADMIN
 都可读写：
 
 | 路径 | 类型和约束 | 含义 |
 | --- | --- | --- |
 | `acl.enabled` | boolean，默认 `false` | 是否启用该 Account 的 ACL |
+| `output_language_override` | string，可选 | 生成内容的语言；缺省或 `null` 使用 Cluster，`""` 启用自动判断 |
+| `memory.extraction_enabled` | boolean，section 内默认 `true` | SessionCommit 长期记忆抽取开关；`memory` 整段缺省或 `null` 使用 Cluster，显式空 section 使用 `true` |
 | `agent_evolution.enabled` | boolean，默认 `false` | 是否启用 Agent Evolution；Account 未设置整个 section 时，为兼容旧行为使用完整 Cluster `agent_evolution` section |
 | `github.token` | string，默认空字符串 | GitHub 访问 token；空字符串表示该 Account 未提供 token |
 | `feishu.app_id` | string，可选 | Account Feishu App ID |
