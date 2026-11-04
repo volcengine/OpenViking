@@ -82,9 +82,9 @@ export interface AgentConnectDetail {
    */
   content?: ReactNode;
   /**
-   * 复制按钮要写入剪贴板的纯文本。不传时不渲染复制按钮。
-   * Plain text the copy control writes to the clipboard. No copy control is
-   * rendered when omitted.
+   * 复制按钮要写入剪贴板的纯文本。组件负责写入并提示成功；不传时不渲染复制按钮。
+   * Plain text the copy control writes to the clipboard. The component performs
+   * the write and reports success; no copy control is rendered when omitted.
    */
   copyText?: string;
 }
@@ -173,8 +173,11 @@ export interface AgentConnectProps extends Omit<
    */
   onSelect?: (item: AgentConnectItem) => void;
   /**
-   * 复制正文时触发。不传时不渲染复制按钮。
-   * Invoked when the body is copied. No copy control is rendered when omitted.
+   * 复制成功后触发，用于埋点或额外反馈。复制本身由组件完成，回调不承担写入。
+   * 不传时仍渲染复制按钮，只是不通知。
+   * Invoked after the body has been copied, for analytics or extra feedback.
+   * The component performs the write; this callback never does. The copy
+   * control still renders when omitted, it just reports nothing.
    */
   onCopy?: (text: string) => void;
 }

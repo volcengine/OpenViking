@@ -47,7 +47,7 @@ import '@openviking/react/components/agent-connect/style.css';
 ## 文档与开发
 
 - 属性表与可运行示例见[组件文档](../../../../../docs/docs/en/components/agent-connect.mdx)（[中文](../../../../../docs/docs/zh/components/agent-connect.mdx)）。
-- 开发与构建命令见[前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README_CN.md)。
+- 开发与构建命令见[前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
 - 独立样式入口 `@openviking/react/components/agent-connect/style.css`，与 JS 入口分离，可按需引入。
 
 当前是占位组件：只渲染固定尺寸的空壳，不消费 props。上述为目标行为。
