@@ -157,6 +157,9 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "target_validator",
         "on_task_created",
         "task_id",
+        "api_key",
+        "parser_api",
+        "parser_api_config",
     }
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
@@ -1220,6 +1223,7 @@ class ResourceService:
             if direct_understanding:
                 understanding_response_id = await self._resource_processor.submit_understanding(
                     path,
+                    ctx=ctx,
                     **feishu_kwargs,
                 )
                 if watch_auth_state is None:
@@ -1272,12 +1276,15 @@ class ResourceService:
                     ):
                         if processor_kwargs.get("temp_file_id"):
                             understanding_file_id = (
-                                await self._resource_processor.upload_understanding_file(prepared)
+                                await self._resource_processor.upload_understanding_file(
+                                    prepared, ctx=ctx
+                                )
                             )
                         else:
                             understanding_response_id = (
                                 await self._resource_processor.submit_understanding(
                                     prepared,
+                                    ctx=ctx,
                                     **processor_kwargs,
                                 )
                             )

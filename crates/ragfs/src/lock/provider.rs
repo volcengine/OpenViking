@@ -699,9 +699,13 @@ impl FilesystemPathLockProvider {
         match result {
             Ok(data) => Ok(Some(data)),
             Err(e) => {
+                // File targets cannot contain the legacy directory-lock probe.
+                // ENOTDIR here proves absence of that token, not a registry read failure.
                 if matches!(
                     e,
-                    crate::core::Error::NotFound(_) | crate::core::Error::MountPointNotFound(_)
+                    crate::core::Error::NotFound(_)
+                        | crate::core::Error::NotADirectory(_)
+                        | crate::core::Error::MountPointNotFound(_)
                 ) {
                     Ok(None)
                 } else {
@@ -847,6 +851,23 @@ mod tests {
             fs.read("/data/.path.ovlock", 0, 0).await,
             Err(Error::NotFound(_))
         ));
+    }
+
+    /// A directory-token probe below a real file is absent, while file reads retain ENOTDIR.
+    #[tokio::test]
+    async fn read_token_below_local_file_is_absent() {
+        use crate::plugins::localfs::LocalFileSystem;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("users.json"), b"registry").unwrap();
+        let fs = Arc::new(LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap());
+        let probe = "/users.json/.path.ovlock";
+        assert!(matches!(
+            fs.read(probe, 0, 0).await,
+            Err(Error::NotADirectory(_))
+        ));
+        let provider = FilesystemPathLockProvider::new(fs, 30.0);
+        assert!(provider.read_token(probe).await.unwrap().is_none());
     }
 
     /// Verify malformed non-legacy lock files still surface as invalid tokens.

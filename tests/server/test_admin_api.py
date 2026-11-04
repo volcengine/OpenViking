@@ -2046,6 +2046,9 @@ async def test_create_account(
 ):
     """ROOT provisioning applies account settings before initializing storage."""
     settings = {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
+        "parser_api": {"api_key": "parser-private-key"},
         "embedding": {"max_retries": 5},
         "vectordb": {
             "backend": "vikingdb",
@@ -2088,11 +2091,12 @@ async def test_create_account(
         json={"account_id": acct, "admin_user_id": "alice", "settings": settings},
         headers=root_headers(),
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
+    assert "parser-private-key" not in resp.text
 
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
@@ -2107,6 +2111,31 @@ async def test_create_account(
     assert effective.embedding.max_retries == 5
     assert factory.call_args.args[0].vikingdb.host == "https://account.invalid"
     adapter.create_collection.assert_not_called()
+
+    url = f"/api/v1/admin/accounts/{acct}/configuration"
+    admin_headers = {"X-API-Key": body["result"]["user_key"]}
+    visible = await admin_client.get(url, headers=admin_headers)
+    assert visible.json()["result"]["settings"] == {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
+    }
+    updated = await admin_client.patch(
+        url,
+        headers=admin_headers,
+        json={"settings": {"output_language_override": "", "memory": {"extraction_enabled": True}}},
+    )
+    assert updated.status_code == 200, updated.text
+    assert "parser-private-key" not in updated.text
+    denied = await admin_client.patch(
+        url, headers=admin_headers, json={"settings": {"parser_api": None}}
+    )
+    assert denied.status_code == 403, denied.text
+    invalid = await admin_client.patch(
+        url, headers=root_headers(), json={"settings": {"parser_api": {"api_key": " "}}}
+    )
+    assert invalid.status_code == 400, invalid.text
+    stored = await admin_client.get(url, headers=root_headers())
+    assert stored.json()["result"]["settings"]["parser_api"] == settings["parser_api"]
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(

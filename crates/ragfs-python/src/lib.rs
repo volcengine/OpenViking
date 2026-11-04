@@ -218,7 +218,6 @@ fn validate_leader_ttl_secs(v: f64) -> PyResult<Duration> {
     }
 }
 
-use ragfs::cache::{CachePolicy, CacheTraversalMode};
 use ragfs::cache_runtime::{CacheError, CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
 use ragfs::core::builder::{
     CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig, EncryptionConfig,
@@ -320,9 +319,6 @@ struct RagfsCacheConfig {
     runtime_enabled: bool,
     provider: CacheProviderKind,
     service_name: String,
-    max_file_size_bytes: usize,
-    traversal_mode: CacheTraversalMode,
-    bypass_prefixes: Vec<String>,
     redis: RedisCacheConfig,
     dynamic: DynamicCacheConfig,
 }
@@ -369,9 +365,6 @@ impl Default for RagfsCacheConfig {
             runtime_enabled: false,
             provider: CacheProviderKind::Redis,
             service_name: String::new(),
-            max_file_size_bytes: CachePolicy::default().max_file_size(),
-            traversal_mode: CacheTraversalMode::Backend,
-            bypass_prefixes: Vec::new(),
             redis: RedisCacheConfig::default(),
             dynamic: DynamicCacheConfig::default(),
         }
@@ -401,9 +394,9 @@ impl Default for RedisCacheConfig {
             sentinel_password: String::new(),
             db: 0,
             pool_size: 32,
-            connect_timeout_ms: 1_000,
-            command_timeout_ms: 20,
-            default_ttl_seconds: 3_600,
+            connect_timeout_ms: 10_000,
+            command_timeout_ms: 0,
+            default_ttl_seconds: 300,
             tls_insecure_skip_verify: false,
         }
     }
@@ -445,7 +438,6 @@ impl RagfsCacheConfig {
             cachefs: CacheFsConfig {
                 enabled: self.enabled,
                 service_name: self.service_name.clone(),
-                policy: cache_policy_from_config(self),
             },
         })
     }
@@ -646,14 +638,9 @@ fn cache_config_from_canonical_ov_conf_with_runtime(
     config.enabled = cachefs_backend == "cache";
     config.runtime_enabled = config.enabled || queuefs_backend == "cache" || force_runtime;
     if let Some(cachefs) = cachefs {
-        let cachefs = cachefs
+        cachefs
             .as_object()
             .ok_or_else(|| "storage.agfs.cachefs must be an object".to_string())?;
-        config.max_file_size_bytes =
-            usize_field(cachefs, "max_file_size_bytes", config.max_file_size_bytes)?;
-        config.traversal_mode =
-            traversal_mode(string_field(cachefs, "traversal_mode", "backend")?)?;
-        config.bypass_prefixes = string_array_field(cachefs, "bypass_prefixes")?;
     }
 
     if !config.runtime_enabled {
@@ -730,10 +717,6 @@ fn cache_config_from_value(
     config.runtime_enabled = bool_field(cache, "runtime_enabled", config.enabled)?;
     let provider = string_field(cache, "provider", "redis")?;
     config.provider = provider_kind(provider)?;
-    config.max_file_size_bytes =
-        usize_field(cache, "max_file_size_bytes", config.max_file_size_bytes)?;
-    config.traversal_mode = traversal_mode(string_field(cache, "traversal_mode", "backend")?)?;
-    config.bypass_prefixes = string_array_field(cache, "bypass_prefixes")?;
 
     if let Some(redis) = cache.get("redis") {
         let redis = redis
@@ -804,7 +787,7 @@ fn parse_redis_config(
     config.db = i64_field(redis, "db", config.db)?;
     config.pool_size = usize_field(redis, "pool_size", config.pool_size)?;
     config.connect_timeout_ms = u64_field(redis, "connect_timeout_ms", config.connect_timeout_ms)?;
-    config.command_timeout_ms = u64_field(redis, "command_timeout_ms", config.command_timeout_ms)?;
+    config.command_timeout_ms = u64_field_allow_zero(redis, "command_timeout_ms", config.command_timeout_ms)?;
     config.default_ttl_seconds =
         u64_field_allow_zero(redis, "default_ttl_seconds", config.default_ttl_seconds)?;
     config.tls_insecure_skip_verify = bool_field(
@@ -833,16 +816,6 @@ fn provider_kind(value: String) -> Result<CacheProviderKind, String> {
         "dynamic" => Ok(CacheProviderKind::Dynamic),
         other => Err(format!(
             "unsupported cache.provider: {other}; expected redis or dynamic"
-        )),
-    }
-}
-
-fn traversal_mode(value: String) -> Result<CacheTraversalMode, String> {
-    match value.as_str() {
-        "backend" => Ok(CacheTraversalMode::Backend),
-        "cached_traversal" => Ok(CacheTraversalMode::CachedTraversal),
-        other => Err(format!(
-            "unsupported cachefs.traversal_mode: {other}; expected backend or cached_traversal"
         )),
     }
 }
@@ -980,13 +953,6 @@ fn string_array_field_or_default(
     }
 }
 
-fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
-    config.bypass_prefixes.iter().fold(
-        CachePolicy::new(config.max_file_size_bytes).with_traversal_mode(config.traversal_mode),
-        |policy, prefix| policy.with_bypass_prefix(prefix),
-    )
-}
-
 mod git;
 mod global_policy;
 mod privacy;
@@ -1025,6 +991,8 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::NotFound(_) => new_py_err("AGFSNotFoundError", msg),
         ragfs::core::Error::AlreadyExists(_) => new_py_err("AGFSAlreadyExistsError", msg),
         ragfs::core::Error::PermissionDenied(_) => new_py_err("AGFSPermissionDeniedError", msg),
+        ragfs::core::Error::QuotaExceeded(_) => new_py_err("AGFSResourceExhaustedError", msg),
+        ragfs::core::Error::RateLimited(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::InvalidPath(_) => new_py_err("AGFSInvalidPathError", msg),
         ragfs::core::Error::NotADirectory(_) => new_py_err("AGFSNotADirectoryError", msg),
         ragfs::core::Error::IsADirectory(_) => new_py_err("AGFSIsADirectoryError", msg),
@@ -3659,7 +3627,6 @@ mod tests {
         assert!(!cache_config.enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Redis);
         assert_eq!(cache_config.service_name, "test-service");
-        assert_eq!(cache_config.traversal_mode, CacheTraversalMode::Backend);
 
         fs::remove_file(path).unwrap();
     }
@@ -3899,10 +3866,7 @@ mod tests {
                 },
                 "storage": {
                     "agfs": {
-                        "cachefs": {
-                            "backend": "cache",
-                            "traversal_mode": "cached_traversal"
-                        },
+                        "cachefs": {"backend": "cache"},
                         "queuefs": {"backend": "cache"}
                     }
                 }
@@ -3916,10 +3880,6 @@ mod tests {
         assert!(cache_config.runtime_enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Redis);
         assert_eq!(cache_config.service_name, "tenant-a");
-        assert_eq!(
-            cache_config.traversal_mode,
-            CacheTraversalMode::CachedTraversal
-        );
         assert_eq!(cache_config.redis.mode, "sentinel");
         assert_eq!(cache_config.redis.master_name.as_deref(), Some("mymaster"));
         assert_eq!(cache_config.redis.command_timeout_ms, 750);
@@ -4067,32 +4027,6 @@ mod tests {
 
             assert!(error.contains(provider));
         }
-    }
-
-    #[test]
-    fn cache_config_rejects_invalid_traversal_mode() {
-        let path = std::env::temp_dir().join(format!(
-            "openviking-invalid-cache-traversal-{}.json",
-            std::process::id()
-        ));
-        fs::write(
-            &path,
-            r#"{
-                "service_name": "test-service",
-                "cache": {"provider": "redis", "params": {}},
-                "storage": {"agfs": {"cachefs": {
-                    "backend": "cache",
-                    "traversal_mode": "bogus"
-                }}}
-            }"#,
-        )
-        .unwrap();
-
-        let error = cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap_err();
-
-        assert!(error.contains("traversal_mode"));
-
-        fs::remove_file(path).unwrap();
     }
 
     #[test]

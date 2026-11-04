@@ -11,7 +11,7 @@ from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -1494,6 +1494,43 @@ class FSService:
         """Validate write access without mutating the target."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+
+    async def ensure_remove_access(self, uri: str, ctx: RequestContext) -> None:
+        """Validate the namespace and ACL checks used when removing a file."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.MANAGE)
+
+    async def can_read_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+    ) -> Dict[str, bool]:
+        """Return caller-specific read visibility for each URI."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
+
+    async def get_tags_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+        *,
+        check_access: bool = True,
+    ) -> Dict[str, List[str]]:
+        """Return vector-backed retrieval tags for each URI."""
+        unique_uris = list(dict.fromkeys(uris))
+        if not unique_uris:
+            return {}
+        if check_access:
+            access = await self.can_read_many(unique_uris, ctx)
+            unique_uris = [uri for uri in unique_uris if access.get(uri, False)]
+        entries = [{"uri": uri, "isDir": False} for uri in unique_uris]
+        tagged_entries = await self._attach_and_filter_tags(
+            entries,
+            ctx,
+            tags=None,
+            include_tags=True,
+        )
+        return {str(entry["uri"]): list(entry.get("tags") or []) for entry in tagged_entries}
 
     async def _read_content(
         self, uri: str, ctx: RequestContext, *, max_bytes: int | None = None

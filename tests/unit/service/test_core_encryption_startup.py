@@ -101,9 +101,6 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
             "enabled": False,
             "runtime_enabled": False,
             "provider": "redis",
-            "max_file_size_bytes": 1024 * 1024,
-            "traversal_mode": "backend",
-            "bypass_prefixes": [],
         },
         "pathlock": {
             "provider": "filesystem",

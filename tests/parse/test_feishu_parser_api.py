@@ -662,6 +662,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     assert task_tracker.create.await_args.kwargs["meta"] == expected_meta
     submit_understanding.assert_awaited_once_with(
         source,
+        ctx=ctx,
         feishu_access_token="u-secret",
         feishu_config=feishu_config,
         custom_option="forwarded",

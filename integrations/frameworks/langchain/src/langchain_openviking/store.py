@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Iterable
 from urllib.parse import quote, unquote
 
@@ -108,8 +109,49 @@ class OpenVikingStore(BaseStore):
         self.wait: bool = wait
         self.search_fetch_limit: int = search_fetch_limit
         self._client_cache: Any = None
+        self._owns_client = client is None
+        self._closed = False
+
+    def close(self) -> None:
+        """Close the Store and release its internally created client, if any."""
+        if self._closed:
+            return
+        self._closed = True
+        client = self._client_cache
+        self._client_cache = None
+        if client is not None and self._owns_client:
+            client.close()
+
+    async def aclose(self) -> None:
+        """Close the Store without blocking the event loop."""
+        await asyncio.to_thread(self.close)
+
+    def __enter__(self) -> OpenVikingStore:
+        self._raise_if_closed()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    async def __aenter__(self) -> OpenVikingStore:
+        self._raise_if_closed()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
     def batch(self, ops: Iterable[Any]) -> list[Any]:
+        self._raise_if_closed()
         results: list[Any] = []
         for op in ops:
             if isinstance(op, GetOp):
@@ -309,6 +351,7 @@ class OpenVikingStore(BaseStore):
         return items
 
     def _all_data_uris(self, namespace_prefix: tuple[str, ...]) -> list[str]:
+        self._raise_if_closed()
         base_uri = self._data_prefix_uri(namespace_prefix)
         uris: list[str] = []
         seen: set[str] = set()
@@ -324,9 +367,14 @@ class OpenVikingStore(BaseStore):
         return uris
 
     def _client(self) -> Any:
+        self._raise_if_closed()
         if self._client_cache is None:
             self._client_cache = ensure_client(self._connection)
         return self._client_cache
+
+    def _raise_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("OpenVikingStore is closed")
 
     def _read_record(self, uri: str) -> dict[str, Any]:
         content = call_openviking(self._client(), "read", uri=uri)

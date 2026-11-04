@@ -1,0 +1,28 @@
+# Console
+
+An importable placeholder for console. It currently renders the module name and a placeholder message, so applications can integrate the container before business functionality lands.
+
+## Basic usage
+
+```tsx file="../../_demos/console-placeholder.tsx" preview
+
+```
+
+## Target capability
+
+VikingBot and TUI share one panel with internal mode switching, a toolbar, and resource context. Each mode keeps its own conversation or command state.
+
+Business Hooks and requests are not implemented yet. The component requires no Provider or credentials.
+
+## Props
+
+The module exports `ConsoleProps` and `ConsoleLabels`.
+
+| Property             | Type            | Default                                            | Description                  |
+| -------------------- | --------------- | -------------------------------------------------- | ---------------------------- |
+| `className`          | `string`        | —                                                  | Additional container class.  |
+| `style`              | `CSSProperties` | —                                                  | Container style overrides.   |
+| `labels.title`       | `string`        | `Console`                                          | Visible module name.         |
+| `labels.description` | `string`        | `Placeholder. Functionality is not available yet.` | Visible placeholder message. |
+
+An omitted label inherits its English default. Labels are plain text; the host maps its own translation system into these props.

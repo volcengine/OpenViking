@@ -245,7 +245,13 @@ store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
 store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该条目
+store.close()
 ```
+
+同步使用后调用 `close()`，异步使用后调用 `await store.aclose()`；也可使用
+`with OpenVikingStore(...) as store` 或 `async with` 自动清理。
+清理仅释放 Store 内部创建的客户端，注入的客户端仍由调用方管理。
+关闭未使用的 Store 不会创建客户端，关闭后不可复用。
 
 按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
 删除不存在的键不会产生任何影响。

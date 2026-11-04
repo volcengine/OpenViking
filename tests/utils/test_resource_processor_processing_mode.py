@@ -50,12 +50,12 @@ class _RecordingVikingDB:
 
 
 @pytest.mark.asyncio
-async def test_resource_processor_upload_understanding_file_delegates():
+async def test_resource_processor_upload_understanding_file_delegates(ctx):
     processor = ResourceProcessor(_FakeVikingDB())
     media_processor = SimpleNamespace(upload_understanding_file=AsyncMock(return_value="file-1"))
     processor._media_processor = media_processor
 
-    result = await processor.upload_understanding_file("/tmp/upload.pdf")
+    result = await processor.upload_understanding_file("/tmp/upload.pdf", ctx=ctx)
 
     assert result == "file-1"
     media_processor.upload_understanding_file.assert_awaited_once_with("/tmp/upload.pdf")
