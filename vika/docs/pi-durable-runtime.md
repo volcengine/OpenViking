@@ -66,6 +66,20 @@ model (`off` … `max` for reasoning models, `off` otherwise; default from
   10 MB. A host without the socket refuses to start.
 - **Coding tools.** pi-durable's `CodingTools` (`bash`, `read`, `write`, `edit`)
   run in the instance workspace.
+- **OpenViking tools.** When the instance has an OpenViking connection
+  (`OPENVIKING_CLI_CONFIG_FILE`, or `OPENVIKING_URL` for a local server), the
+  host connects to the server's MCP endpoint through `@earendil-works/pi-mcp`
+  and registers its whole catalogue as `openviking_*` tools, exactly like the
+  official pi extension. The handshake runs in the background and never
+  delays a fresh start; a turn resumed after a crash waits for the first
+  handshake (bounded by its 5 s budget) so a replayed tool call finds the
+  catalogue. A failed or slow server leaves the session without OpenViking
+  tools but fully able to send and deliver (fail-open), and the next turn
+  retries at most once a minute. Calls carry the same identity headers as the
+  daemon's own OV connection plus the instance's actor peer, are bounded by a
+  15 s timeout, and never replay: read-only tools (`readOnlyHint`) may rerun
+  after a crash, write tools do not. `DURABLE_OV=0` keeps the host off
+  OpenViking entirely.
 
 The child environment is sanitized like the other local runtimes: `LARK_*`,
 `FEISHU_*`, `LARKSUITE_*`, `VIKA_*`, `ARK_*` (except `ARK_API_KEY`) and

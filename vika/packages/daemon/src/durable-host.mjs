@@ -33,6 +33,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { availableChatModels, loadDurableModels } from './durable-models.mjs';
 import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
+import { OVToolSource, OV_RETRY_INTERVAL_MS, toDurableTools, resolveOvConfig } from './durable-ov-tools.mjs';
 import { DURABLE_PROTOCOL } from './durable-runtime.mjs';
 
 const context = BACKGROUND_CONTEXT;
@@ -93,6 +94,13 @@ class Host {
     this.failures = [];
     this.turnSeq = 0;
     this.closing = false;
+    // OpenViking's tool source: null until a config resolves, then the source
+    // whose catalogue lands through installOpenViking/connectOpenViking below.
+    this.registry = null;
+    this.ovSource = null;
+    this.ovReady = false;
+    this.ovConnecting = false;
+    this.ovNextAttemptAt = 0;
   }
 
   storagePath() {
@@ -204,6 +212,55 @@ class Host {
       }));
     }
     return tools;
+  }
+
+  // OpenViking's own tool catalogue, as its MCP endpoint serves it. The
+  // extension starts empty so a slow or absent server never blocks `ready`;
+  // connectOpenViking replaces it in place once the handshake answers, and a
+  // model that never gets OpenViking still sends and delivers through the
+  // Core tools (fail-open, like the official pi extension). DURABLE_OV=0
+  // keeps the host off OpenViking entirely; DURABLE_OV=1 connects even in
+  // the faux-provider tests that drive the model offline.
+  installOpenViking(registry) {
+    const setting = String(process.env.DURABLE_OV ?? '').trim();
+    if (setting === '0') return;
+    if (setting !== '1' && process.env.DURABLE_FAUX === '1') return;
+    const resolved = resolveOvConfig();
+    if (resolved.error) log({ type: 'ov_tools_unavailable', error: resolved.error });
+    if (!resolved.config) return;
+    this.ovSource = new OVToolSource({ readConfig: () => resolveOvConfig().config });
+    registry.install(defineExtension({ name: 'openviking', tools: [] }));
+    void this.connectOpenViking();
+  }
+
+  // One handshake attempt; concurrent callers share it. Resolves true when
+  // the catalogue is registered, false when OpenViking stayed unreachable.
+  connectOpenViking() {
+    if (!this.ovSource) return Promise.resolve(false);
+    if (this.ovConnecting) return this.ovAttempt ?? Promise.resolve(this.ovReady);
+    if (this.ovReady) return Promise.resolve(true);
+    this.ovConnecting = true;
+    this.ovNextAttemptAt = Date.now() + OV_RETRY_INTERVAL_MS;
+    this.ovAttempt = (async () => {
+      try {
+        const catalogue = await this.ovSource.connect();
+        const registrations = toDurableTools(this.ovSource, catalogue);
+        this.registry.install(defineExtension({ name: 'openviking', tools: registrations }));
+        this.ovReady = true;
+        log({
+          type: 'ov_tools_ready',
+          tools: registrations.length,
+          ...(catalogue.length !== registrations.length ? { skipped: catalogue.length - registrations.length } : {}),
+        });
+        return true;
+      } catch (error) {
+        log({ type: 'ov_tools_unavailable', error: safeError(error) });
+        return false;
+      } finally {
+        this.ovConnecting = false;
+      }
+    })();
+    return this.ovAttempt;
   }
 
   // Open the conversation the daemon named, or create the one it should name
@@ -349,6 +406,7 @@ class Host {
     this.models = await this.buildModels();
     const tools = await this.buildTools();
     const registry = createRegistry();
+    this.registry = registry;
     registry.install(defineExtension({
       name: 'vika',
       sections: [section('policy', () => this.policy, { tag: false })],
@@ -359,11 +417,20 @@ class Host {
     // coding tools resolve their cwd from the same per-run NodeExecutionEnv as
     // the Core tools, so nothing else is wired here.
     registry.install(CodingTools);
+    this.installOpenViking(registry);
     const storage = await openNodeSqliteStorage(this.storagePath());
     const env = ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? this.workspace });
     this.harness = await Harness.open(storage, { models: this.models, registry, env }, context);
     this.sessionKey = sessionKey;
     this.conversation = await this.open();
+    const live = await this.harness.snapshot(LiveDoc, this.conversation.id, context);
+    // A turn the previous host left unfinished resumes as soon as
+    // Harness.resume() runs below; its tool calls must find the OpenViking
+    // catalogue registered, so the first handshake settles first (bounded by
+    // its own budget; an unreachable server still resumes fail-open). With no
+    // unfinished turn the handshake stays in the background and never delays
+    // ready.
+    if (live?.run) await this.connectOpenViking();
     this.harness.resume();
     await this.attach(this.conversation);
     try {
@@ -375,7 +442,6 @@ class Host {
       send({ type: 'fatal', error: `durable harness closed (${end?.kind ?? 'unknown'})` });
       setTimeout(() => process.exit(1), 0);
     }).catch(() => {});
-    const live = await this.harness.snapshot(LiveDoc, this.conversation.id, context);
     if (live?.run) {
       this.busy = true;
       send({ type: 'turn_start', turn: ++this.turnSeq });
@@ -395,6 +461,12 @@ class Host {
   async submit(command) {
     const text = String(command?.text ?? '');
     if (!text) throw new Error('durable submit requires text');
+    // A first handshake that failed is retried here, at most once a minute
+    // while turns keep coming; after it succeeds, calls repair their own
+    // connection, so no further attempts are scheduled.
+    if (this.ovSource && !this.ovReady && Date.now() >= this.ovNextAttemptAt) {
+      void this.connectOpenViking();
+    }
     const submission = await this.conversation.submit({
       type: 'input',
       content: text,
@@ -474,6 +546,7 @@ class Host {
 
   async close() {
     this.closing = true;
+    try { await this.ovSource?.close(); } catch (error) { log({ type: 'ov_tools_close_error', error: safeError(error) }); }
     try { await this.watchHandle?.stop?.(); } catch {}
     try { await this.harness?.close(context); } catch (error) { log({ type: 'close_error', error: safeError(error) }); }
   }

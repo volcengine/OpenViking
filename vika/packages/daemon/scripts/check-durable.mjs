@@ -16,7 +16,7 @@ const workspace = path.join(dataDir, 'workspace');
 fs.mkdirSync(workspace);
 const child = spawn(process.execPath, [DURABLE_HOST], {
   cwd: workspace,
-  env: { ...process.env, DURABLE_FAUX: '1', DURABLE_FAUX_RESPONSES: '[{"text":"ok"}]' },
+  env: { ...process.env, DURABLE_FAUX: '1', DURABLE_OV: '0', DURABLE_FAUX_RESPONSES: '[{"text":"ok"}]' },
   stdio: ['pipe', 'pipe', 'pipe'],
 });
 let settled = false;
