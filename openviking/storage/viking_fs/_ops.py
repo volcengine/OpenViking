@@ -2540,6 +2540,13 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
+        # ``_copy_file_through_vikingfs`` overwrites the target and then ``rm``
+        # deletes the source, so an aliased source and target would delete the
+        # only copy. ``mv`` rejects the same alias before touching storage.
+        source = self._normalize_transfer_uri(from_uri).rstrip("/")
+        target = self._normalize_transfer_uri(to_uri).rstrip("/")
+        if source == target:
+            raise InvalidArgumentError("move_file source and target must be different")
         await self._ensure_access(from_uri, ctx, action=AclAction.WRITE)
         await self._ensure_access(to_uri, ctx, action=AclAction.WRITE)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
