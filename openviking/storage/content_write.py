@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import os
 import sys
 from collections import defaultdict
@@ -27,7 +28,6 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
-from openviking.service.task_domain import collect_queue_work_errors
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -36,6 +36,7 @@ from openviking.resource.processing_mode import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import collect_queue_work_errors
 from openviking.service.task_tracker import (
     TaskStatus,
     get_task_tracker,
@@ -736,6 +737,7 @@ class ContentWriteCoordinator:
 
         created: list[str] = []
         updated: list[str] = []
+        unchanged: list[str] = []
         refresh_kinds: dict[str, str] = {}
         file_md5s: dict[str, str] = {}
         file_abstracts: dict[str, str] = {}
@@ -769,6 +771,26 @@ class ContentWriteCoordinator:
                 try:
                     if exists and stat.get("isDir"):
                         raise ConflictError(f"Target is a directory: {uri}")
+                    if operation["if_absent"] and exists:
+                        raise ConflictError(f"Target already exists: {uri}")
+                    expected = operation.get("expected_sha256")
+                    if expected is not None:
+                        if not exists:
+                            raise ConflictError(f"Expected content no longer exists: {uri}")
+                        current = await self._viking_fs.read_file_bytes(uri, ctx=ctx)
+                        if hashlib.sha256(current).hexdigest() != expected:
+                            raise ConflictError(f"Content revision changed: {uri}")
+                        desired = operation["content"]
+                        if isinstance(desired, str):
+                            desired = desired.encode("utf-8")
+                        if (
+                            skip_conflicts
+                            and write_mode == "replace"
+                            and current == desired
+                            and operation["ingest_options"] == IngestOptions()
+                        ):
+                            unchanged.append(uri)
+                            continue
                 except ConflictError as exc:
                     if not skip_conflicts:
                         raise
@@ -875,7 +897,7 @@ class ContentWriteCoordinator:
                     "root_uri": normalized_root,
                     "created": created,
                     "updated": updated,
-                    "unchanged": [],
+                    "unchanged": unchanged,
                     "queue_status": None,
                 }
                 if skip_conflicts:
@@ -1083,7 +1105,25 @@ class ContentWriteCoordinator:
                     ) from exc
 
             mode = raw.get("mode", "replace")
+            expected = raw.get("expected_sha256")
+            if expected is not None and (
+                not isinstance(expected, str)
+                or len(expected) != 64
+                or any(c not in "0123456789abcdef" for c in expected)
+            ):
+                raise InvalidArgumentError("expected_sha256 must be a lowercase SHA-256 digest")
             self._validate_batch_mode(mode)
+            if_absent = raw.get("if_absent", False)
+            if not isinstance(if_absent, bool):
+                raise InvalidArgumentError(f"batch-write if_absent must be a boolean: {uri}")
+            if if_absent and expected is not None:
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with expected_sha256: {uri}"
+                )
+            if if_absent and mode == "append":
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with append mode: {uri}"
+                )
             if has_content_base64 and mode == "append":
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
@@ -1114,6 +1154,8 @@ class ContentWriteCoordinator:
                     "uri": uri,
                     "content": content,
                     "mode": mode,
+                    "expected_sha256": raw.get("expected_sha256"),
+                    "if_absent": if_absent,
                     "ingest_options": ingest_options,
                 }
             )
