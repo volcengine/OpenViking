@@ -1,9 +1,9 @@
 import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
+import { createV2Recall } from "./v2-recall.mjs"
 import { log } from "./utils.mjs"
 
-const METADATA_KEY = "openviking"
 const CURSOR_KEY_PREFIX = "capture-cursor/"
 const LIFECYCLE_EVENTS = new Set([
   "session.created",
@@ -35,6 +35,15 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     return task
   }
   const directory = ctx?.location?.project?.directory || ctx?.location?.directory
+  const v2Recall = createV2Recall({
+    ctx,
+    config,
+    ready: runtime.ready,
+    recall,
+    sessionInject,
+    directory,
+    recallEnabled: isRecallEnabled(config),
+  })
 
   if (config.mcp.enabled && ctx?.mcp?.transform) {
     let registered = false
@@ -73,15 +82,11 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   }
 
   if (ctx?.session?.hook) {
-    await ctx.session.hook("prompt", async (event) => {
+    // The host holds the user's message until this returns, so it only
+    // starts the fetch; `context` waits for it right before the model call.
+    await ctx.session.hook("prompt", (event) => {
       try {
-        await runtime.ready
-        await prepareV2Prompt(event, {
-          directory,
-          recall,
-          sessionInject,
-          recallEnabled: isRecallEnabled(config),
-        })
+        v2Recall.prefetch(event)
       } catch (error) {
         logHookError("session.prompt", error)
       }
@@ -91,6 +96,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       try {
         await runtime.ready
         injectV2Context(event, repoContext)
+        await v2Recall.inject(event)
       } catch (error) {
         logHookError("session.context", error)
       }
@@ -139,6 +145,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
         if (event.type === "session.deleted") {
           sessionOwnership.delete(sessionID)
           await forgetCursor(ctx, captureCursors, sessionID)
+          await v2Recall.forget(sessionID)
         }
       })
     })
@@ -175,55 +182,9 @@ async function consumeEvents(ctx, signal, handle) {
   }
 }
 
-export async function prepareV2Prompt(event, {
-  directory,
-  recall,
-  sessionInject,
-  recallEnabled,
-}) {
-  const sessionID = event?.sessionID
-  const messageID = event?.messageID
-  if (!sessionID || !messageID) return
-  const text = event?.prompt?.text
-  const parts = typeof text === "string" && text.trim() ? [{ type: "text", text }] : []
-  const input = { sessionID, messageID, directory }
-  const blocks = []
-  try {
-    const sessionBlock = await sessionInject.buildSessionContext(input)
-    if (sessionBlock) blocks.push(sessionBlock)
-  } catch (error) {
-    logHookError("session.prompt.profile", error)
-  }
-  if (recallEnabled) {
-    try {
-      const recallBlock = await recall.buildRelevantMemories(input, parts)
-      if (recallBlock) blocks.push(recallBlock)
-    } catch (error) {
-      logHookError("session.prompt.recall", error)
-    }
-  }
-  if (blocks.length === 0) return
-
-  event.metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {}
-  event.metadata[METADATA_KEY] = { context: blocks }
-}
-
 export function injectV2Context(event, repoContext) {
   const repoPrompt = repoContext.getRepoSystemPrompt()
   if (repoPrompt) pushSystem(event, repoPrompt)
-  if (!Array.isArray(event?.messages)) return
-
-  for (const message of event.messages) {
-    const blocks = message?.metadata?.[METADATA_KEY]?.context
-    if (message?.role !== "user" || !Array.isArray(blocks) || blocks.length === 0) continue
-    if (!Array.isArray(message.content)) message.content = []
-    if (message.content.some((part) => part?.metadata?.[METADATA_KEY] === true)) continue
-    message.content.unshift({
-      type: "text",
-      text: blocks.filter((block) => typeof block === "string" && block).join("\n\n"),
-      metadata: { [METADATA_KEY]: true },
-    })
-  }
 }
 
 // The plugin event stream carries every location served by the process, and
