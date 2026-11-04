@@ -158,12 +158,16 @@ async def test_compile_graph_timeout_releases_target(
     clock = SimpleNamespace(time=lambda: 100.0)
     monkeypatch.setattr("openviking.service.artifact_relations_store.time", clock)
     waiting, started, resume = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    checked_five_minutes = asyncio.Event()
     relations = service.artifact_relations
     original_ready, original_build = relations.ready, relations.builder.build
 
     async def ready(*args, **kwargs):
         waiting.set()
-        return await original_ready(*args, **kwargs)
+        result = await original_ready(*args, **kwargs)
+        if clock.time() == 400.0:
+            checked_five_minutes.set()
+        return result
 
     async def build(*args):
         started.set()
@@ -209,6 +213,9 @@ async def test_compile_graph_timeout_releases_target(
         if worker_started:
             await asyncio.wait_for(started.wait(), 10)
         clock.time = lambda: 400.0
+        await asyncio.wait_for(checked_five_minutes.wait(), 10)
+        assert not (await get_task_tracker().get(task_id, **owner)).is_terminal()
+        clock.time = lambda: 700.0
         task = await get_task_tracker().wait(task_id, **owner, timeout=20)
         assert task.status == "failed" and "ARTIFACT_RELATIONS_TIMEOUT" in task.error
         state, graph = await relations.store.get_publication(ctx.account_id, target)

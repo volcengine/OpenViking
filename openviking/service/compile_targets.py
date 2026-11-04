@@ -88,7 +88,7 @@ _operation_outputs: ContextVar[Optional[dict]] = ContextVar("operation_outputs",
 
 
 LOCK_TIMEOUT_SECONDS = 30.0
-COMPILE_GRAPH_TIMEOUT_SECONDS = 300.0
+COMPILE_GRAPH_TIMEOUT_SECONDS = 600.0
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 SUMMARY_FIELDS = (
     "to",
