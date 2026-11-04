@@ -24,7 +24,6 @@ from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
     NotFoundError,
-    PermissionDeniedError,
 )
 from openviking_cli.utils import get_logger
 
@@ -237,6 +236,7 @@ class ArtifactRelationsService(DequeueHandlerBase):
 
     async def query(self, to: str, ctx) -> dict:
         to = normalize_storage_target_uri(to)
+        ctx = self._fs.authorize_read(ctx, [to])
         await self._fs._ensure_access(to, ctx)
         target = await self._targets.get(ctx.account_id, to)
         if target is None or target.get("status") != "active":
@@ -249,13 +249,8 @@ class ArtifactRelationsService(DequeueHandlerBase):
             )
         if state is None or graph is None:
             raise FailedPreconditionError("Artifact relations are not ready")
-        visible = []
-        for node in graph.nodes:
-            try:
-                await self._fs._ensure_access(node.rstrip("/"), ctx)
-            except PermissionDeniedError:
-                continue
-            visible.append(node)
+        access = await self._fs._can_access_many([node.rstrip("/") for node in graph.nodes], ctx)
+        visible = [node for node in graph.nodes if access.get(node.rstrip("/"), False)]
         allowed = set(visible)
         return {
             "nodes": [{"uri": uri} for uri in visible],
@@ -338,14 +333,14 @@ class ArtifactRelationsService(DequeueHandlerBase):
                         head = target.get("wiki_head")
                     if not head:
                         continue
-                    state, _ = await self.store.get_publication(account, to)
+                    state = await self.store.get_state(account, to)
                     if state and state.status == "failed" and state.target_snapshot_id == head:
                         continue
                     if (
                         state
                         and state.status == "ready"
                         and state.target_snapshot_id == head
-                        and state.compile_operation_id == operation
+                        and (operation is None or state.compile_operation_id == operation)
                     ):
                         continue
                     await self.store.request(account, to, head, compile_operation_id=operation)

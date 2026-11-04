@@ -558,3 +558,56 @@ async def test_legacy_compile_request_initializes_timeout_once(backend, monkeypa
     clock.time = lambda: 800.0
     state, _ = await other.check_compile_wait(ACCOUNT, TO, "A", "op", 300)
     assert state.status == "failed" and state.requested_at == 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["ready", "queued", "computing", "failed"])
+async def test_status_read_does_not_load_graph_or_sources(backend, phase):
+    store, _ = stores(backend)
+    await publish(store)
+    if phase != "ready":
+        await store.request(ACCOUNT, TO, "B")
+        if phase != "queued":
+            claimed = await store.claim(ACCOUNT, TO)
+            if phase == "failed":
+                await store.fail(ACCOUNT, TO, claimed, "failed")
+    # A damaged old payload must not be downloaded during obligation scanning.
+    graph_path = published_directory(store, backend) + "/artifact_relations.json"
+    backend.files[graph_path] = b"invalid JSON"
+    backend.reads.clear()
+    state = await store.get_state(ACCOUNT, TO)
+    assert state.status == (phase if phase in {"ready", "failed"} else "building")
+    assert sum(path.endswith("/artifact_relations_state.json") for path in backend.reads) == 1
+    assert not any(
+        path.endswith(("/artifact_relations.json", "/relation_sources.json"))
+        for path in backend.reads
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [False, True], ids=["missing-candidate", "complete-candidate"])
+async def test_status_recovery_reads_only_publishing_candidate(backend, complete):
+    store, _ = stores(backend)
+    await publish(store)
+    await store.request(ACCOUNT, TO, "B")
+    claimed = await store.claim(ACCOUNT, TO)
+    sources, graph = candidate(claimed)
+    backend.fault = (
+        ("artifact_relations_state", "before", "ready")
+        if complete
+        else ("artifact_relations", "before", None)
+    )
+    with pytest.raises(OSError):
+        await store.publish(ACCOUNT, TO, claimed, sources, graph)
+    backend.reads.clear()
+    state = await store.get_state(ACCOUNT, TO)
+    assert state.status == ("ready" if complete else "building")
+    candidate_path = (
+        directory(store, backend) + f"/builds/{claimed.build_id}/artifact_relations.json"
+    )
+    assert [path for path in backend.reads if path.endswith("/artifact_relations.json")] == [
+        candidate_path
+    ]
+    assert not any(path.endswith("/relation_sources.json") for path in backend.reads)
+    if complete:
+        assert (await store.get_publication(ACCOUNT, TO))[1] == graph

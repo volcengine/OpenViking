@@ -32,6 +32,12 @@ class NativeFS:
         if uri in self.denied:
             raise PermissionDeniedError("Denied")
 
+    def authorize_read(self, ctx, targets):
+        return ctx
+
+    async def _can_access_many(self, uris, ctx):
+        return {uri: uri not in self.denied for uri in uris}
+
     async def commit(self, *, paths, ctx, message, **kwargs):
         return await self._async_agfs.run(
             "git_commit",
@@ -194,3 +200,49 @@ async def test_unmanaged_write_does_not_create_graph_snapshot(environment):
         await fs.write(uri, b"ordinary resource", ctx)
         await service.register_writes([uri], None, ctx)
     fs.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completed_compile", [False, True], ids=["ordinary", "completed-compile"])
+async def test_idle_recovery_reads_status_without_loading_graph(environment, completed_compile):
+    service, fs, ctx = environment
+    await save(service, fs, ctx, {ROOT + "/a.md": b"page"})
+    await service._manager.get_queue("ArtifactRelations").dequeue()
+    if completed_compile:
+        head = (await service._targets.get(ctx.account_id, ROOT))["wiki_head"]
+        async with service._targets.edit(ctx.account_id, ROOT) as target:
+            target.update(active_operation_id="completed", active_task_id="task")
+        await service.store.request(ctx.account_id, ROOT, head, compile_operation_id="completed")
+        async with service._targets.edit(ctx.account_id, ROOT) as target:
+            target.update(active_operation_id=None, active_task_id=None)
+    agfs = fs._async_agfs
+    agfs.read = AsyncMock(wraps=agfs.read)
+    service._enqueue = AsyncMock()
+    await service.recover()
+    await service.recover()
+    paths = [call.args[0] for call in agfs.read.await_args_list]
+    assert sum(path.endswith("/artifact_relations_state.json") for path in paths) == 2
+    assert not any(
+        path.endswith(("/artifact_relations.json", "/relation_sources.json")) for path in paths
+    )
+    service._enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_graph_query_uses_one_batch_and_filters_both_edge_ends(environment):
+    service, fs, ctx = environment
+    await save(service, fs, ctx, {ROOT + "/a.md": b"[b](b.md)", ROOT + "/b.md": b"b"})
+    await service._manager.get_queue("ArtifactRelations").dequeue()
+    fs._can_access_many = AsyncMock(wraps=fs._can_access_many)
+    fs._ensure_access = AsyncMock(wraps=fs._ensure_access)
+    fs.denied.add(ROOT + "/b.md")
+    graph = await service.query(ROOT, ctx)
+    fs._can_access_many.assert_awaited_once()
+    fs._ensure_access.assert_awaited_once_with(ROOT, ctx)
+    assert {"uri": ROOT + "/b.md"} not in graph["nodes"]
+    assert not any(
+        edge["from"] == ROOT + "/b.md" or edge["to"] == ROOT + "/b.md" for edge in graph["edges"]
+    )
+    fs.denied.clear()
+    graph = await service.query(ROOT, ctx)
+    assert {"uri": ROOT + "/b.md"} in graph["nodes"]

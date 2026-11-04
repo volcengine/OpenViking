@@ -167,11 +167,15 @@ class ArtifactRelationsStore:
             raise ArtifactRelationsStoreError("Invalid terminal state")
         if state.status == "ready" and state.error is not None:
             raise ArtifactRelationsStoreError("Ready state cannot have an error")
+        if state.status == "ready" and state.published_build_id != state.build_id:
+            raise ArtifactRelationsStoreError("Ready state does not match the published graph")
 
     async def _publication(
-        self, directory: str, ctx: dict, target: dict
+        self, directory: str, ctx: dict, target: dict, *, include_graph: bool = True
     ) -> tuple[ArtifactRelationsState | None, ArtifactRelations | None]:
-        state = await self._read(directory, "artifact_relations_state", ArtifactRelationsState)
+        # _locked already read the exact state bytes for CAS. Reuse that read.
+        raw = ctx["_state_expected"]
+        state = ArtifactRelationsState.model_validate(json.loads(raw)) if raw is not None else None
         if state is not None and state.target_generation != target.get("generation", "legacy"):
             return None, None
         graph = (
@@ -180,7 +184,7 @@ class ArtifactRelationsStore:
                 "artifact_relations",
                 ArtifactRelations,
             )
-            if state is not None and state.published_build_id
+            if include_graph and state is not None and state.published_build_id
             else None
         )
         if state is None:
@@ -204,13 +208,27 @@ class ArtifactRelationsStore:
                 }
             )
             await self._replace(directory, "artifact_relations_state", state, ctx)
-        if state.status == "ready" and (
-            graph is None
-            or graph.build_id != state.build_id
-            or graph.target_snapshot_id != state.target_snapshot_id
+        if (
+            include_graph
+            and state.status == "ready"
+            and (
+                graph is None
+                or graph.build_id != state.build_id
+                or graph.target_snapshot_id != state.target_snapshot_id
+            )
         ):
             raise ArtifactRelationsStoreError("Ready state does not match the published graph")
         return state, graph
+
+    async def get_state(self, account_id: str, to: str) -> ArtifactRelationsState | None:
+        """Read status without graph payloads, except to recover publishing.
+
+        Queries and builders still use get_publication/get_baseline to validate
+        the selected payload. Recovery scans only need the durable obligation.
+        """
+        async with self._locked(account_id, to) as (directory, ctx, target):
+            state, _ = await self._publication(directory, ctx, target, include_graph=False)
+            return state
 
     async def get_publication(
         self, account_id: str, to: str

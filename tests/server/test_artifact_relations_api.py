@@ -9,10 +9,16 @@ import pytest
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
+from openviking.service.artifact_relations_models import (
+    ArtifactRelations,
+    ArtifactRelationsState,
+    RelationEdge,
+)
 from openviking.service.compile_service import CompileSessionAccepted, CompileSessionStatus
 from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_tracker import get_task_tracker
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, PermissionDeniedError
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
@@ -234,3 +240,157 @@ async def test_compile_graph_timeout_releases_target(
     finally:
         resume.set()
         await asyncio.wait_for(execution, 5)
+
+
+@pytest.mark.asyncio
+async def test_graph_batch_acl_deduplicates_queries_and_observes_permission_changes(
+    service, monkeypatch
+):
+    from openviking.storage.acl import AclMode
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    admin = replace(ctx, role=Role.ADMIN)
+    root = "viking://resources/batch-graph"
+    private = root + "/private"
+    hidden = private + "/secret.md"
+    await service.viking_fs.mkdir(private, ctx=admin)
+    for index, uri in enumerate([root, private]):
+        await service.vikingdb_manager.upsert(
+            {
+                "id": f"batch-acl-{index}",
+                "uri": uri,
+                "account_id": ctx.account_id,
+                "context_type": "resource",
+                "level": 0,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+            },
+            ctx=admin,
+        )
+    await service.runtime_config_manager.patch_account(ctx.account_id, {"acl": {"enabled": True}})
+    grant = [{"principal": f"user:{ctx.user.user_id}", "level": "read"}]
+    await service.fs.set_acl(root, grant, ctx=admin, acl_mode=AclMode.RESTRICTED)
+    await service.fs.set_acl(private, [], ctx=admin, acl_mode=AclMode.RESTRICTED)
+    async with service.compile.lifecycle.store.edit(ctx.account_id, root, create=True):
+        pass
+    pages = [root + f"/page-{index}.md" for index in range(250)]
+    graph = ArtifactRelations(
+        build_id="batch",
+        target_snapshot_id="snapshot",
+        generated_at=1,
+        nodes=[root + "/", *pages, private + "/", hidden],
+        edges=[
+            *[RelationEdge(from_uri=root + "/", to=page, type="contains") for page in pages],
+            RelationEdge(from_uri=root + "/", to=private + "/", type="contains"),
+            RelationEdge(from_uri=private + "/", to=hidden, type="contains"),
+            RelationEdge(from_uri=pages[0], to=hidden, type="references"),
+            RelationEdge(from_uri=hidden, to=pages[1], type="references"),
+        ],
+    )
+    state = ArtifactRelationsState(
+        status="ready",
+        build_id="batch",
+        target_snapshot_id="snapshot",
+    )
+    monkeypatch.setattr(
+        service.artifact_relations.store, "get_publication", AsyncMock(return_value=(state, graph))
+    )
+    manager = service.viking_fs.acl_manager
+    scroll = AsyncMock(wraps=manager._context_store.scroll)
+    monkeypatch.setattr(manager._context_store, "scroll", scroll)
+    expected = []
+    for node in graph.nodes:
+        try:
+            await service.viking_fs._ensure_access(node.rstrip("/"), ctx)
+        except PermissionDeniedError:
+            continue
+        expected.append({"uri": node})
+    sequential_reads = scroll.await_count
+    scroll.reset_mock()
+    result = await service.artifact_relations.query(root, ctx)
+    assert result["nodes"] == expected
+    assert len(result["nodes"]) == 251
+    assert len(result["edges"]) == 250
+    # The real resolver groups exact and shared ancestor lookups in batches
+    # of 100. Per-node resolution would issue hundreds of scroll requests.
+    assert 0 < scroll.await_count < 20
+    assert scroll.await_count < sequential_reads / 10
+    print(
+        f"ACL queries for {len(graph.nodes)} nodes: per-node={sequential_reads}, "
+        f"batch={scroll.await_count}"
+    )
+    await service.fs.set_acl(private, grant, ctx=admin, acl_mode=AclMode.RESTRICTED)
+    result = await service.artifact_relations.query(root, ctx)
+    assert {"uri": hidden} in result["nodes"]
+    await service.fs.set_acl(private, [], ctx=admin, acl_mode=AclMode.RESTRICTED)
+    result = await service.artifact_relations.query(root, ctx)
+    assert {"uri": hidden} not in result["nodes"]
+    assert not any(edge["from"] == hidden or edge["to"] == hidden for edge in result["edges"])
+
+
+@pytest.mark.asyncio
+async def test_graph_batch_visibility_preserves_global_owner_scope(service, monkeypatch):
+    account = service.user.account_id
+    owner = RequestContext(user=UserIdentifier(account, "graph-owner"), role=Role.USER)
+    reader = RequestContext(user=UserIdentifier(account, "global-reader"), role=Role.GLOBAL)
+    root = "viking://user/graph-owner/resources/wiki"
+    public, secret = root + "/public.md", root + "/secret.md"
+    await service.viking_fs.write_file(
+        "viking://user/graph-owner/GLOBAL_POLICY.md",
+        "---\ntype: global-access-policy\nschema_version: 1\ndefault: deny\nrules:\n"
+        "  - effect: allow\n    path: resources/wiki\n    recursive: true\n"
+        "  - effect: deny\n    path: resources/wiki/secret.md\n    recursive: false\n---\n",
+        ctx=owner,
+    )
+    async with service.compile.lifecycle.store.edit(account, root, create=True):
+        pass
+    graph = ArtifactRelations(
+        build_id="global",
+        target_snapshot_id="snapshot",
+        generated_at=1,
+        nodes=[root + "/", public, secret],
+        edges=[RelationEdge(from_uri=public, to=secret, type="references")],
+    )
+    state = ArtifactRelationsState(
+        status="ready",
+        build_id="global",
+        target_snapshot_id="snapshot",
+    )
+    monkeypatch.setattr(
+        service.artifact_relations.store, "get_publication", AsyncMock(return_value=(state, graph))
+    )
+    access = AsyncMock(wraps=service.viking_fs._can_access_many)
+    monkeypatch.setattr(service.viking_fs, "_can_access_many", access)
+    result = await service.artifact_relations.query(root, reader)
+    assert result["nodes"] == [{"uri": root + "/"}, {"uri": public}]
+    assert not result["edges"]
+    batch_ctx = access.await_args_list[-1].args[1]
+    assert batch_ctx.user == reader.user and batch_ctx.role == Role.GLOBAL
+    assert batch_ctx.data_access.owner_user_id == "graph-owner"
+
+
+@pytest.mark.asyncio
+async def test_graph_batch_visibility_keeps_actor_peer_isolation(service, monkeypatch):
+    ctx = RequestContext(user=service.user, role=Role.USER, actor_peer_id="alpha")
+    root = f"viking://user/{service.user.user_id}"
+    own = root + "/peers/alpha/memories/profile.md"
+    other = root + "/peers/beta/memories/profile.md"
+    async with service.compile.lifecycle.store.edit(ctx.account_id, root, create=True):
+        pass
+    graph = ArtifactRelations(
+        build_id="peers",
+        target_snapshot_id="snapshot",
+        generated_at=1,
+        nodes=[root + "/", own, other],
+        edges=[RelationEdge(from_uri=own, to=other, type="references")],
+    )
+    state = ArtifactRelationsState(
+        status="ready",
+        build_id="peers",
+        target_snapshot_id="snapshot",
+    )
+    monkeypatch.setattr(
+        service.artifact_relations.store, "get_publication", AsyncMock(return_value=(state, graph))
+    )
+    result = await service.artifact_relations.query(root, ctx)
+    assert {"uri": own} in result["nodes"] and {"uri": other} not in result["nodes"]
+    assert not result["edges"]
