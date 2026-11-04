@@ -32,6 +32,12 @@ function isFileTab(tab: FilePreviewTab): tab is FilePreviewFileTab {
   return tab.kind === 'file';
 }
 
+/** 进入编辑时向宿主取正文的结果。 */
+type EditRequest =
+  | { status: 'ready'; text: string }
+  | { status: 'abandoned' }
+  | { status: 'failed' };
+
 /**
  * 文件预览的占位实现。
  *
@@ -54,6 +60,8 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const [activeKey, setActiveKey] = useState(() => tabs[0].key);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const [editing, setEditing] = useState(false);
+  const [loadingEdit, setLoadingEdit] = useState(false);
+  const [editFailed, setEditFailed] = useState(false);
   const [draft, setDraft] = useState('');
 
   const activeTab = tabs.find((tab) => tab.key === activeKey) ?? tabs[0];
@@ -67,6 +75,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     (tab: FilePreviewTab | undefined, value: string) => {
       if (tab && isFileTab(tab)) tab.editing?.onCancel?.(value);
       setEditing(false);
+      setLoadingEdit(false);
       setDraft('');
     },
     [],
@@ -75,12 +84,13 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const switchTab = useCallback(
     (key: string) => {
       if (key === activeKey) return true;
-      if (editing) discardDraft(activeTab, draft);
+      if (editing || loadingEdit) discardDraft(activeTab, draft);
+      setEditFailed(false);
       setActiveKey(key);
       setViewMode('preview');
       return true;
     },
-    [activeKey, activeTab, discardDraft, draft, editing],
+    [activeKey, activeTab, discardDraft, draft, editing, loadingEdit],
   );
 
   useImperativeHandle(
@@ -95,6 +105,37 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     }),
     [activeKey, switchTab, tabs],
   );
+
+  // 进入编辑：有 onRequestEdit 时以它的返回值为正文，宿主自行处理取数。
+  const startEdit = useCallback(async (tab: FilePreviewFileTab) => {
+    setEditFailed(false);
+    const request = tab.editing?.onRequestEdit;
+    if (!request) {
+      setDraft(tab.source.content ?? '');
+      setEditing(true);
+      return;
+    }
+
+    setLoadingEdit(true);
+    let result: EditRequest;
+    try {
+      const returned = await request(tab.source);
+      result =
+        returned === undefined
+          ? { status: 'abandoned' }
+          : { status: 'ready', text: returned };
+    } catch {
+      result = { status: 'failed' };
+    }
+    setLoadingEdit(false);
+
+    if (result.status === 'ready') {
+      setDraft(result.text);
+      setEditing(true);
+    } else if (result.status === 'failed') {
+      setEditFailed(true);
+    }
+  }, []);
 
   const handleTabClick = (tab: FilePreviewTab) => {
     if (tab.disabled) return;
@@ -133,9 +174,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         editing={editing}
         onViewModeChange={setViewMode}
         onEditStart={() => {
-          fileTab?.editing?.onRequestEdit?.(fileTab.source);
-          setDraft(fileTab?.editing?.content ?? fileTab?.source.content ?? '');
-          setEditing(true);
+          if (fileTab) void startEdit(fileTab);
         }}
         onEditCancel={() => discardDraft(activeTab, draft)}
         onEditSave={() => {
@@ -151,6 +190,8 @@ export const FilePreview: FilePreviewComponent = forwardRef<
           contentTab={contentTab}
           text={tabText}
           editing={editing}
+          loadingEdit={loadingEdit}
+          editFailed={editFailed}
           draft={draft}
           onDraftChange={setDraft}
         />

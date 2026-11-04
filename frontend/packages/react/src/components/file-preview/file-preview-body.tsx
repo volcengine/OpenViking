@@ -10,6 +10,8 @@ export interface FilePreviewBodyProps {
   contentTab?: FilePreviewContentTab;
   text: Required<FilePreviewLabels>;
   editing: boolean;
+  loadingEdit: boolean;
+  editFailed: boolean;
   draft: string;
   onDraftChange: (value: string) => void;
 }
@@ -20,6 +22,8 @@ export function FilePreviewBody({
   contentTab,
   text,
   editing,
+  loadingEdit,
+  editFailed,
   draft,
   onDraftChange,
 }: FilePreviewBodyProps) {
@@ -27,23 +31,24 @@ export function FilePreviewBody({
   if (!fileTab) return null;
 
   const { source } = fileTab;
-  const { editing: capability } = fileTab;
 
-  if (editing && capability) {
-    if (capability.loading) {
-      return (
-        <div className={styles.state}>
-          <span className={styles.muted}>{text.loading}</span>
-        </div>
-      );
-    }
-    if (capability.errorMessage) {
-      return (
-        <div className={styles.state} data-tone="error">
-          <span className={styles.muted}>{capability.errorMessage}</span>
-        </div>
-      );
-    }
+  if (loadingEdit) {
+    return (
+      <div className={styles.state}>
+        <span className={styles.muted}>{text.loading}</span>
+      </div>
+    );
+  }
+
+  if (editFailed) {
+    return (
+      <div className={styles.state} data-tone="error">
+        <span className={styles.muted}>{text.loadFailed}</span>
+      </div>
+    );
+  }
+
+  if (editing && fileTab.editing) {
     return (
       <div className={styles.editor}>
         <textarea

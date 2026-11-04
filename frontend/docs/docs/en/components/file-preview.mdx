@@ -46,7 +46,7 @@ Loading, failure and unsupported formats are not props — the component decides
 - `slots.errorFallback`
 - `slots.unsupportedFallback`
 
-Editing is internal too. The host supplies `editing.onSave`, and optionally `editing.onRequestEdit` — an intent callback that returns nothing. A host whose preview is truncated starts the fetch there and reports the result through `editing.content`, with `editing.loading` and `editing.errorMessage` for the two states.
+Editing is internal too. The host supplies `editing.onSave`, and optionally `editing.onRequestEdit` — called before editing starts, returning the full text so a truncated preview can fetch it first. Returning `undefined` abandons the edit; a rejection shows the load-failure message.
 
 ## Props
 
