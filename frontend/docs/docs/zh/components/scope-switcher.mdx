@@ -26,6 +26,8 @@
       selectedLabel: library.name,
       options,
       selectedId,
+      visible: libraryOpen,
+      onVisibleChange: setLibraryOpen,
       onSelect,
     },
     {
@@ -35,6 +37,8 @@
       selectedLabel: accountId,
       options,
       selectedId,
+      visible: accountOpen,
+      onVisibleChange: setAccountOpen,
       onSelect,
     },
     {
@@ -44,6 +48,8 @@
       selectedLabel: userId,
       options,
       selectedId,
+      visible: userOpen,
+      onVisibleChange: setUserOpen,
       onSelect,
     },
   ]}
@@ -66,7 +72,7 @@
 levels={[
   { kind: 'fixed', key: 'library', ariaLabel: '库', selectedLabel: library.name },
   { kind: 'fixed', key: 'account', ariaLabel: '数据空间', selectedLabel: accountId },
-  { kind: 'selectable', key: 'user', ariaLabel: '切换用户', selectedLabel: userId, options, onSelect },
+  { kind: 'selectable', key: 'user', ariaLabel: '切换用户', selectedLabel: userId, options, selectedId, visible: userOpen, onVisibleChange: setUserOpen, onSelect },
 ]}
 ```
 
@@ -89,7 +95,12 @@ levels={[dataSpaceLevel, userLevel]}
 {
   kind: 'selectable',
   key: 'library',
-  // ...
+  selectedLabel: library.name,
+  options,
+  selectedId: library.id,
+  visible,
+  onVisibleChange: setVisible,
+  onSelect,
   renderPanel: ({ search, list }) => (
     <>
       <header>

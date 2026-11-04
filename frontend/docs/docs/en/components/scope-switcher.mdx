@@ -26,6 +26,8 @@ The component knows nothing about "library / data space / user". It renders the 
       selectedLabel: library.name,
       options,
       selectedId,
+      visible: libraryOpen,
+      onVisibleChange: setLibraryOpen,
       onSelect,
     },
     {
@@ -35,6 +37,8 @@ The component knows nothing about "library / data space / user". It renders the 
       selectedLabel: accountId,
       options,
       selectedId,
+      visible: accountOpen,
+      onVisibleChange: setAccountOpen,
       onSelect,
     },
     {
@@ -44,6 +48,8 @@ The component knows nothing about "library / data space / user". It renders the 
       selectedLabel: userId,
       options,
       selectedId,
+      visible: userOpen,
+      onVisibleChange: setUserOpen,
       onSelect,
     },
   ]}
@@ -66,7 +72,7 @@ The host picks the form from whether the current scope can be switched, without 
 levels={[
   { kind: 'fixed', key: 'library', ariaLabel: 'Library', selectedLabel: library.name },
   { kind: 'fixed', key: 'account', ariaLabel: 'Data space', selectedLabel: accountId },
-  { kind: 'selectable', key: 'user', ariaLabel: 'Switch user', selectedLabel: userId, options, onSelect },
+  { kind: 'selectable', key: 'user', ariaLabel: 'Switch user', selectedLabel: userId, options, selectedId, visible: userOpen, onVisibleChange: setUserOpen, onSelect },
 ]}
 ```
 
@@ -89,7 +95,12 @@ Each level maps to one dropdown panel. The component owns three things only: the
 {
   kind: 'selectable',
   key: 'library',
-  // ...
+  selectedLabel: library.name,
+  options,
+  selectedId: library.id,
+  visible,
+  onVisibleChange: setVisible,
+  onSelect,
   renderPanel: ({ search, list }) => (
     <>
       <header>
