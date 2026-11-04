@@ -1040,22 +1040,30 @@ def test_discovery_timeout_is_bounded(external_provider, monkeypatch):
 
 
 def test_discovery_deadline_preserves_connection_failure_hint(external_provider, monkeypatch):
-    import socket
+    import httpx2
 
     home, _, module, _ = external_provider("mcp-unreachable-discovery")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
-    with socket.socket() as unavailable:
-        unavailable.bind(("127.0.0.1", 0))
-        endpoint = f"http://127.0.0.1:{unavailable.getsockname()[1]}"
-        unavailable.close()
-        configure_home(home, endpoint)
-        connection = mcp.Connection(home, module)
-        values, entry, _ = connection.resolve()
-        entry["connect_timeout"] = 1
-        monkeypatch.setattr(connection, "resolve", lambda: (values, entry, False))
-        with pytest.raises(TimeoutError) as caught:
-            asyncio.run(connection.discover(None))
-        assert "Cannot connect to OpenViking" in mcp._error_hint(caught.value)
+    configure_home(home, "http://127.0.0.1:1")
+    connection = mcp.Connection(home, module)
+    values, entry, _ = connection.resolve()
+    entry["connect_timeout"] = 1
+    monkeypatch.setattr(connection, "resolve", lambda: (values, entry, False))
+    failure = httpx2.ConnectError("Connection refused")
+    calls = []
+
+    async def refuse(method, params):
+        calls.append((method, params))
+        raise failure
+
+    # Windows can take longer than this budget to reject a real socket.
+    # Supply a known failure so this test checks preservation of its cause.
+    monkeypatch.setattr(connection, "request", refuse)
+    with pytest.raises(TimeoutError) as caught:
+        asyncio.run(connection.discover(None))
+    assert calls and all(call == ("tools/list", None) for call in calls)
+    assert caught.value.__cause__ is failure
+    assert "Cannot connect to OpenViking" in mcp._error_hint(caught.value)
 
 
 def test_discovery_slow_request_is_still_reported_as_timeout(external_provider, monkeypatch):
@@ -1247,7 +1255,8 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
     output = capsys.readouterr()
     messages = notices if callback else output.err.splitlines()
     assert len(messages) == 1
-    assert str(source) in messages[0]
+    # The notice quotes the path, escaping Windows separators.
+    assert repr(str(source)) in messages[0]
     assert "/reload-mcp" in messages[0] and "before using" in messages[0]
     assert output.out == ""
     if callback:
