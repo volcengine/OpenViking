@@ -86,13 +86,14 @@ const MANIFESTS = Object.freeze({
     auth_schema: EMPTY_SCHEMA,
     config_schema: EMPTY_SCHEMA,
   }),
-  // A mailbox the owner reads over IMAP and answers over SMTP. A reply speaks
-  // as the owner to whoever wrote, so the owner approves each one on a card
-  // first (`approval`). SMTP has no idempotency key: an uncertain send is never
-  // retried.
+  // A mailbox the owner reads over IMAP and answers over SMTP, signing in with
+  // a client password or, where the provider turned passwords off, with OAuth2
+  // (SASL XOAUTH2). A reply speaks as the owner to whoever wrote, so the owner
+  // approves each one on a card first (`approval`). SMTP has no idempotency
+  // key: an uncertain send is never retried.
   email: connectorManifest({
     name: 'email',
-    version: 'imap-smtp-v1',
+    version: 'imap-smtp-v2',
     capabilities: ['events', 'actions'],
     actions: {
       'message.reply': { content: ['markdown'], approval: true },

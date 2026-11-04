@@ -2,14 +2,25 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import tls from 'node:tls';
+import { xoauth2 } from './oauth2.mjs';
 
-// The IMAP4rev1 subset a read-only inbox watcher needs: LOGIN, EXAMINE (the
-// mailbox opens read-only, so nothing is ever marked read), UID SEARCH, UID
-// FETCH of BODY.PEEK[], and IDLE. Responses are read with their literals;
-// anything unexpected fails the connection and the Connector restarts.
+// The IMAP4rev1 subset a read-only inbox watcher needs: CAPABILITY, LOGIN or
+// AUTHENTICATE XOAUTH2, EXAMINE (the mailbox opens read-only, so nothing is
+// ever marked read), UID SEARCH, UID FETCH of BODY.PEEK[], and IDLE. Responses
+// are read with their literals; anything unexpected fails the connection and
+// the Connector restarts.
 
 const COMMAND_TIMEOUT_MS = 60_000;
 const FETCH_TIMEOUT_MS = 300_000;
+
+// A server that turned password sign-in off says so before a password is sent;
+// the caller can then offer OAuth2 instead.
+export class OAuthRequiredError extends Error {
+  constructor() {
+    super('this mailbox only signs in with OAuth2 (the server refuses LOGIN)');
+    this.name = 'OAuthRequiredError';
+  }
+}
 
 function quote(value) {
   const text = String(value);
@@ -218,9 +229,42 @@ export class ImapConnection {
   }
 
   async login(user, password) {
+    // The greeting does not always carry the capabilities; the mechanism check
+    // below needs them before anything is sent.
+    await this.command('CAPABILITY');
+    if (this.capabilities.has('LOGINDISABLED') && this.capabilities.has('AUTH=XOAUTH2')) {
+      throw new OAuthRequiredError();
+    }
     await this.command('LOGIN', `${quote(user)} ${quote(password)}`);
     await this.command('CAPABILITY');
     // Some providers (163.com) refuse a session that never identified its client.
+    if (this.capabilities.has('ID')) await this.command('ID', '("name" "vika")').catch(() => {});
+  }
+
+  // SASL XOAUTH2 with an access token. Servers that advertise SASL-IR take the
+  // token on the command line; the others ask for it with `+`, and a rejected
+  // token comes back as one more `+` carrying the error, which is answered with
+  // an empty line before the tagged NO.
+  async authenticate(user, accessToken) {
+    await this.command('CAPABILITY');
+    if (!this.capabilities.has('AUTH=XOAUTH2')) {
+      throw new Error('IMAP server does not offer AUTH=XOAUTH2');
+    }
+    const response = xoauth2(user, accessToken);
+    if (this.capabilities.has('SASL-IR')) {
+      await this.command('AUTHENTICATE', `XOAUTH2 ${response}`, {
+        continued: () => this.socket.write('\r\n'),
+      });
+    } else {
+      let sent = false;
+      await this.command('AUTHENTICATE', 'XOAUTH2', {
+        continued: () => {
+          this.socket.write(sent ? '\r\n' : `${response}\r\n`);
+          sent = true;
+        },
+      });
+    }
+    await this.command('CAPABILITY');
     if (this.capabilities.has('ID')) await this.command('ID', '("name" "vika")').catch(() => {});
   }
 

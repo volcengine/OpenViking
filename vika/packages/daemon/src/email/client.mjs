@@ -8,6 +8,7 @@ import { safeError } from '../logger.mjs';
 import { MailArchive, parsesAttachment } from './archive.mjs';
 import { ImapConnection } from './imap.mjs';
 import { buildReply, decodeCharset, isOwnMessageId, parseMail, replyMessageId } from './mime.mjs';
+import { refreshAccessToken, saveRefreshToken, tokenFresh } from './oauth2.mjs';
 import { sendMail, verifySmtp } from './smtp.mjs';
 import { EmailState } from './state.mjs';
 
@@ -34,9 +35,11 @@ const ATTACHMENT_WAIT_MS = 60_000;
 // to more addresses than fit there in full cannot be answered at all.
 const MAX_REPLY_RECIPIENTS = 20;
 
-// The account file: { address, password, imap: { host, port }, smtp: { host,
-// port, secure? }, username?, name? }. The password is a client (app) password.
-// SMTP uses implicit TLS on port 465 unless `secure` says otherwise, else STARTTLS.
+// The account file: { address, imap: { host, port }, smtp: { host, port,
+// secure? }, username?, name? } plus either `password`, a client (app)
+// password, or `oauth2: { tenant, clientId, refreshToken }` for a mailbox whose
+// provider turned password sign-in off (Microsoft 365, Outlook.com). SMTP uses
+// implicit TLS on port 465 unless `secure` says otherwise, else STARTTLS.
 export function loadAccount(file) {
   let value;
   try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {
@@ -44,7 +47,10 @@ export function loadAccount(file) {
   }
   const address = String(value?.address ?? '').trim().toLowerCase();
   if (!/^[^\s@<>]+@[^\s@<>]+$/.test(address)) throw new Error('email config needs an address');
-  if (typeof value.password !== 'string' || !value.password) throw new Error('email config needs a password');
+  const oauth2 = value?.oauth2 && typeof value.oauth2 === 'object' ? accountOAuth2(value.oauth2) : null;
+  if (!oauth2 && (typeof value.password !== 'string' || !value.password)) {
+    throw new Error('email config needs a password or oauth2');
+  }
   const server = (key) => {
     const host = String(value[key]?.host ?? '').trim();
     const port = Number(value[key]?.port);
@@ -55,10 +61,45 @@ export function loadAccount(file) {
     address,
     name: typeof value.name === 'string' ? value.name.trim() : '',
     user: typeof value.username === 'string' && value.username.trim() ? value.username.trim() : address,
-    password: value.password,
+    ...(oauth2 ? { oauth2 } : { password: value.password }),
     imap: server('imap'),
     smtp: server('smtp'),
+    // The refresh token rotates; `oauth2` stays mutable so the new one can be
+    // written back without reloading the file.
+    file,
   });
+}
+
+// The two identifiers are the owner's own Entra application; the refresh token
+// is the credential the sign-in left behind.
+function accountOAuth2(value) {
+  const tenant = String(value.tenant || 'common').trim();
+  const clientId = String(value.clientId ?? '').trim();
+  const refreshToken = String(value.refreshToken ?? '').trim();
+  if (!/^[A-Za-z0-9.-]+$/.test(tenant)) throw new Error('email config oauth2.tenant must be a tenant id or domain');
+  if (!clientId) throw new Error('email config needs oauth2.clientId');
+  if (!refreshToken) throw new Error('email config needs oauth2.refreshToken');
+  return { tenant, clientId, refreshToken };
+}
+
+// What a connection signs in with: the saved password, or an access token
+// refreshed from the saved refresh token and reused until it is about to
+// expire. A rotated refresh token is written back to the account file; failing
+// to write it is not fatal, the token in memory still works.
+function credentialSource(account, { fetch: fetchImpl = globalThis.fetch, now = Date.now, logger } = {}) {
+  let tokens = null;
+  return async () => {
+    if (!account.oauth2) return { password: account.password };
+    if (tokenFresh(tokens, now())) return { accessToken: tokens.accessToken };
+    tokens = await refreshAccessToken(account.oauth2, { fetch: fetchImpl, now });
+    if (tokens.refreshToken !== account.oauth2.refreshToken) {
+      account.oauth2.refreshToken = tokens.refreshToken;
+      try { saveRefreshToken(account.file, account.oauth2); } catch (error) {
+        logger?.warn('email_token_not_saved', { error: safeError(error) });
+      }
+    }
+    return { accessToken: tokens.accessToken };
+  };
 }
 
 // Ids carry which account a mail came from: UIDs and UIDVALIDITY are only
@@ -67,21 +108,26 @@ export function accountTag(address) {
   return createHash('sha256').update(address).digest('hex').slice(0, 8);
 }
 
-// Both credentials: an IMAP login with a read-only look at the inbox, then
+// Both credentials: an IMAP sign-in with a read-only look at the inbox, then
 // SMTP AUTH. Sends nothing. Resolves with whether new mail is pushed (IDLE).
-export async function verifyAccount(account, { connectTls } = {}) {
+// An OAuth2 mailbox needs the caller's `credential` — the one just obtained, or
+// the Connector's own.
+export async function verifyAccount(account, { connectTls, credential } = {}) {
+  const auth = credential ?? (account.oauth2 ? null : { password: account.password });
+  if (!auth) throw new Error('OAuth2 mailbox needs an access token to check');
   const imap = new ImapConnection({ ...account.imap, ...(connectTls ? { connect: connectTls } : {}) });
   let idle;
   try {
     await imap.connect();
-    await imap.login(account.user, account.password);
+    if (auth.accessToken) await imap.authenticate(account.user, auth.accessToken);
+    else await imap.login(account.user, auth.password);
     await imap.examine(MAILBOX);
     idle = imap.capabilities.has('IDLE');
     await imap.logout();
   } finally {
     imap.close();
   }
-  await verifySmtp({ ...account.smtp, user: account.user, password: account.password, ...(connectTls ? { connectTls } : {}) });
+  await verifySmtp({ ...account.smtp, user: account.user, ...auth, ...(connectTls ? { connectTls } : {}) });
   return { idle };
 }
 
@@ -217,14 +263,18 @@ function sleep(ms, stopped) {
 // an event; replies to a reported mail over SMTP. Never marks, moves or
 // deletes mail.
 export class EmailClient {
-  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS } = {}) {
+  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS,
+    fetch: fetchImpl = globalThis.fetch, now = Date.now } = {}) {
     this.config = config;
     this.logger = logger;
     this.connectTls = connectTls;
+    this.fetch = fetchImpl;
+    this.now = now;
     this.state = new EmailState(config.dataDir, config.instance ?? 'email');
     this.archive = archive;
     this.attachmentWaitMs = attachmentWaitMs;
     this.account = null;
+    this.credential = null;
     this.tag = null;
     this.imap = null;
     this.loop = null;
@@ -235,16 +285,18 @@ export class EmailClient {
     return new ImapConnection({ ...this.account.imap, ...(this.connectTls ? { connect: this.connectTls } : {}) });
   }
 
-  smtpAccount() {
-    return { ...this.account.smtp, user: this.account.user, password: this.account.password,
+  async smtpAccount() {
+    return { ...this.account.smtp, user: this.account.user, ...await this.credential(),
       ...(this.connectTls ? { connectTls: this.connectTls } : {}) };
   }
 
   async open() {
     const imap = this.imapConnection();
+    const auth = await this.credential();
     try {
       await imap.connect();
-      await imap.login(this.account.user, this.account.password);
+      if (auth.accessToken) await imap.authenticate(this.account.user, auth.accessToken);
+      else await imap.login(this.account.user, auth.password);
       return imap;
     } catch (error) {
       imap.close();
@@ -256,14 +308,15 @@ export class EmailClient {
   async preflight() {
     this.account = loadAccount(this.config.emailConfigFile);
     this.tag = accountTag(this.account.address);
-    await verifyAccount(this.account, { connectTls: this.connectTls });
+    this.credential = credentialSource(this.account, { fetch: this.fetch, now: this.now, logger: this.logger });
+    await verifyAccount(this.account, { connectTls: this.connectTls, credential: await this.credential() });
     // Where reported mail is kept. The daemon checked OV before starting us.
     if (!this.archive && this.config.openVikingConfigPath) {
       this.archive = MailArchive.fromConfigFile(this.config.openVikingConfigPath, { logger: this.logger });
     }
     this.state.prune(Date.now() - this.config.retentionMs);
     // A mailbox is not an IM: notices to the owner never go here.
-    return { version: 'imap-smtp-v1', owner: null };
+    return { version: 'imap-smtp-v2', owner: null };
   }
 
   startSubscription(onLine, onUnexpectedExit) {
@@ -419,7 +472,7 @@ export class EmailClient {
       from: { name: this.account.name, address: own }, to, original, text: content.text,
       messageId: replyMessageId(idempotencyKey, own),
     });
-    await sendMail(this.smtpAccount(), { from: own, recipients: to.map((recipient) => recipient.address), raw });
+    await sendMail(await this.smtpAccount(), { from: own, recipients: to.map((recipient) => recipient.address), raw });
     this.logger.info('email_replied', { recipients: to.length });
     return { sent: true };
   }

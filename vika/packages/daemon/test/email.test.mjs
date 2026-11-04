@@ -11,7 +11,7 @@ import { ActionService } from '../src/actions/service.mjs';
 import { MailArchive, chunkOffset, needsChunks, readTarget } from '../src/email/archive.mjs';
 import { EmailClient, accountTag } from '../src/email/client.mjs';
 import { EmailState } from '../src/email/state.mjs';
-import { fetchAttributes, parseResponse } from '../src/email/imap.mjs';
+import { ImapConnection, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
 import { buildReply, htmlToText, isOwnMessageId, parseAddresses, parseMail, replyMessageId } from '../src/email/mime.mjs';
 import { normalizeEvent } from '../src/event.mjs';
 import { OVConnection } from '../src/ov-connection.mjs';
@@ -33,16 +33,39 @@ function mail({ from = 'Alice <alice@example.com>', to = ME, subject = 'Thursday
 }
 
 // A scripted IMAP server: the commands it was sent, the mailbox, and IDLE
-// sessions to wake with `deliver(raw)`.
-async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
-  const state = { mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [], idlers: new Set(), sockets: new Set() };
+// sessions to wake with `deliver(raw)`. `oauth` holds the access tokens it
+// accepts: it then refuses LOGIN and offers only XOAUTH2, like a mailbox whose
+// provider turned passwords off. `saslIr` off makes it ask for the SASL
+// response with a continuation instead of taking it on the command line.
+async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = null, saslIr = true } = {}) {
+  const accepted = new Set([].concat(oauth ?? []).filter(Boolean));
+  const state = { mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [],
+    idlers: new Set(), sockets: new Set(), auths: [], authCancelled: 0 };
   const server = net.createServer((socket) => {
     state.sockets.add(socket);
     socket.on('close', () => { state.sockets.delete(socket); state.idlers.delete(socket); });
     socket.on('error', () => {});
     let buffer = '';
     let idleTag = null;
-    socket.write('* OK [CAPABILITY IMAP4rev1 IDLE] ready\r\n');
+    // A SASL response is expected (`cancel` false) or the empty line that ends
+    // a rejected one (`cancel` true).
+    let pendingAuth = null;
+    const sasl = (token) => Buffer.from(`user=${ME}\u0001auth=Bearer ${token}\u0001\u0001`, 'utf8').toString('base64');
+    const capability = () => `IMAP4rev1 IDLE${gmail ? ' X-GM-EXT-1' : ''}`
+      + (accepted.size ? ` AUTH=XOAUTH2 LOGINDISABLED${saslIr ? ' SASL-IR' : ''}` : '');
+    const answer = (tag, response) => {
+      const token = [...accepted].find((each) => sasl(each) === response);
+      if (token) {
+        state.auths.push(token);
+        socket.write(`${tag} OK AUTHENTICATE completed.\r\n`);
+        return;
+      }
+      // A rejected token is reported as one more continuation the client ends
+      // with an empty line; the tagged NO only follows that.
+      socket.write(`+ ${Buffer.from('{"status":"401"}').toString('base64')}\r\n`);
+      pendingAuth = { tag, cancel: true };
+    };
+    socket.write(`* OK [CAPABILITY ${capability()}] ready\r\n`);
     socket.on('data', (chunk) => {
       buffer += chunk.toString('latin1');
       let end;
@@ -57,18 +80,39 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
           }
           continue;
         }
+        if (pendingAuth) {
+          if (pendingAuth.cancel) {
+            if (line === '') {
+              socket.write(`${pendingAuth.tag} NO AUTHENTICATE failed.\r\n`);
+              state.authCancelled += 1;
+              pendingAuth = null;
+            }
+            continue;
+          }
+          answer(pendingAuth.tag, line);
+          pendingAuth = null;
+          continue;
+        }
         const space = line.indexOf(' ');
         const tag = line.slice(0, space);
         const command = line.slice(space + 1);
-        state.commands.push(command.startsWith('LOGIN ') ? 'LOGIN' : command);
+        state.commands.push(command.startsWith('LOGIN ') ? 'LOGIN' : command.startsWith('AUTHENTICATE') ? 'AUTHENTICATE' : command);
         const ok = (text = 'done') => socket.write(`${tag} OK ${text}\r\n`);
         const uidNext = (state.mails.at(-1)?.uid ?? 0) + 1;
         let match;
         if (command.startsWith('LOGIN ')) {
-          if (command.includes(`"${PASSWORD}"`)) ok();
+          if (accepted.size) socket.write(`${tag} NO [AUTHENTICATIONFAILED] Basic authentication is disabled.\r\n`);
+          else if (command.includes(`"${PASSWORD}"`)) ok();
           else socket.write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials\r\n`);
+        } else if (command.startsWith('AUTHENTICATE XOAUTH2')) {
+          const response = command.slice('AUTHENTICATE XOAUTH2'.length).trim();
+          if (response) answer(tag, response);
+          else {
+            pendingAuth = { tag, cancel: false };
+            socket.write('+ \r\n');
+          }
         } else if (command === 'CAPABILITY') {
-          socket.write(`* CAPABILITY IMAP4rev1 IDLE${gmail ? ' X-GM-EXT-1' : ''}\r\n`);
+          socket.write(`* CAPABILITY ${capability()}\r\n`);
           ok();
         } else if (command.startsWith('EXAMINE ')) {
           socket.write(`* ${state.mails.length} EXISTS\r\n* OK [UIDVALIDITY ${uidValidity}] ok\r\n* OK [UIDNEXT ${uidNext}] ok\r\n`);
@@ -138,15 +182,19 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
   };
 }
 
-// A scripted SMTP submission server; `messages` are what it accepted.
-async function fakeSmtp(t) {
+// A scripted SMTP submission server; `messages` are what it accepted. `oauth`
+// makes it advertise and accept only XOAUTH2, like Exchange Online.
+async function fakeSmtp(t, { oauth = null } = {}) {
   const messages = [];
+  const accepted = new Set([].concat(oauth ?? []).filter(Boolean));
+  const auths = [];
   const server = net.createServer((socket) => {
     socket.on('error', () => {});
     socket.write('220 fake ESMTP\r\n');
     let buffer = '';
     let data = null;
     let current = { to: [] };
+    let challenge = null;
     socket.on('data', (chunk) => {
       buffer += chunk.toString('utf8');
       let end;
@@ -164,8 +212,28 @@ async function fakeSmtp(t) {
           }
           continue;
         }
-        if (line.startsWith('EHLO')) socket.write('250-fake\r\n250 AUTH PLAIN LOGIN\r\n');
-        else if (line.startsWith('AUTH PLAIN ')) {
+        // A rejected XOAUTH2 token is reported as a challenge; the 535 that
+        // says so only follows the empty line that ends the exchange.
+        if (challenge) {
+          if (line === '') {
+            socket.write('535 5.7.3 Authentication unsuccessful\r\n');
+            challenge = null;
+          }
+          continue;
+        }
+        if (line.startsWith('EHLO')) {
+          socket.write(accepted.size ? '250-fake\r\n250 AUTH XOAUTH2\r\n' : '250-fake\r\n250 AUTH PLAIN LOGIN\r\n');
+        } else if (line.startsWith('AUTH XOAUTH2 ')) {
+          const response = line.slice('AUTH XOAUTH2 '.length).trim();
+          const token = [...accepted].find((each) => Buffer.from(`user=${ME}\u0001auth=Bearer ${each}\u0001\u0001`).toString('base64') === response);
+          if (token) {
+            auths.push(token);
+            socket.write('235 2.7.0 Authentication successful\r\n');
+          } else {
+            socket.write(`334 ${Buffer.from('{"status":"401"}').toString('base64')}\r\n`);
+            challenge = true;
+          }
+        } else if (line.startsWith('AUTH PLAIN ')) {
           const [, user, password] = Buffer.from(line.slice(11), 'base64').toString('utf8').split('\u0000');
           socket.write(user === ME && password === PASSWORD ? '235 ok\r\n' : '535 bad credentials\r\n');
         } else if (line.startsWith('MAIL FROM:')) { current.from = line.slice(10); socket.write('250 ok\r\n'); }
@@ -178,7 +246,7 @@ async function fakeSmtp(t) {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
-  return { messages, port: server.address().port };
+  return { messages, auths, port: server.address().port };
 }
 
 // TLS is the transport's business; the fakes speak the protocols in the clear.
@@ -188,18 +256,42 @@ function plainTls(options) {
   return socket;
 }
 
-async function setup(t, { mails = [], password = PASSWORD, gmail = true, instance = undefined, archive = null, attachmentWaitMs = undefined } = {}) {
-  const imap = await fakeImap(t, { mails, gmail });
-  const smtp = await fakeSmtp(t);
+// The Microsoft token endpoint, answering the refreshes the Connector makes.
+// `tokens` are handed out in order; the last one is reused after that.
+function fakeTokenEndpoint({ tokens, onRefresh } = {}) {
+  const calls = [];
+  let index = 0;
+  const fetch = async (url, init) => {
+    calls.push({ url, form: Object.fromEntries(new URLSearchParams(init.body)) });
+    const token = tokens[Math.min(index, tokens.length - 1)];
+    index += 1;
+    onRefresh?.(calls.length);
+    const body = token.error
+      ? { error: token.error, error_description: 'AADSTS70000: the grant is invalid' }
+      : { access_token: token.accessToken, refresh_token: token.refreshToken, expires_in: 3_600 };
+    return { ok: !token.error, status: token.error ? 400 : 200, text: async () => JSON.stringify(body) };
+  };
+  return { fetch, calls };
+}
+
+async function setup(t, { mails = [], password = PASSWORD, gmail = true, instance = undefined, archive = null, attachmentWaitMs = undefined,
+  oauth = null, tokens = null } = {}) {
+  const imap = await fakeImap(t, { mails, gmail, ...(oauth ? { oauth: oauth.imap } : {}) });
+  const smtp = await fakeSmtp(t, oauth ? { oauth: oauth.smtp } : {});
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const configFile = path.join(directory, 'account.json');
-  fs.writeFileSync(configFile, JSON.stringify({ address: ME, password,
-    imap: { host: '127.0.0.1', port: imap.port }, smtp: { host: '127.0.0.1', port: smtp.port, secure: true } }), { mode: 0o600 });
+  const servers = { imap: { host: '127.0.0.1', port: imap.port }, smtp: { host: '127.0.0.1', port: smtp.port, secure: true } };
+  const account = oauth
+    ? { address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' }, ...servers }
+    : { address: ME, password, ...servers };
+  fs.writeFileSync(configFile, JSON.stringify(account), { mode: 0o600 });
   const config = { emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000, ...(instance ? { instance } : {}) };
+  const endpoint = tokens ? fakeTokenEndpoint({ tokens }) : null;
   const clients = [];
   const start = async () => {
-    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, archive, attachmentWaitMs });
+    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, archive, attachmentWaitMs,
+      ...(endpoint ? { fetch: endpoint.fetch } : {}) });
     clients.push(client);
     await client.preflight();
     const events = [];
@@ -209,7 +301,7 @@ async function setup(t, { mails = [], password = PASSWORD, gmail = true, instanc
     return { client, events, exits };
   };
   t.after(async () => { for (const client of clients) await client.stop().catch(() => {}); });
-  return { imap, smtp, start, config };
+  return { imap, smtp, start, config, endpoint };
 }
 
 async function until(check, timeoutMs = 3_000) {
@@ -405,6 +497,94 @@ describe('email connector', () => {
     const error = await client.preflight().catch((caught) => caught);
     assert.match(error.message, /IMAP LOGIN failed: NO \[AUTHENTICATIONFAILED\]/);
     assert.doesNotMatch(error.message, /wrong-password/);
+    client.state.close();
+  });
+});
+
+// A mailbox whose provider turned password sign-in off: the account carries a
+// refresh token instead, and both protocols take a SASL XOAUTH2 access token.
+describe('email connector with OAuth2', () => {
+  const TOKEN = 'access-token-1';
+  const oauth = { imap: [TOKEN], smtp: [TOKEN] };
+
+  it('signs in to both protocols with an access token, and never sends the password', async (t) => {
+    const { imap, smtp, start, endpoint } = await setup(t, { oauth, tokens: [{ accessToken: TOKEN, refreshToken: 'refresh-2' }] });
+    const { events, exits } = await start();
+    imap.deliver(mail({ id: 'one@example.com' }));
+    await until(() => events.length === 1);
+
+    assert.equal(events[0].eventId, `imap:${TAG}:1:1`);
+    assert.deepEqual(exits, []);
+    // One refresh for the whole start-up: the token is reused by the check,
+    // both protocols, and the watching connection.
+    assert.equal(endpoint.calls.length, 1);
+    assert.equal(endpoint.calls[0].form.grant_type, 'refresh_token');
+    assert.equal(endpoint.calls[0].form.refresh_token, 'refresh-1');
+    assert.ok(imap.state.auths.length >= 2, 'the check and the watcher both signed in');
+    assert.ok(imap.state.auths.every((token) => token === TOKEN));
+    assert.deepEqual(smtp.auths, [TOKEN]);
+    assert.ok(!imap.state.commands.includes('LOGIN'), 'no password sign-in is attempted');
+  });
+
+  it('writes a rotated refresh token back, and keeps the account file private', async (t) => {
+    const { start, config } = await setup(t, { oauth, tokens: [{ accessToken: TOKEN, refreshToken: 'refresh-2' }] });
+    await start();
+    const saved = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    assert.equal(saved.oauth2.refreshToken, 'refresh-2');
+    assert.equal(saved.address, ME, 'everything else is kept as written');
+    assert.equal(fs.statSync(config.emailConfigFile).mode & 0o777, 0o600);
+  });
+
+  it('refreshes once per start, not per connection, and starts from the rotated token next time', async (t) => {
+    const { imap, start, config, endpoint } = await setup(t, { oauth: { imap: [TOKEN, 'access-token-2'], smtp: [TOKEN, 'access-token-2'] },
+      tokens: [{ accessToken: TOKEN, refreshToken: 'refresh-2' }, { accessToken: 'access-token-2', refreshToken: 'refresh-3' }] });
+    const first = await start();
+    imap.deliver(mail({ id: 'one@example.com' }));
+    await until(() => first.events.length === 1);
+    await first.client.stop();
+    // One refresh served the check, both protocols and the watching connection.
+    assert.equal(endpoint.calls.length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8')).oauth2.refreshToken, 'refresh-2');
+
+    const second = await start();
+    imap.deliver(mail({ id: 'two@example.com' }));
+    await until(() => second.events.length === 1);
+    // The restart starts from the token written back, not the one on disk before.
+    assert.equal(endpoint.calls.length, 2);
+    assert.equal(endpoint.calls[1].form.refresh_token, 'refresh-2');
+    assert.equal(JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8')).oauth2.refreshToken, 'refresh-3');
+  });
+
+  it('authenticates without SASL-IR, when the server asks for the response', async (t) => {
+    const imap = await fakeImap(t, { oauth: [TOKEN], saslIr: false });
+    const account = { address: ME, user: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'r' },
+      imap: { host: '127.0.0.1', port: imap.port } };
+    const connection = new ImapConnection({ ...account.imap, connect: plainTls });
+    t.after(() => connection.close());
+    await connection.connect();
+    await connection.authenticate(ME, TOKEN);
+    assert.equal(imap.state.auths[0], TOKEN);
+    assert.ok(imap.state.commands.includes('AUTHENTICATE'));
+  });
+
+  it('says the sign-in expired rather than calling it a wrong password', async (t) => {
+    const { config } = await setup(t, { oauth, tokens: [{ error: 'invalid_grant' }] });
+    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, fetch: fakeTokenEndpoint({ tokens: [{ error: 'invalid_grant' }] }).fetch });
+    const error = await client.preflight().catch((caught) => caught);
+    assert.match(error.message, /expired; authorize the mailbox again with `vika login email`/);
+    assert.doesNotMatch(error.message, /password/i);
+    client.state.close();
+  });
+
+  it('reports a rejected access token without echoing it, and without spending the refresh token twice', async (t) => {
+    // The server refuses the token the endpoint hands out.
+    const { config, endpoint } = await setup(t, { oauth: { imap: ['other-token'], smtp: [TOKEN] },
+      tokens: [{ accessToken: TOKEN, refreshToken: 'refresh-2' }] });
+    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    const error = await client.preflight().catch((caught) => caught);
+    assert.match(error.message, /AUTHENTICATE failed/);
+    assert.doesNotMatch(error.message, new RegExp(TOKEN));
+    assert.equal(endpoint.calls.length, 1);
     client.state.close();
   });
 });

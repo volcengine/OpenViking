@@ -3,10 +3,11 @@
 
 import net from 'node:net';
 import tls from 'node:tls';
+import { xoauth2 } from './oauth2.mjs';
 
 // The SMTP subset that submits one message: implicit TLS (`secure`, by default
-// on port 465) or STARTTLS, AUTH PLAIN or LOGIN, MAIL/RCPT/DATA. A plaintext
-// session is never authenticated.
+// on port 465) or STARTTLS, AUTH XOAUTH2, PLAIN or LOGIN, MAIL/RCPT/DATA. A
+// plaintext session is never authenticated.
 
 const STEP_TIMEOUT_MS = 60_000;
 
@@ -93,8 +94,25 @@ async function hello(session) {
   return reply.lines.map((line) => line.slice(4).toUpperCase());
 }
 
+// SASL XOAUTH2. A rejected token comes back as the error challenge first, and
+// the 535 that says so only arrives once the exchange is ended with an empty
+// line; the server's final text is the only useful one to report.
+async function authenticateXoauth2(session, user, accessToken) {
+  const answer = session.reply();
+  session.socket.write(`AUTH XOAUTH2 ${xoauth2(user, accessToken)}\r\n`);
+  const first = await answer;
+  if (first.code === 235) return;
+  if (first.code === 334) {
+    const final = session.reply();
+    session.socket.write('\r\n');
+    const reply = await final;
+    throw new Error(`SMTP AUTH XOAUTH2 failed: ${reply.lines.at(-1).slice(0, 200)}`);
+  }
+  throw new Error(`SMTP AUTH XOAUTH2 failed: ${first.lines.at(-1).slice(0, 200)}`);
+}
+
 // Opens an authenticated session; `run(session)` does the work, then QUIT.
-export async function withSmtp({ host, port, secure = Number(port) === 465, user, password,
+export async function withSmtp({ host, port, secure = Number(port) === 465, user, password, accessToken,
   connectTls = tls.connect, connectPlain = net.connect }, run) {
   const implicit = secure;
   const socket = await connect(implicit
@@ -115,7 +133,10 @@ export async function withSmtp({ host, port, secure = Number(port) === 465, user
       features = await hello(session);
     }
     const auth = features.find((feature) => feature.startsWith('AUTH')) ?? '';
-    if (/\bPLAIN\b/.test(auth)) {
+    if (accessToken) {
+      if (!/\bXOAUTH2\b/.test(auth)) throw new Error('SMTP server offers no AUTH XOAUTH2');
+      await authenticateXoauth2(session, user, accessToken);
+    } else if (/\bPLAIN\b/.test(auth)) {
       const token = Buffer.from(`\u0000${user}\u0000${password}`, 'utf8').toString('base64');
       await session.send(`AUTH PLAIN ${token}`, [235], 'AUTH PLAIN');
     } else if (/\bLOGIN\b/.test(auth)) {
