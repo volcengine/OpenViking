@@ -10,6 +10,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_graph import (
+    ArtifactGraphError,
     ArtifactGraphTooLargeError,
     ArtifactRelationGraph,
 )
@@ -92,14 +93,17 @@ class _GraphStore:
         self.record = record
         self.cache = cache
         self.sources = sources
+        self.state = None
         self.published = None
         self.published_sources = None
         self.write_order: list[str] = []
+        self.cache_reads = 0
 
     async def get(self, _account_id: str, _target_id: str):
         return self.record
 
     async def read_artifact_relations(self, _account_id: str, _target_id: str):
+        self.cache_reads += 1
         return self.cache
 
     async def write_artifact_relations(
@@ -108,6 +112,15 @@ class _GraphStore:
         self.published = value
         self.cache = value
         self.write_order.append("graph")
+
+    async def read_artifact_relations_state(self, _account_id: str, _target_id: str):
+        return self.state
+
+    async def write_artifact_relations_state(
+        self, _account_id: str, _target_id: str, value, _lease=None
+    ):
+        self.state = value
+        self.write_order.append(f"state:{value['status']}")
 
     async def read_relation_sources(self, _account_id: str, _target_id: str):
         return self.sources
@@ -195,6 +208,28 @@ async def test_cache_publish_uses_one_supported_write() -> None:
         "account_id": "default",
         "disable_auto_pathlock": "true",
     }
+
+
+@pytest.mark.asyncio
+async def test_graph_state_publish_uses_lightweight_sibling_file() -> None:
+    agfs = _CacheAgfs()
+    store = CompileStateStore(agfs)
+    state = {
+        "schema_version": 1,
+        "target_snapshot_id": "head",
+        "status": "building",
+    }
+
+    await store.write_artifact_relations_state(
+        "default",
+        "viking://resources/wiki",
+        state,
+    )
+
+    path, data, ctx = agfs.writes[0]
+    assert path.endswith("/artifact_relations_state.json")
+    assert json.loads(data) == state
+    assert ctx["disable_auto_pathlock"] == "true"
 
 
 @pytest.mark.asyncio
@@ -390,6 +425,7 @@ async def test_compile_hint_parses_written_bytes_without_snapshot_read() -> None
         "snapshot_id": "snapshot",
         "size": len(content),
         "related_pages": [related],
+        "relations_overflow": False,
     }
 
 
@@ -445,7 +481,7 @@ async def test_reconcile_uses_compile_hint_then_updates_incrementally() -> None:
     )
 
     assert fs.reads == [b]
-    assert store.write_order == ["sources", "graph"]
+    assert store.write_order == ["state:building", "sources", "graph", "state:ready"]
     assert store.sources["pages"] == {
         a: {"blob_oid": "oid-a1", "related_pages": [b]},
         b: {"blob_oid": "oid-b1", "related_pages": []},
@@ -570,3 +606,146 @@ async def test_reconcile_enforces_markdown_byte_limit() -> None:
         "maximum": 5,
         "actual": 6,
     }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_enforces_relation_limit_without_publishing_partial_graph() -> None:
+    target = "viking://resources/wiki"
+    page = f"{target}/page.md"
+    related = f"{target}/related.md"
+    record = {"to": target, "initialized": True, "wiki_head": "head"}
+    store = _GraphStore(record)
+    fs = _SnapshotGraphFs(
+        {
+            (None, "head", (target,)): [
+                {"uri": page, "change_type": "added"},
+                {"uri": related, "change_type": "added"},
+            ],
+        },
+        {
+            ("head", page): {
+                "oid": "page",
+                "size": 21,
+                "bytes": b"[related](related.md)",
+            },
+            ("head", related): {"oid": "related", "size": 9, "bytes": b"# Related"},
+        },
+    )
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=10,
+        max_relations=2,
+        max_markdown_files=10,
+        max_markdown_bytes=1024,
+    )
+
+    with pytest.raises(ArtifactGraphTooLargeError) as exc_info:
+        await graph.reconcile_graph(record, _ctx(), wiki_head="head")
+
+    assert exc_info.value.details == {
+        "limit": "relations",
+        "maximum": 2,
+        "actual": 3,
+    }
+    assert store.published is None
+    assert store.published_sources is None
+    assert store.state["status"] == "failed"
+    assert store.state["error"]["code"] == "ARTIFACT_RELATIONS_TOO_LARGE"
+
+
+@pytest.mark.asyncio
+async def test_compile_hint_overflow_rereads_bounded_snapshot() -> None:
+    target = "viking://resources/wiki"
+    page = f"{target}/page.md"
+    related = f"{target}/related.md"
+    record = {"to": target, "initialized": True, "wiki_head": "head"}
+    store = _GraphStore(record)
+    fs = _SnapshotGraphFs(
+        {
+            (None, "head", (target,)): [
+                {"uri": page, "change_type": "added"},
+                {"uri": related, "change_type": "added"},
+            ],
+            ("hint", "head", (page,)): [],
+        },
+        {
+            ("head", page): {
+                "oid": "page",
+                "size": 21,
+                "bytes": b"[related](related.md)",
+            },
+            ("head", related): {"oid": "related", "size": 9, "bytes": b"# Related"},
+        },
+    )
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=10,
+        max_relations=3,
+        max_markdown_files=10,
+        max_markdown_bytes=1024,
+    )
+    hint = " ".join(f"[x{i}](missing-{i}.md)" for i in range(4)).encode()
+    await graph.capture_compile_page(
+        "default",
+        target,
+        "op",
+        "hint",
+        page,
+        _ctx(),
+        hint,
+    )
+    captured = graph._compile_pages[("default", target, "op")][page]
+    assert captured["relations_overflow"] is True
+    assert len(captured["related_pages"]) == 3
+
+    result = await graph.reconcile_graph(
+        record,
+        _ctx(),
+        wiki_head="head",
+        parsed_pages={page: captured},
+    )
+
+    assert page in fs.reads
+    assert ("references", page, related) in {
+        (edge["type"], edge["from"], edge["to"]) for edge in result["edges"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_query_surfaces_failed_state_without_rereading_graph() -> None:
+    target = "viking://resources/wiki"
+    record = {"to": target, "initialized": True, "wiki_head": "head"}
+    store = _GraphStore(record)
+    store.state = {
+        "schema_version": 1,
+        "target_snapshot_id": "head",
+        "status": "failed",
+        "attempts": 1,
+        "error": {
+            "code": "ARTIFACT_RELATIONS_TOO_LARGE",
+            "message": "too large",
+            "details": {"limit": "relations", "maximum": 2, "actual": 3},
+        },
+    }
+    graph = ArtifactRelationGraph(
+        store,
+        _GraphFs([], {}),
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=10,
+        query_wait_seconds=0.01,
+    )
+    graph.enqueue_wakeup = AsyncMock(return_value=True)
+
+    with pytest.raises(ArtifactGraphError) as exc_info:
+        await graph.get(
+            record,
+            _ctx(),
+            lock_output=AsyncMock(),
+            commit_snapshot=AsyncMock(),
+        )
+
+    assert exc_info.value.code == "ARTIFACT_RELATIONS_TOO_LARGE"
+    assert store.cache_reads == 1

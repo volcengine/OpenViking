@@ -260,6 +260,9 @@ class CompileStateStore:
     def _artifact_relations_path(self, account_id: str, to: str) -> str:
         return f"{self._target_dir(account_id, to)}/artifact_relations.json"
 
+    def _artifact_relations_state_path(self, account_id: str, to: str) -> str:
+        return f"{self._target_dir(account_id, to)}/artifact_relations_state.json"
+
     def _relation_sources_path(self, account_id: str, to: str) -> str:
         return f"{self._target_dir(account_id, to)}/relation_sources.json"
 
@@ -304,6 +307,22 @@ class CompileStateStore:
     ) -> None:
         """Publish the graph while the caller holds the target graph lock."""
         path = self._artifact_relations_path(account_id, to)
+        fs_ctx = fs_ctx_from_agfs_path(path)
+        await self._ensure_parent(path, fs_ctx)
+        data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        await self._agfs.write(path, data, fs_ctx=fs_ctx, auto_pathlock=False)
+
+    async def read_artifact_relations_state(
+        self, account_id: str, to: str
+    ) -> Optional[Dict[str, Any]]:
+        value = await self.read_json(self._artifact_relations_state_path(account_id, to))
+        return value if isinstance(value, dict) else None
+
+    async def write_artifact_relations_state(
+        self, account_id: str, to: str, value: Dict[str, Any]
+    ) -> None:
+        """Publish lightweight build state while holding the target graph lock."""
+        path = self._artifact_relations_state_path(account_id, to)
         fs_ctx = fs_ctx_from_agfs_path(path)
         await self._ensure_parent(path, fs_ctx)
         data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

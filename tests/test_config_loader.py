@@ -194,6 +194,9 @@ def test_parser_and_compile_api_validation():
     )
     assert config.base_url == "https://compile.example.com"
     assert config.gateway_token == ""
+    assert config.artifact_graph_max_relations == 100000
+    with pytest.raises(ValueError, match="artifact_graph_max_relations must be > 0"):
+        CompileApiConfig(artifact_graph_max_relations=0)
 
 
 def test_parser_api_upload_defaults():

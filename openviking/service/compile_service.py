@@ -339,6 +339,7 @@ class CompileService:
             lifecycle.store,
             lifecycle._fs,
             max_nodes=self._config.artifact_graph_max_nodes,
+            max_relations=self._config.artifact_graph_max_relations,
             max_markdown_files=self._config.artifact_graph_max_markdown_files,
             max_markdown_bytes=self._config.artifact_graph_max_markdown_bytes,
             compile_wait_seconds=self._config.artifact_graph_compile_wait_seconds,
