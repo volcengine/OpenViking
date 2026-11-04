@@ -119,7 +119,7 @@ pub struct CachedFileSystem {
     backend: Box<dyn FileSystem>,
     runtime: Arc<CacheRuntime>,
     service_name: String,
-    priority_ttl: Option<Duration>,
+    shared_redis_ttl: Option<Duration>,
     metrics: Arc<CacheMetrics>,
     inflight: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     index_gc_changes: Arc<AtomicU64>,
@@ -150,7 +150,7 @@ impl CachedFileSystem {
             backend,
             runtime,
             service_name,
-            priority_ttl: None,
+            shared_redis_ttl: None,
             metrics: Arc::new(CacheMetrics::default()),
             inflight: Mutex::new(HashMap::new()),
             index_gc_changes: Arc::new(AtomicU64::new(0)),
@@ -158,11 +158,12 @@ impl CachedFileSystem {
         }
     }
 
-    /// Apply a longer TTL to high-value query buckets.
+    /// Override the TTL for every query bucket when Redis is shared.
     ///
-    /// `None` keeps every query bucket on the provider default TTL.
-    pub fn with_priority_ttl(mut self, ttl: Option<Duration>) -> Self {
-        self.priority_ttl = ttl;
+    /// `None` keeps every query bucket on the provider default TTL. This is a
+    /// retention bound for shared deployments, not a per-query priority.
+    pub fn with_shared_redis_ttl(mut self, ttl: Option<Duration>) -> Self {
+        self.shared_redis_ttl = ttl;
         self
     }
 
@@ -293,14 +294,13 @@ impl CachedFileSystem {
             .unwrap_or(0)
     }
 
-    /// Return the TTL for one query bucket, preferring the configured priority TTL
-    /// for directory-derived queries and summary-file metadata.
-    fn query_ttl_ms(&self, op: &str, path: &str) -> u64 {
+    /// Return the TTL for query buckets in a shared Redis deployment.
+    ///
+    /// The override applies uniformly because query buckets have no stable
+    /// file-body priority in the query-driven cache model.
+    fn query_ttl_ms(&self) -> u64 {
         let default_ttl = self.default_ttl_ms();
-        if !priority_query(op, path) {
-            return default_ttl;
-        }
-        self.priority_ttl
+        self.shared_redis_ttl
             .map(|ttl| ttl.as_millis().min(u128::from(u64::MAX)) as u64)
             .unwrap_or(default_ttl)
     }
@@ -427,7 +427,7 @@ impl CachedFileSystem {
     {
         let normalized = normalize_path(path);
         let bucket_key = self.query_bucket_key(&normalized, op);
-        let ttl_ms = self.query_ttl_ms(op, &normalized);
+        let ttl_ms = self.query_ttl_ms();
         if let Some(payload) = self.probe_query(&bucket_key, &query_hash, &request).await {
             self.metrics.query_hit();
             return Ok(payload);
@@ -1009,18 +1009,6 @@ fn current_time_ms() -> u64 {
         .unwrap_or_default()
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
-}
-
-/// Return whether a query bucket should use the configured priority TTL.
-fn priority_query(op: &str, path: &str) -> bool {
-    match op {
-        "stat" => {
-            let name = normalize_path(path).rsplit('/').next().unwrap_or_default();
-            matches!(name, ".abstract.md" | ".overview.md")
-        }
-        "read_dir" | "tree_directory" | "glob_directory" | "grep" => true,
-        _ => false,
-    }
 }
 
 /// Build one query HASH bucket key from service, path, and operation.

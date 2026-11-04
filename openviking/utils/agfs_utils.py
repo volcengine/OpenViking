@@ -88,8 +88,8 @@ class RagfsBindingConfig:
                 uses_runtime,
                 self.service_name,
             )
-            priority_ttl = int(getattr(cachefs, "priority_ttl_seconds", 0))
-            cache_config["priority_ttl_seconds"] = priority_ttl if self.shared_redis_backend else 0
+            shared_redis_ttl = int(getattr(cachefs, "shared_redis_ttl_seconds", 0))
+            cache_config["shared_redis_ttl_seconds"] = shared_redis_ttl if self.shared_redis_backend else 0
         elif self.cache is not None:
             cache_config = _disabled_cache_config(self.service_name)
         else:

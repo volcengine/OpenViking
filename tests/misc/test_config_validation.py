@@ -348,7 +348,7 @@ def test_openviking_config_dump_uses_only_canonical_cache_schema():
     ).to_binding_dict()
 
     assert dumped["cache"] == {"provider": "redis", "params": {}}
-    assert dumped["storage"]["agfs"]["cachefs"] == {"backend": "cache", "priority_ttl_seconds": 0}
+    assert dumped["storage"]["agfs"]["cachefs"] == {"backend": "cache", "shared_redis_ttl_seconds": 0}
     assert "cache" not in dumped["storage"]["agfs"]
     assert "max_file_size_bytes" not in binding["cache"]
     assert "traversal_mode" not in binding["cache"]
@@ -1335,10 +1335,10 @@ def test_watch_leader_provider_config():
         OpenVikingConfig.from_dict({"watch_leader_provider": "redis"})
 
 
-def test_cache_priority_ttl_requires_shared_redis_backend(tmp_path):
+def test_shared_redis_ttl_requires_shared_redis_backend(tmp_path):
     agfs = AGFSConfig(
         path=str(tmp_path),
-        cachefs={"backend": "cache", "priority_ttl_seconds": 7200},
+        cachefs={"backend": "cache", "shared_redis_ttl_seconds": 7200},
     )
     cache = CacheConfig(provider="redis", params={})
 
@@ -1353,8 +1353,8 @@ def test_cache_priority_ttl_requires_shared_redis_backend(tmp_path):
         shared_redis_backend=False,
     ).to_binding_dict()
 
-    assert shared["cache"]["priority_ttl_seconds"] == 7200
-    assert isolated["cache"]["priority_ttl_seconds"] == 0
+    assert shared["cache"]["shared_redis_ttl_seconds"] == 7200
+    assert isolated["cache"]["shared_redis_ttl_seconds"] == 0
 
 
 def test_cache_shared_redis_backend_detection():

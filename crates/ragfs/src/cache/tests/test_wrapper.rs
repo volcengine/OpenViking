@@ -269,22 +269,23 @@ async fn query_index_gc_removes_expired_members_after_change_threshold() {
     );
 }
 
-/// Verifies priority TTLs cover directory-derived queries and summary metadata.
+/// Verifies the shared-Redis TTL uniformly overrides query bucket retention.
 #[test]
-fn priority_ttl_applies_to_high_value_query_buckets() {
-    let backend = MemFileSystem::new();
-    let runtime = CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new()));
-    let cached = CachedFileSystem::with_runtime(Box::new(backend), runtime, SERVICE_NAME)
-        .with_priority_ttl(Some(Duration::from_secs(7_200)));
+fn shared_redis_ttl_applies_to_all_query_buckets() {
+    let cached = CachedFileSystem::with_runtime(
+        Box::new(MemFileSystem::new()),
+        CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
+        SERVICE_NAME,
+    )
+    .with_shared_redis_ttl(Some(Duration::from_secs(60)));
 
-    assert_eq!(cached.query_ttl_ms("read_dir", "/docs"), 7_200_000);
-    assert_eq!(
-        cached.query_ttl_ms("stat", "/docs/note.abstract.md"),
-        7_200_000
+    assert_eq!(cached.query_ttl_ms(), 60_000);
+
+    let default = CachedFileSystem::with_runtime(
+        Box::new(MemFileSystem::new()),
+        CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
+        SERVICE_NAME,
     );
-    assert_eq!(
-        cached.query_ttl_ms("stat", "/docs/note.overview.md"),
-        7_200_000
-    );
-    assert_eq!(cached.query_ttl_ms("stat", "/docs/note.md"), 300_000);
+
+    assert_eq!(default.query_ttl_ms(), 300_000);
 }

@@ -96,7 +96,7 @@ pub struct MountableFS {
 struct MountCacheConfig {
     runtime: Arc<CacheRuntime>,
     service_name: String,
-    priority_ttl: Option<Duration>,
+    shared_redis_ttl: Option<Duration>,
 }
 
 impl MountableFS {
@@ -258,15 +258,15 @@ impl MountableFS {
     /// Create a MountableFS backed by the unified CacheRuntime.
     #[cfg(feature = "cache")]
     pub fn with_cache_runtime(runtime: Arc<CacheRuntime>, service_name: impl Into<String>) -> Self {
-        Self::with_cache_runtime_and_priority_ttl(runtime, service_name, None)
+        Self::with_cache_runtime_and_shared_redis_ttl(runtime, service_name, None)
     }
 
-    /// Create a MountableFS backed by the unified CacheRuntime and a priority TTL.
+    /// Create a MountableFS backed by the unified CacheRuntime and a shared-Redis TTL.
     #[cfg(feature = "cache")]
-    pub fn with_cache_runtime_and_priority_ttl(
+    pub fn with_cache_runtime_and_shared_redis_ttl(
         runtime: Arc<CacheRuntime>,
         service_name: impl Into<String>,
-        priority_ttl: Option<Duration>,
+        shared_redis_ttl: Option<Duration>,
     ) -> Self {
         Self {
             mounts: Arc::new(RwLock::new(Trie::new())),
@@ -277,7 +277,7 @@ impl MountableFS {
             cache: Some(MountCacheConfig {
                 runtime: runtime.clone(),
                 service_name: service_name.into(),
-                priority_ttl,
+                shared_redis_ttl,
             }),
             cache_runtime: Some(runtime),
         }
@@ -430,7 +430,7 @@ impl MountableFS {
                             cache.runtime.clone(),
                             &cache.service_name,
                         )
-                        .with_priority_ttl(cache.priority_ttl),
+                        .with_shared_redis_ttl(cache.shared_redis_ttl),
                     ),
                     None => arc,
                 };
@@ -502,7 +502,7 @@ impl MountableFS {
                     cache.runtime.clone(),
                     &cache.service_name,
                 )
-                .with_priority_ttl(cache.priority_ttl),
+                .with_shared_redis_ttl(cache.shared_redis_ttl),
             ),
             None => fs,
         }

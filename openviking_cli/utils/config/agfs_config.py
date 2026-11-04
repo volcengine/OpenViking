@@ -163,16 +163,16 @@ class AGFSCacheFSConfig(BaseModel):
         default="local",
         description="CacheFS backend: 'local' | 'cache'",
     )
-    priority_ttl_seconds: int = Field(
+    shared_redis_ttl_seconds: int = Field(
         default=0,
-        description="TTL for high-priority cache query buckets; 0 keeps the provider default",
+        description="TTL override for cache query buckets on a shared Redis service; 0 keeps the provider default",
     )
 
     @model_validator(mode="after")
     def validate_config(self):
         """Validate CacheFS query-cache settings."""
-        if self.priority_ttl_seconds < 0:
-            raise ValueError("cachefs priority_ttl_seconds must be >= 0")
+        if self.shared_redis_ttl_seconds < 0:
+            raise ValueError("cachefs shared_redis_ttl_seconds must be >= 0")
         return self
 
 

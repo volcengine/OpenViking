@@ -320,7 +320,7 @@ struct RagfsCacheConfig {
     runtime_enabled: bool,
     provider: CacheProviderKind,
     service_name: String,
-    priority_ttl_seconds: u64,
+    shared_redis_ttl_seconds: u64,
     redis: RedisCacheConfig,
     dynamic: DynamicCacheConfig,
 }
@@ -367,7 +367,7 @@ impl Default for RagfsCacheConfig {
             runtime_enabled: false,
             provider: CacheProviderKind::Redis,
             service_name: String::new(),
-            priority_ttl_seconds: 0,
+            shared_redis_ttl_seconds: 0,
             redis: RedisCacheConfig::default(),
             dynamic: DynamicCacheConfig::default(),
         }
@@ -441,8 +441,8 @@ impl RagfsCacheConfig {
             cachefs: CacheFsConfig {
                 enabled: self.enabled,
                 service_name: self.service_name.clone(),
-                priority_ttl: (self.priority_ttl_seconds > 0)
-                    .then(|| Duration::from_secs(self.priority_ttl_seconds)),
+                shared_redis_ttl: (self.shared_redis_ttl_seconds > 0)
+                    .then(|| Duration::from_secs(self.shared_redis_ttl_seconds)),
             },
         })
     }
@@ -646,8 +646,11 @@ fn cache_config_from_canonical_ov_conf_with_runtime(
         let cachefs = cachefs
             .as_object()
             .ok_or_else(|| "storage.agfs.cachefs must be an object".to_string())?;
-        config.priority_ttl_seconds =
-            u64_field_allow_zero(cachefs, "priority_ttl_seconds", config.priority_ttl_seconds)?;
+        config.shared_redis_ttl_seconds = u64_field_allow_zero(
+            cachefs,
+            "shared_redis_ttl_seconds",
+            config.shared_redis_ttl_seconds,
+        )?;
     }
 
     if !config.runtime_enabled {
@@ -722,8 +725,11 @@ fn cache_config_from_value(
     config.service_name = service_name.to_string();
     config.enabled = bool_field(cache, "enabled", config.enabled)?;
     config.runtime_enabled = bool_field(cache, "runtime_enabled", config.enabled)?;
-    config.priority_ttl_seconds =
-        u64_field_allow_zero(cache, "priority_ttl_seconds", config.priority_ttl_seconds)?;
+    config.shared_redis_ttl_seconds = u64_field_allow_zero(
+        cache,
+        "shared_redis_ttl_seconds",
+        config.shared_redis_ttl_seconds,
+    )?;
     let provider = string_field(cache, "provider", "redis")?;
     config.provider = provider_kind(provider)?;
 
