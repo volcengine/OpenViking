@@ -144,7 +144,7 @@ class ExtractLoop:
             vlm: VLM instance (from openviking.models.vlm.base)
             viking_fs: VikingFS instance for storage operations
             model: Model name to use
-            max_iterations: Maximum number of ReAct iterations (default: 5)
+            max_iterations: Maximum number of ReAct iterations (default: 3)
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Per-call thinking override for this extraction loop. True/False
@@ -1153,9 +1153,18 @@ class ExtractLoop:
             the model should not receive tools in the next iteration.
         """
 
+        allowed_tools = set(self.context_provider.get_tools() or [])
+
         # Execute all tool calls in parallel
         async def execute_single_tool_call(idx: int, tool_call):
             """Execute a single tool call."""
+            if tool_call.name not in allowed_tools:
+                available = ", ".join(sorted(allowed_tools)) if allowed_tools else "none"
+                return (
+                    idx,
+                    tool_call,
+                    {"error": f"Unknown tool: {tool_call.name} (available tools: {available})"},
+                )
             result = await self.context_provider.execute_tool(tool_call)
             return idx, tool_call, result
 
