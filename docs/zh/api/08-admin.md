@@ -958,9 +958,15 @@ Content-Type: application/json
 
 `add_targets` 支持逐字段更新：省略字段表示保留，字段设为 `null` 恢复该项默认值，
 整个 `add_targets` 设为 `null` 清除用户的添加位置设置。返回的默认值不会写回存储。
-新调用通过这个管理员接口维护添加位置。旧的
-`GET/PATCH/DELETE /api/v1/user-settings/add-locations` 本版本继续保留普通用户
-管理自身添加位置的能力，已标记 deprecated，计划下个版本移除。
+新调用通过这个管理员接口维护添加位置。以下旧接口本版本继续保留普通用户
+管理自身添加位置的能力，已标记 deprecated，计划下个版本移除：
+
+```http
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
 `ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
 ---

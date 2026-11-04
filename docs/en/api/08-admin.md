@@ -1109,10 +1109,17 @@ Content-Type: application/json
 `add_targets` supports sparse updates: omitted fields remain unchanged, a null
 field restores its default, and `add_targets: null` removes all User add-target
 overrides. Resolved defaults are never persisted. New callers use this
-administrator endpoint. The old `GET/PATCH/DELETE /api/v1/user-settings/add-locations`
-continues to let ordinary users manage their own targets in this release. It is
-deprecated and scheduled for removal in the next release. `ttl` still returns
-explicit User values without filling defaults from other layers.
+administrator endpoint. The following legacy endpoints continue to let ordinary
+users manage their own targets in this release. They are deprecated and scheduled
+for removal in the next release:
+
+```http
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`ttl` still returns explicit User values without filling defaults from other layers.
 
 ---
 
