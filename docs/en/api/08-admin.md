@@ -72,7 +72,7 @@ The server adds memberships to `RequestContext.group_ids` for each request. Addi
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add members from a JSON body `{"user_ids": [...]}` (1–1000 existing users) atomically; users who are already members are skipped, and the result is `added=true` |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove members atomically using a JSON body `{"user_ids": [...]}` (1–1000 user IDs); `removed=true` if any membership was removed, otherwise `removed=false` |
 
 ```bash
 ov --sudo admin create-group acme engineering
@@ -81,6 +81,15 @@ ov acl grant viking://resources/project-a \
   --principal group:engineering --level read
 ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
+```
+
+To remove members over HTTP, include their user IDs in the request body:
+
+```bash
+curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineering/members \
+  -H "X-API-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids": ["alice", "bob"]}'
 ```
 
 To delete a group that still has members, call `DELETE /api/v1/admin/accounts/acme/groups/engineering`.

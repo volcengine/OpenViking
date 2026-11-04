@@ -25,6 +25,7 @@ from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
     ACL_GRANT_FIELDS,
     ACL_MODE_FIELD,
+    EMPTY_ACL_GRANT,
     AclAction,
     AclManager,
     AclUpdate,
@@ -385,6 +386,10 @@ class _SingleAccountBackend:
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
         result = {k: v for k, v in filtered.items() if v is not None}
+        # Raw writes (including transfer rollback) also encode explicit empty grants.
+        for grant_field in ACL_GRANT_FIELDS:
+            if result.get(grant_field) == []:
+                result[grant_field] = [EMPTY_ACL_GRANT]
         # Full-record writes must not carry legacy invalid tags through a merge.
         if "search_tags" in result:
             result["search_tags"] = normalize_search_tags(
