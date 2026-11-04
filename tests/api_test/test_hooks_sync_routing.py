@@ -5,15 +5,29 @@ result transformations reach tool.post_call. That only happens when the hook is
 routed through the sync path (is_sync=True); the async path discards returns.
 """
 
+import sys
+from pathlib import Path
 from typing import Any
 
-import vikingbot.agent.tools.registry as registry_module
-from vikingbot.agent.tools.base import Tool, ToolContext
-from vikingbot.agent.tools.registry import ToolRegistry
-from vikingbot.config.schema import SessionKey
-from vikingbot.hooks.base import Hook, HookContext
-from vikingbot.hooks.builtins.openviking_hooks import OpenVikingPostCallHook
-from vikingbot.hooks.manager import HookManager
+# This test lives at the root of ``tests/api_test`` because that is the directory
+# the api-test workflow collects (``cd tests/api_test && pytest .``); ``bot/tests``
+# is not reached by any workflow.  ``vikingbot`` lives under ``bot/`` and is not
+# installed by the repo-wide test environment, so make it importable explicitly.
+# At this depth ``parents[2]`` is still the repository root.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_REPO_ROOT, _REPO_ROOT / "bot"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+import vikingbot.agent.tools.registry as registry_module  # noqa: E402
+from vikingbot.agent.tools.base import Tool, ToolContext  # noqa: E402
+from vikingbot.agent.tools.registry import ToolRegistry  # noqa: E402
+from vikingbot.config.schema import SessionKey  # noqa: E402
+from vikingbot.hooks.base import Hook, HookContext  # noqa: E402
+from vikingbot.hooks.builtins.openviking_hooks import (  # noqa: E402
+    OpenVikingPostCallHook,
+)
+from vikingbot.hooks.manager import HookManager  # noqa: E402
 
 
 def test_openviking_post_call_hook_is_sync():
