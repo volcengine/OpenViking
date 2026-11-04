@@ -8,15 +8,16 @@ import {
 } from '#/shared/ui/sidebar'
 import { Link } from '@tanstack/react-router'
 import {
-  FileSearchIcon,
   BotIcon,
-  BracesIcon,
   FolderLockIcon,
   KeyRoundIcon,
-  LayoutDashboardIcon,
+  ChartPieIcon,
+  BoxIcon,
+  LightbulbIcon,
+  HexagonIcon,
+  CpuIcon,
   ListChecksIcon,
   ScrollTextIcon,
-  ServerCogIcon,
   WaypointsIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -46,32 +47,36 @@ export function StudioManagementNavigation({
               {
                 to: '/admin/dashboard',
                 title: 'adminNavigation.dashboard',
-                icon: LayoutDashboardIcon,
+                icon: ChartPieIcon,
               },
             ],
           },
           {
-            label: 'adminNavigation.members',
+            label: 'adminNavigation.spaces',
             items: [
+              ...(isRoot
+                ? ([
+                    {
+                      to: '/admin/spaces',
+                      title: 'adminNavigation.spaces',
+                      icon: BoxIcon,
+                    },
+                  ] as const)
+                : []),
               {
                 to: '/admin/users',
                 title: 'adminNavigation.users',
                 icon: KeyRoundIcon,
               },
-            ],
-          },
-          {
-            label: 'adminNavigation.spaceConfiguration',
-            items: [
+              {
+                to: '/admin/users/memory-templates',
+                title: 'adminNavigation.extraction',
+                icon: LightbulbIcon,
+              },
               {
                 to: '/admin/users/permissions',
                 title: 'adminNavigation.permissions',
                 icon: FolderLockIcon,
-              },
-              {
-                to: '/admin/users/memory-templates',
-                title: 'adminNavigation.extraction',
-                icon: FileSearchIcon,
               },
             ],
           },
@@ -89,6 +94,20 @@ export function StudioManagementNavigation({
               },
             ] as const)
           : []),
+        ...(showRootConfiguration && !gatewayOnly && !developmentMode
+          ? ([
+              {
+                to: '/admin/configuration',
+                title: 'adminNavigation.generalConfiguration',
+                icon: HexagonIcon,
+              },
+              {
+                to: '/admin/configuration/server',
+                title: 'adminNavigation.modelConfiguration',
+                icon: CpuIcon,
+              },
+            ] as const)
+          : []),
       ],
     },
     ...(!gatewayOnly && !developmentMode
@@ -96,6 +115,11 @@ export function StudioManagementNavigation({
           {
             label: 'adminNavigation.operations',
             items: [
+              {
+                to: '/admin/monitoring',
+                title: 'navigation.monitoring.title',
+                icon: ListChecksIcon,
+              },
               {
                 to: '/admin/tasks',
                 title: 'adminNavigation.tasks',
@@ -113,24 +137,6 @@ export function StudioManagementNavigation({
     {
       label: 'adminNavigation.root',
       items: [
-        ...(showRootConfiguration && !gatewayOnly && !developmentMode
-          ? ([
-              {
-                to: '/admin/configuration',
-                title: 'modes.configuration',
-                icon: BracesIcon,
-              },
-            ] as const)
-          : []),
-        ...(isRoot && !gatewayOnly && showRootConfiguration
-          ? ([
-              {
-                to: '/admin/configuration/server',
-                title: 'modes.serverConfiguration',
-                icon: ServerCogIcon,
-              },
-            ] as const)
-          : []),
         ...(showGateway && (showRootConfiguration || gatewayOnly)
           ? ([
               {
@@ -147,8 +153,8 @@ export function StudioManagementNavigation({
   return groups
     .filter(({ items }) => items.length > 0)
     .map(({ label, items }) => (
-      <SidebarGroup key={label} className="px-2.5 pb-1">
-        <SidebarGroupLabel className="h-7 px-2 text-xs font-normal text-muted-foreground">
+      <SidebarGroup key={label} className="px-3 pt-0 pb-4">
+        <SidebarGroupLabel className="h-[22px] px-2 text-[13px] font-normal text-muted-foreground">
           {t(label)}
         </SidebarGroupLabel>
         <SidebarGroupContent>
@@ -164,7 +170,7 @@ export function StudioManagementNavigation({
                     (to === '/admin/gateway' && current.startsWith(`${to}/`))
                   }
                   tooltip={t(title)}
-                  className="min-h-9 h-auto rounded-lg px-2.5 data-[active=true]:font-semibold [&>svg:first-child]:size-4! [&>svg:first-child]:rounded-none! [&>svg:first-child]:bg-transparent! [&>svg:first-child]:p-0! [&>svg:first-child]:shadow-none! [&>span:last-child]:whitespace-normal group-data-[collapsible=icon]:[&>span:last-child]:hidden"
+                  className="min-h-8 h-auto rounded-lg px-2.5 text-[13px] leading-[22px] data-[active=true]:font-semibold [&>svg:first-child]:size-4! [&>svg:first-child]:rounded-none! [&>svg:first-child]:bg-transparent! [&>svg:first-child]:p-0! [&>svg:first-child]:shadow-none! [&>span:last-child]:whitespace-normal group-data-[collapsible=icon]:[&>span:last-child]:hidden"
                 >
                   <Icon />
                   <span>{t(title)}</span>

@@ -1,4 +1,4 @@
-import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
+import styles from './management-page.module.css'
 import {
   getCapabilities,
   getConnections,
@@ -29,7 +29,6 @@ export function BotManagementPage() {
 
 function BotManagementWorkspace({ scope }: { scope: string }) {
   const { t } = useTranslation('vikingbot')
-  const { connection } = useAppConnection()
   const [tab, setTab] = useState<'channels' | 'conversations'>('channels')
   const [selected, setSelected] = useState<{ id: string; connection: string }>()
   const [search, setSearch] = useState('')
@@ -64,19 +63,15 @@ function BotManagementWorkspace({ scope }: { scope: string }) {
     )
   if (!capabilities.data.can_manage) return <p>{t('adminOnly')}</p>
   return (
-    <section className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-col items-start gap-4">
+    <section className={styles.page}>
+      <header className={styles.header}>
         <h1 className="flex items-center gap-2 text-xl font-semibold">
           {t('managementTitle')}
         </h1>
-        <div className="w-full">
-          <AdminSpaceBanner accountId={connection.accountId} />
-        </div>
-        <p className="text-sm text-muted-foreground">{t('managementHint')}</p>
         <div
           role="tablist"
           aria-label={t('managementTitle')}
-          className="flex w-full gap-5 border-b"
+          className={styles.tabs}
         >
           {MANAGEMENT_TABS.map((value) => (
             <button
@@ -84,7 +79,7 @@ function BotManagementWorkspace({ scope }: { scope: string }) {
               key={value}
               role="tab"
               aria-selected={tab === value}
-              className="-mb-px cursor-pointer border-b-2 border-transparent px-1 py-2 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring aria-selected:border-b-foreground aria-selected:font-semibold aria-selected:text-foreground"
+              className={styles.tab}
               onClick={() => setTab(value)}
             >
               {t(value)}
@@ -93,7 +88,7 @@ function BotManagementWorkspace({ scope }: { scope: string }) {
         </div>
       </header>
       {tab === 'channels' ? (
-        <div className="min-h-0 flex-1 pt-4">
+        <div className="min-h-0 flex-1">
           <Channels canManage scope={scope} />
         </div>
       ) : (

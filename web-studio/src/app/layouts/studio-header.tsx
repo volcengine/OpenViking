@@ -4,12 +4,14 @@ import { StudioScopeSwitcher } from '#/features/connection/components/studio-sco
 import { StudioSettingsMenu } from '#/features/connection/components/studio-settings-menu'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { hasStudioAccountScope } from '#/features/connection/lib/studio-mode'
+import onboardingBrand from '#/assets/onboarding/brand.svg'
 import brandLockupDark from '#/assets/brand-lockup-dark.svg'
 import brandLockupLight from '#/assets/brand-lockup-light.svg'
 import { OpenVikingMark } from '#/shared/components/openviking-mark'
 import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
 import { SidebarTrigger } from '#/shared/ui/sidebar'
 import { Link, useRouterState } from '@tanstack/react-router'
+import { CircleHelpIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export function StudioHeader({
@@ -54,10 +56,14 @@ export function StudioHeader({
         >
           <OpenVikingMark className="size-8 sm:size-9 lg:hidden" />
           <img
-            src={brandLockupLight}
+            src={managementMode ? onboardingBrand : brandLockupLight}
             alt=""
             aria-hidden="true"
-            className="hidden h-7 w-auto lg:block dark:lg:hidden"
+            className={
+              managementMode
+                ? 'hidden h-8 w-[142px] lg:block dark:lg:hidden'
+                : 'hidden h-7 w-auto lg:block dark:lg:hidden'
+            }
           />
           <img
             src={brandLockupDark}
@@ -66,16 +72,11 @@ export function StudioHeader({
             className="hidden h-7 w-auto dark:lg:block"
           />
         </Link>
-        {managementMode ? (
-          <span className="hidden shrink-0 rounded-md bg-foreground px-2 py-1 text-xs text-background lg:inline">
-            {t('modes.returnManagement')}
-          </span>
-        ) : null}
         <StudioScopeSwitcher
           key={`${identityScopeKey}:${managementMode}:${showAccountScope}`}
           settingsPath={settingsPath}
           managementMode={managementMode}
-          showAccountScope={showAccountScope}
+          showAccountScope={showAccountScope && !managementMode}
         />
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
@@ -84,13 +85,28 @@ export function StudioHeader({
             key={`${identityScopeKey}:${managementMode}`}
             managementMode={managementMode}
             canManage={canManage}
+            compact={managementMode}
           />
+        ) : null}
+        {managementMode ? (
+          <a
+            href="https://docs.openviking.ai/"
+            target="_blank"
+            rel="noreferrer"
+            aria-label={t('footer.docs')}
+            title={t('footer.docs')}
+            className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+          >
+            <CircleHelpIcon className="size-4" />
+          </a>
         ) : null}
         <StudioApiKeyMenu
           managementMode={managementMode}
           isGatewayHost={isGatewayHost}
         />
-        <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-border/70" />
+        {!managementMode ? (
+          <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-border/70" />
+        ) : null}
         <StudioSettingsMenu
           key={`${connection.baseUrl}:${connection.accountId}`}
           canManage={canManage && !isGatewayHost}

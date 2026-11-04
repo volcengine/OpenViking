@@ -155,7 +155,7 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
       data-workbench={filesystemMode}
       style={
         managementMode
-          ? ({ '--sidebar-width': '236px' } as React.CSSProperties)
+          ? ({ '--sidebar-width': '200px' } as React.CSSProperties)
           : undefined
       }
       open={
@@ -367,10 +367,16 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
         >
           <ScrollArea className="min-h-0 flex-1">
             <div
+              data-model-page={
+                pathname.replace(/\/$/, '') === '/admin/configuration/server'
+              }
+              data-members-page={pathname.replace(/\/$/, '') === '/admin/users'}
               className={
                 filesystemMode
                   ? 'flex w-full flex-col'
-                  : 'flex w-full flex-col gap-6 px-4 py-6 md:px-8 lg:px-12'
+                  : managementMode
+                    ? 'studio-management-content flex w-full min-w-0 flex-col gap-10'
+                    : 'flex w-full flex-col gap-6 px-4 py-6 md:px-8 lg:px-12'
               }
             >
               {children}

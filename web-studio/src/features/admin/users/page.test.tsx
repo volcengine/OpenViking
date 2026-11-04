@@ -114,17 +114,24 @@ it.each([
     )
     await screen.findByText('manager')
     expect(Boolean(screen.queryByText('actions.currentIdentity'))).toBe(current)
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'appShell:userManagement.userActions',
+      }),
+    )
     expect(
       screen
-        .getByRole('button', { name: 'actions.removeUser' })
-        .hasAttribute('disabled'),
+        .getByRole('menuitem', { name: 'actions.removeUser' })
+        .getAttribute('aria-disabled') === 'true',
     ).toBe(current)
     expect(
-      Boolean(screen.queryByRole('button', { name: 'actions.switchIdentity' })),
+      Boolean(
+        screen.queryByRole('menuitem', { name: 'actions.switchIdentity' }),
+      ),
     ).toBe(!current)
     if (!current) {
       fireEvent.click(
-        screen.getByRole('button', { name: 'actions.switchIdentity' }),
+        screen.getByRole('menuitem', { name: 'actions.switchIdentity' }),
       )
       await waitFor(() =>
         expect(mocks.switchIdentity).toHaveBeenCalledWith(
@@ -150,7 +157,9 @@ it('creates a teammate and shows their credential without replacing the administ
       <UserManagementPanel />
     </QueryClientProvider>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'actions.addUser' }))
+  fireEvent.click(
+    screen.getByRole('button', { name: 'appShell:userManagement.addMember' }),
+  )
   fireEvent.click(screen.getByRole('button', { name: 'confirm-create' }))
   await waitFor(() => expect(mocks.result).toHaveBeenCalledWith(result))
   expect(mocks.switchIdentity).not.toHaveBeenCalled()

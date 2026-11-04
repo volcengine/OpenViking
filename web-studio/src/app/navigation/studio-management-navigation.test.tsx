@@ -35,17 +35,26 @@ it.each([false, true])(
     const links = screen.getAllByRole('link')
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '/admin/dashboard',
+      ...(isRoot ? ['/admin/spaces'] : []),
       '/admin/users',
-      '/admin/users/permissions',
       '/admin/users/memory-templates',
-      ...(isRoot ? ['/admin/vikingbot'] : []),
+      '/admin/users/permissions',
+      ...(isRoot
+        ? [
+            '/admin/vikingbot',
+            '/admin/configuration',
+            '/admin/configuration/server',
+          ]
+        : []),
+      '/admin/monitoring',
       '/admin/tasks',
       '/admin/request-logs',
-      ...(isRoot
-        ? ['/admin/configuration', '/admin/configuration/server']
-        : []),
     ])
-    expect(links[1].hasAttribute('data-active')).toBe(true)
+    expect(
+      screen
+        .getByRole('link', { name: 'User & API Keys' })
+        .hasAttribute('data-active'),
+    ).toBe(true)
   },
 )
 
@@ -58,20 +67,20 @@ it('highlights only server configuration in the Root group', () => {
       />
     </SidebarProvider>,
   )
-  const server = screen.getByRole('link', { name: 'Server configuration' })
+  const server = screen.getByRole('link', { name: 'Model configuration' })
   const configuration = screen.getByRole('link', {
-    name: 'Configuration',
+    name: 'General configuration',
   })
   expect(server.hasAttribute('data-active')).toBe(true)
   expect(configuration.hasAttribute('data-active')).toBe(false)
   expect(server.closest('[data-slot="sidebar-group"]')).toBe(
     screen
-      .getByRole('link', { name: 'Configuration' })
+      .getByRole('link', { name: 'General configuration' })
       .closest('[data-slot="sidebar-group"]'),
   )
 })
 
-it('groups gateway management with Root configuration and highlights every gateway subpage', () => {
+it('keeps gateway management in its Root group and highlights every gateway subpage', () => {
   render(
     <SidebarProvider>
       <StudioManagementNavigation
@@ -83,11 +92,11 @@ it('groups gateway management with Root configuration and highlights every gatew
   )
   const gateway = screen.getByRole('link', { name: 'Gateway' })
   const configuration = screen.getByRole('link', {
-    name: 'Configuration',
+    name: 'General configuration',
   })
   expect(gateway.getAttribute('href')).toBe('/admin/gateway')
   expect(gateway.hasAttribute('data-active')).toBe(true)
-  expect(gateway.closest('[data-slot="sidebar-group"]')).toBe(
+  expect(gateway.closest('[data-slot="sidebar-group"]')).not.toBe(
     configuration.closest('[data-slot="sidebar-group"]'),
   )
 })
@@ -104,9 +113,7 @@ it('keeps membership and Root credential entries out of unauthenticated developm
       />
     </SidebarProvider>,
   )
-  expect(
-    screen.queryByRole('link', { name: 'Server configuration' }),
-  ).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Model configuration' })).toBeNull()
   expect(screen.queryByRole('link', { name: 'Gateway' })).toBeNull()
   expect(screen.queryByRole('link', { name: 'User & API Keys' })).toBeNull()
 })

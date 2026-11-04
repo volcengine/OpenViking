@@ -9,10 +9,14 @@ import { UserRoundIcon, UsersRoundIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 const tabs = [
-  { to: '/admin/users', label: 'groups.userLabel', icon: UserRoundIcon },
+  {
+    to: '/admin/users',
+    label: 'appShell:userManagement.members',
+    icon: UserRoundIcon,
+  },
   {
     to: '/admin/users/groups',
-    label: 'groups.groupLabel',
+    label: 'appShell:userManagement.groups',
     icon: UsersRoundIcon,
   },
 ] as const
@@ -36,7 +40,7 @@ export function AdminMembershipTabs() {
   return (
     <nav
       aria-label={t('appShell:adminNavigation.members')}
-      className="inline-flex w-fit gap-0.5 rounded-lg bg-muted p-0.5"
+      className="users-membership-tabs inline-flex w-fit gap-0.5 rounded-md bg-muted p-0.5"
     >
       {tabs.map(({ to, label, icon: Icon }, index) => (
         <Link

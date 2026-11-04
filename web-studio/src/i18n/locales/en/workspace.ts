@@ -1,6 +1,9 @@
 const workspace = {
   appShell: {
     adminNavigation: {
+      spaces: 'Data spaces',
+      generalConfiguration: 'General configuration',
+      modelConfiguration: 'Model configuration',
       accountAdminUnavailable:
         'No usable Admin API Key was found for this space. Check the administrator credentials in User & API Keys.',
       accountAdminLookupFailed:
@@ -20,6 +23,41 @@ const workspace = {
       operations: 'Operations',
       tasks: 'Task monitoring',
       root: 'Root settings',
+    },
+    userManagement: {
+      userId: 'User ID',
+      apiKeys: 'API Keys',
+      help: 'Manage members, API keys, and memory policies in this data space.',
+      keyNotice:
+        'API keys provide long-term access to OpenViking. Keep them private to prevent unauthorized access, security risks, or unexpected charges.',
+      agentNotice:
+        'An Agent configured with a member’s API key can access everything that member can see. Manage external sharing and cross-border access carefully.',
+      search: 'Search...',
+      addMember: 'Add member',
+      members: 'Members · {{total}}',
+      groups: 'Groups · {{total}}',
+      userActions: 'Actions for {{user}}',
+      makeAdmin: 'Make administrator',
+      makeMember: 'Make member',
+    },
+    spaces: {
+      createDescription:
+        'Create a data space with its initial administrator, then switch to it.',
+      title: 'Data spaces',
+      description: 'Manage data spaces and their members.',
+      count: '{{count}} spaces',
+      search: 'Search...',
+      create: 'Create space',
+      name: 'Space name',
+      members: 'Members',
+      createdAt: 'Created at',
+      actions: 'Actions',
+      memberCount: '{{count}} members',
+      empty: 'No data spaces yet',
+      noResults: 'No matching data spaces',
+      unavailable: 'Only Root administrators can manage data spaces.',
+      loading: 'Loading data spaces…',
+      retry: 'Retry',
     },
     apiKey: {
       title: 'API Key',
@@ -171,7 +209,7 @@ const workspace = {
     },
   },
   monitoringPage: {
-    title: 'Monitoring',
+    title: 'Component monitoring',
     description: 'View real-time health for OpenViking components.',
     version: 'v{{version}}',
     refresh: 'Refresh',
@@ -982,6 +1020,31 @@ const workspace = {
     pageTitle: 'Settings',
     tabs: { connection: 'Connection', configuration: 'Server configuration' },
     models: {
+      vlmSection: 'VLM models',
+      embeddingSection: 'Embedding models',
+      editAction: 'Edit',
+      deleteAction: 'Delete',
+      categoryCount: '{{category}} ({{count}})',
+      designDescription:
+        'OpenViking uses VLM models to understand content and generate summaries, and Embedding models to build indexes. Models in each category are tried in order; drag to change priority.',
+      thinkingColumn: 'Thinking',
+      statusColumn: 'Status',
+      thinkingOn: 'On',
+      thinkingOff: 'Off',
+      rowUntested: 'Not tested',
+      rowTesting: 'Testing',
+      rowHealthy: 'Healthy',
+      rowFailed: 'Failed',
+      providerNames: {
+        volcengine: 'Volcengine Ark',
+        openai: 'OpenAI',
+        azure: 'Azure OpenAI',
+        kimi: 'Kimi',
+        glm: 'GLM',
+        litellm: 'LiteLLM',
+        'openai-codex': 'OpenAI Codex',
+      },
+
       editMode: 'Editing mode',
       formMode: 'Form editor',
       fileMode: 'File editor',
@@ -1085,6 +1148,13 @@ const workspace = {
       moveDown: 'Move down',
       view: 'View model',
       edit: 'Edit model',
+      editorTitle: '{{action}} {{kind}} model',
+      addAction: 'Add',
+      vlmDescription:
+        'VLM models understand images and documents, and generate summaries and memories.',
+      embeddingDescription: 'Embedding models build content indexes.',
+      inputPlaceholder: 'Enter a value',
+      defaultAddressHint: 'Leave blank to use the provider’s default address',
       addModel: 'Add model',
       serverSource: 'ov.conf',
       unsaved: 'Unsaved',

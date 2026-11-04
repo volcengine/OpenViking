@@ -20,9 +20,11 @@ import { toast } from 'sonner'
 export function ScopeCreateAccount({
   connection,
   onCreated,
+  toolbar = false,
 }: {
   connection: AdminConnection
   onCreated: () => void
+  toolbar?: boolean
 }) {
   const { t } = useTranslation('accountSwitcher')
   const { identityScopeKey, setGeneratedCredential, switchManagementAccount } =
@@ -76,13 +78,17 @@ export function ScopeCreateAccount({
   return (
     <>
       <Button
-        variant="ghost"
+        variant={toolbar ? 'default' : 'ghost'}
         size="sm"
-        className="mt-1 w-full justify-start border-t"
+        className={
+          toolbar
+            ? 'h-8 rounded-md px-4 text-[13px]'
+            : 'mt-1 w-full justify-start border-t'
+        }
         onClick={() => setOpen(true)}
       >
         <PlusIcon className="size-3.5" />
-        {t('create')}
+        {toolbar ? t('appShell:spaces.create') : t('create')}
       </Button>
       <Dialog
         open={open}
@@ -97,14 +103,20 @@ export function ScopeCreateAccount({
             }}
           >
             <DialogHeader>
-              <DialogTitle>{t('dialog.title')}</DialogTitle>
+              <DialogTitle>
+                {t(toolbar ? 'appShell:spaces.create' : 'dialog.title')}
+              </DialogTitle>
               <DialogDescription>
-                {t('scope.createDescription')}
+                {t(
+                  toolbar
+                    ? 'appShell:spaces.createDescription'
+                    : 'scope.createDescription',
+                )}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-5">
               <label className="grid gap-2 text-sm">
-                {t('dialog.accountLabel')}
+                {t(toolbar ? 'appShell:spaces.name' : 'dialog.accountLabel')}
                 <Input
                   value={accountId}
                   onChange={(event) => setAccountId(event.target.value)}

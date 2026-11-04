@@ -18,6 +18,7 @@ const adminMocks = vi.hoisted(() => ({
 }))
 
 const connectionMocks = vi.hoisted(() => ({
+  connection: { accountId: 'account-a' },
   openConnectionSettings: vi.fn(),
   switchManagementAccount: vi.fn(),
 }))
@@ -66,6 +67,7 @@ function renderButton() {
 }
 
 beforeEach(() => {
+  connectionMocks.connection.accountId = 'account-a'
   adminMocks.deleteAdminAccount.mockResolvedValue('cleanup-task')
   adminMocks.fetchAdminAccounts.mockResolvedValue([
     { accountId: 'account-b', userCount: 1 },
@@ -131,5 +133,21 @@ describe('DeleteAccountButton', () => {
       expect(connectionMocks.switchManagementAccount).toHaveBeenCalledWith('')
     })
     expect(connectionMocks.openConnectionSettings).toHaveBeenCalledOnce()
+  })
+  it('keeps the selected space when deleting a different space', async () => {
+    connectionMocks.connection.accountId = 'account-b'
+    renderButton()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'actions.deleteAccount' }),
+    )
+    fireEvent.change(screen.getByPlaceholderText('account-a'), {
+      target: { value: 'account-a' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'actions.confirmDeleteAccount' }),
+    )
+    await waitFor(() => expect(toastMocks.success).toHaveBeenCalled())
+    expect(connectionMocks.switchManagementAccount).not.toHaveBeenCalled()
+    expect(connectionMocks.openConnectionSettings).not.toHaveBeenCalled()
   })
 })

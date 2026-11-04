@@ -24,9 +24,11 @@ import { useTranslation } from 'react-i18next'
 export function StudioModeSwitch({
   managementMode,
   canManage = true,
+  compact = false,
 }: {
   managementMode: boolean
   canManage?: boolean
+  compact?: boolean
 }) {
   const { t } = useTranslation('appShell')
   const { connection, profiles, activeProfileId, serverMode, switchIdentity } =
@@ -60,10 +62,12 @@ export function StudioModeSwitch({
       ) : (
         <LayoutDashboardIcon className="size-4" />
       )}
-      <span className="hidden md:inline">{label}</span>
+      <span className={compact ? 'sr-only' : 'hidden md:inline'}>{label}</span>
     </>
   )
-  const buttonClass = 'size-9 rounded-md p-0 md:w-auto md:gap-2 md:px-3'
+  const buttonClass = compact
+    ? 'size-8 rounded-md border-0 bg-transparent p-0 shadow-none text-muted-foreground'
+    : 'size-9 rounded-md p-0 md:w-auto md:gap-2 md:px-3'
   async function enter(identity: SavedDataIdentity) {
     if (pending) return
     const controller = new AbortController()

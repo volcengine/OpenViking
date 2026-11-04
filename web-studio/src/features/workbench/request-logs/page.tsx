@@ -1,3 +1,4 @@
+import styles from './page.module.css'
 import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { useQuery } from '@tanstack/react-query'
@@ -123,13 +124,19 @@ export function RequestLogsRoute({
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
+    <div
+      className={
+        management ? styles.page : 'flex w-full min-w-0 flex-col gap-5'
+      }
+    >
       {management ? (
         <>
           <h1 className="text-xl font-semibold tracking-tight">
             {t('appShell:navigation.requestLogs.title')}
           </h1>
-          <AdminSpaceBanner accountId={connection.accountId} />
+          <div className={styles.scope}>
+            <AdminSpaceBanner accountId={connection.accountId} />
+          </div>
         </>
       ) : null}
       {!management ? (
@@ -149,7 +156,7 @@ export function RequestLogsRoute({
         />
       ) : (
         <>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2" data-log-metrics>
             <MetricCard
               label={t('metrics.total')}
               value={hasMetrics ? (total >= 1000 ? '999+' : total) : '—'}

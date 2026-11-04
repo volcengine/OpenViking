@@ -108,12 +108,15 @@ export function StudioSettingsMenu({
         title={identityName}
         className="flex h-9 shrink-0 items-center gap-2 rounded-lg px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {showUser ? (
+        {showUser || managementMode ? (
           <span
             aria-hidden="true"
-            className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold ring-1 ring-border/70"
+            className={cn(
+              'flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold ring-1 ring-border/70',
+              managementMode && 'size-6 bg-[#13a38d] text-white ring-0',
+            )}
           >
-            {initials}
+            {initials || identityName.slice(0, 2)}
           </span>
         ) : managementIdentity ? (
           <ShieldCheckIcon
@@ -127,11 +130,16 @@ export function StudioSettingsMenu({
           />
         )}
         <span
-          className={cn('max-w-32 truncate', showUser && 'hidden sm:inline')}
+          className={cn(
+            'max-w-32 truncate',
+            managementMode ? 'sr-only' : showUser && 'hidden sm:inline',
+          )}
         >
           {identityName}
         </span>
-        <ChevronDownIcon className="hidden size-3 sm:block" />
+        {!managementMode ? (
+          <ChevronDownIcon className="hidden size-3 sm:block" />
+        ) : null}
       </PopoverTrigger>
       <PopoverContent
         align="end"
