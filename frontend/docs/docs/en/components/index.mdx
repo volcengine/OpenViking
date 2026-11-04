@@ -16,6 +16,32 @@ Five file-type icons with configurable image dimensions and accessible labels.
 
 A scaffold example displaying a resource or operation state with a text label and color indicator.
 
-## Reserved modules
+### [FileTree](./file-tree)
 
-`file-tree`, `file-preview`, `tui`, `viking-bot`, `scope-switcher`, `agent-connect`, and `resource-import` have JS and CSS entry placeholders, with no business component implementations yet. See [Getting started](../guide/getting-started) for entry and stylesheet choices.
+A flattened file tree. The host supplies ordered rows; the component renders them and reports selection, expansion and pagination intent.
+
+### [FilePreview](./file-preview)
+
+A tabbed file preview. Each tab either hands a file source to the component or renders a host-owned node; the component owns the tab row, header row and view switching.
+
+### [Tui](./tui)
+
+A command console. The host owns execution; the component renders records and reports submit, cancel and history intent.
+
+### [VikingBot](./viking-bot)
+
+A conversation view. The host owns sessions, streaming and uploads; the component renders messages and reports intent.
+
+### [ScopeSwitcher](./scope-switcher)
+
+A scope breadcrumb. The host declares the levels; the component renders them and reports search and switch intent.
+
+### [AgentConnect](./agent-connect)
+
+Agent selection, onboarding steps and connection status. All content comes from the host.
+
+### [ResourceImport](./resource-import)
+
+Import sources, file selection, progress and results. The host declares the sources and owns uploads.
+
+These five ship as placeholder components: each renders a fixed-size empty shell and consumes no props, so hosts can start against the published package while the real views are migrated. The same props serve every host; hosts differ in flow and data access but share the interaction and UI. See [Getting started](../guide/getting-started) for entry and stylesheet choices.

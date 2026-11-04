@@ -12,6 +12,32 @@
 
 脚手架示例：通过文字标签和颜色指示器展示资源或操作的状态。
 
-## 预留模块
+### [FileTree 文件树](./file-tree)
 
-`file-tree`、`file-preview`、`tui`、`viking-bot`、`scope-switcher`、`agent-connect`、`resource-import` 已预留 JS 和 CSS 入口，尚未迁入业务实现。公开路径及样式选择见[快速开始](../guide/getting-started)。
+展平后的文件树。宿主按顺序提供行数据，组件负责渲染并上报选中、展开与分页意图。
+
+### [FilePreview 文件预览](./file-preview)
+
+带页签的文件预览。每个页签要么把文件来源交给组件渲染，要么由宿主自行渲染；页签行、标题行与视图切换由组件负责。
+
+### [Tui 命令控制台](./tui)
+
+命令输入与执行记录。执行由宿主负责；组件渲染记录并上报提交、取消与历史意图。
+
+### [VikingBot 对话](./viking-bot)
+
+对话与会话视图。会话、流式与上传由宿主负责；组件渲染消息并上报意图。
+
+### [ScopeSwitcher 作用域选择](./scope-switcher)
+
+作用域面包屑。层级由宿主声明；组件渲染并上报搜索与切换意图。
+
+### [AgentConnect Agent 接入](./agent-connect)
+
+Agent 选择、接入步骤与连接状态。内容全部由宿主提供。
+
+### [ResourceImport 资源导入](./resource-import)
+
+导入方式、文件选择、进度与结果。来源由宿主声明，上传由宿主负责。
+
+这五个模块当前是占位组件：只渲染固定尺寸的空壳，不消费 props，宿主可先对着已发布的包开发，真实视图后续迁入。同一套 props 由不同宿主接入，宿主之间的流程与取数不同，交互与 UI 保持一致。公开路径及样式选择见[快速开始](../guide/getting-started)。

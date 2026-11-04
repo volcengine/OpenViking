@@ -13,17 +13,17 @@ export default defineConfig({
           icons: './src/icons/index.tsx',
           'components/status-badge':
             './src/components/status-badge/status-badge.tsx',
-          'components/file-tree': './src/components/file-tree/file-tree.ts',
+          'components/file-tree': './src/components/file-tree/file-tree.tsx',
           'components/file-preview':
-            './src/components/file-preview/file-preview.ts',
-          'components/tui': './src/components/tui/tui.ts',
-          'components/viking-bot': './src/components/viking-bot/viking-bot.ts',
+            './src/components/file-preview/file-preview.tsx',
+          'components/tui': './src/components/tui/tui.tsx',
+          'components/viking-bot': './src/components/viking-bot/viking-bot.tsx',
           'components/scope-switcher':
-            './src/components/scope-switcher/scope-switcher.ts',
+            './src/components/scope-switcher/scope-switcher.tsx',
           'components/agent-connect':
-            './src/components/agent-connect/agent-connect.ts',
+            './src/components/agent-connect/agent-connect.tsx',
           'components/resource-import':
-            './src/components/resource-import/resource-import.ts',
+            './src/components/resource-import/resource-import.tsx',
         },
       },
       output: { emitCss: false },

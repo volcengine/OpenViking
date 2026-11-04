@@ -29,7 +29,7 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: private `@openviking/react` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,tui,viking-bot,scope-switcher,agent-connect,resource-import}`: reserved entries; see the [module map](./packages/react/README.md#模块目录). These entries have no component exports yet.
+- `packages/react/src/components/{file-tree,file-preview,tui,viking-bot,scope-switcher,agent-connect,resource-import}`: props types are public; component implementations follow. See the [module map](./packages/react/README.md#模块目录).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
 - `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.
