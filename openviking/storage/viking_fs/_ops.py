@@ -2073,9 +2073,10 @@ class _OpsMixin:
                 content = result.content
             content = content.encode("utf-8")
 
+        path = self._uri_to_path(uri, ctx=ctx)
         existed = await file_exists_before(self, path)
         await self._async_agfs.write(
-            self._uri_to_path(uri, ctx=ctx),
+            path,
             content,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
