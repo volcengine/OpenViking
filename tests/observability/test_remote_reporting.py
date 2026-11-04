@@ -8,14 +8,25 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.observability.context import bind_root_observability_context, reset_root_observability_context
+from openviking.observability.context import (
+    bind_root_observability_context,
+    reset_root_observability_context,
+)
 from openviking.observability.events import build_event, get_event_bus, register_event_subscriber
 from openviking.observability.reporting import runtime
-from openviking.observability.reporting.facts import begin_request_reporting, bind_memory_type, remember_request_task
+from openviking.observability.reporting.facts import (
+    begin_request_reporting,
+    bind_memory_type,
+    remember_request_task,
+)
 from openviking.observability.reporting.inventory import inventory_lines
 from openviking.observability.reporting.reporter import KafkaEventReporter
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_work_index import bind_task_context, bind_task_context_from_message, prepare_task_payload
+from openviking.service.task_work_index import (
+    bind_task_context,
+    bind_task_context_from_message,
+    prepare_task_payload,
+)
 from openviking.storage.viking_fs._ops import _OpsMixin
 from openviking.telemetry.span_models import RootSpanAttributes
 from openviking_cli.session.user_id import UserIdentifier
@@ -70,6 +81,30 @@ def test_existing_task_metadata_survives_queue_serialization():
         event = build_event("file_mutation", {"uri": "viking://resources/doc.md"})
     assert (event.account_id, event.user_id, event.payload["task_id"]) == ("space_one", "user_one", "task_one")
     assert event.payload["task_type"] == "content_write" and event.payload["mode"] == "create"
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "expected_task"),
+    [("QUEUE", "/queuefs/session_commit", "persisted_task"),
+     ("POST", "/queuefs/session_commit", None),
+     ("QUEUE", "/queuefs/unrelated", None)],
+)
+def test_session_queue_retains_task_attribution_without_task_work_context(
+    method, route, expected_task
+):
+    root = RootSpanAttributes(http_method=method, http_route=route, request_id="persisted_task")
+    root.account_id = "space_one"
+    root.user_id = "user_one"
+    token = bind_root_observability_context(root)
+    try:
+        event = build_event("vlm.call", {"prompt_tokens": 3, "completion_tokens": 2})
+        assert event.payload.get("task_id") == expected_task
+        if expected_task:
+            assert event.payload["task_type"] == "session_commit"
+            assert event.payload["usage_purpose"] == "memory_extract"
+            assert (event.account_id, event.user_id) == ("space_one", "user_one")
+    finally:
+        reset_root_observability_context(token)
 
 
 def test_multiple_exporters_share_event_and_task_fanout_ids(monkeypatch):

@@ -42,8 +42,19 @@ def event_context(name):
     """Use the existing Task context, including after queue delivery/restart."""
     if name not in {"http.request", "vlm.call", "embedding.call", "understanding_call", "file_mutation", "skill_mutation", "task_terminal"}:
         return {}
-    from openviking.service.task_work_index import get_task_context
+    from openviking.service.task_work_index import TaskExecutionContext, get_task_context
     context = get_task_context()
+    if context is None:
+        root = get_observability_context().root
+        # The session queue owns this root and sets request_id to its persisted
+        # Task ID. Extraction callbacks can retain it after losing Task Work
+        # context across event loops. HTTP request IDs are never Task evidence.
+        if (root is not None and root.http_method == "QUEUE"
+                and root.http_route == "/queuefs/session_commit"
+                and root.request_id and root.account_id and root.user_id):
+            context = TaskExecutionContext(
+                root.request_id, root.account_id, root.user_id, task_type="session_commit"
+            )
     fields = {}
     if context is not None:
         fields.update(task_id=context.task_id, account_id=context.account_id, user_id=context.user_id)
