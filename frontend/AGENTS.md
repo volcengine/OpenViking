@@ -17,7 +17,7 @@
 - 跨框架纯函数、资源类型和数据转换放在 `packages/lib/`。OpenViking 请求与服务适配器放在 `packages/client/`。仅供单个模块使用的工具留在模块内。仅随 React 使用的共享能力随 React 包交付。跨模块公共 Hook 有真实实现后再从 `@openviking/react/hooks` 开放，组件不能使用取数或缓存 Hook。出现独立于框架的消费需求时，再为 `lib` 定义框架无关的公开包入口，并在未安装 React 或 Vue 的项目中验证。
 - 图标的 SVG 源文件、来源与授权放在 `packages/icons/`。React 图标组件放在 `packages/react/src/icons/`，随 React 包从 `@openviking/react/icons` 交付。各框架的封装直接消费同一份 SVG 源文件。构建产物包含图标实现和类型声明，消费者通过 React 包一次安装。
 - React 源码的 `components/` 放独立组件，`pages/` 放可嵌入页面及其加载、会话等业务编排。首个页面的名称与范围待定，有实际实现后再提供对应公开入口。可独立部署的微应用放在 `apps/`，例如 `apps/workbench-embed/`，管理挂载、卸载、样式隔离和宿主通信。
-- 每个组件、区块、布局或模板独占一个 kebab-case 目录，入口文件与目录同名。实现、CSS Modules、测试及私有子组件就近放置，例如 `components/status-badge/status-badge.tsx` 和同目录的 `status-badge.module.css`。模块私有的 Hook、类型和工具留在模块内，不提前提升到公共目录。
+- 每个组件、区块、布局或模板独占一个 kebab-case 目录，入口文件与目录同名。实现、CSS Modules、测试及私有子组件就近放置，例如 `components/<模块>/<模块>.tsx` 和同目录的 `<模块>.module.css`。模块私有的 Hook、类型和工具留在模块内，不提前提升到公共目录。
 - 根入口与子路径分别维护公开导出；组件子路径为 `@openviking/react/components/<模块>`，页面为 `@openviking/react/pages/<页面>`。不提供 `components`、`pages` 分类聚合 JS 入口。包导出显式列举，内部文件不开放；各入口共享实现，避免重复创建 Provider、Context 或状态对象。同步维护 Rslib 入口和声明路径。
 - 可嵌入页面通过 props、回调和插槽组装视图组件。宿主提供身份、导航和服务能力，保留产品专属流程。
 - 目录按实际内容创建，不预建空目录，也不为单个简单模块增加不必要的转发层。

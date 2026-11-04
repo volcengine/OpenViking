@@ -25,11 +25,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./components/status-badge": {
-      "types": "./dist/components/status-badge/status-badge.d.ts",
-      "import": "./dist/components/status-badge.js"
-    },
-    "./components/status-badge/style.css": "./dist/components/status-badge/style.css",
     "./components/file-tree": {
       "types": "./dist/components/file-tree/file-tree.d.ts",
       "import": "./dist/components/file-tree.js"
@@ -40,31 +35,6 @@
       "import": "./dist/components/file-preview.js"
     },
     "./components/file-preview/style.css": "./dist/components/file-preview/style.css",
-    "./components/tui": {
-      "types": "./dist/components/tui/tui.d.ts",
-      "import": "./dist/components/tui.js"
-    },
-    "./components/tui/style.css": "./dist/components/tui/style.css",
-    "./components/viking-bot": {
-      "types": "./dist/components/viking-bot/viking-bot.d.ts",
-      "import": "./dist/components/viking-bot.js"
-    },
-    "./components/viking-bot/style.css": "./dist/components/viking-bot/style.css",
-    "./components/scope-switcher": {
-      "types": "./dist/components/scope-switcher/scope-switcher.d.ts",
-      "import": "./dist/components/scope-switcher.js"
-    },
-    "./components/scope-switcher/style.css": "./dist/components/scope-switcher/style.css",
-    "./components/agent-connect": {
-      "types": "./dist/components/agent-connect/agent-connect.d.ts",
-      "import": "./dist/components/agent-connect.js"
-    },
-    "./components/agent-connect/style.css": "./dist/components/agent-connect/style.css",
-    "./components/search": {
-      "types": "./dist/components/search/search.d.ts",
-      "import": "./dist/components/search.js"
-    },
-    "./components/search/style.css": "./dist/components/search/style.css",
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./package.json": "./package.json",
