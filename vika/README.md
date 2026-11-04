@@ -176,7 +176,38 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 }
 ```
 
-`oauth2` 和 `password` 二选一。`vika setup` / `vika login email` 认得出这类邮箱：给出一个代码，在 `https://microsoft.com/devicelogin` 用该邮箱的账号登录一次即可，`refreshToken` 由向导写回，daemon 刷新时也会把轮换后的新值原子写回。手写时需要一个自己的 Entra 应用：注册为公共客户端，加上「Office 365 Exchange Online」的**委托**权限 `IMAP.AccessAsUser.All` 与 `SMTP.Send` 并由租户管理员同意，再把应用 ID 和租户填进来。IMAP 与 SMTP AUTH 须在邮箱上开启（管理员用 `Get-CASMailbox <邮箱> | fl ImapEnabled,SmtpClientAuthenticationDisabled` 核对）。OAuth2 目前只覆盖微软系邮箱。
+`oauth2` 和 `password` 二选一。`vika setup` / `vika login email` 认得出这类邮箱：给出一个代码，在 `https://microsoft.com/devicelogin` 用该邮箱的账号登录一次即可，`refreshToken` 由向导写回，daemon 刷新时也会把轮换后的新值原子写回。OAuth2 目前只覆盖微软系邮箱。
+
+### 前置条件
+
+需要一个自己的 Entra 应用，Vika 不内置第一方 client id：
+
+1. **注册应用**：Entra 管理中心 → 应用注册 → 新注册，支持的账户类型选「任何 Entra ID 租户 + 个人 Microsoft 账户」（只需 Outlook.com 时也可选「仅个人账户」），身份验证里把**允许公共客户端流**设为「是」（设备码登录依赖它）。
+2. **加委托权限**：API 权限 → 添加权限 → Office 365 Exchange Online → 委托的权限，勾选 `IMAP.AccessAsUser.All` 与 `SMTP.Send`。
+3. **授予同意**：个人账户可自助同意；工作账户需要**管理员同意**。租户若关闭了用户自助同意，登录时会停在「需要管理员审批」页面，此时由管理员在应用页授予同意，或在页面上用「请求审批」提交给管理员。
+4. **邮箱开关**：IMAP 与 SMTP AUTH 必须在该邮箱上开启。企业邮箱用 `Get-CASMailbox <邮箱> | fl ImapEnabled,SmtpClientAuthenticationDisabled` 核对；个人 Outlook.com 在网页版「设置 → 邮件 → 转发和 IMAP」里打开 IMAP。
+
+然后在账号文件里填应用 ID 和租户。企业邮箱的租户填自己的租户 ID 或域名，个人 Outlook.com 填 `consumers` 或 `common`。
+
+### 账号用别名登录时
+
+`username` 是协议登录用的名字，默认与 `address` 相同，但两者不一定一致。Exchange Online 接受别名登录 IMAP，**却不接受别名做 SMTP AUTH**（返回 `535 5.7.3 Authentication unsuccessful`）。若邮箱地址是别名，把账号的**主地址**填进 `username`：
+
+```json
+{
+  "address": "alias@outlook.com",
+  "username": "primary@outlook.com",
+  "oauth2": { "tenant": "consumers", "clientId": "<Entra 应用 ID>", "refreshToken": "..." },
+  "imap": { "host": "outlook.office365.com", "port": 993 },
+  "smtp": { "host": "smtp-mail.outlook.com", "port": 587 }
+}
+```
+
+个人 Outlook.com 与企业 Microsoft 365 用同一组协议端点与同一组作用域（`IMAP.AccessAsUser.All`、`SMTP.Send` 都在 `https://outlook.office.com` 受众上），差别只在应用的账户类型和上面的 `username`。
+
+### 令牌刷新与重试
+
+access token 在临近过期前刷新，一次刷新只发一个请求：IMAP 连接与 SMTP 发信同时需要凭据时，后到的一方等同一个结果，避免用同一个 refresh token 并发刷新（后者会失败，或把更旧的令牌写回覆盖新的）。轮换后的 refresh token 只在账号文件里仍是本次用掉的那个时才写回，所以期间另做的登录不会被覆盖。IMAP 连接或 SMTP 登录被服务器拒绝时各自换一个新令牌重试一次；**报文已经发出的失败不重试**，因为那封信可能已经投递，重发会造成重复。
 
 ## 文档附件与交互卡片
 
