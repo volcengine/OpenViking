@@ -314,9 +314,7 @@ class WatchManager:
 
         if not ConnectorDelegate.is_watch_auth_state(task.auth_state):
             return False
-        delegate = ConnectorDelegate(
-            viking_fs=self._viking_fs, background_tasks=set(), link_reason_memory=None
-        )
+        delegate = ConnectorDelegate(viking_fs=self._viking_fs)
         _, _, _, auth_config = await delegate.restore_watch_request(
             task.auth_state, account_id=task.account_id, path=task.path
         )

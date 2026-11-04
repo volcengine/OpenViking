@@ -368,7 +368,9 @@ def test_multi_field_patch_publishes_atomically():
             sections={"vlm", "memory"},
             consumer=consumer,
         )
-        await manager.patch_cluster({"vlm": {"model": "m2"}, "memory": {"extraction_enabled": False}})
+        await manager.patch_cluster(
+            {"vlm": {"model": "m2"}, "memory": {"extraction_enabled": False}}
+        )
         assert seen == [(False, "m2")]
 
     asyncio.run(run())
@@ -454,9 +456,7 @@ def test_account_storage_wait_does_not_block_unrelated_account_load():
     async def run():
         source = BlockingSource()
         manager, _ = _make_manager(source)
-        patch = asyncio.create_task(
-            manager.patch_account("ov-a", {"vlm": {"model": "slow"}})
-        )
+        patch = asyncio.create_task(manager.patch_account("ov-a", {"vlm": {"model": "slow"}}))
         await source.started.wait()
 
         other = asyncio.create_task(manager.get_account("ov-b", "vlm"))
@@ -503,7 +503,6 @@ def test_refresh_does_not_resurrect_unloaded_account():
         assert "ov-x" not in manager._accounts
 
     asyncio.run(run())
-
 
 
 def test_patch_waits_for_matching_consumers_and_filters_registration():
@@ -686,6 +685,10 @@ def test_refresh_does_not_resurrect_evicted_account():
 
 async def test_account_runtime_binding_and_updates_are_isolated():
     from openviking.config.binding import manager_over_source
+    from openviking.config.generation import (
+        get_memory_extraction_enabled,
+        get_output_language_override,
+    )
     from openviking.config.vector import AccountVectorConfigResolver
     from openviking_cli.utils.config import set_openviking_config
     from openviking_cli.utils.config.open_viking_config import (
@@ -695,6 +698,8 @@ async def test_account_runtime_binding_and_updates_are_isolated():
 
     cluster = OpenVikingConfig.from_dict(
         {
+            "output_language_override": "en",
+            "memory": {"extraction_enabled": False},
             "embedding": {
                 "dense": {
                     "provider": "openai",
@@ -717,6 +722,8 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         "api_base": "https://account.invalid/v1",
     }
     settings = {
+        "output_language_override": "",
+        "memory": {},
         "embedding": {"dense": {"model": "account", "dimension": 8, "credentials": [credential]}},
         "vectordb": {
             "backend": "http",
@@ -737,6 +744,10 @@ async def test_account_runtime_binding_and_updates_are_isolated():
             )
         assert await source.load(ConfigScope.account("a")) is None
         await manager.patch_account("a", settings, creating=True)
+        assert await get_output_language_override(manager, "a") == ""
+        assert await get_memory_extraction_enabled(manager, "a") is True
+        assert await get_output_language_override(manager, "b") == "en"
+        assert await get_memory_extraction_enabled(manager, "b") is False
         account, default = await resolver.resolve("a"), await resolver.resolve("b")
         assert account.dedicated_vectordb and account.vectordb.dimension == 8
         assert account.embedding.dense.credentials[0].api_key == "account-secret"
@@ -762,6 +773,11 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         )
         assert (await resolver.resolve("a")).embedding.dense.credentials[0].api_key == "rotated"
         assert (await resolver.resolve("b")).embedding.dense.api_key == "cluster-secret"
+        await manager.patch_account("a", {"output_language_override": None, "memory": None})
+        assert await get_output_language_override(manager, "a") == "en"
+        assert await get_memory_extraction_enabled(manager, "a") is False
+        assert cluster.output_language_override == "en"
+        assert cluster.memory.extraction_enabled is False
     finally:
         OpenVikingConfigSingleton.reset_instance()
 
@@ -946,9 +962,7 @@ def test_real_agent_evolution_precedence_and_fallback():
             OpenVikingConfigSingleton,
         )
 
-        base = OpenVikingConfig.from_dict(
-            {"agent_evolution": {"enabled": False}}
-        )
+        base = OpenVikingConfig.from_dict({"agent_evolution": {"enabled": False}})
         set_openviking_config(base)
         manager = manager_over_source(MemoryConfigSource(), base_config=base)
         await manager.initialize()
@@ -958,9 +972,7 @@ def test_real_agent_evolution_precedence_and_fallback():
             await manager.patch_cluster({"agent_evolution": {"enabled": True}})
             assert (await manager.get_account("ov-a", "agent_evolution")).enabled
 
-            await manager.patch_account(
-                "ov-a", {"agent_evolution": {"enabled": False}}
-            )
+            await manager.patch_account("ov-a", {"agent_evolution": {"enabled": False}})
             assert not (await manager.get_account("ov-a", "agent_evolution")).enabled
 
             await manager.patch_account("ov-a", {"agent_evolution": None})
@@ -988,9 +1000,7 @@ def test_real_feishu_account_override_and_cluster_fallback():
         manager = manager_over_source(MemoryConfigSource(), base_config=base)
         await manager.initialize()
         try:
-            assert (
-                await get_effective_feishu_config(manager, "ov-a")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-a")).app_id == "cluster-v1"
 
             await manager.patch_account(
                 "ov-a", {"feishu": {"app_id": "account-a", "app_secret": "a-secret"}}
@@ -998,14 +1008,10 @@ def test_real_feishu_account_override_and_cluster_fallback():
             effective_a = await get_effective_feishu_config(manager, "ov-a")
             assert effective_a.app_id == "account-a"
             assert effective_a.domain == base.feishu.domain
-            assert (
-                await get_effective_feishu_config(manager, "ov-b")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-b")).app_id == "cluster-v1"
 
             await manager.patch_account("ov-a", {"feishu": None})
-            assert (
-                await get_effective_feishu_config(manager, "ov-a")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-a")).app_id == "cluster-v1"
         finally:
             OpenVikingConfigSingleton.reset_instance()
 
@@ -1069,6 +1075,9 @@ class _FakeAGFS:
 
     def __init__(self):
         self.files: dict[str, bytes] = {}
+        self.acquired_paths: list[str] = []
+        self.released_leases: list[object] = []
+        self.write_contexts: dict[str, object] = {}
 
     async def read(self, path, *a, **k):
         from openviking.pyagfs import AGFSNotFoundError
@@ -1079,6 +1088,7 @@ class _FakeAGFS:
 
     async def write(self, path, data, *a, **k):
         self.files[path] = data if isinstance(data, bytes) else bytes(data)
+        self.write_contexts[path] = k.get("fs_ctx")
         return path
 
     async def ensure_parent_dirs(self, path, *a, **k):
@@ -1099,9 +1109,11 @@ class _FakeAGFS:
         return {"size": len(self.files[path]), "modTime": 1}
 
     async def pathlock_acquire_exact(self, path, *a, **k):
+        self.acquired_paths.append(path)
         return {"lease_ref": "lease-1"}
 
     async def pathlock_release(self, lease, *a, **k):
+        self.released_leases.append(lease)
         return None
 
 
@@ -1124,6 +1136,7 @@ def test_file_source_reads_and_writes_plaintext_json():
         assert agfs.files["/local/ov-a/_system/setting.backup.json"] == json.dumps(
             {"vlm": {"model": "legacy"}}
         ).encode("utf-8")
+        assert agfs.write_contexts["/local/ov-a/_system/setting.backup.json"] is None
         assert await source.load(scope) == {"vlm": {"model": "new"}}
 
     asyncio.run(run())
@@ -1138,6 +1151,27 @@ def test_file_source_cluster_scope_path_and_load():
         await source.update(scope, lambda cur: {"memory": {"extraction_enabled": False}})
         assert "/local/_system/runtime_config/cluster.json" in agfs.files
         assert await source.load(scope) == {"memory": {"extraction_enabled": False}}
+
+    asyncio.run(run())
+
+
+def test_file_source_reuses_outer_account_tree_lease():
+    async def run():
+        agfs = _FakeAGFS()
+        manager, _ = _make_manager(FileConfigSource(agfs))
+        lease = {"lease_ref": "account-tree"}
+
+        await manager.patch_account(
+            "ov-a",
+            {"memory": {"extraction_enabled": False}},
+            creating=True,
+            lease_ref=lease,
+        )
+
+        path = "/local/ov-a/_system/setting.json"
+        assert agfs.acquired_paths == []
+        assert agfs.released_leases == []
+        assert agfs.write_contexts[path]["lease_ref"] == "account-tree"
 
     asyncio.run(run())
 
@@ -1279,9 +1313,7 @@ def test_plugin_source_receives_params_without_kernel_dependencies():
         captured["ctx"] = ctx
         return MemoryConfigSource(ctx)
 
-    src = build_config_source(
-        {"source": "params-only-test", "params": {"namespace": "ns-1"}}
-    )
+    src = build_config_source({"source": "params-only-test", "params": {"namespace": "ns-1"}})
     assert isinstance(src, MemoryConfigSource)
     assert captured["ctx"].params == {"namespace": "ns-1"}
     assert not hasattr(captured["ctx"], "extras")

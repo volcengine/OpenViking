@@ -278,16 +278,41 @@ class WatchRuntime:
         if status not in TERMINAL_TASK_STATUSES:
             if age <= self._run_timeout:
                 return False
-            try:
-                await tracker.cancel(run_id, **owner)
-            except ValueError as exc:
-                logger.warning("Failed to cancel timed-out Watch Task %s: %s", run_id, exc)
-            status = await tracker.get_task_status(run_id, **owner)
-            if status not in TERMINAL_TASK_STATUSES:
-                await tracker.fail(
+            timeout_error = f"Watch run Task timed out after {self._run_timeout:g}s"
+            timed_out_record = await tracker.get(run_id, **owner)
+            if state.connector or (
+                timed_out_record is not None
+                and timed_out_record.task_type == "connector_import"
+            ):
+                try:
+                    await tracker.cancel(run_id, **owner)
+                except ValueError:
+                    # A completion racing the timeout wins over timeout settlement.
+                    record = await tracker.get(run_id, **owner)
+                    if record is not None and record.is_terminal():
+                        return await self.watch_manager.settle_running(state, record)
+                    raise
+                return await self.watch_manager.finish_run(
+                    state.task_id,
                     run_id,
-                    f"Watch run Task timed out after {self._run_timeout:g}s",
-                    **owner,
+                    WatchRunResult(
+                        status="failed",
+                        execution_task_id=run_id,
+                        error=timeout_error,
+                    ),
+                    started_at=state.run_started_at,
                 )
+            else:
+                try:
+                    await tracker.cancel(run_id, **owner)
+                except ValueError as exc:
+                    logger.warning("Failed to cancel timed-out Watch Task %s: %s", run_id, exc)
+                status = await tracker.get_task_status(run_id, **owner)
+                if status not in TERMINAL_TASK_STATUSES:
+                    await tracker.fail(
+                        run_id,
+                        timeout_error,
+                        **owner,
+                    )
         record = await tracker.get(run_id, **owner)
         return await self.watch_manager.settle_running(state, record)

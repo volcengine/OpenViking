@@ -384,6 +384,8 @@ class FileStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         api_key: str | None = None,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
         """Create an account and its first admin, optionally with a credential."""
         if error := validate_account_id(account_id):
@@ -423,8 +425,9 @@ class FileStore(AccountStore):
                 account_id,
                 {admin_user_id: user_info},
                 replace_existing=account_was_created,
+                lease_ref=lease_ref,
             )
-            await self._write_groups_json(account_id, {})
+            await self._write_groups_json(account_id, {}, lease_ref=lease_ref)
         except Exception:
             await self._rollback_create_account(
                 account_id, account_was_created=account_was_created
@@ -1322,17 +1325,22 @@ class FileStore(AccountStore):
         reject_existing_user_ids: set[str] | None = None,
         replace_existing: bool = False,
         expected_api_keys: dict[str, str] | None = None,
+        lease_ref: object | None = None,
     ) -> None:
         """Merge targeted user mutations, or initialize a newly created account."""
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
-        try:
-            lease = await self._async_agfs.pathlock_acquire_exact(path, timeout_secs=10.0)
-        except LockAcquisitionError as exc:
-            raise ResourceBusyError(
-                "Another user operation is in progress for this account. Please retry.",
-                uri=path,
-                conflict_type="user_registry_busy",
-            ) from exc
+        lease = lease_ref
+        if lease is None:
+            try:
+                lease = await self._async_agfs.pathlock_acquire_exact(
+                    path, timeout_secs=10.0
+                )
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    "Another user operation is in progress for this account. Please retry.",
+                    uri=path,
+                    conflict_type="user_registry_busy",
+                ) from exc
         try:
             if replace_existing:
                 users = copy.deepcopy(updated_users or {})
@@ -1369,11 +1377,18 @@ class FileStore(AccountStore):
                 account.users = users
                 self._account_key_indexes[account_id] = key_index
         finally:
-            await self._async_agfs.pathlock_release(lease)
+            if lease_ref is None:
+                await self._async_agfs.pathlock_release(lease)
 
-    async def _write_groups_json(self, account_id: str, groups: dict) -> None:
+    async def _write_groups_json(
+        self,
+        account_id: str,
+        groups: dict,
+        *,
+        lease_ref: object | None = None,
+    ) -> None:
         path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
-        await self._write_json(path, {"groups": groups})
+        await self._write_json(path, {"groups": groups}, lease_ref=lease_ref)
 
     def _watcher_running(self) -> bool:
         return self._watch_task is not None and not self._watch_task.done()
@@ -1461,6 +1476,8 @@ class FileStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
@@ -1468,16 +1485,21 @@ class FileStore(AccountStore):
                 account_id,
                 admin_user_id,
                 api_key,
+                lease_ref=lease_ref,
             )
 
     async def create_account(
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
-            await self._create_account_identity(account_id, admin_user_id)
+            await self._create_account_identity(
+                account_id, admin_user_id, lease_ref=lease_ref
+            )
 
     async def create_user(self, account_id: str, user_id: str, role: str) -> None:
         async with self._mutation_lock:

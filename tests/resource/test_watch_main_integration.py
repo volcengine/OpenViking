@@ -328,9 +328,7 @@ async def connector_task(store, watch_vfs, *, active=True, encrypted=False, lega
                 return ciphertext[4:][::-1]
 
         watch_vfs._encryptor = Encryptor()
-        delegate = ConnectorDelegate(
-            viking_fs=watch_vfs, background_tasks=set(), link_reason_memory=AsyncMock()
-        )
+        delegate = ConnectorDelegate(viking_fs=watch_vfs)
         auth = await delegate.create_watch_auth_state(**request)
     task = await create(
         store,

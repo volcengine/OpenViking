@@ -255,6 +255,7 @@ class SessionService:
             memory_policy_provider=lambda: self._get_user_memory_policy(ctx),
             usage_reporter=self._usage_reporter,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
             expiry_reporter=self._session_expiry_adapter,
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,

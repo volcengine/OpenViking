@@ -127,6 +127,8 @@ acl_inherited_grants
 
 `acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` stores the parent's current effective ACL. `acl_mode` controls whether inherited grants contribute to the current node's effective permissions. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. There is no separate ACL collection.
 
+An empty grants list is stored as `["none"]` and decoded as no grants. The `"none"` token must appear alone and never grants access. This storage marker is independent of `acl_mode`: clearing direct grants preserves the mode and any inherited permissions.
+
 ACLs update with the index, so records for the same URI may temporarily hold different versions. Reads use one ACL snapshot returned by the index, without merging grants across versions or blocking on temporary disagreement. Permission changes take effect as index updates complete; strong consistency is not guaranteed.
 
 The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. Within the shared scope, retrieval identifies controlled records with `acl_mode IN [inherit, restricted]`, then matches each principal's `1`, `3`, and `7` grant tokens: direct or inherited for inherit mode, direct only for restricted mode. Shared records with missing, `null`, or `none` modes use the root’s default wildcard access in retrieval. Stored inherit nodes must match their direct or inherited grants; inherit mode alone never grants wildcard access. Private resources remain isolated by URI owner.

@@ -102,11 +102,13 @@ OpenViking 的配置分为两个层级：
 | Cluster | `agent_evolution` | 动态配置 | ROOT 可通过 Admin API 修改，作为集群默认值使用。 |
 | Account | `feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。Agent Evolution 为兼容旧行为保留已废弃的 Cluster 整段回退。Feishu 默认值由业务解析器处理：Account 未设置时使用 Cluster；设置后仅 `domain` 来自 Cluster。 |
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
+| Account | `output_language_override`、`memory.extraction_enabled` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。生成内容使用任务所属 Account 的配置，未配置时由业务层使用 Cluster 默认值。 |
 | Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
+| Account | `parser_api.api_key` | 动态配置 | 仅 ROOT 可读写。已配置的段必须包含非空白 Key；外部解析使用任务所属 Account 的凭证。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
-Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 不在当前 Account 配置 API 范围内。
+Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 仅开放 `extraction_enabled`。
 
 Account 与 Cluster 配置分别存储和发布。Account 未配置时是否使用 Cluster
 属于业务默认行为，不是配置框架中的隐式继承。VLM 业务解析器负责这项策略：
@@ -153,6 +155,35 @@ PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置�
 的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
+
+## Account 内容生成配置
+
+创建 Account 时应在 `settings` 中显式提供所需默认值，也可以通过 Account
+配置接口更新：
+
+```json
+{
+  "settings": {
+    "output_language_override": "en",
+    "memory": {"extraction_enabled": false}
+  }
+}
+```
+
+语言字段未配置或为 `null` 时使用 Cluster 语言；显式 `""` 启用自动语言判断，
+即使 Cluster 指定了语言也不使用它。语言标识沿用现有生成规则。这项配置覆盖
+文本资源摘要、目录 overview、Working Memory、记忆抽取和手动记忆整理。
+图片摘要提示词保持原有语言行为；音视频摘要优先使用媒体自身语言，仅在媒体语言
+无法识别时使用配置语言兜底。
+
+`memory` 整段未配置或为 `null` 时使用 Cluster 抽取开关。整段存在时使用其
+`extraction_enabled`，程序默认值为 `true`；`{}` 或删除最后一个字段会保留
+这个程序默认值。`false` 关闭 SessionCommit 长期记忆抽取；开启时仍遵守 user/peer
+策略。Working Memory 和手动 `compile --skill memory` 仍可使用。
+
+语言生成和抽取开关判断分别在需要时读取各自的 Account 配置；再次执行读取
+更新后的配置。排队任务保存 owner 身份，不保存这些配置值。
+显式 Account 配置不随 Cluster 默认值改变。
 
 ## Account Embedding 与 VectorDB
 
@@ -1078,7 +1109,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `enable` | `false` | 启用外部解析。 |
 | `extensions` | `[]` | 交给外部解析的扩展名；转为小写并去掉开头的点。 |
 | `host` | `""` | 带协议的 API 地址，如 `https://parser.example.com`；启用时必填。 |
-| `api_key` | `""` | 外部 API 凭证；启用时必填。 |
+| `api_key` | `""` | 兼容旧独享部署的凭证，仅在 Account 未配置 `parser_api` 段时使用；启动外部解析操作时必须有可用 Key。 |
 | `enable_feishu_url` | `false` | 有可用凭证时允许直接解析飞书 URL。已由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析；文件附件仍按扩展名路由。 |
 | `enable_resumable_upload` | `false` | 启用断点续传。 |
 | `upload_simple_max_bytes` | `536870912`（512 MiB） | 简单上传的大小阈值。 |
@@ -1088,6 +1119,24 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `poll_interval_ms` | `3000` | 结果轮询间隔，单位毫秒。 |
 
 大小、超时和轮询参数都必须大于零。
+
+共享部署应通过 `POST /api/v1/admin/accounts` 为每个 Account 配置
+`settings.parser_api.api_key`，或通过
+`PATCH /api/v1/admin/accounts/{account_id}/configuration` 更新。该段仅 ROOT
+可读写；ADMIN 响应不返回该段，ADMIN 修改请求（包括 `null`）均被拒绝。
+Account 只拥有凭证，host、路由、上传和超时参数仍由 Cluster 维护。
+Account 已配置时，远端认证失败不会回退到 Cluster Key。普通 add-resource
+`args.api_key` 和 `args.parser_api` 均被拒绝。
+
+上传、提交、轮询、目录导入（包括嵌套 ZIP）和任务恢复都使用任务所属 Account。队列消息仅保存 owner
+和远端 file/response ID，不保存解析 Key。执行中的一次解析调用使用已取得的 Key，
+下一次调用或恢复读取最新 Key。轮换必须保持同一远端身份，并确保新 Key 能访问已有
+远端 ID；权限错误直接失败，不重新提交或尝试其他凭证。结果 ZIP URL 的下载不附带
+解析服务的 Authorization 头。
+
+内置文件配置源通过 AGFS 持久化 Account 配置，开启 `encryption.enabled=true`
+时沿用现有文件加密；该开关默认关闭。本次改动不会加密宿主机上的 `ov.conf`，
+也不改变自定义配置源的加密行为。
 
 ### rerank
 
@@ -1521,9 +1570,6 @@ Redis 命名空间。
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `backend` | str | `local` 完全沿用原文件系统；`cache` 启用 CacheFS wrapper | `local` |
-| `max_file_size_bytes` | int | 允许缓存的单文件最大字节数 | `1048576` |
-| `traversal_mode` | str | `backend` 或 `cached_traversal` | `backend` |
-| `bypass_prefixes` | array[str] | 绕过缓存的路径前缀 | `[]` |
 
 `storage.agfs.pathlock` 选择 PathLock 存储 Provider：
 
@@ -1825,9 +1871,9 @@ acl_direct_grants
 acl_inherited_grants
 ```
 
-每个元素使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。
+每项授权使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。空 grants 存储为 `["none"]`，这也是两个字段的默认值；该标记不改变 `acl_mode`。
 
-本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空列表读取。
+本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空权限读取。
 
 火山向量库等远端 backend 的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
 
