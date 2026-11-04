@@ -7,6 +7,7 @@ import { sanitizeNonArkChildEnv, terminateProcessTree } from '../process-utils.m
 import { safeError } from '../logger.mjs';
 import { connectorManifest, parseProtocolLine, requestMessage } from './protocol.mjs';
 import { mentionTarget } from '../runtime-input.mjs';
+import { LARK_VIDEO_PREP_MS, isLarkVideo } from '../lark-video.mjs';
 
 const defaultWorkerPath = fileURLToPath(new URL('./worker.mjs', import.meta.url));
 // Backoff between restarts of one failed Connector; the last delay repeats.
@@ -295,6 +296,9 @@ export class ConnectorProcess {
       // lookup. Core must not remove snapshots while this worker uses them.
       const count = new Set(input.content.card_images.map((image) => image.digest)).size;
       timeoutMs = (Math.min(count, 32) + 2) * timeoutMs + 1000;
+    } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkVideo(input.content.path)) {
+      // Cover extraction runs before the CLI send.
+      timeoutMs += LARK_VIDEO_PREP_MS + 1000;
     }
     return this.request('action', { name, input }, timeoutMs);
   }

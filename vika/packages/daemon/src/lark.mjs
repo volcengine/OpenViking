@@ -11,6 +11,7 @@ import { MEETING_EVENT_TYPES } from './meeting/index.mjs';
 import { prepareLarkMediaDirectory } from './lark-media.mjs';
 import { MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, replaceCardImages, validImageKey } from './card-images.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
+import { isLarkVideo, videoCover } from './lark-video.mjs';
 import { LarkImageCache } from './lark-image-cache.mjs';
 import {
   DOC_COMMENT_EVENT, WHOLE_COMMENT_TYPES, commentContent, commentMessageId, commentPeople, docChatId, isDocChatId,
@@ -312,6 +313,7 @@ export class LarkClient {
     if (content.type === 'markdown') {
       data = await this.im([...target, '--markdown', renderMentions(content.text, content.mentions), ...suffix], 'send message');
     } else if (content.type === 'file') {
+      if (isLarkVideo(content.path)) return deliveredMessage(await this.deliverVideo(target, content, suffix));
       // lark-cli accepts only cwd-relative upload paths.
       const flag = IMAGE_TYPES[path.extname(content.path).toLowerCase()] ? '--image' : '--file';
       data = await this.im([...target, flag, `./${path.basename(content.path)}`, ...suffix], 'send attachment',
@@ -325,6 +327,24 @@ export class LarkClient {
       throw new Error(`unsupported Lark content type: ${content.type}`);
     }
     return deliveredMessage(data);
+  }
+
+  // Sends .mp4/.mov as a playable media message with a cover from the video
+  // (or a placeholder), uploaded from the frozen file's own directory.
+  async deliverVideo(target, content, suffix) {
+    const dir = path.dirname(content.path);
+    const work = fs.mkdtempSync(path.join(dir, '.video-'));
+    try {
+      const cover = await videoCover(this.registry, content.path, work, this.logger);
+      try {
+        return await this.im([...target, '--video', `./${path.basename(content.path)}`,
+          '--video-cover', `./${path.relative(dir, cover)}`, ...suffix], 'send video', { cwd: dir });
+      } catch (error) {
+        throw new Error(`${error.message}; if it keeps failing, upload the video to Drive and send the link instead`);
+      }
+    } finally {
+      fs.rmSync(work, { recursive: true, force: true });
+    }
   }
 
   async cardWithImages({ card, card_images: assets }) {

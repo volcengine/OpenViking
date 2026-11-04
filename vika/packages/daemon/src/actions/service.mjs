@@ -20,6 +20,7 @@ import {
   parseApprovalReply, settledApprovalCard,
 } from './approval.mjs';
 import { resolveContent } from './content.mjs';
+import { unsendableVideoError } from '../lark-video.mjs';
 import { TOOLS, publicTool, toolDefinition, validateInput } from './tools.mjs';
 
 const NO_ACTION = 'No action was taken.';
@@ -605,6 +606,8 @@ export class ActionService {
     caller.trace.contentType = content.type;
     try {
       if (!spec.content?.includes(content.type)) throw blocked('unsupported', `${connector} cannot send ${content.type} messages here. ${NO_ACTION}`);
+      const video = content.type === 'file' && this.manifest(connector)?.name === 'lark' ? unsendableVideoError(content.payload.path) : null;
+      if (video) throw blocked('unsupported', `${video.message} ${NO_ACTION}`);
       const mentions = await this.mentions(input, spec, chatId, connector);
       if (mentions.length > 0) {
         content.payload.mentions = mentions;
