@@ -53,7 +53,7 @@ const HANDLERS = {
   create_timer: 'createTimer',
   list_timers: 'listTimers',
   cancel_timer: 'cancelTimer',
-  complete_timer_occurrence: 'completeTimerOccurrence',
+  finish_timer_occurrence: 'finishTimerOccurrence',
 };
 
 // A refusal the model can act on; `code` is what logs and activities record.
@@ -66,7 +66,7 @@ function blocked(code, message) {
 // timer occurrence done counts only when it was marked.
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
-  if (tool?.name === 'complete_timer_occurrence') return result?.data?.completed === true;
+  if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -1369,7 +1369,7 @@ export class ActionService {
       nowMs,
       timezone,
     });
-    const timer = this.timers.create({
+    const timer = await this.timers.create({
       title: input.title,
       text: input.text,
       timezone,
@@ -1424,9 +1424,9 @@ export class ActionService {
     return { text: `Active timers (${timers.length}):\n${lines.join('\n')}`, data: { timers } };
   }
 
-  cancelTimer(input) {
+  async cancelTimer(input) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
-    const cancelled = this.timers.cancelWithOccurrenceChecks(input.timer_id);
+    const cancelled = await this.timers.cancel(input.timer_id);
     if (cancelled) this.onTimersChanged?.();
     return {
       text: cancelled ? `Timer cancelled: timer_id=${input.timer_id}.` : `Timer was not active: timer_id=${input.timer_id}.`,
@@ -1434,30 +1434,63 @@ export class ActionService {
     };
   }
 
-  completeTimerOccurrence(input) {
+  async finishTimerOccurrence(input, caller) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
-    const pending = this.timers.getOccurrenceCheck(input.occurrence_id);
-    const delivery = pending?.event.data?.timer?.delivery;
-    const connector = delivery?.mode === 'owner' ? this.config.channel : delivery?.source;
-    const target = delivery?.mode === 'owner'
-      ? this.connectors.owner?.(connector)?.target
-      : delivery?.mode === 'chat' ? { chat_id: delivery.chat_id } : null;
-    if (!target || !this.store.sentTimerOccurrenceDelivery(input.occurrence_id, { connector, target })) {
+    const check = this.timers.getOccurrenceCheck(input.occurrence_id);
+    if (!check) throw blocked('unknown_occurrence', 'This timer occurrence has no completion check.');
+    let delivery = null;
+    if (input.delivery) {
+      const tool = TOOLS.find((candidate) => candidate.name === input.delivery.tool);
+      if (!tool || !this.offered(tool)) throw blocked('unknown_tool', `unknown tool: ${input.delivery.tool}`);
+      try { validateInput(this.definition(tool).inputSchema, input.delivery.input); } catch (error) {
+        throw blocked('invalid_input', error.message);
+      }
+      if (input.delivery.input.interim || input.delivery.input.choices !== undefined) {
+        throw blocked('invalid_input', 'Use ordinary delivery tools for interim updates or questions with choices.');
+      }
+      const decision = this.resolveDecision(input.delivery.input, caller);
+      if (!this.isTimerReminder(decision)
+        || JSON.parse(decision.event_json).data?.timer?.occurrence_id !== input.occurrence_id) {
+        throw blocked('invalid_input', 'The delivery decision_id must belong to this timer occurrence.');
+      }
+    } else if (!input.reason?.trim()) {
+      throw blocked('invalid_input', 'reason is required when no delivery is needed.');
+    }
+    if (check.status === 'completed') {
       return {
-        text: `Timer occurrence is not complete: no successful delivery is recorded for occurrence_id=${input.occurrence_id}.`,
-        data: { occurrence_id: input.occurrence_id, completed: false },
+        text: `Timer occurrence already completed: occurrence_id=${input.occurrence_id}.`,
+        data: { occurrence_id: input.occurrence_id, completed: true, duplicate: true },
       };
     }
-    const check = this.timers.markOccurrenceCompleted(input.occurrence_id);
-    if (!check) {
-      return {
-        text: `Timer occurrence check was not pending: occurrence_id=${input.occurrence_id}.`,
-        data: { occurrence_id: input.occurrence_id, completed: false },
-      };
+    if (input.delivery) {
+      delivery = await this.call(input.delivery.tool, {
+        ...input.delivery.input,
+        decision_id: check.eventId,
+        decision_instance: 'timer',
+      }, { authority: caller.authority, via: caller.trace.via });
+      if (delivery.data?.dry_run) {
+        return {
+          text: `Timer occurrence is not complete: delivery was simulated for occurrence_id=${input.occurrence_id}.`,
+          data: { ...delivery.data, occurrence_id: input.occurrence_id, completed: false },
+        };
+      }
     }
+    await this.timers.markOccurrenceCompleted(input.occurrence_id);
+    this.store.recordActivity({
+      eventKey: `timer-completed:${input.occurrence_id}`,
+      kind: 'timer.completed',
+      status: 'COMPLETED',
+      summary: input.reason ?? 'Timer result delivered.',
+      metadata: {
+        occurrenceId: input.occurrence_id,
+        outcome: input.delivery ? 'delivered' : 'no_delivery_needed',
+        reason: input.reason ?? null,
+        runtime: caller.trace.runtime,
+      },
+    });
     return {
       text: `Timer occurrence completed: occurrence_id=${input.occurrence_id}.`,
-      data: { occurrence_id: input.occurrence_id, completed: true, status: check.status },
+      data: { ...delivery?.data, occurrence_id: input.occurrence_id, completed: true, status: 'completed' },
     };
   }
 }

@@ -30,6 +30,8 @@ const dom = {
   live: $('live'),
   liveText: $('live-text'),
   stats: $('stats'),
+  timers: $('timers'),
+  pendingTimers: $('pending-timers'),
   system: $('system'),
   privacy: $('privacy-toggle'),
   track: $('strip-track'),
@@ -51,6 +53,7 @@ const state = {
   nextCursor: null,
   service: null,
   overview: null,
+  timers: null,
   follow: true,
   polling: false,
   loaded: false,
@@ -774,6 +777,54 @@ function renderSystem(model) {
   if (!recent.length) dom.system.replaceChildren(h('li', 'muted', '暂无'));
 }
 
+function timerDate(ms, timezone) {
+  if (!Number.isFinite(ms)) return '—';
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: timezone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(ms);
+}
+
+function timerSchedule(schedule, timezone) {
+  if (schedule.type === 'daily') return `每天 ${schedule.time}`;
+  if (schedule.type === 'weekly') {
+    const days = schedule.days ?? schedule.days_of_week ?? [schedule.day_of_week];
+    return `每周 ${days.map((day) => ['日', '一', '二', '三', '四', '五', '六'][day]).join('、')} ${schedule.time}`;
+  }
+  if (schedule.type === 'interval') return `每 ${fmtDur(schedule.interval_ms)}`;
+  return `一次性 ${timerDate(Date.parse(schedule.run_at), timezone)}`;
+}
+
+function renderTimers() {
+  const timers = state.timers;
+  if (!timers) {
+    dom.timers.replaceChildren(h('li', 'muted', '正在读取…'));
+    dom.pendingTimers.replaceChildren(h('li', 'muted', '正在读取…'));
+    return;
+  }
+  dom.timers.replaceChildren(...timers.active.map((timer) => {
+    const item = h('li');
+    const details = h('details');
+    details.dataset.key = `timer:${state.instance}:${timer.timerId}`;
+    details.open = state.openKeys.has(details.dataset.key);
+    details.append(h('summary', 'txt', timer.title), h('pre', 'txt', timer.text));
+    item.append(details,
+      h('div', 'timer-meta', `${timerSchedule(timer.schedule, timer.timezone)} · ${timer.timezone}`),
+      h('div', 'timer-meta', `下次 ${timerDate(timer.nextRunAtMs, timer.timezone)}`),
+      h('div', 'timer-meta', `已触发 ${timer.runCount} 次${timer.maxRuns == null ? '' : ` / 共 ${timer.maxRuns} 次`}`));
+    return item;
+  }));
+  dom.pendingTimers.replaceChildren(...timers.pending.map((check) => {
+    const item = h('li', 'warn');
+    item.append(h('div', 'txt', check.title || check.occurrenceId),
+      h('div', 'timer-meta', `触发 ${timerDate(check.scheduledTimeMs, check.timezone)}`),
+      h('div', 'timer-meta', `已提醒 ${check.attempt} 次 · 下次检查 ${timerDate(check.nextCheckAtMs, check.timezone)}`));
+    return item;
+  }));
+  if (!timers.active.length) dom.timers.append(h('li', 'muted', '暂无定时任务'));
+  if (!timers.pending.length) dom.pendingTimers.append(h('li', 'muted', '暂无未完成执行'));
+}
+
 function render() {
   const rows = [...state.rows.values()].sort((a, b) => a.id - b.id);
   state.model = buildModel(rows);
@@ -781,6 +832,7 @@ function render() {
   renderStrip(state.model);
   renderLive();
   renderStats();
+  renderTimers();
   renderSystem(state.model);
   dom.loadOlder.hidden = state.nextCursor == null;
 }
@@ -842,6 +894,7 @@ function renderSessions() {
 function applyMeta(data) {
   state.service = data.service ?? state.service;
   state.overview = data.overview ?? state.overview;
+  state.timers = data.timers ?? null;
   const previousCurrent = state.currentEpoch;
   state.sessions = Array.isArray(data.sessions) ? data.sessions : state.sessions;
   state.currentEpoch = state.sessions.find((session) => session.current)?.epoch ?? null;
@@ -898,6 +951,8 @@ async function loadInitial() {
   state.rows.clear();
   state.cache.clear();
   dom.entries.replaceChildren();
+  state.timers = null;
+  renderTimers();
   state.nextCursor = null;
   state.follow = true;
   try {
@@ -923,11 +978,18 @@ async function loadInitial() {
 }
 
 async function poll() {
-  if (state.polling || document.hidden || viewingHistorical()) return;
+  if (state.polling || document.hidden) return;
   if (!state.loaded) { void loadInitial(); return; }
   state.polling = true;
   const generation = state.generation;
   try {
+    if (viewingHistorical()) {
+      const data = await fetchActivity({ limit: 1 });
+      if (generation !== state.generation) return;
+      applyMeta(data);
+      renderTimers();
+      return;
+    }
     let added = 0;
     let data;
     do {
@@ -939,7 +1001,7 @@ async function poll() {
     } while (data.hasNewer && state.rows.size);
     showNotice('');
     if (added > 0) render();
-    else { renderLive(); renderStats(); }
+    else { renderLive(); renderStats(); renderTimers(); }
   } catch (error) {
     showNotice(`无法连接 daemon：${error.message}`);
     dom.live.className = 'live bad';
@@ -1008,6 +1070,11 @@ async function loadInstances() {
 }
 
 // ---------- 交互 ----------
+dom.timers.addEventListener('toggle', (event) => {
+  const key = event.target.dataset?.key;
+  if (!key) return;
+  if (event.target.open) state.openKeys.add(key); else state.openKeys.delete(key);
+}, true);
 function jumpLatest() {
   if (viewingHistorical()) { selectSession(String(state.currentEpoch)); return; }
   state.follow = true;

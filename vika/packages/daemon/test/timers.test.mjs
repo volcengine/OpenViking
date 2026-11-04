@@ -52,6 +52,206 @@ function setup(t, { now = 1_790_000_000_000, run = null, ids = ['lark'], channel
 }
 
 describe('timer MCP tools', () => {
+  it('awaits completion persistence before recording completion activity', async (t) => {
+    const context = setup(t);
+    const { occurrenceId } = await dueOccurrence(context);
+    const complete = context.repository.markOccurrenceCompleted.bind(context.repository);
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    context.repository.markOccurrenceCompleted = async (id) => { await pending; return complete(id); };
+    const result = context.call('finish_timer_occurrence', { occurrence_id: occurrenceId, reason: 'No delivery needed' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.store.db.prepare("SELECT COUNT(*) AS count FROM activities WHERE kind = 'timer.completed'").get().count, 0);
+    release();
+    assert.equal((await result).data.completed, true);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'completed');
+  });
+  it('does not record completion when asynchronous persistence fails', async (t) => {
+    const context = setup(t);
+    const { occurrenceId } = await dueOccurrence(context);
+    context.repository.markOccurrenceCompleted = async () => { throw new Error('OV write failed'); };
+    await assert.rejects(context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId, reason: 'No delivery needed',
+    }), /OV write failed/);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+    assert.equal(context.store.db.prepare("SELECT COUNT(*) AS count FROM activities WHERE kind = 'timer.completed'").get().count, 0);
+  });
+  async function dueOccurrence(context) {
+    context.acceptChat();
+    const created = await context.call('create_timer', {
+      decision_id: 'evt-timer-request',
+      title: '条件提醒',
+      text: '工作日不发送，其他日期发送结果',
+      timezone: 'Asia/Shanghai',
+      schedule: { type: 'once', run_at: new Date(1_790_000_000_000).toISOString() },
+      delivery: { mode: 'owner' },
+    });
+    const connector = new TimerConnector({
+      repository: context.repository,
+      submitEvent: (event) => context.store.ingest(normalizeEvent(event)),
+      now: () => 1_790_000_000_000,
+      logger,
+      autoStart: false,
+    });
+    await connector.fireDueOnce();
+    return { occurrenceId: `${created.data.timer_id}:1790000000000`, connector };
+  }
+
+  it('finishes with one delivery call only after sending, even when a new input arrives during delivery', async (t) => {
+    let release;
+    const sending = new Promise((resolve) => { release = resolve; });
+    const context = setup(t, { run: async () => { await sending; return { message_id: 'om_final123456' }; } });
+    const { occurrenceId } = await dueOccurrence(context);
+    const finish = context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: { markdown: '结果', decision_id: `timer:${occurrenceId}` } },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+    await assert.rejects(() => context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: { markdown: '结果', decision_id: `timer:${occurrenceId}` } },
+    }), /in progress/);
+    context.acceptChat({ messageId: 'om_new_input123', eventId: 'evt-new-input' });
+    release();
+    assert.equal((await finish).data.completed, true);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'completed');
+    const repeat = await context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: { markdown: '结果', decision_id: `timer:${occurrenceId}` } },
+    });
+    assert.equal(repeat.data.completed, true);
+    assert.equal(context.store.db.prepare('SELECT COUNT(*) AS count FROM outbox').get().count, 1);
+  });
+
+  it('finishes without sending and records why, without another completion reminder', async (t) => {
+    const context = setup(t);
+    const { occurrenceId, connector } = await dueOccurrence(context);
+    const result = await context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId, reason: '今天是工作日，按任务要求不发送',
+    });
+    assert.equal(result.data.completed, true);
+    assert.equal(context.store.db.prepare('SELECT COUNT(*) AS count FROM outbox').get().count, 0);
+    const activity = context.store.db.prepare("SELECT * FROM activities WHERE kind = 'timer.completed'").get();
+    assert.match(activity.summary, /今天是工作日/);
+    connector.now = () => 1_790_000_300_000;
+    await connector.fireDueOnce();
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId), null);
+    assert.equal(context.store.db.prepare("SELECT COUNT(*) AS count FROM connector_events WHERE connector_instance = 'timer'").get().count, 1);
+    await assert.rejects(() => context.call('complete_timer_occurrence', { occurrence_id: occurrenceId }), /unknown tool/);
+  });
+
+  it('keeps ordinary questions pending and requires an explicit reason for silent completion', async (t) => {
+    const context = setup(t);
+    const { occurrenceId } = await dueOccurrence(context);
+    await context.call('notify_owner', { markdown: '请问使用哪张图片？', decision_id: `timer:${occurrenceId}` });
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+    await assert.rejects(() => context.call('finish_timer_occurrence', { occurrence_id: occurrenceId }), /reason/);
+    await assert.rejects(() => context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: {
+        choices: { prompt: '选哪张？', options: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }] },
+        decision_id: `timer:${occurrenceId}`,
+      } },
+    }), /question|choices/);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+  });
+
+  it('leaves failed deliveries pending on repeated attempts', async (t) => {
+    const context = setup(t, { run: async () => { throw new Error('send timed out'); } });
+    const { occurrenceId } = await dueOccurrence(context);
+    const input = {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: { markdown: '结果', decision_id: `timer:${occurrenceId}` } },
+    };
+    await assert.rejects(() => context.call('finish_timer_occurrence', input), /send timed out/);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+    await assert.rejects(() => context.call('finish_timer_occurrence', input), /send timed out/);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+    assert.equal(context.store.db.prepare('SELECT status FROM outbox').get().status, 'UNCERTAIN');
+  });
+
+  it('recovers a sent result without resending after completion persistence failed', async (t) => {
+    const context = setup(t);
+    const { occurrenceId } = await dueOccurrence(context);
+    const input = {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: { markdown: '结果', decision_id: `timer:${occurrenceId}` } },
+    };
+    context.store.db.exec(`CREATE TRIGGER fail_timer_completion BEFORE UPDATE ON timer_occurrence_checks
+      BEGIN SELECT RAISE(ABORT, 'completion write failed'); END`);
+    await assert.rejects(() => context.call('finish_timer_occurrence', input), /completion write failed/);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+    context.store.db.exec('DROP TRIGGER fail_timer_completion');
+    const result = await context.call('finish_timer_occurrence', input);
+    assert.equal(result.data.completed, true);
+    assert.equal(result.data.duplicate, true);
+    assert.equal(context.store.db.prepare('SELECT COUNT(*) AS count FROM outbox').get().count, 1);
+    assert.equal(context.connectors.calls.length, 1);
+  });
+
+  it('validates the occurrence and nested tool before any delivery', async (t) => {
+    const context = setup(t);
+    const { occurrenceId } = await dueOccurrence(context);
+    for (const delivery of [
+      { tool: 'notify_owner', input: { markdown: '结果', decision_id: 'evt-timer-request' } },
+      { tool: 'notify_owner', input: { markdown: '结果', decision_id: `timer:${occurrenceId}`, unexpected: true } },
+      { tool: 'send_message', input: { markdown: '结果', decision_id: `timer:${occurrenceId}`, chat_id: 'oc_wrong123456', source: 'lark' } },
+    ]) {
+      await assert.rejects(() => context.call('finish_timer_occurrence', { occurrence_id: occurrenceId, delivery }));
+    }
+    await assert.rejects(() => context.call('finish_timer_occurrence', {
+      occurrence_id: 'tm_missing:1790000000000', reason: '不发送',
+    }));
+    assert.equal(context.store.db.prepare('SELECT COUNT(*) AS count FROM outbox').get().count, 0);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+  });
+
+  it('does not complete a simulated delivery in dry-run mode', async (t) => {
+    const context = setup(t);
+    const { occurrenceId } = await dueOccurrence(context);
+    context.service.config.dryRun = true;
+    const result = await context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: { markdown: '结果', decision_id: `timer:${occurrenceId}` } },
+    });
+    assert.equal(result.data.completed, false);
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+  });
+
+  it('reuses reply_message for a final file result in the configured chat', async (t) => {
+    const context = setup(t);
+    context.acceptChat();
+    const created = await context.call('create_timer', {
+      decision_id: 'evt-timer-request',
+      title: '文件结果',
+      text: '完成后发文件',
+      schedule: { type: 'once', run_at: new Date(1_790_000_000_000).toISOString() },
+      delivery: { mode: 'chat', source: 'lark', chat_id: 'oc_timer_setup123' },
+    });
+    const connector = new TimerConnector({
+      repository: context.repository,
+      submitEvent: (event) => context.store.ingest(normalizeEvent(event)),
+      now: () => 1_790_000_000_000,
+      logger,
+      autoStart: false,
+    });
+    await connector.fireDueOnce();
+    const occurrenceId = `${created.data.timer_id}:1790000000000`;
+    const result = await context.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'reply_message', input: {
+        source: 'lark', message_id: 'om_timer_request123',
+        file_key: 'file_result123456', decision_id: `timer:${occurrenceId}`,
+      } },
+    });
+    assert.equal(result.data.completed, true);
+    const outbox = context.store.db.prepare('SELECT action, status, payload_json FROM outbox').get();
+    assert.equal(outbox.action, 'message.reply');
+    assert.equal(outbox.status, 'SENT');
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'completed');
+  });
+
   it('creates one active timer per decision and lists only live timers', async (t) => {
     const { call, acceptChat, repository, wakeups } = setup(t, { now: 1_790_000_000_000 });
     acceptChat();
@@ -119,7 +319,7 @@ describe('timer MCP tools', () => {
     assert.equal(submitted[0].conversation, null);
     assert.equal(submitted[0].data.timer.scheduled_time_ms, 1_790_000_000_000);
     assert.equal(submitted[0].data.timer.run_count, 1);
-    assert.match(submitted[0].content.text, /complete_timer_occurrence/);
+    assert.match(submitted[0].content.text, /finish_timer_occurrence/);
     assert.match(submitted[0].content.text, /occurrence_id=tm_once_pr_001:1790000000000/);
     assert.match(submitted[0].content.text, /提醒我看 PR #123/);
     const check = repository.getOccurrenceCheck('tm_once_pr_001:1790000000000');
@@ -197,11 +397,13 @@ describe('timer MCP tools', () => {
 
     await connector.fireDueOnce();
     store.ingest(normalizeEvent(submitted[0]));
-    await call('notify_owner', {
-      markdown: '提醒我看 PR #456',
-      decision_id: 'timer:tm_once_pr_002:1790000000000',
+    const completed = await call('finish_timer_occurrence', {
+      occurrence_id: 'tm_once_pr_002:1790000000000',
+      delivery: { tool: 'notify_owner', input: {
+        markdown: '提醒我看 PR #456',
+        decision_id: 'timer:tm_once_pr_002:1790000000000',
+      } },
     });
-    const completed = await call('complete_timer_occurrence', { occurrence_id: 'tm_once_pr_002:1790000000000' });
     assert.equal(completed.data.completed, true);
     assert.equal(repository.getOccurrenceCheck('tm_once_pr_002:1790000000000').status, 'completed');
 
@@ -247,7 +449,7 @@ describe('timer MCP tools', () => {
     assert.equal(submitted[1].data.timer.occurrence_id, 'tm_once_pr_003:1790000000000');
     assert.equal(submitted[1].data.timer.check_attempt, 1);
     assert.match(submitted[1].content.text, /may not be complete/);
-    assert.match(submitted[1].content.text, /complete_timer_occurrence/);
+    assert.match(submitted[1].content.text, /finish_timer_occurrence/);
 
     const check = repository.getOccurrenceCheck('tm_once_pr_003:1790000000000');
     assert.equal(check.status, 'pending');
@@ -428,22 +630,39 @@ describe('timer reminder delivery', () => {
   }
 
   it('requires the configured target and excludes approval drafts before completion', async (t) => {
-    const { store, repository, call } = setup(t);
+    const { store, repository, call, connectors } = setup(t, { ids: ['lark', 'email'] });
+    store.ingest(mailEvent());
     const event = pendingTimer(repository, store, { mode: 'chat', source: 'lark', chat_id: 'oc_report_group123' });
-    const inbound = store.acceptedEvents(event.id)[0];
-    const record = (key, payload, metadata = {}) => {
-      const outbox = store.reserveOutbox({
-        connector: 'lark', action: 'message.send', idempotencyKey: key, payload,
-        caller: 'agent', inboundSeq: inbound.seq, metadata,
-      });
-      store.settleOutbox(outbox.id, 'SENT', { result: { message_id: key } });
-    };
-    record('wrong-target', { ...OWNER.target });
-    assert.equal((await call('complete_timer_occurrence', { occurrence_id: event.data.timer.occurrence_id })).data.completed, false);
-    record('draft', { chat_id: 'oc_report_group123' }, { approval: true });
-    assert.equal((await call('complete_timer_occurrence', { occurrence_id: event.data.timer.occurrence_id })).data.completed, false);
-    record('final', { chat_id: 'oc_report_group123' });
-    assert.equal((await call('complete_timer_occurrence', { occurrence_id: event.data.timer.occurrence_id })).data.completed, true);
+    await assert.rejects(() => call('finish_timer_occurrence', {
+      occurrence_id: event.data.timer.occurrence_id,
+      delivery: { tool: 'send_message', input: {
+        source: 'lark',
+        chat_id: 'oc_other_group123',
+        markdown: 'wrong target',
+        decision_id: event.id,
+      } },
+    }), /configured for lark chat oc_report_group123/);
+    await assert.rejects(() => call('finish_timer_occurrence', {
+      occurrence_id: event.data.timer.occurrence_id,
+      delivery: { tool: 'reply_message', input: {
+        source: 'email',
+        message_id: 'mail:1:7',
+        markdown: 'draft',
+        decision_id: event.id,
+      } },
+    }), /configured for lark chat/);
+    assert.equal(repository.getOccurrenceCheck(event.data.timer.occurrence_id).status, 'pending');
+    const completed = await call('finish_timer_occurrence', {
+      occurrence_id: event.data.timer.occurrence_id,
+      delivery: { tool: 'send_message', input: {
+        source: 'lark',
+        chat_id: 'oc_report_group123',
+        markdown: 'final',
+        decision_id: event.id,
+      } },
+    });
+    assert.equal(completed.data.completed, true);
+    assert.equal(connectors.calls.at(-1).input.chat_id, 'oc_report_group123');
   });
 
   it('accepts a fired timer event, delivers it to the target chat, and suppresses the completion check after receipt', async (t) => {
@@ -488,19 +707,21 @@ describe('timer reminder delivery', () => {
     assert.equal(timerRow.event_id, eventId);
     assert.equal(timerRow.kind, 'reminder.due');
     assert.equal(timerRow.scope_key, JSON.stringify(['timer', 'timer', 'tm_integrated_report_001']));
-    assert.match(timerRow.content, /Delivery request: send this timer reminder to Lark chat oc_report_group123/);
-    assert.match(timerRow.content, /complete_timer_occurrence/);
+    assert.match(timerRow.content, /Delivery target: if this task requires a message, send its final result to Lark chat oc_report_group123/);
+    assert.match(timerRow.content, /finish_timer_occurrence/);
 
-    await call('send_message', {
-      source: 'lark',
-      chat_id: 'oc_report_group123',
-      markdown: '写日报',
-      decision_id: eventId,
+    const completed = await call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'send_message', input: {
+        source: 'lark',
+        chat_id: 'oc_report_group123',
+        markdown: '写日报',
+        decision_id: eventId,
+      } },
     });
     assert.equal(connectors.calls.at(-1).action, 'message.send');
     assert.equal(connectors.calls.at(-1).input.chat_id, 'oc_report_group123');
 
-    const completed = await call('complete_timer_occurrence', { occurrence_id: occurrenceId });
     assert.equal(completed.data.completed, true);
 
     nowMs += 300_000;
@@ -551,20 +772,21 @@ describe('timer reminder delivery', () => {
 
     const firstOccurrenceId = 'tm_count_001:1790000000000';
     const firstEventId = `timer:${firstOccurrenceId}`;
-    const notCompleted = await call('complete_timer_occurrence', { occurrence_id: firstOccurrenceId });
-    assert.equal(notCompleted.data.completed, false);
+    await assert.rejects(() => call('finish_timer_occurrence', { occurrence_id: firstOccurrenceId }), /reason/);
     assert.equal(repository.getOccurrenceCheck(firstOccurrenceId).status, 'pending');
 
-    await call('send_message', {
-      source: 'lark',
-      chat_id: 'oc_report_group123',
-      markdown: '1',
-      decision_id: firstEventId,
+    const completed = await call('finish_timer_occurrence', {
+      occurrence_id: firstOccurrenceId,
+      delivery: { tool: 'send_message', input: {
+        source: 'lark',
+        chat_id: 'oc_report_group123',
+        markdown: '1',
+        decision_id: firstEventId,
+      } },
     });
     assert.equal(connectors.calls.at(-1).action, 'message.send');
     assert.equal(connectors.calls.at(-1).input.chat_id, 'oc_report_group123');
 
-    const completed = await call('complete_timer_occurrence', { occurrence_id: firstOccurrenceId });
     assert.equal(completed.data.completed, true);
     assert.equal(repository.getOccurrenceCheck(firstOccurrenceId).status, 'completed');
 
@@ -625,17 +847,18 @@ describe('timer reminder delivery', () => {
     }, nowMs);
     store.settleOutbox(interim.id, 'SENT', { result: { message_id: 'om_interim_sent123' } }, nowMs);
 
-    const notCompleted = await call('complete_timer_occurrence', { occurrence_id: occurrenceId });
-    assert.equal(notCompleted.data.completed, false);
+    await assert.rejects(() => call('finish_timer_occurrence', { occurrence_id: occurrenceId }), /reason/);
     assert.equal(repository.getOccurrenceCheck(occurrenceId).status, 'pending');
 
-    await call('send_message', {
-      source: 'lark',
-      chat_id: 'oc_report_group123',
-      markdown: '日报已生成',
-      decision_id: eventId,
+    const completed = await call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'send_message', input: {
+        source: 'lark',
+        chat_id: 'oc_report_group123',
+        markdown: '日报已生成',
+        decision_id: eventId,
+      } },
     });
-    const completed = await call('complete_timer_occurrence', { occurrence_id: occurrenceId });
     assert.equal(completed.data.completed, true);
   });
 
