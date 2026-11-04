@@ -25,11 +25,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./components/status-badge": {
-      "types": "./dist/components/status-badge/status-badge.d.ts",
-      "import": "./dist/components/status-badge.js"
-    },
-    "./components/status-badge/style.css": "./dist/components/status-badge/style.css",
     "./components/file-tree": {
       "types": "./dist/components/file-tree/file-tree.d.ts",
       "import": "./dist/components/file-tree.js"

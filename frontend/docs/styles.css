@@ -9,8 +9,6 @@
 .dark {
   --rp-c-brand: #f18b97;
   --rp-c-brand-light: #ffa2ad;
-  --ov-ui-status-ready: #78d3a3;
-  --ov-ui-status-processing: #8ab8ff;
   --ov-ui-status-error: #ff9595;
 }
 

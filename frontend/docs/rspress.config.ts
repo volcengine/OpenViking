@@ -52,7 +52,6 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/components/' },
                 { text: 'Icons', link: '/components/icons' },
-                { text: 'StatusBadge', link: '/components/status-badge' },
                 { text: 'FileTree', link: '/components/file-tree' },
                 { text: 'FilePreview', link: '/components/file-preview' },
                 { text: 'Tui', link: '/components/tui' },
@@ -88,10 +87,6 @@ export default defineConfig({
               items: [
                 { text: '概览', link: '/zh/components/' },
                 { text: '图标', link: '/zh/components/icons' },
-                {
-                  text: 'StatusBadge 状态徽标',
-                  link: '/zh/components/status-badge',
-                },
                 { text: 'FileTree 文件树', link: '/zh/components/file-tree' },
                 {
                   text: 'FilePreview 文件预览',

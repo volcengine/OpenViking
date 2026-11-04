@@ -11,8 +11,6 @@ export default defineConfig({
         entry: {
           index: './src/index.ts',
           icons: './src/icons/index.tsx',
-          'components/status-badge':
-            './src/components/status-badge/status-badge.tsx',
           'components/file-tree': './src/components/file-tree/file-tree.tsx',
           'components/file-preview':
             './src/components/file-preview/file-preview.tsx',
@@ -36,8 +34,6 @@ export default defineConfig({
     ...Object.entries({
       style: './src/style.css',
       'components/style': './src/components/style.css',
-      'components/status-badge/style':
-        './src/components/status-badge/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',
       'components/file-preview/style':
         './src/components/file-preview/style.css',

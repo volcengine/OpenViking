@@ -1,6 +1,6 @@
 # @openviking/react
 
-React UI modules for OpenViking applications. The initial scaffold exports `StatusBadge`; six business modules export their public props types and ship placeholder components until the views are migrated, and `search` ships only a placeholder component while its props contract is being finalized.
+React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration. FileTree and FilePreview have implementations; Tui, VikingBot, ScopeSwitcher, AgentConnect, and Search remain placeholders.
 
 This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
@@ -18,7 +18,7 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 | [pages](./src/pages/README.md)                                         | 尚无公开入口                                  | 页面组合、数据获取与处理         |
 | [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)         | 仅包内使用                                    | 跨模块 Hook 与纯工具             |
 
-六个业务模块已定义公开的 props 类型，并从各自子路径导出同名占位组件；`search` 目前只导出占位组件，props 契约仍在定稿中。占位组件只渲染一个固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API；真实实现随视图迁入重写。`StatusBadge` 是已完成的脚手架示例，可从根入口或 `@openviking/react/components/status-badge` 导入。
+FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯文本预览、编辑基础。其余五个模块仍为固定尺寸的占位组件，不消费 props；其中 Search 的 props 契约仍在定稿中。这些占位入口不代表已具备相应业务能力。
 组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[pages](./src/pages/README.md) 负责取数、处理业务状态和编排；尚未定义首个页面。
 
 ### Props 约定
@@ -33,7 +33,7 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 
 ## 公开入口与样式
 
-- 根入口聚合已实现的公开 API；具体组件使用 `components/<模块>` 子路径。不提供 `@openviking/react/components` 或 `@openviking/react/pages` 分类聚合 JS 入口。包导出显式列举，内部文件不开放。
+- 根入口仅导出 FileTree 及其公开类型；具体组件使用 `components/<模块>` 子路径。不提供 `@openviking/react/components` 或 `@openviking/react/pages` 分类聚合 JS 入口。包导出显式列举，内部文件不开放。
 - 当前私有开发包的旧 `/tree`、`/preview`、`/console`、`/tui` 和 `/viking-bot` 子路径统一替换为上述分层路径，不保留旧路径别名。
 - JS 入口共享实现，不隐式加载 CSS。整包、组件集合与单模块样式由同一份源码构建，选择所需范围导入即可。
 
@@ -47,18 +47,7 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 
 经验看板属于预览扩展；任务进度先归所属模块；API Key 展示控件按需复用，凭证创建及管理由宿主负责。本次不新增这些独立模块。
 
-## 使用示例
-
-```tsx
-import { StatusBadge } from '@openviking/react';
-import '@openviking/react/style.css';
-
-export default function Example() {
-  return <StatusBadge status="ready">Connected</StatusBadge>;
-}
-```
-
-### 图标
+## 图标
 
 ```tsx
 import { PdfIcon } from '@openviking/react/icons';

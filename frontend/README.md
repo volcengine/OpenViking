@@ -1,6 +1,6 @@
 # OpenViking Frontend
 
-An isolated npm workspace for OpenViking frontend assets. It currently contains reusable React modules and an Rspress documentation site. The initial scaffold includes one example, `StatusBadge`; it does not migrate any existing business components.
+React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. Applications supply business UI, data, authentication, and workflow orchestration. FileTree and FilePreview already have implementations; Tui, VikingBot, ScopeSwitcher, AgentConnect, and Search remain placeholders.
 
 Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).
 
@@ -22,13 +22,14 @@ The navigation language menu switches between English at `/ui/` and Simplified C
 npm run lint           # Check formatting, lint rules, and types for all workspaces
 npm run lint:fix       # Format files and apply available lint fixes
 npm run typecheck      # Check types without formatting or lint rules
+npm test               # Verify built public JS, declaration, and CSS entries
 npm run build          # Build the ESM library, declarations, CSS, and static docs
 npm run preview        # Serve the built documentation at /ui/
 ```
 
 ## Layout
 
-- `packages/react`: private `@openviking/react` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
+- `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
 - `packages/react/src/components/{file-tree,file-preview,tui,viking-bot,scope-switcher,agent-connect}`: props types are public; component implementations follow. `packages/react/src/components/search` ships only its placeholder component, with the props contract still being finalized. See the [module map](./packages/react/README.md#模块目录).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
@@ -47,7 +48,7 @@ npm run lint -- packages/react/src/index.ts docs/rspress.config.ts
 npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
 ```
 
-Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. Import `@openviking/react/style.css`, `@openviking/react/components/style.css`, or `@openviking/react/components/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. Component subpaths use `components/<module>`; there are no category-level `components` or `pages` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. The package is private until a separate publication change establishes its release policy.
+Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. Import `@openviking/react/style.css`, `@openviking/react/components/style.css`, or `@openviking/react/components/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. Component subpaths use `components/<module>`; there are no category-level `components` or `pages` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. Publication is controlled by the separate release workflow and is not part of local validation.
 
 ## Target layout
 
@@ -90,7 +91,7 @@ The UI workflow checks relevant pull requests and pushes. The existing product d
 - TOS: `/ui/` is uploaded to the existing documentation bucket with the existing repository secrets.
 - Domain, Pages environment rules, and TOS secrets remain repository administration settings.
 - A branch push does not publish the production website. Production publication follows the existing `main` workflows.
-- No npm publication is configured.
+- npm publication uses the separate tag-triggered release workflow; local validation does not publish a package.
 
 Do not deploy this output as a second independent GitHub Pages site in this repository: deploying a new artifact would replace the product documentation.
 
