@@ -8,9 +8,22 @@ post-start existence check therefore always sees the directory present and
 never copies the bootstrap files into a fresh workspace.
 """
 
-import pytest
-from vikingbot.config.schema import Config, SessionKey
-from vikingbot.sandbox.manager import SandboxManager
+# This test lives at the root of ``tests/api_test`` because that is the directory the
+# api-test workflow collects (``cd tests/api_test && pytest .``); ``bot/tests`` is not
+# reached by any workflow.  ``vikingbot`` lives under ``bot/`` and is not installed by
+# the repo-wide test environment.  At this depth ``parents[2]`` is the repository root.
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_REPO_ROOT, _REPO_ROOT / "bot"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+
+import pytest  # noqa: E402
+from vikingbot.config.schema import Config, SessionKey  # noqa: E402
+from vikingbot.sandbox.manager import SandboxManager  # noqa: E402
 
 BOOTSTRAP_FILE = "AGENTS.md"
 BOOTSTRAP_CONTENT = "bootstrap instructions"
