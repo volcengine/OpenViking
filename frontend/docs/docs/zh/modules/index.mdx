@@ -19,7 +19,7 @@
 
 ## 导入与样式
 
-从 `@openviking/react/modules/<模块>` 导入组件及其 Props / Labels 类型。四个组件的本体、Props 与 Labels 类型也一并从根入口 `@openviking/react` 导出。
+从 `@openviking/react/modules/<模块>` 导入组件及其 Props / Labels 类型。四个组件的本体与主 Props 类型也从根入口 `@openviking/react` 导出；Labels 等子类型只从子路径导入。
 
 JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/style.css`，全部模块使用 `@openviking/react/modules/style.css`，整库使用 `@openviking/react/style.css`，每个样式入口均可独立消费。没有 `@openviking/react/modules` 分类聚合 JavaScript 入口。
 
