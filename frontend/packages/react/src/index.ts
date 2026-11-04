@@ -1,33 +1,18 @@
-export { FileTree } from './components/file-tree/file-tree.js';
-export type {
-  FileTreeEntryRow,
-  FileTreeErrorRow,
-  FileTreeHandle,
-  FileTreeLabels,
-  FileTreeLoadMoreRow,
-  FileTreeOperations,
-  FileTreeProps,
-  FileTreeRow,
-} from './components/file-tree/file-tree.js';
-export { FileBrowser } from './modules/file-browser/file-browser.js';
-export type {
-  FileBrowserLabels,
-  FileBrowserProps,
-} from './modules/file-browser/file-browser.js';
-export { Console } from './modules/console/console.js';
-export type { ConsoleLabels, ConsoleProps } from './modules/console/console.js';
-export { AgentConnect } from './components/agent-connect/agent-connect.js';
-export type {
-  AgentConnectLabels,
-  AgentConnectProps,
-} from './components/agent-connect/agent-connect.js';
-export { TaskCenter } from './modules/task-center/task-center.js';
-export type {
-  TaskCenterLabels,
-  TaskCenterProps,
-} from './modules/task-center/task-center.js';
-export { UserUsage } from './modules/user-usage/user-usage.js';
-export type {
-  UserUsageLabels,
-  UserUsageProps,
-} from './modules/user-usage/user-usage.js';
+export { FileTree } from './components/file-tree/index.js';
+export type { FileTreeProps } from './components/file-tree/index.js';
+export { FilePreview } from './components/file-preview/index.js';
+export type { FilePreviewProps } from './components/file-preview/index.js';
+export { Tui } from './components/tui/index.js';
+export type { TuiProps } from './components/tui/index.js';
+export { ScopeSwitcher } from './components/scope-switcher/index.js';
+export type { ScopeSwitcherProps } from './components/scope-switcher/index.js';
+export { AgentConnect } from './components/agent-connect/index.js';
+export type { AgentConnectProps } from './components/agent-connect/index.js';
+export { FileBrowser } from './modules/file-browser/index.js';
+export type { FileBrowserProps } from './modules/file-browser/index.js';
+export { Console } from './modules/console/index.js';
+export type { ConsoleProps } from './modules/console/index.js';
+export { TaskCenter } from './modules/task-center/index.js';
+export type { TaskCenterProps } from './modules/task-center/index.js';
+export { UserUsage } from './modules/user-usage/index.js';
+export type { UserUsageProps } from './modules/user-usage/index.js';
