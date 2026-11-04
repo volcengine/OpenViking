@@ -201,6 +201,31 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
+  // A pasted path starts with '/' but is not a command: it must reach the model
+  // as ordinary input. Pre-fix it was ingested as a slash_command, so the row
+  // was RULE_IGNORED and its content was blanked — unrecoverable from the
+  // ledger — and nothing was ever delivered.
+  it('delivers a message that starts with an absolute path instead of reading it as a command', async () => {
+    const env = await startMockEnv();
+    const text = '/home/bennett/.quectel-cli/jira/tokens.json token在这里';
+    try {
+      env.receive(textMessage({ messageId: 'om-path', text }));
+      await env.waitForCodexInput(/om-path/);
+
+      const delivered = env.codexInput().find((entry) => /om-path/.test(entry.text)).text;
+      assert.ok(delivered.includes(text), 'the model receives the path message verbatim');
+      // The ledger keeps the message: DONE, no filter reason, content intact.
+      const row = env.daemon.store.db.prepare(
+        "SELECT status, filter_reason, content FROM connector_events WHERE message_id = 'om-path'",
+      ).get();
+      assert.deepEqual({ ...row }, { status: 'DONE', filter_reason: null, content: text });
+      assert.equal(env.replies().length, 0, 'nothing answers a path as a command');
+      assert.equal(env.codexInput().length, 1, 'one turn, not a command reply plus a turn');
+    } finally {
+      await env.stop();
+    }
+  });
+
   it('answers a slash command through the outbox without waking codex', async () => {
     const env = await startMockEnv();
     try {

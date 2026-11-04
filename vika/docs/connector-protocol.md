@@ -219,12 +219,16 @@ collapsed onto one physical line. Journal-to-OpenViking synchronization uses the
 same formatter, so native session recovery preserves event identity and subject.
 
 The Harness applies shared validation, filtering, persistence, and admission to
-all events. Only replyable direct text/post chat messages can execute slash
-commands. Only message events in a group are burst-batched; subject events are
-submitted immediately or queued when the runtime cannot accept them. Lark roster
-lookups require a Lark conversation. Failure retry retains the canonical event;
-an event without a reply route records `NO_TARGET` instead of attempting an IM
-reply. Specialized card and meeting handlers consume normalized extension data.
+all events. Only replyable direct text/post chat messages whose first token is a
+known command name or an unambiguous prefix of one can execute slash commands; a
+token outside that vocabulary — a pasted path (`/home/me/x.json 看下`,
+`/tmp 里有什么`) or a typo — stays ordinary model input. Only a bare `/` asks for
+the command list. Only message events in a group are burst-batched; subject
+events are submitted immediately or queued when the runtime cannot accept them.
+Lark roster lookups require a Lark conversation. Failure retry retains the
+canonical event; an event without a reply route records `NO_TARGET` instead of
+attempting an IM reply. Specialized card and meeting handlers consume normalized
+extension data.
 
 The generic event contract does not provide an inbound ACK/replay guarantee.
 Connector cursor durability and Core acknowledgement are separate work; the

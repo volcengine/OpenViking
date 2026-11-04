@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { chatEvent } from './event-fixture.mjs';
 import { describe, it } from 'node:test';
 import {
+  COMMANDS,
   EFFORT_LEVELS,
   commandCandidate,
   executeCommand,
@@ -106,12 +107,67 @@ describe('parseCommand', () => {
     assert.deepEqual(parseCommand('/model  a  b '), { name: 'model', arg: 'a b' });
   });
 
-  it('reports unknown and bare-slash tokens without a name', () => {
-    const unknown = parseCommand('/foo bar');
-    assert.equal(unknown.name, null);
-    assert.equal(unknown.token, 'foo');
-    assert.deepEqual(unknown.matches, []);
+  it('asks for the vocabulary on a bare slash and ignores a slash plus space', () => {
     assert.equal(parseCommand('/').name, null);
+    // '/ new' is text ('/' plus a word), not a command: it keeps its content.
+    assert.equal(parseCommand('/ new'), null);
+    assert.equal(parseCommand('/ 帮我看下'), null);
+  });
+
+  // A pasted path starts with '/' just like a command. Answering it as an
+  // unknown command dropped the message, so an unrecognized token is text.
+  it('never reads a leading path as a command', () => {
+    assert.equal(parseCommand('/tmp/a.png'), null);
+    assert.equal(parseCommand('/home/bennett/.quectel-cli/jira/tokens.json token在这里'), null);
+    assert.equal(parseCommand('/usr/local/bin/vika --help'), null);
+    assert.equal(parseCommand('/etc/hosts 看下这个'), null);
+    assert.equal(parseCommand('/mnt/d/下载/报告.pdf 帮我看看'), null);
+    assert.equal(parseCommand('/var/log/syslog'), null);
+    assert.equal(parseCommand('/C:/Users/me/x.txt'), null);
+    assert.equal(parseCommand('/12345'), null);
+    assert.equal(parseCommand('/-v'), null);
+    // Single-segment paths are the same bug, one path segment shorter: their
+    // first token looks exactly like a command word.
+    assert.equal(parseCommand('/tmp 里有什么'), null);
+    assert.equal(parseCommand('/home 下有哪些目录'), null);
+    assert.equal(parseCommand('/etc 有什么'), null);
+    assert.equal(parseCommand('/opt 呢'), null);
+    assert.equal(parseCommand('/D 盘'), null);
+    // A word followed by a path still parses as a command, arg untouched.
+    assert.deepEqual(parseCommand('/model /home/me/x.json'), { name: 'model', arg: '/home/me/x.json' });
+  });
+
+  // Nothing else reserves the message: a typo reaches the model, which can
+  // answer it. Swallowing it with a vocabulary dump lost the message instead.
+  it('leaves an unrecognized word to the model rather than the daemon', () => {
+    for (const text of ['/hlp', '/hlep me', '/status2', '/run-me', '/foo bar', '/restart']) {
+      assert.equal(parseCommand(text), null, `${text} must flow to the model`);
+    }
+  });
+
+  it('accepts a command typed with trailing IME punctuation', () => {
+    assert.deepEqual(parseCommand('/new。'), { name: 'new', arg: '' });
+    assert.deepEqual(parseCommand('/help？'), { name: 'help', arg: '' });
+    assert.deepEqual(parseCommand('/status!'), { name: 'status', arg: '' });
+    // Punctuation inside the token is not trailing punctuation: no match, so
+    // the text is the model's, and the path shape is preserved.
+    assert.equal(parseCommand('/model，x'), null);
+    assert.equal(parseCommand('/tmp。'), null);
+  });
+
+  it('parses every command name and its every prefix', () => {
+    for (const name of COMMANDS) {
+      assert.deepEqual(parseCommand(`/${name}`), { name, arg: '' });
+      for (let end = 1; end <= name.length; end += 1) {
+        const prefix = name.slice(0, end);
+        const parsed = parseCommand(`/${prefix}`);
+        // An unambiguous prefix resolves; an ambiguous one asks the daemon to
+        // disambiguate. Either way it stays a command, never model input.
+        assert.notEqual(parsed, null, `/${prefix} must stay a command`);
+        assert.ok(parsed.name === name || parsed.matches.includes(name),
+          `/${prefix} must resolve to ${name}`);
+      }
+    }
   });
 });
 
@@ -211,13 +267,10 @@ describe('executeCommand', () => {
     assert.deepEqual(codex.calls, [['interrupt'], ['rotate', { resume: false }]]);
   });
 
-  it('treats the removed /restart command as unknown', () => {
-    assert.deepEqual(parseCommand('/restart'), {
-      name: null,
-      arg: '',
-      token: 'restart',
-      matches: [],
-    });
+  it('treats the removed /restart command as ordinary text', () => {
+    // A retired command is no longer in the vocabulary, so it is a message the
+    // model answers — not a command reply that swallows it.
+    assert.equal(parseCommand('/restart'), null);
   });
 
   it('new while disconnected still succeeds with a deferred message', async () => {
@@ -449,12 +502,12 @@ describe('executeCommand', () => {
     assert.match(listing.text, /可选：none、low、medium、high、xhigh/);
   });
 
-  it('unknown commands answer with help instead of reaching codex', async () => {
+  it('bare slash answers with help instead of reaching codex', async () => {
     const codex = fakeCodex();
-    const outcome = await executeCommand({ name: null, arg: '', token: 'foo', matches: [] }, codex);
+    const outcome = await executeCommand(parseCommand('/'), codex);
     assert.equal(outcome.ok, false);
-    assert.match(outcome.text, /未知命令：\/foo/);
     assert.match(outcome.text, /可用命令/);
+    assert.doesNotMatch(outcome.text, /未知命令/);
     assert.equal(codex.calls.length, 0);
   });
 });

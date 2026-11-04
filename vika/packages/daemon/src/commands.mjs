@@ -1,10 +1,15 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// Local slash commands. A message whose text starts with '/' is reserved for the
-// daemon: it is handled here deterministically and replied to directly — it never
-// reaches codex. Any unambiguous prefix of a command name works (/h → /help,
-// /m gpt-5.5 → /model gpt-5.5); effort levels match by prefix too.
+// Local slash commands. A message whose first token names — or is a prefix of —
+// a command is reserved for the daemon: it is handled here deterministically and
+// replied to directly, so it never reaches codex. Any unambiguous prefix works
+// (/h → /help, /m gpt-5.5 → /model gpt-5.5); effort levels match by prefix too.
+// A leading '/' alone is not enough: IM users paste absolute paths
+// ("/tmp 里有什么", "/home/me/x.json 看下"), and those start with a '/' as well.
+// So the command vocabulary decides, not the shape of the token: an
+// unrecognized '/word' stays ordinary model input instead of being answered as
+// a command, which used to lose the message entirely.
 
 import {
   DEFAULT_RUNTIME_ID,
@@ -19,7 +24,8 @@ import {
 // Default vocabulary for callers; command validation uses current model metadata.
 export const EFFORT_LEVELS = getRuntimeDefinition(DEFAULT_RUNTIME_ID).efforts;
 
-const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary'];
+// The vocabulary. Exported so tests can pin every name and every prefix.
+export const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary'];
 
 const MODEL_NAME = /^[A-Za-z0-9._:\/\[\]-]{1,256}$/;
 
@@ -55,8 +61,13 @@ export function commandCandidate(event) {
   return null;
 }
 
-// null → not a command (does not start with '/'). Otherwise { name, arg } for a
-// unique match, or { name: null, token, matches } for unknown/ambiguous input.
+// null → not a command. Otherwise { name, arg } for a unique match, or
+// { name: null, token, matches } for ambiguous input. An unmatched token is not
+// a command attempt: a pasted path ("/tmp 里有什么", "/home/me/x.json 看下")
+// starts with '/' too, and answering it as an unknown command dropped the
+// message. Only the vocabulary — or a bare '/' asking for it — reserves the
+// message for the daemon, so a mistyped command is handed to the model like any
+// other text (which can answer it) rather than being swallowed with a dump.
 export function parseCommand(text) {
   const trimmed = String(text ?? '').trim();
   if (!trimmed.startsWith('/')) return null;
@@ -64,7 +75,19 @@ export function parseCommand(text) {
   const arg = rest.join(' ').trim();
   const matches = matchPrefix(token.toLowerCase(), COMMANDS);
   if (matches.length === 1) return { name: matches[0], arg };
-  return { name: null, arg, token, matches };
+  if (matches.length > 1) return { name: null, arg, token, matches };
+  // A command typed with trailing punctuation from an IME ("/new。", "/help？").
+  // Only an unambiguous vocabulary hit is accepted, so a path keeps its shape.
+  const bare = token.replace(/[?!.,;:，。？！；：]+$/u, '');
+  if (bare && bare !== token) {
+    const stripped = matchPrefix(bare.toLowerCase(), COMMANDS);
+    if (stripped.length === 1) return { name: stripped[0], arg };
+  }
+  // Nothing matched: a pasted path or a typo is ordinary text, not a command.
+  // A bare '/' asks for the vocabulary; '/ new' is still a message with content
+  // ('/' plus 'new'), so it flows to the model rather than losing that text.
+  if (token || rest.length) return null;
+  return { name: null, arg: '', token: '', matches: [] };
 }
 
 export function helpText(snapshot) {
@@ -136,10 +159,13 @@ export async function executeCommand(command, runtime, { primary } = {}) {
   }
   const cached = await runtime.snapshot({ catalog: 'cached' });
   if (!command.name) {
+    // Reached only for an ambiguous prefix, or a bare '/' asking for the
+    // vocabulary: an unrecognized token never becomes a command (see
+    // parseCommand), so there is no "unknown command" answer to give.
     const head = command.matches.length > 1
       ? `命令 /${command.token} 有歧义：${command.matches.map((name) => `/${name}`).join('、')}`
-      : `未知命令：/${command.token}`;
-    return { ok: false, text: `${head}\n\n${helpText(cached)}` };
+      : null;
+    return { ok: false, text: head ? `${head}\n\n${helpText(cached)}` : helpText(cached) };
   }
 
   if (command.name === 'help') return { ok: true, text: helpText(cached) };
