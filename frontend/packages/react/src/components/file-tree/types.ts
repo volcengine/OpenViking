@@ -14,8 +14,8 @@ import type {
  */
 export interface FileTreeRowBase {
   /**
-   * 行唯一标识，用作 React key 与选中判断的依据。
-   * Unique row identity, used as the React key and for selection.
+   * 行唯一标识，用于选中与定位。
+   * Unique row identity, used for selection and lookup.
    */
   id: string;
   /**
@@ -414,13 +414,8 @@ export interface FileTreeProps extends Omit<
 }
 
 /**
- * 目录树组件类型。组件以 `forwardRef` 实现，`ref` 通过第二个参数接收，
- * 因此 React 18 与 19 都能拿到 `FileTreeHandle`；React 19 里写成普通 `ref`
- * prop 也照常工作。
- *
- * Component type. The implementation uses `forwardRef`, so the ref arrives as
- * the second argument and yields a `FileTreeHandle` on both React 18 and 19;
- * on React 19 passing it as a plain `ref` prop works as well.
+ * 目录树组件，可通过 ref 查找行或滚动到指定行。
+ * A file-tree component whose ref supports row lookup and scrolling.
  */
 export type FileTreeComponent = ForwardRefExoticComponent<
   PropsWithoutRef<FileTreeProps> & RefAttributes<FileTreeHandle>
