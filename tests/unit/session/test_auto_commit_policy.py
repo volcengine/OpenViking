@@ -15,6 +15,7 @@ from openviking.session.auto_commit_policy import (
     MAX_MESSAGE_COUNT_THRESHOLD,
     MAX_PENDING_TOKEN_THRESHOLD,
     AutoCommitPolicy,
+    validate_idle_timeout_input,
 )
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -117,3 +118,22 @@ def test_to_dict_round_trips():
     }
 
     assert AutoCommitPolicy.from_dict(payload).to_dict() == payload
+
+
+@pytest.mark.parametrize("field", list(AutoCommitPolicy.default().to_dict()))
+@pytest.mark.parametrize("value", [0.5, 300.9, True, False, float("nan"), float("inf")])
+def test_from_dict_rejects_lossy_integer_conversion(field, value):
+    with pytest.raises(InvalidArgumentError, match="must be an integer"):
+        AutoCommitPolicy.from_dict({field: value})
+
+
+@pytest.mark.parametrize("value", [0.5, 300.9, True, False, float("nan"), float("inf")])
+def test_idle_timeout_rejects_lossy_integer_conversion(value):
+    with pytest.raises(ValueError, match="must be an integer"):
+        validate_idle_timeout_input(value)
+
+
+@pytest.mark.parametrize("value", [300, "300", 300.0])
+def test_integer_compatible_values_remain_supported(value):
+    assert AutoCommitPolicy.from_dict({"idle_timeout_seconds": value}).idle_timeout_seconds == 300
+    assert validate_idle_timeout_input(value) == 300

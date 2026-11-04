@@ -37,10 +37,16 @@ _POLICY_KEYS = {
 }
 
 
+def _parse_int(value: Any) -> int:
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise ValueError("must be an integer")
+    return int(value)
+
+
 def _coerce_int(value: Any, *, field: str, minimum: int, maximum: int) -> int:
     try:
-        parsed = int(value)
-    except (TypeError, ValueError):
+        parsed = _parse_int(value)
+    except (TypeError, ValueError, OverflowError):
         raise InvalidArgumentError(f"auto_commit_policy.{field} must be an integer")
     if parsed < minimum:
         parsed = minimum
@@ -52,8 +58,8 @@ def _coerce_int(value: Any, *, field: str, minimum: int, maximum: int) -> int:
 def validate_idle_timeout_input(value: Any) -> int:
     """Validate a newly supplied idle timeout without changing stored policies."""
     try:
-        parsed = int(value)
-    except (TypeError, ValueError):
+        parsed = _parse_int(value)
+    except (TypeError, ValueError, OverflowError):
         raise ValueError("auto_commit_policy.idle_timeout_seconds must be an integer")
     if parsed != 0 and parsed < MIN_IDLE_TIMEOUT_SECONDS:
         raise ValueError(
