@@ -72,7 +72,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个已有用户）原子地添加成员；已是成员的用户会跳过，结果为 `added=true` |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个用户 ID）原子地移除成员；至少移除一个成员关系时返回 `removed=true`，否则返回 `removed=false` |
 
 ```bash
 ov --sudo admin create-group acme engineering
@@ -81,6 +81,15 @@ ov acl grant viking://resources/project-a \
   --principal group:engineering --level read
 ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
+```
+
+通过 HTTP 移除成员时，在请求体中传入用户 ID：
+
+```bash
+curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineering/members \
+  -H "X-API-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids": ["alice", "bob"]}'
 ```
 
 要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering`。

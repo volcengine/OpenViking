@@ -1919,9 +1919,9 @@ acl_direct_grants
 acl_inherited_grants
 ```
 
-Each element uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`.
+Each grant uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. Empty grants are stored as `["none"]`, which is also the default value of both fields. This marker does not change `acl_mode`.
 
-Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and empty lists.
+Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and no grants.
 
 For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
 

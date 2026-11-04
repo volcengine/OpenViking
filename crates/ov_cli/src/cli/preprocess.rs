@@ -134,7 +134,15 @@ fn allows_plain_help_as_user_input(command: &str) -> bool {
 fn is_plain_help_group(command: &str) -> bool {
     matches!(
         command,
-        "config" | "task" | "admin" | "system" | "session" | "privacy" | "observer" | "skills"
+        "config"
+            | "task"
+            | "admin"
+            | "system"
+            | "session"
+            | "privacy"
+            | "observer"
+            | "skills"
+            | "mcps"
     )
 }
 
@@ -175,6 +183,10 @@ pub(crate) fn pre_parse_requires_cli_config_file(args: &[OsString]) -> bool {
         "skills" => tokens
             .get(1)
             .map(|token| is_skill_subcommand(token))
+            .unwrap_or(false),
+        "mcps" => tokens
+            .get(1)
+            .map(|token| is_mcp_subcommand(token))
             .unwrap_or(false),
         "observer" => tokens
             .get(1)
@@ -331,6 +343,24 @@ fn is_skill_subcommand(token: &str) -> bool {
     matches!(
         token,
         "add" | "list" | "ls" | "find" | "show" | "update" | "remove" | "rm" | "delete"
+    )
+}
+
+fn is_mcp_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "add"
+            | "remove"
+            | "list"
+            | "find"
+            | "validate"
+            | "show"
+            | "sync"
+            | "status"
+            | "mount"
+            | "unmount"
+            | "mounts"
+            | "invoke"
     )
 }
 

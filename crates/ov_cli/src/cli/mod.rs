@@ -2,6 +2,7 @@
 
 mod admin;
 mod config;
+mod mcps;
 pub(crate) mod preprocess;
 mod privacy;
 mod resources;
@@ -15,6 +16,7 @@ pub(crate) use config::{
     ConfigAddCustomArgs, ConfigAddOvServiceArgs, ConfigAddTarget, ConfigCommands, ConfigDeleteArgs,
     ConfigEditArgs,
 };
+pub(crate) use mcps::McpCommands;
 pub(crate) use privacy::PrivacyCommands;
 pub(crate) use resources::{AclCommands, AttrsCommands, CompileCommands};
 pub(crate) use session::{SessionCommands, SessionConfigCommands};
@@ -277,6 +279,11 @@ pub(crate) enum Commands {
     Skills {
         #[command(subcommand)]
         action: SkillCommands,
+    },
+    /// [Data] Manage remote MCP servers and tools
+    Mcps {
+        #[command(subcommand)]
+        action: McpCommands,
     },
     /// [Data] List directory contents
     #[command(alias = "list")]

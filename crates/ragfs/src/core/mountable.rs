@@ -2378,5 +2378,24 @@ mod tests {
                 .is_some(),
             "single-backend encrypted mount should place encryption under stats"
         );
+        drop(mounts);
+
+        assert!(matches!(
+            mfs.read("/mock/missing", 0, 0).await,
+            Err(Error::NotFound(_))
+        ));
+        let metrics = mfs.metrics().await.unwrap();
+        let error = metrics
+            .iter()
+            .find(|metric| {
+                metric.name == "ragfs_operation_errors_total"
+                    && metric.labels.get("operation").map(String::as_str) == Some("read")
+                    && metric.labels.get("error_kind").map(String::as_str) == Some("not_found")
+            })
+            .expect("failed reads must be exported by error kind");
+        assert!(matches!(
+            error.value,
+            crate::metrics::RagfsMetricValue::Counter { value: 1, .. }
+        ));
     }
 }

@@ -2,8 +2,8 @@
 
 use crate::CliContext;
 use crate::cli::{
-    AttrsCommands, Commands, CompileCommands, SkillCommands, TaskCommands, UploadCliOptions,
-    WatchCommands,
+    AttrsCommands, Commands, CompileCommands, McpCommands, SkillCommands, TaskCommands,
+    UploadCliOptions, WatchCommands,
 };
 use crate::commands;
 use crate::config;
@@ -204,6 +204,156 @@ pub(super) async fn dispatch(
                     .await
             }
         },
+        Commands::Mcps { action } => {
+            let client = ctx.get_client();
+            match action {
+                McpCommands::Add {
+                    config,
+                    wait,
+                    target_uri,
+                } => {
+                    commands::mcps::add(
+                        &client,
+                        &config,
+                        wait,
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Remove { name, target_uri } => {
+                    commands::mcps::remove(
+                        &client,
+                        &name,
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::List { target_uri } => {
+                    commands::mcps::list(
+                        &client,
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Find {
+                    query,
+                    limit,
+                    target_uri,
+                } => {
+                    commands::mcps::find(
+                        &client,
+                        &query,
+                        limit,
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Validate { config } => {
+                    commands::mcps::validate(&client, &config, ctx.output_format, ctx.compact).await
+                }
+                McpCommands::Show { name, target_uri } => {
+                    commands::mcps::show(
+                        &client,
+                        &name,
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Sync {
+                    name,
+                    wait,
+                    target_uri,
+                } => {
+                    commands::mcps::sync(
+                        &client,
+                        &name,
+                        wait,
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Status { name, target_uri } => {
+                    commands::mcps::status(
+                        &client,
+                        &name,
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Mount {
+                    tool_uri,
+                    node_uri,
+                    title,
+                    description,
+                    timeout_seconds,
+                    arguments,
+                    wait,
+                } => {
+                    commands::mcps::mount(
+                        &client,
+                        &tool_uri,
+                        &node_uri,
+                        &title,
+                        description.as_deref(),
+                        timeout_seconds,
+                        &arguments,
+                        wait,
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Unmount { node_uri, wait } => {
+                    commands::mcps::unmount(
+                        &client,
+                        &node_uri,
+                        wait,
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Mounts {
+                    mcp,
+                    tool,
+                    target_uri,
+                } => {
+                    commands::mcps::mounts(
+                        &client,
+                        &mcp,
+                        tool.as_deref(),
+                        target_uri.as_deref(),
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+                McpCommands::Invoke { uri, arguments } => {
+                    commands::mcps::invoke(
+                        &client,
+                        &uri,
+                        &arguments,
+                        ctx.output_format,
+                        ctx.compact,
+                    )
+                    .await
+                }
+            }
+        }
         Commands::Export {
             uri,
             to,

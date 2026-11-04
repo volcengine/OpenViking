@@ -69,6 +69,18 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
                 1.0,
             ));
         }
+        for (error_kind, count) in &stats.error_counts {
+            metrics.push(RagfsMetric::counter(
+                "ragfs_operation_errors_total",
+                &[
+                    ("plugin", plugin),
+                    ("operation", operation.as_str()),
+                    ("error_kind", error_kind),
+                ],
+                *count,
+                1.0,
+            ));
+        }
         if stats.count == 0 {
             continue;
         }
