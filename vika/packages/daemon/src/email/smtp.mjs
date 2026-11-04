@@ -94,6 +94,18 @@ async function hello(session) {
   return reply.lines.map((line) => line.slice(4).toUpperCase());
 }
 
+// The mechanisms a server offers for AUTH. RFC 4954 lets one server spread
+// them over several EHLO lines, and some also send the pre-RFC `AUTH=LOGIN`
+// spelling, so every AUTH line has to be read — taking the first one alone
+// reports "no XOAUTH2" against a server that offers it on the next line.
+function authMechanisms(features) {
+  return features
+    .filter((feature) => /^AUTH\b/.test(feature))
+    .flatMap((feature) => feature.slice(5).split(/\s+/))
+    .filter(Boolean)
+    .join(' ');
+}
+
 // A sign-in that failed. Nothing was offered to the server yet, so the caller
 // may refresh the credential and try the same message again: unlike a failure
 // after DATA, this one cannot have delivered anything.
@@ -101,8 +113,6 @@ export class SmtpAuthError extends Error {
   constructor(message) {
     super(message);
     this.name = 'SmtpAuthError';
-    // Retrying with a new credential is safe: no recipient was told anything.
-    this.retryable = true;
   }
 }
 
@@ -144,7 +154,7 @@ export async function withSmtp({ host, port, secure = Number(port) === 465, user
       session = new SmtpSession(secure);
       features = await hello(session);
     }
-    const auth = features.find((feature) => feature.startsWith('AUTH')) ?? '';
+    const auth = authMechanisms(features);
     // Everything from here to a successful sign-in is the authentication step:
     // no message has been offered, so any failure in it is retryable.
     try {

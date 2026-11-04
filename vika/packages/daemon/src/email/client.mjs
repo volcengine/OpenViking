@@ -5,7 +5,7 @@ import { eventMessage } from '../connectors/protocol.mjs';
 import { safeError } from '../logger.mjs';
 import { MAILBOX, accountTag, credentialSource, loadAccount, verifyAccount } from './account.mjs';
 import { MailArchive } from './archive.mjs';
-import { ImapConnection } from './imap.mjs';
+import { ImapAuthError, ImapConnection } from './imap.mjs';
 import { buildReply, isOwnMessageId, replyMessageId } from './mime.mjs';
 import {
   MAX_ATTACHMENTS, MAX_REPLY_RECIPIENTS, attachmentFile, bodyMarkdown, label, mailText, parseStoredMail,
@@ -73,10 +73,14 @@ export class EmailClient {
   }
 
   // A new IMAP connection, with the same one-retry rule the SMTP path uses: a
-  // rejected token means a fresh one is worth trying, since the server that
+  // refused token means a fresh one is worth trying, since the server that
   // refused it is better evidence than our own expiry clock. A mailbox that
   // reconnects after a long run therefore never reuses a token that has aged
   // out, and never needs a restart to get a working one.
+  //
+  // What counts as a refusal is `ImapAuthError`, which imap.mjs raises where it
+  // reads the tagged NO — servers word that NO differently, and matching the
+  // wording here would only recover on the one whose text we happened to test.
   async open() {
     let auth = await this.credential();
     for (let attempt = 0; ; attempt += 1) {
@@ -88,7 +92,7 @@ export class EmailClient {
         return imap;
       } catch (error) {
         imap.close();
-        const rejected = auth.accessToken && /AUTHENTICATE failed|Authentication failed/i.test(error.message);
+        const rejected = Boolean(auth.accessToken) && error instanceof ImapAuthError;
         if (!rejected || attempt > 0) throw error;
         this.logger.warn('email_imap_reauth', { error: safeError(error) });
         auth = await this.credential({ stale: true });

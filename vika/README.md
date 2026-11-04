@@ -187,11 +187,20 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 3. **授予同意**：个人账户可自助同意；工作账户需要**管理员同意**。租户若关闭了用户自助同意，登录时会停在「需要管理员审批」页面，此时由管理员在应用页授予同意，或在页面上用「请求审批」提交给管理员。
 4. **邮箱开关**：IMAP 与 SMTP AUTH 必须在该邮箱上开启。企业邮箱用 `Get-CASMailbox <邮箱> | fl ImapEnabled,SmtpClientAuthenticationDisabled` 核对；个人 Outlook.com 在网页版「设置 → 邮件 → 转发和 IMAP」里打开 IMAP。
 
+   漏掉这一步的表现容易被误判为登录失败：浏览器授权成功、令牌也换到了，但 Exchange 在认证通过后的第一条命令上回 `BAD User is authenticated but not connected.`。按 RFC 3501，`BAD` 表示命令本身不被接受、`NO` 才表示命令失败，所以这不是凭据问题，刷新令牌或重试都无用。Vika 会把这种情况报成邮箱设置问题而不是登录失败，据此去开 IMAP 即可。
+
 然后在账号文件里填应用 ID 和租户。企业邮箱的租户填自己的租户 ID 或域名，个人 Outlook.com 填 `consumers` 或 `common`。
 
-### 账号用别名登录时
+### 读共享邮箱 / 账号用别名登录时
 
-`username` 是协议登录用的名字，默认与 `address` 相同，但两者不一定一致。Exchange Online 接受别名登录 IMAP，**却不接受别名做 SMTP AUTH**（返回 `535 5.7.3 Authentication unsuccessful`）。若邮箱地址是别名，把账号的**主地址**填进 `username`：
+`username` 是协议登录用的名字，默认与 `address` 相同，但两者不一定一致。这也是微软文档里读共享邮箱的做法：用有权限的账号拿到令牌，再把 SASL 字符串里的用户名换成共享邮箱地址。
+
+两种常见用法：
+
+- **共享邮箱**：`address` 填共享邮箱地址（Vika 读它、以它回信），`username` 也填它，浏览器登录时用有 `FullAccess` 的那个账号。
+- **别名登录**：Exchange Online 接受别名登录 IMAP，**却不接受别名做 SMTP AUTH**（返回 `535 5.7.3 Authentication unsuccessful`），此时 `username` 填账号的**主地址**。
+
+以别名登录为例：
 
 ```json
 {

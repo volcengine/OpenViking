@@ -12,7 +12,7 @@ import { MailArchive, chunkOffset, needsChunks, readTarget } from '../src/email/
 import { accountTag, loadAccount } from '../src/email/account.mjs';
 import { EmailClient } from '../src/email/client.mjs';
 import { EmailState } from '../src/email/state.mjs';
-import { ImapConnection, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
+import { ImapAuthError, ImapConnection, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
 import { refreshAccessToken, requestDeviceCode, waitForDeviceCode } from '../src/email/oauth2.mjs';
 import { safeError } from '../src/logger.mjs';
 import { verifySmtp } from '../src/email/smtp.mjs';
@@ -41,7 +41,8 @@ function mail({ from = 'Alice <alice@example.com>', to = ME, subject = 'Thursday
 // accepts: it then refuses LOGIN and offers only XOAUTH2, like a mailbox whose
 // provider turned passwords off. `saslIr` off makes it ask for the SASL
 // response with a continuation instead of taking it on the command line.
-async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = null, saslIr = true } = {}) {
+async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = null, saslIr = true,
+  refusal = 'AUTHENTICATE failed.', mailboxRefusal = null } = {}) {
   const accepted = new Set([].concat(oauth ?? []).filter(Boolean));
   let expectedUser = ME;
   const state = { mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [],
@@ -88,7 +89,7 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
         if (pendingAuth) {
           if (pendingAuth.cancel) {
             if (line === '') {
-              socket.write(`${pendingAuth.tag} NO AUTHENTICATE failed.\r\n`);
+              socket.write(`${pendingAuth.tag} NO ${refusal}\r\n`);
               state.authCancelled += 1;
               pendingAuth = null;
             }
@@ -119,6 +120,10 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
         } else if (command === 'CAPABILITY') {
           socket.write(`* CAPABILITY ${capability()}\r\n`);
           ok();
+        } else if (command.startsWith('EXAMINE ') && mailboxRefusal) {
+          // Exchange's answer when the sign-in worked but IMAP is off for the
+          // mailbox; Microsoft's IMAP OAuth sample checks for this text.
+          socket.write(`${tag} BAD ${mailboxRefusal}\r\n`);
         } else if (command.startsWith('EXAMINE ')) {
           socket.write(`* ${state.mails.length} EXISTS\r\n* OK [UIDVALIDITY ${uidValidity}] ok\r\n* OK [UIDNEXT ${uidNext}] ok\r\n`);
           socket.known = state.mails.length;
@@ -193,7 +198,7 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
 
 // A scripted SMTP submission server; `messages` are what it accepted. `oauth`
 // makes it advertise and accept only XOAUTH2, like Exchange Online.
-async function fakeSmtp(t, { oauth = null } = {}) {
+async function fakeSmtp(t, { oauth = null, ehlo = null } = {}) {
   const messages = [];
   let bodies = 0;
   let breakAfterData = false;
@@ -236,7 +241,8 @@ async function fakeSmtp(t, { oauth = null } = {}) {
           continue;
         }
         if (line.startsWith('EHLO')) {
-          socket.write(accepted.size ? '250-fake\r\n250 AUTH XOAUTH2\r\n' : '250-fake\r\n250 AUTH PLAIN LOGIN\r\n');
+          const lines = ehlo ?? (accepted.size ? ['250-fake', '250 AUTH XOAUTH2'] : ['250-fake', '250 AUTH PLAIN LOGIN']);
+          socket.write(`${lines.join('\r\n')}\r\n`);
         } else if (line.startsWith('AUTH XOAUTH2 ')) {
           const response = line.slice('AUTH XOAUTH2 '.length).trim();
           const token = [...accepted].find((each) => Buffer.from(`user=${expectedUser}\u0001auth=Bearer ${each}\u0001\u0001`).toString('base64') === response);
@@ -1234,5 +1240,150 @@ describe('an account whose login name is not its address', () => {
     // The mailbox still calls itself by its address, which is what a reply says.
     assert.equal(client.account.address, ALIAS);
     assert.equal(client.account.user, PRIMARY);
+  });
+});
+
+// A server words its refusal however it likes; what the Connector does about a
+// refused token must not depend on the wording. Deciding that from the response
+// text only recovered on the one provider whose words were tested — the fake
+// server here answered `NO AUTHENTICATE failed.`, like Exchange, so the fragile
+// check passed. These are the real answers of other servers.
+describe('a refused token is retried whatever words the server uses', () => {
+  const REFUSALS = [
+    ['Exchange Online', 'AUTHENTICATE failed.'],
+    ['Dovecot', '[AUTHENTICATIONFAILED] Authentication failed.'],
+    ['Gmail', '[AUTHENTICATIONFAILED] Invalid credentials (Failure)'],
+    ['Coremail', '[AUTHENTICATIONFAILED] Authentication failed'],
+    ['bare', '[AUTHENTICATIONFAILED]'],
+    ['unqualified', ''],
+  ];
+
+  for (const [provider, refusal] of REFUSALS) {
+    it(`signs in again when ${provider} refuses the cached token`, async (t) => {
+      const imap = await fakeImap(t, { oauth: ['token-2'], refusal });
+      const smtp = await fakeSmtp(t, { oauth: ['token-2'] });
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-refusal-'));
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+      const configFile = path.join(directory, 'account.json');
+      fs.writeFileSync(configFile, JSON.stringify({
+        address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+        imap: { host: '127.0.0.1', port: imap.port },
+        smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+      }), { mode: 0o600 });
+      const endpoint = fakeTokenEndpoint({ tokens: [
+        { accessToken: 'token-1', refreshToken: 'refresh-2' },
+        { accessToken: 'token-2', refreshToken: 'refresh-3' },
+      ] });
+      const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+        null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+      t.after(() => client.stop().catch(() => {}));
+      // The first sign-in succeeds, so the token is cached; the server then
+      // revokes it, which is what a long run runs into.
+      imap.accept('token-1');
+      smtp.accept('token-1');
+      await client.preflight();
+      imap.accept('token-2');
+      const connection = await client.open();
+      connection.close();
+      // A fresh token was asked for and the second attempt was accepted.
+      assert.equal(endpoint.calls.length, 2, `${provider}: the token was never refreshed`);
+      assert.deepEqual(imap.state.auths, ['token-1', 'token-2']);
+    });
+  }
+});
+
+// Microsoft's own IMAP OAuth sample calls out one failure by name, because a
+// succeeded sign-in makes it look like a credential problem when it is a
+// mailbox setting: Exchange answers the first mailbox command with
+// `BAD User is authenticated but not connected.` when IMAP is switched off for
+// that mailbox. RFC 3501 gives `BAD` for "the command was wrong" and `NO` for
+// "the command failed", so neither is a refused credential and neither may be
+// retried with a fresh token.
+describe('a mailbox that signs in but refuses IMAP', () => {
+  const MAILBOX_OFF = 'User is authenticated but not connected.';
+
+  it('reports what to change instead of retrying the credential', async (t) => {
+    const imap = await fakeImap(t, { oauth: ['token-1'], mailboxRefusal: MAILBOX_OFF });
+    const smtp = await fakeSmtp(t, { oauth: ['token-1'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-imap-off-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = fakeTokenEndpoint({ tokens: [{ accessToken: 'token-1', refreshToken: 'refresh-2' }] });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    const error = await client.preflight().catch((caught) => caught);
+    assert.ok(error, 'the check must fail');
+    // The owner is told the mailbox setting, not "authentication failed".
+    assert.match(error.message, /enable IMAP|grant/i);
+    // And the credential was never refreshed for it: the token was fine.
+    assert.equal(endpoint.calls.length, 1, 'the token must not be refreshed for a mailbox setting');
+  });
+
+  it('does not mistake it for a refused credential', async (t) => {
+    const imap = await fakeImap(t, { oauth: ['token-1'], mailboxRefusal: MAILBOX_OFF });
+    const connection = new ImapConnection({ host: '127.0.0.1', port: imap.port, connect: plainTls });
+    await connection.connect();
+    await connection.authenticate(ME, 'token-1');
+    const error = await connection.examine('INBOX').catch((caught) => caught);
+    connection.close();
+    assert.ok(!(error instanceof ImapAuthError), 'a BAD answer is not a refused credential');
+    assert.match(error.message, /enable IMAP|grant/i);
+  });
+
+  it('still refreshes once when the credential itself is refused', async (t) => {
+    // The counterpart: a `NO` on AUTHENTICATE is a refused credential and is
+    // retried, so the two cases stay apart.
+    const imap = await fakeImap(t, { oauth: ['token-2'] });
+    const smtp = await fakeSmtp(t, { oauth: ['token-2'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-no-vs-bad-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = fakeTokenEndpoint({ tokens: [
+      { accessToken: 'token-1', refreshToken: 'refresh-2' },
+      { accessToken: 'token-2', refreshToken: 'refresh-3' },
+    ] });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+    imap.accept('token-1');
+    smtp.accept('token-1');
+    await client.preflight();
+    imap.accept('token-2');
+    const connection = await client.open();
+    connection.close();
+    assert.equal(endpoint.calls.length, 2, 'a refused credential is retried with a fresh token');
+  });
+});
+
+// RFC 4954 lets a server spread its AUTH mechanisms over several EHLO lines,
+// and some still send the pre-RFC `AUTH=LOGIN` spelling. Reading only the first
+// AUTH line reported "no XOAUTH2" against a server that offers it on the next
+// one, so an OAuth2 mailbox on such a server could not send at all.
+describe('AUTH mechanisms spread over several EHLO lines', () => {
+  it('finds XOAUTH2 on a later line and signs in', async (t) => {
+    const smtp = await fakeSmtp(t, { oauth: ['token-1'], ehlo: ['250-AUTH=LOGIN', '250 AUTH LOGIN XOAUTH2'] });
+    const checked = await verifySmtp({ host: '127.0.0.1', port: smtp.port, secure: true, user: ME, accessToken: 'token-1',
+      connectTls: plainTls });
+    assert.deepEqual(checked, { ok: true });
+    assert.deepEqual(smtp.auths, ['token-1']);
+  });
+
+  it('still reports a server that offers no XOAUTH2 at all', async (t) => {
+    const smtp = await fakeSmtp(t, { oauth: ['token-1'], ehlo: ['250-AUTH PLAIN', '250 AUTH LOGIN'] });
+    const error = await verifySmtp({ host: '127.0.0.1', port: smtp.port, secure: true, user: ME, accessToken: 'token-1',
+      connectTls: plainTls }).catch((caught) => caught);
+    assert.match(error.message, /no AUTH XOAUTH2/);
   });
 });
