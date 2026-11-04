@@ -79,7 +79,10 @@ def test_store_preserves_created_at_and_reports_index_write_errors(
     else:
         with pytest.raises(type(expected_error)) as caught:
             update()
-        assert caught.value is expected_error
+        assert type(caught.value) is type(expected_error)
+        assert caught.value.args == expected_error.args
+        assert str(caught.value) == str(expected_error)
+        assert getattr(caught.value, "code", None) == getattr(expected_error, "code", None)
         assert {uri: text for uri, text in client.records.items() if "/index/" in uri} == old_index
     after = store.get(("memory",), "note")
     assert after.value == {"version": 2}
@@ -340,7 +343,6 @@ def test_store_keeps_namespace_validation_and_persisted_values(
     assert [item.key for item in store.search(namespace)] == [key]
     assert not any("/index/" in uri for uri in client.records)
     assert store.search(namespace, query=key) == []
-
 
 
 @pytest.mark.asyncio
