@@ -1,7 +1,5 @@
 export { FileTree } from './components/file-tree/index.js';
 export type { FileTreeProps } from './components/file-tree/index.js';
-export { FilePreview } from './components/file-preview/index.js';
-export type { FilePreviewProps } from './components/file-preview/index.js';
 export { Tui } from './components/tui/index.js';
 export type { TuiProps } from './components/tui/index.js';
 export { ScopeSwitcher } from './components/scope-switcher/index.js';

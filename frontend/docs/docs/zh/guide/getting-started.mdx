@@ -29,7 +29,7 @@ workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档�
 
 ## 公开入口
 
-根入口 `@openviking/react` 导出 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 及其主 Props 类型，以及四个业务模块占位组件及其主 Props 类型。行类型、选项类型、句柄与文案包等子类型从 `components/<组件>`、`modules/<模块>` 子路径导入。`@openviking/react/icons` 提供五种文件类型图标。
+根入口 `@openviking/react` 当前导出 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 与四个业务模块占位组件及其主 Props 类型；`FilePreview` 只从 `components/file-preview` 子路径导出，因为它的类型依赖可选的 `@ark-design/ui`。行类型、选项类型、句柄与文案包等子类型一律从子路径导入。`@openviking/react/icons` 提供五种文件类型图标。
 
 没有 `components` 或 `modules` 分类聚合 JavaScript 入口。业务占位组件使用独立的 `modules/<模块>` 入口：
 
