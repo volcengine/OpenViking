@@ -6,12 +6,13 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 
 ## 模块目录
 
-| 源码目录                                                           | 公开入口                                    | 职责                             |
-| ------------------------------------------------------------------ | ------------------------------------------- | -------------------------------- |
-| [components/file-tree](./src/components/file-tree/README.md)       | `@openviking/react/components/file-tree`    | 目录树渲染、展开、选中与事件回传 |
-| [components/file-preview](./src/components/file-preview/README.md) | `@openviking/react/components/file-preview` | 只读预览状态与扩展页签           |
-| [modules](./src/modules/README.md)                                 | `@openviking/react/modules/<模块>`          | 五个业务模块的占位组件与类型     |
-| [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)     | 仅包内使用                                  | 跨模块 Hook 与纯工具             |
+| 源码目录                                                           | 公开入口                                    | 职责                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------- | ---------------------------------------------------- |
+| [components/file-tree](./src/components/file-tree/README.md)       | `@openviking/react/components/file-tree`    | 目录树渲染、展开、选中与事件回传                     |
+| [components/file-preview](./src/components/file-preview/README.md) | `@openviking/react/components/file-preview` | 只读预览状态与扩展页签                               |
+| [components/tui](./src/components/tui/README.md)                   | `@openviking/react/components/tui`          | 已确认的命令记录、结果与输入区类型；视图仍为占位实现 |
+| [modules](./src/modules/README.md)                                 | `@openviking/react/modules/<模块>`          | 五个业务模块的占位组件与类型                         |
+| [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)     | 仅包内使用                                  | 跨模块 Hook 与纯工具                                 |
 
 FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯文本预览、编辑基础；具体限制见各自文档。包还提供五种文件类型图标。
 组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[modules](./src/modules/README.md) 按业务能力规划 Hook 与视图：Hook 负责取数、状态和操作，组合视图将其接入组件。完整页面与产品专属流程由宿主负责，管理后台不在本期范围内。当前 `file-browser`、`console`、`agent-connect`、`task-center` 与 `user-usage` 已提供占位组件、基础 Props / Labels 类型与样式，可先接入布局；业务 Hook、数据加载和联动尚未实现。

@@ -14,6 +14,7 @@ export default defineConfig({
           'components/file-tree': './src/components/file-tree/file-tree.tsx',
           'components/file-preview':
             './src/components/file-preview/file-preview.tsx',
+          'components/tui': './src/components/tui/tui.tsx',
           'modules/file-browser': './src/modules/file-browser/file-browser.tsx',
           'modules/console': './src/modules/console/console.tsx',
           'modules/agent-connect':
@@ -36,6 +37,7 @@ export default defineConfig({
       'components/file-tree/style': './src/components/file-tree/style.css',
       'components/file-preview/style':
         './src/components/file-preview/style.css',
+      'components/tui/style': './src/components/tui/style.css',
       'modules/style': './src/modules/style.css',
       'modules/file-browser/style': './src/modules/file-browser/style.css',
       'modules/console/style': './src/modules/console/style.css',
