@@ -307,32 +307,6 @@ export class TimerRepository {
     return this.listActiveStatement.all().map(timerRow);
   }
 
-  observation() {
-    return {
-      active: this.listActive().map((timer) => ({
-        timerId: timer.timerId,
-        title: timer.title,
-        text: timer.text,
-        timezone: timer.timezone,
-        schedule: timer.schedule,
-        nextRunAtMs: timer.nextRunAtMs,
-        runCount: timer.runCount,
-        maxRuns: timer.maxRuns,
-      })),
-      pending: this.db.prepare(`
-        SELECT * FROM timer_occurrence_checks WHERE status = 'pending'
-        ORDER BY next_check_at_ms, occurrence_id
-      `).all().map(occurrenceCheckRow).map((check) => ({
-        occurrenceId: check.occurrenceId,
-        title: check.event.content?.title ?? '',
-        timezone: check.event.data?.timer?.timezone ?? 'UTC',
-        scheduledTimeMs: check.event.data?.timer?.scheduled_time_ms ?? null,
-        attempt: check.attempt,
-        nextCheckAtMs: check.nextCheckAtMs,
-      })),
-    };
-  }
-
   nextActive() {
     return timerRow(this.nextActiveStatement.get());
   }

@@ -91,21 +91,6 @@ export class OVTimerRepository {
     return values.length ? Math.min(...values) : null;
   }
 
-  observation() {
-    return {
-      active: this.listActive().map(({ timerId, title, text, timezone, schedule, nextRunAtMs, runCount, maxRuns }) =>
-        ({ timerId, title, text, timezone, schedule, nextRunAtMs, runCount, maxRuns })),
-      pending: this.state.timer_occurrence_checks.filter((check) => check.status === 'pending')
-        .sort((left, right) => left.nextCheckAtMs - right.nextCheckAtMs || left.occurrenceId.localeCompare(right.occurrenceId))
-        .map((check) => ({
-          occurrenceId: check.occurrenceId, title: check.event.content?.title ?? '',
-          timezone: check.event.data?.timer?.timezone ?? 'UTC',
-          scheduledTimeMs: check.event.data?.timer?.scheduled_time_ms ?? null,
-          attempt: check.attempt, nextCheckAtMs: check.nextCheckAtMs,
-        })),
-    };
-  }
-
   create({ timerId = `tm_${randomUUID().replaceAll('-', '').slice(0, 24)}`, createdAtMs = Date.now(), ...input }) {
     return this.mutate((state) => {
       const existing = state.timers.find((timer) =>

@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
 import { startHttpApi } from '../src/http-api.mjs';
 import { Store } from '../src/store.mjs';
-import { TimerRepository } from '../src/timers.mjs';
 import { chatEvent } from './event-fixture.mjs';
 
 const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -439,7 +438,6 @@ describe('daemon activity API', { concurrency: false }, () => {
     daemon.httpServer = await startHttpApi({
       config: daemon.config,
       store: daemon.store,
-      timers: new TimerRepository(daemon.store.db),
       logger: quietLogger,
       serviceSnapshot: (options) => daemon.serviceSnapshot(options),
     });
@@ -509,37 +507,6 @@ describe('daemon activity API', { concurrency: false }, () => {
     assert.equal(previous.epoch, 1);
     assert.equal(previous.activities.some((item) => item.summary === 'old line'), true);
     assert.equal(previous.activities.some((item) => item.summary === 'new line'), false);
-  });
-
-  it('includes live timers and only pending occurrences regardless of the selected epoch', async () => {
-    const timers = new TimerRepository(daemon.store.db);
-    timers.create({
-      timerId: 'tm_dashboard', title: '每日检查', text: '检查服务',
-      timezone: 'Asia/Shanghai', nextRunAtMs: 1_800_000_000_000, maxRuns: null,
-      schedule: { type: 'daily', time: '10:00', timezone: 'Asia/Shanghai' },
-      delivery: { mode: 'owner' }, createdFromSource: 'lark',
-      createdFromEventId: 'evt-dashboard', createdAtMs: 1_700_000_000_000,
-    });
-    for (const [occurrenceId, completed] of [['tm_dashboard:1700000000000', false], ['tm_removed:1700000000000', false], ['tm_dashboard:1690000000000', true]]) {
-      timers.createOccurrenceCheck({
-        occurrenceId, eventId: `timer:${occurrenceId}`, nextCheckAtMs: 1_700_000_300_000,
-        event: { content: { title: '每日检查', text: '检查服务' }, data: { timer: {
-          scheduled_time_ms: 1_700_000_000_000, timezone: 'Asia/Shanghai',
-        } } },
-      });
-      if (completed) timers.markOccurrenceCompleted(occurrenceId);
-    }
-    const previous = JSON.parse((await request(port, '/api/activity?epoch=1')).body);
-    assert.equal(previous.timers.active.length, 1);
-    assert.equal(previous.timers.active[0].title, '每日检查');
-    assert.equal(previous.timers.active[0].schedule.time, '10:00');
-    assert.equal(previous.timers.pending.length, 2);
-    assert.equal(previous.timers.pending[1].occurrenceId, 'tm_removed:1700000000000');
-    assert.equal(previous.timers.pending[0].nextCheckAtMs, 1_700_000_300_000);
-    timers.markOccurrenceCompleted('tm_dashboard:1700000000000');
-    const refreshed = JSON.parse((await request(port, '/api/activity?epoch=1')).body);
-    assert.equal(refreshed.timers.pending.length, 1);
-    assert.equal(refreshed.timers.active.length, 1);
   });
 
   it('rejects invalid queries, path traversal, non-loopback hosts, and cross-origin requests', async () => {

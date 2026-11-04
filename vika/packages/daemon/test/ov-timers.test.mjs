@@ -82,7 +82,6 @@ describe('OV timer storage', () => {
     assert.equal(restored.getOccurrenceCheck('tm_test:1790000000000').status, 'pending');
     await restored.markOccurrenceCompleted('tm_test:1790000000000');
     const completed = await new OVTimerRepository(client, 'primary').load();
-    assert.equal(completed.observation().pending.length, 0);
     assert.equal(completed.getOccurrenceCheck('tm_test:1790000000000').status, 'completed');
     connector.repository = completed;
     connector.now = () => nowMs + 300_000;
@@ -102,7 +101,6 @@ describe('OV timer storage', () => {
     assert.equal((await new OVTimerRepository(bob, 'primary').load()).listActive().length, 0);
     state.down = true;
     assert.equal(repository.listActive().length, 1);
-    assert.equal(repository.observation().active[0].timerId, 'tm_test');
     assert.equal(repository.nextDue(nowMs - 1), null);
   });
 

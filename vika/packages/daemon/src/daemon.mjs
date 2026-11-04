@@ -343,7 +343,6 @@ export class PersonalAgentDaemon {
         this.httpServer = await startHttpApi({
           config: this.config,
           store: this.store,
-          timers: this.timers,
           logger: this.logger,
           serviceSnapshot: (options) => this.serviceSnapshot(options),
         });
