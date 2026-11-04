@@ -289,6 +289,18 @@ describe('agent tools', () => {
     assert.equal(fs.existsSync(seen.path), false);
   });
 
+  it('refuses a video container Lark cannot send before any outbox entry, and still takes the mp4', async (t) => {
+    const { call, workspace, connectors, inbound, store } = setup(t);
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    for (const name of ['clip.webm', 'clip.mp4']) fs.writeFileSync(path.join(workspace, name), 'video');
+    const send = (file) => call('send_message', { chat_id: 'oc_chat12345678', file_path: file, decision_id: 'message:om_decision123456' });
+    await assert.rejects(send('clip.webm'), /Lark cannot send clip\.webm.*\.mp4.*No action was taken/);
+    assert.equal(connectors.calls.length, 0);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM outbox').get().n, 0);
+    await send('clip.mp4');
+    assert.deepEqual(connectors.calls.map(({ input }) => input.content.name), ['clip.mp4']);
+  });
+
   for (const tool of ['send_message', 'reply_message', 'notify_owner']) {
     for (const [name, flag] of [['chart 图.png', '--image'], ['report.pdf', '--file']]) {
       for (const fails of [false, true]) {
