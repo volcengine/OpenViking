@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.message import Message, TextPart
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
 from openviking.session.train import (
     CriterionResult,
     Experience,
@@ -98,6 +100,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
                 memory_fields={
                     "experience_name": "booking_duplicate_handling",
                     "content": "new body",
+                    "reasoning": "The observed state change supports this method only before submission.",
                     "supersedes": ["older_experience"],
                 },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
@@ -124,6 +127,10 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.base_version == 7
     assert gradient.before_file is old_file
     assert gradient.after_file.content == "new body"
+    assert (
+        gradient.after_file.extra_fields["reasoning"]
+        == operations.upsert_operations[0].memory_fields["reasoning"]
+    )
     assert gradient.after_file.extra_fields["supersedes"] == ["older_experience"]
     assert gradient.metadata["supersedes"] == ["older_experience"]
     assert len(gradient.links) == 1
@@ -224,13 +231,21 @@ async def test_experience_gradient_estimator_skips_empty_content_and_handles_ext
 
 
 @pytest.mark.asyncio
-async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
+@pytest.mark.parametrize("use_resolver", [False, True])
+async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch, use_resolver):
     analysis = _analysis()
+    analysis.trajectories[0].metadata.update(
+        case_uris=["viking://user/u/memories/cases/booking.md"],
+        source_archive_uri="viking://user/u/sessions/new/history/archive_001",
+        task_query="Update the selected record first.",
+    )
+    history_uri = "viking://user/u/memories/trajectories/old.md"
     captured = {}
 
     class FakeProvider:
         def __init__(self, **kwargs):
             captured["provider_kwargs"] = kwargs
+            self.history_uris = [history_uri]
 
     class FakeIsolationHandler:
         def __init__(self, request_context, extract_context, allowed_memory_types):
@@ -246,7 +261,17 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
             captured["extract_loop_kwargs"] = kwargs
 
         async def run(self):
-            return SimpleNamespace(upsert_operations=[]), {"summary": "ok"}
+            return ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        memory_type="experiences",
+                        memory_fields={"experience_name": "booking", "content": "new body"},
+                        uris=["viking://user/u/memories/experiences/booking.md"],
+                    )
+                ],
+                delete_file_contents=[],
+                errors=[],
+            ), {"summary": "ok"}
 
     monkeypatch.setattr(gradient_estimator_module, "AgentExperienceContextProvider", FakeProvider)
     monkeypatch.setattr(gradient_estimator_module, "MemoryIsolationHandler", FakeIsolationHandler)
@@ -256,23 +281,204 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
     resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
     estimator = ExperienceGradientEstimator(
         viking_fs=SimpleNamespace(),
-        vlm_resolver=resolver,
+        vlm=None if use_resolver else vlm,
+        vlm_resolver=resolver if use_resolver else None,
     )
     context = _context()
     context.request_context.account_id = "account-a"
+    context.messages = [Message(id="raw", role="user", parts=[TextPart("RAW_CONTEXT_SENTINEL")])]
+    analysis.metadata["rollout_messages"] = [
+        Message(id="rollout", role="user", parts=[TextPart("RAW_ROLLOUT_SENTINEL")])
+    ]
 
     gradients = await estimator.estimate(analysis, _experience_set(), context)
 
-    assert gradients == []
-    assert captured["provider_kwargs"] == {
-        "messages": context.messages,
+    assert len(gradients) == 1
+    assert [link.to_uri for link in gradients[0].links] == [
+        analysis.trajectories[0].uri,
+        history_uri,
+    ]
+    expected_provider_kwargs = {
+        "messages": [],
         "trajectory_summary": analysis.trajectories[0].content,
         "trajectory_uri": analysis.trajectories[0].uri,
-        "vlm_config": vlm,
+        "trajectory_case_uris": analysis.trajectories[0].metadata["case_uris"],
+        "trajectory_source_archive_uri": analysis.trajectories[0].metadata["source_archive_uri"],
+        "trajectory_outcome": analysis.trajectories[0].outcome,
+        "trajectory_task_query": "Update the selected record first.",
+        "trajectory_retrieval_anchor": analysis.trajectories[0].retrieval_anchor,
+        "trajectory_evaluation": {
+            "passed": True,
+            "score": 1.0,
+            "feedback": [],
+            "criterion_results": [
+                {
+                    "criterion_name": "done",
+                    "passed": True,
+                    "score": 1.0,
+                    "feedback": [],
+                    "evidence": ["evidence"],
+                    "metadata": {},
+                }
+            ],
+            "metadata": {},
+        },
     }
-    resolver.get_vlm.assert_awaited_once_with(context.request_context.account_id)
+    if use_resolver:
+        expected_provider_kwargs["vlm_config"] = vlm
+        resolver.get_vlm.assert_awaited_once_with(context.request_context.account_id)
+    else:
+        resolver.get_vlm.assert_not_awaited()
+    assert captured["provider_kwargs"] == expected_provider_kwargs
+    assert captured["extract_context"].messages == []
+    assert context.messages[0].content == "RAW_CONTEXT_SENTINEL"
+    assert analysis.metadata["rollout_messages"][0].content == "RAW_ROLLOUT_SENTINEL"
     assert captured["request_context"] is context.request_context
     assert captured["allowed_memory_types"] == {"experiences"}
     assert captured["prepare_messages_called"] is True
     assert captured["extract_loop_kwargs"]["vlm"] is vlm
     assert captured["extract_loop_kwargs"]["context_provider"]._isolation_handler is not None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "## Post-task Evaluation\n- score=1.0; passed=true.",
+        "## Post-hoc Evaluation\n- Task passed.",
+        "## 事后评测反馈\n- 原生得分：1.0。",
+        "<!-- POST_TASK_EVALUATION -->\n## 実行後の評価\n- score=1.0。",
+        '# OpenViking OutcomeEvaluation\n```json\n{"passed":true}\n```',
+        "[Rollout Evaluation]\npassed: True\nscore: 1.0",
+        "<!-- POST_TASK_EVALUATION -->\r\n## Évaluation finale\r\n- score=1.0.\r\n",
+        "## 事后评测反馈：\n- 得分：1.0。",
+    ],
+)
+def test_existing_trajectory_evaluation_is_not_injected_again(content):
+    analysis = _analysis()
+    trajectory = analysis.trajectories[0]
+    trajectory.content = "# Task\n## Actual Result\nCompleted.\n" + content
+
+    assert (
+        gradient_estimator_module._missing_trajectory_evaluation(trajectory, analysis.evaluation)
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "# Task\n## Actual Result\nCompleted.",
+        "# Task\n## Post-task Evaluation\n\n",
+        "<!-- POST_TASK_EVALUATION -->\n## 事后评测反馈\n\n",
+        "## Post-task Evaluation\n\n## Actual Result\nCompleted.",
+        "The tool name was OutcomeEvaluation, but no post-task score was provided.",
+        "## Execution Chain\n```markdown\n## Post-task Evaluation\nexample only\n```\n"
+        "## Actual Result\nFailed.",
+        "## Execution Chain\n~~~markdown\n<!-- POST_TASK_EVALUATION -->\n"
+        "## 評価\nexample only\n~~~\n## Actual Result\nFailed.",
+        "## Post-task Evaluation\n<!-- no report available -->\n-\n",
+        "## Execution Chain\n  ```markdown\n## Post-task Evaluation\nexample only\n  ```\n"
+        "## Actual Result\nFailed.",
+    ],
+)
+def test_missing_trajectory_evaluation_is_supplied_once(content):
+    analysis = _analysis()
+    trajectory = analysis.trajectories[0]
+    trajectory.content = content
+
+    result = gradient_estimator_module._missing_trajectory_evaluation(
+        trajectory, analysis.evaluation
+    )
+
+    assert result["passed"] is True
+    assert result["score"] == 1.0
+    assert len(result["criterion_results"]) == 1
+
+
+def test_missing_trajectory_evaluation_deduplicates_tau2_report():
+    analysis = _analysis(passed=False)
+    report = {"db_match": False, "reason": "UNIQUE_EVALUATION_REPORT"}
+    encoded = json.dumps(report)
+    analysis.evaluation.feedback = [encoded]
+    criterion = analysis.evaluation.criterion_results[0]
+    criterion.feedback = [encoded]
+    criterion.evidence = [encoded]
+    analysis.evaluation.metadata["evaluation_result"] = report
+
+    result = gradient_estimator_module._missing_trajectory_evaluation(
+        analysis.trajectories[0], analysis.evaluation
+    )
+
+    assert json.dumps(result).count("UNIQUE_EVALUATION_REPORT") == 1
+    assert result["metadata"]["evaluation_result"] == report
+    assert analysis.evaluation.feedback == [encoded]
+    assert criterion.feedback == [encoded]
+    assert criterion.evidence == [encoded]
+
+
+@pytest.mark.parametrize("fallback", ["trajectory_extracted", "rollout_evaluation_provided"])
+def test_extraction_or_missing_evaluation_fallback_is_not_a_task_score(fallback):
+    analysis = _analysis()
+    criterion = analysis.evaluation.criterion_results[0]
+    criterion.criterion_name = fallback
+    if fallback == "trajectory_extracted":
+        analysis.evaluation.metadata = {"trajectory_count": 1}
+    else:
+        criterion.metadata = {"source": "session_commit_default"}
+
+    assert gradient_estimator_module._task_evaluation(analysis) is None
+
+
+def test_real_evaluation_and_absent_evaluation_are_kept_distinct():
+    analysis = _analysis(passed=False)
+    assert gradient_estimator_module._task_evaluation(analysis) is analysis.evaluation
+    assert (
+        gradient_estimator_module._missing_trajectory_evaluation(analysis.trajectories[0], None)
+        is None
+    )
+
+
+@pytest.mark.parametrize("scope", ["multiple_tasks", "unmatched_case"])
+@pytest.mark.asyncio
+async def test_rollout_evaluation_is_not_assigned_to_unscoped_tasks(scope):
+    analysis = _analysis()
+    if scope == "multiple_tasks":
+        analysis.trajectories.append(
+            Trajectory(
+                name="independent_task",
+                uri="viking://user/u/memories/trajectories/independent_task.md",
+                content="An independent task without a task-specific evaluation.",
+                outcome="unknown",
+                retrieval_anchor="independent task",
+            )
+        )
+    else:
+        analysis.trajectories[0].metadata["case_uris"] = []
+    estimator = FakeExperienceGradientEstimator({})
+
+    await estimator.estimate(analysis, _experience_set(), _context())
+
+    assert len(estimator.calls) == len(analysis.trajectories)
+    assert all(context.evaluation is None for _, context in estimator.calls)
+
+
+@pytest.mark.asyncio
+async def test_estimator_preserves_case_associations_but_does_not_rehydrate_messages():
+    analysis = _analysis()
+    analysis.trajectories[0].metadata["case_uris"] = ["viking://user/u/memories/cases/case.md"]
+    analysis.metadata["rollout_messages"] = [
+        Message(id="source", role="user", parts=[TextPart("RAW_SOURCE_NOT_AN_EXP_INPUT")])
+    ]
+    estimator = FakeExperienceGradientEstimator({})
+    context = _context()
+    context.metadata["case_name"] = "case"
+
+    await estimator.estimate(analysis, _experience_set(), context)
+
+    trajectory, captured_context = estimator.calls[0]
+    assert trajectory is analysis.trajectories[0]
+    assert trajectory.metadata["case_uris"] == ["viking://user/u/memories/cases/case.md"]
+    assert captured_context.messages == []
+    assert captured_context.metadata["case_name"] == "case"
+    assert captured_context.evaluation is analysis.evaluation
+    assert context.evaluation is None

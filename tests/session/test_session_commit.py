@@ -8,7 +8,9 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from openviking.message import TextPart
+import pytest
+
+from openviking.message import TextPart, ToolPart
 from openviking.scheduling.expiry import (
     CallbackRequest,
     CallbackStatus,
@@ -187,7 +189,12 @@ class TestCommit:
         extract_long_term = AsyncMock(return_value=[])
         wm_session_with_messages._session_compressor.extract_long_term_memories = extract_long_term
 
-        result = await wm_session_with_messages.commit_async()
+        result = await wm_session_with_messages.commit_async(
+            memory_policy={
+                "memory_types": ["events"],
+                "working_memory": {"enabled": True},
+            }
+        )
         task_result = await _wait_for_task(result["task_id"])
 
         assert task_result["status"] == "completed"
@@ -197,6 +204,95 @@ class TestCommit:
         assert all(len(batch) == 1 for batch in working_memory_batches)
         assert extract_long_term.await_count == 4
         assert all(len(call.kwargs["messages"]) == 1 for call in extract_long_term.await_args_list)
+
+    @pytest.mark.parametrize("threshold", ["message_count_threshold", "pending_token_threshold"])
+    @pytest.mark.parametrize(
+        "memory_types,agent_evolution_enabled,expected_calls",
+        [
+            (None, True, 1),
+            (["experiences"], True, 1),
+            (["events", "experiences"], True, 1),
+            (["trajectories"], True, 0),
+            (["events"], True, 7),
+            (None, False, 7),
+        ],
+    )
+    async def test_phase2_preserves_execution_context_without_changing_user_memory_batches(
+        self,
+        session: Session,
+        monkeypatch,
+        threshold,
+        memory_types,
+        agent_evolution_enabled,
+        expected_calls,
+    ):
+        session._agent_evolution_enabled_provider = lambda: agent_evolution_enabled
+        for role, parts in [
+            ("user", [TextPart("# OpenViking Batch Training CaseSpec v1\nTask metadata")]),
+            ("user", [TextPart("system:\nConfirm the user before changing the booking.")]),
+            ("user", [TextPart("Change my booking to flight AB123.")]),
+            ("assistant", [TextPart("Please confirm flight AB123 and the 30 dollar fee.")]),
+            ("user", [TextPart("I confirm flight AB123 and the 30 dollar fee.")]),
+            (
+                "user",
+                [
+                    ToolPart(
+                        tool_id="update-1",
+                        tool_name="update_booking",
+                        tool_input={"flight": "AB123", "fee": 30},
+                        tool_output='{"flight":"AB123","status":"confirmed"}',
+                        tool_status="completed",
+                    )
+                ],
+            ),
+            ("user", [TextPart('# OpenViking OutcomeEvaluation\n{"passed": true}')]),
+        ]:
+            await session.add_message_async(role, parts)
+        original_messages = list(session.messages)
+        await session.update_config(
+            auto_commit_policy={
+                "pending_token_threshold": int(threshold == "pending_token_threshold"),
+                "message_count_threshold": int(threshold == "message_count_threshold"),
+            },
+            update_auto_commit_policy=True,
+        )
+        working_memory_batches = []
+
+        async def generate_summary(_session, messages, **kwargs):
+            working_memory_batches.append([message.id for message in messages])
+            return "Summary"
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", generate_summary)
+        monkeypatch.setattr(
+            Session,
+            "_get_vlm_config",
+            AsyncMock(return_value=SimpleNamespace(is_available=lambda: True)),
+        )
+        extract_long_term = AsyncMock(return_value=[])
+        session._session_compressor.extract_long_term_memories = extract_long_term
+        policy = {"working_memory": {"enabled": True}}
+        if memory_types is not None:
+            policy["memory_types"] = memory_types
+
+        committed = await session.commit_async(memory_policy=policy, keep_recent_count=0)
+        task = await _wait_for_task(committed["task_id"])
+
+        assert task["status"] == "completed"
+        assert extract_long_term.await_count == expected_calls
+        assert len(working_memory_batches) == len(original_messages)
+        assert all(len(batch) == 1 for batch in working_memory_batches)
+        if expected_calls == 1:
+            extracted_messages = extract_long_term.await_args.kwargs["messages"]
+            assert [message.id for message in extracted_messages] == [
+                message.id for message in original_messages
+            ]
+            assert [message.parts for message in extracted_messages] == [
+                message.parts for message in original_messages
+            ]
+        else:
+            assert all(
+                len(call.kwargs["messages"]) == 1 for call in extract_long_term.await_args_list
+            )
 
     async def test_commit_task_reports_intentionally_skipped_memory_operations(
         self,

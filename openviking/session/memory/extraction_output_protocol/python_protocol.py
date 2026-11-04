@@ -190,11 +190,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
                 # instead of copying the JSON model's merge-operation wrappers.
                 description = render_description_template(description, context.template_context)
                 field = schema_fields[name]
-                if field.merge_op == MergeOp.REPLACE:
+                if field.merge_op == MergeOp.REPLACE and schema.operation_mode != "add_only":
                     description = MergeOpFactory.from_field(field).get_output_schema_description(
                         description
                     )
-            normalized_description = " ".join(str(description or "").split())
+            normalized_description = str(description or "").strip()
             qualifier = f" [{merge_ops[name]}]" if name in merge_ops else ""
             lines.append(f"  - {_identifier_alias(name)}{qualifier}: {normalized_description}")
         return lines

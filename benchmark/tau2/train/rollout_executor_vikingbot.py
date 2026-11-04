@@ -27,6 +27,7 @@ from benchmark.tau2.train._rollout_helpers import (
     _tau2_evaluation as _tau2_evaluation_helper,
 )
 from openviking.message import Message, ToolPart
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.train import (
     Case,
     ExecutionContext,
@@ -199,7 +200,7 @@ def _make_tau2_tool(
     return Tau2Tool(schema, provider)
 
 
-def _make_search_experience_tool():
+def _make_search_experience_tool(*, case_lookup: dict[str, Any] | None = None):
     Tool = _vikingbot_imports()["Tool"]
 
     class SearchExperienceTool(Tool):
@@ -210,9 +211,10 @@ def _make_search_experience_tool():
         @property
         def description(self) -> str:
             return (
-                "Search OpenViking case memories under the current user, read each matched "
-                "case's Linked Experiences section, and return candidate case summaries plus "
-                "linked experience URIs. Use read_experience to open selected experience URIs."
+                "Look up the current task's OpenViking case by exact task_signature under "
+                "the current user and return its linked experience URIs. The runner supplies "
+                "the task identity; query does not change the match. No relevance search or "
+                "fallback is performed. Use read_experience to open selected experience URIs."
             )
 
         @property
@@ -222,11 +224,11 @@ def _make_search_experience_tool():
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural-language query describing the current task intent, target object, operation, policy/tool keywords.",
+                        "description": "Current task description for the lookup log only; matching uses the runner-supplied task_signature, not query relevance.",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum candidate cases to inspect and return.",
+                        "description": "Maximum exactly matching cases to return.",
                         "default": 10,
                     },
                 },
@@ -239,20 +241,40 @@ def _make_search_experience_tool():
             del kwargs
             client = None
             try:
+                from vikingbot.agent.memory import MemoryStore
                 from vikingbot.openviking_mount.ov_server import VikingClient
 
                 client = await VikingClient.create()
                 target_uri = _current_cases_uri(client)
-                result = await client.search(query, target_uri=target_uri, limit=max(1, int(limit)))
-                memories = result.get("memories", []) if isinstance(result, dict) else []
-                candidates = [
-                    await _experience_search_summary(client, item, rank)
-                    for rank, item in enumerate(memories, start=1)
-                ]
+                lookup = MemoryStore._normalize_case_lookup(case_lookup)
+                candidates = []
+                if lookup.get("task_signature"):
+                    for uri in MemoryStore._case_uri_candidates(target_uri, lookup):
+                        try:
+                            content = await client.read_content(uri, level="read")
+                        except Exception as exc:
+                            logger.warning("Exact case lookup failed for %s: %s", uri, exc)
+                            continue
+                        if not content or not MemoryStore._case_matches_lookup(
+                            content, lookup, uri=uri
+                        ):
+                            continue
+                        candidates.append(
+                            await _experience_search_summary(
+                                client,
+                                {"uri": uri, "score": 1.0},
+                                len(candidates) + 1,
+                                content=content,
+                            )
+                        )
+                        if len(candidates) >= max(1, int(limit)):
+                            break
                 return json.dumps(
                     {
                         "query": query,
                         "target_uri": target_uri,
+                        "match_type": "task_signature_exact",
+                        "task_signature": lookup.get("task_signature", ""),
                         "count": len(candidates),
                         "candidates": candidates,
                     },
@@ -389,7 +411,9 @@ def _linked_experience_count(content: str) -> int:
     return sum(1 for line in section.splitlines() if line.strip().startswith("- "))
 
 
-async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[str, Any]:
+async def _experience_search_summary(
+    client: Any, item: Any, rank: int, *, content: str
+) -> dict[str, Any]:
     case_uri = _case_uri(item)
     summary: dict[str, Any] = {
         "rank": rank,
@@ -400,10 +424,6 @@ async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[
         "experiences": [],
     }
     if not case_uri:
-        return summary
-    try:
-        content = await client.read_content(case_uri, level="read")
-    except Exception:
         return summary
     input_text = _markdown_section(content, "Input")
     input_obj = _parse_json_object(input_text)
@@ -439,7 +459,7 @@ def _linked_experience_uris(content: str, *, source_uri: str) -> list[str]:
     section = _markdown_section(content, "Linked Experiences")
     if not section:
         return []
-    targets = re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", section)
+    targets = [link.target for link in LinkRenderer.iter_markdown_links(section)]
     if not targets:
         targets = [
             line.lstrip("- ").strip()
@@ -455,7 +475,7 @@ def _linked_experience_uris(content: str, *, source_uri: str) -> list[str]:
 
 
 def _resolve_case_link_uri(target: str, *, source_uri: str) -> str:
-    target = str(target or "").strip()
+    target = LinkRenderer.normalize_markdown_target(str(target or "")) if target else ""
     if not target:
         return ""
     if "://" in target:
@@ -599,65 +619,72 @@ class VikingBotTau2RolloutExecutor:
         stage_started_at = time.perf_counter()
         Tau2BenchToolProvider = _tool_provider_cls()
         provider = Tau2BenchToolProvider(domain, task_id, data_root=data_root)
-        await asyncio.to_thread(provider.reset)
-        timings.record("provider_reset", stage_started_at)
+        termination_reason = "agent_error"
+        try:
+            await asyncio.to_thread(provider.reset)
+            timings.record("provider_reset", stage_started_at)
 
-        stage_started_at = time.perf_counter()
-        agent = await asyncio.to_thread(
-            _build_agent,
-            self.config_path,
-            max_iterations=self.max_iterations,
-        )
-        timings.record("build_agent", stage_started_at)
+            stage_started_at = time.perf_counter()
+            agent = await asyncio.to_thread(
+                _build_agent,
+                self.config_path,
+                max_iterations=self.max_iterations,
+            )
+            timings.record("build_agent", stage_started_at)
 
-        stage_started_at = time.perf_counter()
-        _configure_tools(
-            agent,
-            provider,
-            keep_default_tools=self.keep_default_tools,
-            record_tool_timing=timings.record_tool,
-            task_id=task_id,
-            task_no=task_no,
-            data_split=data_split,
-        )
-        timings.record("configure_tools", stage_started_at)
+            stage_started_at = time.perf_counter()
+            _configure_tools(
+                agent,
+                provider,
+                keep_default_tools=self.keep_default_tools,
+                record_tool_timing=timings.record_tool,
+                task_id=task_id,
+                task_no=task_no,
+                data_split=data_split,
+                case_lookup=_tau2_case_lookup(case),
+            )
+            timings.record("configure_tools", stage_started_at)
 
-        stage_started_at = time.perf_counter()
-        system_prompt = _build_system_prompt(
-            provider.policy,
-            keep_default_tools=self.keep_default_tools,
-            rollout_language=self.rollout_language,
-        )
-        user_prompt = provider.user_query
-        SessionKey = _vikingbot_imports()["SessionKey"]
-        trial_suffix = "" if trial is None else f"_r{int(trial)}"
-        stage = _safe_session_fragment(str(context.metadata.get("stage") or "rollout"))
-        session_key = SessionKey(
-            type="cli",
-            channel_id="tau2",
-            chat_id=f"tau2_{stage}_{data_split}_{task_no}{trial_suffix}",
-        )
-        timings.record("prepare_prompt", stage_started_at)
+            stage_started_at = time.perf_counter()
+            system_prompt = _build_system_prompt(
+                provider.policy,
+                keep_default_tools=self.keep_default_tools,
+                rollout_language=self.rollout_language,
+            )
+            user_prompt = provider.user_query
+            SessionKey = _vikingbot_imports()["SessionKey"]
+            trial_suffix = "" if trial is None else f"_r{int(trial)}"
+            stage = _safe_session_fragment(str(context.metadata.get("stage") or "rollout"))
+            session_key = SessionKey(
+                type="cli",
+                channel_id="tau2",
+                chat_id=f"tau2_{stage}_{data_split}_{task_no}{trial_suffix}",
+            )
+            timings.record("prepare_prompt", stage_started_at)
 
-        (
-            final_content,
-            final_reasoning_content,
-            tools_used,
-            token_usage,
-            iteration,
-            memory_content,
-            experience_reminder,
-            experience_loader_skill,
-        ) = await _run_agent(
-            agent=agent,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            session_key=session_key,
-            sender_id="tau2_user",
-            keep_default_tools=self.keep_default_tools,
-            timings=timings,
-            case_lookup=_tau2_case_lookup(case),
-        )
+            (
+                final_content,
+                final_reasoning_content,
+                tools_used,
+                token_usage,
+                iteration,
+                memory_content,
+                experience_reminder,
+                experience_loader_skill,
+            ) = await _run_agent(
+                agent=agent,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                session_key=session_key,
+                sender_id="tau2_user",
+                keep_default_tools=self.keep_default_tools,
+                timings=timings,
+            )
+            termination_reason = "max_steps" if iteration >= self.max_iterations else "agent_stop"
+        finally:
+            stage_started_at = time.perf_counter()
+            await asyncio.to_thread(provider.close, termination_reason=termination_reason)
+            timings.record("provider_close", stage_started_at)
 
         reward = None
         evaluation_result = None
@@ -717,7 +744,8 @@ class VikingBotTau2RolloutExecutor:
                 "final_reasoning_content": final_reasoning_content,
                 "keep_default_tools": self.keep_default_tools,
                 "ov_tools_enable": False,
-                "experience_recall_enable": self.keep_default_tools,
+                "experience_recall_enable": False,
+                "experience_lookup_mode": "task_signature_exact",
                 "experience_loader_skill": experience_loader_skill,
                 "execution_metadata": dict(context.metadata),
             },
@@ -788,14 +816,16 @@ def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: s
         append_message(str(final_content))
 
 
-# Tokens tau2's user simulator emits to signal that the conversation should end.
+# User STOP closes dialogue only; transfer/out-of-scope still end the task.
 _TAU2_USER_STOP_TOKENS = ("###STOP###",)
-_TAU2_USER_TRANSFER_TOKENS = ("###TRANSFER###",)
+_TAU2_USER_TRANSFER_TOKENS = ("###TRANSFER###", "###OUT-OF-SCOPE###")
 
 
 def _tau2_user_reply_terminates(reply: Any) -> bool:
     text = str(reply or "")
-    return any(tok in text for tok in _TAU2_USER_STOP_TOKENS + _TAU2_USER_TRANSFER_TOKENS)
+    return text.strip() == "Task Terminated" or any(
+        tok in text for tok in _TAU2_USER_TRANSFER_TOKENS
+    )
 
 
 def _make_tau2_plain_text_router(*, publish_events: bool, bus: Any, session_key: Any):
@@ -876,7 +906,9 @@ def _make_tau2_plain_text_router(*, publish_events: bool, bus: Any, session_key:
                 "auto": True,
             }
         ]
-        messages.append({"role": "user", "content": str(user_reply)})
+        # A rejected communication is an environment notice, not a customer reply.
+        reply_role = "system" if str(user_reply).startswith("Error:") else "user"
+        messages.append({"role": reply_role, "content": str(user_reply)})
         terminates = _tau2_user_reply_terminates(user_reply)
         return PlainTextDelivered(
             messages=messages,
@@ -926,15 +958,15 @@ def _configure_tools(
     task_id: str | None = None,
     task_no: int | None = None,
     data_split: str | None = None,
+    case_lookup: dict[str, Any] | None = None,
 ) -> None:
-    # Tau2 rollout may keep generic VikingBot tools, but OpenViking access is
-    # restricted to automatic experience recall during prompt construction.
-    # No openviking_* tool should be callable by the agent.
+    # Restrict generic tools before registering Tau2 and experience tools.
     del keep_default_tools
+    allowed_default_tools = {"read_file", "write_file", "edit_file", "list_dir", "exec"}
     for tool_name in list(agent.tools.tool_names):
-        if str(tool_name).startswith("openviking_"):
+        if tool_name not in allowed_default_tools:
             agent.tools.unregister(tool_name)
-    agent.tools.register(_make_search_experience_tool())
+    agent.tools.register(_make_search_experience_tool(case_lookup=case_lookup))
     agent.tools.register(_make_read_experience_tool())
     tool_lock = _AsyncRWLock()
     write_tool_names = _classify_write_tools(provider)
@@ -1052,6 +1084,12 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
         )
     instructions.append(
         "If you need to communicate with the user, you MUST call tool `communicate_with_user`."
+    )
+    instructions.append(
+        "If the user replies with ###STOP###, the user dialogue is closed, not the task. "
+        "Do not contact the user again or assume any new confirmation. Complete only "
+        "actions already authorized under the policy, then call `done`. "
+        "Business tools remain available until `done`."
     )
     instructions.append(
         "When communicating numbers, prices, reservation IDs, flight numbers, airport codes, "
@@ -1197,11 +1235,9 @@ async def _run_agent(
     sender_id: str,
     keep_default_tools: bool,
     timings: "_RolloutTiming | None" = None,
-    case_lookup: dict[str, Any] | None = None,
 ):
     stage_started_at = time.perf_counter()
     message_context = agent.context
-    del case_lookup
     message_context = await _prepare_experience_loader_skill(
         agent=agent,
         session_key=session_key,
@@ -1269,6 +1305,7 @@ async def _run_agent(
         ov_tools_enable=False,
         stop_tool_names=["done"],
         on_plain_text=plain_text_router,
+        inject_write_experience=False,
     )
     if timings is not None:
         timings.record("agent_loop", stage_started_at)
@@ -1541,7 +1578,7 @@ def _build_rollout_messages(
             messages.append(
                 Message(
                     id=f"tau2-tool-{idx}",
-                    role="user" if has_result else "assistant",
+                    role="assistant",
                     parts=[
                         ToolPart(
                             tool_id=f"tau2-tool-{idx}",

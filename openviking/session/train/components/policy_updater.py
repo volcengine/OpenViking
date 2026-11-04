@@ -101,20 +101,40 @@ class MemoryFilePolicyUpdater:
             policy_set=policy_set,
             updated_policy_set=updated_policy_set,
         )
-        trajectory_uris = sorted({link.to_uri for link in operations.resolved_links if link.to_uri})
+        related_uris = {
+            uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri) if uri
+        }
+        related_uris.update(operations.delete_replacements)
+        related_uris.update(operations.delete_replacements.values())
+        # The caller reloads these files under the EXP tree lock before planning.
+        for source in operations.delete_file_contents:
+            related_uris.update(
+                uri
+                for link in [*source.links, *source.backlinks]
+                for uri in (link.get("from_uri"), link.get("to_uri"))
+                if uri
+            )
         operation_lease = transaction_handle
         combined_lease = None
-        if trajectory_uris:
+        if related_uris:
             uri_to_path = getattr(viking_fs, "_uri_to_path", None)
             if not callable(uri_to_path):
                 raise RuntimeError("VikingFS must provide _uri_to_path for policy link locking")
-            combined_lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
-                sorted(uri_to_path(uri, ctx=context) for uri in trajectory_uris),
-                [uri_to_path(policy_set.root_uri, ctx=context)],
-                timeout_secs=300.0,
-                owner_lease_ref=transaction_handle,
-            )
-            operation_lease = combined_lease
+            root_path = uri_to_path(policy_set.root_uri, ctx=context).rstrip("/")
+            exact_paths = {uri_to_path(uri, ctx=context) for uri in related_uris if uri}
+            exact_paths = {
+                path
+                for path in exact_paths
+                if path != root_path and not path.startswith(root_path + "/")
+            }
+            if exact_paths:
+                combined_lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
+                    sorted(exact_paths),
+                    [root_path],
+                    timeout_secs=300.0,
+                    owner_lease_ref=transaction_handle,
+                )
+                operation_lease = combined_lease
 
         try:
             updater = MemoryUpdater(
@@ -193,6 +213,13 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         )
         metadata = dict(existing.metadata) if existing is not None else {}
         metadata.update(item.metadata.get("patch_metadata", {}))
+        metadata.update(
+            {
+                key: value
+                for key, value in item.metadata.get("merge_memory_fields", {}).items()
+                if key not in {"content", "links", "backlinks", "status", "version"}
+            }
+        )
         metadata.setdefault("memory_type", item.memory_type or "experiences")
         metadata["experience_name"] = item.target_name
         version = (existing.version + 1) if existing is not None else 1
@@ -250,6 +277,7 @@ def _plan_to_resolved_operations(
 ) -> tuple[ResolvedOperations, list[str]]:
     upserts: list[ResolvedOperation] = []
     deletes: list[MemoryFile] = []
+    delete_replacements: dict[str, str] = {}
     links: list[StoredLink] = []
     errors: list[str] = []
 
@@ -269,6 +297,8 @@ def _plan_to_resolved_operations(
 
         if item.kind == "delete":
             deletes.append(_policy_or_plan_item_memory_file(item, uri=uri, current=current))
+            if item.replacement_uri:
+                delete_replacements[uri] = item.replacement_uri
             continue
 
         if item.kind != "upsert":
@@ -299,6 +329,11 @@ def _plan_to_resolved_operations(
             )
         )
         links.extend(_source_trajectory_links(exp_uri=uri, links=item.links))
+        links.extend(
+            link
+            for link in item.links
+            if "/memories/cases/" in link.from_uri and link.to_uri == uri
+        )
 
     return (
         ResolvedOperations(
@@ -306,6 +341,7 @@ def _plan_to_resolved_operations(
             delete_file_contents=deletes,
             errors=[],
             resolved_links=links,
+            delete_replacements=delete_replacements,
         ),
         errors,
     )

@@ -57,6 +57,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
     include_tool_parts_in_conversation: bool = False
+    _tool_output_max_chars: Optional[int] = 500
     split_long_text_messages_for_extraction: bool = True
 
     def __init__(
@@ -336,7 +337,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     if part.tool_input:
                         fields.append(f"input={part.tool_input}")
                     if part.tool_output:
-                        fields.append(f"output={part.tool_output[:500]}")
+                        fields.append(f"output={part.tool_output[: self._tool_output_max_chars]}")
                     if part.duration_ms is not None:
                         fields.append(f"duration_ms={part.duration_ms}")
                     if part.skill_uri:

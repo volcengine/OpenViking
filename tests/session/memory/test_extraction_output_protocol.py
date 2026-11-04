@@ -267,7 +267,7 @@ def test_python_contract_renders_builtin_field_descriptions_like_json(
     model_ref = json_schema["properties"][memory_type]["items"]["$ref"].rsplit("/", 1)[1]
     rendered = json_schema["$defs"][model_ref]["properties"][field_name]["description"]
 
-    assert " ".join(rendered.split()) in python_contract
+    assert rendered.strip() in python_contract
     assert language in rendered
     assert "{{ language }}" not in python_contract
     assert "{% if language" not in python_contract
@@ -279,13 +279,20 @@ def test_python_contract_renders_builtin_field_descriptions_like_json(
 
 def test_python_field_description_keeps_dsl_patch_instructions():
     schema = _preference_schema()
-    schema.fields[1].description = "Write content in {{ language.upper() }}."
+    schema.fields[1].description = (
+        "Write content in {{ language.upper() }}.\n\n"
+        "## Details\n- Condition:\n  - Preserve this nested rule.\n"
+    )
     context = _context([schema], template_context={"language": "en"})
 
     protocol = create_extraction_output_protocol("python")
     contract = protocol.render_contract(context)
 
     assert "content [editable string: obj.field.edit/drop/update]: Write content in EN." in contract
+    assert (
+        "Write content in EN.\n\n## Details\n- Condition:\n  - Preserve this nested rule."
+        in contract
+    )
     assert "obj.content.edit(search=..., replace=...)" in contract
     assert "PATCH operation for" not in contract
     assert "Use a DELETE block" not in contract

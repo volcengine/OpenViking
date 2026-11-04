@@ -71,6 +71,14 @@ bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
 rollouts for epoch `0`, before memory training has changed the policy. Later
 training epochs and eval rollouts are always executed normally.
 
+VikingBot memory recall uses exact task identity: `search_experience` directly
+reads the current task's stable case URI and requires an equal `task_signature`
+before returning linked experiences. The query is for logging only; a missing or
+mismatched case returns no candidates, with no relevance-search fallback. Train
+and test signatures include different split names, so test tasks do not recall
+semantically similar train cases. SKILL loading and linked-experience applicability
+checks remain enabled.
+
 ## 2. Evaluation modes from the restart launcher
 
 The restart launcher always runs the full VikingBot path. Evaluation behavior is

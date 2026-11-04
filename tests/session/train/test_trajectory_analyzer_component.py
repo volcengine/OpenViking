@@ -361,3 +361,48 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     assert "task failed" in feedback_message.content
     assert "missing confirmation" in feedback_message.content
     assert analysis.metadata["extraction_message_count"] == 2
+    assert analysis.trajectories[0].outcome == "failure"
+    assert '"outcome": "failure"' in fs.writes[0][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("passed", [False, True])
+async def test_trajectory_uses_external_commit_verdict_instead_of_model_outcome(
+    monkeypatch, passed
+):
+    from openviking.session.train.components import trajectory_analyzer as module
+    from openviking.session.train.components.session_commit import _build_commit_messages
+
+    _patch_runtime_defaults(monkeypatch)
+    fs = FakeVikingFS()
+
+    class MisclassifiedExtractLoop(FakeExtractLoop):
+        async def run(self):
+            operations, messages = await super().run()
+            operations.upsert_operations[0].memory_fields["outcome"] = (
+                "failure" if passed else "success"
+            )
+            return operations, messages
+
+    monkeypatch.setattr(module, "ExtractLoop", MisclassifiedExtractLoop)
+    monkeypatch.setattr(module, "get_viking_fs", lambda: fs)
+    rollout = _rollout()
+    rollout.evaluation = RubricEvaluation(
+        passed=passed, score=float(passed), criterion_results=[], feedback=[]
+    )
+    rollout.messages = [
+        Message.from_dict({"id": f"commit-{index}", **message})
+        for index, message in enumerate(_build_commit_messages(rollout))
+    ]
+    # Session commit transports the evaluation in messages, not on the new Rollout.
+    rollout.evaluation = None
+    analyzer = TrajectoryRolloutAnalyzer(viking_fs=fs, vlm=SimpleNamespace(model="fake"))
+    context = TrajectoryAnalyzerContext(
+        request_context=RequestContext(user=UserIdentifier("default", "u"), role=Role.USER),
+    )
+
+    analysis = await analyzer.analyze(rollout, context)
+
+    expected = "success" if passed else "failure"
+    assert analysis.trajectories[0].outcome == expected
+    assert f'"outcome": "{expected}"' in fs.writes[0][1]

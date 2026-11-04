@@ -27,6 +27,10 @@ _SYSTEM_HIDDEN_FIELDS = {
 }
 _MAX_EXTRA_CANDIDATE_FILES = 10
 _PATCH_METADATA_KEYS = ("confidence",)
+_EXPERIENCE_MERGE_REASONING = """Write before content in {{ language }}. In 2–3 sentences, compare the supplied experiences' reasoning and applicability, then state the basis for the resulting guidance and any unresolved uncertainty.
+Use only evidence summarized in the inputs, preserving the conditions behind each conclusion; do not infer an action's effectiveness from outcomes under different conditions.
+Repeated claims are not independent support.
+Keep the final rationale, not a history of edits or a repetition of content."""
 
 
 @dataclass(slots=True)
@@ -138,6 +142,24 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
+        if self.memory_type == "experiences":
+            return """Merge new experience proposals with historical experiences using their content and reasoning.
+
+Inputs: proposals rendered as field diffs and candidate historical experiences, including their content and reasoning. Neither newness nor prior storage establishes validity.
+
+Choose only necessary operations:
+- Update: improve an existing method with compatible applicability, keeping its experience_name.
+- Create: add a distinct method not already covered; consolidate equivalent new proposals.
+- Replace: fully replace a narrower experience under a different name; explicitly delete the old memory with the new memory as its replacement.
+- No change: output no operation when the existing experience remains valid and the proposal adds no useful guidance.
+
+Merge only the same problem with compatible applicability and core method, not merely shared tools or keywords. Preserve valid branches, dependencies, exceptions, and counterexamples; leave unrelated memories unchanged.
+For the same decision, reconcile overlapping conditions before merging actions. Resolve conflicting actions using supported applicability or precedence; do not invent either. If unresolved, retain supported guidance without prescribing the disputed action, and explain the uncertainty in reasoning.
+Keep Procedure, Verification, and Anti-pattern consistent; verification must not introduce unsupported actions.
+
+For each change, return complete resulting content and reasoning, not diffs or a merge history. Correct unsupported claims under the shared evidence rules rather than copying them forward.
+Do not call tools. Follow the output contract below.
+"""
         return f"""You are a memory patch merge agent.
 
 You are given original memory files and structured memory-file field diffs. Merge them by producing final memory operations that follow the provided JSON schema.
@@ -146,7 +168,7 @@ Do not call tools. Output JSON only.
 
 All memory content must be written in {output_language}.
 
-Reconcile independent extraction patch proposals. Apply this shared policy before
+Reconcile independent extraction patch proposals. Apply this policy before
 choosing a canonical file or deleting any proposal:
 
 {MEMORY_MERGE_POLICY}
@@ -169,6 +191,17 @@ canonical replacement; if it is only a duplicate new proposal, omit it.
         schema = registry.get(self.memory_type)
         if schema is None or not schema.enabled:
             raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
+        if self.memory_type == "experiences":
+            schema = schema.model_copy(
+                update={
+                    "fields": [
+                        field.model_copy(update={"description": _EXPERIENCE_MERGE_REASONING})
+                        if field.name == "reasoning"
+                        else field
+                        for field in schema.fields
+                    ]
+                }
+            )
         return [schema]
 
     async def prefetch(self) -> list[dict[str, Any]]:
@@ -182,10 +215,16 @@ canonical replacement; if it is only a duplicate new proposal, omit it.
                 uri,
             )
 
+        patches_text = _render_field_diff_patches(self.patches)
+        if self.memory_type == "experiences":
+            patches_text += (
+                "\n\nMerge the proposed experiences above with the historical experiences "
+                "using their content and reasoning."
+            )
         messages.append(
             {
                 "role": "user",
-                "content": _render_field_diff_patches(self.patches),
+                "content": patches_text,
             }
         )
         return messages
@@ -253,7 +292,8 @@ def _render_field_diff_patches(patches: list[PatchMergePatch]) -> str:
 
 def _render_one_field_diff_patch(index: int, patch: PatchMergePatch) -> str:
     lines = [f"Patch {index}"]
-    if patch.metadata:
+    # Rollout success is not confidence in a lesson learned from that rollout.
+    if patch.metadata and patch.memory_type != "experiences":
         compact_metadata = _compact_patch_metadata(patch.metadata)
         if compact_metadata:
             lines.append(f"  meta: {_compact_value(compact_metadata)}")

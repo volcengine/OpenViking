@@ -58,7 +58,10 @@ from openviking.session.extraction_batch import (
     plan_extraction_batches,
     resolve_extraction_batch_limits,
 )
-from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+    EXECUTION_MEMORY_TYPES,
+)
 from openviking.session.memory.memory_updater import MemoryUpdateError
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
@@ -2385,6 +2388,10 @@ class Session:
                     peer_memory_enabled = extraction_scope.peer_memory_enabled
                     allowed_peer_ids = extraction_scope.allowed_peer_ids
                     long_term_memory_types = extraction_scope.memory_types
+                    preserve_execution_context = agent_evolution_enabled and (
+                        long_term_memory_types is None
+                        or bool(EXECUTION_MEMORY_TYPES.intersection(long_term_memory_types))
+                    )
 
                     long_term_messages = [
                         message
@@ -2435,7 +2442,8 @@ class Session:
                                     event_search_tags=event_search_tags,
                                 )
 
-                            if extraction_batch_limits.enabled:
+                            # Policies, confirmations, actions and outcomes form one execution.
+                            if extraction_batch_limits.enabled and not preserve_execution_context:
                                 extraction_tasks.append(
                                     self._extract_long_term_memories_with_batching(
                                         messages=long_term_messages,

@@ -828,8 +828,6 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            if uri == deleted_uri:
-                raise AssertionError("deleted URI should not be read")
             return MemoryFileUtils.write(MemoryFile(uri=uri, content="new content"))
 
         mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
@@ -871,8 +869,9 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
+        assert result.errors == []
         assert deleted_uri not in [
-            call.args[0] for call in mock_viking_fs.read_file.await_args_list
+            call.args[0] for call in mock_viking_fs.write_file.await_args_list
         ]
 
     @pytest.mark.asyncio
@@ -2105,6 +2104,7 @@ class TestApplyEditWithSearchReplacePatch:
         result = MemoryFileUtils.read(written_content)
         assert result.extra_fields["source_extraction_id"] == "extract_1"
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
+        assert result.memory_type == "test"
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):
@@ -2326,6 +2326,7 @@ class TestConsecutivePatchesSameURI:
         parsed = parse_memory_file_with_fields(final_content)
         assert parsed["content"] == "Step B"
         assert parsed["version"] == 2
+        assert parsed["memory_type"] == memory_type
 
     @pytest.mark.asyncio
     async def test_apply_upsert_strips_user_id_and_sets_version(self):
