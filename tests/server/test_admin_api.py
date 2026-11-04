@@ -83,6 +83,11 @@ class _FakeAGFS:
             raise AGFSNotFoundError(path)
         return self._files[path]
 
+    def stat(self, path, **_kwargs):
+        content = self.read(path)
+        raw = content.encode("utf-8") if isinstance(content, str) else content
+        return {"size": len(raw), "modTime": hashlib.sha256(raw).hexdigest()}
+
     def write(self, path, content, **_kwargs):
         self.ensure_parent_dirs(path)
         self._files[path] = content
@@ -217,6 +222,49 @@ async def lightweight_admin_app(monkeypatch):
     await app.state.fake_service.runtime_config_manager.initialize()
     await app.state.api_key_manager.load()
     return app
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/accounts", {"account_id": "new_account", "admin_user_id": "admin"}),
+        ("DELETE", "/accounts/readonly_account", None),
+        ("POST", "/accounts/readonly_account/users", {"user_id": "new_user"}),
+        ("DELETE", "/accounts/readonly_account/users/member", None),
+        ("PUT", "/accounts/readonly_account/users/member/role", {"role": "admin"}),
+        ("POST", "/accounts/readonly_account/users/member/key", None),
+        ("POST", "/accounts/readonly_account/groups", {"group_id": "new_group"}),
+        ("DELETE", "/accounts/readonly_account/groups/team", None),
+        ("PUT", "/accounts/readonly_account/groups/team/members", {"user_ids": ["member"]}),
+        ("DELETE", "/accounts/readonly_account/groups/team/members", {"user_ids": ["member"]}),
+    ],
+)
+async def test_read_only_identity_writes_fail_before_filesystem_locks(
+    lightweight_admin_app, method, path, body
+):
+    app = lightweight_admin_app
+    manager = app.state.api_key_manager
+    await manager.create_account("readonly_account", "admin")
+    await manager.register_user("readonly_account", "member")
+    await manager.create_group("readonly_account", "team")
+    manager._store._read_only = True
+    service = app.state.fake_service
+    original_files = dict(service.viking_fs.agfs._files)
+    original_writes = list(service.viking_fs.writes)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.request(
+            method, f"/api/v1/admin{path}", json=body, headers={"X-API-Key": ROOT_KEY}
+        )
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+        read = await client.get("/api/v1/admin/accounts", headers={"X-API-Key": ROOT_KEY})
+        assert read.status_code == 200
+    assert service.account_lock_events == []
+    assert service.viking_fs.agfs._files == original_files
+    assert service.viking_fs.writes == original_writes
+    await manager.close()
 
 
 @pytest_asyncio.fixture(scope="function")

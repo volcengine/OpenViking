@@ -19,6 +19,11 @@ from openviking.server.account_stores.models import (
 class AccountStore(ABC):
     """Nominal contract implemented by every complete account store provider."""
 
+    @property
+    def read_only(self) -> bool:
+        """Whether management writes must be rejected before acquiring locks."""
+        return False
+
     @abstractmethod
     async def load(self) -> None: ...
 

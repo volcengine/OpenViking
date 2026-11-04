@@ -153,6 +153,10 @@ class FileStore(AccountStore):
         self._registry_read_retries = 0
         self._registry_read_failures = 0
 
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
     def _discard_account_state(self, account_id: str) -> None:
         """Remove an account and its key index entries from in-memory state."""
         self._accounts.pop(account_id, None)
