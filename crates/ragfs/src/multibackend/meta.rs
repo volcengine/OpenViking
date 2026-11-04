@@ -1,8 +1,8 @@
 //! Multi-write metadata management.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -71,6 +71,103 @@ pub(crate) enum MultiWriteWorker {
     Checkpoint,
     CatchUp,
     Gc,
+}
+
+/// In-memory multi-write metrics snapshot used by scrape paths.
+#[derive(Default)]
+pub(crate) struct MultiWriteMetricsSnapshot {
+    protocol_status: Mutex<Option<ProtocolStatus>>,
+    scope_lag: Mutex<HashMap<(ScopeKey, String), u64>>,
+}
+
+impl MultiWriteMetricsSnapshot {
+    /// Store the latest known protocol status for metrics collection.
+    pub(crate) fn set_protocol_status(&self, status: ProtocolStatus) {
+        *self
+            .protocol_status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(status);
+    }
+
+    /// Return the latest known protocol status for metrics collection.
+    pub(crate) fn protocol_status(&self) -> Option<ProtocolStatus> {
+        *self
+            .protocol_status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// Add newly appended segment events to every configured backup lag.
+    pub(crate) fn record_flush(
+        &self,
+        scope: &ScopeKey,
+        backends: &[String],
+        first: u64,
+        last: u64,
+    ) {
+        if last < first {
+            return;
+        }
+        let delta = last - first + 1;
+        let mut lag = self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for backend in backends {
+            *lag.entry((scope.clone(), backend.clone())).or_default() += delta;
+        }
+    }
+
+    /// Replace one scope's lag from a freshly read segment manifest.
+    pub(crate) fn replace_scope(&self, scope: &ScopeKey, manifest: &SegmentManifest) {
+        let tail = manifest.next_seq.saturating_sub(1);
+        let mut lag = self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        lag.retain(|(existing, _), _| existing != scope);
+        for (backend, state) in &manifest.backend_states {
+            lag.insert(
+                (scope.clone(), backend.clone()),
+                tail.saturating_sub(state.synced_seq),
+            );
+        }
+    }
+
+    /// Decrease one backend's lag after catch-up advances durable progress.
+    pub(crate) fn record_progress(
+        &self,
+        scope: &ScopeKey,
+        backend: &str,
+        previous: u64,
+        progress: u64,
+    ) {
+        if progress <= previous {
+            return;
+        }
+        let mut lag = self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let value = lag.entry((scope.clone(), backend.to_string())).or_default();
+        *value = value.saturating_sub(progress - previous);
+    }
+
+    /// Return lag aggregated by backend and partition labels.
+    pub(crate) fn backend_lag(&self) -> BTreeMap<(String, u32), u64> {
+        let mut aggregated = BTreeMap::new();
+        for ((scope, backend), value) in self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+        {
+            *aggregated
+                .entry((backend.clone(), scope.partition_id))
+                .or_default() += *value;
+        }
+        aggregated
+    }
 }
 
 /// Primary filesystem store for V2 multi-write metadata.

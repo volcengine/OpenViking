@@ -63,7 +63,7 @@ describe('fetchDirectorySidecarContent', () => {
 
 describe('fetchFsList', () => {
   it('requests newest entries before the server applies node_limit', async () => {
-    await fetchFsList('viking://session', { nodeLimit: 200 })
+    await fetchFsList('viking://~/sessions', { nodeLimit: 200 })
 
     expect(getFsLsMock).toHaveBeenCalledWith({
       query: expect.objectContaining({

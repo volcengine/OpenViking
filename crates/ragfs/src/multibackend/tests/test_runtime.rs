@@ -63,12 +63,14 @@ async fn delete_account_event_removes_backup_scope() {
     ));
     let store = Arc::new(MetadataStore::new(primary.clone(), manager, "/local").unwrap());
     let provider = Arc::new(FilesystemProvider::new(store.clone()));
+    let metrics = Arc::new(MultiWriteMetricsSnapshot::default());
     let catch_up = Arc::new(CatchUpWorker::new(
         "backup".to_string(),
         primary.clone(),
         backup.clone(),
         store.clone(),
         provider.clone(),
+        metrics.clone(),
     ));
     let mut worker = FlushWorker::new(
         store,
@@ -76,6 +78,8 @@ async fn delete_account_event_removes_backup_scope() {
         1,
         vec!["backup".to_string()],
         Some(primary),
+        Arc::new(StdMutex::new(HashSet::<ScopeKey>::new())),
+        metrics,
     );
 
     worker

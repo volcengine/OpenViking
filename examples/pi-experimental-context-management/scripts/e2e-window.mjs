@@ -420,7 +420,7 @@ async function sessionRootUri(ovSessionId) {
   const res = await ovFetch(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
   const uri = typeof res.body?.result?.uri === "string" ? res.body.result.uri.trim() : "";
   if (uri.startsWith("viking://")) return uri.replace(/\/+$/, "");
-  return `viking://session/${ovSessionId}`;
+  return `viking://~/sessions/${ovSessionId}`;
 }
 
 /** Archive directories under `<root>/history`, newest first. */

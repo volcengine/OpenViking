@@ -242,17 +242,17 @@ Locks coordinate participating operations. The low-level `PathLockWrappedFS` use
 
 ### Filesystem Provider Lock Protocol
 
-The caller chooses the lock type; the resolver chooses the token location from the target's state:
+The caller chooses the lock type. The filesystem provider uses a parent sidecar for every target:
 
 | Target state | Exact token | Tree token |
 | --- | --- | --- |
 | Existing file `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
-| Existing directory `/docs/a` | `/docs/a/.path.ovlock`, containing E | Same file inside the directory, containing T |
-| Missing `/docs/a` | Parent sidecar, containing E | Create the target directory, then write `.path.ovlock` inside it, containing T |
+| Existing directory `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
+| Missing `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
 
-A sidecar sits beside its target but represents only that target, not its parent directory. `<hash>` is a SHA-1 prefix of the full backend path, not the business file's contents.
+A sidecar sits beside its target but represents only that target, not its parent directory. Recursively deleting the target does not delete the token in its parent, so mutual exclusion remains active until the lease is formally released. `<hash>` is a SHA-1 prefix of the full backend path, not the business file's contents.
 
-`.exact.ovlock.*` can contain a Tree token, and `.path.ovlock` can contain an Exact token. Filenames are part of the storage protocol, but do not alone identify the logical lock type. Token contents are:
+`.exact.ovlock.*` stores E or T according to the logical lock type. For compatibility with tokens left by older versions, conflict checks still read `.path.ovlock` inside the target, but new locks are no longer written there. Filenames are part of the storage protocol, but do not alone identify the logical lock type. Token contents are:
 
 ```text
 {owner_id}:{time_ns}:{lock_type}
@@ -261,6 +261,17 @@ A sidecar sits beside its target but represents only that target, not its parent
 `lock_type` is `E` or `T`. This ownership token supports conflict checks, refresh, and conditional release; it does not imply storage-side fencing of every business write.
 
 A lease records logical scope in `covered_paths` separately from token locations in `lock_paths`. An owned lease controls refresh, release, and handoff. A borrowed lease proves coverage by an existing lock without permission to release the outer lock.
+
+#### Protocol Migration and Deployment
+
+The new version reads both the new sidecar and the legacy `.path.ovlock`, but writes new tokens only to the sidecar. Existing leases are not migrated in place: refresh, release, and handoff continue to use the legacy `lock_paths` recorded by the lease until those tokens are released or expire.
+
+Old versions do not inspect new ancestor sidecars, so filesystem-provider instances of different protocol versions must not process writes against the same backend concurrently. The current version requires a coordinated cutover:
+
+1. Stop new writes, wait for active leases and pending handoffs to drain, then stop every old instance.
+2. Start all new instances, confirm legacy tokens were released or can be reclaimed by expiry, then resume writes.
+
+A zero-downtime rolling deployment requires two independently deployable protocol stages: first deploy a compatibility version that reads both formats but still writes legacy tokens; after every instance is upgraded, switch all instances to reading both formats and writing only new sidecars. There must be no interval where an old instance can encounter a new sidecar.
 
 ### Cache Provider Lock Protocol
 
@@ -321,8 +332,8 @@ loop until timeout (poll interval: 200ms):
        - Missing target directory? -> treat as no descendant locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Ensure the resolved token parent exists; this creates a missing target as a directory
-    5. Write the TREE (T) token (sidecar for an existing file, internal .path.ovlock otherwise)
+    4. Ensure the resolved sidecar parent exists; do not create the missing target itself
+    5. Write the TREE (T) token to the parent sidecar
     6. TOCTOU double-check: re-scan descendants and ancestors
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
@@ -335,17 +346,17 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 
 ### Missing Directory Creation
 
-The lock system may create directories so it can place lock files, but it checks
-for conflicts first:
+The lock system may create a missing parent chain so it can place a sidecar,
+but it does not create the locked target itself. It checks for conflicts first:
 
 ```
-1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create the directory
-2. No current conflict -> create the directory and write the lock
+1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create directories
+2. No current conflict -> create the sidecar parent and write the lock
 3. A post-write double-check finds a new conflict -> remove our own lock and fail or retry
 4. Step 3 does not roll back the empty directory
 ```
 
-Acquisition rollback and normal release clean up tokens without guaranteeing removal of directories created to store them. An Exact sidecar can also create a missing parent chain. Snapshots use a separate policy for missing targets; see [snapshot scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
+Acquisition rollback and normal release clean up tokens without guaranteeing removal of a parent chain created to store the sidecar. Snapshots use a separate policy for missing targets; see [snapshot scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
 
 ### Lock Expiry Cleanup
 
