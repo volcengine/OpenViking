@@ -158,9 +158,9 @@ export interface FileTreeLoadingRow extends FileTreeChildRow {
 }
 
 /**
- * 子节点尚未加载时的分页行，宿主据此触发 `onLoadMore`。
+ * 子节点尚未加载时的分页行，提供继续加载的入口。
  * A pagination row for children the host has not loaded yet; the host uses it
- * to trigger `onLoadMore`.
+ * to offer a load-more entry.
  *
  * 宿主按页取子节点时产出这类行；一次性返回全部子节点时不产出。
  * The host emits this row when children are paged; it is not emitted when all
@@ -185,8 +185,8 @@ export interface FileTreeLoadMoreRow extends FileTreeChildRow {
 }
 
 /**
- * 子节点加载失败的行，宿主据此触发 `onRetry`。
- * A failed children load; the host uses it to trigger `onRetry`.
+ * 子节点加载失败的行，提供重新加载的入口。
+ * A failed children load with a retry entry.
  */
 export interface FileTreeErrorRow extends FileTreeChildRow {
   /**
@@ -303,13 +303,27 @@ export interface FileTreeHandle {
   scrollToRow: (id: string, options?: ScrollIntoViewOptions) => boolean;
 }
 
+/** 文件树操作的执行能力。File-tree operation capabilities. */
+export interface FileTreeOperations {
+  /** 选中条目。Selects an entry. */
+  select?: (row: FileTreeEntryRow) => Promise<void>;
+  /** 展开或折叠目录。Expands or collapses a directory. */
+  toggleExpand?: (row: FileTreeEntryRow) => Promise<void>;
+  /** 加载下一页子节点。Loads the next page of children. */
+  loadMore?: (row: FileTreeLoadMoreRow) => Promise<void>;
+  /** 重新加载失败的子节点。Retries a failed children load. */
+  retry?: (row: FileTreeErrorRow) => Promise<void>;
+  /** 打开保留策略设置。Opens retention policy settings. */
+  openRetentionSettings?: (uri: string) => Promise<void>;
+}
+
 /**
  * 目录树的公开接口。
  * Public interface of the file tree.
  *
- * 组件只负责渲染行与上报意图；工具栏、搜索、导入、权限流程都由页面层实现，
+ * 组件渲染行并通知成功的操作；工具栏、搜索、导入、权限流程都由页面层实现，
  * 通过 `toolbar` 插槽注入。
- * The component only renders rows and reports intent. Toolbars, search,
+ * The component renders rows and reports successful operations. Toolbars, search,
  * import and permission flows belong to the page layer and are injected
  * through the `toolbar` slot.
  */
@@ -322,6 +336,11 @@ export interface FileTreeProps extends Omit<
    * Visible rows in render order.
    */
   rows: readonly FileTreeRow[];
+  /**
+   * 操作的执行能力；省略对应方法时禁用该操作。
+   * Operation capabilities; omitting a method disables its operation.
+   */
+  operations?: FileTreeOperations;
   /**
    * 当前选中的行 id，由宿主持有。
    * Selected row id, owned by the host.
@@ -383,32 +402,28 @@ export interface FileTreeProps extends Omit<
    */
   renderRowTooltip?: (row: FileTreeEntryRow) => ReactNode;
   /**
-   * 选中意图；宿主随后更新 `selectedId`。点击目录与点击文件走同一个回调，
-   * 由宿主按 `row.type` 决定是切换目录还是打开文件。
-   * Selection intent; the host updates `selectedId` afterwards. Directory and
-   * file clicks share this callback, and the host decides by `row.type`
-   * whether to toggle the directory or open the file.
+   * 条目成功选中后触发，参数为选中的条目；失败时不触发。
+   * Called after an entry is selected successfully; not called on failure.
    */
   onSelect?: (row: FileTreeEntryRow) => void;
   /**
-   * 展开或折叠意图。
-   * Expand or collapse intent.
+   * 目录成功展开或折叠后触发，参数为操作的条目；失败时不触发。
+   * Called after a directory expands or collapses successfully; not called on failure.
    */
   onToggleExpand?: (row: FileTreeEntryRow) => void;
   /**
-   * 加载下一页子节点的意图。
-   * Intent to load the next page of children.
+   * 下一页子节点加载成功后触发；失败时不触发。
+   * Called after the next page of children loads successfully; not called on failure.
    */
   onLoadMore?: (row: FileTreeLoadMoreRow) => void;
   /**
-   * 重试加载子节点的意图。
-   * Intent to retry a failed children load.
+   * 重新加载子节点成功后触发；重试失败时不触发。
+   * Called after retrying a children load succeeds; not called on failure.
    */
   onRetry?: (row: FileTreeErrorRow) => void;
   /**
-   * 打开保留策略设置。宿主传了 `expiresAt` 时，过期提示里会给出该入口。
-   * Opens the retention policy settings. When a row carries `expiresAt`, the
-   * expiry hint offers this entry.
+   * 保留策略设置成功打开后触发，参数为对应 URI；失败时不触发。
+   * Called after retention settings open successfully, with the URI; not called on failure.
    */
   onOpenRetentionSettings?: (uri: string) => void;
 }

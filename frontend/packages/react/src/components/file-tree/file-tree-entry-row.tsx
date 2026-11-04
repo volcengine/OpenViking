@@ -78,6 +78,7 @@ export function FileTreeEntryRowView({
             row.name,
           )}
           tabIndex={-1}
+          disabled={!onToggleExpand || row.disabled || row.busy}
           onClick={(event) => {
             event.stopPropagation();
             onToggleExpand?.(row);

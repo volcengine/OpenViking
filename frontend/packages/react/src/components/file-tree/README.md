@@ -1,6 +1,6 @@
 # FileTree
 
-面向资源浏览的目录树。宿主把树状态展平成有序行列表传进来，组件负责渲染、键盘交互与意图回传。
+面向资源浏览的目录树。宿主把树状态展平成有序行列表传进来，通过 `operations` 提供异步执行能力；组件负责渲染、键盘交互，并在操作成功后通知。
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -9,8 +9,10 @@ import '@openviking/react/components/file-tree/style.css';
 <FileTree
   rows={rows}
   selectedId={selectedId}
-  onSelect={(row) => setSelectedId(row.id)}
-  onToggleExpand={(row) => toggle(row.id)}
+  operations={{
+    select: async (row) => setSelectedId(row.id),
+    toggleExpand: async (row) => toggle(row.id),
+  }}
 />;
 ```
 
@@ -43,7 +45,7 @@ type FileTreeRow =
 
 - 渲染行：图标、缩进、层级标记、副标题、写入中指示。
 - 键盘交互：方向键移动、左右键展开折叠、Enter/Space 选中，`role="tree"` 与 `aria-*` 完整。
-- 交互意图：选中、展开、加载更多、重试、打开保留策略设置——只上报，不执行。
+- 选中、展开、加载更多、重试和打开保留策略设置通过 `operations` 执行，完成后才触发对应的 `on…` 成功通知；失败时不触发。省略执行方法时禁用对应操作，省略通知不影响执行。
 - 三类整树级状态的展示位：加载中、加载失败、空树，内容由宿主给。
 - 悬停浮层的延迟、定位与抑制。
 
@@ -51,7 +53,7 @@ type FileTreeRow =
 
 - 不请求任何数据，不建连接，不做权限判断。
 - 不维护展开集合与选中项——两者都是受控的。
-- 不区分「选中」与「打开」：点击目录与点击文件走同一个 `onSelect`，由宿主按 `row.type` 分流。
+- 点击目录与点击文件共用 `operations.select`，由宿主按 `row.type` 分流；选中成功后通过 `onSelect` 通知。
 - 工具栏、搜索、导入来源、权限流程属于页面层，通过 `slots.toolbar` 注入。
 
 ## 扩展点

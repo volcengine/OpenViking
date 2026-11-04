@@ -72,7 +72,7 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
           <button
             type="button"
             className={styles.childAction}
-            disabled={row.loading}
+            disabled={row.loading || !onLoadMore}
             onClick={() => onLoadMore?.(row)}
           >
             {row.loading ? <Spinner /> : null}
@@ -87,6 +87,7 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
           <button
             type="button"
             className={styles.childAction}
+            disabled={!onRetry}
             onClick={() => onRetry?.(row)}
           >
             {text.retry}

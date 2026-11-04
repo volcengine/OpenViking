@@ -123,10 +123,16 @@ export default function FileTreeBasic() {
         renderDashboard={(row) =>
           row.id === 'resources' ? <span title="Has a dashboard">◧</span> : null
         }
-        onSelect={(row) => setSelectedId(row.id)}
-        onToggleExpand={handleToggle}
-        onLoadMore={() => undefined}
-        onRetry={() => undefined}
+        operations={{
+          select: (row) => {
+            setSelectedId(row.id);
+            return Promise.resolve();
+          },
+          toggleExpand: (row) => {
+            handleToggle(row);
+            return Promise.resolve();
+          },
+        }}
       />
     </div>
   );

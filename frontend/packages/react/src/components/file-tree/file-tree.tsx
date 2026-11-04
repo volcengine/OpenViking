@@ -7,6 +7,7 @@ import { handleRowKeyDown } from './file-tree-keyboard.js';
 import { DEFAULT_LABELS } from './file-tree-labels.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { useRowTooltip } from './file-tree-tooltip.js';
+import { useFileTreeActions } from './use-file-tree-actions.js';
 import styles from './file-tree.module.css';
 import type {
   FileTreeComponent,
@@ -26,6 +27,7 @@ export type {
   FileTreeLabels,
   FileTreeLoadingRow,
   FileTreeLoadMoreRow,
+  FileTreeOperations,
   FileTreeProps,
   FileTreeRow,
   FileTreeRowBase,
@@ -38,6 +40,7 @@ export const FileTree: FileTreeComponent = forwardRef<
 >(function FileTree(
   {
     rows,
+    operations,
     selectedId,
     isReady = true,
     loadingFallback,
@@ -61,6 +64,14 @@ export const FileTree: FileTreeComponent = forwardRef<
   const rootRef = useRef<HTMLDivElement>(null);
   const text = { ...DEFAULT_LABELS, ...labels };
   const tooltip = useRowTooltip();
+  const actions = useFileTreeActions({
+    operations,
+    onSelect,
+    onToggleExpand,
+    onLoadMore,
+    onRetry,
+    onOpenRetentionSettings,
+  });
 
   useImperativeHandle(
     ref,
@@ -83,11 +94,7 @@ export const FileTree: FileTreeComponent = forwardRef<
     getRowAttributes,
     renderDashboard,
     renderRowTooltip,
-    onSelect,
-    onToggleExpand,
-    onLoadMore,
-    onRetry,
-    onOpenRetentionSettings,
+    ...actions,
     onRowKeyDown: (
       event: KeyboardEvent<HTMLDivElement>,
       row: FileTreeEntryRow,
@@ -95,8 +102,8 @@ export const FileTree: FileTreeComponent = forwardRef<
       handleRowKeyDown(event, {
         root: rootRef.current,
         row,
-        onSelect,
-        onToggleExpand,
+        onSelect: actions.onSelect,
+        onToggleExpand: actions.onToggleExpand,
       }),
     onRowEnter: tooltip.show,
     onRowLeave: tooltip.hide,

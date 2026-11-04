@@ -5,6 +5,7 @@ export type {
   FileTreeHandle,
   FileTreeLabels,
   FileTreeLoadMoreRow,
+  FileTreeOperations,
   FileTreeProps,
   FileTreeRow,
 } from './components/file-tree/file-tree.js';
