@@ -9,7 +9,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { ActionService } from '../src/actions/service.mjs';
 import { MailArchive, chunkOffset, needsChunks, readTarget } from '../src/email/archive.mjs';
-import { accountTag, loadAccount } from '../src/email/account.mjs';
+import { accountTag, credentialSource, loadAccount } from '../src/email/account.mjs';
 import { EmailClient } from '../src/email/client.mjs';
 import { EmailState } from '../src/email/state.mjs';
 import { ImapAuthError, ImapConnection, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
@@ -42,7 +42,8 @@ function mail({ from = 'Alice <alice@example.com>', to = ME, subject = 'Thursday
 // provider turned passwords off. `saslIr` off makes it ask for the SASL
 // response with a continuation instead of taking it on the command line.
 async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = null, saslIr = true,
-  refusal = 'AUTHENTICATE failed.', mailboxRefusal = null } = {}) {
+  refusal = 'AUTHENTICATE failed.', mailboxRefusal = null, capabilityRefusal = null, closeDuringAuth = false,
+  badAuth = null } = {}) {
   const accepted = new Set([].concat(oauth ?? []).filter(Boolean));
   let expectedUser = ME;
   const state = { mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [],
@@ -95,6 +96,16 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
             }
             continue;
           }
+          // The empty line ends a rejected two-step exchange: answer it with
+          // the tagged NO, since answer() would send another continuation.
+          if (line === '') {
+            socket.write(`${pendingAuth.tag} NO ${refusal}\r\n`);
+            state.authCancelled += 1;
+            pendingAuth = null;
+            continue;
+          }
+          if (closeDuringAuth) { socket.destroy(); return; }
+          if (badAuth) { socket.write(`${pendingAuth.tag} BAD ${badAuth}\r\n`); pendingAuth = null; continue; }
           answer(pendingAuth.tag, line);
           pendingAuth = null;
           continue;
@@ -117,6 +128,8 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
             pendingAuth = { tag, cancel: false };
             socket.write('+ \r\n');
           }
+        } else if (command === 'CAPABILITY' && capabilityRefusal) {
+          socket.write(`${tag} NO [UNAVAILABLE] ${capabilityRefusal}\r\n`);
         } else if (command === 'CAPABILITY') {
           socket.write(`* CAPABILITY ${capability()}\r\n`);
           ok();
@@ -1385,5 +1398,676 @@ describe('AUTH mechanisms spread over several EHLO lines', () => {
     const error = await verifySmtp({ host: '127.0.0.1', port: smtp.port, secure: true, user: ME, accessToken: 'token-1',
       connectTls: plainTls }).catch((caught) => caught);
     assert.match(error.message, /no AUTH XOAUTH2/);
+  });
+});
+
+
+
+
+// A token endpoint whose answer the test controls: it counts the refreshes, can
+// hold them open, and can hold each one for a chosen number of milliseconds.
+function controllableEndpoint({ tokens, delayMs = 0, hold = false } = {}) {
+  const calls = [];
+  const gates = [];
+  let active = 0;
+  let maxActive = 0;
+  let index = 0;
+  const fetch = async (url, init) => {
+    calls.push(Object.fromEntries(new URLSearchParams(init.body)));
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    try {
+      if (hold) await new Promise((resolve) => gates.push(resolve));
+      const delay = typeof delayMs === 'function' ? delayMs() : delayMs;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      const token = tokens[Math.min(index, tokens.length - 1)];
+      index += 1;
+      const body = token.error
+        ? { error: token.error, error_description: 'AADSTS70000: the grant is invalid' }
+        : { access_token: token.accessToken, refresh_token: token.refreshToken, expires_in: 3_600 };
+      return { ok: !token.error, status: token.error ? 400 : 200, text: async () => JSON.stringify(body) };
+    } finally {
+      active -= 1;
+    }
+  };
+  return {
+    fetch,
+    calls,
+    get maxActive() { return maxActive; },
+    get pending() { return gates.length; },
+    release() { const each = gates.shift(); each?.(); },
+    releaseAll() { while (gates.length) gates.shift()(); },
+  };
+}
+
+// An account file another process could write to while our refresh is on the
+// wire. Returns the path, the loaded account, and a way to read the file.
+function accountFile(refreshToken = 'refresh-1') {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-race-'));
+  const file = path.join(directory, 'account.json');
+  fs.writeFileSync(file, JSON.stringify({
+    address: ME,
+    oauth2: { tenant: 'common', clientId: 'app-id', refreshToken },
+    imap: { host: '127.0.0.1', port: 1 },
+    smtp: { host: '127.0.0.1', port: 2, secure: true },
+  }), { mode: 0o600 });
+  return {
+    file,
+    account: loadAccount(file),
+    saved: () => JSON.parse(fs.readFileSync(file, 'utf8')),
+    signInAgain: (token) => {
+      const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      value.oauth2.refreshToken = token;
+      fs.writeFileSync(file, JSON.stringify(value, null, 2), { mode: 0o600 });
+    },
+    cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+// A token endpoint that enforces Microsoft's rotation rule: each refresh token
+// can be spent once. `doubleSpent` names any token offered a second time, which
+// is what a caller refreshing on an already-rotated token would do.
+function rotatingEndpoint({ steps, delayMs = 0, onAnswer = null } = {}) {
+  const calls = [];
+  const spent = new Set();
+  let active = 0;
+  let maxActive = 0;
+  const fetch = async (url, init) => {
+    const form = Object.fromEntries(new URLSearchParams(init.body));
+    calls.push(form);
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    try {
+      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const step = steps.find((each) => each.from === form.refresh_token);
+      const reused = spent.has(form.refresh_token);
+      if (step && !reused) spent.add(form.refresh_token);
+      const ok = Boolean(step) && !reused;
+      const body = ok
+        ? { access_token: step.accessToken, refresh_token: step.refreshToken, expires_in: 3_600 }
+        : { error: 'invalid_grant', error_description: 'AADSTS70000: the grant is invalid' };
+      return { ok, status: ok ? 200 : 400, text: async () => {
+        onAnswer?.(calls.length);
+        return JSON.stringify(body);
+      } };
+    } finally {
+      active -= 1;
+    }
+  };
+  return {
+    fetch,
+    calls,
+    get maxActive() { return maxActive; },
+    get doubleSpent() {
+      const seen = new Set();
+      const twice = [];
+      for (const form of calls) {
+        if (seen.has(form.refresh_token)) twice.push(form.refresh_token);
+        seen.add(form.refresh_token);
+      }
+      return twice;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The contract a refresh storm must not break: one refresh on the wire, and
+// every caller of that refresh gets the same access token.
+// ---------------------------------------------------------------------------
+describe('a refresh storm spends the refresh token once', () => {
+  it('gives 50 simultaneous callers one refresh and one access token', async () => {
+    const file = accountFile();
+    try {
+      const endpoint = controllableEndpoint({
+        tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }],
+        // A real endpoint answers somewhere in this window; every caller
+        // arrives before the first answer does.
+        delayMs: () => Math.floor(Math.random() * 100),
+      });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+      const asked = await Promise.all(Array.from({ length: 50 }, () => credential()));
+
+      assert.equal(endpoint.calls.length, 1, 'the refresh token was spent more than once');
+      assert.equal(endpoint.maxActive, 1, 'two refreshes were on the wire at once');
+      assert.deepEqual(new Set(asked.map((each) => each.accessToken)), new Set(['access-1']),
+        'a caller was handed a token other than the one the refresh produced');
+      // The rotated token is the one the next start will sign in with.
+      assert.equal(file.saved().oauth2.refreshToken, 'refresh-2');
+    } finally {
+      file.cleanup();
+    }
+  });
+
+  it('reuses the cached token for callers that arrive after the storm', async () => {
+    const file = accountFile();
+    try {
+      const endpoint = controllableEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }] });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+      await Promise.all(Array.from({ length: 10 }, () => credential()));
+      const later = await credential();
+      assert.equal(later.accessToken, 'access-1');
+      assert.equal(endpoint.calls.length, 1, 'a token that was still valid was refreshed again');
+    } finally {
+      file.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A refresh that fails is not cached: the waiters of that refresh see the error,
+// and the next caller tries again instead of inheriting a dead promise.
+// ---------------------------------------------------------------------------
+describe('a failed refresh is reported once and not cached', () => {
+  it('rejects every waiter of the failed refresh, then tries again for the next caller', async () => {
+    const file = accountFile();
+    try {
+      const endpoint = controllableEndpoint({ tokens: [{ error: 'invalid_grant' }], delayMs: 30 });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+
+      const settled = await Promise.allSettled(Array.from({ length: 10 }, () => credential()));
+      const failures = settled.filter((each) => each.status === 'rejected');
+      assert.equal(failures.length, 10, 'a waiter was handed a token by a refresh that failed');
+      // One refresh, so one failure object: they all waited on the same promise.
+      assert.equal(new Set(failures.map((each) => each.reason)).size, 1);
+      assert.equal(endpoint.calls.length, 1);
+
+      // Not cached: the next caller starts a refresh of its own.
+      const again = await credential().then(() => null, (error) => error.message);
+      assert.match(String(again), /sign-in expired/);
+      assert.equal(endpoint.calls.length, 2, 'the failure was cached instead of retried');
+      // And the account file was left alone: a failed refresh rotates nothing.
+      assert.equal(file.saved().oauth2.refreshToken, 'refresh-1');
+    } finally {
+      file.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two reasons to refresh — the clock says the token is old, or a server just
+// refused it — must not become two refreshes when they arrive together.
+// ---------------------------------------------------------------------------
+describe('a refusal and a normal ask do not refresh twice', () => {
+  it('joins a stale ask to the refresh already in flight instead of starting another', async () => {
+    const file = accountFile();
+    try {
+      const endpoint = controllableEndpoint({
+        tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }], hold: true });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+
+      const normal = credential();
+      await until(() => endpoint.calls.length === 1);
+      // IMAP was refused and asks for a fresh token while SMTP's refresh is
+      // still on the wire.
+      const stale = credential({ stale: true });
+      const alsoNormal = credential();
+      endpoint.release();
+
+      const [first, second, third] = await Promise.all([normal, stale, alsoNormal]);
+      assert.equal(endpoint.calls.length, 1, 'the refusal started a second refresh');
+      assert.deepEqual([first.accessToken, second.accessToken, third.accessToken],
+        ['access-1', 'access-1', 'access-1'], 'a caller was handed a token it had just refused');
+    } finally {
+      file.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The refresh token rotates. A second process (a fresh `vika login email`, or
+// another instance) can leave a newer one in the account file while our refresh
+// is on the wire; writing ours back would undo that sign-in.
+// ---------------------------------------------------------------------------
+describe('a rotated token never overwrites a newer sign-in', () => {
+  it('keeps the newer token when the file changed during the refresh', async () => {
+    const file = accountFile('refresh-1');
+    try {
+      const endpoint = controllableEndpoint({
+        tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }], hold: true });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+      const refresh = credential();
+      await until(() => endpoint.calls.length === 1);
+      // Another process signs in while our refresh is in flight.
+      file.signInAgain('refresh-from-new-signin');
+      endpoint.release();
+      await refresh;
+
+      assert.equal(file.saved().oauth2.refreshToken, 'refresh-from-new-signin',
+        'the refresh wrote its older token over the newer sign-in');
+    } finally {
+      file.cleanup();
+    }
+  });
+
+  it('writes the rotated token when the file still holds the one it spent', async () => {
+    const file = accountFile('refresh-1');
+    try {
+      const endpoint = controllableEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }] });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+      await credential();
+      assert.equal(file.saved().oauth2.refreshToken, 'refresh-2');
+      // Everything else in the file is left as the owner wrote it.
+      assert.equal(file.saved().address, ME);
+      assert.equal(file.saved().imap.port, 1);
+    } finally {
+      file.cleanup();
+    }
+  });
+
+  it('does not spend the refresh token a second time to make the write-back true', async () => {
+    const file = accountFile('refresh-1');
+    try {
+      const endpoint = controllableEndpoint({
+        tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }], hold: true });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+      const refresh = credential();
+      await until(() => endpoint.calls.length === 1);
+      file.signInAgain('refresh-from-new-signin');
+      endpoint.release();
+      await refresh;
+      // One refresh, one spend: a skipped write is reported, not repaired by
+      // refreshing again with a token we no longer hold.
+      assert.equal(endpoint.calls.length, 1);
+    } finally {
+      file.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The specific question behind this file: .finally(() => { inFlight = null })
+// runs after the inner promise settles but before a caller awaiting the outer
+// promise resumes, so does a caller resuming in that same microtask batch see no
+// refresh in flight and start a second one? Sweep every microtask offset around
+// the settlement so an ordering-dependent answer cannot hide.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// The window after the cleanup and before the first waiter resumes IS reachable
+// (a caller resuming there sees inFlight === null), but it is harmless: the only
+// refresh it can start is one whose refresh token the previous refresh already
+// rotated, so under Microsoft's rotation rule it fails — unless the account file
+// guard is in place, which it is. This sweep plants a `stale` caller at every
+// microtask offset and holds the fleet to the invariant that matters: no two
+// refreshes overlap, and one refresh token is never spent twice.
+// ---------------------------------------------------------------------------
+describe('a caller landing in the cleanup window cannot spend a spent token', () => {
+  const STEPS = [
+    { from: 'refresh-1', accessToken: 'access-1', refreshToken: 'refresh-2' },
+    { from: 'refresh-2', accessToken: 'access-2', refreshToken: 'refresh-3' },
+  ];
+
+  it('holds the no-overlap, no-double-spend invariants across 0..24 microtask offsets', async () => {
+    for (let hops = 0; hops <= 24; hops += 1) {
+      const file = accountFile('refresh-1');
+      let credential = null;
+      let probe = null;
+      const plantProbe = () => {
+        // Step `hops` microtasks past the token answer, then ask as a caller
+        // whose access token a server just refused. At some offsets that lands
+        // after the cleanup cleared inFlight and before the first waiter
+        // resumed — the window the review asked about.
+        let stepped = 0;
+        const step = () => {
+          stepped += 1;
+          if (stepped < hops) { queueMicrotask(step); return; }
+          probe = credential({ stale: true }).then(
+            (value) => value.accessToken,
+            (error) => 'rejected: ' + error.message.slice(0, 24),
+          );
+        };
+        if (hops === 0) step();
+        else queueMicrotask(step);
+      };
+      const endpoint = rotatingEndpoint({ steps: STEPS, onAnswer: (count) => { if (count === 1) plantProbe(); } });
+      try {
+        credential = credentialSource(file.account, { fetch: endpoint.fetch });
+        const first = await credential();
+        // The probe chain may still be walking microtasks; wait for it to land.
+        const deadline = Date.now() + 1_000;
+        while (!probe && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+        assert.ok(probe, `hop ${hops}: the probe caller never ran`);
+        const second = await probe;
+
+        // The invariants that make a concurrent refresh safe: at most one
+        // refresh on the wire, and a refresh token spent at most once.
+        assert.equal(endpoint.maxActive, 1, `hop ${hops}: two refreshes overlapped`);
+        assert.deepEqual(endpoint.doubleSpent, [], `hop ${hops}: a refresh token was spent twice`);
+        // The caller that started the refresh always gets that refresh's token.
+        assert.equal(first.accessToken, 'access-1', `hop ${hops}: the first caller got another token`);
+        // The late caller either joined it, or refreshed with the rotated token;
+        // it is never handed the token that was refused, and never a failure
+        // from re-spending one.
+        assert.ok(['access-1', 'access-2'].includes(second),
+          `hop ${hops}: the late caller got neither the shared nor the rotated token (${second})`);
+        // Whatever happened, the file ends on the newest refresh token.
+        assert.equal(file.saved().oauth2.refreshToken, second === 'access-2' ? 'refresh-3' : 'refresh-2',
+          `hop ${hops}: the account file did not end on the newest token`);
+      } finally {
+        file.cleanup();
+      }
+    }
+  });
+});
+
+describe('clearing the in-flight refresh opens no window for a second one', () => {
+  it('never starts a second refresh for a caller resuming 0..64 microtasks behind the answer', async () => {
+    for (let hops = 0; hops <= 64; hops += 1) {
+      const file = accountFile();
+      const endpoint = controllableEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }], hold: true });
+      try {
+        const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+        const first = credential();
+        // A caller that resumes `hops` microtasks after the refresh settles:
+        // wait for the same settlement, then step through empty microtasks.
+        const late = (async () => {
+          await until(() => endpoint.pending === 1);
+          endpoint.release();
+          for (let hop = 0; hop < hops; hop += 1) await Promise.resolve();
+          return credential();
+        })();
+        const [a, b] = await Promise.all([first, late]);
+        assert.equal(endpoint.maxActive, 1, `${hops} microtasks after the answer, two refreshes overlapped`);
+        assert.equal(endpoint.calls.length, 1, `${hops} microtasks after the answer, a second refresh started`);
+        assert.equal(a.accessToken, b.accessToken);
+      } finally {
+        file.cleanup();
+      }
+    }
+  });
+
+  it('keeps the one-refresh rule for a caller arriving right after the answer', async () => {
+    const file = accountFile();
+    try {
+      const endpoint = controllableEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }], delayMs: 20 });
+      const credential = credentialSource(file.account, { fetch: endpoint.fetch });
+      const first = credential();
+      // Ask again while the first refresh is on the wire and again after it has
+      // settled: neither may produce a second refresh.
+      await until(() => endpoint.calls.length === 1);
+      const during = await credential();
+      const after = await credential();
+      await first;
+      assert.equal(endpoint.calls.length, 1, 'a token that was still valid was refreshed again');
+      assert.deepEqual([during.accessToken, after.accessToken], ['access-1', 'access-1']);
+    } finally {
+      file.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Credentials are asked for from two directions at once in real use: the IMAP
+// watcher reconnects while an SMTP reply is being sent. Both must sign in, and
+// the refresh token must be spent once between them.
+// ---------------------------------------------------------------------------
+describe('IMAP and SMTP signing in together spend one refresh', () => {
+  it('connects the watcher and sends a reply while both share one refreshed token', async (t) => {
+    const TOKEN_1 = 'access-1';
+    const TOKEN_2 = 'access-2';
+    const imap = await fakeImap(t, { oauth: [TOKEN_1, TOKEN_2] });
+    const smtp = await fakeSmtp(t, { oauth: [TOKEN_1, TOKEN_2] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-both-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = controllableEndpoint({
+      tokens: [{ accessToken: TOKEN_1, refreshToken: 'refresh-2' }], delayMs: 40 });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    await client.preflight();
+    // A reconnect and a send started together, exactly as the reading loop and
+    // a reply would overlap.
+    const connection = client.open();
+    const sending = client.deliver({ from: ME, recipients: ['alice@example.com'],
+      raw: 'From: me@example.com\r\nTo: alice@example.com\r\nSubject: hi\r\n\r\nhi' });
+    const [opened] = await Promise.all([connection, sending]);
+    opened.close();
+
+    assert.equal(smtp.messages.length, 1, 'the reply did not go out');
+    assert.equal(endpoint.calls.length, 1, 'the two protocols spent the refresh token between them');
+    assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).oauth2.refreshToken, 'refresh-2');
+    // Both protocols signed in with the one token the refresh produced.
+    assert.deepEqual([...new Set(imap.state.auths)], [TOKEN_1]);
+    assert.deepEqual([...new Set(smtp.auths)], [TOKEN_1]);
+  });
+
+  it('refreshes once when both protocols are refused at the same moment', async (t) => {
+    const TOKEN_1 = 'access-1';
+    const TOKEN_2 = 'access-2';
+    const imap = await fakeImap(t, { oauth: [TOKEN_1] });
+    const smtp = await fakeSmtp(t, { oauth: [TOKEN_1] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-both-stale-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = controllableEndpoint({
+      tokens: [{ accessToken: TOKEN_1, refreshToken: 'refresh-2' },
+        { accessToken: TOKEN_2, refreshToken: 'refresh-3' }], delayMs: 30 });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+    await client.preflight();
+    assert.equal(endpoint.calls.length, 1);
+
+    // The mailbox revokes access-1 for both protocols between them: the next
+    // connection and the next send are each refused, at the same moment.
+    imap.accept(TOKEN_2);
+    smtp.accept(TOKEN_2);
+    const connection = client.open();
+    const sending = client.deliver({ from: ME, recipients: ['alice@example.com'],
+      raw: 'From: me@example.com\r\nTo: alice@example.com\r\nSubject: hi\r\n\r\nhi' });
+    const [opened] = await Promise.all([connection, sending]);
+    opened.close();
+
+    // Neither refusal overlaps another refresh, and no refresh token is spent
+    // twice: whatever the interleaving, the protocol that is refused later
+    // either joins a refresh or starts one with the token the previous refresh
+    // rotated to.
+    assert.equal(endpoint.maxActive, 1, 'two refreshes were on the wire at once');
+    const spent = endpoint.calls.map((each) => each.refresh_token);
+    assert.equal(new Set(spent).size, spent.length, `a refresh token was spent twice: ${spent.join(',')}`);
+    assert.deepEqual(spent.slice(0, 2), ['refresh-1', 'refresh-2']);
+    void TOKEN_1;
+    // The reply went out once and both protocols ended signed in.
+    assert.equal(smtp.messages.length, 1);
+    assert.deepEqual([...new Set(smtp.auths)], [TOKEN_1, TOKEN_2]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stopping must not leave a refresh dangling: the credential wait settles, the
+// loop ends, and nothing rejects unhandled once nobody is waiting for it.
+// ---------------------------------------------------------------------------
+describe('stopping during a refresh leaves nothing dangling', () => {
+  it('stops a watcher whose preflight refresh is still on the wire', async (t) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    t.after(() => process.off('unhandledRejection', onUnhandled));
+
+    const imap = await fakeImap(t, { oauth: ['access-1'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-stop-race-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: 1, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = controllableEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }], hold: true });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    // preflight() holds its refresh open; stopping meanwhile must not hang.
+    const preflight = client.preflight().then(() => 'ok', (error) => error.message);
+    await until(() => endpoint.calls.length === 1);
+    const stopping = client.stopSubscription();
+    endpoint.release();
+
+    const outcome = await Promise.race([
+      preflight,
+      new Promise((resolve) => { const timer = setTimeout(() => resolve('hung'), 3_000); timer.unref?.(); }),
+    ]);
+    await stopping;
+    assert.notEqual(outcome, 'hung', 'stopping during a refresh left the credential wait hanging');
+    assert.deepEqual(unhandled, [], 'stopping during a refresh produced an unhandled rejection');
+  });
+
+  it('ends a started subscription that is stopped immediately', async (t) => {
+    const imap = await fakeImap(t, { oauth: ['access-1'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-stop-now-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: 1, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = controllableEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }] });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    client.account = loadAccount(configFile);
+    client.credential = credentialSource(client.account, { fetch: endpoint.fetch });
+    const exits = [];
+    client.startSubscription(() => {}, (exit) => exits.push(exit));
+    await client.stop();
+    assert.equal(client.loop, null, 'the loop outlived the stop');
+    assert.deepEqual(exits, [], 'a deliberate stop was reported as an unexpected exit');
+  });
+
+  it('stops a watcher whose connection is still waiting for a refresh', async (t) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    t.after(() => process.off('unhandledRejection', onUnhandled));
+
+    const imap = await fakeImap(t, { oauth: ['access-1'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-stop-open-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: 1, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = controllableEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }], hold: true });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    client.account = loadAccount(configFile);
+    client.credential = credentialSource(client.account, { fetch: endpoint.fetch });
+    const exits = [];
+    client.startSubscription(() => {}, (exit) => exits.push(exit));
+    // The loop is blocked in open(): the refresh it is waiting for has not been
+    // answered yet. Stopping now must still end, not wait for the answer.
+    await until(() => endpoint.pending === 1);
+    const stopping = client.stop();
+    endpoint.release();
+    const ended = await Promise.race([
+      stopping.then(() => 'stopped'),
+      new Promise((resolve) => { const timer = setTimeout(() => resolve('hung'), 3_000); timer.unref?.(); }),
+    ]);
+    assert.equal(ended, 'stopped', 'a stop during the connection refresh hung');
+    assert.equal(client.loop, null, 'the loop outlived the stop');
+    assert.deepEqual(exits, [], 'a deliberate stop was reported as an unexpected exit');
+    assert.deepEqual(unhandled, [], 'a stop during the connection refresh produced an unhandled rejection');
+  });
+});
+
+// The counterpart of the refused-credential cases: what must NOT be read as
+// one. A fresh access token can only fix a refusal, so spending the refresh
+// token on anything else wastes it and hides the real cause.
+describe('what a fresh token cannot fix is never retried', () => {
+  it('does not refresh when a command before the sign-in fails', async (t) => {
+    // CAPABILITY is sent before AUTHENTICATE, so a server answering it with
+    // "Authentication failed" (maintenance, say) never sees the credential.
+    const imap = await fakeImap(t, { oauth: ['token-1'], capabilityRefusal: 'Authentication failed' });
+    const smtp = await fakeSmtp(t, { oauth: ['token-1'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-cap-refusal-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = fakeTokenEndpoint({ tokens: [
+      { accessToken: 'token-1', refreshToken: 'refresh-2' },
+      { accessToken: 'token-2', refreshToken: 'refresh-3' },
+    ] });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    const error = await client.preflight().catch((caught) => caught);
+    assert.ok(error, 'the check must fail');
+    assert.ok(!(error instanceof ImapAuthError), 'a failed CAPABILITY is not a refused credential');
+    assert.equal(endpoint.calls.length, 1, 'the refresh token was spent on a failure a new token cannot fix');
+  });
+
+  it('does not refresh when the connection ends during the sign-in', async (t) => {
+    const imap = await fakeImap(t, { oauth: ['token-1'], closeDuringAuth: true });
+    const smtp = await fakeSmtp(t, { oauth: ['token-1'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-close-auth-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+    }), { mode: 0o600 });
+    const endpoint = fakeTokenEndpoint({ tokens: [
+      { accessToken: 'token-1', refreshToken: 'refresh-2' },
+      { accessToken: 'token-2', refreshToken: 'refresh-3' },
+    ] });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    const error = await client.preflight().catch((caught) => caught);
+    assert.ok(error, 'the check must fail');
+    assert.equal(endpoint.calls.length, 1, 'a broken connection is not a refused credential');
+  });
+
+  it('does not treat a BAD answer to AUTHENTICATE as a refused credential', async (t) => {
+    // RFC 3501: BAD says the command was not accepted, NO says it failed. A new
+    // token would be rejected for the same reason the command was.
+    const imap = await fakeImap(t, { oauth: ['token-1'], badAuth: 'invalid command' });
+    const connection = new ImapConnection({ host: '127.0.0.1', port: imap.port, connect: plainTls });
+    await connection.connect();
+    const error = await connection.authenticate(ME, 'token-1').catch((caught) => caught);
+    connection.close();
+    assert.ok(!(error instanceof ImapAuthError), 'a BAD answer is not a refused credential');
+  });
+
+  it('completes the two-step exchange before reading the NO when SASL-IR is off', async (t) => {
+    // Without SASL-IR the client sends AUTHENTICATE alone, answers the
+    // continuation with the token, and must end the rejected exchange with an
+    // empty line before the tagged NO arrives. Leaving it open would hang.
+    const imap = await fakeImap(t, { oauth: ['token-1'], saslIr: false,
+      refusal: '[AUTHENTICATIONFAILED] Invalid credentials' });
+    const connection = new ImapConnection({ host: '127.0.0.1', port: imap.port, connect: plainTls });
+    await connection.connect();
+    await connection.authenticate(ME, 'token-1');
+    connection.close();
+    // The command carried no token: it went on the continuation instead, which
+    // is what a server without SASL-IR requires.
+    assert.ok(imap.state.commands.includes('AUTHENTICATE'),
+      'the AUTHENTICATE command was never sent');
+    assert.deepEqual(imap.state.auths, ['token-1'], 'the token was never accepted');
   });
 });
