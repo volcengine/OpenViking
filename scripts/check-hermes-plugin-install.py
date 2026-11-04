@@ -161,6 +161,7 @@ def check(host, repository, root, timeout, *, install_only=False):
             )
         probe = """
 import hermes_bootstrap
+import importlib
 import json
 from pathlib import Path
 import psutil
@@ -180,9 +181,14 @@ provider.shutdown()
 # Provider CLI commands are exposed only for the selected memory provider,
 # as after `hermes memory setup openviking`.
 config.setdefault("memory", {})["provider"] = "openviking"
+adapter = importlib.import_module(type(provider).__module__ + ".mcp_tools")
+adapter.configure(config, str(home))
 save_config(config)
+entry = config["mcp_servers"]["openviking"]
+assert "HERMES_HOME" not in entry["env"]
 print(json.dumps({"installed": True, "enabled": True, "external_module": type(provider).__module__,
                   "psutil": psutil.__version__, "home": str(home),
+                  "mcp_launch": [entry["command"], *entry["args"]],
                   "python": str(project_python(Path.cwd()))}))
 """
         result = subprocess.check_output(
@@ -199,8 +205,32 @@ print(json.dumps({"installed": True, "enabled": True, "external_module": type(pr
                 check=True,
             )
         evidence = json.loads(result.strip().splitlines()[-1])
+        stale_bin = root / "stale-bin"
+        stale_bin.mkdir()
+        stale = stale_bin / ("hermes.cmd" if os.name == "nt" else "hermes")
+        stale.write_text(
+            "@echo off\necho STALE_HERMES\nexit /b 91\n"
+            if os.name == "nt"
+            else "#!/bin/sh\necho STALE_HERMES\nexit 91\n",
+            encoding="utf-8",
+        )
+        stale.chmod(0o755)
+        launch = subprocess.run(
+            evidence.pop("mcp_launch") + ["--help"],
+            cwd=home.parent,
+            env={**env, "PATH": str(stale_bin) + os.pathsep + env.get("PATH", "")},
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        (root / "bound-launch.log").write_text(launch.stdout + launch.stderr, encoding="utf-8")
+        if launch.returncode or "--profile-bound" not in launch.stdout or "STALE_HERMES" in (
+            launch.stdout + launch.stderr
+        ):
+            raise RuntimeError("Installed MCP adapter did not use this Hermes installation")
         evidence["source_ref"] = ref
         evidence["unbound_mcp_launch_refused"] = True
+        evidence["installation_bound_mcp_launch"] = True
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))
     finally:

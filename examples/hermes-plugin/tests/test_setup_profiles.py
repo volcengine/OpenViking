@@ -2,6 +2,7 @@
 
 import copy
 import importlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -107,7 +108,12 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     assert (other_home / "config.yaml").read_bytes() == other_before
     saved = yaml.safe_load((home / "config.yaml").read_text())
     settings = saved["memory"]["openviking"]
-    assert saved["mcp_servers"]["openviking"]["args"] == ["openviking", "mcp", "--profile-bound"]
+    assert Path(saved["mcp_servers"]["openviking"]["command"]).is_absolute()
+    assert saved["mcp_servers"]["openviking"]["args"][-3:] == [
+        "openviking",
+        "mcp",
+        "--profile-bound",
+    ]
     assert "HERMES_HOME" not in saved["mcp_servers"]["openviking"]["env"]
     assert "OpenViking MCP tools configured. Restart Hermes to load them." in output
     assert saved["mcp_servers"]["openviking"]["trust"] == "untrusted"

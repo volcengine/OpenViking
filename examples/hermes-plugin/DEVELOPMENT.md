@@ -28,6 +28,14 @@ host must bind that home at spawn. Legacy commands and missing home binding
 fail before profile reads or HTTP. Existing old-code processes require a
 reload or restart after upgrade.
 
+Setup uses Hermes's `installation_command()` helper from the loaded host's
+`pm.paths.repo_root()`. Managed installs save their durable source launcher;
+external installs use the base interpreter and Hermes bootstrap. Do not save
+a dependency generation's interpreter or a profile home. Initialization repairs
+known source and bootstrap adapter entries after an installation move, while
+leaving custom MCP commands and connection policy intact. Discovery keeps a
+shorter deadline than the host so errors can reach the CLI before cancellation.
+
 One task owns each reusable HTTP/MCP connection's SDK context managers. Parallel
 calls share that session. A configuration change retires the old connection
 after its active calls finish; shutdown closes all connection tasks. Preserve

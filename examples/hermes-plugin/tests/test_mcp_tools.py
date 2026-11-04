@@ -196,7 +196,8 @@ def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled
     original = copy.deepcopy(config)
     mcp.configure(config, str(home))
     new = config["mcp_servers"]["openviking"]
-    assert new["command"] == "hermes" and new["args"] == ["openviking", "mcp", "--profile-bound"]
+    assert Path(new["command"]).is_absolute()
+    assert new["args"][-3:] == ["openviking", "mcp", "--profile-bound"]
     assert "HERMES_HOME" not in new["env"]
     assert "old-secret" not in json.dumps(config) and "url" not in new
     assert new["headers"] == {"X-Custom": "${CUSTOM_SECRET}"}
@@ -1222,6 +1223,8 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
         "model": {"default": "unchanged", "api_key": "${MODEL_SECRET}"},
     }
     mcp.configure(config, str(source))
+    expected = copy.deepcopy(config)
+    config["mcp_servers"]["openviking"]["command"] = "hermes"
     config["mcp_servers"]["openviking"]["args"] = ["openviking", "mcp"]
     config["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = str(source)
     (source / "config.yaml").write_text(json.dumps(config))
@@ -1240,9 +1243,6 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
             "relocated", hermes_home=str(home), platform="cli", agent_context="cron", **kwargs
         )
         repaired = read_user_config_raw(home / "config.yaml")
-        expected = copy.deepcopy(config)
-        expected["mcp_servers"]["openviking"]["env"].pop("HERMES_HOME")
-        expected["mcp_servers"]["openviking"]["args"] = ["openviking", "mcp", "--profile-bound"]
         assert repaired == expected
         before = (home / "config.yaml").read_bytes()
         provider.initialize(
@@ -1269,7 +1269,7 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
         None,
         {"url": "https://example.test/mcp", "env": {"HERMES_HOME": "/old/profile"}},
         {"command": "other", "args": ["serve"], "env": {"HERMES_HOME": "/old/profile"}},
-        {"command": "hermes", "args": ["openviking", "mcp", "--profile-bound"], "env": {}},
+        {"command": "custom-server", "args": ["openviking", "mcp", "--profile-bound"], "env": {}},
         {"command": "hermes", "args": ["custom", "mcp"], "env": {"HERMES_HOME": "${HERMES_HOME}"}},
     ],
 )
@@ -1302,6 +1302,7 @@ def test_failed_profile_repair_warns_once_without_stopping_memory(
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     config = {}
     mcp.configure(config, str(home))
+    config["mcp_servers"]["openviking"]["command"] = "hermes"
     config["mcp_servers"]["openviking"]["args"] = ["openviking", "mcp"]
     config["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = str(home.parent / "old")
     (home / "config.yaml").write_text(json.dumps(config))

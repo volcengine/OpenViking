@@ -299,8 +299,12 @@ connections still check anonymous server health before authenticated calls.
 After a failed operation, the next call can reconnect; the failed call is not
 replayed.
 
-The saved command is `hermes openviking mcp --profile-bound`. It does not save
-an absolute `env.HERMES_HOME`. Hermes must supply the owning profile home when
+Setup binds `openviking mcp --profile-bound` to the running Hermes installation,
+using Hermes's launcher helper. It bypasses stale `hermes` commands on `PATH`
+and follows that installation's dependency and Python updates. External
+installations use Hermes's bootstrap command with their base interpreter.
+The entry does not save an absolute `env.HERMES_HOME`.
+Hermes must supply the owning profile home when
 it starts the child, including for routed gateway and desktop profiles. This
 requires Hermes v0.22.7 or newer, which includes the
 [launch-time host binding change](https://github.com/NousResearch/hermes-agent/pull/148129).
@@ -313,7 +317,11 @@ command. After an update, use `/reload-mcp` or restart Hermes to replace any
 process that still runs the previous plugin code. Repairing saved configuration
 cannot change an existing process.
 
-Discovery waits up to `connect_timeout` (60 seconds by default) for the server.
+The host's `connect_timeout` bounds startup and discovery (60 seconds by default).
+The adapter reserves up to 10 seconds, or one quarter of a shorter timeout,
+for host startup and error delivery. With the default timeout, it waits up to
+50 seconds for the server. This lets connection errors reach Hermes before
+its outer timeout cancels the connection.
 Tools may be unavailable on the first turn while discovery runs. After a longer
 outage, run `/reload-mcp` in the Hermes CLI once OpenViking is ready, or restart
 the gateway. Hermes can defer tools until `tool_search` and temporarily pause

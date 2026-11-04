@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -60,8 +61,10 @@ def test_new_entry_and_legacy_migration_preserve_profile_policy(external_provide
     }
     adapter.configure(config, str(home))
     entry = config["mcp_servers"]["openviking"]
-    assert entry["args"] == ["openviking", "mcp", "--profile-bound"]
+    assert entry["args"][-3:] == ["openviking", "mcp", "--profile-bound"]
     assert "HERMES_HOME" not in entry["env"]
+    launcher = [entry["command"], *entry["args"]]
+    entry["command"] = "hermes"
     entry["args"] = ["openviking", "mcp"]
     entry["env"]["HERMES_HOME"] = str(home.parent / "source")
     (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
@@ -69,7 +72,7 @@ def test_new_entry_and_legacy_migration_preserve_profile_policy(external_provide
     from hermes_cli.config import read_user_config_raw
 
     saved = read_user_config_raw(home / "config.yaml")["mcp_servers"]["openviking"]
-    assert saved["args"] == ["openviking", "mcp", "--profile-bound"]
+    assert [saved["command"], *saved["args"]] == launcher
     assert "HERMES_HOME" not in saved["env"]
     for key in ("trust", "enabled", "tools", "headers"):
         assert saved[key] == entry[key]
@@ -99,3 +102,114 @@ def test_adapter_process_refuses_missing_profile_home(external_provider, tmp_pat
     assert result.stdout == ""
     assert "Hermes did not supply the MCP profile home" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("external_install", [False, True])
+def test_saved_launcher_uses_current_installation_with_stale_path(
+    external_provider, monkeypatch, tmp_path, external_install
+):
+    from hermes_cli import _launchers
+    from tools.mcp_tool_config import _resolve_stdio_command
+
+    home, _, module, _ = external_provider("installation-launch")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    if external_install:
+        monkeypatch.setattr(_launchers, "resolve_store_python", lambda *_: None)
+    stale_bin = tmp_path / "stale-bin"
+    stale_bin.mkdir()
+    stale = stale_bin / ("hermes.cmd" if os.name == "nt" else "hermes")
+    stale.write_text(
+        "@echo off\necho STALE_HERMES\nexit /b 91\n"
+        if os.name == "nt"
+        else "#!/bin/sh\necho STALE_HERMES\nexit 91\n",
+        encoding="utf-8",
+    )
+    stale.chmod(0o755)
+    monkeypatch.setenv("PATH", str(stale_bin) + os.pathsep + os.environ.get("PATH", ""))
+    config = {}
+    adapter.configure(config, str(home))
+    entry = config["mcp_servers"]["openviking"]
+    assert Path(entry["command"]).is_absolute()
+    assert ".venv" not in Path(entry["command"]).parts
+    assert "HERMES_HOME" not in entry["env"]
+    resolved, _ = _resolve_stdio_command(entry["command"], {"PATH": os.environ["PATH"]})
+    assert resolved == entry["command"]
+    assert Path(resolved) != stale
+    if external_install:
+        assert resolved == sys._base_executable
+        assert entry["args"][:2] == ["-I", "-c"]
+
+
+@pytest.mark.parametrize("launch", ["bare", "source", "windows-source", "external"])
+def test_launcher_migration_keeps_profile_and_mcp_policy(external_provider, launch):
+    from hermes_cli._launchers import runtime_command
+    from hermes_cli.config import read_user_config_raw
+
+    home, _, module, _ = external_provider("launcher-migration")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = {}
+    adapter.configure(config, str(home))
+    expected = config["mcp_servers"]["openviking"].copy()
+    old_root = home.parent / "old-installation"
+    bound_args = ["openviking", "mcp", "--profile-bound"]
+    if launch == "external":
+        command = runtime_command(old_root, bound_args, python=sys._base_executable)
+    elif launch == "windows-source":
+        command = [r"C:\old-installation\.hermes\bin\hermes.exe", *bound_args]
+    else:
+        command = ["hermes" if launch == "bare" else str(old_root / ".hermes/bin/hermes")]
+        command += bound_args
+    entry = config["mcp_servers"]["openviking"]
+    entry.update(command=command[0], args=command[1:])
+    policy = {
+        "enabled": False,
+        "trust": "untrusted",
+        "connect_timeout": 91,
+        "timeout": 123,
+        "tools": {"include": ["read"], "exclude": ["forget"]},
+        "headers": {"X-Gateway": "${GATEWAY_SECRET}"},
+        "ssl_verify": "/custom/ca.pem",
+    }
+    entry.update(policy)
+    config["mcp_servers"]["other"] = {"command": "custom-server", "args": ["serve"]}
+    (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
+    assert adapter.repair_profile_home(home)
+    saved = read_user_config_raw(home / "config.yaml")["mcp_servers"]
+    for key in ("command", "args", "env"):
+        assert saved["openviking"][key] == expected[key]
+    for key, value in policy.items():
+        assert saved["openviking"][key] == value
+    assert saved["other"] == config["mcp_servers"]["other"]
+    before = (home / "config.yaml").read_bytes()
+    assert adapter.repair_profile_home(home) is None
+    assert (home / "config.yaml").read_bytes() == before
+
+
+def test_discovery_failure_reaches_host_before_its_deadline(external_provider, monkeypatch):
+    import asyncio
+
+    import httpx2
+
+    home, _, module, _ = external_provider("host-discovery-deadline")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    connection = adapter.Connection(home, module)
+    values, entry, managed = connection.resolve()
+    entry["connect_timeout"] = 2
+    monkeypatch.setattr(connection, "resolve", lambda: (values, entry, managed))
+    contacted = []
+
+    async def unavailable(method, params):
+        contacted.append((method, params))
+        raise httpx2.ConnectError("Connection refused")
+
+    monkeypatch.setattr(connection, "request", unavailable)
+
+    async def probe():
+        async with asyncio.timeout(2) as host_deadline:
+            with pytest.raises(TimeoutError) as caught:
+                await connection.discover(None)
+            assert not host_deadline.expired()
+            assert "Cannot connect to OpenViking" in adapter._error_hint(caught.value)
+
+    asyncio.run(probe())
+    assert contacted and all(call == ("tools/list", None) for call in contacted)

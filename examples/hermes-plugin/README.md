@@ -30,6 +30,11 @@ and OpenViking >=0.4.23 with `/mcp` enabled. Upgrade Hermes and a separately
 managed server before upgrading this plugin. Setup checks the server version and MCP access and
 reports an error if either requirement is unmet. There is no native-tool fallback.
 
+Version 2.2 also limits MCP capture to the reviewed OpenViking `remember`,
+`write`, `edit` and `forget` calls and results. Retrieval, privacy tools,
+other MCP servers and deferred `tool_call` wrappers are excluded from memory
+extraction. Tool approval does not change this capture policy.
+
 ### Personal or Shared
 
 Hermes uses conversation history to follow the current chat. OpenViking saves

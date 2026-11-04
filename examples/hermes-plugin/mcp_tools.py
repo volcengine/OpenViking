@@ -132,6 +132,41 @@ def _error_hint(exc):
     )
 
 
+def _launch_command():
+    from hermes_cli._launchers import installation_command
+    from pm.paths import repo_root
+
+    # The source launcher follows PM updates without pinning a dependency
+    # generation. External installs keep their base interpreter, not a venv.
+    command = installation_command(repo_root().resolve(), _BOUND_ARGS, python=sys._base_executable)
+    if os.name == "nt" and Path(command[0]).name == "hermes":
+        for suffix in (".exe", ".cmd"):
+            candidate = Path(command[0] + suffix)
+            if candidate.is_file():
+                command[0] = str(candidate)
+                break
+    return command
+
+
+def _is_adapter_entry(entry):
+    args = entry.get("args")
+    if not isinstance(args, list):
+        return False
+    # Recognize paths from another OS too, for profile clone/import.
+    name = str(entry.get("command", "")).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if args in (["openviking", "mcp"], _BOUND_ARGS):
+        return name in {"hermes", "hermes.exe", "hermes.cmd"}
+    # External installations use the host helper's isolated bootstrap prefix.
+    return (
+        len(args) == 6
+        and args[:2] == ["-I", "-c"]
+        and args[-3:] == _BOUND_ARGS
+        and isinstance(args[2], str)
+        and "import hermes_bootstrap;" in args[2]
+        and "runpy.run_module('hermes_cli.main'" in args[2]
+    )
+
+
 def configure(config: dict, hermes_home: str) -> None:
     """Save one adapter entry; preserve the user's MCP policy and custom headers."""
     servers = config.get("mcp_servers")
@@ -148,7 +183,8 @@ def configure(config: dict, hermes_home: str) -> None:
     # The host resolves the owning profile at spawn. A saved path survives
     # clone/import and can select the original profile's credentials.
     env.pop("HERMES_HOME", None)
-    entry.update(command="hermes", args=list(_BOUND_ARGS), env=env)
+    command = _launch_command()
+    entry.update(command=command[0], args=command[1:], env=env)
     if isinstance(entry.get("headers"), dict):
         entry["headers"] = {
             k: v for k, v in entry["headers"].items() if k.lower() not in _CONNECTION_HEADERS
@@ -179,14 +215,16 @@ def repair_profile_home(hermes_home: str | Path) -> str | None:
             entry = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
             if not isinstance(entry, dict) or "url" in entry or not entry.get("command"):
                 return None
-            args = entry.get("args")
-            if args not in (["openviking", "mcp"], _BOUND_ARGS):
+            if not _is_adapter_entry(entry):
                 return None  # a manually configured server, not our adapter
+            command = _launch_command()
             env = entry.get("env")
             previous = env.get("HERMES_HOME") if isinstance(env, dict) else None
-            if args == _BOUND_ARGS and (not isinstance(env, dict) or "HERMES_HOME" not in env):
+            if [entry["command"], *entry["args"]] == command and (
+                not isinstance(env, dict) or "HERMES_HOME" not in env
+            ):
                 return None
-            entry["args"] = list(_BOUND_ARGS)
+            entry.update(command=command[0], args=command[1:])
             if isinstance(env, dict):
                 env.pop("HERMES_HOME", None)
             # Write the locked raw config so deleting the leaf is preserved.
@@ -194,11 +232,13 @@ def repair_profile_home(hermes_home: str | Path) -> str | None:
             save_config(config)
             saved = read_user_config_raw()
             saved_entry = saved.get("mcp_servers", {}).get(SERVER_NAME, {})
-            if saved_entry.get("args") != _BOUND_ARGS or "HERMES_HOME" in (
-                saved_entry.get("env") or {}
+            if (
+                saved_entry.get("command") != command[0]
+                or saved_entry.get("args") != command[1:]
+                or "HERMES_HOME" in (saved_entry.get("env") or {})
             ):
-                raise PermissionError("MCP profile binding was not saved")
-            return previous or "legacy MCP launch"
+                raise PermissionError("MCP launch binding was not saved")
+            return previous or "saved MCP launcher"
     finally:
         reset_hermes_home_override(token)
 
@@ -311,8 +351,12 @@ class Connection:
 
         _, entry, managed = await asyncio.to_thread(self.resolve)
         retry_error = None
+        # Hermes's CLI bounds the entire child connection with this timeout.
+        # Reserve time for process startup and delivery of our safe error hint.
+        timeout = float(entry.get("connect_timeout") or 60)
+        discovery_timeout = timeout - min(10, timeout / 4)
         try:
-            async with asyncio.timeout(float(entry.get("connect_timeout") or 60)):
+            async with asyncio.timeout(discovery_timeout):
                 while True:
                     try:
                         return await self.request("tools/list", params)
