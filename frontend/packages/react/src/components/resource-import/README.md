@@ -2,7 +2,7 @@
 
 导入方式选择、文件选择、进度及结果展示。导入选项和任务状态由上层传入；选择、提交、取消和重试等意图通过事件回调上报，组件不上传文件、启动任务或轮询状态。
 
-`resource-import.ts` 对应 `@openviking/react/components/resource-import`，当前导出 props 类型，组件实现待迁入。接口以源码与类型声明为准，本文不重复列举。
+`resource-import.tsx` 对应 `@openviking/react/components/resource-import`。当前是占位组件：只渲染固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API。真实实现按本文与类型声明重写，接口以源码为准，本文不重复列举。
 
 ## 职责边界
 
@@ -27,4 +27,4 @@
 
 开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
 
-独立样式入口为 `@openviking/react/components/resource-import/style.css`，迁入实现前为空样式。
+独立样式入口为 `@openviking/react/components/resource-import/style.css`，当前只含占位壳的样式。

@@ -1,4 +1,5 @@
-// 模块入口：已定义 props 类型，组件随视图迁入补齐。
+import styles from './tui.module.css';
+
 export type {
   TuiCommandSuggestion,
   TuiCustomContent,
@@ -22,3 +23,8 @@ export type {
   TuiTextContent,
   TuiWriteResultContent,
 } from './types.js';
+
+/** 占位组件：仅渲染固定尺寸的空壳，真实实现按 props 契约重写。 */
+export function Tui() {
+  return <div className={styles.root}>Tui</div>;
+}

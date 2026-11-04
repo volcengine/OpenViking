@@ -2,7 +2,7 @@
 
 Agent 选择、接入步骤、配置说明及连接状态视图。配置内容、凭证展示状态及连接结果由上层传入；组件通过事件回调上报用户意图，不创建凭证、执行鉴权或建立连接。
 
-`agent-connect.ts` 对应 `@openviking/react/components/agent-connect`，当前导出 props 类型，组件实现待迁入。接口以源码与类型声明为准，本文不重复列举。
+`agent-connect.tsx` 对应 `@openviking/react/components/agent-connect`。当前是占位组件：只渲染固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API。真实实现按本文与类型声明重写，接口以源码为准，本文不重复列举。
 
 ## 职责边界
 
@@ -27,4 +27,4 @@ Agent 选择、接入步骤、配置说明及连接状态视图。配置内容�
 
 开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
 
-独立样式入口为 `@openviking/react/components/agent-connect/style.css`，迁入实现前为空样式。
+独立样式入口为 `@openviking/react/components/agent-connect/style.css`，当前只含占位壳的样式。

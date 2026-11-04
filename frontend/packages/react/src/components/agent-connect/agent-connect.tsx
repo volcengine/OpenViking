@@ -1,4 +1,5 @@
-// 模块入口：已定义 props 类型，组件随视图迁入补齐。
+import styles from './agent-connect.module.css';
+
 export type {
   AgentConnectCatalogProps,
   AgentConnectDetail,
@@ -11,3 +12,8 @@ export type {
   AgentConnectStep,
   AgentConnectTab,
 } from './types.js';
+
+/** 占位组件：仅渲染固定尺寸的空壳，真实实现按 props 契约重写。 */
+export function AgentConnect() {
+  return <div className={styles.root}>AgentConnect</div>;
+}

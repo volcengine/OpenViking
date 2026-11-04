@@ -1,4 +1,5 @@
-// 模块入口：已定义 props 类型，组件随视图迁入补齐。
+import styles from './resource-import.module.css';
+
 export type {
   ResourceImportField,
   ResourceImportFile,
@@ -10,3 +11,8 @@ export type {
   ResourceImportTask,
   ResourceImportTaskListProps,
 } from './types.js';
+
+/** 占位组件：仅渲染固定尺寸的空壳，真实实现按 props 契约重写。 */
+export function ResourceImport() {
+  return <div className={styles.root}>ResourceImport</div>;
+}

@@ -52,6 +52,11 @@ export default defineConfig({
                 { text: 'StatusBadge', link: '/components/status-badge' },
                 { text: 'FileTree', link: '/components/file-tree' },
                 { text: 'FilePreview', link: '/components/file-preview' },
+                { text: 'Tui', link: '/components/tui' },
+                { text: 'VikingBot', link: '/components/viking-bot' },
+                { text: 'ScopeSwitcher', link: '/components/scope-switcher' },
+                { text: 'AgentConnect', link: '/components/agent-connect' },
+                { text: 'ResourceImport', link: '/components/resource-import' },
               ],
             },
           ],
@@ -87,6 +92,20 @@ export default defineConfig({
                 {
                   text: 'FilePreview 文件预览',
                   link: '/zh/components/file-preview',
+                },
+                { text: 'Tui 命令控制台', link: '/zh/components/tui' },
+                { text: 'VikingBot 对话', link: '/zh/components/viking-bot' },
+                {
+                  text: 'ScopeSwitcher 作用域选择',
+                  link: '/zh/components/scope-switcher',
+                },
+                {
+                  text: 'AgentConnect Agent 接入',
+                  link: '/zh/components/agent-connect',
+                },
+                {
+                  text: 'ResourceImport 资源导入',
+                  link: '/zh/components/resource-import',
                 },
               ],
             },
