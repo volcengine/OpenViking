@@ -33,11 +33,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check out the reviewed Hermes test host
+      - name: Check out released Hermes v0.22.7
         uses: actions/checkout@v6
         with:
-          repository: ehz0ah/hermes-agent
-          ref: 837617717c045f70c0a68121d11295534b9f9a33
+          repository: NousResearch/hermes-agent
+          ref: b200f5bc60e31588ba2cb60e288029c4a54ba5fa # v0.22.7
           path: .ci/hermes-agent
           persist-credentials: false
 
@@ -57,7 +57,7 @@ jobs:
         working-directory: .ci/hermes-agent
         run: |
           python scripts/write_install_stamp.py --output install-stamp.json \
-            --base-version 0.22.5 --source ci --update-mechanism self
+            --base-version 0.22.7 --source ci --update-mechanism self
           python -m pm.build_env --source . --out .venv --group dev --group test
 
       - name: Run the external memory provider tests
@@ -91,13 +91,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2025]
-        host: [main]
-        include:
-          - os: ubuntu-24.04
-            host: release
-            python: '3.14'
-            hermes_repo: NousResearch/hermes-agent
-            hermes_ref: v0.22.5
+        host: [release]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -110,13 +104,13 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v6
         with:
-          repository: ${{ matrix.hermes_repo || 'ehz0ah/hermes-agent' }}
-          ref: ${{ matrix.hermes_ref || '837617717c045f70c0a68121d11295534b9f9a33' }}
+          repository: NousResearch/hermes-agent
+          ref: b200f5bc60e31588ba2cb60e288029c4a54ba5fa # v0.22.7
           path: .ci/hermes-agent
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python || '3.14' }}
+          python-version: '3.14'
       - uses: astral-sh/setup-uv@v7
         with:
           version: '0.12.3'
@@ -128,7 +122,7 @@ jobs:
       - name: Install the reviewed host and test dependencies
         run: |
           python scripts/write_install_stamp.py --output install-stamp.json \
-            --base-version 0.22.5 --source ci --update-mechanism self
+            --base-version 0.22.7 --source ci --update-mechanism self
           python -m pm.build_env --source . --out .venv --group dev --group test
           if [ -x .venv/Scripts/python.exe ]; then
             PYTHON="$PWD/.venv/Scripts/python.exe"
@@ -150,7 +144,7 @@ jobs:
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_mcp_tools.py" \
             --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
       - name: Run the complete provider suite on the release host
-        if: matrix.host == 'release'
+        if: matrix.os == 'ubuntu-24.04'
         env:
           HERMES_TEST_FILE_RETRIES: '0'
           HERMES_TEST_WORKERS: '2'

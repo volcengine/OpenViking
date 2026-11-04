@@ -716,9 +716,10 @@ OpenViking 的 profile 会自动尝试安装目录插件。provider 名、配置
 | 显式工具 | 6 个原生 `viking_*` 工具 | 服务端 MCP schema 和结果；Hermes 负责过滤与审批 |
 | cron、子代理和 flush 上下文 | 该提交中没有说明 | 召回可用；跳过自动写入和镜像 |
 
-2.2 插件使用 `mcp__openviking__<tool>`，要求 OpenViking 0.4.23 或更新版本。
+2.2 插件使用 `mcp__openviking__<tool>`，要求 Hermes 0.22.7 或更新版本，
+以及 OpenViking 0.4.23 或更新版本并启用 `/mcp`。
 新连接默认不受信任。只读工具无需审批，其他工具需要审批。适配器在启动时绑定
-profile，要求 Hermes 提供相应支持。升级后请重启。详见
+profile，使用 Hermes 提供的 profile 路径。升级后请重启。详见
 [插件配置](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/CONFIGURATION.md#mcp-tools)。
 
 上述固定提交中内置 provider 的行为：

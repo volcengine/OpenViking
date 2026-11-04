@@ -719,10 +719,11 @@ The two are separate code bases. Where their behavior differs:
 | Explicit tools | Six native `viking_*` tools | Server MCP schemas and results; Hermes owns filters and approval |
 | Cron, subagent, and flush contexts | Not documented at that commit | Recall works. Automatic writes and mirroring are skipped |
 
-Plugin 2.2 uses `mcp__openviking__<tool>` and requires OpenViking 0.4.23 or newer.
+Plugin 2.2 uses `mcp__openviking__<tool>` and requires Hermes 0.22.7 or newer
+and OpenViking 0.4.23 or newer with `/mcp` enabled.
 New connections use untrusted policy. Read-only tools run without approval;
 other tools require approval. The adapter uses launch-time profile binding and
-requires the corresponding Hermes host support. Restart after upgrading.
+uses the profile supplied by Hermes. Restart after upgrading.
 See the [plugin configuration](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/CONFIGURATION.md#mcp-tools).
 
 Behavior of the pinned bundled provider:

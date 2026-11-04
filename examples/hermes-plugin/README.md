@@ -17,19 +17,17 @@ Accept the dependency prompt during installation. In setup, choose how you
 use Hermes, then choose a connection.
 
 Version 2.2 uses OpenViking's MCP tools. Custom and hosted servers need
-OpenViking 0.4.23 or newer and `/mcp` access. Hermes v0.22.5 includes the
-required read-only approval support. MCP launch-time profile binding is also
-required; see [the host change](https://github.com/NousResearch/hermes-agent/issues/138512).
-The 2.2 release waits for this support in a released upstream Hermes version.
-A host without binding cannot start the adapter.
+OpenViking 0.4.23 or newer and `/mcp` access. Hermes v0.22.7 or newer is required
+for read-only approval support and MCP launch-time profile binding. Update
+Hermes before installing plugin 2.2. Older hosts cannot start the adapter.
 
 Setup saves a portable MCP entry. Restart Hermes after setup or a plugin update.
 The adapter rejects old saved-path launch commands. An adapter process started
 before the update must be replaced with `/reload-mcp` or a restart.
 
-Upgrading to 2.2 replaces the six `viking_*` tools. It requires OpenViking
->=0.4.23 with `/mcp` enabled. Upgrade a separately managed server before
-upgrading this plugin. Setup checks the server version and MCP access and
+Upgrading to 2.2 replaces the six `viking_*` tools. It requires Hermes >=0.22.7
+and OpenViking >=0.4.23 with `/mcp` enabled. Upgrade Hermes and a separately
+managed server before upgrading this plugin. Setup checks the server version and MCP access and
 reports an error if either requirement is unmet. There is no native-tool fallback.
 
 ### Personal or Shared

@@ -265,9 +265,9 @@ Setup saves `mcp_servers.openviking` in the active Hermes profile. Restart
 Hermes to load the server tools as `mcp__openviking__<tool>`. Tool names,
 arguments and results come from the server. All tools are exposed by default.
 
-A new connection uses `trust: untrusted`. Hermes v0.22.5 includes the read-only
-annotation support needed by this policy. Read-only tools such
-as `find`, `read` and `grep` do not ask for approval. `search`, `remember`,
+A new connection uses `trust: untrusted`. Hermes v0.22.7, the minimum supported
+version, includes the read-only annotation support needed by this policy.
+Read-only tools such as `find`, `read` and `grep` do not ask for approval. `search`, `remember`,
 `write` and `forget` require approval. Unattended runs such as `-q` and cron
 cannot approve them. Automatic recall, capture and commits are separate and
 continue without this gate.
@@ -302,8 +302,9 @@ replayed.
 The saved command is `hermes openviking mcp --profile-bound`. It does not save
 an absolute `env.HERMES_HOME`. Hermes must supply the owning profile home when
 it starts the child, including for routed gateway and desktop profiles. This
-requires the [launch-time host binding change](https://github.com/NousResearch/hermes-agent/issues/138512).
-A host without this change fails before the adapter reads profile credentials
+requires Hermes v0.22.7 or newer, which includes the
+[launch-time host binding change](https://github.com/NousResearch/hermes-agent/pull/148129).
+An older host fails before the adapter reads profile credentials
 or sends a request.
 
 Provider initialization migrates known legacy adapter entries while preserving
@@ -471,10 +472,9 @@ hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
 Connection settings and server data are retained. Restart Hermes or the gateway
 after updating.
 
-Version 2.2 requires OpenViking >=0.4.23 with `/mcp` enabled and a released
-Hermes version that supplies launch-time MCP profile binding. The six native
-`viking_*` tools are removed. The plugin release waits for that Hermes release;
-it does not provide a native-tool fallback.
+Version 2.2 requires Hermes >=0.22.7 and OpenViking >=0.4.23 with `/mcp` enabled.
+Upgrade Hermes and a separately managed server before updating the plugin.
+The six native `viking_*` tools are removed; there is no native-tool fallback.
 
 ## Recovery lock files
 

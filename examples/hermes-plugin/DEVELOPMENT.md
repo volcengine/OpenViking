@@ -38,12 +38,11 @@ and imported profiles, routed profiles, missing host binding, cold startup,
 retained-provider recovery and concurrent local embeddings. Preserve the
 Windows installation check and reviewed native package pins.
 
-Release gate: do not merge or publish 2.2 until MCP launch-time profile binding
-is available in a released upstream Hermes version. If the host release slips,
-this plugin release slips too. The fork host in CI is temporary development
-evidence. Replace it with the reviewed upstream commit and update the Hermes
-minimum to the release that includes binding. Repeat installation, configured
-stdio launch, missing-home refusal and approval checks on that release.
+Version 2.2 requires Hermes v0.22.7 or newer. That release includes MCP launch-time
+profile binding from [Hermes PR #148129](https://github.com/NousResearch/hermes-agent/pull/148129).
+CI uses the official release commit `b200f5bc60e31588ba2cb60e288029c4a54ba5fa`.
+Keep real installation, configured stdio launch, missing-home refusal and
+approval checks on the minimum supported release before publication.
 
 MCP capture is opt-in by tool name. Only reviewed `remember`, `write`, `edit`
 and `forget` acknowledgements enter the capture batch. Review both the inputs
@@ -162,11 +161,11 @@ the installed runtime without clearing pending validation. Local status reports
 
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
-It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
-The release-host job runs the complete provider suite on Hermes v2026.9.24
-with Python 3.13, selected explicitly by `uv sync --python` rather than the
-release checkout's `.python-version`. Legacy autostart uses Hermes's profile
-environment helper and credential scrubber on both hosts. Unrelated process and
+It uses Python 3.14 and the official Hermes v0.22.7 commit, with test retries
+disabled. The Linux release-host job also runs the complete provider suite.
+Platform jobs run the lifecycle and MCP tests plus real Quick Local services;
+Windows also runs the real plugin installation check. Legacy autostart uses
+Hermes's profile environment helper and credential scrubber. Unrelated process and
 profile secrets are removed; missing helpers or secret-scope errors prevent spawning.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
@@ -174,10 +173,10 @@ These regression tests use mock responses and local test servers; live-service
 validation remains part of release testing.
 The reviewed current host builds its test environment through Hermes PM.
 Fixtures use the host's YAML implementation, so they do not need a separate
-PyYAML install on current Hermes. The older release retains its uv installer.
-Native edit tests select the action advertised by the host tool schema:
-`patch` on current Hermes and `replace` on the release baseline. Both must
-update the same mapped file. Patch-specific tests also check that text outside
+PyYAML install.
+Native edit tests select the action advertised by the host tool schema;
+Hermes v0.22.7 uses `patch`. Legacy compatibility tests also cover `replace`.
+Both must update the same mapped file. Patch-specific tests check that text outside
 the edited span is preserved in the native entry and its remote copy.
 
 CI also runs `scripts/check-hermes-plugin-install.py` through the real Hermes
