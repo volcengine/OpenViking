@@ -4,7 +4,7 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 use colored::Colorize;
 
 use crate::{
-    Cli,
+    cli::Cli,
     cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
     terminal_ui::{
@@ -2700,7 +2700,7 @@ mod tests {
         render_top_level_help_with_language_and_width,
     };
     use super::{command_spec, is_top_level_help_request};
-    use crate::Cli;
+    use crate::cli::Cli;
     use crate::i18n::Language;
     use clap::CommandFactory;
     use std::ffi::OsString;
