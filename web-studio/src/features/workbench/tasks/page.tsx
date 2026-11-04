@@ -1,5 +1,4 @@
-import { adminTaskHeaders } from '#/features/connection/lib/admin-console-headers'
-import { createConnectionRoleProbeKey } from '#/features/connection/lib/connection-runtime'
+import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -93,8 +92,13 @@ export function TasksRoute({
 }: { management?: boolean } = {}) {
   const navigate = useNavigate()
   const { t } = useTranslation(['tasksPage', 'appShell'])
-  const { identityScopeKey, connection, connectionRole, serverMode } =
-    useAppConnection()
+  const { identityScopeKey, connection } = useAppConnection()
+  const {
+    headers: taskHeaders,
+    scopeKey,
+    isLoading: isScopeLoading,
+    unavailableKey,
+  } = useAdminSpaceHeaders(management)
   const queryClient = useQueryClient()
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
@@ -105,19 +109,21 @@ export function TasksRoute({
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
     null,
   )
-  const taskHeaders = management
-    ? adminTaskHeaders(connection, connectionRole, serverMode)
-    : undefined
   const taskScopeUnavailable = taskHeaders === null
   const taskIdentityScopeKey = management
-    ? `management/${createConnectionRoleProbeKey(connection, serverMode)}`
+    ? `management/${scopeKey}`
     : `workbench/${identityScopeKey}`
   const tasksQuery = useQuery({
-    enabled: !taskScopeUnavailable,
+    enabled: !isScopeLoading && !taskScopeUnavailable,
+    meta: { adminSpaceScope: management ? scopeKey : undefined },
     queryFn: () => fetchTasks(taskType, statusFilter, taskHeaders ?? undefined),
     queryKey: ['tasks', taskIdentityScopeKey, taskType, statusFilter],
     refetchInterval: 10_000,
   })
+  React.useEffect(() => {
+    setPage(1)
+    setSelectedTaskId(null)
+  }, [taskIdentityScopeKey])
   const rawTasks = tasksQuery.data ?? []
   const allTasks = React.useMemo(() => {
     if (!dedupByResource) return rawTasks
@@ -608,8 +614,9 @@ export function TasksRoute({
     }
   }, [allTasks, t])
 
-  if (taskScopeUnavailable)
-    return <p role="status">{t('appShell:adminNavigation.scopeUnavailable')}</p>
+  if (isScopeLoading) return <LoaderCircleIcon className="animate-spin" />
+
+  if (taskScopeUnavailable) return <p role="status">{t(unavailableKey)}</p>
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">

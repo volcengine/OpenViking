@@ -1,4 +1,5 @@
 import studioI18n from '#/i18n/core'
+import type * as ConnectionHealth from '#/features/connection/lib/health'
 // @vitest-environment jsdom
 
 import en from '#/i18n/locales/en/workspace'
@@ -35,6 +36,15 @@ import { Route } from '#/routes/tasks/route'
 import { toast } from 'sonner'
 
 const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn() }))
+
+const credentialMocks = vi.hoisted(() => ({ users: vi.fn(), health: vi.fn() }))
+vi.mock('#/shared/api/admin', () => ({
+  fetchAdminUsers: credentialMocks.users,
+}))
+vi.mock('#/features/connection/lib/health', async (importOriginal) => ({
+  ...(await importOriginal<typeof ConnectionHealth>()),
+  fetchServerHealth: credentialMocks.health,
+}))
 
 const navigationMocks = vi.hoisted(() => ({ navigate: vi.fn() }))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
@@ -151,6 +161,19 @@ beforeEach(() => {
   connectionState.connection.apiKey = 'user-key'
   connectionState.connectionRole = 'root'
   connectionState.serverMode = 'api_key'
+  credentialMocks.users.mockImplementation(async (_connection, accountId) => [
+    {
+      accountId,
+      userId: 'space-admin',
+      role: 'admin',
+      apiKey: `${accountId}-admin-key`,
+    },
+  ])
+  credentialMocks.health.mockImplementation(async () => ({
+    role: 'admin',
+    account_id: connectionState.connection.accountId,
+    user_id: 'space-admin',
+  }))
   records = runningTasks(12)
   clientMocks.getTasks.mockReset()
   // Model the API contract: filtering precedes ordering and the result limit.
@@ -435,16 +458,21 @@ describe('management task scope', () => {
     ['other-space', ''],
     ['other-space', 'user-key'],
   ])(
-    'does not query Root tasks for space %s with data key %s',
+    'queries space %s using its Admin key when Root and data key %s are present',
     async (account, apiKey) => {
       connectionState.connection.accountId = account
       connectionState.connection.apiKey = apiKey
       await renderPage('en', true)
-      expect(screen.getByRole('status').textContent).toBe(
-        en.appShell.adminNavigation.scopeUnavailable,
+      await screen.findByRole('row', { name: 'View details for task task-1' })
+      expect(clientMocks.getTasks).toHaveBeenCalledWith({
+        headers: { 'X-API-Key': `${account}-admin-key` },
+        query: { limit: 200 },
+      })
+      expect(credentialMocks.users).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: 'management-key' }),
+        account,
+        true,
       )
-      expect(clientMocks.getTasks).not.toHaveBeenCalled()
-      expect(taskRows()).toHaveLength(0)
     },
   )
 

@@ -1,4 +1,4 @@
-import { adminConsoleHeaders } from '#/features/connection/lib/admin-console-headers'
+import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -50,20 +50,22 @@ export function HomePage({
   management = false,
 }: { management?: boolean } = {}) {
   const { t } = useTranslation(['home', 'appShell'])
-  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
-    useAppConnection()
-  const headers = management
-    ? adminConsoleHeaders(connection, connectionRole, serverMode)
-    : undefined
+  const { connection, connectionRole, serverMode } = useAppConnection()
+  const {
+    headers,
+    scopeKey,
+    isLoading: isConnectionRoleLoading,
+    unavailableKey,
+  } = useAdminSpaceHeaders(management)
   const canQueryMetrics =
     !isConnectionRoleLoading && connectionRole !== 'unknown' && headers !== null
-  const metricsScopeKey = getMetricsScopeKey(
-    connection,
-    connectionRole,
-    management,
-  )
+  const metricsScopeKey = {
+    scopeKey,
+    identity: getMetricsScopeKey(connection, connectionRole, management),
+  }
 
   const dashboard = useQuery({
+    meta: { adminSpaceScope: management ? scopeKey : undefined },
     enabled: canQueryMetrics,
     queryFn: () => fetchConsoleDashboardSummary(headers ?? undefined),
     queryKey: ['console-dashboard-summary', metricsScopeKey, serverMode],
@@ -71,6 +73,7 @@ export function HomePage({
   })
 
   const tokenSeries = useQuery({
+    meta: { adminSpaceScope: management ? scopeKey : undefined },
     enabled: canQueryMetrics,
     queryFn: () => fetchConsoleTokenSeries(headers ?? undefined),
     queryKey: [
@@ -83,6 +86,7 @@ export function HomePage({
   })
 
   const contextCommits = useQuery({
+    meta: { adminSpaceScope: management ? scopeKey : undefined },
     enabled: canQueryMetrics,
     queryFn: () => fetchConsoleContextCommits(headers ?? undefined),
     queryKey: [
@@ -99,7 +103,7 @@ export function HomePage({
   const metricsUnavailable = identityUnavailable || isDisabledPayload(summary)
   const unavailableMessage = identityUnavailable
     ? headers === null
-      ? t('appShell:adminNavigation.scopeUnavailable')
+      ? t(unavailableKey)
       : t('usageAccessRequired')
     : t('usageDisabled')
   const isMetricsLoading =

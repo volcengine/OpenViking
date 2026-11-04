@@ -1,6 +1,10 @@
 const workspace = {
   appShell: {
     adminNavigation: {
+      accountAdminUnavailable:
+        '当前空间没有可用的 Admin API Key，请在 User 与 API Keys 中检查管理员凭据。',
+      accountAdminLookupFailed:
+        '获取或验证当前空间的 Admin API Key 失败，请检查连接后重试。',
       scopeUnavailable: '当前管理凭据无法查询这个数据空间。',
       spaceScope: '这一页只显示这个数据空间的数据',
       overview: '概览',

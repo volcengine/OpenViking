@@ -1,6 +1,10 @@
 const workspace = {
   appShell: {
     adminNavigation: {
+      accountAdminUnavailable:
+        'No usable Admin API Key was found for this space. Check the administrator credentials in User & API Keys.',
+      accountAdminLookupFailed:
+        'Unable to retrieve or verify the Admin API Key for this space. Check the connection and try again.',
       scopeUnavailable:
         'The current management credential cannot query this space.',
       spaceScope: 'This page shows data for this space only.',

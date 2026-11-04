@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentType } from 'react'
+import type * as ReactI18next from 'react-i18next'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import type * as AuditApi from '#/features/workbench/request-logs/lib/api'
@@ -28,7 +29,8 @@ vi.mock(
     fetchAuditLogs: fetchLogs,
   }),
 )
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof ReactI18next>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 afterEach(cleanup)

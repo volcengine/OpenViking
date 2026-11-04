@@ -1,3 +1,5 @@
+import { configureManagementCredentials } from '#/shared/api/management-credentials'
+import { adminSpaceCredentialQuery } from '#/features/connection/lib/admin-space-credential'
 import {
   rememberSurface,
   restoreSurface,
@@ -861,6 +863,38 @@ export function AppConnectionProvider({
     queryClient,
     reconnect,
     serverHealth,
+    serverMode,
+    studioMode,
+  ])
+
+  React.useLayoutEffect(() => {
+    if (
+      studioMode !== 'management' ||
+      serverMode !== 'api_key' ||
+      connectionRole !== 'root' ||
+      isConnectionRoleLoading
+    )
+      return
+    return configureManagementCredentials({
+      baseUrl: connection.baseUrl,
+      rootApiKey: connection.adminApiKey,
+      resolveAccount: (accountId) =>
+        queryClient.fetchQuery(
+          adminSpaceCredentialQuery({ ...connection, accountId }, serverMode),
+        ),
+      invalidateAccount: (accountId) => {
+        const { queryKey } = adminSpaceCredentialQuery(
+          { ...connection, accountId },
+          serverMode,
+        )
+        void queryClient.invalidateQueries({ queryKey })
+      },
+    })
+  }, [
+    connection,
+    connectionRole,
+    isConnectionRoleLoading,
+    queryClient,
     serverMode,
     studioMode,
   ])

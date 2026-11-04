@@ -1,3 +1,4 @@
+import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { resolveStudioManagementCapabilities } from '#/features/connection/lib/studio-permissions'
 import { createResourceAclApi } from '#/features/resource-acl/lib/resource-acl'
@@ -14,6 +15,7 @@ export function useAclManagement(load = true) {
     switchIdentity,
     studioMode,
   } = useAppConnection()
+  const scoped = useAdminSpaceHeaders(studioMode === 'management')
   const { canManageUsers } = resolveStudioManagementCapabilities({
     hasControlCredential: Boolean(connection.adminApiKey.trim()),
     isRoleLoading: isConnectionRoleLoading,
@@ -22,6 +24,7 @@ export function useAclManagement(load = true) {
   })
   const allowed =
     studioMode === 'management' &&
+    !scoped.isLoading &&
     canManageUsers &&
     Boolean(connection.accountId) &&
     serverMode !== 'checking' &&
@@ -29,21 +32,28 @@ export function useAclManagement(load = true) {
   // An account admin's control key is also a valid tenant data credential.
   // Keep the regular browsing identity unchanged while managing ACLs.
   const useAccountAdminCredential =
-    serverMode === 'api_key' && connectionRole === 'admin'
+    serverMode === 'api_key' && Boolean(scoped.headers?.['X-API-Key'])
+  const aclConnection = useMemo(
+    () =>
+      useAccountAdminCredential
+        ? { ...connection, adminApiKey: scoped.headers!['X-API-Key'] }
+        : connection,
+    [connection, scoped.headers, useAccountAdminCredential],
+  )
   const api = useMemo(
     () =>
       createResourceAclApi(
-        connection,
+        aclConnection,
         serverMode === 'trusted',
         useAccountAdminCredential,
       ),
-    [connection, serverMode, useAccountAdminCredential],
+    [aclConnection, serverMode, useAccountAdminCredential],
   )
   const settingsKey = [
     'account-acl',
     connection.baseUrl,
     connection.accountId,
-    connection.adminApiKey,
+    aclConnection.adminApiKey,
   ]
   const settings = useQuery({
     queryKey: settingsKey,
@@ -55,10 +65,11 @@ export function useAclManagement(load = true) {
     accountId: connection.accountId,
     userId: connection.userId,
     baseUrl: connection.baseUrl,
-    apiKey: connection.adminApiKey,
+    apiKey: aclConnection.adminApiKey,
   }
   return {
     api,
+    isLoading: scoped.isLoading,
     serverMode,
     switchIdentity,
     allowed,
@@ -70,7 +81,7 @@ export function useAclManagement(load = true) {
     settingsKey,
     adminConnection,
     identityScopeKey,
-    aclIdentityScopeKey: `${identityScopeKey}:${useAccountAdminCredential ? 'account-admin' : 'data-user'}`,
+    aclIdentityScopeKey: `${identityScopeKey}:${scoped.scopeKey}:${useAccountAdminCredential ? 'account-admin' : 'data-user'}`,
     useAccountAdminCredential,
     connection,
   }

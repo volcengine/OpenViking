@@ -86,6 +86,7 @@ function DirectoryPermissions() {
     })),
   ]
 
+  if (state.isLoading) return <p role="status">{t('loading')}</p>
   if (!state.allowed) return <p>{t('acl.page.unavailable')}</p>
   if (!state.hasDataIdentity)
     return <ResourceAclIdentityRecovery missingDataIdentity />

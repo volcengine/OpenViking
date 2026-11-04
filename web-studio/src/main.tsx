@@ -1,3 +1,4 @@
+import { registerCredentialStorageNotifications } from '#/features/connection/components/credential-storage-notice'
 import { registerServiceWorker } from '#/app/lib/service-worker'
 import { queryClient } from '#/app/providers/query-client'
 import {
@@ -13,7 +14,6 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { ThemeProvider } from 'next-themes'
 import ReactDOM from 'react-dom/client'
-import { toast } from 'sonner'
 
 // PWA: register the service worker at the SPA's base path so the scope
 // matches the manifest's start_url / scope. Production builds only — the
@@ -50,12 +50,7 @@ async function start() {
     rootElement.textContent = i18n.t('studio:credentialStorage.startError')
     return
   }
-  window.addEventListener('ov-credential-storage-error', () => {
-    toast.error(i18n.t('studio:credentialStorage.saveError'), {
-      id: 'credential-storage',
-      duration: Infinity,
-    })
-  })
+  registerCredentialStorageNotifications((key) => i18n.t(`studio:${key}`))
   if (!rootElement.innerHTML) {
     const root = ReactDOM.createRoot(rootElement)
     root.render(

@@ -1467,7 +1467,13 @@ class PersistentTaskStore(TaskWorkStore):
             owner = self._find_cached_owner(task_id, account_id, user_id)
             if owner is not None:
                 return self._task_cache[owner]
-        if not account_id or not user_id:
+        if not account_id:
+            return None
+        if not user_id:
+            for owner_user in await self._owner_users(account_id):
+                task = await self._load_task(task_id, account_id, owner_user)
+                if task is not None:
+                    return task
             return None
         try:
             payload = json.loads(

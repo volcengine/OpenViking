@@ -1,3 +1,7 @@
+import {
+  routeManagementCredential,
+  invalidateManagementCredential,
+} from '#/shared/api/management-credentials'
 import i18n from '#/i18n/core'
 import { resolveApiKeyAuth } from '#/shared/api/auth'
 import type { InternalAxiosRequestConfig } from 'axios'
@@ -202,7 +206,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     throwOnError: true,
   })
 
-  instance.interceptors.request.use((config) => {
+  instance.interceptors.request.use(async (config) => {
     const headers = AxiosHeaders.from(config.headers)
 
     for (const [key, value] of Object.entries(defaultHeaders)) {
@@ -267,11 +271,19 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     config.headers = headers
     maybeInjectTelemetry(config, runtimeOptions.defaultTelemetry)
 
+    if (
+      runtimeOptions.credentialScope !== 'data' &&
+      !connection.identityHeaders &&
+      runtimeOptions.apiKeyAuth === 'header'
+    ) {
+      return routeManagementCredential(config)
+    }
     return config
   })
 
   instance.interceptors.response.use(
     (response) => {
+      invalidateManagementCredential(response.config)
       const requestId = readHeader(response.headers, 'x-request-id')
 
       if (isEnvelopeError(response.data)) {
@@ -291,6 +303,13 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       return response
     },
     (error) => {
+      if (
+        axios.isAxiosError(error) &&
+        error.config &&
+        (error.response?.status === 401 || error.response?.status === 403)
+      ) {
+        invalidateManagementCredential(error.config, true)
+      }
       const normalized = normalizeOvClientError(error)
       return Promise.reject(normalized)
     },

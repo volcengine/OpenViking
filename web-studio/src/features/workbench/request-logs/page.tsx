@@ -1,4 +1,4 @@
-import { adminConsoleHeaders } from '#/features/connection/lib/admin-console-headers'
+import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { useQuery } from '@tanstack/react-query'
 import * as React from 'react'
@@ -37,20 +37,23 @@ export function RequestLogsRoute({
   management = false,
 }: { management?: boolean } = {}) {
   const { t } = useTranslation(['requestLogs', 'appShell'])
-  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
-    useAppConnection()
+  const { connection, connectionRole, serverMode } = useAppConnection()
+  const {
+    headers,
+    scopeKey,
+    isLoading: isConnectionRoleLoading,
+    unavailableKey,
+  } = useAdminSpaceHeaders(management)
   const [draftFilters, setDraftFilters] =
     React.useState<AuditFilters>(DEFAULT_FILTERS)
   const [filters, setFilters] = React.useState<AuditFilters>(DEFAULT_FILTERS)
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
   const zeroResult = isZeroResultCombination(filters)
-  const headers = management
-    ? adminConsoleHeaders(connection, connectionRole, serverMode)
-    : undefined
   const canQueryAudit =
     !isConnectionRoleLoading && connectionRole !== 'unknown' && headers !== null
   const auditScopeKey = {
+    scopeKey,
     accountId: connection.accountId,
     baseUrl: connection.baseUrl,
     keyHash: hashSecret(
@@ -63,12 +66,17 @@ export function RequestLogsRoute({
   }
 
   const audit = useQuery({
+    meta: { adminSpaceScope: management ? scopeKey : undefined },
     enabled: canQueryAudit && !zeroResult,
     queryFn: () =>
       fetchAuditLogs(filters, page, pageSize, headers ?? undefined),
     queryKey: ['console-audit-logs', auditScopeKey, filters, page, pageSize],
     refetchInterval: 30_000,
   })
+
+  React.useEffect(() => {
+    setPage(1)
+  }, [scopeKey])
 
   const logs = !canQueryAudit || zeroResult ? [] : (audit.data?.items ?? [])
   const disabled = audit.data?.enabled === false
@@ -135,7 +143,7 @@ export function RequestLogsRoute({
           title={t('accessRequired.title')}
           description={
             headers === null
-              ? t('appShell:adminNavigation.scopeUnavailable')
+              ? t(unavailableKey)
               : t('accessRequired.description')
           }
         />
