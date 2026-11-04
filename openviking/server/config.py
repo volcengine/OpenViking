@@ -5,7 +5,7 @@
 import sys
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
@@ -137,12 +137,22 @@ class DeprecatedUserAgentEvolutionConfig(BaseModel):
     enabled: Optional[bool] = None
 
 
+class PrivacyConfig(BaseModel):
+    """Sparse privacy overrides; unset fields inherit deployment defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Optional[Literal["off", "registered", "auto"]] = None
+    restore: Optional[StrictBool] = None
+
+
 class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
     memory_policy: Optional[Dict[str, Any]] = None
     ttl: Optional[TTLConfig] = None
+    privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,

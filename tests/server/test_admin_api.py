@@ -24,12 +24,13 @@ from openviking.config.binding import manager_over_source
 from openviking.config.source import MemoryConfigSource
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig, UserConfig
+from openviking.server.config import PrivacyConfig, ServerConfig, UserConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.store_assembly import build_api_key_manager
 from openviking.server.user_config import (
+    patch_user_config,
     read_user_add_targets,
     read_user_config,
     user_config_backup_uri,
@@ -2352,6 +2353,40 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     finally:
         set_openviking_config(previous_config)
         await engine.aclose()
+
+
+async def test_admin_can_inspect_but_not_set_user_privacy(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    client = lightweight_admin_client
+    account = _uid()
+    created = await client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    ctx = RequestContext(user=UserIdentifier(account, "alice"), role=Role.USER)
+    await patch_user_config(
+        lightweight_admin_app.state.fake_service.viking_fs,
+        ctx,
+        {"privacy": {"mode": "registered"}},
+    )
+    lightweight_admin_app.state.config.user_config_defaults.privacy = PrivacyConfig(restore=False)
+    url = f"/api/v1/admin/accounts/{account}/users/alice/settings"
+    response = await client.get(url, headers=root_headers())
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["privacy"] == {"mode": "registered", "restore": False}
+    rejected = await client.patch(url, json={"privacy": {"mode": "auto"}}, headers=root_headers())
+    assert rejected.status_code == 422, rejected.text
+    for privacy in ({"mode": "auto"}, {"mode": "off"}, {"restore": False}):
+        rejected = await client.post(
+            f"/api/v1/admin/accounts/{account}/users",
+            json={"user_id": "bob", "user_config": {"privacy": privacy}},
+            headers=root_headers(),
+        )
+        assert rejected.status_code == 400, rejected.text
 
 
 async def test_user_memory_policy_uses_server_default_without_user_override(

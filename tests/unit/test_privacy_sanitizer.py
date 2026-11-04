@@ -15,6 +15,7 @@ from openviking.privacy.reference import (
 )
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -24,6 +25,10 @@ class _PrivacyCatalog:
         self.configs = configs or {}
         self.revision = 0
         self.build_reads = 0
+        self.settings = ResolvedPrivacyConfig()
+
+    async def get_settings(self, _ctx):
+        return self.settings
 
     def catalog_revision(self, _ctx):
         return self.revision
@@ -168,7 +173,7 @@ async def test_sanitizer_rejects_oversized_or_excessively_dense_writes():
         await match_limited.sanitize("secret secret secret", ctx=_ctx())
 
 
-async def test_sanitizer_cache_rebuilds_only_after_catalog_revision_changes():
+async def test_sanitizer_cache_tracks_catalog_and_settings():
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
     sanitizer = PrivacySanitizer(catalog)
 
@@ -185,6 +190,10 @@ async def test_sanitizer_cache_rebuilds_only_after_catalog_revision_changes():
         "{{ov_privacy:alice:viking://~/privacy/credential/service#/values/key}}"
     )
     assert catalog.build_reads == 2
+
+    catalog.settings = ResolvedPrivacyConfig(mode="registered")
+    await sanitizer.sanitize("second2", ctx=_ctx())
+    assert catalog.build_reads == 3
 
 
 async def test_sanitizer_cache_expires_after_ttl_even_without_local_revision_change():
@@ -216,13 +225,21 @@ async def test_sanitizer_cache_expires_after_ttl_even_without_local_revision_cha
     assert catalog.build_reads == 2
 
 
-async def test_sanitizer_never_rewrites_privacy_storage_itself():
+@pytest.mark.parametrize(
+    "path",
+    [
+        "privacy/credential/service/current.json",
+        "settings/user_config.json",
+        "settings/user_config.backup.json",
+    ],
+)
+async def test_sanitizer_never_rewrites_privacy_or_settings_storage(path):
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
     sanitizer = PrivacySanitizer(catalog)
     result = await sanitizer.sanitize(
         "secret",
         ctx=_ctx(),
-        uri="viking://user/alice/privacy/credential/service/current.json",
+        uri=f"viking://user/alice/{path}",
     )
     assert result.content == "secret"
     assert not result.changed

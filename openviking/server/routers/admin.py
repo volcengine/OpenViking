@@ -5,6 +5,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
@@ -23,7 +24,7 @@ from openviking.server.auth import (
     require_auth_root_or_admin,
     should_expose_user_key,
 )
-from openviking.server.config import UserConfig
+from openviking.server.config import PrivacyConfig, UserConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import (
     ACCOUNT_USER_ASSIGNABLE_ROLES,
@@ -33,6 +34,7 @@ from openviking.server.identity import (
 from openviking.server.models import Response
 from openviking.server.user_config import (
     read_user_config,
+    resolve_user_privacy,
     validate_add_targets,
     validate_user_memory_policy,
     write_user_config,
@@ -356,7 +358,14 @@ def _has_add_targets(user_config: UserConfig | None) -> bool:
 def _has_initial_user_config(user_config: UserConfig | None) -> bool:
     return bool(
         _has_add_targets(user_config)
-        or (user_config and (user_config.memory_policy or user_config.ttl is not None))
+        or (
+            user_config
+            and (
+                user_config.memory_policy
+                or user_config.ttl is not None
+                or user_config.privacy.model_dump(exclude_none=True)
+            )
+        )
     )
 
 
@@ -378,6 +387,10 @@ async def _validate_initial_user_config(
     if user_config is not None:
         if user_config.ttl is not None:
             _reject_unsupported_ttl_config({"ttl": {}})
+        if user_config.privacy.model_dump(exclude_none=True):
+            raise InvalidArgumentError(
+                "Privacy settings must be changed by the user via user-settings/privacy"
+            )
         validate_user_memory_policy(user_config.memory_policy)
 
 
@@ -470,6 +483,7 @@ def _user_settings_result(
     user_id: str,
     user_config: UserConfig,
     default_memory_policy: Optional[dict] = None,
+    default_privacy: Optional[PrivacyConfig] = None,
 ) -> dict:
     memory_policy_config = (
         user_config.memory_policy
@@ -482,6 +496,7 @@ def _user_settings_result(
     memory_policy = policy.to_dict()
     if policy.memory_types is None:
         memory_policy["memory_types"] = sorted(known_memory_types)
+    privacy = asdict(resolve_user_privacy(user_config.privacy, default_privacy))
     return {
         "account_id": account_id,
         "user_id": user_id,
@@ -489,6 +504,7 @@ def _user_settings_result(
         "ttl": user_config.ttl.model_dump(by_alias=True, exclude_none=True)
         if user_config.ttl is not None
         else None,
+        "privacy": privacy,
     }
 
 
@@ -1170,6 +1186,7 @@ async def get_user_settings(
             user_id,
             user_config,
             request.app.state.config.user_config_defaults.memory_policy,
+            request.app.state.config.user_config_defaults.privacy,
         ),
     )
 
@@ -1207,6 +1224,7 @@ async def patch_user_settings(
             user_id,
             user_config,
             request.app.state.config.user_config_defaults.memory_policy,
+            request.app.state.config.user_config_defaults.privacy,
         ),
     )
 

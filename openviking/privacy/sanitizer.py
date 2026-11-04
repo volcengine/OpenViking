@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
+from openviking.core.namespace import canonical_user_root
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext
@@ -68,7 +71,7 @@ class PrivacySanitizer:
         self._monotonic_clock = monotonic_clock
         matcher_class: Any = get_privacy_matcher_class()
         self._matcher_class = matcher_class
-        self._cache: dict[tuple[str, str, int, bool], tuple[float, Any]] = {}
+        self._cache: dict[tuple[str, str, int, str, bool], tuple[float, Any]] = {}
         self._cache_lock = asyncio.Lock()
 
     @property
@@ -166,8 +169,18 @@ class PrivacySanitizer:
         )
 
     async def _matcher(self, ctx: RequestContext, *, prefer_credentials: bool = False) -> Any:
+        settings = await self._privacy.get_settings(ctx)
+        settings_hash = hashlib.sha256(
+            json.dumps(asdict(settings), sort_keys=True).encode("utf-8")
+        ).hexdigest()
         revision = self._privacy.catalog_revision(ctx)
-        cache_key = (ctx.account_id, ctx.user.user_id, revision, prefer_credentials)
+        cache_key = (
+            ctx.account_id,
+            ctx.user.user_id,
+            revision,
+            settings_hash,
+            prefer_credentials,
+        )
         now = self._monotonic_clock()
         cached = self._cache.get(cache_key)
         if cached is not None and now - cached[0] < self._cache_ttl_seconds:
@@ -187,7 +200,7 @@ class PrivacySanitizer:
             self._cache = {
                 key: item
                 for key, item in self._cache.items()
-                if key[:2] != owner_key or key[2] == revision
+                if key[:2] != owner_key or key[2:4] == cache_key[2:4]
             }
             self._cache[cache_key] = (now, matcher)
             return matcher
@@ -205,10 +218,7 @@ class PrivacySanitizer:
                     # sensitivity from field names. Very short values are not
                     # safe for global substring replacement because ordinary
                     # prose would produce excessive false positives.
-                    if (
-                        not isinstance(value, str)
-                        or len(value) < MIN_PROTECTED_VALUE_CHARS
-                    ):
+                    if not isinstance(value, str) or len(value) < MIN_PROTECTED_VALUE_CHARS:
                         continue
                     reference = build_privacy_field_reference(
                         ctx.user.user_id,
@@ -227,5 +237,8 @@ class PrivacySanitizer:
 
     @staticmethod
     def _is_privacy_storage_uri(uri: str, ctx: RequestContext) -> bool:
-        root = f"viking://user/{ctx.user.user_id}/privacy"
-        return uri.rstrip("/") == root or uri.startswith(f"{root}/")
+        user_root = canonical_user_root(ctx)
+        return any(
+            uri.rstrip("/") == root or uri.startswith(f"{root}/")
+            for root in (f"{user_root}/privacy", f"{user_root}/settings")
+        )

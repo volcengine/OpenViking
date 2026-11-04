@@ -29,6 +29,11 @@ from openviking.privacy.validation import (
     validate_privacy_values,
 )
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import (
+    ResolvedPrivacyConfig,
+    read_user_privacy,
+    resolve_user_privacy,
+)
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError
@@ -50,6 +55,15 @@ class UserPrivacyConfigService:
     def catalog_revision(self, ctx: RequestContext) -> int:
         """Return the process-local revision of the caller's active value catalog."""
         return self._catalog_revisions.get((ctx.account_id, ctx.user.user_id), 0)
+
+    async def get_settings(self, ctx: RequestContext) -> ResolvedPrivacyConfig:
+        """Return the current user's effective privacy settings."""
+        from openviking.server.dependencies import get_server_config
+
+        override = await read_user_privacy(self._viking_fs, ctx)
+        server_config = get_server_config()
+        defaults = server_config.user_config_defaults.privacy if server_config is not None else None
+        return resolve_user_privacy(override, defaults)
 
     def _bump_catalog_revision(self, ctx: RequestContext) -> None:
         key = (ctx.account_id, ctx.user.user_id)
