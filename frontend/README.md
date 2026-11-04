@@ -30,7 +30,8 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview}`: file-tree interaction and tabbed file-preview modules with public props types. See the [module map](./packages/react/README.md#模块目录).
+- `packages/react/src/components/{file-tree,file-preview}`: file-tree interaction and tabbed file-preview views with public props types. See the [module map](./packages/react/README.md#模块目录).
+- `packages/react/src/modules`: business capability guidelines for Hooks and composed views; no implementations or public entries yet.
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
 - `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.
@@ -48,11 +49,11 @@ npm run lint -- packages/react/src/index.ts docs/rspress.config.ts
 npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
 ```
 
-Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. Import `@openviking/react/style.css`, `@openviking/react/components/style.css`, or `@openviking/react/components/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. Component subpaths use `components/<module>`; there are no category-level `components` or `pages` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. Publication is controlled by the separate release workflow and is not part of local validation.
+Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. Import `@openviking/react/style.css`, `@openviking/react/components/style.css`, or `@openviking/react/components/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. Component subpaths use `components/<module>`; there are no category-level `components` or `modules` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. Publication is controlled by the separate release workflow and is not part of local validation.
 
 ## Target layout
 
-The workspace currently contains React components, shared SVGs, page guidelines, and documentation. The target also includes framework-neutral libraries, service adapters, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
+The workspace currently contains React components, shared SVGs, business module guidelines, and documentation. The target also includes framework-neutral libraries, service adapters, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
 
 ```text
 frontend/
@@ -65,7 +66,7 @@ frontend/
 │   │   └── src/
 │   │       ├── components/
 │   │       ├── icons/       # @openviking/react/icons
-│   │       └── pages/       # Embeddable pages; first page not defined
+│   │       └── modules/     # Business Hooks and composed views
 │   └── vue/                 # Future @openviking/vue
 ├── apps/
 │   └── workbench-embed/     # Deployable microfrontend entry
@@ -73,11 +74,13 @@ frontend/
 └── docs/                   # Rspress documentation
 ```
 
-Pages use components and shared libraries. Service adapters handle OpenViking requests. Micro-apps consume public page entries and own deployment and host integration. Shared source directories can supply multiple framework builds. The `lib/` directory is a source boundary. React-only consumers receive the shared code through the React package. When standalone consumers need those functions, expose a framework-neutral package and verify installation in a project without React or Vue. React icon components use the shared SVG sources and ship with the React package, including their type declarations. Import icons from `@openviking/react/icons`. Page implementations and names are deferred; add page JS and CSS entries when real pages land. Web Studio consumes these assets through package exports from its separate application directory.
+Business modules combine data-loading Hooks with view components around a focused capability. Hooks expose data, state, and actions separately from the composed view, so hosts can reuse the logic with their own UI. The shared Client follows the native OpenViking API contract. A React Provider supplies request defaults, with optional module / Hook overrides; nonstandard gateways are adapted once at the host request boundary. Hosts retain authentication, account scope, routing, permissions, and product-specific flows. Complete pages belong to hosts, including Web Studio and micro-apps. The [module boundaries and request configuration](./packages/react/src/modules/README.md) focus on the personal terminal; administration is outside the current scope. Add `@openviking/react/modules/<module>` exports for Hooks and composed views when real implementations land. Module CSS includes its component dependencies; Hook-only use needs no CSS.
+
+Shared source directories can supply multiple framework builds. The `lib/` directory is a source boundary. React-only consumers receive the shared code through the React package. When standalone consumers need those functions, expose a framework-neutral package and verify installation in a project without React or Vue. React icon components use the shared SVG sources and ship with the React package, including their type declarations. Import icons from `@openviking/react/icons`. Web Studio consumes these assets through package exports from its separate application directory.
 
 ## Add a module
 
-1. Implement the module in `packages/react/src/` and export it from its module entry. Add new public JS and CSS entries to the package exports and `rslib.config.ts` together. Include module styles in the relevant aggregate stylesheet; page styles must cover their component dependencies. Export root-level APIs explicitly from `src/index.ts` when needed.
+1. Implement the component or business module in `packages/react/src/` and export it from its entry. Business modules expose their Hooks and composed views separately from `modules/<module>`. Add new public JS and CSS entries to the package exports and `rslib.config.ts` together. Include module styles in the relevant aggregate stylesheet; composed views must cover their component dependencies. Export root-level APIs explicitly from `src/index.ts` when needed.
 2. Keep module styling local and expose theme variables with the `--ov-ui-` prefix.
 3. Add a demo in `docs/docs/_demos/` that imports from `@openviking/react`.
 4. Add matching documentation in `docs/docs/en/` and `docs/docs/zh/`, and update both locale sidebars in `docs/rspress.config.ts`. Reuse examples from `docs/docs/_demos/`.

@@ -2,7 +2,7 @@
 
 OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
 
-包提供 FileTree、FilePreview 与五种文件类型图标，现有实现的范围与限制见各组件文档。目前没有公开页面或公共 Hook 导出。
+包提供 FileTree、FilePreview 与五种文件类型图标，现有实现的范围与限制见各组件文档。目前没有业务模块或公共 Hook 导出。
 
 ## 本地运行
 
@@ -21,17 +21,23 @@ workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档�
 ## 组织应用代码
 
 - `packages/react/src/components/`：可复用视图，通过 props 接收处理后的数据，通过回调表达用户意图。
-- `packages/react/src/pages/`：预留给页面组合与数据编排，目前没有公开页面实现。
+- `packages/react/src/modules/`：业务 Hook 与组合视图，目前没有公开模块实现。
 - `packages/react/src/hooks/` 与 `utils/`：包内共享逻辑，没有公开子路径。
 - `docs/docs/en/` 与 `docs/docs/zh/`：对应的双语文档页面；共用的可运行示例放在 `docs/docs/_demos/`。
 
-应用专属流程、认证和请求留在应用层。组件不获取业务数据，也不依赖应用路由。
+应用专属流程与认证留在应用层；模块 Hook 通过共享 Client 加载数据。组件不获取业务数据，也不依赖应用路由。
 
 ## 公开入口
 
 根入口 `@openviking/react` 导出 FileTree 及其公开类型。FileTree 和 FilePreview 也可通过各自的 `components/<模块>` 子路径使用。`@openviking/react/icons` 提供五种文件类型图标。
 
-没有 `components` 或 `pages` 分类聚合 JavaScript 入口。各模块实际范围见[组件概览](../components/)。
+没有 `components` 或 `modules` 分类聚合 JavaScript 入口。各模块实际范围见[组件概览](../components/)。
+
+业务模块将按具体能力组合取数 Hook 与视图，从 `@openviking/react/modules/<模块>` 分别导出 Hook 和组合视图，接入方可只复用 Hook 并自行组装 UI。共享 Client 遵循 OpenViking 原生 API 的路径、入参和响应类型；认证、账号作用域、路由、权限及完整页面流程由宿主负责。业务模块及跨模块公共 Hook 当前尚无实现或导出。
+
+模块规划聚焦个人终端：`file-browser` 将目录、搜索和预览作为一个整体，统一维护资源选择、结果定位、内容加载与刷新联动；宿主可按需受控指定当前资源。`console` 将 VikingBot 与 TUI 作为一个交互面板，内部协调模式切换、工具栏和公共上下文，各自保留会话与命令状态。Agent 接入、任务管理和当前 User 的用量统计分别接入。宿主负责模块间布局、导航与联动；产品引导、资源与 Skill 导入流程及同步配置由宿主负责，经验看板和会话内容通过文件浏览模块的预览扩展接入，管理后台不在此范围内。这些规划尚未新增可导入入口。
+
+请求配置将通过 `OpenVikingProvider` 下发：`baseURL` 和 headers，鉴权由宿主明确提供。共享 Client 将复用现有 OpenAPI 生成 SDK 与 Axios 请求层；Fetch / SSE 调用共用其服务地址与鉴权头生成逻辑。模块和独立 Hook 可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。Client 和 Provider 当前仍为规划，尚无实现或导出。
 
 ## 样式
 
@@ -43,7 +49,7 @@ import '@openviking/react/style.css';
 // 或已有模块的 @openviking/react/components/<模块>/style.css。
 ```
 
-Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；页面样式将在实际页面实现后再开放导出。
+Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；业务模块样式将在实际实现后再开放导出，包含组合视图及其组件依赖；单独使用 Hook 无需 CSS。
 
 ## 构建与检查
 
