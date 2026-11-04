@@ -1,0 +1,34 @@
+# Tui
+
+A command console: input, execution records and results. The host owns execution; the component renders records and reports submit, cancel and history intent.
+
+This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can integrate against the published package before the view is migrated. The props contract below is final; the placeholder implementation will be replaced.
+
+## Basic usage
+
+```tsx file="../../_demos/tui-basic.tsx" preview
+
+```
+
+The placeholder is 360 × 560, matching the right-hand command panel.
+
+## Props
+
+The public props are published as types from the same subpath. Read them from the source of truth:
+
+```tsx
+import type { TuiProps } from '@openviking/react/components/tui';
+```
+
+| Property | Type | Default | Description                        |
+| -------- | ---- | ------- | ---------------------------------- |
+| —        | —    | —       | The placeholder consumes no props. |
+
+```tsx
+import { Tui } from '@openviking/react/components/tui';
+import '@openviking/react/components/tui/style.css';
+```
+
+## Implementation scope
+
+The component renders the view and reports intent. Data access, persistence, permissions and any network connection belong to the host.

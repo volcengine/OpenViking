@@ -1,0 +1,34 @@
+# ScopeSwitcher
+
+A scope breadcrumb. The host declares how many levels exist and what they are called; the component renders them and reports search and switch intent.
+
+This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can integrate against the published package before the view is migrated. The props contract below is final; the placeholder implementation will be replaced.
+
+## Basic usage
+
+```tsx file="../../_demos/scope-switcher-basic.tsx" preview
+
+```
+
+The placeholder is 640 × 40, matching the header scope bar.
+
+## Props
+
+The public props are published as types from the same subpath. Read them from the source of truth:
+
+```tsx
+import type { ScopeSwitcherProps } from '@openviking/react/components/scope-switcher';
+```
+
+| Property | Type | Default | Description                        |
+| -------- | ---- | ------- | ---------------------------------- |
+| —        | —    | —       | The placeholder consumes no props. |
+
+```tsx
+import { ScopeSwitcher } from '@openviking/react/components/scope-switcher';
+import '@openviking/react/components/scope-switcher/style.css';
+```
+
+## Implementation scope
+
+The component renders the view and reports intent. Data access, persistence, permissions and any network connection belong to the host.
