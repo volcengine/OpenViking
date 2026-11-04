@@ -99,7 +99,7 @@ bash output/install.sh --source tarball --tarball output/openviking.tgz --json
 
 - 发送一轮 OpenClaw 对话后，`Session` 下出现原始会话。
 - 触发 `/compact` 或等待 commit 后，`User/memories` 出现长期记忆。
-- 如果配置了 `peer_role=assistant`，数据面 recall/search 会携带对应 `X-OpenViking-Actor-Peer`，session message 仍用 body `peer_id` 做消息归因。
+- 如果配置了 `peer_role=assistant`，数据面 recall/search 会携带对应 `X-OpenViking-Actor-Peer`，session message 的 body `peer_id` 会打在 user 和 assistant 两种角色上。服务端只从 user 消息读取 peer 归属，只给 assistant 打 `peer_id` 时记忆仍会落在用户级 `memories/`。
 - 通过手动 `/add-resource` 导入文档、URL 或目录后，`Resources` 下出现对应知识，并可做目录递归检索。Agent 可见的 `add_resource` 工具默认禁用，只有显式设置 `enableAddResourceTool=true` 后才暴露。
 
 ## 启动 OpenViking Server
@@ -318,7 +318,7 @@ plugins.entries.openviking.config
 | `mode` | `remote` | 兼容旧配置的字段。当前只支持 remote。 |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP 地址 |
 | `apiKey` | 空 | OpenViking API key |
-| `peer_role` | `none` | 记忆归属：`none`（共享 `viking://user/<user_id>/memories`）、`assistant`（`.../peers/<assistant_id>/memories`）或 `sender`（`.../peers/<sender_id>/memories`）。旧值 `person` 作为 `sender` 的别名兼容。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
+| `peer_role` | `none` | 记忆归属：`none`（共享 `viking://user/<user_id>/memories`）、`assistant`（`.../peers/<assistant_id>/memories`）或 `sender`（`.../peers/<sender_id>/memories`）。旧值 `person` 作为 `sender` 的别名兼容。Session message 使用 body `peer_id`（`assistant` 模式下 user 和 assistant 都带；服务端只从 user 消息读取 peer 归属）；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀。 |
 | `accountId` | 空 | 使用 root API key 时需要 |
 | `userId` | 空 | 使用 root API key 时需要 |
@@ -343,7 +343,7 @@ openclaw config get plugins.entries.openviking.config
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `peer_role` | `none` | 记忆归属：`none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容。Session message 使用 body `peer_id`，数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
+| `peer_role` | `none` | 记忆归属：`none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容。Session message 使用 body `peer_id`（`assistant` 模式下 user 和 assistant 都带），数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀 |
 
 常见设置：
