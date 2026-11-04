@@ -98,6 +98,7 @@ class QueueManager:
     CONTENT_WRITE = "ContentWrite"
     SESSION_COMMIT = "SessionCommit"
     EXTERNAL_TASK = "ExternalTask"
+    ARTIFACT_RELATIONS = "ArtifactRelations"
     # Account and user cleanup share one consumer. Retain the persisted name
     # so user cleanup messages queued before this change resume in place.
     DATA_CLEANUP = "UserDeletion"

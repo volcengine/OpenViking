@@ -71,10 +71,13 @@ async def get_compile_config(
 
 @router.get("/compile/artifact-relations")
 async def get_artifact_relations(
+    response: HTTPResponse,
     to: str = Query(..., min_length=1),
     ctx: RequestContext = Depends(get_request_context),
 ):
     result = await get_service().compile.artifact_relations(to, ctx)
+    if result.get("building") and not result.get("generated_at"):
+        response.status_code = status.HTTP_202_ACCEPTED
     return Response(status="ok", result=result)
 
 

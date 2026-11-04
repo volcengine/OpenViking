@@ -339,8 +339,11 @@ class CompileService:
             max_nodes=self._config.artifact_graph_max_nodes,
             max_markdown_files=self._config.artifact_graph_max_markdown_files,
             max_markdown_bytes=self._config.artifact_graph_max_markdown_bytes,
+            compile_wait_seconds=self._config.artifact_graph_compile_wait_seconds,
+            query_wait_seconds=self._config.artifact_graph_query_wait_seconds,
         )
         lifecycle.artifact_graph = self._artifact_graph
+        lifecycle.versions.artifact_graph = self._artifact_graph
 
     @property
     def lifecycle(self) -> CompileLifecycle | None:

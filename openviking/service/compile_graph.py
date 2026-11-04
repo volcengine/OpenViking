@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import posixpath
+import time
 from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import unquote, urlsplit
@@ -14,14 +16,17 @@ from markdown_it import MarkdownIt
 from pathspec import GitIgnoreSpec
 
 from openviking.pyagfs.exceptions import AGFSNotFoundError
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 SCHEMA_VERSION = 1
+PARSER_VERSION = 1
 _DERIVED_NAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
-_READ_CONCURRENCY = 16
-_TREE_PAGE_SIZE = 512
 
 
 class ArtifactGraphError(OpenVikingError):
@@ -49,13 +54,19 @@ class ArtifactRelationGraph:
         max_nodes: int,
         max_markdown_files: int,
         max_markdown_bytes: int,
+        compile_wait_seconds: float = 60.0,
+        query_wait_seconds: float = 10.0,
     ) -> None:
         self._store = store
         self._fs = viking_fs
         self._max_nodes = max_nodes
         self._max_markdown_files = max_markdown_files
         self._max_markdown_bytes = max_markdown_bytes
+        self._compile_wait_seconds = compile_wait_seconds
+        self._query_wait_seconds = query_wait_seconds
         self._markdown = MarkdownIt("commonmark")
+        self._compile_pages: dict[tuple[str, str, str], dict[str, dict[str, Any]]] = {}
+        self._background: set[asyncio.Task[Any]] = set()
 
     async def get(
         self,
@@ -70,176 +81,386 @@ class ArtifactRelationGraph:
                 "Compile target is not initialized",
                 code="COMPILE_TARGET_NOT_INITIALIZED",
             )
-        cached = await self._valid_cache(ctx.account_id, record)
-        if cached is None:
+        wiki_head = record.get("wiki_head")
+        if not wiki_head:
             async with lock_output(record["to"]) as lease:
                 record = await self._store.get(ctx.account_id, record["to"])
-                cached = await self._valid_cache(ctx.account_id, record)
-                if cached is None:
-                    wiki_head = record.get("wiki_head")
+                wiki_head = record.get("wiki_head")
+                if not wiki_head:
+                    wiki_head = await commit_snapshot(record["to"], lease)
                     if not wiki_head:
-                        wiki_head = await commit_snapshot(record["to"], lease)
-                        if not wiki_head:
-                            raise ArtifactGraphError(
-                                "Snapshots are disabled",
-                                code="SNAPSHOT_DISABLED",
-                            )
-                        async with self._store.edit(ctx.account_id, record["to"]) as editable:
-                            editable["wiki_head"] = wiki_head
-                        record["wiki_head"] = wiki_head
-                    try:
-                        cached = await self._build(record["to"], wiki_head, ctx)
-                        await self._store.write_artifact_relations(
-                            ctx.account_id, record["to"], cached
-                        )
-                    except ArtifactGraphError:
-                        raise
-                    except Exception as exc:
                         raise ArtifactGraphError(
-                            "Failed to build artifact relation graph",
-                            code="ARTIFACT_RELATIONS_BUILD_FAILED",
-                        ) from exc
-        return await self._filter(cached, ctx)
+                            "Snapshots are disabled",
+                            code="SNAPSHOT_DISABLED",
+                        )
+                    async with self._store.edit(ctx.account_id, record["to"]) as editable:
+                        editable["wiki_head"] = wiki_head
+                    record["wiki_head"] = wiki_head
 
-    async def build_locked(
+        cached = await self._read_cache(ctx.account_id, record["to"])
+        if await self._cache_current(cached, record["to"], wiki_head, ctx):
+            return await self._response(cached, ctx, stale=False, building=False)
+
+        await self.enqueue_wakeup(ctx.account_id, record["to"], ctx.user.user_id)
+        deadline = time.monotonic() + self._query_wait_seconds
+        while time.monotonic() < deadline:
+            await asyncio.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+            latest = await self._store.get(ctx.account_id, record["to"])
+            latest_head = (latest or record).get("wiki_head")
+            if latest_head and latest_head != wiki_head:
+                wiki_head = latest_head
+                await self.enqueue_wakeup(
+                    ctx.account_id,
+                    record["to"],
+                    ctx.user.user_id,
+                )
+            current = await self._read_cache(ctx.account_id, record["to"])
+            if await self._cache_current(current, record["to"], wiki_head, ctx):
+                return await self._response(current, ctx, stale=False, building=False)
+            if self._cache_valid(current, record["to"]):
+                cached = current
+
+        if self._cache_valid(cached, record["to"]):
+            return await self._response(cached, ctx, stale=True, building=True)
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "to": record["to"].rstrip("/"),
+            "target_snapshot_id": wiki_head,
+            "nodes": [],
+            "edges": [],
+            "stale": False,
+            "building": True,
+        }
+
+    async def reconcile_graph(
         self,
         record: dict[str, Any],
         ctx: RequestContext,
         *,
         wiki_head: str,
+        parsed_pages: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        graph = await self._build(record["to"], wiki_head, ctx)
-        await self._store.write_artifact_relations(ctx.account_id, record["to"], graph)
-        return graph
+        """Reconcile one target to its latest immutable Snapshot."""
+        async with self._store.lock_artifact_graph(ctx.account_id, record["to"]):
+            current = await self._store.get(ctx.account_id, record["to"])
+            head = (current or record).get("wiki_head") or wiki_head
+            return await self._reconcile_once(
+                record["to"],
+                head,
+                self._internal_ctx(ctx),
+                parsed_pages=parsed_pages,
+            )
 
-    async def _valid_cache(
-        self, account_id: str, record: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        wiki_head = record.get("wiki_head")
-        if not wiki_head:
-            return None
+    async def reconcile_compile(
+        self,
+        record: dict[str, Any],
+        ctx: RequestContext,
+        *,
+        wiki_head: str,
+        operation_id: str,
+    ) -> None:
+        """Wait briefly for the graph without making Compile depend on it."""
+        key = (ctx.account_id, record["to"], operation_id)
+        parsed_pages = self._compile_pages.pop(key, None)
+        task = asyncio.create_task(
+            self.reconcile_graph(
+                record,
+                ctx,
+                wiki_head=wiki_head,
+                parsed_pages=parsed_pages,
+            )
+        )
+        self._background.add(task)
+        task.add_done_callback(self._finish_background)
         try:
-            cached = await self._store.read_artifact_relations(account_id, record["to"])
-        except (ValueError, UnicodeDecodeError):
-            return None
-        if (
-            cached
-            and cached.get("schema_version") == SCHEMA_VERSION
-            and cached.get("to") == record["to"].rstrip("/")
-            and cached.get("target_snapshot_id") == wiki_head
-            and isinstance(cached.get("nodes"), list)
-            and isinstance(cached.get("edges"), list)
-        ):
-            return cached
-        return None
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._compile_wait_seconds)
+        except TimeoutError:
+            await self.enqueue_wakeup(ctx.account_id, record["to"], ctx.user.user_id)
+        except Exception:
+            logger.exception("Artifact relation graph build failed for %s", record["to"])
+            await self.enqueue_wakeup(ctx.account_id, record["to"], ctx.user.user_id)
 
-    async def _build(
-        self, to: str, wiki_head: str, ctx: RequestContext
+    async def capture_compile_page(
+        self,
+        account_id: str,
+        to: str,
+        operation_id: str,
+        snapshot: str,
+        uri: str,
+        ctx: RequestContext,
+        content: bytes | None = None,
+    ) -> None:
+        """Keep a validated-by-OID candidate in memory for Compile finalization."""
+        if not uri.lower().endswith(".md") or self._excluded(uri, None):
+            return
+        if content is None:
+            blob = await self._fs.show_blob_raw(snapshot, path=uri, ctx=ctx)
+            content = blob["bytes"]
+            blob_oid = blob["oid"]
+            size = int(blob.get("size") or len(content))
+        else:
+            blob_oid = hashlib.sha1(
+                f"blob {len(content)}\0".encode("ascii") + content,
+                usedforsecurity=False,
+            ).hexdigest()
+            size = len(content)
+        text = content.decode("utf-8", errors="replace")
+        self._compile_pages.setdefault((account_id, to, operation_id), {})[uri] = {
+            "blob_oid": blob_oid,
+            "snapshot_id": snapshot,
+            "size": size,
+            "related_pages": sorted(self._related_pages(text, uri)),
+        }
+
+    def discard_compile_pages(self, account_id: str, to: str, operation_id: str) -> None:
+        self._compile_pages.pop((account_id, to, operation_id), None)
+
+    def _finish_background(self, task: asyncio.Task[Any]) -> None:
+        self._background.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def reconcile_target(self, account_id: str, to: str, user_id: str) -> None:
+        """Worker entrypoint; chase wiki_head until the target is current."""
+        ctx = RequestContext(
+            user=UserIdentifier(account_id=account_id, user_id=user_id or "artifact-graph"),
+            role=Role.USER,
+            bypass_acl=True,
+        )
+        while True:
+            record = await self._store.get(account_id, to)
+            if record is None or not record.get("initialized") or not record.get("wiki_head"):
+                return
+            await self.reconcile_graph(record, ctx, wiki_head=record["wiki_head"])
+            latest = await self._store.get(account_id, to)
+            cached = await self._read_cache(account_id, to)
+            if latest is None or await self._cache_current(
+                cached,
+                to,
+                latest.get("wiki_head"),
+                ctx,
+            ):
+                return
+
+    async def enqueue_wakeup(self, account_id: str, to: str, user_id: str) -> bool:
+        try:
+            from openviking.storage.queuefs import get_queue_manager
+            from openviking.storage.queuefs.queue_manager import QueueManager
+
+            await get_queue_manager().enqueue(
+                QueueManager.ARTIFACT_RELATIONS,
+                {"account_id": account_id, "to": to, "user_id": user_id},
+            )
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to enqueue artifact relation graph for %s", to)
+            return False
+
+    async def _reconcile_once(
+        self,
+        to: str,
+        head: str,
+        ctx: RequestContext,
+        *,
+        parsed_pages: dict[str, dict[str, Any]] | None,
     ) -> dict[str, Any]:
         to = to.rstrip("/")
-        internal_ctx = self._internal_ctx(ctx)
-        files, nodes = await self._scan_entries(to, internal_ctx)
-        node_uris = sorted(nodes)
-        markdown = [entry for entry in files if entry["uri"].lower().endswith(".md")]
+        graph = await self._read_cache(ctx.account_id, to)
+        sources = await self._read_sources(ctx.account_id, to)
+        ignore, ignore_signature = await self._ignore_state(ctx)
+        base = None
+        if (
+            self._cache_valid(graph, to)
+            and isinstance(sources, dict)
+            and sources.get("schema_version") == SCHEMA_VERSION
+            and sources.get("parser_version") == PARSER_VERSION
+            and sources.get("ignore_signature") == ignore_signature
+            and sources.get("to") == to
+            and sources.get("target_snapshot_id") == graph.get("target_snapshot_id")
+            and isinstance(sources.get("pages"), dict)
+            and isinstance(sources.get("page_sizes"), dict)
+        ):
+            base = graph["target_snapshot_id"]
+        if base == head:
+            return graph
 
-        node_set = set(node_uris)
-        edges = self._containment_edges(to, node_set)
-        actual_markdown_bytes = 0
-        for start in range(0, len(markdown), _READ_CONCURRENCY):
-            batch = markdown[start : start + _READ_CONCURRENCY]
-            contents = await asyncio.gather(
-                *(self._fs.read_file_bytes(entry["uri"], ctx=internal_ctx) for entry in batch)
-            )
-            for entry, raw in zip(batch, contents, strict=True):
-                actual_markdown_bytes += len(raw)
-                self._check_limit(
-                    "markdown_bytes", self._max_markdown_bytes, actual_markdown_bytes
+        changes = await self._fs.diff_paths(dirs=[to], base=base, head=head, ctx=ctx)
+        files = (
+            {node["uri"] for node in graph["nodes"] if not node["uri"].endswith("/")}
+            if base
+            else set()
+        )
+        pages = dict(sources["pages"]) if base else {}
+        page_sizes = dict(sources["page_sizes"]) if base else {}
+        changed_markdown: list[str] = []
+        for change in changes:
+            uri = change["uri"]
+            if change["change_type"] == "deleted" or self._excluded(uri, ignore):
+                files.discard(uri)
+                pages.pop(uri, None)
+                page_sizes.pop(uri, None)
+                continue
+            files.add(uri)
+            if uri.lower().endswith(".md"):
+                changed_markdown.append(uri)
+            else:
+                pages.pop(uri, None)
+                page_sizes.pop(uri, None)
+
+        changed_bytes = 0
+        for uri in changed_markdown:
+            candidate = (parsed_pages or {}).get(uri)
+            candidate_valid = False
+            if isinstance(candidate, dict) and candidate.get("snapshot_id"):
+                later_changes = await self._fs.diff_paths(
+                    dirs=[uri],
+                    base=candidate["snapshot_id"],
+                    head=head,
+                    ctx=ctx,
                 )
-                text = raw.decode("utf-8", errors="replace")
-                for target in self._link_targets(text, entry["uri"], node_set):
-                    edges.add(("references", entry["uri"], target))
+                candidate_valid = not any(change["uri"] == uri for change in later_changes)
+            if candidate_valid:
+                related_pages = candidate.get("related_pages")
+                if not isinstance(related_pages, list):
+                    candidate_valid = False
+            if candidate_valid:
+                blob_oid = candidate["blob_oid"]
+                page_size = int(candidate.get("size") or 0)
+            else:
+                blob = await self._fs.show_blob_raw(head, path=uri, ctx=ctx)
+                blob_oid = blob["oid"]
+                page_size = int(blob.get("size") or len(blob["bytes"]))
+                text = blob["bytes"].decode("utf-8", errors="replace")
+                related_pages = sorted(self._related_pages(text, uri))
+            changed_bytes += page_size
+            self._check_limit("markdown_bytes", self._max_markdown_bytes, changed_bytes)
+            pages[uri] = {
+                "blob_oid": blob_oid,
+                "related_pages": list(related_pages),
+            }
+            page_sizes[uri] = page_size
 
-        return {
+        self._check_limit("markdown_files", self._max_markdown_files, len(pages))
+        self._check_limit(
+            "markdown_bytes",
+            self._max_markdown_bytes,
+            sum(int(size) for size in page_sizes.values()),
+        )
+        nodes = files | self._required_directories(to, files)
+        self._check_limit("nodes", self._max_nodes, len(nodes))
+        edges = self._containment_edges(to, nodes)
+        for source, page in pages.items():
+            for target in page["related_pages"]:
+                normalized = target if target in nodes else f"{target.rstrip('/')}/"
+                if normalized in nodes:
+                    edges.add(("references", source, normalized))
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        sources_value = {
+            "schema_version": SCHEMA_VERSION,
+            "parser_version": PARSER_VERSION,
+            "ignore_signature": ignore_signature,
+            "to": to,
+            "target_snapshot_id": head,
+            "generated_at": generated_at,
+            "pages": dict(sorted(pages.items())),
+            "page_sizes": dict(sorted(page_sizes.items())),
+        }
+        result = {
             "schema_version": SCHEMA_VERSION,
             "to": to,
-            "target_snapshot_id": wiki_head,
-            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "nodes": [{"uri": uri} for uri in node_uris],
+            "target_snapshot_id": head,
+            "generated_at": generated_at,
+            "nodes": [{"uri": uri} for uri in sorted(nodes)],
             "edges": [
                 {"type": edge_type, "from": source, "to": target}
                 for edge_type, source, target in sorted(edges)
             ],
         }
+        await self._store.write_relation_sources(ctx.account_id, to, sources_value)
+        await self._store.write_artifact_relations(ctx.account_id, to, result)
+        return result
 
-    async def _scan_entries(
-        self, to: str, ctx: RequestContext
-    ) -> tuple[list[dict[str, Any]], set[str]]:
-        root_path = self._fs._uri_to_path(to, ctx=ctx)
-        ignore = await self._ignore_spec(ctx)
-        entries: list[dict[str, Any]] = []
-        nodes = {f"{to.rstrip('/')}/"}
-        markdown_files = 0
-        markdown_bytes = 0
-        offset = 0
-        while True:
-            page = await self._fs._async_agfs.tree_directory(
-                root_path,
-                show_hidden=True,
-                node_limit=_TREE_PAGE_SIZE,
-                level_limit=None,
-                offset=offset,
-                sort_by="name",
-                sort_order="asc",
-            )
-            if not page:
-                break
-            offset += len(page)
-            for entry in page:
-                if not self._fs._is_tree_entry_visible(
-                    entry,
-                    root_path,
-                    ctx,
-                    acl_enabled=False,
-                ):
-                    continue
-                info = entry.get("info", {})
-                uri = self._fs._path_to_uri(entry["path"], ctx=ctx).rstrip("/")
-                is_dir = bool(info.get("isDir", False))
-                if is_dir or self._excluded(uri, ignore):
-                    continue
-                item = {
-                    "uri": uri,
-                    "isDir": False,
-                    "size": int(info.get("size") or 0),
-                }
-                entries.append(item)
-                nodes.add(uri)
-                nodes.update(self._required_directories(to, (uri,)))
-                self._check_limit("nodes", self._max_nodes, len(nodes))
-                if uri.lower().endswith(".md"):
-                    markdown_files += 1
-                    markdown_bytes += item["size"]
-                    self._check_limit(
-                        "markdown_files",
-                        self._max_markdown_files,
-                        markdown_files,
-                    )
-                    self._check_limit(
-                        "markdown_bytes",
-                        self._max_markdown_bytes,
-                        markdown_bytes,
-                    )
-            if len(page) < _TREE_PAGE_SIZE:
-                break
-        return entries, nodes
+    async def _read_cache(self, account_id: str, to: str) -> dict[str, Any] | None:
+        try:
+            return await self._store.read_artifact_relations(account_id, to)
+        except (ValueError, UnicodeDecodeError):
+            return None
 
-    async def _ignore_spec(self, ctx: RequestContext) -> GitIgnoreSpec | None:
+    async def _read_sources(self, account_id: str, to: str) -> dict[str, Any] | None:
+        try:
+            return await self._store.read_relation_sources(account_id, to)
+        except (ValueError, UnicodeDecodeError):
+            return None
+
+    @staticmethod
+    def _cache_valid(cache: Any, to: str) -> bool:
+        return bool(
+            isinstance(cache, dict)
+            and cache.get("schema_version") == SCHEMA_VERSION
+            and cache.get("to") == to.rstrip("/")
+            and isinstance(cache.get("target_snapshot_id"), str)
+            and isinstance(cache.get("nodes"), list)
+            and isinstance(cache.get("edges"), list)
+        )
+
+    @classmethod
+    def _cache_matches(cls, cache: Any, to: str, head: Any) -> bool:
+        return cls._cache_valid(cache, to) and cache.get("target_snapshot_id") == head
+
+    async def _cache_current(
+        self,
+        cache: Any,
+        to: str,
+        head: Any,
+        ctx: RequestContext,
+    ) -> bool:
+        if not self._cache_matches(cache, to, head):
+            return False
+        sources = await self._read_sources(ctx.account_id, to)
+        if not isinstance(sources, dict):
+            return False
+        _, ignore_signature = await self._ignore_state(self._internal_ctx(ctx))
+        return (
+            sources.get("schema_version") == SCHEMA_VERSION
+            and sources.get("parser_version") == PARSER_VERSION
+            and sources.get("ignore_signature") == ignore_signature
+            and sources.get("to") == to.rstrip("/")
+            and sources.get("target_snapshot_id") == head
+        )
+
+    async def _response(
+        self,
+        graph: dict[str, Any],
+        ctx: RequestContext,
+        *,
+        stale: bool,
+        building: bool,
+    ) -> dict[str, Any]:
+        filtered = await self._filter(graph, ctx)
+        return {**filtered, "stale": stale, "building": building}
+
+    def _related_pages(self, text: str, source: str) -> set[str]:
+        targets: set[str] = set()
+        for token in self._markdown.parse(text):
+            for child in token.children or []:
+                if child.type == "link_open":
+                    target = self._resolve_link(source, child.attrGet("href") or "")
+                    if target:
+                        targets.add(target)
+        return targets
+
+    async def _ignore_state(
+        self, ctx: RequestContext
+    ) -> tuple[GitIgnoreSpec | None, str]:
         path = self._fs._gitignore_agfs_path(ctx)
         try:
             raw = await self._fs._async_agfs.read(path)
         except (AGFSNotFoundError, FileNotFoundError):
-            return None
-        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+            raw = b""
+        raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+        text = raw_bytes.decode("utf-8")
         lines = []
         for raw_line in text.splitlines():
             line = raw_line.strip()
@@ -251,7 +472,8 @@ class ArtifactRelationGraph:
                     code="ARTIFACT_RELATIONS_BUILD_FAILED",
                 )
             lines.append(line)
-        return GitIgnoreSpec.from_lines(lines) if lines else None
+        spec = GitIgnoreSpec.from_lines(lines) if lines else None
+        return spec, hashlib.sha256(raw_bytes).hexdigest()
 
     @staticmethod
     def _excluded(uri: str, ignore: GitIgnoreSpec | None) -> bool:
@@ -287,21 +509,6 @@ class ArtifactRelationGraph:
             if parent in nodes:
                 edges.add(("contains", parent, uri))
         return edges
-
-    def _link_targets(self, text: str, source: str, nodes: set[str]) -> set[str]:
-        targets: set[str] = set()
-        for token in self._markdown.parse(text):
-            children = token.children or []
-            for child in children:
-                if child.type != "link_open":
-                    continue
-                href = child.attrGet("href")
-                target = self._resolve_link(source, href or "")
-                if target in nodes:
-                    targets.add(target)
-                elif f"{target.rstrip('/')}/" in nodes:
-                    targets.add(f"{target.rstrip('/')}/")
-        return targets
 
     @staticmethod
     def _resolve_link(source: str, href: str) -> str:

@@ -193,6 +193,38 @@ async def test_artifact_relations_http_contract(service, app, client, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_artifact_relations_returns_202_while_first_graph_builds(
+    service, app, client, monkeypatch
+):
+    from openviking.server.auth import get_request_context
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    monkeypatch.setattr(
+        service.compile,
+        "artifact_relations",
+        AsyncMock(
+            return_value={
+                "to": "viking://resources/wiki",
+                "target_snapshot_id": "head",
+                "nodes": [],
+                "edges": [],
+                "stale": False,
+                "building": True,
+            }
+        ),
+    )
+
+    response = await client.get(
+        "/api/v1/compile/artifact-relations",
+        params={"to": "viking://resources/wiki"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["result"]["building"] is True
+
+
+@pytest.mark.asyncio
 async def test_artifact_relations_commits_missing_baseline_with_internal_context():
     from openviking.service.compile_service import CompileService
     from openviking_cli.utils.config.open_viking_config import CompileApiConfig

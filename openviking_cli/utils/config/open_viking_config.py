@@ -208,6 +208,8 @@ class CompileApiConfig(BaseModel):
     artifact_graph_max_nodes: int = 10000
     artifact_graph_max_markdown_files: int = 2000
     artifact_graph_max_markdown_bytes: int = 50 * 1024 * 1024
+    artifact_graph_compile_wait_seconds: float = 60.0
+    artifact_graph_query_wait_seconds: float = 10.0
 
     @model_validator(mode="after")
     def _validate(self) -> "CompileApiConfig":
@@ -221,6 +223,8 @@ class CompileApiConfig(BaseModel):
             "artifact_graph_max_nodes",
             "artifact_graph_max_markdown_files",
             "artifact_graph_max_markdown_bytes",
+            "artifact_graph_compile_wait_seconds",
+            "artifact_graph_query_wait_seconds",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"compile_api.{name} must be > 0")

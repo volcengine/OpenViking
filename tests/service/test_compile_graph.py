@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from typing import Any
@@ -82,10 +83,18 @@ class _GraphFs:
 
 
 class _GraphStore:
-    def __init__(self, record: dict[str, Any], cache: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        record: dict[str, Any],
+        cache: dict[str, Any] | None = None,
+        sources: dict[str, Any] | None = None,
+    ) -> None:
         self.record = record
         self.cache = cache
+        self.sources = sources
         self.published = None
+        self.published_sources = None
+        self.write_order: list[str] = []
 
     async def get(self, _account_id: str, _target_id: str):
         return self.record
@@ -93,12 +102,53 @@ class _GraphStore:
     async def read_artifact_relations(self, _account_id: str, _target_id: str):
         return self.cache
 
-    async def write_artifact_relations(self, _account_id: str, _target_id: str, value):
+    async def write_artifact_relations(
+        self, _account_id: str, _target_id: str, value, _lease=None
+    ):
         self.published = value
+        self.cache = value
+        self.write_order.append("graph")
+
+    async def read_relation_sources(self, _account_id: str, _target_id: str):
+        return self.sources
+
+    async def write_relation_sources(
+        self, _account_id: str, _target_id: str, value, _lease=None
+    ):
+        self.published_sources = value
+        self.sources = value
+        self.write_order.append("sources")
+
+    @asynccontextmanager
+    async def lock_artifact_graph(self, _account_id: str, _target_id: str):
+        yield {"lease_ref": "graph"}
 
     @asynccontextmanager
     async def edit(self, _account_id: str, _target_id: str):
         yield self.record
+
+
+class _SnapshotGraphFs(_GraphFs):
+    def __init__(
+        self,
+        diffs: dict[tuple[str | None, str, tuple[str, ...]], list[dict[str, str]]],
+        blobs: dict[tuple[str, str], dict[str, Any]],
+    ) -> None:
+        super().__init__([], {})
+        self.diffs = diffs
+        self.blobs = blobs
+        self.diff_calls: list[tuple[str | None, str, tuple[str, ...]]] = []
+
+    async def diff_paths(self, *, dirs, base, head, ctx):
+        del ctx
+        key = (base, head, tuple(dirs))
+        self.diff_calls.append(key)
+        return self.diffs.get(key, [])
+
+    async def show_blob_raw(self, head: str, *, path: str, ctx: RequestContext):
+        del ctx
+        self.reads.append(path)
+        return self.blobs[(head, path)]
 
 
 def _entry(path: str, *, size: int = 1, is_dir: bool = False) -> dict[str, Any]:
@@ -148,144 +198,6 @@ async def test_cache_publish_uses_one_supported_write() -> None:
 
 
 @pytest.mark.asyncio
-async def test_builds_stable_containment_and_reference_edges() -> None:
-    root = "/local/default/resources/wiki"
-    entries = [
-        _entry(f"{root}/sub", is_dir=True),
-        _entry(f"{root}/a.md", size=60),
-        _entry(f"{root}/sub/b.md", size=10),
-        _entry(f"{root}/secret.md", size=6),
-        _entry(f"{root}/.overview.md", size=100),
-        _entry(f"{root}/guide.abstract.md", size=10),
-        _entry(f"{root}/.path.ovlock", size=100),
-        _entry(f"{root}/ignored.log", size=100),
-    ]
-    fs = _GraphFs(
-        entries,
-        {
-            "viking://resources/wiki/a.md": (
-                b"[B](sub/b.md) [again](sub/b.md) [query](?view=1) "
-                b"[external](https://example.com)"
-            ),
-            "viking://resources/wiki/sub/b.md": b"# B",
-            "viking://resources/wiki/secret.md": b"# S",
-            "viking://resources/wiki/guide.abstract.md": b"# Guide",
-        },
-        gitignore=b"*.log\n",
-    )
-
-    result = await _graph(fs)._build("viking://resources/wiki", "abc123", _ctx())
-
-    assert result["nodes"] == [
-        {"uri": "viking://resources/wiki/"},
-        {"uri": "viking://resources/wiki/a.md"},
-        {"uri": "viking://resources/wiki/guide.abstract.md"},
-        {"uri": "viking://resources/wiki/secret.md"},
-        {"uri": "viking://resources/wiki/sub/"},
-        {"uri": "viking://resources/wiki/sub/b.md"},
-    ]
-    assert {
-        (edge["type"], edge["from"], edge["to"]) for edge in result["edges"]
-    } == {
-        (
-            "contains",
-            "viking://resources/wiki/",
-            "viking://resources/wiki/a.md",
-        ),
-        (
-            "contains",
-            "viking://resources/wiki/",
-            "viking://resources/wiki/guide.abstract.md",
-        ),
-        (
-            "contains",
-            "viking://resources/wiki/",
-            "viking://resources/wiki/secret.md",
-        ),
-        (
-            "contains",
-            "viking://resources/wiki/",
-            "viking://resources/wiki/sub/",
-        ),
-        (
-            "contains",
-            "viking://resources/wiki/sub/",
-            "viking://resources/wiki/sub/b.md",
-        ),
-        (
-            "references",
-            "viking://resources/wiki/a.md",
-            "viking://resources/wiki/sub/b.md",
-        ),
-    }
-
-    filtered = await _graph(fs)._filter(result, _ctx())
-    assert all(node["uri"] != "viking://resources/wiki/secret.md" for node in filtered["nodes"])
-    assert all("secret.md" not in (edge["from"], edge["to"]) for edge in filtered["edges"])
-
-
-@pytest.mark.asyncio
-async def test_size_limit_stops_before_markdown_reads() -> None:
-    root = "/local/default/resources/wiki"
-    fs = _GraphFs(
-        [
-            _entry(f"{root}/a.md", size=6),
-            _entry(f"{root}/b.md", size=6),
-        ],
-        {
-            "viking://resources/wiki/a.md": b"123456",
-            "viking://resources/wiki/b.md": b"123456",
-        },
-    )
-
-    with pytest.raises(ArtifactGraphTooLargeError) as exc_info:
-        await _graph(fs, max_markdown_bytes=10)._build(
-            "viking://resources/wiki", "abc123", _ctx()
-        )
-
-    assert exc_info.value.code == "ARTIFACT_RELATIONS_TOO_LARGE"
-    assert fs.reads == []
-
-
-@pytest.mark.asyncio
-async def test_node_limit_stops_during_tree_scan() -> None:
-    root = "/local/default/resources/wiki"
-    fs = _GraphFs(
-        [
-            _entry(f"{root}/a.txt"),
-            _entry(f"{root}/b.txt"),
-            _entry(f"{root}/c.txt"),
-        ],
-        {},
-    )
-
-    with pytest.raises(ArtifactGraphTooLargeError) as exc_info:
-        await _graph(fs, max_nodes=3)._build(
-            "viking://resources/wiki", "abc123", _ctx()
-        )
-
-    assert exc_info.value.details == {
-        "limit": "nodes",
-        "maximum": 3,
-        "actual": 4,
-    }
-
-
-@pytest.mark.asyncio
-async def test_actual_bytes_are_checked_when_metadata_underreports() -> None:
-    root = "/local/default/resources/wiki"
-    fs = _GraphFs(
-        [_entry(f"{root}/a.md", size=1)],
-        {"viking://resources/wiki/a.md": b"123456"},
-    )
-
-    with pytest.raises(ArtifactGraphTooLargeError):
-        await _graph(fs, max_markdown_bytes=5)._build(
-            "viking://resources/wiki", "abc123", _ctx()
-        )
-
-
-@pytest.mark.asyncio
 async def test_cache_hit_avoids_tree_lock_and_rebuild() -> None:
     record = {
         "to": "viking://resources/wiki",
@@ -300,9 +212,18 @@ async def test_cache_hit_avoids_tree_lock_and_rebuild() -> None:
         "nodes": [],
         "edges": [],
     }
+    sources = {
+        "schema_version": 1,
+        "parser_version": 1,
+        "ignore_signature": hashlib.sha256(b"").hexdigest(),
+        "to": record["to"],
+        "target_snapshot_id": "abc123",
+        "pages": {},
+        "page_sizes": {},
+    }
     fs = _GraphFs([], {})
     graph = ArtifactRelationGraph(
-        _GraphStore(record, cache),
+        _GraphStore(record, cache, sources),
         fs,
         max_nodes=10,
         max_markdown_files=10,
@@ -319,11 +240,11 @@ async def test_cache_hit_avoids_tree_lock_and_rebuild() -> None:
         commit_snapshot=AsyncMock(),
     )
 
-    assert result == cache
+    assert result == {**cache, "stale": False, "building": False}
 
 
 @pytest.mark.asyncio
-async def test_legacy_target_initializes_wiki_head_inside_lock() -> None:
+async def test_legacy_target_initializes_wiki_head_then_returns_building() -> None:
     record = {
         "to": "viking://resources/wiki",
         "initialized": True,
@@ -337,17 +258,9 @@ async def test_legacy_target_initializes_wiki_head_inside_lock() -> None:
         max_nodes=10,
         max_markdown_files=10,
         max_markdown_bytes=10,
+        query_wait_seconds=0,
     )
-    graph._build = AsyncMock(
-        return_value={
-            "schema_version": 1,
-            "to": record["to"],
-            "target_snapshot_id": "new-head",
-            "generated_at": "2026-01-01T00:00:00Z",
-            "nodes": [],
-            "edges": [],
-        }
-    )
+    graph.enqueue_wakeup = AsyncMock(return_value=True)
     locked = False
 
     @asynccontextmanager
@@ -369,4 +282,291 @@ async def test_legacy_target_initializes_wiki_head_inside_lock() -> None:
     )
 
     assert record["wiki_head"] == "new-head"
-    assert store.published == result
+    assert store.published is None
+    assert result == {
+        "schema_version": 1,
+        "to": record["to"],
+        "target_snapshot_id": "new-head",
+        "nodes": [],
+        "edges": [],
+        "stale": False,
+        "building": True,
+    }
+    graph.enqueue_wakeup.assert_awaited_once_with("default", record["to"], "alice")
+
+
+@pytest.mark.asyncio
+async def test_query_returns_acl_filtered_stale_graph_after_wait_budget() -> None:
+    target = "viking://resources/wiki"
+    visible = f"{target}/visible.md"
+    secret = f"{target}/secret.md"
+    record = {"to": target, "initialized": True, "wiki_head": "new-head"}
+    cache = {
+        "schema_version": 1,
+        "to": target,
+        "target_snapshot_id": "old-head",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "nodes": [{"uri": visible}, {"uri": secret}],
+        "edges": [{"type": "references", "from": visible, "to": secret}],
+    }
+    graph = ArtifactRelationGraph(
+        _GraphStore(record, cache),
+        _GraphFs([], {}),
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=10,
+        query_wait_seconds=0,
+    )
+    graph.enqueue_wakeup = AsyncMock(return_value=True)
+
+    result = await graph.get(
+        record,
+        _ctx(),
+        lock_output=AsyncMock(),
+        commit_snapshot=AsyncMock(),
+    )
+
+    assert result["stale"] is True
+    assert result["building"] is True
+    assert result["nodes"] == [{"uri": visible}]
+    assert result["edges"] == []
+
+
+@pytest.mark.asyncio
+async def test_compile_graph_failure_falls_back_to_queue() -> None:
+    target = "viking://resources/wiki"
+    record = {"to": target, "initialized": True, "wiki_head": "head"}
+    graph = ArtifactRelationGraph(
+        _GraphStore(record),
+        _GraphFs([], {}),
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=10,
+    )
+    graph._compile_pages[("default", target, "op")] = {}
+    graph.reconcile_graph = AsyncMock(side_effect=RuntimeError("build failed"))
+    graph.enqueue_wakeup = AsyncMock(return_value=True)
+
+    await graph.reconcile_compile(
+        record,
+        _ctx(),
+        wiki_head="head",
+        operation_id="op",
+    )
+
+    assert ("default", target, "op") not in graph._compile_pages
+    graph.enqueue_wakeup.assert_awaited_once_with("default", target, "alice")
+
+
+@pytest.mark.asyncio
+async def test_compile_hint_parses_written_bytes_without_snapshot_read() -> None:
+    target = "viking://resources/wiki"
+    page = f"{target}/page.md"
+    related = f"{target}/related.md"
+    graph = ArtifactRelationGraph(
+        _GraphStore({"to": target}),
+        _GraphFs([], {}),
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=10,
+    )
+    content = b"[related](related.md)"
+
+    await graph.capture_compile_page(
+        "default",
+        target,
+        "op",
+        "snapshot",
+        page,
+        _ctx(),
+        content,
+    )
+
+    assert graph._compile_pages[("default", target, "op")][page] == {
+        "blob_oid": hashlib.sha1(
+            f"blob {len(content)}\0".encode("ascii") + content,
+            usedforsecurity=False,
+        ).hexdigest(),
+        "snapshot_id": "snapshot",
+        "size": len(content),
+        "related_pages": [related],
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_uses_compile_hint_then_updates_incrementally() -> None:
+    target = "viking://resources/wiki"
+    a = f"{target}/a.md"
+    b = f"{target}/b.md"
+    c = f"{target}/sub/c.md"
+    asset = f"{target}/logo.png"
+    record = {"to": target, "initialized": True, "wiki_head": "h1"}
+    store = _GraphStore(record)
+    fs = _SnapshotGraphFs(
+        {
+            (None, "h1", (target,)): [
+                {"uri": a, "change_type": "added"},
+                {"uri": b, "change_type": "added"},
+                {"uri": asset, "change_type": "added"},
+            ],
+            ("hint-a1", "h1", (a,)): [],
+            ("h1", "h2", (target,)): [
+                {"uri": a, "change_type": "modified"},
+                {"uri": b, "change_type": "deleted"},
+                {"uri": c, "change_type": "added"},
+            ],
+            ("hint-a2", "h2", (a,)): [],
+        },
+        {
+            ("h1", b): {"oid": "oid-b1", "size": 3, "bytes": b"# B"},
+            ("h2", c): {"oid": "oid-c1", "size": 9, "bytes": b"[A](../a.md)"},
+        },
+    )
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=20,
+        max_markdown_files=10,
+        max_markdown_bytes=1024,
+    )
+
+    first = await graph.reconcile_graph(
+        record,
+        _ctx(),
+        wiki_head="h1",
+        parsed_pages={
+            a: {
+                "blob_oid": "oid-a1",
+                "snapshot_id": "hint-a1",
+                "size": 9,
+                "related_pages": [b],
+            }
+        },
+    )
+
+    assert fs.reads == [b]
+    assert store.write_order == ["sources", "graph"]
+    assert store.sources["pages"] == {
+        a: {"blob_oid": "oid-a1", "related_pages": [b]},
+        b: {"blob_oid": "oid-b1", "related_pages": []},
+    }
+    assert ("references", a, b) in {
+        (edge["type"], edge["from"], edge["to"]) for edge in first["edges"]
+    }
+
+    record["wiki_head"] = "h2"
+    second = await graph.reconcile_graph(
+        record,
+        _ctx(),
+        wiki_head="h2",
+        parsed_pages={
+            a: {
+                "blob_oid": "oid-a2",
+                "snapshot_id": "hint-a2",
+                "size": 8,
+                "related_pages": [c],
+            }
+        },
+    )
+
+    assert fs.reads == [b, c]
+    assert set(store.sources["pages"]) == {a, c}
+    assert b not in {node["uri"] for node in second["nodes"]}
+    assert {asset, a, c, f"{target}/", f"{target}/sub/"} == {
+        node["uri"] for node in second["nodes"]
+    }
+    assert {
+        (edge["type"], edge["from"], edge["to"]) for edge in second["edges"]
+    } >= {
+        ("references", a, c),
+        ("references", c, a),
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_rereads_snapshot_when_compile_hint_changed() -> None:
+    target = "viking://resources/wiki"
+    page = f"{target}/page.md"
+    actual = f"{target}/actual.md"
+    record = {"to": target, "initialized": True, "wiki_head": "head"}
+    store = _GraphStore(record)
+    fs = _SnapshotGraphFs(
+        {
+            (None, "head", (target,)): [
+                {"uri": page, "change_type": "added"},
+                {"uri": actual, "change_type": "added"},
+            ],
+            ("hint", "head", (page,)): [
+                {"uri": page, "change_type": "modified"},
+            ],
+        },
+        {
+            ("head", page): {
+                "oid": "final-oid",
+                "size": 19,
+                "bytes": b"[actual](actual.md)",
+            },
+            ("head", actual): {"oid": "actual-oid", "size": 8, "bytes": b"# Actual"},
+        },
+    )
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=1024,
+    )
+
+    await graph.reconcile_graph(
+        record,
+        _ctx(),
+        wiki_head="head",
+        parsed_pages={
+            page: {
+                "blob_oid": "stale-oid",
+                "snapshot_id": "hint",
+                "size": 8,
+                "related_pages": [],
+            }
+        },
+    )
+
+    assert fs.reads == [page, actual]
+    assert store.sources["pages"][page] == {
+        "blob_oid": "final-oid",
+        "related_pages": [actual],
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_enforces_markdown_byte_limit() -> None:
+    target = "viking://resources/wiki"
+    page = f"{target}/page.md"
+    record = {"to": target, "initialized": True, "wiki_head": "head"}
+    store = _GraphStore(record)
+    fs = _SnapshotGraphFs(
+        {
+            (None, "head", (target,)): [
+                {"uri": page, "change_type": "added"},
+            ],
+        },
+        {
+            ("head", page): {"oid": "oid", "size": 6, "bytes": b"123456"},
+        },
+    )
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=5,
+    )
+
+    with pytest.raises(ArtifactGraphTooLargeError) as exc_info:
+        await graph.reconcile_graph(record, _ctx(), wiki_head="head")
+
+    assert exc_info.value.details == {
+        "limit": "markdown_bytes",
+        "maximum": 5,
+        "actual": 6,
+    }
