@@ -32,14 +32,8 @@ export default function FilePreviewBasic() {
         fileName: 'SKILL.md',
         path: 'viking://system/compile/llm-wiki/SKILL.md',
       },
-      onCopyContent: (text) => {
-        void navigator.clipboard.writeText(text);
-        setActiveHint('Content copied');
-      },
-      onCopyPath: (path) => {
-        void navigator.clipboard.writeText(path);
-        setActiveHint('Path copied');
-      },
+      onCopyContent: () => setActiveHint('Content copied'),
+      onCopyPath: () => setActiveHint('Path copied'),
       onOpenParent: (path) => setActiveHint(`Open parent of ${path}`),
     },
     {

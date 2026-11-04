@@ -115,11 +115,12 @@ export interface FilePreviewTabBase {
    */
   onOpenParent?: (path: string) => void;
   /**
-   * 复制当前节点路径。取值来自文件页签的 `source.path`；内容页签没有路径，
-   * 传了也不会渲染按钮。
+   * 路径复制成功后触发，参数为已复制的路径；复制失败时不触发。
+   * 省略回调不影响复制。文件页签提供 `source.path` 时显示复制路径按钮。
    *
-   * Copies the current node path. The value comes from a file tab's
-   * `source.path`; a content tab has no path, so passing it renders nothing.
+   * Called after path copying succeeds, with the copied path; not called on
+   * failure. Omitting it does not affect copying. File tabs with `source.path`
+   * show the copy-path button.
    */
   onCopyPath?: (path: string) => void;
   /**
@@ -204,18 +205,12 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    */
   slots?: FilePreviewFileTabSlots;
   /**
-   * 复制正文内容。取值来自 `source`（`content` 或 `file` 的文本），不传时
-   * 不显示该按钮。
+   * 正文复制成功后触发，参数为已复制的文本；复制失败时不触发。
+   * 省略回调不影响复制。仅文件页签提供正文复制，没有可复制文本时按钮禁用。
    *
-   * 内容页签的正文由宿主渲染，组件拿不到纯文本，因此这个回调只在文件页签上
-   * 有效；内容页签需要复制时由宿主在 `content` 里自行实现。
-   *
-   * Copies the body content. The value comes from `source` (the text of
-   * `content` or `file`); no such button is rendered when omitted.
-   *
-   * A content tab's body is rendered by the host and the component has no plain
-   * text for it, so this only applies to file tabs. Implement copying inside
-   * `content` when a content tab needs it.
+   * Called after content copying succeeds, with the copied text; not called on
+   * failure. Omitting it does not affect copying. Only file tabs provide body
+   * copying; the button is disabled when no copyable text is available.
    */
   onCopyContent?: (text: string) => void;
   /**
@@ -343,15 +338,12 @@ export interface FilePreviewHeaderSlots {
   /**
    * 标题行右侧的额外动作，例如权限设置或删除。
    *
-   * 复制与下载不从这里放——它们由 `onCopyContent`、`onCopyPath` 与
-   * `onDownload` 控制内置按钮，避免同一入口出现两个按钮。
+   * 复制与下载使用已有按钮，不需要在这里重复添加。
    *
    * Extra actions on the right of the header, for example permissions or
    * delete.
    *
-   * Copy and download do not belong here — the built-in buttons are driven by
-   * `onCopyContent`, `onCopyPath` and `onDownload`, so the same entry never
-   * shows twice.
+   * Use the existing copy and download buttons instead of adding duplicates here.
    */
   actions?: ReactNode;
   /**
