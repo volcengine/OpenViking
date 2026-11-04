@@ -22,8 +22,7 @@ export default defineConfig({
             './src/components/scope-switcher/scope-switcher.tsx',
           'components/agent-connect':
             './src/components/agent-connect/agent-connect.tsx',
-          'components/resource-import':
-            './src/components/resource-import/resource-import.tsx',
+          'components/search': './src/components/search/search.tsx',
         },
       },
       output: { emitCss: false },
@@ -48,8 +47,7 @@ export default defineConfig({
         './src/components/scope-switcher/style.css',
       'components/agent-connect/style':
         './src/components/agent-connect/style.css',
-      'components/resource-import/style':
-        './src/components/resource-import/style.css',
+      'components/search/style': './src/components/search/style.css',
     }).map(([name, entry]) => ({
       id: name.replaceAll('/', '-'),
       format: 'esm' as const,
