@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -24,10 +23,9 @@ from openviking.session.train.domain import (
     PolicySet,
     PolicyUpdatePlan,
 )
+from openviking.session.train.utils import experience_target_uri
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
-
-_EXPERIENCE_NAME_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
 @dataclass(slots=True)
@@ -181,7 +179,7 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
     result = list(policy_set.policies)
 
     for item in items:
-        uri = _target_uri(item, policy_set.root_uri)
+        uri = experience_target_uri(policy_set.root_uri, item.target_name, item.target_uri)
 
         if item.kind == "delete":
             existing = policies_by_uri.get(uri) or _find_policy(
@@ -263,12 +261,6 @@ def _find_policy(
     return None
 
 
-def _target_uri(item: PolicyPlanItem, root_uri: str) -> str:
-    if item.target_uri:
-        return item.target_uri
-    return f"{root_uri.rstrip('/')}/{_safe_experience_filename(item.target_name)}.md"
-
-
 def _plan_to_resolved_operations(
     *,
     plan: PolicyUpdatePlan,
@@ -282,7 +274,7 @@ def _plan_to_resolved_operations(
     errors: list[tuple[str, str]] = []
 
     for item in plan.items:
-        uri = _target_uri(item, policy_set.root_uri)
+        uri = experience_target_uri(policy_set.root_uri, item.target_name, item.target_uri)
         current = _find_policy(policy_set, uri=uri, name=item.target_name)
         if (
             current is not None
@@ -412,11 +404,6 @@ def _source_trajectory_links(
             update["created_at"] = datetime.now(timezone.utc).isoformat()
         result.append(link.model_copy(update=update))
     return result
-
-
-def _safe_experience_filename(name: str) -> str:
-    filename = _EXPERIENCE_NAME_RE.sub("_", name.strip()).strip("._-")
-    return filename or "new_experience"
 
 
 def _normalize_guard_content(content: str) -> str:

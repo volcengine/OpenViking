@@ -28,7 +28,7 @@ from openviking.session.train.domain import (
     PolicyUpdatePlan,
 )
 from openviking.session.train.interfaces import SemanticGradient
-from openviking.session.train.utils import first_uri, safe_int
+from openviking.session.train.utils import experience_target_uri, first_uri, safe_int
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
@@ -437,6 +437,8 @@ def _operations_to_plan_items(
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != memory_type:
             continue
+        if getattr(op, "resolution_skip", None) is not None:
+            continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
         after_content = str(fields.get("content") or "")
         if not after_content.strip():
@@ -447,6 +449,8 @@ def _operations_to_plan_items(
             or _fallback_policy_name(op, memory_type=memory_type)
         )
         target_uri = first_uri(getattr(op, "uris", []) or [])
+        if memory_type == "experiences":
+            target_uri = experience_target_uri(policy_set.root_uri, target_name, target_uri)
         old_file = getattr(op, "old_memory_file_content", None)
         before_content = old_file.plain_content() if old_file is not None else None
         if before_content is None and target_uri:
@@ -554,7 +558,6 @@ def _operations_to_plan_items(
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
             for case_uri in sorted(case_uris)
-            if item.target_uri
         )
     return items
 
@@ -812,6 +815,8 @@ def _upsert_output_count(operations: Any, *, memory_type: str) -> int:
     count = 0
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != memory_type:
+            continue
+        if getattr(op, "resolution_skip", None) is not None:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
         if str(fields.get("content") or "").strip():

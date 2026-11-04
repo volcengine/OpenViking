@@ -99,12 +99,13 @@ class CommitTrainer:
             self.policy_set = await ExperienceSetLoader(viking_fs=self.fs).load(
                 self.policy_set.root_uri, ctx=self.ctx
             )
+            # Keep one merged output name-only to exercise URI fallback during commit.
             operations = ResolvedOperations(
                 upsert_operations=[
                     ResolvedOperation(
                         memory_type=g.after_file.memory_type,
                         memory_fields=g.after_file.to_metadata(),
-                        uris=[g.target_uri],
+                        uris=[] if g.target_name == "book" else [g.target_uri],
                     )
                     for g in gradients
                 ],

@@ -4,9 +4,20 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from openviking.session.train.domain import Rollout, RolloutAnalysis
+
+_EXPERIENCE_NAME_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
+
+
+def experience_target_uri(root_uri: str, name: str, uri: str | None = None) -> str:
+    """Use the explicit URI or the historical experience filename fallback."""
+    if uri:
+        return uri
+    filename = _EXPERIENCE_NAME_RE.sub("_", name.strip()).strip("._-")
+    return f"{root_uri.rstrip('/')}/{filename or 'new_experience'}.md"
 
 
 def average_score(analyses: list[RolloutAnalysis | None]) -> float | None:

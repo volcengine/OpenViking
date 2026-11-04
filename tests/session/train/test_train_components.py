@@ -995,7 +995,7 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
                                 "content": "取消前核验资格",
                             },
                             memory_type="experiences",
-                            uris=[f"{root}/取消资格核验.md"],
+                            uris=[],
                         ),
                         ResolvedOperation(
                             old_memory_file_content=None,
@@ -1036,6 +1036,15 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
         "取消资格核验": {"viking://user/u/memories/cases/cancel.md"},
         "退款总额传达": {"viking://user/u/memories/cases/refund.md"},
     }
+    assert {item.target_name: item.target_uri for item in plan.items} == {
+        "取消资格核验": f"{root}/new_experience.md",
+        "退款总额传达": f"{root}/退款总额传达.md",
+    }
+    for item in plan.items:
+        assert all(
+            (link.from_uri if link.link_type == "derived_from" else link.to_uri) == item.target_uri
+            for link in item.links
+        )
 
 
 @pytest.mark.asyncio
