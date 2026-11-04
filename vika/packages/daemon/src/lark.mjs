@@ -28,7 +28,11 @@ const IMAGE_TYPES = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
   '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
 };
-const VIDEO_TYPES = new Set(['.mp4', '.mov']);
+// lark-cli infers the upload file_type from the extension, so videos sent via
+// --file are rejected (230055); every video goes through --video instead.
+const VIDEO_TYPES = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
+const VIDEO_NATIVE = new Set(['.mp4', '.mov']);
+const VIDEO_HINT = 'upload the video to Drive and send the link instead';
 const MAX_CHAT_PAGES = 10;
 // Reading one comment: each lark-cli call, the reply pages read when the
 // comment's own page lacks the reply, and how long a looked-up name is kept.
@@ -310,16 +314,11 @@ export class LarkClient {
   async deliver(target, content, idempotencyKey) {
     const suffix = ['--idempotency-key', idempotencyKey, '--format', 'json'];
     let data;
-    let fallback = null;
     if (content.type === 'markdown') {
       data = await this.im([...target, '--markdown', renderMentions(content.text, content.mentions), ...suffix], 'send message');
     } else if (content.type === 'file') {
       const ext = path.extname(content.path).toLowerCase();
-      if (VIDEO_TYPES.has(ext)) {
-        const video = await this.deliverVideo(target, content, suffix);
-        if (video.data) return deliveredMessage(video.data);
-        fallback = video.fallback;
-      }
+      if (VIDEO_TYPES.has(ext)) return deliveredMessage(await this.deliverVideo(target, content, suffix));
       // lark-cli accepts only cwd-relative upload paths.
       const flag = IMAGE_TYPES[ext] ? '--image' : '--file';
       data = await this.im([...target, flag, `./${path.basename(content.path)}`, ...suffix], 'send attachment',
@@ -332,34 +331,41 @@ export class LarkClient {
     } else {
       throw new Error(`unsupported Lark content type: ${content.type}`);
     }
-    const delivered = deliveredMessage(data);
-    return fallback ? { ...delivered, media_fallback: fallback } : delivered;
+    return deliveredMessage(data);
   }
 
-  // Sends .mp4/.mov as a playable media message with an ffmpeg-extracted cover.
-  // Returns { data } on success, or { fallback: reason } so the caller sends a
-  // plain file with the same idempotency key (a rejected request is not recorded).
+  // Sends a video as a playable media message with an ffmpeg-extracted cover,
+  // transcoding non-mp4/mov containers to mp4 first. Any failure throws a clear
+  // error: a plain --file send of a video is always rejected by Lark (230055).
   async deliverVideo(target, content, suffix) {
     const dir = path.dirname(content.path);
-    const name = path.basename(content.path);
-    const coverDir = fs.mkdtempSync(path.join(dir, '.cover-'));
+    const ext = path.extname(content.path).toLowerCase();
+    const work = fs.mkdtempSync(path.join(dir, '.video-'));
+    const fail = (what, error) => new Error(`${what} failed for ${path.basename(content.path)} (${error.message}); ${VIDEO_HINT}`);
     try {
-      const cover = path.join(coverDir, 'cover.jpg');
-      try {
-        await this.extractVideoCover(content.path, cover);
-      } catch (error) {
-        return { fallback: `video cover extraction failed (${error.message}); sent as a plain file` };
+      let video = content.path;
+      if (!VIDEO_NATIVE.has(ext)) {
+        video = path.join(work, `${path.basename(content.path, path.extname(content.path))}.mp4`);
+        try { await this.transcodeVideo(content.path, video); } catch (error) { throw fail('video transcode to mp4', error); }
       }
+      const cover = path.join(work, 'cover.jpg');
+      try { await this.extractVideoCover(video, cover); } catch (error) { throw fail('video cover extraction', error); }
       try {
-        const data = await this.im([...target, '--video', `./${name}`, '--video-cover', `./${path.relative(dir, cover)}`,
+        return await this.im([...target, '--video', `./${path.relative(dir, video)}`, '--video-cover', `./${path.relative(dir, cover)}`,
           ...suffix], 'send video', { cwd: dir });
-        return { data };
-      } catch (error) {
-        return { fallback: `video media send failed (${error.message}); sent as a plain file` };
-      }
+      } catch (error) { throw fail('video send', error); }
     } finally {
-      fs.rmSync(coverDir, { recursive: true, force: true });
+      fs.rmSync(work, { recursive: true, force: true });
     }
+  }
+
+  async transcodeVideo(input, output) {
+    const result = await this.registry.run(this.config.ffmpegBin || 'ffmpeg', [
+      '-y', '-i', input, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', output,
+    ], { timeoutMs: 300_000 });
+    if (result.timedOut) throw new Error('ffmpeg timed out');
+    if (result.code !== 0) throw new Error(`ffmpeg exit ${result.code}`);
+    if (!fs.existsSync(output) || !fs.statSync(output).size) throw new Error('ffmpeg produced no output');
   }
 
   async extractVideoCover(input, output) {

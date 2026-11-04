@@ -1092,7 +1092,6 @@ export class ActionService {
   deliveryResult(result, what, warning = null) {
     if (result.dry_run) return { text: `Dry run only: no ${what} was delivered.`, data: result };
     const remote = result.message_id ? ` message_id=${result.message_id}` : '';
-    if (result.media_fallback && !result.duplicate) warning = warning ? `${warning} ${result.media_fallback}` : result.media_fallback;
     const text = result.duplicate
       ? `Already delivered earlier: ${what}.${remote} No new message was sent.`
       : `Delivered ${what}.${remote}${warning ? ` Warning: ${warning}` : ''}`;

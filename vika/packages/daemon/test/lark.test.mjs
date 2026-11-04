@@ -82,25 +82,22 @@ describe('Lark IM operations', () => {
     assert.ok(send.args.includes('--reply-in-thread'));
     assert.equal(send.args[send.args.indexOf('--video') + 1], './demo.mp4');
     const cover = send.args[send.args.indexOf('--video-cover') + 1];
-    assert.match(cover, /^\.\/\.cover-[^/]+\/cover\.jpg$/);
+    assert.match(cover, /^\.\/\.video-[^/]+\/cover\.jpg$/);
     assert.ok(!send.args.includes('--file'));
     assert.equal(send.args[send.args.indexOf('--idempotency-key') + 1], 'kv');
     assert.deepEqual(fs.readdirSync(tempDir), [], 'temporary cover is removed');
   });
 
-  it('falls back to a plain file when the video cover cannot be extracted', async () => {
+  it('returns a clear error without a --file fallback when the video cover cannot be extracted', async () => {
     const { lark, calls, tempDir } = client(() => ({ message_id: 'om_file123456789' }));
-    const sent = await lark.sendMessage({ chat_id: 'oc_chat12345678',
-      content: { type: 'file', path: path.join(tempDir, 'clip.mov'), name: 'clip.mov' }, idempotency_key: 'kf' });
-    assert.equal(sent.message_id, 'om_file123456789');
-    assert.match(sent.media_fallback, /cover extraction failed.*plain file/);
-    const send = calls.at(-1);
-    assert.ok(!send.args.includes('--video'));
-    assert.equal(send.args[send.args.indexOf('--file') + 1], './clip.mov');
-    assert.equal(send.options.cwd, tempDir);
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'clip.mov'), name: 'clip.mov' }, idempotency_key: 'kf' }),
+    /cover extraction failed.*Drive/);
+    assert.ok(!calls.some(({ args }) => args.includes('--file') || args.includes('--video')));
+    assert.deepEqual(fs.readdirSync(tempDir), []);
   });
 
-  it('falls back to a plain file when the media send is rejected', async () => {
+  it('returns a clear error without a --file fallback when the video send is rejected', async () => {
     const calls = [];
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
     const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
@@ -112,11 +109,36 @@ describe('Lark IM operations', () => {
         return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { message_id: 'om_file123456789' } }), stderr: '' };
       },
     }, quietLogger);
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'demo.mp4'), name: 'demo.mp4' }, idempotency_key: 'kf' }),
+    /video send failed.*unsupported msg_type.*Drive/);
+    assert.ok(!calls.some(({ args }) => args.includes('--file')));
+  });
+
+  it('transcodes .webm to a temporary mp4 before sending it as video', async () => {
+    const { lark, calls, tempDir } = client((args) => {
+      if (args.includes('-frames:v') || args.includes('libx264')) fs.writeFileSync(args.at(-1), 'data');
+      return { message_id: 'om_video12345678' };
+    });
     const sent = await lark.sendMessage({ chat_id: 'oc_chat12345678',
-      content: { type: 'file', path: path.join(tempDir, 'demo.mp4'), name: 'demo.mp4' }, idempotency_key: 'kf' });
-    assert.match(sent.media_fallback, /media send failed.*unsupported msg_type/);
-    assert.equal(calls.at(-1).args[calls.at(-1).args.indexOf('--file') + 1], './demo.mp4');
-    assert.equal(calls.at(-1).args[calls.at(-1).args.indexOf('--idempotency-key') + 1], 'kf');
+      content: { type: 'file', path: path.join(tempDir, 'clip.webm'), name: 'clip.webm' }, idempotency_key: 'kw' });
+    assert.equal(sent.message_id, 'om_video12345678');
+    const transcode = calls.find(({ args }) => args.includes('libx264'));
+    assert.deepEqual(transcode.args.slice(0, 3), ['-y', '-i', path.join(tempDir, 'clip.webm')]);
+    assert.ok(['-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart'].every((a) => transcode.args.includes(a)));
+    const send = calls.at(-1);
+    assert.match(send.args[send.args.indexOf('--video') + 1], /^\.\/\.video-[^/]+\/clip\.mp4$/);
+    assert.ok(!send.args.includes('--file'));
+    assert.equal(send.options.cwd, tempDir);
+    assert.deepEqual(fs.readdirSync(tempDir), [], 'temporary mp4 and cover are removed');
+  });
+
+  it('returns a clear error when transcoding fails', async () => {
+    const { lark, calls, tempDir } = client(() => ({ message_id: 'om_x' }));
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'clip.mkv'), name: 'clip.mkv' }, idempotency_key: 'kt' }),
+    /transcode to mp4 failed.*Drive/);
+    assert.ok(!calls.some(({ args }) => args.includes('--file') || args.includes('--video')));
   });
 
   it('renders inline and prefixed mentions without ever sending @all', () => {
