@@ -35,9 +35,16 @@ fn partial_delete_error(bucket: &str, errors: &[aws_sdk_s3::types::Error]) -> Op
         })
         .collect::<Vec<_>>()
         .join("; ");
-    Some(Error::internal(format!(
-        "S3 DeleteObjects partial failure: bucket={bucket} errors=[{details}]"
-    )))
+    Some(classify_s3_error(
+        "DeleteObjects",
+        &format!("bucket={bucket}"),
+        &details,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ))
 }
 
 fn build_s3_error_message(
@@ -68,11 +75,70 @@ fn build_s3_error_message(
     output
 }
 
+/// Map known S3/TOS quota and throttling responses to bounded RAGFS error kinds.
+///
+/// The full formatted message remains on the error for logs and traceability, but metrics only
+/// export the resulting stable kind.  Do not turn request IDs, bucket names, keys, or raw service
+/// messages into metric labels.
+fn classify_s3_error(
+    op: &str,
+    scope: &str,
+    raw_error: &str,
+    code: Option<&str>,
+    message: Option<&str>,
+    request_id: Option<&str>,
+    extended_request_id: Option<&str>,
+    status: Option<u16>,
+) -> Error {
+    let formatted = build_s3_error_message(
+        op,
+        scope,
+        raw_error,
+        code,
+        message,
+        request_id,
+        extended_request_id,
+    );
+    let classification_text = [raw_error, code.unwrap_or_default(), message.unwrap_or_default()]
+        .join(" ")
+        .to_ascii_lowercase();
+    let quota = [
+        "edquot",
+        "quotaexceeded",
+        "quota_exceeded",
+        "quota exceeded",
+        "disk quota",
+        "storage quota",
+        "bucket quota",
+    ]
+    .iter()
+    .any(|marker| classification_text.contains(marker));
+    if quota {
+        return Error::quota_exceeded(formatted);
+    }
+    let rate_limited = status == Some(429)
+        || [
+            "slowdown",
+            "throttl",
+            "ratelimit",
+            "rate limit",
+            "too many requests",
+            "requestlimitexceeded",
+            "request limit exceeded",
+        ]
+        .iter()
+        .any(|marker| classification_text.contains(marker));
+    if rate_limited {
+        return Error::rate_limited(formatted);
+    }
+    Error::internal(formatted)
+}
+
 fn format_s3_service_error<E>(op: &str, scope: &str, err: &E) -> Error
 where
     E: std::fmt::Display + ProvideErrorMetadata + RequestId + RequestIdExt,
 {
-    Error::internal(build_s3_error_message(
+    classify_s3_error(
         op,
         scope,
         &err.to_string(),
@@ -80,7 +146,8 @@ where
         err.message(),
         err.request_id(),
         err.extended_request_id(),
-    ))
+        None,
+    )
 }
 
 fn is_s3_compatible_not_found_code<E>(err: &E) -> bool
@@ -105,7 +172,7 @@ where
             if let Some(resp) = (se.raw() as &dyn Any).downcast_ref::<HttpResponse>() {
                 let status = resp.status().as_u16();
                 let headers = resp.headers();
-                Error::internal(build_s3_error_message(
+                classify_s3_error(
                     op,
                     scope,
                     &format!("HTTP {}: {}", status, se.err()),
@@ -117,9 +184,10 @@ where
                     se.err()
                         .extended_request_id()
                         .or_else(|| headers.get("x-amz-id-2")),
-                ))
+                    Some(status),
+                )
             } else {
-                Error::internal(build_s3_error_message(
+                classify_s3_error(
                     op,
                     scope,
                     &format!("service error: {}", se.err()),
@@ -127,10 +195,11 @@ where
                     se.err().message(),
                     se.err().request_id(),
                     se.err().extended_request_id(),
-                ))
+                    None,
+                )
             }
         }
-        _ => Error::internal(build_s3_error_message(
+        _ => classify_s3_error(
             op,
             scope,
             &sdk_err.to_string(),
@@ -138,7 +207,8 @@ where
             None,
             None,
             None,
-        )),
+            None,
+        ),
     }
 }
 
@@ -172,7 +242,7 @@ fn format_generic_s3_error(
     key: &str,
     raw_error: impl std::fmt::Display,
 ) -> Error {
-    Error::internal(build_s3_error_message(
+    classify_s3_error(
         op,
         &format!("bucket={bucket} key={key}"),
         &raw_error.to_string(),
@@ -180,11 +250,12 @@ fn format_generic_s3_error(
         None,
         None,
         None,
-    ))
+        None,
+    )
 }
 
 fn format_bucket_s3_error(op: &str, bucket: &str, raw_error: impl std::fmt::Display) -> Error {
-    Error::internal(build_s3_error_message(
+    classify_s3_error(
         op,
         &format!("bucket={bucket}"),
         &raw_error.to_string(),
@@ -192,7 +263,8 @@ fn format_bucket_s3_error(op: &str, bucket: &str, raw_error: impl std::fmt::Disp
         None,
         None,
         None,
-    ))
+        None,
+    )
 }
 
 fn encode_path(path: &str, normalize_encoding_chars: &str) -> String {
@@ -1364,12 +1436,12 @@ mod tests {
     }
 
     #[test]
-    fn test_format_s3_service_error_includes_metadata_fields() {
+    fn test_s3_quota_error_preserves_metadata() {
         let service_err = FakeServiceError {
             raw: "service error",
             meta: ErrorMetadata::builder()
-                .code("AccessDenied")
-                .message("signature mismatch")
+                .code("EDQUOT")
+                .message("disk quota exceeded")
                 .custom("aws_request_id", "req-123")
                 .custom("s3_extended_request_id", "ext-456")
                 .build(),
@@ -1381,17 +1453,18 @@ mod tests {
             &service_err,
         );
 
+        assert_eq!(err.kind_name(), "quota_exceeded");
         match err {
-            Error::Internal(message) => {
+            Error::QuotaExceeded(message) => {
                 assert!(message.contains("S3 PutObject error"));
                 assert!(message.contains("bucket=test-bucket key=tenant/a.txt"));
-                assert!(message.contains("code=AccessDenied"));
-                assert!(message.contains("message=signature mismatch"));
+                assert!(message.contains("code=EDQUOT"));
+                assert!(message.contains("message=disk quota exceeded"));
                 assert!(message.contains("request_id=req-123"));
                 assert!(message.contains("extended_request_id=ext-456"));
                 assert!(message.contains("raw=service error"));
             }
-            other => panic!("expected internal error, got {other:?}"),
+            other => panic!("expected quota error, got {other:?}"),
         }
     }
 

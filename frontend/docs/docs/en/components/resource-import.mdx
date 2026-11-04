@@ -1,0 +1,34 @@
+# ResourceImport
+
+Import sources, file selection, progress and results. The host declares which sources exist and owns uploads and polling; the component renders and reports intent.
+
+This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can integrate against the published package before the view is migrated. The props contract below is final; the placeholder implementation will be replaced.
+
+## Basic usage
+
+```tsx file="../../_demos/resource-import-basic.tsx" preview
+
+```
+
+The placeholder is 960 × 640, matching the full-page view.
+
+## Props
+
+The public props are published as types from the same subpath. Read them from the source of truth:
+
+```tsx
+import type { ResourceImportProps } from '@openviking/react/components/resource-import';
+```
+
+| Property | Type | Default | Description                        |
+| -------- | ---- | ------- | ---------------------------------- |
+| —        | —    | —       | The placeholder consumes no props. |
+
+```tsx
+import { ResourceImport } from '@openviking/react/components/resource-import';
+import '@openviking/react/components/resource-import/style.css';
+```
+
+## Implementation scope
+
+The component renders the view and reports intent. Data access, persistence, permissions and any network connection belong to the host.

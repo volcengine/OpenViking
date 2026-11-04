@@ -28,6 +28,10 @@ from typing import (
 )
 from uuid import uuid4
 
+from openviking.config.generation import (
+    get_memory_extraction_enabled,
+    get_output_language_override,
+)
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
@@ -508,12 +512,14 @@ class Session:
         expiry_reporter: Optional[SessionExpiryReporter] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
+        runtime_config_manager: Any = None,
     ):
         self._viking_fs = viking_fs
         self._privacy_config_service = privacy_config_service
         self._privacy_sanitizer = privacy_sanitizer
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
+        self._runtime_config_manager = runtime_config_manager
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
         self.session_id = (
@@ -2833,7 +2839,9 @@ class Session:
                         return result
 
                     # Summary and V3 long-term memory extraction run concurrently.
-                    memory_extraction_enabled = ov_config.memory.extraction_enabled
+                    memory_extraction_enabled = await get_memory_extraction_enabled(
+                        self._runtime_config_manager, self.ctx.account_id
+                    )
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
@@ -3589,7 +3597,12 @@ class Session:
         summary_token_ratio: float = 0.25,
         reasoning_effort: Optional[str] = None,
         checkpoint_requests: Optional[List[_CheckpointRequest]] = None,
+        output_language_override: str | None = None,
     ) -> str | _ArchiveSummaryResult:
+        if output_language_override is None:
+            output_language_override = await get_output_language_override(
+                self._runtime_config_manager, self.ctx.account_id
+            )
         vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             return await self._generate_archive_summary_async(
@@ -3599,6 +3612,7 @@ class Session:
                 summary_token_ratio=summary_token_ratio,
                 reasoning_effort=reasoning_effort,
                 checkpoint_requests=checkpoint_requests,
+                output_language_override=output_language_override,
             )
         try:
             _load_render_prompt()
@@ -3610,6 +3624,7 @@ class Session:
                 summary_token_ratio=summary_token_ratio,
                 reasoning_effort=reasoning_effort,
                 checkpoint_requests=checkpoint_requests,
+                output_language_override=output_language_override,
             )
 
         material_limit = max(1, int(session_window_context * 0.7))
@@ -3682,6 +3697,7 @@ class Session:
             generated = await self._generate_archive_summary_async(
                 batch_messages,
                 latest_archive_overview=current_overview,
+                output_language_override=output_language_override,
                 session_window_context=session_window_context,
                 summary_token_ratio=summary_token_ratio,
                 reasoning_effort=reasoning_effort,
@@ -3699,6 +3715,7 @@ class Session:
                     await self._generate_archive_summary_with_batching(
                         [message for message in messages if message.id in source_ids],
                         latest_archive_overview=request.previous_checkpoint_abstract,
+                        output_language_override=output_language_override,
                         session_window_context=session_window_context,
                         summary_token_ratio=min(
                             summary_token_ratio,
@@ -3721,6 +3738,7 @@ class Session:
         session_window_context: int = 128_000,
         summary_token_ratio: float = 0.25,
         reasoning_effort: Optional[str] = None,
+        output_language_override: str | None = None,
     ) -> str | _ArchiveSummaryResult:
         """Generate Working Memory document for the current archive (async).
 
@@ -3753,8 +3771,12 @@ class Session:
             for line in part.text.splitlines()
             if line.strip()
         )
+        if output_language_override is None:
+            output_language_override = await get_output_language_override(
+                self._runtime_config_manager, self.ctx.account_id
+            )
         output_language = resolve_output_language_from_conversation(
-            language_conversation, config=get_openviking_config()
+            language_conversation, output_language_override=output_language_override
         )
         checkpoint_instructions = wm.checkpoint_prompt_instructions(len(checkpoint_requests))
         session_window_context = max(1, int(session_window_context or 128_000))

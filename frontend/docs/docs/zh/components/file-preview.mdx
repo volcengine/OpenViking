@@ -1,0 +1,111 @@
+# FilePreview 文件预览
+
+带页签的文件预览。宿主给出内容与文件名，组件负责格式识别、页签行、内容区标题行与正文。
+
+当前是占位实现：页签行、标题行、页签切换、复制、预览/源码切换与 ref 句柄可用，文件正文尚未接入渲染器，先以纯文本降级展示。编辑流程也只是骨架——尚未隔离切换页签时在途的取正文请求，保存失败时也不会保留草稿；这两项会在真实实现替换时补齐。
+
+## 基础用法
+
+至少传入一个页签。文件页签携带 `source`，内容页签携带由宿主自行渲染的节点。
+
+```tsx file="../../_demos/file-preview-basic.tsx" preview
+
+```
+
+## 两类页签
+
+| 类型              | 由谁渲染     | 典型用途             |
+| ----------------- | ------------ | -------------------- |
+| `kind: 'file'`    | 组件         | 文件原文、源码、文档 |
+| `kind: 'content'` | 宿主原样渲染 | 看板、图谱、摘要     |
+
+两类共享外壳——页签行、路径面包屑、复制路径与标题行插槽。差异在正文怎么来，以及预览/源码切换只属于文件页签：内容页签需要多种视图时在 `content` 里自行实现。
+
+当前激活哪个页签由组件内部维护。需要从外部切换时用 ref 句柄：
+
+```tsx
+const previewRef = useRef<FilePreviewHandle>(null);
+previewRef.current?.setActiveTab('dashboard');
+```
+
+## 内容从哪来
+
+`source` 接受三种互斥输入，按顺序取第一个有值的：
+
+- `content` —— 内联文本，会被包成以 `fileName` 命名的 `File`。
+- `file` —— `File` 或 `Blob`，直接透传。
+- `url` —— 可访问链接，组件不自行鉴权。
+
+`fileName` 必填，同时决定格式识别与页签默认标题。
+
+## 状态
+
+加载中、失败与格式不支持都不是 props，由组件根据内容与文件名判定。三种状态都可以通过插槽替换：
+
+- `slots.loadingFallback`
+- `slots.errorFallback`
+- `slots.unsupportedFallback`
+
+编辑态同样在内部。宿主提供 `editing.onSave`，可选提供 `editing.onRequestEdit`——进入编辑前调用，返回完整正文，便于截断的预览先取回全文。返回 `undefined` 表示放弃本次编辑；抛错或 reject 时展示读取失败提示。
+
+## 属性
+
+| 属性     | 类型                                             | 默认值 | 说明                                 |
+| -------- | ------------------------------------------------ | ------ | ------------------------------------ |
+| `tabs`   | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填   | 至少一个页签，初始展示第一个。       |
+| `labels` | `FilePreviewLabels`                              | 英文   | 所有页签的默认文案，页签可逐项覆盖。 |
+| 其余属性 | `HTMLAttributes<HTMLDivElement>`                 | —      | 标准 div 属性。                      |
+
+### 页签字段
+
+两类页签共有：
+
+| 属性                 | 类型                         | 默认值  | 说明                               |
+| -------------------- | ---------------------------- | ------- | ---------------------------------- |
+| `key`                | `string`                     | 必填    | 页签唯一标识。                     |
+| `title`              | `ReactNode`                  | 文件名  | 页签行显示内容；内容页签必填。     |
+| `icon`               | `ReactNode`                  | 按格式  | 页签图标。                         |
+| `labels`             | `Partial<FilePreviewLabels>` | —       | 覆盖该页签的文案。                 |
+| `disabled`           | `boolean`                    | `false` | 禁用该页签。                       |
+| `onOpenParent`       | `(path: string) => void`     | —       | 路径面包屑的返回入口。             |
+| `onCopyPath`         | `(path: string) => void`     | —       | 复制路径按钮，需要 `source.path`。 |
+| `showViewModeSwitch` | `boolean`                    | `true`  | 预览/源码切换；仅文件页签生效。    |
+| `slots`              | `FilePreviewHeaderSlots`     | —       | `actions`、`titleExtra`。          |
+
+文件页签额外提供：
+
+| 属性            | 类型                            | 默认值 | 说明                     |
+| --------------- | ------------------------------- | ------ | ------------------------ |
+| `source`        | `FilePreviewSource`             | 必填   | 内容与文件名。           |
+| `resources`     | `readonly FileViewerResource[]` | —      | 伴随资源，例如 3D 贴图。 |
+| `editing`       | `FilePreviewEditing`            | —      | 编辑能力；不传即只读。   |
+| `slots`         | `FilePreviewFileTabSlots`       | —      | 增加三类状态兜底。       |
+| `onCopyContent` | `(text: string) => void`        | —      | 复制正文按钮。           |
+| `onDownload`    | `() => void`                    | —      | 下载按钮。               |
+| `onOpenUri`     | `(uri: string) => void`         | —      | 跳转到正文中的资源 URI。 |
+
+```tsx
+import { FilePreview } from '@openviking/react/components/file-preview';
+import '@openviking/react/components/file-preview/style.css';
+```
+
+## 无障碍
+
+页签行使用 `role="tablist"` 与 `role="tab"` 按钮并上报 `aria-selected`。图标按钮都带 `aria-label` 与 `title` 提示。路径面包屑只在传入 `onOpenParent` 时才是按钮。
+
+## 主题变量
+
+| CSS 变量             | 默认值                    | 用途               |
+| -------------------- | ------------------------- | ------------------ |
+| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         | 分隔线与边框。     |
+| `--ov-ui-text-muted` | `#8f959e`                 | 次要文字与图标。   |
+| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         | 悬停背景。         |
+| `--ov-ui-accent`     | `#2563c5`                 | 面包屑与主按钮。   |
+| `--ov-ui-focus-ring` | `#2563c5`                 | 键盘焦点环。       |
+| `--ov-ui-radius`     | `6px`                     | 圆角。             |
+| `--ov-ui-surface`    | `canvas`                  | 选中页签背景。     |
+| `--ov-ui-font-mono`  | `ui-monospace, monospace` | 正文与编辑器文字。 |
+
+## 实现范围
+
+组件只渲染外壳并上报意图。读取、保存、下载与权限都由宿主负责。

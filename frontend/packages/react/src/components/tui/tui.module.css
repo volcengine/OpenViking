@@ -1,0 +1,13 @@
+.root {
+  display: flex;
+  box-sizing: border-box;
+  width: 360px;
+  height: 560px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ov-ui-radius, 6px);
+  background: var(--ov-ui-placeholder, #f3f4f7);
+  color: var(--ov-ui-text-muted, #8f959e);
+  font-family: inherit;
+  font-size: 12px;
+}

@@ -15,7 +15,7 @@ use super::types::{
     BackendRole, FileInfo, GlobPage, GrepOptions, GrepResult, ListSortBy, SortOrder, TreeEntry,
     WriteFlag,
 };
-use crate::core::internal_names::is_multiwrite_internal_path;
+use crate::core::internal_names::{is_hidden_runtime_lock_name, is_multiwrite_internal_path};
 use crate::metrics::{RagfsMetric, RagfsMetricValue};
 use crate::multibackend::catch_up::CatchUpTarget;
 use crate::multibackend::meta::{
@@ -373,6 +373,15 @@ impl MultiWriteWrappedFS {
         kind: SegmentEventType,
         destination_path: Option<&str>,
     ) -> Result<Option<PendingEvent>> {
+        // Runtime lock files are primary-only and may sit outside an account root.
+        if destination_path.is_none()
+            && path
+                .rsplit('/')
+                .next()
+                .is_some_and(is_hidden_runtime_lock_name)
+        {
+            return Ok(None);
+        }
         let ctx = self.resolve_context(path)?;
         let account_id = ctx.account_id().to_string();
         let mut path = logical_path(&account_id, path)?;

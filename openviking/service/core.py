@@ -26,6 +26,7 @@ from openviking.service.compile_targets import CompileLifecycle, CompileStateSto
 from openviking.service.debug_service import DebugService
 from openviking.service.external_task_service import ExternalTaskService, set_external_task_service
 from openviking.service.fs_service import FSService
+from openviking.service.mcp_service import MCPService
 from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
@@ -146,6 +147,7 @@ class OpenVikingService:
         self._external_task_service = ExternalTaskService(
             credential_encryptor=build_credential_encryptor(config.encryption)
         )
+        self._mcp_service = MCPService(self)
         self._compile_service = CompileService(
             config.compile_api,
             self._external_task_service,
@@ -340,6 +342,7 @@ class OpenVikingService:
         self._session_service.set_runtime_config_manager(manager)
         self._vlm_resolver = AccountVLMProvider(manager)
         if self._queue_manager is not None:
+            self._queue_manager.set_runtime_config_manager(manager)
             self._queue_manager.set_vlm_resolver(self._vlm_resolver)
             self._queue_manager.setup_standard_queues(
                 self._vikingdb_manager,
@@ -416,6 +419,11 @@ class OpenVikingService:
     def fs(self) -> FSService:
         """Get FSService instance."""
         return self._fs_service
+
+    @property
+    def mcps(self) -> MCPService:
+        """Get MCP server registry service."""
+        return self._mcp_service
 
     @property
     def pack(self) -> PackService:
@@ -572,6 +580,7 @@ class OpenVikingService:
             user_count,
         )
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+        self._viking_fs.set_global_policy_service(self._privacy_config_service.global_policies)
         self._privacy_sanitizer = PrivacySanitizer(self._privacy_config_service)
         self._viking_fs.set_privacy_sanitizer(self._privacy_sanitizer)
         self._resource_processor.set_privacy_sanitizer(self._privacy_sanitizer)
@@ -587,6 +596,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             skill_processor=self._skill_processor,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
         )
 
         self._watch_manager = WatchManager(
@@ -674,7 +684,11 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
         )
-        self._compile_service.configure_memory_runner(vikingdb=self._vikingdb_manager)
+        self._compile_service.configure_memory_runner(
+            vikingdb=self._vikingdb_manager,
+            runtime_config_manager=self._runtime_config_manager,
+            vlm_resolver=self._vlm_resolver,
+        )
         self._rule_service.set_dependencies(
             fs=self._fs_service,
             resources=self._resource_service,

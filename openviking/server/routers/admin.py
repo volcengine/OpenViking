@@ -167,7 +167,9 @@ def _reject_unsupported_ttl_config(
         raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
 
 
-_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
+_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset(
+    {"vlm", "query_planner", "embedding", "vectordb", "parser_api"}
+)
 
 
 def _authorize_account_config_patch(
@@ -177,9 +179,7 @@ def _authorize_account_config_patch(
     restricted = _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS.intersection(settings)
     if restricted and ctx.role != Role.ROOT:
         fields = ", ".join(sorted(restricted))
-        raise PermissionDeniedError(
-            f"Only ROOT can modify account configuration fields: {fields}"
-        )
+        raise PermissionDeniedError(f"Only ROOT can modify account configuration fields: {fields}")
 
 
 def _visible_account_config(
@@ -331,9 +331,7 @@ async def _account_settings_result(
     """
     enabled = await get_service().sessions.get_agent_evolution_enabled(account_id)
     legacy_overrides = {
-        key: overrides[key]
-        for key in ("agent_evolution", "acl")
-        if key in overrides
+        key: overrides[key] for key in ("agent_evolution", "acl") if key in overrides
     }
     return {
         "account_id": account_id,
@@ -461,9 +459,7 @@ async def _rollback_account_creation(
         )
 
 
-async def _check_user_exists(
-    request: Request, account_id: str, user_id: str, manager=None
-) -> None:
+async def _check_user_exists(request: Request, account_id: str, user_id: str, manager=None) -> None:
     manager = manager or _get_api_key_manager(request)
     if await manager.get_user_for_management(account_id, user_id) is None:
         raise NotFoundError(user_id, "user")
@@ -1306,9 +1302,7 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(
-        account_id, body.group_id
-    )
+    result = await _get_api_key_manager(request).create_group(account_id, body.group_id)
     return Response(status="ok", result=result)
 
 
@@ -1349,9 +1343,7 @@ async def list_group_members(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    members = await _get_api_key_manager(request).get_group_members(
-        account_id, group_id
-    )
+    members = await _get_api_key_manager(request).get_group_members(account_id, group_id)
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 
