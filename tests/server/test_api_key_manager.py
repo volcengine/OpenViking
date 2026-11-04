@@ -218,6 +218,7 @@ async def test_registry_diagnostics_distinguish_missing_reads_without_exposing_k
     original_registry = read(registry_path)
     messages = []
     monkeypatch.setattr(file.logger, "warning", lambda fmt, *args: messages.append(fmt % args))
+    monkeypatch.setattr(file.logger, "debug", lambda fmt, *args: messages.append(fmt % args))
 
     if missing_read:
 
@@ -240,13 +241,11 @@ async def test_registry_diagnostics_distinguish_missing_reads_without_exposing_k
     else:
         user_key = await manager.register_user(acct, "new-user")
     diagnostics = "\n".join(messages)
-    assert f"registry_found={not missing_read}" in diagnostics
-    assert 'cached_members={"admin": "admin", "new-user": "user"}' in diagnostics
     if missing_read:
         assert "registry_missing" in diagnostics
-        assert "persisted_members={}" in diagnostics
+        assert "attempts=3" in diagnostics
     else:
-        assert 'persisted_members={"admin": "admin"}' in diagnostics
+        assert "members=1 updated=1 deleted=0" in diagnostics
     assert ("save_written" in diagnostics) is not missing_read
     assert all(key not in diagnostics for key in (ROOT_KEY, admin_key, user_key))
 
@@ -273,7 +272,9 @@ async def test_default_initialization_preserves_existing_users(
         return read(path, *args, **kwargs)
 
     monkeypatch.setattr(agfs, "read", missing_accounts)
-    await manager.load()
+    with pytest.raises(FailedPreconditionError, match="Account registry is missing"):
+        await manager.load()
+    monkeypatch.setattr(agfs, "read", read)
     assert read("/local/default/_system/users.json") == original_registry
     assert (await manager.resolve_identity(key)).role == Role.ADMIN
 

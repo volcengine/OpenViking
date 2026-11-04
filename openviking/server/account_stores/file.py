@@ -8,8 +8,9 @@ import fnmatch
 import hashlib
 import hmac
 import json
+import re
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional, overload
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
@@ -56,6 +57,7 @@ ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
 GROUPS_PATH_TEMPLATE = "/local/{account_id}/_system/groups.json"
 _MAX_FILE_ACCOUNT_ID_BYTES = 255
+_REGISTRY_READ_RETRY_DELAYS = (0.05, 0.1)
 
 
 # Argon2id parameters shared with API key hashing.
@@ -142,6 +144,9 @@ class FileStore(AccountStore):
         # File locks remain responsible for inter-instance coordination.
         self._mutation_lock = AsyncSemaphore(1)
         self._deletion_lock = AsyncSemaphore(1)
+        self._cache_available = False
+        self._registry_read_retries = 0
+        self._registry_read_failures = 0
 
     def _discard_account_state(self, account_id: str) -> None:
         """Remove an account and its key index entries from in-memory state."""
@@ -183,15 +188,47 @@ class FileStore(AccountStore):
     async def load(self) -> None:
         """Load keys into memory (writable startup path; migrates plaintext; see reload())."""
         async with self._mutation_lock:
-            accounts_data = await self._read_json(ACCOUNTS_PATH)
-            if accounts_data is None:
-                # First run: create default account
-                now = datetime.now(timezone.utc).isoformat()
-                accounts_data = {"accounts": {"default": {"created_at": now}}}
-                default_users_path = USERS_PATH_TEMPLATE.format(account_id="default")
-                if await self._read_json(default_users_path) is None:
-                    await self._write_json(default_users_path, {"users": {}})
-                await self._write_json(ACCOUNTS_PATH, accounts_data)
+            lease = await self._async_agfs.pathlock_acquire_exact(ACCOUNTS_PATH, timeout_secs=10.0)
+            try:
+                signature = await self._stat_signature(ACCOUNTS_PATH)
+                accounts_data = await self._read_json(
+                    ACCOUNTS_PATH,
+                    required=bool(self._accounts) or signature[1] is not None,
+                    lease_ref=lease,
+                )
+                if accounts_data is None:
+                    default_users_path = USERS_PATH_TEMPLATE.format(account_id="default")
+                    # Orphaned identities are an existing store, never bootstrap evidence.
+                    if await self._stat_signature(default_users_path) != (
+                        default_users_path,
+                        None,
+                        None,
+                    ):
+                        self._cache_available = False
+                        raise FailedPreconditionError(
+                            "Account registry is missing; existing identities require recovery."
+                        )
+                    now = datetime.now(timezone.utc).isoformat()
+                    accounts_data = {"accounts": {"default": {"created_at": now}}}
+                    users_lease = await self._async_agfs.pathlock_acquire_exact(
+                        default_users_path, timeout_secs=10.0
+                    )
+                    try:
+                        if (
+                            await self._read_json(default_users_path, lease_ref=users_lease)
+                            is not None
+                        ):
+                            raise FailedPreconditionError(
+                                "Account registry is missing; existing identities require recovery."
+                            )
+                        await self._write_json(
+                            default_users_path, {"users": {}}, lease_ref=users_lease
+                        )
+                    finally:
+                        await self._async_agfs.pathlock_release(users_lease)
+                    await self._write_json(ACCOUNTS_PATH, accounts_data, lease_ref=lease)
+            finally:
+                await self._async_agfs.pathlock_release(lease)
 
             accounts, prefix_index, user_group_ids = await self._build_state(
                 accounts_data, allow_migration=True
@@ -199,6 +236,7 @@ class FileStore(AccountStore):
             self._accounts = accounts
             self._prefix_index = prefix_index
             self._user_group_ids = user_group_ids
+            self._cache_available = True
             logger.info(
                 "FileStore loaded: %d accounts, %d user keys",
                 len(self._accounts),
@@ -229,9 +267,11 @@ class FileStore(AccountStore):
     async def _watch_store(self) -> None:
         try:
             last_signature = await self._compute_store_signature()
-        except Exception:
+        except Exception as exc:
+            self._cache_available = False
             logger.warning(
-                "Initial account store signature failed; watcher will retry", exc_info=True
+                "Initial account store signature failed; watcher will retry error_type=%s",
+                type(exc).__qualname__,
             )
             last_signature = None
 
@@ -239,17 +279,23 @@ class FileStore(AccountStore):
             await asyncio.sleep(self._watch_interval_seconds)
             try:
                 signature = await self._compute_store_signature()
-            except Exception:
-                logger.debug("Account store signature check failed", exc_info=True)
+            except Exception as exc:
+                self._cache_available = False
+                logger.debug(
+                    "Account store signature check failed error_type=%s", type(exc).__qualname__
+                )
                 continue
-            if signature == last_signature:
+            if signature == last_signature and self._cache_available:
                 continue
             try:
                 await self._reload()
                 last_signature = signature
                 logger.info("Account store change detected; provider cache reloaded")
-            except Exception:
-                logger.warning("Account store reload failed; will retry", exc_info=True)
+            except Exception as exc:
+                self._cache_available = False
+                logger.warning(
+                    "Account store reload failed; will retry error_type=%s", type(exc).__qualname__
+                )
 
     async def _reload(self) -> None:
         """Read-only refresh: re-read store and atomically swap state (never writes/migrates)."""
@@ -259,10 +305,7 @@ class FileStore(AccountStore):
     async def _reload_unlocked(self) -> None:
         """Reload while holding ``_mutation_lock``."""
         async with self._reload_lock:
-            accounts_data = await self._read_json(ACCOUNTS_PATH)
-            if accounts_data is None:
-                # Store not initialized yet (reader started before writer): keep state.
-                return
+            accounts_data = await self._read_json(ACCOUNTS_PATH, required=True)
 
             accounts, prefix_index, user_group_ids = await self._build_state(
                 accounts_data, allow_migration=False
@@ -271,6 +314,7 @@ class FileStore(AccountStore):
             self._accounts = accounts
             self._prefix_index = prefix_index
             self._user_group_ids = user_group_ids
+            self._cache_available = True
             logger.debug(
                 "FileStore reloaded: %d accounts, %d user keys",
                 len(self._accounts),
@@ -278,9 +322,7 @@ class FileStore(AccountStore):
             )
 
     async def _refresh_accounts_from_store_unlocked(self) -> None:
-        accounts_data = await self._read_json(ACCOUNTS_PATH)
-        if accounts_data is None:
-            return
+        accounts_data = await self._read_json(ACCOUNTS_PATH, required=True)
         persisted_accounts = accounts_data.get("accounts", {})
 
         for account_id in set(self._accounts) - set(persisted_accounts):
@@ -303,8 +345,8 @@ class FileStore(AccountStore):
 
     async def _refresh_account_users_from_store_unlocked(self, account_id: str) -> None:
         users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
-        users_data = await self._read_json(users_path)
         account = self._accounts.get(account_id)
+        users_data = await self._read_json(users_path, required=account is not None)
         if users_data is None and account is None:
             raise NotFoundError(account_id, "account")
 
@@ -355,7 +397,7 @@ class FileStore(AccountStore):
 
         for account_id, info in accounts_data.get("accounts", {}).items():
             users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
-            users_data = await self._read_json(users_path)
+            users_data = await self._read_json(users_path, required=True)
             users = users_data.get("users", {}) if users_data else {}
             groups_path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
             groups_data = await self._read_json(groups_path)
@@ -419,32 +461,38 @@ class FileStore(AccountStore):
         """Return a cheap (path, size, modTime) signature over accounts.json + all users.json."""
         signature: list[tuple] = []
 
-        accounts_data = await self._read_json(ACCOUNTS_PATH)
-        signature.append(await self._stat_signature(ACCOUNTS_PATH))
+        accounts_data = await self._read_json(ACCOUNTS_PATH, required=True)
+        signature.append(await self._stat_signature(ACCOUNTS_PATH, required=True))
 
         if accounts_data:
             for account_id in accounts_data.get("accounts", {}):
                 users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
-                signature.append(await self._stat_signature(users_path))
+                signature.append(await self._stat_signature(users_path, required=True))
                 groups_path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
                 signature.append(await self._stat_signature(groups_path))
 
         return tuple(signature)
 
-    async def _stat_signature(self, path: str) -> tuple:
+    async def _stat_signature(self, path: str, *, required: bool = False) -> tuple:
         """Return a (path, size, mod_time) tuple for one file; missing/error yields a sentinel."""
         try:
             # Bypass plugin-local stat caches: on S3 the sliding-TTL stat cache
             # would otherwise pin stale metadata and mask writer-side changes.
             info = await self._async_agfs.stat(path, bypass_cache=True)
         except AGFSNotFoundError:
+            if required:
+                self._cache_available = False
+                raise FailedPreconditionError(
+                    "Required identity registry metadata is missing."
+                ) from None
             return (path, None, None)
         except Exception:
-            logger.debug("Failed to stat %s for key-store signature", path, exc_info=True)
-            return (path, None, None)
+            self._cache_available = False
+            raise
 
         if not isinstance(info, dict):
-            return (path, None, None)
+            self._cache_available = False
+            raise FailedPreconditionError("Invalid identity registry metadata.")
 
         size = info.get("size")
         mod_time = info.get("modTime", info.get("mod_time", info.get("mtime")))
@@ -657,6 +705,7 @@ class FileStore(AccountStore):
                         raise InvalidArgumentError(error)
 
         created_accounts = 0
+        new_account_ids: set[str] = set()
         created_users = 0
         now = datetime.now(timezone.utc).isoformat()
 
@@ -671,7 +720,7 @@ class FileStore(AccountStore):
                 conflict_type="account_registry_busy",
             ) from exc
         try:
-            accounts_data = await self._read_accounts_for_update()
+            accounts_data = await self._read_accounts_for_update(lease_ref=accounts_lease)
             persisted_accounts = accounts_data.setdefault("accounts", {})
             normalized = {
                 account_id: user_ids
@@ -682,6 +731,7 @@ class FileStore(AccountStore):
                 if account_id not in persisted_accounts:
                     validate_file_account_id(account_id)
                     persisted_accounts[account_id] = {"created_at": now}
+                    new_account_ids.add(account_id)
                     created_accounts += 1
             if created_accounts:
                 await self._write_json(ACCOUNTS_PATH, accounts_data, lease_ref=accounts_lease)
@@ -699,7 +749,11 @@ class FileStore(AccountStore):
                     conflict_type="user_registry_busy",
                 ) from exc
             try:
-                users_data = await self._read_json(path) or {"users": {}}
+                users_data = await self._read_json(
+                    path, required=account_id not in new_account_ids, lease_ref=users_lease
+                )
+                if users_data is None:
+                    users_data = {"users": {}}
                 persisted_users = users_data.setdefault("users", {})
                 new_users = sorted(
                     user_id for user_id in user_ids if user_id not in persisted_users
@@ -1258,31 +1312,86 @@ class FileStore(AccountStore):
         )
         return ph.hash(api_key)
 
-    async def _read_json(self, path: str) -> Optional[dict]:
-        """Read a JSON file from AGFS with encryption support. Returns None if not found."""
-        try:
-            content = await self._async_agfs.read(path)
-            if isinstance(content, bytes):
-                raw = content
-            else:
-                raw = content.content if hasattr(content, "content") else b""
+    @overload
+    async def _read_json(
+        self, path: str, *, required: Literal[True], lease_ref: object | None = None
+    ) -> dict: ...
 
-            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            return json.loads(text)
-        except AGFSNotFoundError as exc:
-            if path.endswith("/_system/users.json"):
-                logger.warning(
-                    "account_store_diag registry_missing path=%s client_type=%s error_type=%s",
-                    path,
-                    type(self._viking_fs.agfs).__qualname__,
-                    type(exc).__qualname__,
+    @overload
+    async def _read_json(
+        self, path: str, *, required: bool = False, lease_ref: object | None = None
+    ) -> Optional[dict]: ...
+
+    async def _read_json(
+        self, path: str, *, required: bool = False, lease_ref: object | None = None
+    ) -> Optional[dict]:
+        """Retry ENOENT for required registries; never synthesize a writable baseline."""
+        delays = _REGISTRY_READ_RETRY_DELAYS if required else ()
+        for attempt in range(len(delays) + 1):
+            try:
+                content = await self._async_agfs.read(
+                    path, fs_ctx=self._fs_ctx_with_lease(path, lease_ref)
                 )
-                # Keep only the native NotFound path; arbitrary exception text can
-                # contain credentials when a third-party client implements read.
-                detail = str(exc)
-                if detail.lower().startswith("not found: /"):
-                    logger.warning("account_store_diag registry_missing_detail %s", detail[:1024])
-            return None
+                raw = content if isinstance(content, bytes) else getattr(content, "content", b"")
+                text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise FailedPreconditionError("Invalid identity registry.")
+                if path == ACCOUNTS_PATH:
+                    field = "accounts"
+                elif path.endswith("/_system/users.json"):
+                    field = "users"
+                else:
+                    field = None
+                if field is not None:
+                    entries = data.get(field)
+                    if not isinstance(entries, dict) or any(
+                        not isinstance(info, dict) for info in entries.values()
+                    ):
+                        raise FailedPreconditionError("Invalid identity registry.")
+                if attempt:
+                    logger.info(
+                        "account_store_diag registry_read_recovered path=%s attempts=%d",
+                        path,
+                        attempt + 1,
+                    )
+                return data
+            except AGFSNotFoundError as exc:
+                if attempt < len(delays):
+                    self._registry_read_retries += 1
+                    await asyncio.sleep(delays[attempt])
+                    continue
+                if not required:
+                    return None
+                self._cache_available = False
+                self._registry_read_failures += 1
+                logger.warning(
+                    "account_store_diag registry_missing path=%s attempts=%d "
+                    "retry_total=%d failure_total=%d",
+                    path,
+                    attempt + 1,
+                    self._registry_read_retries,
+                    self._registry_read_failures,
+                )
+                # Only export bounded native classifications, never arbitrary exception text.
+                detail = re.search(
+                    r"stage=(open|metadata|read) .*?kind=([A-Za-z]+) errno=Some\((\d+)\)",
+                    str(exc),
+                )
+                if detail is not None:
+                    logger.warning(
+                        "account_store_diag registry_missing_detail stage=%s kind=%s errno=%s",
+                        *detail.groups(),
+                    )
+                kind = "Account" if path == ACCOUNTS_PATH else "User"
+                raise FailedPreconditionError(
+                    f"{kind} registry is missing; refusing to use an unreadable identity store."
+                ) from None
+            except Exception:
+                if required:
+                    self._cache_available = False
+                raise
+        raise AssertionError("Registry read loop exhausted without a result")
 
     @staticmethod
     def _fs_ctx_with_lease(path: str, lease_ref: object | None) -> Dict[str, str] | None:
@@ -1295,7 +1404,7 @@ class FileStore(AccountStore):
         else:
             ref = getattr(lease_ref, "lease_ref", None) or getattr(lease_ref, "id", None)
         if not isinstance(ref, str) or not ref:
-            return None
+            raise FailedPreconditionError("Invalid identity registry lease.")
         fs_ctx = fs_ctx_from_agfs_path(path)
         fs_ctx["lease_ref"] = ref
         return fs_ctx
@@ -1341,13 +1450,8 @@ class FileStore(AccountStore):
                 )
         self._prefix_index = prefix_index
 
-    async def _read_accounts_for_update(self) -> dict:
-        data = await self._read_json(ACCOUNTS_PATH)
-        if data is None:
-            raise FailedPreconditionError(
-                "Account registry is missing; refusing to overwrite it with account changes."
-            )
-        return data
+    async def _read_accounts_for_update(self, *, lease_ref: object | None = None) -> dict:
+        return await self._read_json(ACCOUNTS_PATH, required=True, lease_ref=lease_ref)
 
     async def _save_accounts_json(
         self,
@@ -1366,7 +1470,7 @@ class FileStore(AccountStore):
                 conflict_type="account_registry_busy",
             ) from exc
         try:
-            data = await self._read_accounts_for_update()
+            data = await self._read_accounts_for_update(lease_ref=lease)
             accounts = data.setdefault("accounts", {})
             for account_id in reject_existing_account_ids or set():
                 if account_id in accounts:
@@ -1409,34 +1513,21 @@ class FileStore(AccountStore):
                 conflict_type="user_registry_busy",
             ) from exc
         try:
-            account = self._accounts.get(account_id)
-            cached_users = account.users if account is not None else {}
             if replace_existing:
                 users = copy.deepcopy(updated_users or {})
                 data = {"users": users}
-                registry_found = None
             else:
-                persisted = await self._read_json(path)
-                registry_found = persisted is not None
-                data = persisted or {"users": {}}
+                data = await self._read_json(path, required=True, lease_ref=lease)
                 users = data.setdefault("users", {})
-            logger.warning(
-                "account_store_diag save_read account=%s replace_existing=%s "
-                "registry_found=%s persisted_members=%s cached_members=%s updated=%s deleted=%s",
+            logger.debug(
+                "account_store_diag save_read account=%s replace_existing=%s members=%d "
+                "updated=%d deleted=%d",
                 account_id,
                 replace_existing,
-                registry_found,
-                json.dumps({uid: info.get("role") for uid, info in users.items()}, sort_keys=True),
-                json.dumps(
-                    {uid: info.get("role") for uid, info in cached_users.items()}, sort_keys=True
-                ),
-                sorted(updated_users or {}),
-                sorted(deleted_user_ids or set()),
+                len(users),
+                len(updated_users or {}),
+                len(deleted_user_ids or set()),
             )
-            if registry_found is False:
-                raise FailedPreconditionError(
-                    "User registry is missing; refusing to overwrite it with user changes."
-                )
             # Check persisted credentials while holding the cross-instance lease.
             # Request-time authentication and the local cache may already be stale.
             for user_id, expected_key in (expected_api_keys or {}).items():
@@ -1459,10 +1550,10 @@ class FileStore(AccountStore):
             for user_id in deleted_user_ids or set():
                 users.pop(user_id, None)
             await self._write_json(path, data, lease_ref=lease)
-            logger.warning(
-                "account_store_diag save_written account=%s members=%s",
+            logger.debug(
+                "account_store_diag save_written account=%s members=%d",
                 account_id,
-                json.dumps({uid: info.get("role") for uid, info in users.items()}, sort_keys=True),
+                len(users),
             )
 
             account = self._accounts.get(account_id)
@@ -1489,6 +1580,8 @@ class FileStore(AccountStore):
 
     async def _refresh_accounts_for_management_read_unlocked(self) -> None:
         """Refresh account state while the caller holds ``_mutation_lock``."""
+        if not self._cache_available:
+            await self._reload_unlocked()
         if not self._watcher_running():
             async with self._reload_lock:
                 await self._refresh_accounts_from_store_unlocked()
@@ -1497,6 +1590,8 @@ class FileStore(AccountStore):
         self, account_id: str
     ) -> None:
         """Refresh user state while the caller holds ``_mutation_lock``."""
+        if not self._cache_available:
+            await self._reload_unlocked()
         if not self._watcher_running():
             async with self._reload_lock:
                 await self._refresh_account_users_from_store_unlocked(account_id)
@@ -1521,6 +1616,8 @@ class FileStore(AccountStore):
         return summary
 
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None:
+        if not self._cache_available:
+            await self._reload()
         account = self._accounts.get(account_id)
         if account is None:
             return None
@@ -1784,6 +1881,8 @@ class FileStore(AccountStore):
         account_id_hint: str | None = None,
         user_id_hint: str | None = None,
     ) -> tuple[str, str] | None:
+        if not self._cache_available:
+            await self._reload()
         for entry in self._prefix_index.get(self._get_key_prefix(api_key), []):
             if account_id_hint is not None and entry.account_id != account_id_hint:
                 continue

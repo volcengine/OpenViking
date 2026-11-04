@@ -341,10 +341,49 @@ impl LocalFileSystem {
 
     /// Map local file failures into stable filesystem error categories.
     fn map_error(path: &str, error: std::io::Error) -> Error {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Error::NotFound(path.to_string());
+        match error.kind() {
+            ErrorKind::NotFound => Error::NotFound(path.to_string()),
+            ErrorKind::PermissionDenied => Error::PermissionDenied(path.to_string()),
+            ErrorKind::NotADirectory => Error::NotADirectory(path.to_string()),
+            _ => Error::Io(error),
         }
-        Error::plugin(format!("failed to read file: {}", error))
+    }
+
+    fn map_read_error(path: &str, local_path: &Path, stage: &str, error: io::Error) -> Error {
+        if path.ends_with("/_system/users.json") || path.ends_with("/_system/accounts.json") {
+            tracing::debug!(
+                path,
+                local_path = %local_path.display(),
+                stage,
+                error_kind = ?error.kind(),
+                errno = ?error.raw_os_error(),
+                "account_store_diag local_registry_read_failed"
+            );
+            if error.kind() == ErrorKind::NotFound {
+                return Error::NotFound(format!(
+                    "{path} [stage={stage} local_path={} kind={:?} errno={:?}]",
+                    local_path.display(),
+                    error.kind(),
+                    error.raw_os_error()
+                ));
+            }
+        }
+        Self::map_error(path, error)
+    }
+
+    fn read_open_file(path: &str, local_path: &Path, mut file: fs::File) -> Result<Vec<u8>> {
+        use std::io::Read;
+
+        let metadata = file
+            .metadata()
+            .map_err(|error| Self::map_read_error(path, local_path, "metadata", error))?;
+        if metadata.is_dir() {
+            return Err(Error::IsADirectory(path.to_string()));
+        }
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)
+            .map_err(|error| Self::map_read_error(path, local_path, "read", error))?;
+        Ok(data)
     }
 
     /// Run blocking local filesystem work on a dedicated thread.
@@ -834,55 +873,14 @@ impl FileSystem for LocalFileSystem {
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let local_path = self.resolve_path(path)?;
-
-        // Check if exists and is not a directory
-        let metadata = fs::metadata(&local_path).map_err(|error| {
-            if path.ends_with("/_system/users.json") {
-                tracing::warn!(
-                    path,
-                    local_path = %local_path.display(),
-                    error_kind = ?error.kind(),
-                    errno = ?error.raw_os_error(),
-                    "account_store_diag local_registry_metadata_failed"
-                );
-            }
-            if path.ends_with("/_system/users.json") {
-                Error::NotFound(format!(
-                    "{path} [stage=metadata local_path={} kind={:?} errno={:?}]",
-                    local_path.display(),
-                    error.kind(),
-                    error.raw_os_error()
-                ))
-            } else {
-                Error::NotFound(path.to_string())
-            }
-        })?;
-
-        if metadata.is_dir() {
-            return Err(Error::plugin(format!("is a directory: {}", path)));
-        }
-
-        // Read file
-        let data = fs::read(&local_path).map_err(|error| {
-            if path.ends_with("/_system/users.json") {
-                tracing::warn!(
-                    path,
-                    local_path = %local_path.display(),
-                    error_kind = ?error.kind(),
-                    errno = ?error.raw_os_error(),
-                    "account_store_diag local_registry_read_failed"
-                );
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    return Error::NotFound(format!(
-                        "{path} [stage=read local_path={} kind={:?} errno={:?}]",
-                        local_path.display(),
-                        error.kind(),
-                        error.raw_os_error()
-                    ));
-                }
-            }
-            Self::map_error(path, error)
-        })?;
+        let owned_path = path.to_string();
+        // A replacement after open must not make metadata and read target different inodes.
+        let data = Self::run_blocking_fs(move || {
+            let file = fs::File::open(&local_path)
+                .map_err(|error| Self::map_read_error(&owned_path, &local_path, "open", error))?;
+            Self::read_open_file(&owned_path, &local_path, file)
+        })
+        .await?;
 
         // Apply offset and size
         let file_size = data.len() as u64;
@@ -890,7 +888,7 @@ impl FileSystem for LocalFileSystem {
         let end = if size == 0 {
             data.len()
         } else {
-            (offset + size).min(file_size) as usize
+            offset.saturating_add(size).min(file_size) as usize
         };
 
         if start >= data.len() {
@@ -1326,6 +1324,57 @@ mod tests {
             &dir.path().join("missing.txt")
         )
         .unwrap());
+    }
+
+    #[test]
+    fn test_open_read_survives_path_replacement() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "users.json", "original registry");
+        write_file(dir.path(), "replacement.json", "replacement registry");
+        let path = dir.path().join("users.json");
+        let file = fs::File::open(&path).unwrap();
+        fs::rename(dir.path().join("replacement.json"), &path).unwrap();
+        assert_eq!(
+            LocalFileSystem::read_open_file("/users.json", &path, file).unwrap(),
+            b"original registry"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"replacement registry");
+    }
+
+    #[test]
+    fn test_read_errors_preserve_permission_and_io_failures() {
+        assert!(matches!(
+            LocalFileSystem::map_error("/users.json", io::Error::from(ErrorKind::PermissionDenied)),
+            Error::PermissionDenied(_)
+        ));
+        assert!(matches!(
+            LocalFileSystem::map_error("/users.json", io::Error::from_raw_os_error(5)),
+            Error::Io(_)
+        ));
+        assert!(matches!(
+            LocalFileSystem::map_error(
+                "/users.json/child",
+                io::Error::from(ErrorKind::NotADirectory)
+            ),
+            Error::NotADirectory(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_read_ranges_and_missing_stage() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "note.txt", "abcdef");
+        let fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(fs.read("/note.txt", 2, 3).await.unwrap(), b"cde");
+        assert_eq!(fs.read("/note.txt", 2, u64::MAX).await.unwrap(), b"cdef");
+        assert!(fs.read("/note.txt", u64::MAX, 1).await.unwrap().is_empty());
+        assert!(matches!(
+            fs.read("/", 0, 0).await,
+            Err(Error::IsADirectory(_))
+        ));
+        let error = fs.read("/a/_system/users.json", 0, 0).await.unwrap_err();
+        assert!(matches!(&error, Error::NotFound(_)));
+        assert!(error.to_string().contains("stage=open"));
     }
 
     #[test]
