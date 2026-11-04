@@ -16,6 +16,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
     ExperienceSet,
+    ExperienceSetLoader,
     PolicyApplyResult,
     PolicyPlanItem,
     PolicyUpdatePlan,
@@ -35,6 +36,14 @@ class CommitFS:
 
     def __init__(self):
         self.files = {}
+        self._async_agfs = SimpleNamespace(
+            pathlock_acquire_exact_batch=AsyncMock(return_value={"lease_ref": "trajectory"}),
+            pathlock_acquire_exact_tree_batch=AsyncMock(return_value={"lease_ref": "policy"}),
+            pathlock_release=AsyncMock(),
+        )
+
+    def _uri_to_path(self, uri, ctx=None):
+        return "/" + uri.removeprefix("viking://")
 
     async def read_file(self, uri, ctx=None):
         if uri not in self.files:
@@ -45,7 +54,12 @@ class CommitFS:
         self.files[uri] = content
 
     async def ls(self, *args, **kwargs):
-        return []
+        prefix = args[0].rstrip("/") + "/"
+        return [
+            {"uri": uri, "name": uri.removeprefix(prefix), "isDir": False}
+            for uri in self.files
+            if uri.startswith(prefix) and "/" not in uri.removeprefix(prefix)
+        ]
 
 
 class CommitTrainer:
@@ -73,15 +87,51 @@ class CommitTrainer:
                     links=gradient.links,
                 )
             )
-            self.fs.files[uri] = after
+            if gradient.after_file.memory_type != "experiences":
+                self.fs.files[uri] = after
+        if any(g.after_file.memory_type == "experiences" for g in gradients):
+            from openviking.session.train.components.policy_optimizer import (
+                _operations_to_plan_items,
+            )
+            from openviking.session.train.components.policy_updater import MemoryFilePolicyUpdater
+
+            self.policy_set = await ExperienceSetLoader(viking_fs=self.fs).load(
+                self.policy_set.root_uri, ctx=self.ctx
+            )
+            operations = ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        memory_type=g.after_file.memory_type,
+                        memory_fields=g.after_file.to_metadata(),
+                        uris=[g.target_uri],
+                    )
+                    for g in gradients
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+            items = _operations_to_plan_items(
+                operations=operations,
+                gradients=gradients,
+                policy_set=self.policy_set,
+                memory_type="experiences",
+            )
+            apply_result = await MemoryFilePolicyUpdater(viking_fs=self.fs).apply(
+                PolicyUpdatePlan(items=items),
+                self.policy_set,
+                self.ctx,
+            )
+            self.policy_set = apply_result.updated_policy_set
+        else:
+            apply_result = PolicyApplyResult(
+                updated_policy_set=self.policy_set,
+                written_uris=[item.target_uri for item in items],
+            )
         result = RolloutTrainingResult(
             analyses=[analysis],
             gradients=gradients,
             plan=PolicyUpdatePlan(items=items),
-            apply_result=PolicyApplyResult(
-                updated_policy_set=self.policy_set,
-                written_uris=[item.target_uri for item in items],
-            ),
+            apply_result=apply_result,
         )
         if batch_finalizer:
             await batch_finalizer(result)
@@ -142,6 +192,7 @@ def commit_runtime(monkeypatch):
         experience_output,
     )
     ctx = RequestContext(user=UserIdentifier.the_default_user("u"), role=Role.ROOT)
+    trainer.ctx = ctx
     cases = [
         Case(
             name=name,
@@ -312,6 +363,18 @@ async def test_commit_preserves_evaluator_training_semantics(
             "openviking.session.compressor_v3.TrajectoryAnalyzerContext",
             lambda **kwargs: TrajectoryAnalyzerContext(**kwargs, inject_evaluation_feedback=False),
         )
+        submit = runtime.trainer.submit_gradients
+
+        async def submit_scoped(gradients, **kwargs):
+            suffix = "success" if kwargs["analysis"].evaluation.passed else "failure"
+            for gradient in gradients:
+                name = f"{gradient.target_name}_{suffix}"
+                gradient.after_file.uri = f"{runtime.trainer.policy_set.root_uri}/{name}.md"
+                gradient.after_file.extra_fields["experience_name"] = name
+                gradient.after_file.content = name
+            return await submit(gradients, **kwargs)
+
+        monkeypatch.setattr(runtime.trainer, "submit_gradients", submit_scoped)
     separate_extraction = evaluation_mode == "different_feedback"
     rows = (
         [[("shared", None)], [("shared", None)]]
@@ -353,6 +416,9 @@ async def test_commit_preserves_evaluator_training_semantics(
         uri = runtime.case_uris[case.name]
         mf = MemoryFileUtils.read(runtime.fs.files[uri], uri=uri)
         expected_names = {"shared"} if separate_extraction else {case.name, "shared"}
+        if evaluation_mode == "scores_only":
+            suffix = "success" if case.name == "book" else "failure"
+            expected_names = {f"{name}_{suffix}" for name in expected_names}
         assert {
             link["to_uri"] for link in mf.links if "/memories/experiences/" in link["to_uri"]
         } == {f"{runtime.trainer.policy_set.root_uri}/{name}.md" for name in expected_names}
@@ -367,3 +433,7 @@ async def test_commit_preserves_evaluator_training_semantics(
             assert trajectory.extra_fields["case_uris"] == [uri]
     if separate_extraction:
         assert case_trajectories[0].isdisjoint(case_trajectories[1])
+    else:
+        shared_uri = next(iter(case_trajectories[0].intersection(case_trajectories[1])))
+        shared = MemoryFileUtils.read(runtime.fs.files[shared_uri], uri=shared_uri)
+        assert set(shared.extra_fields["case_uris"]) == set(runtime.case_uris.values())

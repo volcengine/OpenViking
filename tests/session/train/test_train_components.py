@@ -973,6 +973,13 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
         ),
     ]
 
+    shared_uri = "viking://user/u/memories/trajectories/shared.md"
+    for gradient, case_name in zip(gradients, ("cancel", "refund"), strict=True):
+        gradient.links.append(
+            StoredLink(from_uri=gradient.target_uri, to_uri=shared_uri, link_type="derived_from")
+        )
+        gradient.metadata["case_uris"] = [f"viking://user/u/memories/cases/{case_name}.md"]
+
     class FakeExtractLoop:
         def __init__(self, **kwargs):
             pass
@@ -1014,10 +1021,20 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
         PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
-    links_by_name = {item.target_name: {link.to_uri for link in item.links} for item in plan.items}
+    links_by_name = {
+        item.target_name: {link.to_uri for link in item.links if link.link_type == "derived_from"}
+        for item in plan.items
+    }
     assert links_by_name == {
-        "取消资格核验": {"viking://user/u/memories/trajectories/traj_cancel.md"},
-        "退款总额传达": {"viking://user/u/memories/trajectories/traj_refund.md"},
+        "取消资格核验": {"viking://user/u/memories/trajectories/traj_cancel.md", shared_uri},
+        "退款总额传达": {"viking://user/u/memories/trajectories/traj_refund.md", shared_uri},
+    }
+    assert {
+        item.target_name: {link.from_uri for link in item.links if "/cases/" in link.from_uri}
+        for item in plan.items
+    } == {
+        "取消资格核验": {"viking://user/u/memories/cases/cancel.md"},
+        "退款总额传达": {"viking://user/u/memories/cases/refund.md"},
     }
 
 
@@ -1117,7 +1134,7 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
 
     upserts = [item for item in plan.items if item.kind == "upsert"]
     deletes = [item for item in plan.items if item.kind == "delete"]
-    assert [item.target_uri for item in deletes] == ([old_uri] if supersedes else [])
+    assert deletes == []
     assert len(upserts) == 1
     assert {link.to_uri for link in upserts[0].links} == {
         "viking://user/u/memories/trajectories/traj1.md",

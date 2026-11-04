@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from openviking.config.vlm import VLMResolver
@@ -358,6 +359,7 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
 
 def _compact_gradient_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     compact = dict(metadata)
+    compact.pop("case_uris", None)  # Runtime link ownership, not merge instructions.
     memory_fields = compact.get("memory_fields")
     if isinstance(memory_fields, dict) and "content" in memory_fields:
         compact["memory_fields"] = {
@@ -489,7 +491,6 @@ def _operations_to_plan_items(
         if target_uri:
             upsert_target_uris.add(target_uri)
 
-    delete_uris: set[str] = set()
     for old_file in getattr(operations, "delete_file_contents", []) or []:
         target_uri = old_file.uri
         target_name = str(
@@ -519,36 +520,42 @@ def _operations_to_plan_items(
                     "rationale": "PatchMergeContextProvider merge requested memory deletion.",
                     "merge_gradient_count": len(gradients),
                 },
+                replacement_uri=(getattr(operations, "delete_replacements", {}) or {}).get(
+                    target_uri
+                ),
             )
         )
-        delete_uris.add(target_uri)
-
-    for policy in superseded_policies:
-        if policy.uri in upsert_target_uris or policy.uri in delete_uris:
+    case_uris_by_source: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for gradient in gradients:
+        for key in _gradient_source_keys(gradient, policy_set):
+            case_uris_by_source[key].update(gradient.metadata.get("case_uris", []))
+    for item in items:
+        if item.kind != "upsert" or item.memory_type != "experiences":
             continue
-        items.append(
-            PolicyPlanItem(
-                kind="delete",
-                memory_type=memory_type,
-                target_name=policy.name,
-                target_uri=policy.uri,
-                before_content=policy.content,
-                after_content=None,
-                base_version=policy.version,
-                confidence=confidence,
-                links=_source_trajectory_links_from_experience(policy),
-                metadata={
-                    "rationale": "Superseded by broader experience from semantic gradient.",
-                    "merge_gradient_count": len(gradients),
-                    "superseded_by": [
-                        item.target_uri or item.target_name
-                        for item in items
-                        if item.kind == "upsert"
-                    ],
-                },
-            )
+        source_keys = _plan_item_source_keys(
+            target_uri=item.target_uri or "",
+            target_name=item.target_name,
+            before_content=item.before_content,
+            after_content=item.after_content,
+            source_links_by_target=source_links_by_target,
+            replacement_source_uris=replacement_source_uris_by_target.get(item.target_uri or "", []),
+            include_all_sources=upsert_output_count == 1,
         )
-        delete_uris.add(policy.uri)
+        case_uris = {
+            case_uri
+            for key in source_keys
+            for case_uri in case_uris_by_source.get(key, [])
+        }
+        item.links.extend(
+            StoredLink(
+                from_uri=case_uri,
+                to_uri=item.target_uri,
+                weight=1.0,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            for case_uri in sorted(case_uris)
+            if item.target_uri
+        )
     return items
 
 
@@ -714,7 +721,7 @@ def _plan_item_source_keys(
     # treat it as this plan item's source.  This handles URI/name normalization
     # without turning duplicate-content batches into a broadcast.
     content = str(after_content or "").strip()
-    if content:
+    if content and not keys:
         matches = [
             key
             for key in all_keys
