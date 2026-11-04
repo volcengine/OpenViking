@@ -12,6 +12,29 @@
   --ov-ui-status-error: #ff9595;
 }
 
+/* Rspress's large hero buttons have no padding around longer labels. */
+.rp-home-hero__actions .rp-home-hero__action {
+  display: inline-flex;
+  width: auto;
+  height: auto;
+  min-height: 48px;
+  padding: 10px 28px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.rp-home-hero__actions .rp-home-hero__action:hover {
+  text-decoration: none;
+}
+
+@media (width <= 768px) {
+  .rp-home-hero__actions .rp-home-hero__action {
+    min-height: 42px;
+    padding: 10px 20px;
+  }
+}
+
 .ov-demo-row {
   display: flex;
   flex-wrap: wrap;
