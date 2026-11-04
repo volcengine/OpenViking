@@ -144,6 +144,10 @@ const activity = {
     },
   },
   filesystem: {
+    console: {
+      search: 'Search files and content',
+      shortcut: '⌘K',
+    },
     copyUri: 'Copy current URI',
     copied: 'URI copied',
     copyFailed: 'Copy failed',

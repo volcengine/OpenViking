@@ -13,7 +13,7 @@ import {
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import {
   getOvResult,
   isOvClientError,
@@ -185,7 +185,7 @@ async function fetchSkillDetail(skill: SkillItem): Promise<SkillDetail> {
 
 export function SkillsRoute() {
   const { t } = useTranslation('skillsPage')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const [selectedSkill, setSelectedSkill] = React.useState<SkillItem | null>(
     null,
   )

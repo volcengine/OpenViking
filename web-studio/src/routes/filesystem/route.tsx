@@ -1,8 +1,9 @@
 import type { FilesystemSearch } from '#/features/workbench/filesystem/lib/types'
-import { FilesystemRoute } from '#/features/workbench/filesystem/page'
+import { FilesystemEntry } from '#/app/composition/filesystem-entry'
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/filesystem')({
+  staticData: { studioTheme: 'workbench' },
   validateSearch: (search: Record<string, unknown>): FilesystemSearch => ({
     file: typeof search.file === 'string' ? search.file : undefined,
     panel:
@@ -13,5 +14,5 @@ export const Route = createFileRoute('/filesystem')({
     upload: search.upload === true || search.upload === 'true',
     uri: typeof search.uri === 'string' ? search.uri : undefined,
   }),
-  component: FilesystemRoute,
+  component: FilesystemEntry,
 })

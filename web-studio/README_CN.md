@@ -204,6 +204,37 @@ VITE_OV_BASE_URL=https://ov-api.example.com npm run build
 
 `VITE_OV_BASE_URL` 是浏览器中的初始 OpenViking API origin。用户仍可以在连接弹窗中修改它。
 
+Studio 默认使用私有化版，绑定自定义域名也不会切换版本。其 `/login` 默认输入服务地址和一把
+API Key，由服务端识别角色：ROOT 直接进入管理后台；Admin 和普通 User 进入个人工作台。
+Admin 同时可以管理自己的数据空间，普通 User 没有管理入口。
+
+官方托管构建需要显式指定版本：
+
+```bash
+VITE_STUDIO_EDITION=volcengine npm run build
+```
+
+可使用 `VITE_STUDIO_HOSTED_API_URL` 覆盖固定的 HTTPS 托管服务地址。官方版只接受该地址，
+不提供管理后台；私有化版可连接自部署或火山托管服务。
+发布环境独立于部署版本：构建 base 为 `/workbench-stg/` 时，火山登录、连接编辑和请求默认使用
+`https://api.vikingdb-stg.cn-beijing.volces.com/openviking`；根路径默认使用生产地址。
+也可显式设置 `VITE_STUDIO_ENVIRONMENT=stg`，或通过运行时配置 `environment: 'stg'` 选择环境。
+运行时环境优先于构建环境，显式环境优先于 base 推导；显式托管地址覆盖仍然优先。
+STG 的火山连接只接受其配置地址，已有生产连接需重新按 STG 验证，自部署服务仍可配置。
+这不会根据前缀改变私有化/官方版本，也不会授予角色权限。
+
+运行时覆盖方式与本阶段验收范围见[部署配置与登录验收记录](docs/all-ov-studio-stage-0.md)。
+公共认证路由已补齐：`/login`、`/login/api-key`、`/login/email`、`/forgot-password`、
+`/reset-password`、`/invite`；已有连接也可直接访问。`/login` 在私有化版默认显示
+API Key，在官方火山版默认显示邮箱。API Key 认证继续可用；邮箱、密码恢复与邀请页面
+当前仅提供前端校验及服务暂不可用状态，不发送账号请求、不创建会话、不发送重置邮件，
+也不接受邀请。真实账号 API 与邀请完整流程仍待联调，当前范围与验证证据见
+[局部 UX 迁移记录](docs/all-ov-studio-ux-migration.md)。
+
+个人终端与 Studio 合并的讨论背景、双版本登录规则、角色边界及暂缓事项，见
+[项目背景与已确认决策](docs/all-ov-studio-background.md)；当前入口目录与枚举见
+[入口分层说明](docs/studio-entry-architecture.md)。
+
 ### 3. 独立 host 部署
 
 示例 URL：

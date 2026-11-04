@@ -1,4 +1,4 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { readFilesystemAgentSessionIds } from '#/features/workbench/filesystem/lib/utils'
 import { DeleteConversation } from '#/features/workbench/sessions/components/delete-conversation'
 import { Thread } from '#/features/workbench/sessions/components/thread'
@@ -25,7 +25,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export function VikingBotPage() {
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   return <VikingBotWorkspace key={identityScopeKey} scope={identityScopeKey} />
 }
 

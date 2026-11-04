@@ -278,6 +278,7 @@ it('keeps a valid data connection and its resolved identity when a separate cont
 function RecoveryState() {
   const {
     reconnect,
+    accessContext,
     connection,
     connectionRole,
     isConnectionRoleLoading,
@@ -290,6 +291,7 @@ function RecoveryState() {
       <output data-testid="recovery-state">
         {JSON.stringify({
           mode: serverMode,
+          verification: accessContext.data.status,
           role: isConnectionRoleLoading ? 'loading' : connectionRole,
           account: connection.accountId,
           user: connection.userId,
@@ -361,6 +363,7 @@ it('reconnects health, auth mode and identity together after a temporary outage 
     await waitFor(() =>
       expect(state()).toEqual({
         mode: 'api_key',
+        verification: 'verified',
         role: 'user',
         account: 'account-a',
         user: 'alice',
@@ -369,6 +372,12 @@ it('reconnects health, auth mode and identity together after a temporary outage 
       }),
     )
     expect(client.getQueryData(['studio-feature', 'previous'])).toBeUndefined()
+    healthy = false
+    fireEvent.click(screen.getByRole('button', { name: 'Retry connection' }))
+    expect(state().verification).toBe('unchecked')
+    await waitFor(() => expect(state().mode).toBe('offline'))
+    await waitFor(() => expect(state().role).toBe('unknown'))
+    expect(state().verification).toBe('unchecked')
   } finally {
     cleanup()
     client.clear()

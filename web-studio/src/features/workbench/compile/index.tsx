@@ -1,4 +1,4 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import {
   CapabilityNotice,
   useCompileCapability,
@@ -97,7 +97,7 @@ export function CompileList() {
 
 function CompileTaskList() {
   const { t, i18n } = useTranslation('compile')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const skillName = useCompileSkillName()
   const location = useLocation()
   const search = routeApi.useSearch(),

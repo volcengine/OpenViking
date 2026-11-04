@@ -1,4 +1,4 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
   ActivityIcon,
@@ -137,7 +137,7 @@ function SectionTabs({ activeTab }: { activeTab: GatewayTab }) {
 export function GatewayLayout() {
   const { t } = useTranslation('gateway')
   const navigate = useNavigate()
-  const { isGatewayHost } = useAppConnection()
+  const { isGatewayHost } = useConnectionAccess()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })

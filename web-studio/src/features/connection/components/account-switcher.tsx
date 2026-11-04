@@ -38,7 +38,7 @@ import {
 import { ovClient } from '#/shared/api/ov-client/index'
 import { OpenVikingMark } from '#/shared/components/openviking-mark'
 import { PLAIN_INPUT_PROPS } from '#/shared/lib/form-input'
-import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
+import { resolveConfiguredServiceProvider } from '#/platform/connection/service-provider'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 import {

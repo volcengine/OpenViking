@@ -32,7 +32,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import {
   fetchDirectoryLevelContent,
   fetchFileContent,
@@ -506,7 +506,7 @@ export function TerminalPanel({
   toolbarContainer: HTMLDivElement | null
 }) {
   const { t } = useTranslation('filesystem')
-  const { connectionRole, identityScopeKey } = useAppConnection()
+  const { connectionRole, identityScopeKey } = useConnectionAccess()
   const { invalidateAll } = useInvalidateVikingFs()
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
@@ -2029,7 +2029,10 @@ export function TerminalPanel({
             ) : null}
           </div>
         </div>
-        <div className="border-t bg-background p-3">
+        <div
+          data-fs-slot="terminal-composer"
+          className="border-t bg-background p-3"
+        >
           <form
             className="relative rounded-xl border bg-background px-3 py-2 focus-within:border-ring"
             onSubmit={(event) => {
@@ -2447,7 +2450,7 @@ function TerminalQuickStart({
   title: string
 }) {
   return (
-    <section className="py-10">
+    <section data-fs-slot="terminal-welcome" className="py-10">
       <h2 className="font-mono text-xl font-normal tracking-tight text-foreground">
         {heading}
         <span
@@ -2646,7 +2649,7 @@ export function CompileTaskResult({
   onOpenResource: ResourceOpenHandler
 }) {
   const { t } = useTranslation('compile')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const { invalidateAll, invalidatePreview } = useInvalidateVikingFs()
   const refreshedTasksRef = useRef(new Set<string>())
   const query = useQuery({

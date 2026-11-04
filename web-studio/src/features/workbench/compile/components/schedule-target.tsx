@@ -1,4 +1,4 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { ContextLink } from '#/features/workbench/compile/components/context-link'
 import {
   defaultSchedule,
@@ -44,7 +44,7 @@ export function CompileScheduleTarget({
   target: CompileConfigSummary
 }) {
   const { t, i18n } = useTranslation('compile')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const client = useQueryClient()
   const navigate = useNavigate()
   const switchId = useId()
@@ -250,7 +250,7 @@ function ScheduleDialog({
   onSave: (schedule: UpdateSchedule) => void
 }) {
   const { t } = useTranslation('compile')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
   const [filled, setFilled] = useState(false)
   const config = useQuery({

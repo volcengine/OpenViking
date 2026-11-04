@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { Button } from '#/shared/ui/button'
 import {
   Sheet,
@@ -30,7 +30,7 @@ export function ExperiencePreviewSheet({
   onClose: () => void
 }) {
   const { t } = useTranslation('agentExperiencePage')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const contentQuery = useQuery({
     enabled: Boolean(experience),
     queryFn: ({ signal }) => fetchContent(experience?.uri ?? '', signal),

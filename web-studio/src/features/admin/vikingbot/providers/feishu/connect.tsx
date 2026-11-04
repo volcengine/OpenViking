@@ -14,7 +14,7 @@ import {
 import { FeishuSetup } from '#/features/admin/vikingbot/providers/feishu/feishu-setup'
 import { GroupSetup } from '#/features/admin/vikingbot/providers/feishu/group-setup'
 import { ReplyMode } from '#/features/admin/vikingbot/providers/feishu/reply-settings'
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { createRandomUuid } from '#/shared/lib/browser-crypto'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
@@ -68,7 +68,7 @@ function ScanSetup({
   onManual: (connection?: Connection) => void
 }) {
   const { t } = useTranslation('vikingbot')
-  const { identityScopeKey: scope } = useAppConnection()
+  const { identityScopeKey: scope } = useConnectionAccess()
   const client = useQueryClient()
   const [requireMention, setRequireMention] = useState(true)
   const [name, setName] = useState('VikingBot')

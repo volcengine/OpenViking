@@ -1,4 +1,7 @@
+import type { ConnectionIdentitySummary } from './connection-contract'
+import { normalizeConnectionDraft } from '#/platform/connection/configuration'
 import { createConnectionHealthHeaders } from '#/features/connection/lib/auth'
+import { assertAllowedConnection } from './connection-policy'
 import {
   readCredentialStorage,
   writeCredentialStorage,
@@ -10,7 +13,6 @@ import {
   readServerIdentity,
   resolveServerAuthMode,
 } from '#/features/connection/lib/health'
-import type { ConnectionProfile } from '#/features/connection/lib/profiles'
 import type { StudioMode } from '#/features/connection/lib/studio-mode'
 import type {
   ConnectionDraft,
@@ -20,7 +22,9 @@ import i18n from '#/i18n'
 import { fetchAdminAccounts } from '#/shared/api/admin'
 import { resolveApiKeyAuth } from '#/shared/api/auth'
 import { isOvClientError, ovClient } from '#/shared/api/ov-client/index'
-import { identifyServiceProvider } from '#/shared/lib/studio-service'
+import { identifyServiceProvider } from '#/platform/connection/service-provider'
+
+export { normalizeConnectionDraft } from '#/platform/connection/configuration'
 
 export type {
   ConnectionDraft,
@@ -29,56 +33,11 @@ export type {
 
 export { createConnectionHealthHeaders } from '#/features/connection/lib/auth'
 
-export type ConnectionIdentitySummary = {
-  labelKey: string
-  values?: {
-    identity?: string
-  }
-}
-
-export type GeneratedCredential = {
-  accountId?: string
-  apiKey: string
-  userId?: string
-}
-
-export type AppConnectionContextValue = {
-  profiles: Array<ConnectionProfile>
-  activeProfileId: string
-  saveProfile: (profile: ConnectionProfile) => void
-  activateProfile: (id: string) => void
-  deleteProfile: (id: string) => void
-  clearGeneratedCredential: () => void
-  connection: ConnectionDraft
-  connectionRole: ConnectionRole
-  generatedCredential: GeneratedCredential | null
-  identityScopeKey: string
-  isConnectionRoleLoading: boolean
-  isGatewayHost: boolean
-  openvikingUrl: string
-  openConnectionSettings: () => void
-  reconnect: () => void
-  serverHealth: Record<string, unknown> | null
-  saveConnection: (next: ConnectionDraft) => void
-  setGeneratedCredential: (credential: GeneratedCredential) => void
-  serverMode: ServerMode
-  studioMode: StudioMode
-  switchIdentity: (identity: {
-    accountId: string
-    allowLegacyIdentityFallback?: boolean
-    /** Keep the selected connection configuration while changing its scope. */
-    preserveProfile?: boolean
-    /** A management-only resource identity must not replace the user's workspace. */
-    rememberWorkbench?: boolean
-    signal?: AbortSignal
-    apiKey: string
-    userId: string
-  }) => Promise<void>
-  switchManagementAccount: (
-    accountId: string,
-    options?: { preserveProfile?: boolean },
-  ) => Promise<void>
-}
+export type {
+  AppConnectionContextValue,
+  GeneratedCredential,
+  ConnectionIdentitySummary,
+} from './connection-contract'
 
 export const CONNECTION_STORAGE_KEY = 'ov_console_connection'
 
@@ -175,29 +134,6 @@ export function persistConnection(connection: ConnectionDraft): void {
     writeCredentialStorage(CONNECTION_STORAGE_KEY, JSON.stringify(connection))
   } catch {
     // Ignore localStorage failures in restricted environments.
-  }
-}
-
-export function normalizeConnectionDraft(
-  connection: ConnectionDraft,
-): ConnectionDraft {
-  return {
-    authMode: connection.authMode,
-    serviceSelection:
-      connection.serviceSelection === 'opensource' ||
-      connection.serviceSelection === 'volcengine'
-        ? connection.serviceSelection
-        : 'auto',
-    accountId: connection.accountId.trim(),
-    adminApiKey: connection.adminApiKey.trim(),
-    apiKey: connection.apiKey.trim(),
-    // Keep the URL as typed (whitespace trimmed only). Stripping the trailing
-    // slash here ran on every keystroke and fought the input: typing the "//"
-    // of "http://" kept collapsing back to "http:". Trailing slashes are
-    // stripped where the URL is actually used instead (ovClient.setOptions,
-    // fetchServerHealth, detectConnectionRole, and the admin client).
-    baseUrl: connection.baseUrl.trim(),
-    userId: connection.userId.trim(),
   }
 }
 
@@ -310,6 +246,7 @@ export function applyConnection(
   serverMode: ServerMode,
   studioMode: StudioMode = 'management',
 ): void {
+  assertAllowedConnection(connection)
   ovClient.setOptions({
     credentialScope: studioMode === 'management' ? 'control' : 'data',
     baseUrl: connection.baseUrl,

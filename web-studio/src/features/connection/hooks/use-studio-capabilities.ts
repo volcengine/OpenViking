@@ -1,7 +1,7 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { fetchStudioCapability } from '#/features/connection/lib/capabilities'
-import { STUDIO_FEATURES } from '#/shared/lib/studio-service'
+import { STUDIO_FEATURES } from '#/platform/access/features'
 import { useQueries } from '@tanstack/react-query'
 
 // Only inexpensive, object-free GETs. Do not probe writes, imports, or search.

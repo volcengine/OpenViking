@@ -1,0 +1,47 @@
+.ball {
+  position: fixed;
+  z-index: 40;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: max(80px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 56px;
+  height: 56px;
+  padding: 6px;
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 14px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+}
+.panel {
+  width: min(288px, calc(100vw - 32px));
+}
+.options {
+  display: grid;
+  gap: 8px;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.option:has(:checked) {
+  border-color: var(--foreground);
+  background: var(--muted);
+}
+.option:has(:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.error {
+  font-size: 12px;
+  color: var(--destructive);
+}

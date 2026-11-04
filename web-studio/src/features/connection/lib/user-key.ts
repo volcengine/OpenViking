@@ -3,10 +3,8 @@ import {
   isUsableServerHealth,
   readServerIdentity,
 } from '#/features/connection/lib/health'
-import {
-  StudioSetupRequestError,
-  verifyStudioSetup,
-} from '#/features/connection/lib/onboarding'
+import { StudioSetupRequestError } from '#/features/connection/lib/connection-errors'
+import { verifyStudioSetup } from '#/features/connection/lib/connection-verification'
 import type { ConnectionDraft } from '#/features/connection/lib/types'
 
 export function validateUserKeySearch(search: Record<string, unknown>): {

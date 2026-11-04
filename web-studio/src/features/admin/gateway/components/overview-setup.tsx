@@ -13,7 +13,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 import {
@@ -161,7 +161,7 @@ type QuickIssued = {
 export function OverviewSetup() {
   const { t } = useTranslation('gateway')
   const { connection, access, readOnly, invalidate } = useGateway()
-  const { isGatewayHost } = useAppConnection()
+  const { isGatewayHost } = useConnectionAccess()
   const upstreams = useUpstreams()
   const profiles = useProfiles()
   const keys = useKeys()

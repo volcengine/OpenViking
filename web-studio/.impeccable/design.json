@@ -1,0 +1,335 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T18:25:14+08:00",
+  "title": "Design System: OpenViking Studio — Workbench 局部样式",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "primary",
+        "tonalRamp": [
+          "oklch(0.1500 0.2480 274.69)",
+          "oklch(0.2643 0.2480 274.69)",
+          "oklch(0.3786 0.2480 274.69)",
+          "oklch(0.4929 0.2480 274.69)",
+          "oklch(0.6071 0.2480 274.69)",
+          "oklch(0.7214 0.2480 274.69)",
+          "oklch(0.8357 0.2480 274.69)",
+          "oklch(0.9500 0.2480 274.69)"
+        ]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "primary-hover",
+        "tonalRamp": [
+          "oklch(0.1500 0.2314 273.37)",
+          "oklch(0.2643 0.2314 273.37)",
+          "oklch(0.3786 0.2314 273.37)",
+          "oklch(0.4929 0.2314 273.37)",
+          "oklch(0.6071 0.2314 273.37)",
+          "oklch(0.7214 0.2314 273.37)",
+          "oklch(0.8357 0.2314 273.37)",
+          "oklch(0.9500 0.2314 273.37)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "surface",
+        "tonalRamp": [
+          "oklch(0.1500 0.0000 89.88)",
+          "oklch(0.2643 0.0000 89.88)",
+          "oklch(0.3786 0.0000 89.88)",
+          "oklch(0.4929 0.0000 89.88)",
+          "oklch(0.6071 0.0000 89.88)",
+          "oklch(0.7214 0.0000 89.88)",
+          "oklch(0.8357 0.0000 89.88)",
+          "oklch(0.9500 0.0000 89.88)"
+        ]
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "foreground",
+        "tonalRamp": [
+          "oklch(0.1500 0.0085 285.34)",
+          "oklch(0.2643 0.0085 285.34)",
+          "oklch(0.3786 0.0085 285.34)",
+          "oklch(0.4929 0.0085 285.34)",
+          "oklch(0.6071 0.0085 285.34)",
+          "oklch(0.7214 0.0085 285.34)",
+          "oklch(0.8357 0.0085 285.34)",
+          "oklch(0.9500 0.0085 285.34)"
+        ]
+      },
+      "muted-foreground": {
+        "role": "neutral",
+        "displayName": "muted-foreground",
+        "tonalRamp": [
+          "oklch(0.1500 0.0419 279.96)",
+          "oklch(0.2643 0.0419 279.96)",
+          "oklch(0.3786 0.0419 279.96)",
+          "oklch(0.4929 0.0419 279.96)",
+          "oklch(0.6071 0.0419 279.96)",
+          "oklch(0.7214 0.0419 279.96)",
+          "oklch(0.8357 0.0419 279.96)",
+          "oklch(0.9500 0.0419 279.96)"
+        ]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "canvas",
+        "tonalRamp": [
+          "oklch(0.1500 0.0080 286.25)",
+          "oklch(0.2643 0.0080 286.25)",
+          "oklch(0.3786 0.0080 286.25)",
+          "oklch(0.4929 0.0080 286.25)",
+          "oklch(0.6071 0.0080 286.25)",
+          "oklch(0.7214 0.0080 286.25)",
+          "oklch(0.8357 0.0080 286.25)",
+          "oklch(0.9500 0.0080 286.25)"
+        ]
+      },
+      "auth-visual": {
+        "role": "neutral",
+        "displayName": "auth-visual",
+        "tonalRamp": [
+          "oklch(0.1500 0.0062 255.47)",
+          "oklch(0.2643 0.0062 255.47)",
+          "oklch(0.3786 0.0062 255.47)",
+          "oklch(0.4929 0.0062 255.47)",
+          "oklch(0.6071 0.0062 255.47)",
+          "oklch(0.7214 0.0062 255.47)",
+          "oklch(0.8357 0.0062 255.47)",
+          "oklch(0.9500 0.0062 255.47)"
+        ]
+      },
+      "subtle": {
+        "role": "neutral",
+        "displayName": "subtle",
+        "tonalRamp": [
+          "oklch(0.1500 0.0029 264.54)",
+          "oklch(0.2643 0.0029 264.54)",
+          "oklch(0.3786 0.0029 264.54)",
+          "oklch(0.4929 0.0029 264.54)",
+          "oklch(0.6071 0.0029 264.54)",
+          "oklch(0.7214 0.0029 264.54)",
+          "oklch(0.8357 0.0029 264.54)",
+          "oklch(0.9500 0.0029 264.54)"
+        ]
+      },
+      "divider": {
+        "role": "neutral",
+        "displayName": "divider",
+        "tonalRamp": [
+          "oklch(0.1500 0.0055 274.96)",
+          "oklch(0.2643 0.0055 274.96)",
+          "oklch(0.3786 0.0055 274.96)",
+          "oklch(0.4929 0.0055 274.96)",
+          "oklch(0.6071 0.0055 274.96)",
+          "oklch(0.7214 0.0055 274.96)",
+          "oklch(0.8357 0.0055 274.96)",
+          "oklch(0.9500 0.0055 274.96)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "border",
+        "tonalRamp": [
+          "oklch(0.1500 0.0097 273.35)",
+          "oklch(0.2643 0.0097 273.35)",
+          "oklch(0.3786 0.0097 273.35)",
+          "oklch(0.4929 0.0097 273.35)",
+          "oklch(0.6071 0.0097 273.35)",
+          "oklch(0.7214 0.0097 273.35)",
+          "oklch(0.8357 0.0097 273.35)",
+          "oklch(0.9500 0.0097 273.35)"
+        ]
+      },
+      "secondary": {
+        "role": "neutral",
+        "displayName": "secondary",
+        "tonalRamp": [
+          "oklch(0.1500 0.0175 279.06)",
+          "oklch(0.2643 0.0175 279.06)",
+          "oklch(0.3786 0.0175 279.06)",
+          "oklch(0.4929 0.0175 279.06)",
+          "oklch(0.6071 0.0175 279.06)",
+          "oklch(0.7214 0.0175 279.06)",
+          "oklch(0.8357 0.0175 279.06)",
+          "oklch(0.9500 0.0175 279.06)"
+        ]
+      },
+      "secondary-foreground": {
+        "role": "neutral",
+        "displayName": "secondary-foreground",
+        "tonalRamp": [
+          "oklch(0.1500 0.2314 273.37)",
+          "oklch(0.2643 0.2314 273.37)",
+          "oklch(0.3786 0.2314 273.37)",
+          "oklch(0.4929 0.2314 273.37)",
+          "oklch(0.6071 0.2314 273.37)",
+          "oklch(0.7214 0.2314 273.37)",
+          "oklch(0.8357 0.2314 273.37)",
+          "oklch(0.9500 0.2314 273.37)"
+        ]
+      },
+      "dark-primary": {
+        "role": "primary",
+        "displayName": "dark-primary",
+        "tonalRamp": [
+          "oklch(0.1500 0.1568 281.63)",
+          "oklch(0.2643 0.1568 281.63)",
+          "oklch(0.3786 0.1568 281.63)",
+          "oklch(0.4929 0.1568 281.63)",
+          "oklch(0.6071 0.1568 281.63)",
+          "oklch(0.7214 0.1568 281.63)",
+          "oklch(0.8357 0.1568 281.63)",
+          "oklch(0.9500 0.1568 281.63)"
+        ]
+      },
+      "dark-canvas": {
+        "role": "neutral",
+        "displayName": "dark-canvas",
+        "tonalRamp": [
+          "oklch(0.1500 0.0197 284.57)",
+          "oklch(0.2643 0.0197 284.57)",
+          "oklch(0.3786 0.0197 284.57)",
+          "oklch(0.4929 0.0197 284.57)",
+          "oklch(0.6071 0.0197 284.57)",
+          "oklch(0.7214 0.0197 284.57)",
+          "oklch(0.8357 0.0197 284.57)",
+          "oklch(0.9500 0.0197 284.57)"
+        ]
+      },
+      "dark-surface": {
+        "role": "neutral",
+        "displayName": "dark-surface",
+        "tonalRamp": [
+          "oklch(0.1500 0.0229 284.51)",
+          "oklch(0.2643 0.0229 284.51)",
+          "oklch(0.3786 0.0229 284.51)",
+          "oklch(0.4929 0.0229 284.51)",
+          "oklch(0.6071 0.0229 284.51)",
+          "oklch(0.7214 0.0229 284.51)",
+          "oklch(0.8357 0.0229 284.51)",
+          "oklch(0.9500 0.0229 284.51)"
+        ]
+      },
+      "dark-foreground": {
+        "role": "neutral",
+        "displayName": "dark-foreground",
+        "tonalRamp": [
+          "oklch(0.1500 0.0080 286.25)",
+          "oklch(0.2643 0.0080 286.25)",
+          "oklch(0.3786 0.0080 286.25)",
+          "oklch(0.4929 0.0080 286.25)",
+          "oklch(0.6071 0.0080 286.25)",
+          "oklch(0.7214 0.0080 286.25)",
+          "oklch(0.8357 0.0080 286.25)",
+          "oklch(0.9500 0.0080 286.25)"
+        ]
+      }
+    },
+    "shadows": [
+      {
+        "name": "keyboard-focus",
+        "value": "0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent)",
+        "purpose": "共享 Button/Input 的键盘焦点环；不得被无阴影覆盖。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "auth-single-column-max",
+        "value": "760px"
+      },
+      {
+        "name": "filesystem-stacked-max",
+        "value": "767px"
+      },
+      {
+        "name": "filesystem-three-panel-min",
+        "value": "1280px"
+      }
+    ],
+    "typographyMeta": {
+      "input-mobile": {
+        "displayName": "移动端认证输入",
+        "purpose": "认证页宽度不超过 760px 时使用；保持既有表单层级。"
+      }
+    }
+  },
+  "components": [
+    {
+      "name": "认证主按钮",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "认证提交；包含悬停、焦点、按下及禁用状态。",
+      "html": "<button class=\"ds-submit\">连接服务</button>",
+      "css": ".ds-submit{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);height:44px;min-width:120px;padding:0 24px;border:1px solid transparent;border-radius:8px;font-size:14px;font-weight:500;background:var(--primary,#5252ff);color:var(--primary-foreground,#ffffff);cursor:pointer}.ds-submit:not(:disabled):hover{background:var(--wb-hover,#3833d2)}.ds-submit:focus-visible{border-color:var(--ring,#5252ff);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ring,#5252ff) 50%,transparent);}.ds-submit:not(:disabled):active{transform:translateY(1px)}.ds-submit:disabled{background:var(--muted,#f3f4f7);color:var(--muted-foreground,#6e718c);cursor:default}"
+    },
+    {
+      "name": "认证输入框",
+      "kind": "input",
+      "refersTo": "input-auth",
+      "description": "认证字段；静态阴影去除，保留键盘焦点反馈。",
+      "html": "<label class=\"ds-field\">服务地址<input class=\"ds-input\" value=\"https://example.com\" /></label>",
+      "css": ".ds-field{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:22px;color:var(--foreground,#0b0b0f)}.ds-input{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);height:44px;padding:4px 10px;border:1px solid var(--input,#e1e3ea);border-radius:8px;background:var(--background,#ffffff);color:var(--foreground,#0b0b0f);font-size:14px;box-shadow:none}.ds-input:focus-visible{border-color:var(--ring,#5252ff);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ring,#5252ff) 50%,transparent);}.ds-input:read-only{background:var(--wb-subtle,#fafbfd);color:var(--muted-foreground,#6e718c)}.ds-input:disabled{opacity:.5;cursor:not-allowed}@media (max-width:760px){.ds-input{font-size:16px}}"
+    },
+    {
+      "name": "上下文切换器",
+      "kind": "nav",
+      "description": "文件系统顶栏的空间与用户上下文入口；保留 Studio 原有交互。",
+      "html": "<nav class=\"ds-context\" aria-label=\"当前上下文\"><button class=\"ds-segment\">空间</button><span aria-hidden=\"true\">/</span><button class=\"ds-segment\">用户</button></nav>",
+      "css": ".ds-context{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);display:inline-flex;align-items:center;gap:4px;padding:2px 5px;border:1px solid var(--border,#e1e3ea);border-radius:22px;color:var(--foreground,#0b0b0f)}.ds-segment{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);height:28px;padding:0 10px;border:1px solid transparent;border-radius:20px;font-size:13px;color:inherit;background:transparent;cursor:pointer}.ds-segment:hover{background:var(--muted,#f3f4f7)}.ds-segment:focus-visible{border-color:var(--ring,#5252ff);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ring,#5252ff) 50%,transparent);}.ds-segment:active{transform:translateY(1px)}"
+    },
+    {
+      "name": "次级状态标签",
+      "kind": "chip",
+      "refersTo": "badge-secondary",
+      "description": "沿用 Studio Badge 的次级语义与紧凑胶囊形状。",
+      "html": "<span class=\"ds-badge\">当前连接</span>",
+      "css": ".ds-badge{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);display:inline-flex;align-items:center;height:20px;padding:2px 8px;border:1px solid transparent;border-radius:32px;font-size:12px;font-weight:500;background:var(--secondary,#edeffc);color:var(--secondary-foreground,#3833d2)}"
+    },
+    {
+      "name": "工作区面板",
+      "kind": "card",
+      "refersTo": "workspace-panel",
+      "description": "助手/终端或文档内容表面；通过边框与背景建立层级。",
+      "html": "<section class=\"ds-panel\"><div class=\"ds-toolbar\">文档</div><div class=\"ds-content\">当前文件内容</div></section>",
+      "css": ".ds-panel{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);overflow:hidden;border:1px solid var(--wb-divider,#edeef2);border-radius:16px;background:var(--background,#ffffff);color:var(--foreground,#0b0b0f)}.ds-toolbar{display:flex;align-items:center;min-height:56px;padding:0 16px;border-bottom:1px solid var(--wb-divider,#edeef2);font-size:14px}.ds-content{padding:16px;font-size:14px;line-height:22px}"
+    },
+    {
+      "name": "账号服务提示",
+      "kind": "custom",
+      "refersTo": "auth-service-notice",
+      "description": "公共账号表单与有 token 的邀请页明确说明服务暂不可用；不展示演示成功。",
+      "html": "<p class=\"ds-service-notice\" role=\"status\">账号服务暂不可用，请使用 API Key 登录。</p><div class=\"ds-auth-links\"><a class=\"ds-auth-link\" href=\"/login/api-key\">使用 API Key 登录</a></div>",
+      "css": ".ds-service-notice,.ds-auth-links{font-family:var(--wb-font,'PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif)}.ds-service-notice{margin-top:24px;font-size:13px;line-height:22px;color:var(--muted-foreground,#6e718c);overflow-wrap:anywhere}.ds-auth-links{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:24px}.ds-auth-link{display:inline-flex;align-items:center;min-height:32px;color:var(--primary,#5252ff);font-size:13px;line-height:22px;border-radius:4px;text-decoration:none;text-underline-offset:4px}.ds-auth-link:hover{text-decoration:underline}.ds-auth-link:focus-visible{outline:2px solid var(--ring,#5252ff);outline-offset:4px}@media (max-width:760px){.ds-auth-link{min-height:44px}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "延续现有 OV Workbench",
+    "overview": "本文件记录用户指定参考的局部继承，不定义 Studio 全站的新品牌。浅色背景、紫蓝色操作、细分隔线和紧凑内容区来自已有 Workbench；保留 Studio 的组件、身份权限和连接语义。该名称用于说明继承关系，不是新创作的视觉主题。\n\n适用范围由各文件路由的 `staticData.studioTheme` 标记决定，`src/app/layouts/app-shell.tsx` 消费标记应用主题：公共认证路径 `/login`、`/login/email`、`/login/api-key`、`/forgot-password`、`/reset-password`、`/invite`，以及兼容入口 `/onboarding`、`/filesystem`、`/settings`、`/connections/*` 启用。公共认证路径以 `src/features/auth/lib/auth-routes.ts` 为准；`/onboarding` 转到 `/login`，已有连接也能独立访问这些页面。文件系统顶栏与面板布局还受独立标记限制。其他页面继续使用既有 Studio 样式。",
+    "keyCharacteristics": [
+      "现有 Workbench 的认证分栏、插画与上下文工作区样式。",
+      "通过背景色、边框和留白区分内容层级。",
+      "桌面、平板、手机布局；保留 Studio 深色模式。"
+    ],
+    "rules": [
+      {
+        "name": "The Focus Preservation Rule",
+        "body": "去除装饰阴影时，不得覆盖 `focus-visible` 的边框与焦点环。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** 从实际主题 CSS 和原始 Workbench 文件核对样式，再同步设计文档。",
+      "**Do** 在目标路由内复用 Studio 组件，保留权限、键盘焦点、禁用和错误反馈。",
+      "**Do** 同时检查桌面、平板、手机与 Studio 深色模式。"
+    ],
+    "donts": [
+      "**Don't** 将本文件视为全站改版授权，或把限定主题扩散到其他路由。",
+      "**Don't** 为移除阴影而抹去焦点环。",
+      "**Don't** 把邮箱、密码恢复或邀请页面视为账号服务已接通，或迁入参考项目的模拟会话、演示成功分支和 Arco 依赖。"
+    ]
+  }
+}

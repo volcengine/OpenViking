@@ -17,7 +17,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { isOvClientError } from '#/shared/api/ov-client/index'
 import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { Button } from '#/shared/ui/button'
@@ -65,7 +65,7 @@ function getErrorMessage(error: unknown): string {
 
 export function ExperienceDetailRoute() {
   const { t, i18n } = useTranslation('agentExperiencePage')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const params = routeApi.useParams()
   // The router percent-encodes path params when building hrefs and decodes
   // them again on match, so `params.experienceUri` is the raw `viking://` URI.

@@ -20,7 +20,7 @@ import { Alert, AlertDescription, AlertTitle } from '#/shared/ui/alert'
 import { Badge } from '#/shared/ui/badge'
 import { Button } from '#/shared/ui/button'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { ObserverStatusContent } from '#/features/workbench/monitoring/components/observer-status-content'
 import { stripVersionPrefix } from '#/features/workbench/monitoring/lib/version'
 import {
@@ -137,7 +137,7 @@ function HealthBadge({
 
 export function MonitoringRoute() {
   const { i18n, t } = useTranslation('monitoringPage')
-  const { identityScopeKey, serverMode } = useAppConnection()
+  const { identityScopeKey, serverMode } = useConnectionAccess()
   const [activeType, setActiveType] = React.useState<MonitorType>('overview')
   const monitoringQuery = useQuery({
     enabled: serverMode !== 'offline',

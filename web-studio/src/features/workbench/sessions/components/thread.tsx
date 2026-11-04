@@ -2,7 +2,7 @@ import { CompassIcon } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { Composer } from '#/features/workbench/sessions/components/composer'
 import { MemoryImpact } from '#/features/workbench/sessions/components/memory-impact'
@@ -25,7 +25,7 @@ interface ThreadProps {
 }
 
 export function Thread(props: ThreadProps) {
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   return (
     <SessionThread key={`${identityScopeKey}:${props.sessionId}`} {...props} />
   )
@@ -35,7 +35,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const { t } = useTranslation('sessions')
   const service = useStudioService()
   const canChat = service.ready && service.provider === 'opensource'
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 

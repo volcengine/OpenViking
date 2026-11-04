@@ -1,3 +1,4 @@
+import { isCurrentVerification } from '#/features/connection/lib/connection-identity'
 // @vitest-environment jsdom
 import {
   completeStudioSetup,
@@ -6,6 +7,7 @@ import {
   studioSetupDestination,
   StudioSetupRequestError,
   verifyStudioSetup,
+  verifyConnection,
   WORKSPACE_SESSION_KEY,
 } from '#/features/connection/lib/onboarding'
 import { PROFILES_STORAGE_KEY } from '#/features/connection/lib/profiles'
@@ -405,7 +407,7 @@ it.each([
       new AbortController().signal,
     )
     expect(result.accountId).toBe(expectedAccount)
-    expect(result.userId).toBe(role === 'root' ? 'alice' : 'default')
+    expect(result.userId).toBe(role === 'root' ? '' : 'default')
     expect(result.apiKey).toBe(role === 'root' ? '' : 'control-key')
     if (role === 'root')
       expect(get.mock.calls[1][0].path.account_id).toBe(expectedAccount)
@@ -582,4 +584,63 @@ it('does not retry an invalid data credential with Root in API Key mode', async 
   ).rejects.toMatchObject({ stage: 'health', statusCode: 401 })
   expect(get).toHaveBeenCalledTimes(2)
   expect(vi.mocked(createClient).mock.calls[1][0]?.headers).toEqual({})
+})
+
+it('reuses an identical saved connection without replacing its profile name', async () => {
+  const first = await completeStudioSetup(draft, 'Custom name')
+  const second = await completeStudioSetup({ ...draft }, 'Auto name')
+  const state = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY)!)
+  expect(second).toBe(first)
+  expect(state.profiles).toHaveLength(1)
+  expect(state.profiles[0].name).toBe('Custom name')
+})
+it('does not create a new profile when reauthentication targets a deleted profile', async () => {
+  await expect(completeStudioSetup(draft, 'Name', 'deleted')).rejects.toThrow()
+  expect(localStorage.getItem(PROFILES_STORAGE_KEY)).toBeNull()
+})
+it('keeps independently verified data and control principals separate and invalidates changed credentials', async () => {
+  get
+    .mockResolvedValueOnce({
+      data: {
+        version: 'test',
+        auth_mode: 'api_key',
+        role: 'root',
+        account_id: 'system',
+        user_id: 'root',
+      },
+    })
+    .mockResolvedValueOnce({
+      data: {
+        version: 'test',
+        auth_mode: 'api_key',
+        role: 'user',
+        account_id: 'team',
+        user_id: 'alice',
+      },
+    })
+    .mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: { status: 'ok', result: [] },
+    })
+  const result = await verifyConnection(
+    { ...draft, apiKey: 'root-credential', adminApiKey: 'user-credential' },
+    new AbortController().signal,
+  )
+  expect(result.data).toMatchObject({
+    status: 'verified',
+    principal: { role: 'user', accountId: 'team', userId: 'alice' },
+  })
+  expect(result.control).toMatchObject({
+    status: 'verified',
+    principal: { role: 'root' },
+  })
+  expect(isCurrentVerification(result)).toBe(true)
+  expect(
+    isCurrentVerification(result, {
+      ...result.configuration,
+      apiKey: 'changed',
+    }),
+  ).toBe(false)
+  expect(isCurrentVerification(JSON.parse(JSON.stringify(result)))).toBe(false)
 })

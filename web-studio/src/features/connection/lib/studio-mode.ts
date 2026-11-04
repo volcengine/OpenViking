@@ -1,28 +1,37 @@
-import { resolveStudioManagementCapabilities } from '#/features/connection/lib/studio-permissions'
+import { isManagementPath, isSharedStudioPath } from '#/platform/entry/paths'
+import { canOpenManagementSurface } from '#/platform/access/management'
+import type { StudioMode, ServiceProvider } from '#/platform/studio-contract'
 import type {
   ConnectionDraft,
   ConnectionRole,
 } from '#/features/connection/lib/types'
-import type { ServiceProvider } from '#/shared/lib/studio-service'
 import type { ServerMode } from '#/shared/types/auth'
+import { resolveStudioEntry as resolveEntry } from '#/platform/entry/resolve-entry'
+import { resolveConnectionEntryAccess } from './connection-identity'
 
-export type StudioMode = 'management' | 'workbench'
-export function isManagementPath(pathname: string): boolean {
-  return pathname === '/admin' || pathname.startsWith('/admin/')
+export type { StudioMode } from '#/platform/studio-contract'
+
+/** Compatibility for old setup consumers; new routes consume accessContext. */
+export function resolveStudioEntry(input: {
+  connection: ConnectionDraft
+  provider: ServiceProvider
+  canManage: boolean
+  preferredMode: StudioMode | null
+  serverMode?: ServerMode
+  role?: ConnectionRole
+}) {
+  return resolveEntry({
+    access: resolveConnectionEntryAccess(input),
+    provider: input.provider,
+    preferredMode: input.preferredMode,
+  })
 }
-export function isConnectionSettingsPath(pathname: string): boolean {
-  return (
-    pathname === '/settings' ||
-    pathname === '/admin/settings' ||
-    pathname === '/connections/new' ||
-    pathname.startsWith('/connections/') ||
-    pathname === '/admin/connections/new' ||
-    pathname.startsWith('/admin/connections/')
-  )
-}
-export function isSharedStudioPath(pathname: string): boolean {
-  return pathname === '/oauth/verify'
-}
+
+export {
+  isManagementPath,
+  isConnectionSettingsPath,
+  isSharedStudioPath,
+} from '#/platform/entry/paths'
 export function hasStudioAccountScope(pathname: string): boolean {
   const path = pathname.replace(/\/+$/, '')
   return path !== '/admin/configuration/server'
@@ -67,19 +76,13 @@ export function canOpenManagement(input: {
   isRoleLoading: boolean
   serverMode: ServerMode
 }): boolean {
-  if (input.serverMode === 'dev')
-    return (
-      input.provider === 'opensource' &&
-      !input.isRoleLoading &&
-      input.role === 'root'
-    )
-  return resolveStudioManagementCapabilities({
+  return canOpenManagementSurface({
     serviceProvider: input.provider,
     hasControlCredential: Boolean(input.connection.adminApiKey.trim()),
-    role: input.role,
     isRoleLoading: input.isRoleLoading,
+    role: input.role,
     serverMode: input.serverMode,
-  }).canManageUsers
+  })
 }
 
 function preferenceKey(connection: ConnectionDraft): string {
@@ -115,28 +118,6 @@ export function savePreferredMode(
     // Preferences are optional when storage is unavailable.
   }
 }
-export function resolveStudioEntry({
-  canManage,
-  connection,
-  provider,
-  preferredMode,
-  serverMode,
-}: {
-  canManage: boolean
-  connection: ConnectionDraft
-  provider: ServiceProvider
-  preferredMode: StudioMode | null
-  serverMode?: ServerMode
-}): '/admin' | '/home' | '/filesystem' {
-  const hasDataIdentity =
-    Boolean(connection.apiKey) ||
-    serverMode === 'trusted' ||
-    serverMode === 'dev'
-  if (canManage && (preferredMode === 'management' || !hasDataIdentity))
-    return '/admin'
-  return provider === 'opensource' ? '/home' : '/filesystem'
-}
-
 export function newConnectionPath(
   settingsPath: '/settings' | '/admin/settings',
 ): '/connections/new' | '/admin/connections/new' {

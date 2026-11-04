@@ -10,10 +10,14 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsersRouteImport } from './routes/users'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as PlaygroundRouteImport } from './routes/playground'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as MemoriesRouteImport } from './routes/memories'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as InviteRouteImport } from './routes/invite'
 import { Route as GatewayRouteImport } from './routes/gateway'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as ConfigRouteImport } from './routes/config'
 import { Route as WatchesRouteRouteImport } from './routes/watches/route'
 import { Route as VikingbotRouteRouteImport } from './routes/vikingbot/route'
@@ -33,12 +37,15 @@ import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as VikingbotIndexRouteImport } from './routes/vikingbot/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
+import { Route as LoginIndexRouteImport } from './routes/login.index'
 import { Route as CompileIndexRouteImport } from './routes/compile/index'
 import { Route as AgentExperienceIndexRouteImport } from './routes/agent-experience/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as UsersSplatRouteImport } from './routes/users.$'
 import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
+import { Route as LoginEmailRouteImport } from './routes/login.email'
+import { Route as LoginApiKeyRouteImport } from './routes/login.api-key'
 import { Route as GatewaySplatRouteImport } from './routes/gateway.$'
 import { Route as ConnectionsUserKeyRouteImport } from './routes/connections/user-key'
 import { Route as ConnectionsNewRouteImport } from './routes/connections/new'
@@ -76,6 +83,11 @@ const UsersRoute = UsersRouteImport.update({
   path: '/users',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PlaygroundRoute = PlaygroundRouteImport.update({
   id: '/playground',
   path: '/playground',
@@ -91,9 +103,24 @@ const MemoriesRoute = MemoriesRouteImport.update({
   path: '/memories',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InviteRoute = InviteRouteImport.update({
+  id: '/invite',
+  path: '/invite',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const GatewayRoute = GatewayRouteImport.update({
   id: '/gateway',
   path: '/gateway',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConfigRoute = ConfigRouteImport.update({
@@ -191,6 +218,11 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => SessionsRouteRoute,
 } as any)
+const LoginIndexRoute = LoginIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => LoginRoute,
+} as any)
 const CompileIndexRoute = CompileIndexRouteImport.update({
   id: '/compile/',
   path: '/compile/',
@@ -220,6 +252,16 @@ const OauthConsentRoute = OauthConsentRouteImport.update({
   id: '/oauth/consent',
   path: '/oauth/consent',
   getParentRoute: () => rootRouteImport,
+} as any)
+const LoginEmailRoute = LoginEmailRouteImport.update({
+  id: '/email',
+  path: '/email',
+  getParentRoute: () => LoginRoute,
+} as any)
+const LoginApiKeyRoute = LoginApiKeyRouteImport.update({
+  id: '/api-key',
+  path: '/api-key',
+  getParentRoute: () => LoginRoute,
 } as any)
 const GatewaySplatRoute = GatewaySplatRouteImport.update({
   id: '/$',
@@ -404,10 +446,14 @@ export interface FileRoutesByFullPath {
   '/vikingbot': typeof VikingbotRouteRouteWithChildren
   '/watches': typeof WatchesRouteRoute
   '/config': typeof ConfigRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/gateway': typeof GatewayRouteWithChildren
+  '/invite': typeof InviteRoute
+  '/login': typeof LoginRouteWithChildren
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/gateway': typeof AdminGatewayRouteRouteWithChildren
   '/admin/users': typeof AdminUsersRouteRouteWithChildren
@@ -419,12 +465,15 @@ export interface FileRoutesByFullPath {
   '/connections/new': typeof ConnectionsNewRoute
   '/connections/user-key': typeof ConnectionsUserKeyRoute
   '/gateway/$': typeof GatewaySplatRoute
+  '/login/api-key': typeof LoginApiKeyRoute
+  '/login/email': typeof LoginEmailRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/$': typeof UsersSplatRoute
   '/admin/': typeof AdminIndexRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
+  '/login/': typeof LoginIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/vikingbot/': typeof VikingbotIndexRoute
   '/admin/configuration/server': typeof AdminConfigurationServerRoute
@@ -463,10 +512,13 @@ export interface FileRoutesByTo {
   '/tasks': typeof TasksRouteRoute
   '/watches': typeof WatchesRouteRoute
   '/config': typeof ConfigRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/gateway': typeof GatewayRouteWithChildren
+  '/invite': typeof InviteRoute
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/settings': typeof AdminSettingsRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
@@ -475,12 +527,15 @@ export interface FileRoutesByTo {
   '/connections/new': typeof ConnectionsNewRoute
   '/connections/user-key': typeof ConnectionsUserKeyRoute
   '/gateway/$': typeof GatewaySplatRoute
+  '/login/api-key': typeof LoginApiKeyRoute
+  '/login/email': typeof LoginEmailRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/$': typeof UsersSplatRoute
   '/admin': typeof AdminIndexRoute
   '/agent-experience': typeof AgentExperienceIndexRoute
   '/compile': typeof CompileIndexRoute
+  '/login': typeof LoginIndexRoute
   '/sessions': typeof SessionsIndexRoute
   '/vikingbot': typeof VikingbotIndexRoute
   '/admin/configuration/server': typeof AdminConfigurationServerRoute
@@ -524,10 +579,14 @@ export interface FileRoutesById {
   '/vikingbot': typeof VikingbotRouteRouteWithChildren
   '/watches': typeof WatchesRouteRoute
   '/config': typeof ConfigRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/gateway': typeof GatewayRouteWithChildren
+  '/invite': typeof InviteRoute
+  '/login': typeof LoginRouteWithChildren
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/gateway': typeof AdminGatewayRouteRouteWithChildren
   '/admin/users': typeof AdminUsersRouteRouteWithChildren
@@ -539,12 +598,15 @@ export interface FileRoutesById {
   '/connections/new': typeof ConnectionsNewRoute
   '/connections/user-key': typeof ConnectionsUserKeyRoute
   '/gateway/$': typeof GatewaySplatRoute
+  '/login/api-key': typeof LoginApiKeyRoute
+  '/login/email': typeof LoginEmailRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/$': typeof UsersSplatRoute
   '/admin/': typeof AdminIndexRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
+  '/login/': typeof LoginIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/vikingbot/': typeof VikingbotIndexRoute
   '/admin/configuration/server': typeof AdminConfigurationServerRoute
@@ -589,10 +651,14 @@ export interface FileRouteTypes {
     | '/vikingbot'
     | '/watches'
     | '/config'
+    | '/forgot-password'
     | '/gateway'
+    | '/invite'
+    | '/login'
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/reset-password'
     | '/users'
     | '/admin/gateway'
     | '/admin/users'
@@ -604,12 +670,15 @@ export interface FileRouteTypes {
     | '/connections/new'
     | '/connections/user-key'
     | '/gateway/$'
+    | '/login/api-key'
+    | '/login/email'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/$'
     | '/admin/'
     | '/agent-experience/'
     | '/compile/'
+    | '/login/'
     | '/sessions/'
     | '/vikingbot/'
     | '/admin/configuration/server'
@@ -648,10 +717,13 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/watches'
     | '/config'
+    | '/forgot-password'
     | '/gateway'
+    | '/invite'
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/reset-password'
     | '/users'
     | '/admin/settings'
     | '/agent-experience/$experienceUri'
@@ -660,12 +732,15 @@ export interface FileRouteTypes {
     | '/connections/new'
     | '/connections/user-key'
     | '/gateway/$'
+    | '/login/api-key'
+    | '/login/email'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/$'
     | '/admin'
     | '/agent-experience'
     | '/compile'
+    | '/login'
     | '/sessions'
     | '/vikingbot'
     | '/admin/configuration/server'
@@ -708,10 +783,14 @@ export interface FileRouteTypes {
     | '/vikingbot'
     | '/watches'
     | '/config'
+    | '/forgot-password'
     | '/gateway'
+    | '/invite'
+    | '/login'
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/reset-password'
     | '/users'
     | '/admin/gateway'
     | '/admin/users'
@@ -723,12 +802,15 @@ export interface FileRouteTypes {
     | '/connections/new'
     | '/connections/user-key'
     | '/gateway/$'
+    | '/login/api-key'
+    | '/login/email'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/$'
     | '/admin/'
     | '/agent-experience/'
     | '/compile/'
+    | '/login/'
     | '/sessions/'
     | '/vikingbot/'
     | '/admin/configuration/server'
@@ -772,10 +854,14 @@ export interface RootRouteChildren {
   VikingbotRouteRoute: typeof VikingbotRouteRouteWithChildren
   WatchesRouteRoute: typeof WatchesRouteRoute
   ConfigRoute: typeof ConfigRoute
+  ForgotPasswordRoute: typeof ForgotPasswordRoute
   GatewayRoute: typeof GatewayRouteWithChildren
+  InviteRoute: typeof InviteRoute
+  LoginRoute: typeof LoginRouteWithChildren
   MemoriesRoute: typeof MemoriesRoute
   OnboardingRoute: typeof OnboardingRoute
   PlaygroundRoute: typeof PlaygroundRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   UsersRoute: typeof UsersRouteWithChildren
   CompileNewRoute: typeof CompileNewRoute
   ConnectionsProfileIdRoute: typeof ConnectionsProfileIdRoute
@@ -794,6 +880,13 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/users'
       preLoaderRoute: typeof UsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/playground': {
@@ -817,11 +910,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MemoriesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite': {
+      id: '/invite'
+      path: '/invite'
+      fullPath: '/invite'
+      preLoaderRoute: typeof InviteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/gateway': {
       id: '/gateway'
       path: '/gateway'
       fullPath: '/gateway'
       preLoaderRoute: typeof GatewayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/config': {
@@ -957,6 +1071,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsIndexRouteImport
       parentRoute: typeof SessionsRouteRoute
     }
+    '/login/': {
+      id: '/login/'
+      path: '/'
+      fullPath: '/login/'
+      preLoaderRoute: typeof LoginIndexRouteImport
+      parentRoute: typeof LoginRoute
+    }
     '/compile/': {
       id: '/compile/'
       path: '/compile'
@@ -998,6 +1119,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/oauth/consent'
       preLoaderRoute: typeof OauthConsentRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/login/email': {
+      id: '/login/email'
+      path: '/email'
+      fullPath: '/login/email'
+      preLoaderRoute: typeof LoginEmailRouteImport
+      parentRoute: typeof LoginRoute
+    }
+    '/login/api-key': {
+      id: '/login/api-key'
+      path: '/api-key'
+      fullPath: '/login/api-key'
+      preLoaderRoute: typeof LoginApiKeyRouteImport
+      parentRoute: typeof LoginRoute
     }
     '/gateway/$': {
       id: '/gateway/$'
@@ -1355,6 +1490,20 @@ const GatewayRouteChildren: GatewayRouteChildren = {
 const GatewayRouteWithChildren =
   GatewayRoute._addFileChildren(GatewayRouteChildren)
 
+interface LoginRouteChildren {
+  LoginApiKeyRoute: typeof LoginApiKeyRoute
+  LoginEmailRoute: typeof LoginEmailRoute
+  LoginIndexRoute: typeof LoginIndexRoute
+}
+
+const LoginRouteChildren: LoginRouteChildren = {
+  LoginApiKeyRoute: LoginApiKeyRoute,
+  LoginEmailRoute: LoginEmailRoute,
+  LoginIndexRoute: LoginIndexRoute,
+}
+
+const LoginRouteWithChildren = LoginRoute._addFileChildren(LoginRouteChildren)
+
 interface UsersRouteChildren {
   UsersSplatRoute: typeof UsersSplatRoute
 }
@@ -1383,10 +1532,14 @@ const rootRouteChildren: RootRouteChildren = {
   VikingbotRouteRoute: VikingbotRouteRouteWithChildren,
   WatchesRouteRoute: WatchesRouteRoute,
   ConfigRoute: ConfigRoute,
+  ForgotPasswordRoute: ForgotPasswordRoute,
   GatewayRoute: GatewayRouteWithChildren,
+  InviteRoute: InviteRoute,
+  LoginRoute: LoginRouteWithChildren,
   MemoriesRoute: MemoriesRoute,
   OnboardingRoute: OnboardingRoute,
   PlaygroundRoute: PlaygroundRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   UsersRoute: UsersRouteWithChildren,
   CompileNewRoute: CompileNewRoute,
   ConnectionsProfileIdRoute: ConnectionsProfileIdRoute,

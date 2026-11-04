@@ -1,163 +1,155 @@
 // @vitest-environment jsdom
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import {
+  createMemoryHistory,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from '@tanstack/react-router'
+import { routeTree } from '#/routeTree.gen'
+import { AppShell } from './app-shell'
+import { StudioRouteLayout } from '#/app/router/studio-route-layout'
+import { AUTH_PATHS } from '#/features/auth/lib/auth-routes'
+import i18n from '#/i18n'
 
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-
-import { AppShell } from '#/app/layouts/app-shell'
-import { ConnectionScopedRouteContent } from '#/app/layouts/connection-boundary'
-import { shouldShowGatewayNavigation } from '#/app/navigation/visibility'
-
-const bootstrap = vi.hoisted(() => ({
-  health: vi.fn(),
-  pathname: '/',
-  navigate: vi.fn(),
-}))
+const { health } = vi.hoisted(() => ({ health: vi.fn() }))
 vi.mock('#/features/connection/lib/health', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  fetchServerHealth: bootstrap.health,
+  ...(await original<object>()),
+  fetchServerHealth: health,
+}))
+vi.mock('#/features/connection/lib/credential-storage', async (original) => ({
+  ...(await original<object>()),
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  AppConnectionProvider: () => <span data-testid="connected-provider" />,
+  ...(await original<object>()),
+  AppConnectionProvider: () => <div data-testid="connected-provider" />,
 }))
-
-vi.mock('@tanstack/react-router', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  Navigate: ({ to }: { to: string }) => <output>{to}</output>,
-  useNavigate: () => bootstrap.navigate,
-  useRouterState: ({
-    select,
-  }: {
-    select: (state: { location: { pathname: string } }) => unknown
-  }) => select({ location: { pathname: bootstrap.pathname } }),
+vi.mock('#/app/router/root-layout', () => ({
+  RootComponent: () => (
+    <AppShell>
+      <StudioRouteLayout>
+        <Outlet />
+      </StudioRouteLayout>
+    </AppShell>
+  ),
+  RootErrorComponent: ({ error }: { error: Error }) => (
+    <div>{error.message}</div>
+  ),
 }))
-
+beforeEach(async () => {
+  localStorage.clear()
+  sessionStorage.clear()
+  health.mockClear()
+  await i18n.changeLanguage('en')
+})
 afterEach(() => {
   cleanup()
-  bootstrap.pathname = '/'
+  delete window.__OV_STUDIO_CONFIG__
+  window.history.replaceState(null, '', '/')
 })
 
-describe('ConnectionScopedRouteContent', () => {
-  it('does not mount route content while the server mode is unresolved', () => {
-    render(
-      <ConnectionScopedRouteContent serverMode="checking">
-        <span data-testid="identity-scoped-route" />
-      </ConnectionScopedRouteContent>,
-    )
-
-    expect(screen.queryByTestId('identity-scoped-route')).toBeNull()
+async function open(path: string, basepath = '') {
+  window.history.replaceState(null, '', `${basepath}${path}`)
+  const router = createRouter({
+    routeTree,
+    basepath,
+    history: createMemoryHistory({ initialEntries: [`${basepath}${path}`] }),
   })
-
-  it.each(['api_key', 'trusted', 'dev', 'oidc', 'ldap', 'offline'] as const)(
-    'mounts route content after resolving %s mode',
-    (serverMode) => {
-      render(
-        <ConnectionScopedRouteContent serverMode={serverMode}>
-          <span data-testid="identity-scoped-route" />
-        </ConnectionScopedRouteContent>,
-      )
-
-      expect(screen.getByTestId('identity-scoped-route')).toBeTruthy()
-    },
+  const view = render(<RouterProvider router={router} />)
+  await router.load()
+  return { ...view, router }
+}
+function saved(
+  baseUrl = 'https://private.example',
+  serviceSelection = 'opensource',
+) {
+  localStorage.setItem(
+    'ov_console_connection',
+    JSON.stringify({
+      baseUrl,
+      serviceSelection,
+      apiKey: 'synthetic',
+      adminApiKey: '',
+      accountId: 'team',
+      userId: 'alice',
+    }),
   )
-})
-
-it('routes first use to the onboarding before mounting business routes', () => {
-  localStorage.clear()
-  sessionStorage.clear()
-  render(
-    <AppShell>
-      <span data-testid="business-route" />
-    </AppShell>,
-  )
-  expect(screen.queryByTestId('business-route')).toBeNull()
-  expect(screen.getByText('/onboarding')).toBeTruthy()
-  expect(localStorage.getItem('ov_console_connection_profiles')).toBeNull()
-})
-
-it('keeps existing connections out of first-use onboarding', () => {
-  localStorage.clear()
-  sessionStorage.setItem('ov_studio_workspace_selected', 'selected')
-  bootstrap.pathname = '/onboarding'
-  render(<AppShell>{null}</AppShell>)
-  expect(screen.getByText('/settings')).toBeTruthy()
-  expect(screen.queryByRole('heading')).toBeNull()
-})
-
-describe('gateway navigation', () => {
-  it.each([
-    ['dev', true, true],
-    ['api_key', true, true],
-    ['trusted', true, true],
-    ['api_key', false, false],
-    ['offline', true, false],
-    ['checking', true, false],
-  ] as const)('%s allowed %s: %s', (serverMode, allowed, visible) => {
-    expect(
-      shouldShowGatewayNavigation({
-        isGatewayHost: false,
-        serverMode,
-        allowed,
-      }),
-    ).toBe(visible)
-  })
-
-  it('always shows the entry on a standalone gateway', () => {
-    expect(
-      shouldShowGatewayNavigation({
-        isGatewayHost: true,
-        serverMode: 'offline',
-        allowed: false,
-      }),
-    ).toBe(true)
-  })
-})
-
-it('opens a fresh standalone Gateway Studio without the data-connection wizard', async () => {
-  localStorage.clear()
-  sessionStorage.clear()
-  window.history.replaceState(null, '', '/studio/')
-  bootstrap.health.mockResolvedValueOnce({
-    service: 'openviking-gateway',
-    auth_mode: 'api_key',
-  })
-  try {
-    render(
-      <AppShell>
-        <span data-testid="business-route" />
-      </AppShell>,
-    )
-    expect(await screen.findByTestId('connected-provider')).toBeTruthy()
-    expect(bootstrap.health).toHaveBeenCalledWith(window.location.origin)
-    expect(screen.queryByRole('heading')).toBeNull()
-  } finally {
-    window.history.replaceState(null, '', '/')
-  }
-})
-
-it('renders first-use onboarding only at /onboarding', () => {
-  localStorage.clear()
-  sessionStorage.clear()
-  bootstrap.pathname = '/onboarding'
-  render(<AppShell>{null}</AppShell>)
-  expect(screen.getByRole('heading', { level: 1 }).textContent).toContain(
-    'Choose a service',
-  )
-  expect(screen.queryByTestId('connected-provider')).toBeNull()
-})
-
-it.each([true, false])(
-  'redirects a mounted legacy /config surface with first-use=%s',
-  (firstUse) => {
-    localStorage.clear()
-    sessionStorage.clear()
-    if (!firstUse)
-      sessionStorage.setItem('ov_studio_workspace_selected', 'selected')
-    bootstrap.pathname = '/config'
-    render(<AppShell>{null}</AppShell>)
-    expect(
-      screen.getByText(firstUse ? '/onboarding' : '/settings'),
-    ).toBeTruthy()
-    expect(screen.queryByRole('heading')).toBeNull()
+}
+it.each(AUTH_PATHS.flatMap((path) => [path, `${path}/`]))(
+  'mounts public route %s without connected state or host discovery',
+  async (path) => {
+    saved()
+    const { container } = await open(path, '/studio')
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.queryByTestId('connected-provider')).toBeNull()
+    expect(health).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-studio-ux="workbench"]')).toBeTruthy()
   },
 )
+it.each(['/filesystem', '/onboarding', '/config'])(
+  'redirects first use or legacy route %s to the real login route',
+  async (path) => {
+    const { router } = await open(path)
+    await screen.findByRole('heading', {
+      level: 1,
+      name: 'Connect to OpenViking',
+    })
+    expect(router.state.location.pathname.replace(/\/+$/, '')).toBe('/login')
+    expect(screen.queryByTestId('connected-provider')).toBeNull()
+  },
+)
+it('rejects an incompatible active profile before mounting connected state', async () => {
+  saved()
+  window.__OV_STUDIO_CONFIG__ = { edition: 'volcengine' }
+  await open('/filesystem')
+  await screen.findByRole('heading', {
+    level: 1,
+    name: i18n.t('onboarding:accountAuth.loginTitle'),
+  })
+  expect(screen.queryByTestId('connected-provider')).toBeNull()
+  expect(health).not.toHaveBeenCalled()
+})
+it('keeps official management deep links out of connected management', async () => {
+  const endpoint = 'https://cloud.example/ov'
+  window.__OV_STUDIO_CONFIG__ = {
+    edition: 'volcengine',
+    hostedApiBaseUrl: endpoint,
+  }
+  saved(endpoint, 'volcengine')
+  const { router } = await open('/admin/settings')
+  await waitFor(() =>
+    expect(router.state.location.pathname).toBe('/filesystem'),
+  )
+  expect(screen.getByTestId('connected-provider')).toBeTruthy()
+})
+it.each([
+  ['/filesystem', true],
+  ['/settings/', true],
+  ['/connections/new', true],
+  ['/home', false],
+] as const)(
+  'applies scoped theme to %s independently of connection layout',
+  async (path, themed) => {
+    saved()
+    const { container } = await open(path)
+    await screen.findByTestId('connected-provider')
+    expect(
+      Boolean(container.querySelector('[data-studio-ux="workbench"]')),
+    ).toBe(themed)
+  },
+)
+it('uses route components when switching between default and explicit API Key login', async () => {
+  window.__OV_STUDIO_CONFIG__ = { edition: 'volcengine' }
+  const { router } = await open('/login')
+  await screen.findByRole('heading', {
+    level: 1,
+    name: i18n.t('onboarding:accountAuth.loginTitle'),
+  })
+  await router.navigate({ to: '/login/api-key' })
+  await screen.findByLabelText('API Key')
+  expect(screen.queryByTestId('connected-provider')).toBeNull()
+})

@@ -21,6 +21,33 @@ const files = sourceFiles(sourceRoot).filter(
     !file.includes('/gen/') &&
     !file.endsWith('routeTree.gen.ts'),
 )
+// Existing protocol/configuration consumers; migrate individually as their request interfaces change.
+// Do not add read-only UI consumers: use features/connection/access instead.
+const legacyConfigurationConsumers = new Set([
+  'features/admin/account-configuration/experience-setting.tsx',
+  'features/admin/account-configuration/page.tsx',
+  'features/admin/extraction-rules/components/memory-templates-page.tsx',
+  'features/admin/gateway/components/gateway-enable.tsx',
+  'features/admin/gateway/lib/use-gateway.ts',
+  'features/admin/groups/page.tsx',
+  'features/admin/server-configuration/components/model-connection-test.tsx',
+  'features/admin/server-configuration/components/server-configuration.tsx',
+  'features/admin/users/components/root-setup-guide.tsx',
+  'features/admin/users/page.tsx',
+  'features/oauth/components/cross-device-verify-form.tsx',
+  'features/oauth/consent-page.tsx',
+  'features/oauth/hooks/use-identity-directory.ts',
+  'features/resource-acl/hooks/use-acl-management.ts',
+  'features/workbench/agent-experience/index.tsx',
+  'features/workbench/compile/components/compile-form.tsx',
+  'features/workbench/compile/components/compile-locations.tsx',
+  'features/workbench/compile/lib/skills.ts',
+  'features/workbench/filesystem/memories-redirect.tsx',
+  'features/workbench/home/page.tsx',
+  'features/workbench/request-logs/page.tsx',
+  'features/workbench/sessions/lib/use-sessions.ts',
+])
+
 function owner(path: string) {
   if (path.startsWith('features/')) return path.split('/').slice(0, 2).join('/')
   return path.split('/')[0]
@@ -46,6 +73,13 @@ it('keeps shared, features, app and routes dependencies pointing toward their ow
             : undefined
       if (specifier && ts.isStringLiteral(specifier)) {
         const name = specifier.text
+        if (
+          path === 'features/connection/lib/connection-controller.ts' &&
+          /^(react|@tanstack\/)/.test(name)
+        )
+          violations.push(
+            `${path}: lifecycle must run independently of React and Router`,
+          )
         const target =
           name.startsWith('#/') || name.startsWith('@/')
             ? name.slice(2)
@@ -53,6 +87,42 @@ it('keeps shared, features, app and routes dependencies pointing toward their ow
               ? relative(sourceRoot, resolve(dirname(file), name))
               : undefined
         if (target) {
+          if (
+            target === 'shared/lib/studio-service' ||
+            target === 'shared/lib/studio-deployment'
+          )
+            violations.push(
+              `${path}: import product policy from its platform owner`,
+            )
+          if (
+            path.startsWith('features/connection/') &&
+            target.startsWith('features/auth/')
+          )
+            violations.push(
+              `${path}: connection must not depend on authentication UI`,
+            )
+          if (
+            path.startsWith('features/auth/') &&
+            target.startsWith('features/connection/') &&
+            target !== 'features/connection/login'
+          )
+            violations.push(
+              `${path}: authentication uses the public login interface`,
+            )
+          if (
+            !path.startsWith('features/connection/') &&
+            target === 'features/connection/lib/connection-controller'
+          )
+            violations.push(`${path}: connection lifecycle is internal`)
+          if (
+            path.startsWith('features/') &&
+            !path.startsWith('features/connection/') &&
+            target === 'features/connection/hooks/use-app-connection' &&
+            !legacyConfigurationConsumers.has(path)
+          )
+            violations.push(
+              `${path}: use the connection read/command interface`,
+            )
           const from = owner(path),
             to = owner(target)
           if (
@@ -63,6 +133,7 @@ it('keeps shared, features, app and routes dependencies pointing toward their ow
                 to.startsWith('features/'))) ||
             (from.startsWith('features/') &&
               (to === 'app' || to === 'routes')) ||
+            (from === 'platform' && to !== 'platform') ||
             (from === 'app' && to === 'routes') ||
             (from === 'features/admin' && to === 'features/workbench') ||
             (from === 'features/workbench' && to === 'features/admin') ||
@@ -73,9 +144,46 @@ it('keeps shared, features, app and routes dependencies pointing toward their ow
           }
         }
       }
+      if (
+        (path.startsWith('app/') || path.startsWith('features/')) &&
+        ts.isPropertyAccessExpression(node) &&
+        node.name.text === 'edition'
+      ) {
+        violations.push(
+          `${path}: edition decisions belong to platform/deployment`,
+        )
+      }
+      if (
+        ts.isImportDeclaration(node) &&
+        node.importClause &&
+        (path.startsWith('app/') || path.startsWith('features/'))
+      ) {
+        const bindings = node.importClause.namedBindings
+        if (
+          bindings &&
+          ts.isNamedImports(bindings) &&
+          bindings.elements.some((element) =>
+            ['getStudioDeployment', 'resolveStudioDeployment'].includes(
+              (element.propertyName ?? element.name).text,
+            ),
+          )
+        )
+          violations.push(
+            `${path}: raw deployment configuration bypasses entry composition`,
+          )
+      }
       ts.forEachChild(node, visit)
     }
     visit(source)
+    if (
+      path !== 'platform/deployment/config.ts' &&
+      /__OV_STUDIO_CONFIG__|import\.meta\.env\.VITE_STUDIO_/.test(
+        readFileSync(file, 'utf8'),
+      )
+    )
+      violations.push(
+        `${path}: deployment inputs must be read only at startup configuration`,
+      )
     if (path.startsWith('routes/')) {
       // Route declarations can assemble a page, redirect or Outlet, but page state
       // and network effects belong to a feature or an app boundary.

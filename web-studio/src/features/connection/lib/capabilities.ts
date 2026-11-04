@@ -7,11 +7,11 @@ import {
 import type {
   CapabilityState,
   STUDIO_FEATURES,
-} from '#/shared/lib/studio-service'
+} from '#/platform/access/features'
 import {
   classifyCapabilityError,
   classifyCapabilityResponse,
-} from '#/shared/lib/studio-service'
+} from '#/features/connection/lib/capability-response'
 
 type ProbedFeature = Extract<
   (typeof STUDIO_FEATURES)[number],

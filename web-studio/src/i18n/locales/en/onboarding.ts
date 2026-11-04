@@ -1,4 +1,89 @@
 export default {
+  preview: {
+    trigger: 'STG edition preview',
+    title: 'Preview Studio edition',
+    description: 'Switching returns to sign-in and clears the current form.',
+    official: 'Volcengine edition',
+    private: 'Open-source edition',
+    failed: 'Could not save the preview. Allow tab storage and try again.',
+  },
+  consent: {
+    agree: 'I have read and agree to',
+    terms: 'Service terms',
+    privacyPending: 'Privacy policy (coming soon)',
+  },
+  accountAuth: {
+    enterpriseLogin: 'Enterprise sign-in',
+    switchEmail: 'Use enterprise sign-in',
+    switchApiKey: 'Use an API Key instead',
+    back: 'Back',
+    emailPlaceholder: 'Enter your sign-in email',
+    keyEntryHelp:
+      'For Agents, service accounts and members who use an API Key.',
+    loginTitle: 'Enterprise sign-in',
+    loginDescription:
+      'Enter your context workspace, the external brain for your AI Agent.',
+    emailLogin: 'Sign in with email',
+    apiKeyLogin: 'Sign in with API Key',
+    email: 'Work email',
+    password: 'Password',
+    signIn: 'Sign in',
+    forgotPassword: 'Forgot password?',
+    forgotTitle: 'Forgot password',
+    forgotDescription:
+      'Enter your work email to request a password reset link.',
+    sendReset: 'Send reset link',
+    backToLogin: 'Back to email sign-in',
+    resetTitle: 'Reset password',
+    resetDescription: 'Choose a new password for your OpenViking account.',
+    newPassword: 'New password',
+    confirmPassword: 'Confirm password',
+    resetSubmit: 'Reset password',
+    requestReset: 'Request a new reset link',
+    missingResetLink:
+      'This reset link is incomplete. Request a new link to continue.',
+    invalidEmail: 'Enter a valid email address.',
+    requiredPassword: 'Enter your password.',
+    passwordRule:
+      'Use at least 8 characters, including a letter, a number and a symbol.',
+    mismatch: 'The passwords do not match.',
+    showPassword: 'Show {{field}}',
+    hidePassword: 'Hide {{field}}',
+    unavailable:
+      'Email account services are not available on this site yet. Use an API Key to sign in, or contact your administrator.',
+    inviteTitle: 'Join a team workspace',
+    inviteDescription:
+      'Your invitation must be verified before you can view the team and data space or accept it.',
+    missingInviteLink:
+      'This invitation link is incomplete. Ask the inviter to send a new link.',
+    inviteHelp:
+      'You can register or sign in and choose whether to join after the invitation is verified. Opening this link does not add you to a team.',
+  },
+  apiLogin: {
+    paste: 'Paste',
+    pasteFailed: 'Could not read the clipboard. Paste the API Key manually.',
+    keyPlaceholder: 'Paste or enter your API Key',
+    tagline: 'Keep every team member’s Agent in sync.',
+    title: 'Connect to OpenViking',
+    cloudTitle: 'Sign in with API Key',
+    description:
+      'Connect to a self-hosted or Volcengine service with your API Key.',
+    cloudDescription: 'Use your Volcengine API Key to open your workspace.',
+    serviceType: 'Service type',
+    opensource: 'Self-hosted',
+    volcengine: 'Volcengine hosted',
+    submit: 'Sign in',
+    showKey: 'Show API Key',
+    hideKey: 'Hide API Key',
+    language: '中文',
+    keyHelp:
+      'User and Admin keys open your workspace. Root keys open administration. Development servers may allow an empty key.',
+    deploymentError:
+      'Invalid Studio deployment configuration. Contact the site administrator.',
+    connectionNotAllowed:
+      'This Studio only connects to its configured Volcengine service.',
+  },
+
   directoryOptions: 'Choose another data identity (advanced)',
   rootSetupTitle: 'Start using the workbench',
   rootSetupDescription:

@@ -5,7 +5,7 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionCommands } from '#/features/connection/access'
 import type { AdminConnection } from '#/shared/api/admin'
 import { deleteAdminAccount, fetchAdminAccounts } from '#/shared/api/admin'
 import { PLAIN_INPUT_PROPS } from '#/shared/lib/form-input'
@@ -31,7 +31,8 @@ export function DeleteAccountButton({
 }) {
   const { t } = useTranslation('settings')
   const queryClient = useQueryClient()
-  const { openConnectionSettings, switchManagementAccount } = useAppConnection()
+  const { openConnectionSettings, switchManagementAccount } =
+    useConnectionCommands()
   const [open, setOpen] = React.useState(false)
   const [confirmation, setConfirmation] = React.useState('')
 

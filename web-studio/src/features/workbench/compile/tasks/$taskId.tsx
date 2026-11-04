@@ -1,5 +1,5 @@
 import { copyTextToClipboard } from '#/shared/lib/clipboard'
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import {
   ContextLink,
   useCompileSkillName,
@@ -39,7 +39,7 @@ export function CompileDetail() {
   const skillName = useCompileSkillName()
   const { taskId } = routeApi.useParams(),
     { t, i18n } = useTranslation('compile')
-  const { identityScopeKey, connectionRole } = useAppConnection(),
+  const { identityScopeKey, connectionRole } = useConnectionAccess(),
     client = useQueryClient()
   const { invalidateAll, invalidatePreview } = useInvalidateVikingFs()
   const [tab, setTab] = useState<'overview' | 'events' | 'result'>('overview')

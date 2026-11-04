@@ -306,7 +306,7 @@ export function StudioScopeSwitcher({
 
   return (
     <>
-      <div className="flex h-9 min-w-0 items-center rounded-lg border border-border/60 bg-muted/30 p-0.5">
+      <div className="studio-scope-switcher flex h-9 min-w-0 items-center rounded-lg border border-border/60 bg-muted/30 p-0.5">
         <ScopeMenu
           open={open === 'connection'}
           onOpenChange={changeOpen('connection')}

@@ -1,6 +1,6 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { isUsableServerHealth } from '#/features/connection/lib/health'
-import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
+import { resolveConfiguredServiceProvider } from '#/platform/connection/service-provider'
 
 // The connection provider owns health, auth mode and reconnection as one lifecycle.
 export function useStudioService() {

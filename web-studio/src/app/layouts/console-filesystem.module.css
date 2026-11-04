@@ -1,0 +1,357 @@
+/* Official filesystem presentation; self-hosted routes retain Workbench styles. */
+.console {
+  color: var(--foreground);
+  font-family: var(--wb-font);
+  background: var(--wb-canvas);
+}
+.console :global(.studio-header) {
+  height: 60px;
+  padding-inline: 16px;
+  background: var(--wb-canvas);
+}
+.console :global(.studio-header-context) {
+  gap: 16px;
+}
+.console :global(.studio-header-context > div.h-5) {
+  display: none;
+}
+.console :global(.studio-scope-switcher) {
+  height: 32px;
+  border-radius: 16px;
+  border-color: var(--wb-divider);
+  background: transparent;
+}
+.console :global(.studio-scope-switcher > button),
+.console :global(.studio-scope-switcher > [role='group']) {
+  font-size: 12px;
+  height: 24px;
+}
+.console :global(.studio-header-actions) {
+  gap: 8px;
+}
+.console :global(.studio-header-context > [data-slot='sidebar-trigger']) {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+}
+/* Keep existing destinations reachable through the header toggle, without a
+   persistent navigation rail taking width from the three-pane workspace. */
+.console :global([data-slot='sidebar-gap']) {
+  display: none;
+}
+.console
+  :global(
+    [data-slot='sidebar'][data-state='collapsed']
+      [data-slot='sidebar-container']
+  ) {
+  display: none;
+}
+.console
+  :global(
+    [data-slot='sidebar'][data-state='expanded'] [data-slot='sidebar-container']
+  ) {
+  top: 60px;
+  height: calc(100svh - 60px);
+  z-index: 30;
+  width: var(--sidebar-width);
+  border-right: 1px solid var(--wb-divider);
+  box-shadow: 8px 0 24px rgb(0 0 0 / 6%);
+}
+.console :global(.workbench-filesystem-inset) {
+  padding: 0 16px 8px;
+  background: var(--wb-canvas);
+}
+.console :global([data-fs-slot='explorer']) {
+  width: clamp(240px, calc(var(--filesystem-left-width) + 22px), 30%);
+  background: var(--background);
+  border-color: var(--wb-divider);
+  border-right: 1px solid var(--wb-divider);
+}
+.console :global([data-fs-slot='document']) {
+  border-color: var(--wb-divider);
+}
+.console :global([data-fs-slot='assistant']) {
+  width: min(calc(var(--filesystem-right-width) - 70px), 30%);
+  border-color: var(--wb-divider);
+}
+.console :global([data-fs-slot='explorer'] + [role='separator']) {
+  width: 1px;
+  border: 0;
+  background: var(--wb-divider);
+}
+.console :global([data-fs-slot='explorer'] + [role='separator'] > span) {
+  position: relative;
+  z-index: 2;
+  width: 8px;
+  background: transparent;
+}
+.console :global([data-fs-slot='document'] + [role='separator']) {
+  width: 8px;
+}
+.console :global([data-fs-slot='document'] + [role='separator'] > span) {
+  background: transparent;
+}
+.console :global([data-fs-slot='explorer-header']) {
+  padding: 8px 8px 4px;
+}
+.console :global([data-fs-slot='explorer-title']) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 8px;
+  padding-inline: 8px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.console :global([data-fs-slot='explorer-search-row']) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.console :global([data-fs-slot='explorer-search-row'] > button) {
+  height: 28px;
+  min-width: 30px;
+  border-radius: 6px;
+}
+.console :global([data-fs-slot='explorer-search']) {
+  flex: 1;
+  justify-content: flex-start;
+  min-width: 0;
+  gap: 6px;
+  padding-inline: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.console :global([data-fs-slot='explorer-search'] > span) {
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console :global([data-fs-slot='explorer-search'] > kbd) {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding-inline: 4px;
+  font-size: 10px;
+  font-family: inherit;
+}
+.console :global([data-fs-slot='tree']) {
+  padding: 4px 8px 12px;
+}
+.console :global([data-fs-slot='tree-row']) {
+  height: 32px;
+  border-radius: 4px;
+  font-weight: 400;
+  color: var(--foreground);
+}
+.console :global([data-fs-slot='tree-row'][data-selected='true']) {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.console :global([data-fs-slot='tree-row'] svg) {
+  color: var(--muted-foreground);
+}
+.console :global([data-fs-slot='tree-name'] + span) {
+  font-size: 11px;
+}
+.console :global([data-fs-slot='document-toolbar']) {
+  min-height: 48px;
+  padding-inline: 16px;
+  border-color: var(--wb-divider);
+}
+.console :global([data-fs-slot='document-toolbar'] > button:first-child) {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+.console :global([data-fs-slot='action-header']) {
+  height: 56px;
+  border: 0;
+  padding-inline: 12px;
+  gap: 4px;
+}
+.console :global([data-fs-slot='action-header'] > button),
+.console :global([data-fs-slot='action-header'] > div > button) {
+  border-radius: 20px;
+  font-size: 12px;
+}
+.console :global([data-fs-slot='directory-levels']) {
+  gap: 20px;
+  padding-bottom: 0;
+}
+.console :global([data-fs-slot='directory-levels'] button) {
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  padding: 4px 0 12px;
+  background: transparent;
+}
+.console :global([data-fs-slot='directory-levels'] button.bg-muted)::after {
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 2px;
+  background: var(--foreground);
+  content: '';
+}
+.console :global([data-fs-slot='directory-levels'] button span) {
+  color: inherit;
+}
+:global([data-fs-slot='empty-illustration']) {
+  display: none;
+}
+.console :global([data-fs-slot='empty-illustration']) {
+  display: block;
+  width: min(400px, 100%);
+  height: auto;
+}
+.console :global([data-fs-slot='empty-label']) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (max-width: 1279px) and (min-width: 768px) {
+  .console :global([data-fs-slot='explorer']) {
+    width: min(calc(var(--filesystem-left-width) + 22px), 36%);
+  }
+}
+@media (max-width: 767px) {
+  .console :global(.studio-header) {
+    height: auto;
+    min-height: 100px;
+    padding: 8px 12px;
+  }
+  .console :global(.studio-header-context) {
+    gap: 8px;
+  }
+  .console :global(.workbench-filesystem-inset) {
+    padding: 0 8px 8px;
+  }
+  .console :global([data-fs-slot='explorer']) {
+    width: 100%;
+    border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+  }
+  .console :global([data-fs-slot='document-toolbar']) {
+    padding-inline: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .console :global([data-slot='sidebar-container']) {
+    transition: none;
+  }
+}
+
+/* The source illustration contains Chinese copy. Keep translated HTML in
+   English and preserve the exact source artwork for the Chinese design. */
+:global(html[lang^='en'])
+  .console
+  :global([data-fs-slot='empty-illustration']) {
+  display: none;
+}
+:global(html[lang^='en']) .console :global([data-fs-slot='empty-label']) {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+}
+:global(.dark) .console :global([data-fs-slot='empty-illustration']) {
+  display: none;
+}
+:global(.dark) .console :global([data-fs-slot='empty-label']) {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+}
+
+.console :global([data-fs-slot='preview-body']) {
+  max-width: none;
+  padding: 0 16px 16px;
+  font-size: 13px;
+  line-height: 24px;
+}
+.console :global([data-fs-slot='directory-levels']) {
+  margin-inline: -16px;
+  padding: 12px 16px 0;
+  background: var(--background);
+}
+.console :global([data-fs-slot='preview-body'] article) {
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 13px;
+  line-height: 24px;
+}
+.console :global([data-fs-slot='preview-body'] article h1) {
+  margin-block: 8px 12px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+.console :global([data-fs-slot='preview-body'] article h2) {
+  margin-block: 16px 8px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+}
+.console :global([data-fs-slot='preview-body'] article p),
+.console :global([data-fs-slot='preview-body'] article ul),
+.console :global([data-fs-slot='preview-body'] article ol) {
+  margin-block: 8px;
+}
+.console :global([data-fs-slot='action-tabs']) {
+  border: 0;
+  border-radius: 20px;
+  padding: 4px;
+  background: var(--muted);
+}
+.console :global([data-fs-slot='action-tabs'] button) {
+  height: 28px;
+  border-radius: 20px;
+  background: var(--background);
+}
+.console :global([data-fs-slot='terminal-welcome'] h2) {
+  font-family: inherit;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+}
+.console :global([data-fs-slot='terminal-welcome'] h2 > span) {
+  display: none;
+}
+.console :global([data-fs-slot='terminal-composer']) {
+  border: 0;
+  padding: 12px 16px 16px;
+}
+.console :global([data-fs-slot='terminal-composer'] form) {
+  padding: 12px;
+  border-radius: 20px;
+}
+
+.console :global([data-fs-slot='tree-detail']) {
+  display: block;
+  font-size: 11px;
+}
+.console
+  :global(
+    [data-fs-slot='tree-row']:has([data-fs-slot='tree-detail'])
+      [data-fs-slot='tree-name']
+  ) {
+  flex: 0 1 auto;
+  max-width: 60%;
+}

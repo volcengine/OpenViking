@@ -1,4 +1,4 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { CompileSelect } from '#/features/workbench/compile/components/compile-select'
 import { CompileScheduleTarget } from '#/features/workbench/compile/components/schedule-target'
 import {
@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next'
 
 export function CompileScheduleList() {
   const { t } = useTranslation('compile')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const [filter, setFilter] = useState('all')
   const query = useInfiniteQuery({
     queryKey: ['compile-configs', identityScopeKey],

@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   isGatewayHost: false,
+  accessContext: { entryAccess: 'workbench' },
   provider: 'opensource',
   connection: {
     baseUrl: 'http://service.test',

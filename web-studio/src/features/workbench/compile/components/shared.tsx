@@ -1,4 +1,4 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { errorText } from '#/features/workbench/compile/lib/api'
 import { compileErrorKey } from '#/features/workbench/compile/lib/errors'
 import { compileListReturn } from '#/features/workbench/compile/lib/navigation'
@@ -23,7 +23,7 @@ export function CompileShell({
   const { t } = useTranslation('compile')
   const location = useLocation()
   const router = useRouter()
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const returnTo = compileListReturn(
     location.state.compileListOrigin,
     identityScopeKey,

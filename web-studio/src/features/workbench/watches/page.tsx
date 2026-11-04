@@ -15,7 +15,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import {
   AddResourceForm,
@@ -104,7 +104,7 @@ export function WatchesRoute() {
 
 export function WatchManagementPage() {
   const { i18n, t } = useTranslation(['watchesPage', 'studio'])
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const { provider } = useStudioService()
   const readOnly = provider !== 'opensource'
   const queryClient = useQueryClient()

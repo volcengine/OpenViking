@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { Composer } from '#/features/workbench/sessions/components/composer'
 import { DeleteConversation } from '#/features/workbench/sessions/components/delete-conversation'
 import { MessageList } from '#/features/workbench/sessions/components/message-list'
@@ -56,7 +56,7 @@ export function AgentPanel({
   toolbarContainer: HTMLDivElement | null
 }) {
   const { t } = useTranslation('filesystem')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const [sessionId, setSessionId] = useState(
     initialSessionId ?? createVikingBotWebSessionId(),
   )

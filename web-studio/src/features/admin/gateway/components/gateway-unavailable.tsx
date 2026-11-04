@@ -4,7 +4,7 @@ import { EnableGatewayCard } from '#/features/admin/gateway/components/gateway-e
 import { SetupCard } from '#/features/admin/gateway/components/setup-card'
 import type { GatewayError } from '#/features/admin/gateway/lib/api'
 import { gatewayErrorMessage } from '#/features/admin/gateway/lib/localize'
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { Button } from '#/shared/ui/button'
 import { Link } from '@tanstack/react-router'
 import { KeyRoundIcon, RefreshCwIcon } from 'lucide-react'
@@ -44,7 +44,7 @@ export function GatewayUnavailable({
 }) {
   const { t } = useTranslation('gateway')
   const { connectionRole, serverMode, openvikingUrl, isGatewayHost } =
-    useAppConnection()
+    useConnectionAccess()
   const isRoot = serverMode === 'dev' || connectionRole === 'root'
   // On an OpenViking server only root can change ov.conf; a standalone
   // gateway host keeps showing the instructions to its admins as well.

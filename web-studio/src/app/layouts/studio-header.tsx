@@ -7,7 +7,6 @@ import { hasStudioAccountScope } from '#/features/connection/lib/studio-mode'
 import brandLockupDark from '#/assets/brand-lockup-dark.svg'
 import brandLockupLight from '#/assets/brand-lockup-light.svg'
 import { OpenVikingMark } from '#/shared/components/openviking-mark'
-import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
 import { SidebarTrigger } from '#/shared/ui/sidebar'
 import { Link, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -29,23 +28,20 @@ export function StudioHeader({
   })
   const showAccountScope = hasStudioAccountScope(pathname)
   const { connection, identityScopeKey } = useAppConnection()
-  const showManagementEntry =
-    !isGatewayHost &&
-    (canManage ||
-      resolveConfiguredServiceProvider(
-        connection.baseUrl,
-        connection.serviceSelection,
-      ) === 'opensource')
+  const showManagementEntry = !isGatewayHost && (canManage || managementMode)
   return (
-    <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-background px-3 sm:gap-4 sm:px-4">
-      <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+    <header className="studio-header z-20 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-background px-3 sm:gap-4 sm:px-4">
+      <div className="studio-header-context flex min-w-0 items-center gap-2 sm:gap-4">
         <SidebarTrigger className="shrink-0 md:hidden" />
         <Link
           to={managementMode ? '/admin' : '/'}
           aria-label={t('studioSettings.brand')}
-          className="flex shrink-0 items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="studio-brand flex shrink-0 items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <OpenVikingMark className="size-8 sm:size-9 lg:hidden" />
+          <span className="studio-brand-wordmark hidden">
+            {t('studioSettings.brand')}
+          </span>
           <img
             src={brandLockupLight}
             alt=""
@@ -67,7 +63,7 @@ export function StudioHeader({
           showAccountScope={showAccountScope}
         />
       </div>
-      <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
+      <div className="studio-header-actions flex shrink-0 items-center gap-1.5 sm:gap-3">
         {managementMode ? (
           <span className="hidden rounded-md bg-muted/60 px-2 py-1 text-xs text-muted-foreground xl:inline">
             {t('modes.management')}

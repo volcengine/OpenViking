@@ -137,6 +137,10 @@ const activity = {
     },
   },
   filesystem: {
+    console: {
+      search: '搜索文件和内容',
+      shortcut: '⌘K',
+    },
     copyUri: '复制当前 URI',
     copied: '已复制 URI',
     copyFailed: '复制失败',

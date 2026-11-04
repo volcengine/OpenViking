@@ -19,6 +19,7 @@ const workspace = {
       connections: 'Saved connections',
       addConnection: 'Add connection',
       manageConnections: 'Manage connections',
+      signIn: 'Sign in with another key',
       root: 'Root',
       accountAdmin: 'Account Admin',
       dualCredential: 'Management + User',

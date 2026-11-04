@@ -1,4 +1,6 @@
-import { StudioSetupRequestError } from '#/features/connection/lib/onboarding'
+import userEvent from '@testing-library/user-event'
+import { submitConnectionProfile } from '#/features/connection/lib/connection-operations'
+import { StudioSetupRequestError } from '#/features/connection/lib/connection-errors'
 import { OvClientError } from '#/shared/api/ov-client/errors'
 import i18n from '#/i18n/core'
 // @vitest-environment jsdom
@@ -37,10 +39,13 @@ const connectionState = vi.hoisted(() => ({
   navigate: vi.fn(),
 }))
 const verify = vi.hoisted(() => vi.fn())
-vi.mock('#/features/connection/lib/onboarding', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  verifyStudioSetup: verify,
-}))
+vi.mock(
+  '#/features/connection/lib/connection-verification',
+  async (original) => ({
+    ...(await original<Record<string, unknown>>()),
+    verifyStudioSetup: verify,
+  }),
+)
 vi.mock('#/features/connection/components/setup-identity-directory', () => ({
   SetupIdentityDirectory: ({
     onSelect,
@@ -70,7 +75,23 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
-  useAppConnection: () => connectionState,
+  useAppConnection: () => ({
+    ...connectionState,
+    submitProfile: async (
+      draft: ConnectionProfile,
+      options: Parameters<typeof submitConnectionProfile>[2],
+    ) => {
+      await submitConnectionProfile(
+        draft,
+        connectionState.profiles.find((entry) => entry.id === draft.id),
+        options,
+        (next, activate) => {
+          connectionState.saveProfile(next)
+          if (activate) connectionState.activateProfile(next.id)
+        },
+      )
+    },
+  }),
 }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -102,6 +123,7 @@ beforeEach(() => {
   connectionState.studioMode = 'workbench'
 })
 afterEach(() => {
+  delete window.__OV_STUDIO_CONFIG__
   cleanup()
   vi.unstubAllGlobals()
 })
@@ -404,4 +426,66 @@ it('keeps a verified request status and redacted details in the profile editor',
   expect(alert.textContent).not.toContain('bob-key')
   expect(alert.querySelector('details')?.open).toBe(false)
   expect(connectionState.saveProfile).not.toHaveBeenCalled()
+})
+
+it('uses the configured hosted endpoint and clears both credentials when switching services', async () => {
+  const user = userEvent.setup()
+  window.__OV_STUDIO_CONFIG__ = {
+    hostedApiBaseUrl: 'https://custom.example/openviking',
+  }
+  const profile = hosted('private', 'team', 'alice', 'private-data-key')
+  profile.connection.serviceSelection = 'opensource'
+  profile.connection.baseUrl = 'https://private.example'
+  profile.connection.adminApiKey = 'private-control-key'
+  connectionState.profiles = [profile]
+  render(React.createElement(ConnectionProfilesList, { editorId: profile.id }))
+  await user.click(screen.getByRole('combobox'))
+  await user.click(
+    await screen.findByRole('option', { name: 'providers.volcengine' }),
+  )
+  expect(
+    screen
+      .getByDisplayValue('https://custom.example/openviking')
+      .hasAttribute('readonly'),
+  ).toBe(true)
+  expect(
+    screen.getByLabelText<HTMLInputElement>('profiles.fields.apiKey').value,
+  ).toBe('')
+  await user.click(screen.getByRole('combobox'))
+  await user.click(
+    await screen.findByRole('option', { name: 'providers.opensource' }),
+  )
+  expect(
+    screen
+      .getByDisplayValue('https://private.example')
+      .hasAttribute('readonly'),
+  ).toBe(false)
+  expect(
+    screen.getByLabelText<HTMLInputElement>('profiles.fields.adminApiKey')
+      .value,
+  ).toBe('')
+})
+
+it('only offers the configured hosted service in the official deployment editor', async () => {
+  const user = userEvent.setup()
+  window.__OV_STUDIO_CONFIG__ = {
+    edition: 'volcengine',
+    hostedApiBaseUrl: 'https://custom.example/openviking',
+  }
+  const profile = hosted('official', 'team', 'alice')
+  profile.connection.baseUrl = 'https://custom.example/openviking'
+  connectionState.profiles = [profile]
+  render(React.createElement(ConnectionProfilesList, { editorId: profile.id }))
+  expect(
+    screen
+      .getByDisplayValue(profile.connection.baseUrl)
+      .hasAttribute('readonly'),
+  ).toBe(true)
+  await user.click(screen.getByRole('combobox'))
+  expect(
+    await screen.findByRole('option', { name: 'providers.volcengine' }),
+  ).toBeTruthy()
+  expect(
+    screen.queryByRole('option', { name: 'providers.opensource' }),
+  ).toBeNull()
 })

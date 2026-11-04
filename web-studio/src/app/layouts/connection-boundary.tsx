@@ -1,3 +1,5 @@
+import { resolveDataAccess } from '#/platform/connection/configuration'
+import { StudioEntry } from '#/platform/entry/paths'
 import { StudioFeatureBoundary } from '#/app/layouts/studio-feature-boundary'
 import { StudioLayout } from '#/app/layouts/studio-layout'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
@@ -5,10 +7,12 @@ import type { ServerMode } from '#/features/connection/lib/health'
 import {
   connectionSettingsPath,
   isConnectionSettingsPath,
+  isManagementPath,
+  isSharedStudioPath,
 } from '#/features/connection/lib/studio-mode'
 import studioI18n from '#/i18n'
 import { Button } from '#/shared/ui/button'
-import { Link, useRouterState } from '@tanstack/react-router'
+import { Link, Navigate, useRouterState } from '@tanstack/react-router'
 import * as React from 'react'
 
 export function IdentityScopedAppShell({
@@ -16,12 +20,29 @@ export function IdentityScopedAppShell({
 }: {
   children: React.ReactNode
 }) {
-  const { identityScopeKey, activeProfileId, serverMode, studioMode } =
-    useAppConnection()
+  const {
+    identityScopeKey,
+    activeProfileId,
+    serverMode,
+    studioMode,
+    connection,
+    isGatewayHost,
+  } = useAppConnection()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
   const isSettings = isConnectionSettingsPath(pathname)
+  // A control-only API-key connection has no personal workspace. Redirect
+  // before mounting layouts or data queries; /admin will authenticate it.
+  if (
+    !isSettings &&
+    !isManagementPath(pathname) &&
+    !isSharedStudioPath(pathname) &&
+    !isGatewayHost &&
+    serverMode === 'api_key' &&
+    resolveDataAccess(connection, serverMode) === 'control-only'
+  )
+    return <Navigate replace to={StudioEntry.Management} />
   // Keep the settings tree stable across health transitions, but reset it when
   // an actual profile changes. Business routes retain identity isolation.
   if (serverMode === 'checking' && !isSettings)

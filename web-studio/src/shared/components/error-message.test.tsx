@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, expect, it } from 'vitest'
 import i18n from '#/i18n'
-import { StudioSetupRequestError } from '#/features/connection/lib/onboarding'
+import { StudioSetupRequestError } from '#/features/connection/lib/connection-errors'
 import { OvClientError } from '#/shared/api/ov-client/errors'
 import { ErrorMessage } from './error-message'
 

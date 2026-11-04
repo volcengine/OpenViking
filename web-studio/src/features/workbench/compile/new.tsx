@@ -1,9 +1,9 @@
 import { getRouteApi } from '@tanstack/react-router'
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { CompileForm } from '#/features/workbench/compile/components/compile-form'
 
 export function NewCompile() {
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const { fromTask, from, target } = getRouteApi('/compile/new').useSearch()
   return (
     <CompileForm

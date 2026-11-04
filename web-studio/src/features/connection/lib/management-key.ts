@@ -3,7 +3,7 @@ import {
   isUsableServerHealth,
   readServerIdentity,
 } from '#/features/connection/lib/health'
-import { StudioSetupRequestError } from '#/features/connection/lib/onboarding'
+import { StudioSetupRequestError } from '#/features/connection/lib/connection-errors'
 import type { ConnectionDraft } from '#/features/connection/lib/types'
 
 export class ManagementKeyError extends Error {

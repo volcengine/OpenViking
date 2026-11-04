@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
-import { ContextTree } from '#/features/workbench/filesystem/components/context-explorer'
+import {
+  ContextTree,
+  ContextExplorerHeader,
+} from '#/features/workbench/filesystem/components/context-explorer'
 
 const { useVikingFsListMock } = vi.hoisted(() => ({
   useVikingFsListMock: vi.fn(),
@@ -188,4 +191,28 @@ describe('ContextTree keyboard semantics', () => {
     expect(onSelectFile).toHaveBeenCalledWith(file)
     expect(onExpandedKeysChange).not.toHaveBeenCalled()
   })
+})
+
+it('console styling preserves search and refresh without introducing unavailable actions', async () => {
+  const user = userEvent.setup()
+  const search = vi.fn()
+  const refresh = vi.fn()
+  render(
+    <ContextExplorerHeader
+      appearance="console"
+      activeTaskCount={0}
+      hasActiveTasks={false}
+      hasTasks={false}
+      isRefreshing={false}
+      isRefreshingTasks={false}
+      onOpenProcessingTasks={vi.fn()}
+      onOpenSearch={search}
+      onRefresh={refresh}
+    />,
+  )
+  expect(screen.getAllByRole('button')).toHaveLength(2)
+  await user.click(screen.getByRole('button', { name: /console.search/ }))
+  await user.click(screen.getByRole('button', { name: 'explorer.refresh' }))
+  expect(search).toHaveBeenCalledOnce()
+  expect(refresh).toHaveBeenCalledOnce()
 })

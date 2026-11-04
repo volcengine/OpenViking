@@ -68,6 +68,7 @@ vi.mock('#/features/connection/hooks/use-app-connection', async (original) => ({
 }))
 vi.mock('@tanstack/react-router', async (original) => ({
   ...(await original<Record<string, unknown>>()),
+  Navigate: ({ to }: { to: string }) => <div data-testid="redirect">{to}</div>,
   Link: ({
     to,
     children,
@@ -258,23 +259,25 @@ it.each([
   },
 )
 
-it('keeps gateway management out of the workbench even when a Root credential is saved', () => {
+it('redirects a control-only Root from the workbench to management', () => {
   state.mode = 'api_key'
   state.pathname = '/home'
   state.role = 'root'
   state.control = 'root-key'
   render(
     <IdentityScopedAppShell>
-      <span />
+      <span data-testid="personal-workbench" />
     </IdentityScopedAppShell>,
   )
+  expect(screen.getByTestId('redirect').textContent).toBe('/admin')
+  expect(screen.queryByTestId('personal-workbench')).toBeNull()
   expect(screen.queryByRole('link', { name: 'Gateway' })).toBeNull()
   expect(
     screen.queryByRole('link', { name: 'OpenViking configuration' }),
   ).toBeNull()
 })
 
-it('keeps management setup reachable from an ordinary User workbench without a control key', () => {
+it('does not expose management setup to an ordinary User', () => {
   state.pathname = '/settings'
   state.mode = 'api_key'
   state.surface = 'workbench'
@@ -285,10 +288,6 @@ it('keeps management setup reachable from an ordinary User workbench without a c
       <span data-testid="settings" />
     </IdentityScopedAppShell>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Admin console' }))
-  expect(
-    screen.getByRole('dialog', { name: 'Configure management access' }),
-  ).toBeTruthy()
-  expect(screen.getByLabelText('Management API Key')).toBeTruthy()
-  expect(screen.getByText('http://service.test')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Admin console' })).toBeNull()
+  expect(screen.getByTestId('settings')).toBeTruthy()
 })

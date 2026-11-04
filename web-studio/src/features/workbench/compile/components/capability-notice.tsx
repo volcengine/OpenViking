@@ -1,4 +1,7 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import {
+  useConnectionAccess,
+  useConnectionCommands,
+} from '#/features/connection/access'
 import { CompileError } from '#/features/workbench/compile/components/shared'
 import { fetchCapabilities } from '#/features/workbench/compile/lib/api'
 import { Button } from '#/shared/ui/button'
@@ -6,7 +9,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
 export function useCompileCapability() {
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   return useQuery({
     queryKey: ['compile-capability', identityScopeKey],
     queryFn: ({ signal }) => fetchCapabilities(signal),
@@ -20,7 +23,7 @@ export function CapabilityNotice({
   capability: ReturnType<typeof useCompileCapability>
 }) {
   const { t, i18n } = useTranslation('compile')
-  const { openConnectionSettings } = useAppConnection()
+  const { openConnectionSettings } = useConnectionCommands()
   if (capability.isError)
     return (
       <div className="space-y-2">

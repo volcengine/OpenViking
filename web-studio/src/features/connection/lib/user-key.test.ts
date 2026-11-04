@@ -1,5 +1,5 @@
 import { fetchConnectionHealth } from '#/features/connection/lib/health'
-import { verifyStudioSetup } from '#/features/connection/lib/onboarding'
+import { verifyStudioSetup } from '#/features/connection/lib/connection-verification'
 import {
   validateUserKeySearch,
   verifyUserKey,
@@ -10,10 +10,13 @@ vi.mock('#/features/connection/lib/health', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   fetchConnectionHealth: vi.fn(),
 }))
-vi.mock('#/features/connection/lib/onboarding', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  verifyStudioSetup: vi.fn(),
-}))
+vi.mock(
+  '#/features/connection/lib/connection-verification',
+  async (original) => ({
+    ...(await original<Record<string, unknown>>()),
+    verifyStudioSetup: vi.fn(),
+  }),
+)
 const source = {
   baseUrl: 'https://service.test',
   serviceSelection: 'opensource' as const,
