@@ -56,6 +56,7 @@ export default defineConfig({
                 { text: 'FileTree', link: '/components/file-tree' },
                 { text: 'FilePreview', link: '/components/file-preview' },
                 { text: 'Tui', link: '/components/tui' },
+                { text: 'ScopeSwitcher', link: '/components/scope-switcher' },
               ],
             },
           ],
@@ -112,6 +113,10 @@ export default defineConfig({
                   link: '/zh/components/file-preview',
                 },
                 { text: 'Tui 命令控制台', link: '/zh/components/tui' },
+                {
+                  text: 'ScopeSwitcher 作用域选择',
+                  link: '/zh/components/scope-switcher',
+                },
               ],
             },
           ],
