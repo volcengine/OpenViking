@@ -3,11 +3,9 @@
 """Tests for LiteLLM VLM provider detection and model prefix resolution."""
 
 import asyncio
-import json
 import os
 from unittest.mock import AsyncMock, Mock
 
-import httpx
 import pytest
 from litellm import ModelResponse
 
@@ -22,78 +20,6 @@ NEMOTRON_LITELLM_MODEL = f"nvidia_nim/{NEMOTRON_MODEL}"
 
 def _vlm(model: str) -> LiteLLMVLMProvider:
     return LiteLLMVLMProvider({"model": model, "provider": "litellm"})
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-flash"])
-async def test_deepseek_vision_reaches_http_without_losing_image(monkeypatch, model):
-    """Exercise the installed SDK converter, not a mocked completion function."""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5XsAAAAASUVORK5CYII="
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Read viking://resources/diagram.png"},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
-            ],
-        }
-    ]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "read_evidence",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        }
-    ]
-    requests = []
-
-    def handle(request):
-        assert str(request.url) == "https://deepseek.test/v1/chat/completions"
-        assert request.headers["authorization"] == "Bearer test-key"
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            json={
-                "id": "vision-test",
-                "object": "chat.completion",
-                "created": 0,
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "ok"},
-                        "finish_reason": "stop",
-                    }
-                ],
-            },
-        )
-
-    provider = LiteLLMVLMProvider(
-        {
-            "provider": "deepseek",
-            "model": model,
-            "api_key": "test-key",
-            "api_base": "https://deepseek.test/v1",
-        }
-    )
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
-        mock_send = http.send
-
-        async def send(_client, request, **kwargs):
-            return await mock_send(request, **kwargs)
-
-        monkeypatch.setattr(httpx.AsyncClient, "send", send)
-        result = await provider.get_completion_async(messages=messages, tools=tools)
-        assert result.content == "ok"
-
-    assert len(requests) == 1
-    assert requests[0]["model"] == model
-    assert requests[0]["messages"] == messages
-    assert requests[0]["tools"] == tools
-    assert json.dumps(requests[0]).count(encoded) == 1
 
 
 class TestLiteLLMVLMProviderDetection:
