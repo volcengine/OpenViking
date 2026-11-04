@@ -236,6 +236,7 @@ use ragfs::lock::{
     PathLockHandoffRef, PathLockKind, PathLockManager, PathLockRequest,
 };
 use ragfs::metrics::{RagfsMetric, RagfsMetricValue};
+use ragfs::write_hook::WriteHookRegistry;
 
 /// Parse an optional listing sort field and return the matching RagFS value.
 fn parse_list_sort_by(value: Option<&str>) -> PyResult<Option<ListSortBy>> {
@@ -987,6 +988,7 @@ fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
 }
 
 mod git;
+mod global_policy;
 mod privacy;
 mod privacy_extractor;
 
@@ -1475,6 +1477,9 @@ fn extract_optional_owned_lease_ref(
 /// Convert a PathLockHandoffRef to a Python dict.
 fn handoff_ref_to_py_dict(py: Python<'_>, handoff: &PathLockHandoffRef) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
+    if let Some(holder_id) = &handoff.holder_id {
+        dict.set_item("holder_id", holder_id)?;
+    }
     if let Some(lease_ref) = &handoff.lease_ref {
         dict.set_item("lease_ref", lease_ref)?;
     }
@@ -1562,6 +1567,8 @@ struct RAGFSBindingClient {
     leader_leases: Arc<AsyncMutex<HashMap<String, LeaderLease>>>,
     /// Blocks leader operations during close and waits in-flight operations out.
     leader_closing: Arc<AsyncRwLock<bool>>,
+    /// Write-time hooks applied before any filesystem write.
+    write_hooks: WriteHookRegistry,
 }
 
 impl RAGFSBindingClient {
@@ -1763,6 +1770,9 @@ impl RAGFSBindingClient {
             },
         };
 
+        let mut write_hooks = WriteHookRegistry::new();
+        ragfs::global_policy::register_write_hooks(&mut write_hooks);
+
         Ok(Self {
             mountable: stack.mountable,
             top: stack.top,
@@ -1774,6 +1784,7 @@ impl RAGFSBindingClient {
             service_name: service_name.unwrap_or_else(|| "ragfs".to_string()),
             leader_leases: Arc::new(AsyncMutex::new(HashMap::new())),
             leader_closing: Arc::new(AsyncRwLock::new(false)),
+            write_hooks,
         })
     }
 
@@ -2075,6 +2086,11 @@ impl RAGFSBindingClient {
 
     /// Write data to file.
     ///
+    /// Registered write hooks run before the filesystem is touched. The
+    /// reserved GLOBAL policy path is validated as a v1 policy; invalid content
+    /// raises ``GlobalPolicyError`` (``GLOBAL_POLICY_INVALID``) or
+    /// ``UnsupportedGlobalPolicySchemaError`` (``GLOBAL_POLICY_SCHEMA_UNSUPPORTED``).
+    ///
     /// Args:
     ///     path: File path
     ///     data: File content as bytes
@@ -2089,6 +2105,9 @@ impl RAGFSBindingClient {
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let _ = max_retries; // not applicable for local binding
+        self.write_hooks
+            .check(&path, &data)
+            .map_err(|error| global_policy::write_hook_error(py, error))?;
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
         let len = data.len();
@@ -2936,6 +2955,32 @@ impl RAGFSBindingClient {
         })
     }
 
+    /// Reacquire validated durable coverage under its original logical owner.
+    #[pyo3(signature = (ctx, requests, owner_id, timeout_secs=0.0))]
+    fn pathlock_reacquire_batch_async<'py>(
+        &self,
+        py: Python<'py>,
+        ctx: Option<HashMap<String, String>>,
+        requests: Vec<HashMap<String, String>>,
+        owner_id: String,
+        timeout_secs: f64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let requests = parse_pathlock_request_batch(&requests)?;
+        let manager = self.clone_pathlock_manager();
+        let task = self.rt.spawn(FS_CTX.scope(fs_ctx, async move {
+            manager.reacquire_batch(&requests, &owner_id, timeout).await
+        }));
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lease = task
+                .await
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+                .map_err(pathlock_err_to_py)?;
+            Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+        })
+    }
+
     /// Create a borrowed view of an owned lease.
     #[pyo3(signature = (ctx, owned_lease_ref))]
     fn pathlock_as_borrowed(
@@ -3176,6 +3221,10 @@ impl RAGFSBindingClient {
             })
             .transpose()?;
         let handoff = PathLockHandoffRef {
+            holder_id: handoff_ref
+                .get("holder_id")
+                .map(|v| v.extract(py))
+                .transpose()?,
             lease_ref,
             handle_mode,
             owner_id,
@@ -3324,8 +3373,26 @@ impl RAGFSBindingClient {
 #[pymodule]
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
+    m.add_class::<global_policy::PyUserGlobalPolicy>()?;
     m.add_class::<privacy::PyPrivacyMatcher>()?;
     m.add_class::<privacy_extractor::PyPrivacyExtractor>()?;
+    let global_policy_error = m.py().get_type::<global_policy::GlobalPolicyError>();
+    global_policy_error.setattr(
+        "code",
+        ragfs::global_policy::GlobalPolicyError::INVALID_CODE,
+    )?;
+    m.add("GlobalPolicyError", global_policy_error)?;
+    let unsupported_global_policy_error = m
+        .py()
+        .get_type::<global_policy::UnsupportedGlobalPolicySchemaError>();
+    unsupported_global_policy_error.setattr(
+        "code",
+        ragfs::global_policy::GlobalPolicyError::UNSUPPORTED_SCHEMA_CODE,
+    )?;
+    m.add(
+        "UnsupportedGlobalPolicySchemaError",
+        unsupported_global_policy_error,
+    )?;
     m.add_function(wrap_pyfunction!(reopen_tracing_file, m)?)?;
 
     // Import the Python business exception so native code raises the same type

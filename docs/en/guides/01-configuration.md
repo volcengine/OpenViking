@@ -778,6 +778,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
+| `temperature` | float or null | Sampling temperature (default: `null`). Omit or set to `null` to leave it out of requests and use the provider default |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
@@ -796,6 +797,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `media.file_processing_timeout` | float | Maximum provider-side preprocessing wait in seconds (default: `1800`) |
 | `media.file_poll_interval` | float | Provider-side preprocessing poll interval in seconds (default: `3`) |
 | `media.video_fps` | float | Video frame sampling rate when supported by the provider, from `0.2` through `5.0` (default: `1.0`) |
+
+The `vlm` and any dedicated `query_planner` configuration leave temperature unspecified by default. Omitting `temperature` or setting `"temperature": null` uses provider-default sampling for both fixed and routed models. The setting is shared by all credentials in that configuration; standalone VikingBot configuration and call interfaces also leave temperature unspecified by default. Explicit numeric settings retain each backend's existing behavior. To retain the previous VLM default, explicitly set `"temperature": 0.0` if the model supports it. Switching to provider defaults may change output randomness; the endpoint must support omitting temperature. Thinking mode and its supported settings remain model-specific.
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
@@ -1312,6 +1315,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
+| `watch_store` | object | Watch store: `file` (single node) or `mysql` (shared) | `{"provider":"file"}` |
 
 
 ```json
@@ -1371,6 +1375,103 @@ the change scripts in order; existing TaskStore tables created before
 `openviking/service/sql/changes/0001_task_store_service_name.sql` before
 upgrading. Do not use the FileStore tables and MySQL tables as active writers
 for the same deployment.
+
+#### watch_store
+
+The default `file` provider keeps Watch tasks in the internal control file
+`viking://resources/.watch_tasks.json`, as earlier releases did; it belongs to
+a single OpenViking process. Tasks are loaded into memory once. Submission start
+and Task association only update process memory; creation, configuration,
+checkpoint, outcome, deletion and target changes write the full task snapshot.
+Unchanged patches do not write. Runtime occupancy is omitted even when another
+Watch changes, and a restart retries overdue Watches from their saved schedules,
+as in earlier releases. The snapshot and its tmp/backup files are internal
+control state.
+Use `mysql` when Watch metadata itself needs a
+shared store: install `openviking[mysql]` and provision
+`openviking/service/sql/001_watch_tasks.sql`. MySQL `params` take the same
+connection fields as `task_store`; `params.table` defaults to `ov_watch_tasks`.
+`params.credential_encryption_key` is required:
+a base64-encoded 32-byte key used to store each Watch's private `auth_state`
+(source tokens) and `connector_states` AES-GCM encrypted, bound to the task ID.
+Every node needs the same key, and changing it makes existing Watch
+credentials unreadable. In `file` mode this state is protected by VikingFS
+file encryption, as before.
+
+Watch list pagination uses the `list` and `list_all` indexes in that schema.
+Candidate queries read capacity-sized batches of Watch IDs, owner IDs and target
+URIs. Manager `due()` holds each target's PathLock while `begin_run()` reads the
+current Watch once and reserves it in the same transaction. Submission uses that
+snapshot without re-reading the Watch. Parameters changed after reservation apply
+to the next run. `running()` only reads owner/run identifiers, start time,
+the Connector flag and instruction, and database time; it does not
+transfer or decrypt authentication, Connector state or checkpoints.
+
+MySQL persists reservation, real Task association and terminal settlement. The
+run's checkpoint version remains in the payload, as before; checkpoint settlement
+cannot overwrite a newer source configuration. Missing Tasks
+retain the existing grace period and retry behavior. A crash after creating a Task
+but before associating it can still cause duplicate ingestion on retry.
+
+For Watch tables provisioned before pagination was added, update the indexes
+once (replace table and index names when using a custom table):
+
+```sql
+ALTER TABLE ov_watch_tasks
+  DROP INDEX ix_ov_watch_tasks_list,
+  ADD INDEX ix_ov_watch_tasks_list
+    (service_name(128), account_id(128), user_id(128), deleted, created_at, task_id),
+  ADD INDEX ix_ov_watch_tasks_list_all
+    (service_name, deleted, created_at, task_id);
+```
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "mysql",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+Every node serves the Watch API. Nodes with `enable_watch_scheduler=true` may
+run the background Watch scheduler. `watch_leader_provider` selects leader
+mode: `auto` keeps the storage-derived default, `local` keeps leadership inside
+one process, and `cache` uses AGFS CacheRuntime for a shared leader lease. The
+leader polls due Watches every 15 seconds and settles finished runs. File and
+MySQL use the same Runtime polling and bounded dispatch flow. Background
+dispatch tracks unfinished Watch runs and pending submissions in leader memory
+toward its concurrency limit (default 4). Taking leadership restores occupancy
+through the existing run sweep (process-local state for File, durable rows for
+MySQL); subsequent dispatches need no extra occupancy query.
+Manual triggers and first imports are admitted independently and enter the
+background occupancy count when observed by a sweep.
+File target moves have no 1000-Watch limit; MySQL retains that transaction limit.
+A run is the
+ingestion Task itself: the
+Watch row records its Task ID while the run occupies the target, and the run
+starts only while the target's Tree PathLock is held. A submission that stops
+before creating its Task (server shutdown, identity deletion, failure) settles
+the run at once; if its Task is still missing after 1 hour, further submission
+is fenced and the run is settled as an error. After 3 hours, cancellation is
+requested. If the Task remains nonterminal, TaskTracker records a timeout error.
+Connector imports have no local Work, so their Tasks become failed and the
+Watch is settled with its occupancy released. Tasks with open local Work keep
+their occupancy until that Work settles. Existing terminal states are preserved.
+This timeout ends local tracking; it does not guarantee that remote execution stops.
+
+`mv`, `cp`, `rm`, and `mkdir` on a path overlapping an occupied Watch target
+wait up to 10 seconds and then fail with a retryable busy error.
 
 #### agfs (RAGFS)
 
@@ -2080,29 +2181,28 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 }
 ```
 
-`redis_mysql` requires the `redis-mysql` extra and wraps the same MySQL
-parameters. Its `cache` block follows the top-level `cache` `provider/params`
-shape. The Python client currently supports `standalone`, `cluster`, and
-`sentinel` Redis deployments. It caches API-key bindings, users, per-user group
-IDs, and deletion records for a fixed 60 seconds by default. Cache fills and account mutations
-share an account-scoped Redis lease; normal cache hits do not acquire that
-lease. Mutations commit to MySQL first, then invalidate affected cache entries.
-If Redis is unavailable, the MySQL mutation still succeeds and stale cache
-entries remain valid only until their fixed TTL expires. Cache fills also
-maintain an
-account-scoped, expiry-scored key index. Each indexed cache fill removes expired
-index members, allowing account deletion or recreation to clear only that
-account's current cached users, groups, deletion records, and credential data.
-API-key bindings are checked against account and user credential fences, so
-normal key replacement, revocation, and user deletion invalidate old bindings.
-Redis automatically removes the index when its last sorted-set member is removed.
-Cleanup does not issue a separate index deletion, which could remove a newer
-fill's index after lease loss. Provisioning
-and key replacement clear negative lookups both with and without a user hint.
-Redis connection and command timeouts are configured with
-`cache.params.connect_timeout_ms` and `cache.params.command_timeout_ms`; both
-default to 5000 milliseconds when omitted. These are socket timeouts, not an
-overall request deadline.
+`redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
+same parameters as the MySQL provider; its `cache` block follows the top-level
+cache `provider/params` structure and supports `standalone`, `cluster`, and
+`sentinel` Redis deployments.
+
+MySQL remains the source of truth. Redis caches authentication results, user
+information, groups, and deletion status. Cache misses and Redis read failures
+fall back to MySQL. Configure `cache.params.ttl_seconds` to control cache lifetime;
+the default is 60 seconds. Hits do not extend the TTL.
+
+Credential, permission, and deletion changes invalidate the affected cache.
+If invalidation fails, cached data may remain stale until its TTL expires.
+Upgrade all instances sharing the cache together: old and new cache formats
+do not invalidate each other. Cache-version metadata does not expire automatically
+and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
+`lock_wait_seconds` settings are accepted but no longer used.
+
+Redis connection and command timeouts use `cache.params.connect_timeout_ms` and
+`cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
+are socket timeouts, not an overall request deadline. Set `cache.params.pool_size`
+for the expected concurrent Redis requests; the default is 32, and the example
+below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
 
 ```json
 {
@@ -2130,9 +2230,8 @@ overall request deadline.
             "password_env": "OPENVIKING_REDIS_PASSWORD",
             "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
             "key_prefix": "ov:account-auth",
-            "ttl_seconds": 60,
-            "lock_ttl_seconds": 60,
-            "lock_wait_seconds": 30
+            "pool_size": 100,
+            "ttl_seconds": 60
           }
         }
       }

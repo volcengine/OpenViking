@@ -918,7 +918,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["compile"],
-        purpose: "Use a required VikingBot Skill to transform materials into reports, JSON, Wiki pages or other Skill-defined files, or `--skill memory` to consolidate existing memories in place.",
+        purpose: "Use a VikingBot Skill to transform materials into reports, JSON, Wiki pages or other Skill-defined files, or `ov compile memory` to consolidate existing memories in place.",
         examples: &[
             HelpItem {
                 label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki",
@@ -929,8 +929,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Generate or update one shared Skill package.",
             },
             HelpItem {
-                label: "ov compile --to viking://user/me/memories/entities --skill memory",
-                description: "Consolidate one memory type in place (dedup/merge); takes no --from.",
+                label: "ov compile memory",
+                description: "Consolidate memories in place under viking://~/memories; takes no --from.",
             },
         ],
         next_steps: &[
@@ -2631,6 +2631,7 @@ fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
         "task"
+            | "compile"
             | "skills"
             | "session"
             | "snapshot"
@@ -3251,6 +3252,7 @@ mod tests {
     #[test]
     fn unsupported_nested_prefixed_help_falls_back_to_clap() {
         for args in [
+            ["ov", "compile", "memory", "--help"],
             ["ov", "task", "list", "--help"],
             ["ov", "session", "add-message", "--help"],
             ["ov", "privacy", "upsert", "--help"],

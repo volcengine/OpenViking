@@ -43,7 +43,11 @@ async def _user_config_lock(
     viking_fs: VikingFS,
     uri: str,
     ctx: RequestContext,
+    lease_ref: object | None = None,
 ) -> AsyncIterator[Optional[dict[str, Any]]]:
+    if lease_ref is not None:
+        yield lease_ref
+        return
     uri_to_path = getattr(viking_fs, "_uri_to_path", None)
     agfs = getattr(viking_fs, "_async_agfs", None)
     acquire = getattr(agfs, "pathlock_acquire_exact", None)
@@ -241,13 +245,15 @@ async def write_user_config(
     viking_fs: VikingFS,
     ctx: RequestContext,
     user_config: UserConfig,
+    *,
+    lease_ref: object | None = None,
 ) -> ResolvedAddTargets:
     runtime = await validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
     user_config.add_targets.resource_uri = runtime.resource_uri
     user_config.add_targets.skill_uri = runtime.skill_uri
     validate_user_memory_policy(user_config.memory_policy)
     uri = user_config_uri(ctx)
-    async with _user_config_lock(viking_fs, uri, ctx) as handle:
+    async with _user_config_lock(viking_fs, uri, ctx, lease_ref) as handle:
         await _prepare_ttl_change(ctx, UserConfig(), user_config)
         await viking_fs.write_file(
             uri,

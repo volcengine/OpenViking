@@ -7,6 +7,7 @@ from typing import Any
 from loguru import logger
 
 from vikingbot.config.loader import load_config
+from vikingbot.openviking_mount.session_budget import session_budget
 from vikingbot.openviking_mount.session_state import (
     get_openviking_session_id,
     get_openviking_state,
@@ -83,7 +84,6 @@ class OpenVikingCompactHook(Hook):
         *,
         force_commit: bool,
         keep_recent_turn_count: int,
-        retained_message_token_budget: int,
         min_raw_tail_steps: int,
         commit_message_threshold: int | None,
     ) -> dict[str, Any]:
@@ -93,7 +93,9 @@ class OpenVikingCompactHook(Hook):
             default_session_id=context.session_key.safe_name(),
         )
 
-        commit_token_threshold = int(getattr(agents_config, "commit_token_threshold", 6000) or 6000)
+        context_window_tokens, _, token_threshold = session_budget(agents_config)
+        summary_token_ratio = float(getattr(agents_config, "summary_token_ratio", 0.25) or 0.25)
+        retained_token_ratio = float(getattr(agents_config, "retained_token_ratio", 0.05) or 0.05)
         pending_tokens = int(state.get("last_pending_tokens", 0) or 0)
         messages_to_sync = get_unsynced_messages(session)
         last_commit_local_index = parse_local_index(state.get("last_commit_local_index", -1))
@@ -115,7 +117,7 @@ class OpenVikingCompactHook(Hook):
 
         should_commit = bool(
             force_commit
-            or pending_tokens + unsynced_tokens >= commit_token_threshold
+            or pending_tokens + unsynced_tokens >= token_threshold
             or reached_message_threshold
         )
         session_user_id = client.session_owner_user_id()
@@ -135,7 +137,7 @@ class OpenVikingCompactHook(Hook):
             pending_tokens = int(admin_session_state.get("pending_tokens", 0) or 0)
 
         should_commit = (
-            force_commit or pending_tokens >= commit_token_threshold or reached_message_threshold
+            force_commit or pending_tokens >= token_threshold or reached_message_threshold
         )
         if should_commit:
             admin_commit_result = await client.commit_session(
@@ -145,8 +147,10 @@ class OpenVikingCompactHook(Hook):
                 enable_working_memory=True,
                 retention_mode="turn_budget",
                 keep_recent_turn_count=keep_recent_turn_count,
-                retained_message_token_budget=retained_message_token_budget,
                 min_raw_tail_steps=min_raw_tail_steps,
+                session_window_context=context_window_tokens,
+                summary_token_ratio=summary_token_ratio,
+                retained_token_ratio=retained_token_ratio,
                 user_id=session_user_id,
             )
             confirmed = admin_commit_result.get("effective_enable_working_memory") is True
@@ -204,13 +208,6 @@ class OpenVikingCompactHook(Hook):
             )
             or 0
         )
-        retained_message_token_budget = int(
-            kwargs.get(
-                "retained_message_token_budget",
-                getattr(agents_config, "commit_retained_message_token_budget", 6_000),
-            )
-            or 6_000
-        )
         min_raw_tail_steps = int(
             kwargs.get(
                 "min_raw_tail_steps",
@@ -256,7 +253,6 @@ class OpenVikingCompactHook(Hook):
                     admin_user_id,
                     force_commit=force_commit,
                     keep_recent_turn_count=keep_recent_turn_count,
-                    retained_message_token_budget=retained_message_token_budget,
                     min_raw_tail_steps=min_raw_tail_steps,
                     commit_message_threshold=commit_message_threshold,
                 )

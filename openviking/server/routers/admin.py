@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from openviking.config.scope import ConfigScope
 from openviking.config.validate import ConfigPatchError
-from openviking.server.api_keys.models import validate_account_user_role
+from openviking.server.api_keys.models import validate_account_user_creation_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
@@ -25,7 +25,11 @@ from openviking.server.auth import (
 )
 from openviking.server.config import UserConfig
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import (
+    ACCOUNT_USER_ASSIGNABLE_ROLES,
+    RequestContext,
+    Role,
+)
 from openviking.server.models import Response
 from openviking.server.user_config import (
     read_user_config,
@@ -91,7 +95,7 @@ class CreateGroupRequest(BaseModel):
     group_id: str
 
 
-class AddGroupMembersRequest(BaseModel):
+class GroupMembersRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     user_ids: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1, max_length=1000)
@@ -267,6 +271,39 @@ def _check_account_access(ctx: RequestContext, account_id: str) -> None:
         raise PermissionDeniedError(f"{ctx.role} can only access account: {ctx.account_id}")
 
 
+async def _reject_non_root_global_target(
+    request: Request,
+    ctx: RequestContext,
+    account_id: str,
+    user_id: str,
+) -> None:
+    """Only ROOT may manage a GLOBAL identity; other roles may only observe it."""
+    if ctx.role == Role.ROOT:
+        return
+    manager = getattr(request.app.state, "api_key_manager", None)
+    if manager is None:
+        return
+    user = await manager.get_user_membership(account_id, user_id)
+    if user is not None and user["role"] == Role.GLOBAL:
+        raise PermissionDeniedError("Only ROOT can manage GLOBAL identities")
+
+
+async def _reject_global_role_change_target(
+    request: Request,
+    account_id: str,
+    user_id: str,
+) -> None:
+    """GLOBAL identities are creation-only and cannot be promoted or demoted."""
+    manager = getattr(request.app.state, "api_key_manager", None)
+    if manager is None:
+        return
+    user = await manager.get_user_membership(account_id, user_id)
+    if user is not None and user["role"] == Role.GLOBAL:
+        raise InvalidArgumentError(
+            "GLOBAL identities cannot change roles; delete and recreate instead."
+        )
+
+
 async def _check_account_exists(request: Request, account_id: str):
     manager = getattr(request.app.state, "api_key_manager", None)
     if manager is None:
@@ -350,10 +387,17 @@ async def _write_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
+    *,
+    lease_ref: object | None = None,
 ) -> None:
     if not _has_initial_user_config(user_config):
         return
-    await write_user_config(service.viking_fs, user_ctx, user_config)
+    await write_user_config(
+        service.viking_fs,
+        user_ctx,
+        user_config,
+        lease_ref=lease_ref,
+    )
 
 
 async def _rollback_account_creation(
@@ -479,30 +523,42 @@ async def create_account(
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
     manager = _get_api_key_manager(request)
-    user_key = await manager.create_account(
-        body.account_id,
-        body.admin_user_id,
-        seed=body.seed,
-    )
+    user_key = None
+    account_created = False
     try:
-        if body.settings and runtime_config is not None:
-            # Persist the pre-validated override.
-            await runtime_config.patch_account(
+        async with service.account_workspace_lock(account_ctx) as lease:
+            user_key = await manager.create_account(
                 body.account_id,
-                body.settings,
-                creating=True,
+                body.admin_user_id,
+                seed=body.seed,
+                lease_ref=lease,
             )
-        await service.initialize_account_workspace(account_ctx)
-        await _write_initial_user_config(service, account_ctx, body.user_config)
+            account_created = True
+            if body.settings and runtime_config is not None:
+                # Persist the pre-validated override.
+                await runtime_config.patch_account(
+                    body.account_id,
+                    body.settings,
+                    creating=True,
+                    lease_ref=lease,
+                )
+            await service.initialize_account_workspace(account_ctx, lease_ref=lease)
+            await _write_initial_user_config(
+                service,
+                account_ctx,
+                body.user_config,
+                lease_ref=lease,
+            )
     except BaseException:
-        await _rollback_account_creation(
-            service,
-            manager,
-            body.account_id,
-            runtime_config,
-            deletion_service=getattr(request.app.state, "deletion_service", None),
-            actor=ctx,
-        )
+        if account_created:
+            await _rollback_account_creation(
+                service,
+                manager,
+                body.account_id,
+                runtime_config,
+                deletion_service=getattr(request.app.state, "deletion_service", None),
+                actor=ctx,
+            )
         raise
     result = {
         "account_id": body.account_id,
@@ -649,6 +705,7 @@ async def get_account_configuration(
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from exc
         user_id = uri_parts(path)[1]
+        await _reject_non_root_global_target(request, ctx, account_id, user_id)
         await _check_user_exists(request, account_id, user_id, manager)
         user_ctx = RequestContext(user=UserIdentifier(account_id, user_id), role=Role.USER)
         config = await read_user_config(get_service().viking_fs, user_ctx)
@@ -980,7 +1037,9 @@ async def register_user(
 ):
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
-    resolved_role = validate_account_user_role(body.role)
+    resolved_role = validate_account_user_creation_role(body.role)
+    if resolved_role == Role.GLOBAL and ctx.role != Role.ROOT:
+        raise PermissionDeniedError("Only ROOT can create GLOBAL identities")
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id),
@@ -1097,6 +1156,7 @@ async def get_user_settings(
 ):
     """Return the configured and effective memory policy for one User."""
     _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
     service = get_service()
@@ -1129,6 +1189,7 @@ async def patch_user_settings(
 ):
     """Patch the allowlisted User memory and TTL policies without restarting."""
     _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
     service = get_service()
@@ -1164,6 +1225,7 @@ async def remove_user(
 ):
     """Revoke a user and start durable cleanup of their owned data."""
     _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
     deletion_service = request.app.state.deletion_service
     if deletion_service is None:
         raise FailedPreconditionError("Deletion service is not initialized.")
@@ -1184,11 +1246,15 @@ async def set_user_role(
 
     ROOT may manage any account; ADMIN may manage only its own account.
     Supports USER <-> ADMIN changes, including promotion and demotion.
+    GLOBAL identities are creation-only and cannot participate in role changes
+    in either direction.
     Role input is case-insensitive; stored and returned roles are lowercase.
     """
     _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    await _reject_global_role_change_target(request, account_id, user_id)
     role = body.role.lower()
-    if role not in (Role.USER, Role.ADMIN):
+    if role not in ACCOUNT_USER_ASSIGNABLE_ROLES:
         raise InvalidArgumentError("set_user_role only supports user and admin roles.")
     await _get_api_key_manager(request).set_role(account_id, user_id, role)
     return Response(
@@ -1212,6 +1278,7 @@ async def regenerate_key(
 ):
     """Regenerate a user's API key. Old key is immediately invalidated."""
     _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
     if ctx.role == Role.USER:
         if user_id != ctx.user.user_id:
             raise PermissionDeniedError("USER can only regenerate their own API key")
@@ -1266,7 +1333,10 @@ async def delete_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    await _get_api_key_manager(request).delete_group(account_id, group_id)
+    manager = _get_api_key_manager(request)
+    for member_id in await manager.get_group_members(account_id, group_id):
+        await _reject_non_root_global_target(request, ctx, account_id, member_id)
+    await manager.delete_group(account_id, group_id)
     return Response(status="ok", result={"deleted": True})
 
 
@@ -1288,7 +1358,7 @@ async def list_group_members(
 @router.put("/accounts/{account_id}/groups/{group_id}/members")
 @require_auth_root_or_admin
 async def add_group_members(
-    body: AddGroupMembersRequest,
+    body: GroupMembersRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     group_id: str = Path(..., description="Group ID"),
@@ -1296,23 +1366,28 @@ async def add_group_members(
 ):
     """Add one or more users atomically; existing memberships are a no-op."""
     _check_account_access(ctx, account_id)
+    for member_id in body.user_ids:
+        await _reject_non_root_global_target(request, ctx, account_id, member_id)
     added = await _get_api_key_manager(request).add_group_members(
         account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"added": added})
 
 
-@router.delete("/accounts/{account_id}/groups/{group_id}/members/{user_id}")
+@router.delete("/accounts/{account_id}/groups/{group_id}/members")
 @require_auth_root_or_admin
-async def remove_group_member(
+async def remove_group_members(
+    body: GroupMembersRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     group_id: str = Path(..., description="Group ID"),
-    user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
+    """Remove users atomically; return whether any membership was removed."""
     _check_account_access(ctx, account_id)
-    removed = await _get_api_key_manager(request).remove_group_member(
-        account_id, group_id, user_id
+    for member_id in body.user_ids:
+        await _reject_non_root_global_target(request, ctx, account_id, member_id)
+    removed = await _get_api_key_manager(request).remove_group_members(
+        account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"removed": removed})

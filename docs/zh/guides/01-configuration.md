@@ -771,6 +771,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
+| `temperature` | float 或 null | 采样温度（默认：`null`）。省略或设为 `null` 时请求不携带该字段，使用服务端默认值 |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
@@ -789,6 +790,8 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `media.file_processing_timeout` | float | Provider 侧媒体预处理最长等待秒数（默认：`1800`） |
 | `media.file_poll_interval` | float | Provider 侧媒体预处理轮询间隔秒数（默认：`3`） |
 | `media.video_fps` | float | Provider 支持时使用的视频采样帧率，范围 `0.2` 到 `5.0`（默认：`1.0`） |
+
+`vlm` 及单独配置的 `query_planner` 默认不指定温度；省略 `temperature` 或设置 `"temperature": null` 均使用服务端默认采样设置，适用于固定模型和自动路由模型。同一配置下的所有凭据共享此设置，VikingBot 的独立配置和调用接口也默认不指定温度。现有显式数字配置保留各后端原有处理逻辑；如需延续原 VLM 默认温度，可显式设置 `"temperature": 0.0`（需模型支持）。从原默认值改为服务端默认值后，输出随机性可能变化；具体接口需支持省略温度参数。思考模式及其支持的参数仍由具体模型决定。
 
 `vlm.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；认证、鉴权、欠费等永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
@@ -1300,6 +1303,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单节点）或 `mysql`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1356,6 +1360,84 @@ Task/Work/Event 记录，用于隔离共用同一套表的多个 OpenViking 部�
 再按顺序执行变更脚本；升级使用旧 TaskStore 表的库前，先执行
 `openviking/service/sql/changes/0001_task_store_service_name.sql`。同一部署
 不要同时让 FileStore 和 MySQL 表作为写入端。
+
+#### watch_store
+
+默认的 `file` provider 与旧版本一样，把 Watch 任务保存在内部控制文件
+`viking://resources/.watch_tasks.json` 中，只供单个 OpenViking 进程使用。任务启动时
+一次性加载到内存；开始运行和关联 Task 只更新内存，创建、配置、checkpoint、
+结果、删除及目标变化时写完整任务快照，内容相同的 patch 不落盘。即使其它 Watch
+发生变化，也不会保存运行占用；重启后与旧版本一样，按保存的计划重新调度过期 Watch。
+快照及其 tmp/backup 文件均为内部控制状态。当 Watch
+元数据本身需要共享存储时使用 `mysql`：安装 `openviking[mysql]`，并执行
+`openviking/service/sql/001_watch_tasks.sql`。MySQL 的 `params` 与 `task_store`
+使用相同的连接字段；`params.table` 默认为 `ov_watch_tasks`。必须配置
+`params.credential_encryption_key`：一个 base64 编码的 32 字节密钥，用于以 AES-GCM
+加密存储每个 Watch 的私有 `auth_state`（数据源 token）和 `connector_states`，密文与
+task ID 绑定。所有节点必须使用同一密钥，更换密钥会导致已有 Watch 凭证无法解密。
+`file` 模式下这些状态仍由 VikingFS 文件加密保护。
+
+候选查询按剩余并发容量分批读取 Watch ID、归属和目标 URI。Manager 的 `due()` 在
+目标 PathLock 内调用 `begin_run()`，在同一事务中读取一次当前 Watch 并占用，
+提交时直接使用快照，不再读取 Watch。占用后的参数修改从下一轮生效。
+`running()` 只读取归属和运行 ID、开始时间、Connector 标记、
+instruction 及数据库时间，不搬运或解密鉴权、Connector 状态和 checkpoint。
+
+MySQL 持久化占用、真实 Task 关联和终态结算，本轮 checkpoint 版本与之前一样
+保存在 payload 中，结算不会用旧 checkpoint 覆盖新配置。缺失 Task
+沿用现有宽限期及重试语义，创建 Task 后、关联 Watch 前崩溃的窗口仍可能造成重复导入。
+
+Watch 列表分页使用建表脚本中的 `list` 和 `list_all` 索引。若此前已创建 Watch 表，
+需执行一次索引更新；自定义表名时同步替换表名及索引名：
+
+```sql
+ALTER TABLE ov_watch_tasks
+  DROP INDEX ix_ov_watch_tasks_list,
+  ADD INDEX ix_ov_watch_tasks_list
+    (service_name(128), account_id(128), user_id(128), deleted, created_at, task_id),
+  ADD INDEX ix_ov_watch_tasks_list_all
+    (service_name, deleted, created_at, task_id);
+```
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "mysql",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
+调度器。`watch_leader_provider` 选择 leader 模式：`auto` 保持按存储类型推导的默认值，
+`local` 将 leader 限制在本进程内，`cache` 使用 AGFS CacheRuntime 的共享 leader 租约。
+leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
+的轮询与有限并发派发流程。后台派发在 leader 内存中维护
+未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描
+恢复占用（File 为本进程状态，MySQL 为持久化行），后续派发不额外查询占用。
+手动触发和首次导入独立受理，扫描发现后计入
+后台占用。File 目标移动没有 1000 条 Watch 上限，MySQL 仍保留该事务限制。
+一次运行就是
+对应的 ingestion Task：运行占用目标期间，Watch 行记录该 Task ID，且只有在持有
+目标 Tree PathLock 时才能开始运行。提交在创建 Task 前停止（服务停机、身份删除、
+失败）时立即结算；Task 超过 1 小时仍不存在时，阻止后续提交并按 error 结算。
+运行超过 3 小时会请求取消；若 Task 仍非终态，则通过 TaskTracker 记录超时错误。
+Connector 导入没有本地 Work，其 Task 会成为 failed，再结算 Watch 并释放占用。
+仍有未结束本地 Work 的 Task 保持占用，直到 Work 结算。已有终态保持不变。
+该超时表示结束本轮本地跟踪，不保证远端执行已经停止。
+
+对与被占用 Watch 目标重叠的路径执行 `mv`、`cp`、`rm`、`mkdir` 时，最多等待
+10 秒，之后返回可重试的 busy 错误。
 
 #### agfs (RAGFS)
 
@@ -2054,21 +2136,23 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
 }
 ```
 
-`redis_mysql` 需要安装 `redis-mysql` extra，并在参数中嵌套同一份 MySQL 配置。
-其 `cache` 配置沿用顶层 `cache` 的 `provider/params` 结构，目前 Python
-客户端支持 `standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
-它默认以固定 60 秒 TTL 缓存 API Key 绑定、User、每个 User 的 Group ID 和删除记录。
-缓存重建与同一 Account 的修改共用 Redis 租约，正常缓存命中不获取该租约。修改会先
-提交 MySQL，再失效相关缓存。Redis 不可用时 MySQL 修改仍会成功，遗留缓存最多保持到
-固定 TTL 到期。缓存回填同时维护 Account
-级、按过期时间排序的 key 索引；每次写入已索引缓存时会清理过期成员，因此删除或重建
-Account 时只会清理该 Account 当前的 User、Group、删除记录和凭据缓存。API Key 绑定会
-校验 Account 和 User 的凭据 fence，所以正常的换 Key、吊销和删 User 会使旧绑定失效。
-索引的最后一个有序集合成员被移除后，Redis 会自动删除空索引；清理结束时不再单独删除
-索引，避免失去租约的旧请求误删新回填的索引。创建身份或换 Key 会同时清除携带和未携带
-User 提示的负缓存。
-Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
-`cache.params.command_timeout_ms` 配置，未配置时均为 5000 毫秒；这不是整个请求的总超时。
+`redis_mysql` 需要安装 `redis-mysql` extra。`mysql` 部分使用与 MySQL provider
+相同的参数；`cache` 部分沿用顶层缓存的 `provider/params` 结构，支持
+`standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
+
+MySQL 是数据来源，Redis 缓存鉴权结果、用户信息、组和删除状态。缓存未命中或
+Redis 读取失败时会查询 MySQL。通过 `cache.params.ttl_seconds` 配置缓存有效期，
+默认 60 秒；命中不会延长有效期。
+
+凭据、权限和删除状态变更会失效相关缓存。如果失效操作失败，缓存可能保持旧值
+直到 TTL 到期。共享同一缓存的实例应一起升级，旧、新缓存格式无法互相失效。
+缓存版本元数据不会自动过期，需要计入 Redis 容量规划。旧的 `lock_ttl_seconds`
+和 `lock_wait_seconds` 配置兼容接受，但不再使用。
+
+Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
+`cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
+总超时。`cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
+使用 100；连接池耗尽会触发连接错误并转为查询 MySQL。
 
 ```json
 {
@@ -2096,9 +2180,8 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
             "password_env": "OPENVIKING_REDIS_PASSWORD",
             "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
             "key_prefix": "ov:account-auth",
-            "ttl_seconds": 60,
-            "lock_ttl_seconds": 60,
-            "lock_wait_seconds": 30
+            "pool_size": 100,
+            "ttl_seconds": 60
           }
         }
       }

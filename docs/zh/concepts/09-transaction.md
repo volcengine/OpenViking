@@ -524,12 +524,18 @@ filesystem 与 Redis 是相互独立的锁协调域，Redis 的 acquire **不会
 不同 owner，两个进程也可能同时写业务文件；等待旧 token 过期不能替代退出检查。
 
 新 handoff 包含 `handle_mode`；旧消息缺少该字段时仍可恢复。
-消费者遇到 Provider 变化或旧 token 不可用时，按完整逻辑路径和 Exact/Tree
-类型重新加锁，获得新 owner 后才执行任务。优先使用 `covered_paths`；
+native adopt 只接管仍有效的 source holder；来源消失、过期或 Provider 变化时返回
+`HandoffRecoveryRequired`。消费者通过 `adopt_or_reacquire` 统一校验账号和覆盖范围，
+按完整逻辑路径和 Exact/Tree 类型在原 owner 下重新加锁，获得新的 holder、
+`lease_ref` 和 `ownership_ref` 后才执行任务。优先使用 `covered_paths`；
 旧 `.path.ovlock` 可反解 Tree 路径，无法反解的 Exact 文件名使用任务自身的
 完整路径请求。不会只恢复混合批次中的部分路径。
-重新加锁遇到冲突或服务错误时保留任务重试；非法覆盖、失效引用和重复 adopt
-不会触发重新加锁。旧 `.ovlock` 文件无需扫描或复制到 Redis。
+重新加锁遇到冲突或服务错误时保留任务重试；非法覆盖和失效的本地所有权引用
+不会触发重新加锁。重复投递的来源 holder 已被消费时也走上述恢复流程，
+业务写入需保证幂等。旧 `.ovlock` 文件无需扫描或复制到 Redis。
+
+`owner_lease_ref` 是当前进程中仍有效的本地所有权凭证，包含 `lease_ref` 和
+`ownership_ref`，不能用于跨重启或 Provider 迁移恢复。
 
 恢复必须携带有效账号上下文；缺少上下文或覆盖路径不属于该账号时拒绝恢复。
 语义任务优先保留 `covered_paths` 中的 Exact/Tree 类型；历史消息缺少覆盖类型、
