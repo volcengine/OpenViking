@@ -30,50 +30,6 @@ class _TestVLMResolver:
         return self._vlm
 
 
-async def test_shared_processor_uses_owner_language_and_latest_account_patch(monkeypatch):
-    from openviking.config.binding import manager_over_source
-    from openviking.config.source import MemoryConfigSource
-    from openviking.server.identity import RequestContext, Role
-    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-    from openviking_cli.session.user_id import UserIdentifier
-    from openviking_cli.utils.config import get_openviking_config
-
-    cluster = get_openviking_config()
-    original_language = cluster.output_language_override
-    manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
-    await manager.patch_account("a", {"output_language_override": "en"})
-    await manager.patch_account("b", {"output_language_override": "zh-CN"})
-    vlm = LanguageAwareMockVLM()
-    processor = SemanticProcessor(
-        vlm_resolver=_TestVLMResolver(vlm), runtime_config_manager=manager
-    )
-    contexts = {
-        account: RequestContext(user=UserIdentifier(account, "default"), role=Role.ADMIN)
-        for account in ("a", "b")
-    }
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: MagicMock()
-    )
-
-    async def summarize(account):
-        return await processor._generate_text_summary(
-            "viking://resources/readme.md",
-            "readme.md",
-            asyncio.Semaphore(1),
-            ctx=contexts[account],
-            file_content="请记住这个项目需要简洁的文档。".encode(),
-        )
-
-    a, b = await asyncio.gather(summarize("a"), summarize("b"))
-    assert a["summary"] == vlm.language_responses["en"]
-    assert b["summary"] == vlm.language_responses["zh-CN"]
-    await processor._generate_overview("viking://resources/project", [a], [], ctx=contexts["b"])
-    assert "Output Language: zh-CN" in vlm.prompts_received[-1]
-    await manager.patch_account("a", {"output_language_override": ""})
-    assert (await summarize("a"))["summary"] == vlm.language_responses["zh-CN"]
-    assert cluster.output_language_override == original_language
-
-
 class TestLanguageDetection:
     """语言检测功能测试。"""
 
@@ -583,10 +539,55 @@ class TestOutputLanguageOverride:
         )
         assert result == "en"
 
-    def test_override_set_bypasses_detection(self):
-        config = self._make_config(override="en")
-        result = resolve_output_language("これは日本語のテキストです", config=config)
-        assert result == "en"
+    async def test_override_set_bypasses_detection(self, monkeypatch):
+        from openviking.config.binding import manager_over_source
+        from openviking.config.source import MemoryConfigSource
+        from openviking.server.identity import RequestContext, Role
+        from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+        from openviking_cli.session.user_id import UserIdentifier
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        cluster = OpenVikingConfig.from_dict({"output_language_override": "en"})
+        monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.semantic_processor.get_openviking_config", lambda: cluster
+        )
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: MagicMock()
+        )
+        manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
+        await manager.patch_account("a", {"output_language_override": "en"})
+        await manager.patch_account("b", {"output_language_override": "zh-CN"})
+        vlm = LanguageAwareMockVLM()
+        processor = SemanticProcessor(
+            vlm_resolver=_TestVLMResolver(vlm), runtime_config_manager=manager
+        )
+        contexts = [
+            RequestContext(user=UserIdentifier(account, "alice"), role=Role.USER)
+            for account in ("a", "b")
+        ]
+        summaries = await asyncio.gather(
+            *[
+                processor._generate_text_summary(
+                    "viking://resources/readme.md",
+                    "readme.md",
+                    asyncio.Semaphore(1),
+                    ctx=ctx,
+                    file_content="这是需要保留的中文文档。".encode(),
+                )
+                for ctx in contexts
+            ]
+        )
+        assert [item["summary"] for item in summaries] == [
+            vlm.language_responses["en"],
+            vlm.language_responses["zh-CN"],
+        ]
+        await manager.patch_account("a", {"output_language_override": ""})
+        await processor._generate_overview(
+            "viking://resources/project", [summaries[1]], [], ctx=contexts[0]
+        )
+        assert "Output Language: zh-CN" in vlm.prompts_received[-1]
+        assert cluster.output_language_override == "en"
 
     def test_override_set_wins_over_fallback(self):
         config = self._make_config(override="zh-CN", fallback="en")

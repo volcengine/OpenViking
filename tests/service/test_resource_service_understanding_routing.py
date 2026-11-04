@@ -91,6 +91,14 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         lambda: queue_manager,
     )
 
+    with pytest.raises(InvalidArgumentError, match="args cannot contain"):
+        await service.add_resource(
+            path="https://example.com/download?id=1",
+            ctx=ctx,
+            to="viking://resources/manual",
+            args={"parser_api_config": {"api_key": "caller-key"}},
+        )
+
     result = await service.add_resource(
         path="https://example.com/download?id=1",
         ctx=ctx,
@@ -322,19 +330,6 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     processor.process_resource.assert_not_awaited()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
     agfs.pathlock_handoff.assert_awaited_once_with(lock)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field", ["api_key", "parser_api"])
-async def test_add_resource_rejects_parser_credential_overrides(field):
-    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
-    service = ResourceService()
-    with pytest.raises(InvalidArgumentError, match="args cannot contain") as failure:
-        await service._normalize_add_resource_args(
-            {field: "private-key"}, watch_interval=0, ctx=ctx
-        )
-    assert failure.value.code == "INVALID_ARGUMENT"
-    assert "private-key" not in str(failure.value)
 
 
 @pytest.mark.asyncio

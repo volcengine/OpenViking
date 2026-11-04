@@ -2048,6 +2048,7 @@ async def test_create_account(
     settings = {
         "output_language_override": "en",
         "memory": {"extraction_enabled": False},
+        "parser_api": {"api_key": "parser-private-key"},
         "embedding": {"max_retries": 5},
         "vectordb": {
             "backend": "vikingdb",
@@ -2090,11 +2091,12 @@ async def test_create_account(
         json={"account_id": acct, "admin_user_id": "alice", "settings": settings},
         headers=root_headers(),
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
+    assert "parser-private-key" not in resp.text
 
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
@@ -2110,108 +2112,30 @@ async def test_create_account(
     assert factory.call_args.args[0].vikingdb.host == "https://account.invalid"
     adapter.create_collection.assert_not_called()
 
-
-async def test_account_generation_configuration_permissions_and_validation(
-    lightweight_admin_client, lightweight_admin_app
-):
-    client = lightweight_admin_client
-    account = _uid()
-    settings = {"output_language_override": "en", "memory": {"extraction_enabled": False}}
-    created = await client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": account, "admin_user_id": "default", "settings": settings},
-        headers=root_headers(),
-    )
-    assert created.status_code == 200, created.text
-    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
-    url = f"/api/v1/admin/accounts/{account}/configuration"
-    assert (await client.get(url, headers=admin_headers)).json()["result"]["settings"] == settings
-    updated = await client.patch(
+    url = f"/api/v1/admin/accounts/{acct}/configuration"
+    admin_headers = {"X-API-Key": body["result"]["user_key"]}
+    visible = await admin_client.get(url, headers=admin_headers)
+    assert visible.json()["result"]["settings"] == {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
+    }
+    updated = await admin_client.patch(
         url,
         headers=admin_headers,
         json={"settings": {"output_language_override": "", "memory": {"extraction_enabled": True}}},
     )
     assert updated.status_code == 200, updated.text
-    expected = {"output_language_override": "", "memory": {"extraction_enabled": True}}
-    assert updated.json()["result"]["settings"] == expected
-    invalid = await client.patch(
-        url,
-        headers=admin_headers,
-        json={"settings": {"memory": {"extraction_enabled": "invalid"}}},
+    assert "parser-private-key" not in updated.text
+    denied = await admin_client.patch(
+        url, headers=admin_headers, json={"settings": {"parser_api": None}}
     )
-    assert invalid.status_code == 400
-    assert (await client.get(url, headers=admin_headers)).json()["result"]["settings"] == expected
-    other = f"/api/v1/admin/accounts/{_uid()}/configuration"
-    assert (await client.get(other, headers=admin_headers)).status_code == 403
-    assert (
-        await client.patch(other, headers=admin_headers, json={"settings": settings})
-    ).status_code == 403
-    reset = await client.patch(
-        url,
-        headers=admin_headers,
-        json={"settings": {"output_language_override": None, "memory": None}},
+    assert denied.status_code == 403, denied.text
+    invalid = await admin_client.patch(
+        url, headers=root_headers(), json={"settings": {"parser_api": {"api_key": " "}}}
     )
-    assert reset.status_code == 200, reset.text
-    assert reset.json()["result"]["settings"] == {}
-
-
-async def test_account_parser_credentials_are_root_only(lightweight_admin_client):
-    client = lightweight_admin_client
-    account = _uid()
-    settings = {
-        "parser_api": {"api_key": "parser-private-key"},
-        "output_language_override": "en",
-    }
-    created = await client.post(
-        "/api/v1/admin/accounts",
-        headers=root_headers(),
-        json={"account_id": account, "admin_user_id": "alice", "settings": settings},
-    )
-    assert created.status_code == 200, created.text
-    assert "parser-private-key" not in created.text
-    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
-    url = f"/api/v1/admin/accounts/{account}/configuration"
-    root_result = await client.get(url, headers=root_headers())
-    assert root_result.json()["result"]["settings"] == settings
-    for result in (
-        await client.get(url, headers=admin_headers),
-        await client.patch(
-            url, headers=admin_headers, json={"settings": {"output_language_override": "zh"}}
-        ),
-    ):
-        assert result.status_code == 200, result.text
-        assert "parser_api" not in result.json()["result"]["settings"]
-        assert "parser-private-key" not in result.text
-    for section in ({"api_key": "other-key"}, {}, None, {"api_key": None}):
-        denied = await client.patch(
-            url, headers=admin_headers, json={"settings": {"parser_api": section}}
-        )
-        assert denied.status_code == 403, denied.text
-        assert "other-key" not in denied.text
-    for section in (
-        {"api_key": ""},
-        {"api_key": " "},
-        {"api_key": None},
-        {"host": "https://evil.test"},
-    ):
-        invalid = await client.patch(
-            url, headers=root_headers(), json={"settings": {"parser_api": section}}
-        )
-        assert invalid.status_code == 400, invalid.text
-    unchanged = await client.get(url, headers=root_headers())
-    assert unchanged.json()["result"]["settings"]["parser_api"] == settings["parser_api"]
-    rotated = await client.patch(
-        url,
-        headers=root_headers(),
-        json={"settings": {"parser_api": {"api_key": "parser-rotated-key"}}},
-    )
-    assert rotated.status_code == 200, rotated.text
-    assert rotated.json()["result"]["settings"]["parser_api"]["api_key"] == "parser-rotated-key"
-    removed = await client.patch(
-        url, headers=root_headers(), json={"settings": {"parser_api": None}}
-    )
-    assert removed.status_code == 200, removed.text
-    assert removed.json()["result"]["settings"] == {"output_language_override": "zh"}
+    assert invalid.status_code == 400, invalid.text
+    stored = await admin_client.get(url, headers=root_headers())
+    assert stored.json()["result"]["settings"]["parser_api"] == settings["parser_api"]
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(

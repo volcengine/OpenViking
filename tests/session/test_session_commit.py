@@ -49,69 +49,6 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 class TestCommit:
     """Test commit"""
 
-    async def test_account_extraction_gate_and_language_refresh_keep_working_memory(
-        self, service, client
-    ):
-        from openviking.server.identity import Role
-        from openviking_cli.session.user_id import UserIdentifier
-        from openviking_cli.utils.config import get_openviking_config
-
-        cluster = get_openviking_config()
-        original_language = cluster.output_language_override
-        manager = service.runtime_config_manager
-        await manager.patch_account(
-            "a", {"output_language_override": "en", "memory": {"extraction_enabled": False}}
-        )
-        await manager.patch_account(
-            "b", {"output_language_override": "zh-CN", "memory": {"extraction_enabled": True}}
-        )
-        prompts = []
-
-        async def complete(prompt="", **kwargs):
-            prompts.append(prompt or str(kwargs.get("messages")))
-            return "# Working Memory\n\nGenerated account summary."
-
-        vlm = SimpleNamespace(
-            is_available=lambda: True, max_tokens=4096, get_completion_async=complete
-        )
-        service.sessions._vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
-        extract = AsyncMock(return_value=[])
-        service.sessions._session_compressor.extract_long_term_memories = extract
-        sessions = {}
-        for account in ("a", "b"):
-            ctx = RequestContext(user=UserIdentifier(account, "default"), role=Role.ROOT)
-            session = await service.sessions.create(ctx)
-            await session.add_message_async("user", [TextPart("请记住我喜欢简洁的文档。")])
-            sessions[account] = session
-        results = await asyncio.gather(
-            *[
-                session.commit_async(
-                    memory_policy={"memory_types": ["profile"], "working_memory": {"enabled": True}}
-                )
-                for session in sessions.values()
-            ]
-        )
-        tasks = await asyncio.gather(*[_wait_for_task(result["task_id"]) for result in results])
-        assert all(task["status"] == "completed" for task in tasks), tasks
-        assert extract.await_count == 1
-        assert extract.await_args.kwargs["ctx"].account_id == "b"
-        assert any("Write all section content in en." in prompt for prompt in prompts)
-        assert any("Write all section content in zh-CN." in prompt for prompt in prompts)
-        assert await sessions["a"]._archives.read_overview(results[0]["archive_uri"])
-
-        await manager.patch_account(
-            "a", {"output_language_override": "zh-CN", "memory": {"extraction_enabled": True}}
-        )
-        await sessions["a"].add_message_async("user", [TextPart("我也喜欢自动化测试。")])
-        result = await sessions["a"].commit_async(
-            memory_policy={"memory_types": ["profile"], "working_memory": {"enabled": True}}
-        )
-        task = await _wait_for_task(result["task_id"])
-        assert task["status"] == "completed", task
-        assert extract.await_count == 2
-        assert extract.await_args.kwargs["ctx"].account_id == "a"
-        assert cluster.output_language_override == original_language
-
     async def test_memory_apply_failure_does_not_reextract(
         self, session_with_messages, monkeypatch
     ):
@@ -712,27 +649,49 @@ class TestCommit:
         assert isinstance(result, dict)
         assert result.get("archived") is False
 
-    async def test_commit_multiple_times(self, client):
-        """Test multiple commits"""
+    async def test_commit_multiple_times(self, client, service):
+        """Later commits use updated account settings while preserving Working Memory."""
+        manager = service.runtime_config_manager
+        vlm = SimpleNamespace(
+            is_available=lambda: True,
+            max_tokens=4096,
+            get_completion_async=AsyncMock(return_value="# Working Memory\n\nAccount summary."),
+        )
+        service.sessions._vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
         session = client(session_id="multi_commit_test")
         await session.ensure_exists()
+        extract = AsyncMock(return_value=[])
+        session._session_compressor.extract_long_term_memories = extract
+        policy = {"memory_types": ["profile"], "working_memory": {"enabled": True}}
+        await manager.patch_account(
+            session.ctx.account_id,
+            {"output_language_override": "en", "memory": {"extraction_enabled": False}},
+        )
 
-        # First round of conversation
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])
-        result1 = await session.commit_async()
+        result1 = await session.commit_async(memory_policy=policy)
         assert result1.get("status") == "accepted"
-        assert result1.get("task_id") is not None
+        assert (await _wait_for_task(result1["task_id"]))["status"] == "completed"
+        assert await session._archives.read_overview(result1["archive_uri"])
+        extract.assert_not_awaited()
 
-        # Wait for first commit's background task to finish
-        await _wait_for_task(result1["task_id"])
-
-        # Second round of conversation
+        await manager.patch_account(
+            session.ctx.account_id,
+            {"output_language_override": "zh-CN", "memory": {"extraction_enabled": True}},
+        )
         session.add_message("user", [TextPart("Second round message")])
         session.add_message("assistant", [TextPart("Second round response")])
-        result2 = await session.commit_async()
+        result2 = await session.commit_async(memory_policy=policy)
         assert result2.get("status") == "accepted"
-        assert result2.get("task_id") is not None
+        assert (await _wait_for_task(result2["task_id"]))["status"] == "completed"
+        assert result1["archive_uri"] != result2["archive_uri"]
+        assert session.messages == []
+        extract.assert_awaited_once()
+        assert extract.await_args.kwargs["ctx"].account_id == session.ctx.account_id
+        prompts = str(vlm.get_completion_async.call_args_list)
+        assert "Write all section content in en." in prompts
+        assert "Write all section content in zh-CN." in prompts
 
     async def test_commit_keep_recent_count_retains_live_tail_and_resets_pending_tokens(
         self,

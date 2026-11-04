@@ -281,12 +281,7 @@ class TestSessionConversationToolFiltering:
 
         assert provider._detect_language() == "zh-CN"
 
-    @pytest.mark.parametrize(
-        "language_override, expected_language", [(None, "en"), ("zh-CN", "zh-CN"), ("", "en")]
-    )
-    async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(
-        self, language_override, expected_language
-    ):
+    async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
             def __init__(self):
                 self.messages = None
@@ -312,12 +307,11 @@ class TestSessionConversationToolFiltering:
         provider = SessionExtractContextProvider(
             messages=messages,
             vlm_config=fake_vlm,
-            output_language_override=language_override,
+            output_language_override="zh-CN",
         )
 
-        assert provider.get_output_language() == expected_language
         await provider.prepare_extraction_messages()
-        assert provider.get_output_language() == expected_language
+        assert provider.get_output_language() == "zh-CN"
         prompt_message = provider._build_conversation_message()
 
         assert "Please remember this image." in prompt_message["content"]

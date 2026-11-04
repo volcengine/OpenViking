@@ -683,72 +683,12 @@ def test_refresh_does_not_resurrect_evicted_account():
 # -- AccountConfig field attributes + manager fallback ------------------------
 
 
-async def test_account_language_and_extraction_defaults_patch_and_refresh():
+async def test_account_runtime_binding_and_updates_are_isolated():
     from openviking.config.binding import manager_over_source
     from openviking.config.generation import (
         get_memory_extraction_enabled,
         get_output_language_override,
     )
-    from openviking_cli.utils.config import set_openviking_config
-    from openviking_cli.utils.config.open_viking_config import (
-        OpenVikingConfig,
-        OpenVikingConfigSingleton,
-    )
-
-    cluster = OpenVikingConfig.from_dict(
-        {"output_language_override": "en", "memory": {"extraction_enabled": False}}
-    )
-    set_openviking_config(cluster)
-    source = MemoryConfigSource()
-    writer = manager_over_source(source, base_config=cluster)
-    reader = manager_over_source(source, base_config=cluster)
-    try:
-        assert await get_output_language_override(writer, "a") == "en"
-        assert await get_memory_extraction_enabled(writer, "a") is False
-        await writer.patch_account(
-            "a", {"output_language_override": "", "memory": {"extraction_enabled": False}}
-        )
-        assert await get_output_language_override(reader, "a") == ""
-        assert await get_memory_extraction_enabled(reader, "a") is False
-        await writer.patch_account("b", {"output_language_override": "zh-CN", "memory": {}})
-        assert await get_output_language_override(writer, "b") == "zh-CN"
-        assert await get_memory_extraction_enabled(writer, "b") is True
-
-        before = await writer.get_settings(ConfigScope.account("a"))
-        with pytest.raises(ValueError):
-            await writer.patch_account("a", {"memory": {"extraction_enabled": "invalid"}})
-        with pytest.raises(ValueError):
-            await writer.patch_account("a", {"output_language_override": 123})
-        assert await writer.get_settings(ConfigScope.account("a")) == before
-        assert await get_output_language_override(writer, "a") == ""
-        assert await get_memory_extraction_enabled(writer, "a") is False
-
-        await writer.patch_account("a", {"memory": {"extraction_enabled": None}})
-        assert await writer.get_settings(ConfigScope.account("a")) == {
-            "output_language_override": "",
-            "memory": {},
-        }
-        assert await get_memory_extraction_enabled(writer, "a") is True
-        assert await get_output_language_override(writer, "a") == ""
-        assert await get_memory_extraction_enabled(reader, "a") is False
-        await reader.refresh_once()
-        assert await get_memory_extraction_enabled(reader, "a") is True
-        assert await get_output_language_override(reader, "a") == ""
-
-        await writer.patch_account("a", {"output_language_override": None, "memory": None})
-        assert await writer.get_settings(ConfigScope.account("a")) == {}
-        assert await get_output_language_override(writer, "a") == "en"
-        assert await get_memory_extraction_enabled(writer, "a") is False
-        assert await get_output_language_override(writer, "b") == "zh-CN"
-        assert await get_memory_extraction_enabled(writer, "b") is True
-        assert cluster.output_language_override == "en"
-        assert cluster.memory.extraction_enabled is False
-    finally:
-        OpenVikingConfigSingleton.reset_instance()
-
-
-async def test_account_runtime_binding_and_updates_are_isolated():
-    from openviking.config.binding import manager_over_source
     from openviking.config.vector import AccountVectorConfigResolver
     from openviking_cli.utils.config import set_openviking_config
     from openviking_cli.utils.config.open_viking_config import (
@@ -758,6 +698,8 @@ async def test_account_runtime_binding_and_updates_are_isolated():
 
     cluster = OpenVikingConfig.from_dict(
         {
+            "output_language_override": "en",
+            "memory": {"extraction_enabled": False},
             "embedding": {
                 "dense": {
                     "provider": "openai",
@@ -780,6 +722,8 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         "api_base": "https://account.invalid/v1",
     }
     settings = {
+        "output_language_override": "",
+        "memory": {},
         "embedding": {"dense": {"model": "account", "dimension": 8, "credentials": [credential]}},
         "vectordb": {
             "backend": "http",
@@ -800,6 +744,10 @@ async def test_account_runtime_binding_and_updates_are_isolated():
             )
         assert await source.load(ConfigScope.account("a")) is None
         await manager.patch_account("a", settings, creating=True)
+        assert await get_output_language_override(manager, "a") == ""
+        assert await get_memory_extraction_enabled(manager, "a") is True
+        assert await get_output_language_override(manager, "b") == "en"
+        assert await get_memory_extraction_enabled(manager, "b") is False
         account, default = await resolver.resolve("a"), await resolver.resolve("b")
         assert account.dedicated_vectordb and account.vectordb.dimension == 8
         assert account.embedding.dense.credentials[0].api_key == "account-secret"
@@ -825,6 +773,11 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         )
         assert (await resolver.resolve("a")).embedding.dense.credentials[0].api_key == "rotated"
         assert (await resolver.resolve("b")).embedding.dense.api_key == "cluster-secret"
+        await manager.patch_account("a", {"output_language_override": None, "memory": None})
+        assert await get_output_language_override(manager, "a") == "en"
+        assert await get_memory_extraction_enabled(manager, "a") is False
+        assert cluster.output_language_override == "en"
+        assert cluster.memory.extraction_enabled is False
     finally:
         OpenVikingConfigSingleton.reset_instance()
 

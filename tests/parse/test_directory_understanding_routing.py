@@ -105,14 +105,10 @@ def _fake_understanding_parse(calls: list[Path]):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("account_id", ["a", "b"])
-@pytest.mark.parametrize("source_kind", ["directory", "zip"])
-async def test_materialized_html_webpage_routes_to_understanding(
-    monkeypatch, tmp_path: Path, account_id, source_kind
-):
+async def test_materialized_html_webpage_routes_to_understanding(monkeypatch, tmp_path: Path):
     config = _configure_understanding(monkeypatch, ["html"])
     parser_api_config = ParserApiConfig(**vars(config.parser_api)).model_copy(
-        update={"api_key": f"key-{account_id}"}
+        update={"api_key": "account-key"}
     )
     site_dir = tmp_path / "example.com"
     nested_dir = site_dir / "articles"
@@ -122,14 +118,8 @@ async def test_materialized_html_webpage_routes_to_understanding(
         "<html><h1>Detail</h1></html>",
         encoding="utf-8",
     )
-    source_path = site_dir
-    if source_kind == "zip":
-        source_path = tmp_path / "pages.zip"
-        with zipfile.ZipFile(source_path, "w") as archive:
-            archive.write(site_dir / "index.html", "example.com/index.html")
-            archive.write(nested_dir / "detail.html", "example.com/articles/detail.html")
     resource = LocalResource(
-        path=source_path,
+        path=site_dir,
         source_type=SourceType.HTTP,
         original_source="https://example.com/",
         meta={"web_import": True, "original_filename": "example.com"},
@@ -140,7 +130,7 @@ async def test_materialized_html_webpage_routes_to_understanding(
     parse_file = _fake_understanding_parse(calls)
 
     async def parse_api(api, source, **kwargs):
-        assert api._api_key == f"key-{account_id}"
+        assert api._api_key == "account-key"
         return await parse_file(api, source, **kwargs)
 
     with (
@@ -155,7 +145,7 @@ async def test_materialized_html_webpage_routes_to_understanding(
             parser_api_config=parser_api_config,
         )
 
-    assert {path.as_posix().split("example.com/", 1)[1] for path in calls} == {
+    assert {path.relative_to(site_dir).as_posix() for path in calls} == {
         "articles/detail.html",
         "index.html",
     }

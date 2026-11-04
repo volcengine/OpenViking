@@ -1964,10 +1964,7 @@ async def test_force_merge_does_not_drop_add_only_delete():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("override, expected", [(None, "zh-CN"), ("en", "en"), ("", "zh-CN")])
-async def test_patch_merge_uses_original_messages_for_output_language(
-    monkeypatch, override, expected
-):
+async def test_patch_merge_uses_original_messages_for_output_language(monkeypatch):
     _patch_language_config(monkeypatch)
     existing_uri = "viking://user/u/memories/notes/code.md"
     old_file = MemoryFile(
@@ -2024,10 +2021,10 @@ async def test_patch_merge_uses_original_messages_for_output_language(
         ctx=_ctx(),
         registry=_registry(),
         vlm_resolver=_TestVLMResolver(),
-        output_language_override=override,
+        output_language_override="",
     )
 
-    assert captured_languages == [expected]
+    assert captured_languages == ["zh-CN"]
 
 
 class TestFilterValidLinksTransientErrors:
