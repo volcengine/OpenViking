@@ -156,6 +156,47 @@ async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, 
 
 
 @pytest.mark.asyncio
+async def test_shared_collection_count_includes_each_shared_account(
+    vector_backend_factory, tmp_path
+):
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path / "shared_count_vectors"),
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        for account_id in ("default", "acct"):
+            await backend._upsert_many_raw(
+                [
+                    {
+                        "id": f"{account_id}-memory",
+                        "uri": f"viking://user/alice/memories/{account_id}.md",
+                        "account_id": account_id,
+                        "context_type": "memory",
+                        "level": 2,
+                        "updated_at": "2026-01-01T00:00:00Z",
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                    }
+                ],
+                ctx=RequestContext(
+                    user=UserIdentifier(account_id, "admin"),
+                    role=Role.ADMIN,
+                ),
+            )
+
+        assert await backend.count(ctx=None) == 1
+        assert await backend.count_shared_collection() == 2
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("reader_grants", "allowed"), [([], False), (["1:user:reader"], True)])
 async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
     vector_backend_factory, tmp_path, reader_grants, allowed
