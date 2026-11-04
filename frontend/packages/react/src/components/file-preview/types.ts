@@ -85,11 +85,9 @@ export interface FilePreviewTabBase {
    */
   disabled?: boolean;
   /**
-   * 请求打开上级目录，参数为当前文件的 `source.path`。
-   * 仅在文件页签提供路径时生效；省略时路径不可点击。
-   * Requests opening the parent directory, passing the current file's
-   * `source.path`. Applies only to file tabs with a path; omitting it makes
-   * the path non-interactive.
+   * 上级目录成功打开后触发，参数为当前文件路径；失败时不触发。
+   * Called after the parent directory opens, with the current file path;
+   * not called on failure.
    */
   onOpenParent?: (path: string) => void;
   /**
@@ -145,6 +143,11 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    */
   source: FilePreviewSource;
   /**
+   * 文件操作的执行能力；省略对应方法时该操作不可用。
+   * File operation capabilities; omitting a method makes its operation unavailable.
+   */
+  operations?: FilePreviewOperations;
+  /**
    * 主文件之外、按 key 读取的伴随资源，例如 3D 模型的贴图。
    * Companion resources read by key alongside the main file, for example
    * textures of a 3D model.
@@ -171,14 +174,13 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    */
   onCopyContent?: (text: string) => void;
   /**
-   * 请求下载当前文件。不传时不显示下载按钮。
-   * Requests downloading this file. No download button is rendered when
-   * omitted.
+   * 下载操作成功后触发，失败时不触发。
+   * Called after the download operation succeeds; not called on failure.
    */
   onDownload?: () => void;
   /**
-   * 跳转到内容中出现的资源 URI。
-   * Navigates to a resource URI found in the rendered content.
+   * 正文中的资源成功打开后触发，参数为已打开的 URI；失败时不触发。
+   * Called after a content resource opens, with its URI; not called on failure.
    */
   onOpenUri?: (uri: string) => void;
 }
@@ -210,6 +212,16 @@ export interface FilePreviewContentTab extends FilePreviewTabBase {
   content: ReactNode;
 }
 
+/** 文件操作的执行能力。File operation capabilities. */
+export interface FilePreviewOperations {
+  /** 打开当前文件的上级目录。Opens the current file's parent directory. */
+  openParent?: (path: string) => Promise<void>;
+  /** 下载当前文件，完成后返回。Downloads the current file and resolves on completion. */
+  download?: () => Promise<void>;
+  /** 打开正文引用的资源。Opens a resource referenced by the content. */
+  openUri?: (uri: string) => Promise<void>;
+}
+
 /**
  * 文件编辑配置。省略时只读；可提供编辑所需的完整文本，并处理保存与取消操作。
  * File-editing options. Omit them for a read-only preview. Provide the full
@@ -217,29 +229,30 @@ export interface FilePreviewContentTab extends FilePreviewTabBase {
  */
 export interface FilePreviewEditing {
   /**
-   * 用户请求编辑时提供完整文本，适用于预览内容被截断或仅提供文件地址的场景。
-   * 省略时使用 `content` 或 `file` 中的文本；仅提供 `url` 时需通过此回调提供文本。
+   * 进入编辑时读取完整文本，适用于截断预览或文件地址。
+   * 省略时使用 `content` 或 `file` 中的文本；仅提供 `url` 时需提供此读取函数。
    * 返回 `undefined` 时放弃本次编辑，保持预览态。
    * Provides the full text when editing is requested, for example for a truncated
    * preview or a file URL. When omitted, text from `content` or `file` is used;
-   * URL-only sources require this callback. Returning `undefined` cancels the
+   * URL-only sources require this loader. Returning `undefined` cancels the
    * edit request and keeps the preview open.
    */
-  onRequestEdit?: (
-    source: FilePreviewSource,
-  ) => Promise<string | undefined> | string | undefined;
+  loadContent?: (source: FilePreviewSource) => Promise<string | undefined>;
   /**
    * 保存草稿时调用。抛错或 reject 时组件展示失败提示并保留草稿。
    * Invoked when the draft is saved. A thrown error or rejection keeps the
    * draft and shows a failure message.
    */
-  onSave: (value: string) => Promise<void> | void;
+  save: (value: string) => Promise<void>;
   /**
-   * 退出编辑且草稿被丢弃时调用，参数是丢弃的草稿内容。
-   * 用户点取消、切换到其他页签、关闭预览都会触发；保存成功不触发。
-   * Invoked when editing ends and the draft is discarded, passing the discarded
-   * draft. Triggered by cancellation, switching tabs or closing the preview;
-   * not triggered by a successful save.
+   * 保存成功后触发，参数为已保存的文本；失败时不触发。
+   * Called after saving succeeds, with the saved text; not called on failure.
+   */
+  onSave?: (value: string) => void;
+  /**
+   * 取消编辑或切换页签并丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发。
+   * Called after cancelling editing or switching tabs discards the draft;
+   * receives the discarded text and is not called after a successful save.
    */
   onCancel?: (value: string) => void;
 }

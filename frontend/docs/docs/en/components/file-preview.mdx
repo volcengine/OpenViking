@@ -2,7 +2,7 @@
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-This is a placeholder implementation: the tab row, header row, tab switching, copy, the preview/source switch and the ref handle work, and the file body falls back to plain text until FileViewer is wired in. The editing flow is a skeleton too — it does not yet isolate an in-flight fetch from a tab switch, nor keep the draft when a save fails; both will be handled when the real implementation replaces it.
+The shell, editing flow and success notifications are implemented. The file body still falls back to plain text until FileViewer is wired in.
 
 ## Basic usage
 
@@ -46,7 +46,9 @@ Loading, failure and unsupported formats are not props — the component decides
 - `slots.errorFallback`
 - `slots.unsupportedFallback`
 
-Editing is internal too. The host supplies `editing.onSave`, and optionally `editing.onRequestEdit` — called before editing starts, returning the full text so a truncated preview can fetch it first. Returning `undefined` abandons the edit; a rejection shows the load-failure message.
+The host supplies asynchronous `editing.save` and optional `editing.loadContent` capabilities. `loadContent` returns the full text; `undefined` abandons the edit, and rejection shows a read error. A failed save retains the draft and shows an error. `editing.onSave` only reports a successful save; `editing.onCancel` reports a discarded draft. Saving prevents duplicate submissions and tab changes until completion.
+
+Execution capabilities and notifications are separate. Operation resolution triggers the corresponding `on…` callback; rejection does not. Missing methods hide or disable their controls, and notifications do not perform the operations. URI handling will be wired into the future FileViewer body.
 
 ## Props
 
@@ -60,29 +62,30 @@ Editing is internal too. The host supplies `editing.onSave`, and optionally `edi
 
 Shared by both kinds:
 
-| Property             | Type                         | Default   | Description                                        |
-| -------------------- | ---------------------------- | --------- | -------------------------------------------------- |
-| `key`                | `string`                     | Required  | Unique tab key.                                    |
-| `title`              | `ReactNode`                  | File name | What the tab row shows. Required for content tabs. |
-| `icon`               | `ReactNode`                  | By format | Tab icon.                                          |
-| `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.             |
-| `disabled`           | `boolean`                    | `false`   | Disables the tab.                                  |
-| `onOpenParent`       | `(path: string) => void`     | —         | Back entry on the path breadcrumb.                 |
-| `onCopyPath`         | `(path: string) => void`     | —         | Called after path copying succeeds.                |
-| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.             |
-| `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                           |
+| Property             | Type                         | Default   | Description                                                                  |
+| -------------------- | ---------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `key`                | `string`                     | Required  | Unique tab key.                                                              |
+| `title`              | `ReactNode`                  | File name | What the tab row shows. Required for content tabs.                           |
+| `icon`               | `ReactNode`                  | By format | Tab icon.                                                                    |
+| `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.                                       |
+| `disabled`           | `boolean`                    | `false`   | Disables the tab.                                                            |
+| `onOpenParent`       | `(path: string) => void`     | —         | Called after the parent directory opens successfully; not called on failure. |
+| `onCopyPath`         | `(path: string) => void`     | —         | Called after path copying succeeds.                                          |
+| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.                                       |
+| `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                                                     |
 
 File tabs add:
 
-| Property        | Type                            | Default  | Description                             |
-| --------------- | ------------------------------- | -------- | --------------------------------------- |
-| `source`        | `FilePreviewSource`             | Required | The content and file name.              |
-| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.     |
-| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only. |
-| `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.         |
-| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.  |
-| `onDownload`    | `() => void`                    | —        | Download button.                        |
-| `onOpenUri`     | `(uri: string) => void`         | —        | Navigate to a URI in the content.       |
+| Property        | Type                            | Default  | Description                                                                                             |
+| --------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `source`        | `FilePreviewSource`             | Required | The content and file name.                                                                              |
+| `operations`    | `FilePreviewOperations`         | —        | Async `openParent(path)`, `download()` and `openUri(uri)` capabilities, each returning `Promise<void>`. |
+| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.                                                                     |
+| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only.                                                                 |
+| `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.                                                                         |
+| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.                                                                  |
+| `onDownload`    | `() => void`                    | —        | Called after the download operation succeeds; not called on failure.                                    |
+| `onOpenUri`     | `(uri: string) => void`         | —        | Called after a content resource opens successfully; not called on failure.                              |
 
 ```tsx
 import { FilePreview } from '@openviking/react/components/file-preview';
@@ -93,7 +96,7 @@ Copying is handled by the component. File tabs with `source.path` show the copy-
 
 ## Accessibility
 
-The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-selected`. Every icon-only control carries an accessible name through `aria-label` and a `title` tooltip. The path breadcrumb is a button only when `onOpenParent` is supplied.
+The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-selected`. Every icon-only control carries an accessible name through `aria-label` and a `title` tooltip. The path breadcrumb is enabled only when `operations.openParent` is supplied.
 
 ## Theme tokens
 
@@ -110,4 +113,4 @@ The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-se
 
 ## Implementation scope
 
-The component renders the shell and reports intent. Reading, saving, downloading and permissions belong to the host.
+The component renders the shell and reports successful operations. Reading, saving, downloading and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
