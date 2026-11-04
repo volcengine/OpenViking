@@ -103,6 +103,13 @@ export class EmailClient {
   // Both credentials, before anything starts.
   async preflight() {
     this.account = loadAccount(this.config.emailConfigFile);
+    if (this.account.unusedPassword) {
+      // Not fatal: the mailbox signs in with oauth2 either way. Said once at
+      // start, which is when an owner sees it.
+      this.logger.warn('email_unused_password', {
+        hint: 'the account file has both a password and oauth2; the password is not used',
+      });
+    }
     this.tag = accountTag(this.account.address);
     this.credential = credentialSource(this.account, { fetch: this.fetch, now: this.now, logger: this.logger });
     await verifyAccount(this.account, { connectTls: this.connectTls, credential: await this.credential() });

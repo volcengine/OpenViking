@@ -38,12 +38,11 @@ export function loadAccount(file) {
     throw new Error('email config needs a password or oauth2');
   }
   // A file carried over from a password account and given an `oauth2` block is
-  // easy to get wrong by leaving the old `password` in place. Saying so beats
-  // quietly using one of them: the unused credential is a sign the file is not
-  // what its owner thinks it is.
-  if (oauth2 && typeof value.password === 'string' && value.password) {
-    throw new Error('email config has both a password and oauth2; keep only the one this mailbox signs in with');
-  }
+  // easy to leave half-converted: the README asks owners to edit this file by
+  // hand, so a leftover `password` is a likely mistake. It is reported rather
+  // than refused — refusing would stop a mailbox that worked before the upgrade
+  // — and a warning is how an unused credential gets noticed.
+  const both = Boolean(oauth2) && typeof value.password === 'string' && Boolean(value.password);
   const server = (key) => {
     const host = String(value[key]?.host ?? '').trim();
     const port = Number(value[key]?.port);
@@ -55,6 +54,8 @@ export function loadAccount(file) {
     name: typeof value.name === 'string' ? value.name.trim() : '',
     user: typeof value.username === 'string' && value.username.trim() ? value.username.trim() : address,
     ...(oauth2 ? { oauth2 } : { password: value.password }),
+    // Both were written; oauth2 wins and this says the other is unused.
+    ...(both ? { unusedPassword: true } : {}),
     imap: server('imap'),
     smtp: server('smtp'),
     // The refresh token rotates; `oauth2` stays mutable so the new one can be
