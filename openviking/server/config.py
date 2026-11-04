@@ -292,6 +292,17 @@ class TraceDumpBodyConfig(BaseModel):
     max_bytes: int = 4096
 
 
+class EventReportingConfig(BaseModel):
+    """Optional remote business-event exporter. Endpoint settings remain external."""
+
+    enabled: bool = False
+    config_file: Optional[str] = None
+    nacos_server: Optional[str] = None
+    nacos_namespace: str = "public"
+    nacos_data_id: str = "global_configs"
+    nacos_group: str = "DEFAULT_GROUP"
+
+
 class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
 
@@ -300,6 +311,7 @@ class ObservabilityConfig(BaseModel):
     traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
+    reporting: EventReportingConfig = Field(default_factory=EventReportingConfig)
 
 
 class TempUploadConfig(BaseModel):

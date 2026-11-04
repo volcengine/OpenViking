@@ -582,6 +582,22 @@ async def list_accounts(
     return Response(status="ok", result=accounts)
 
 
+@router.get("/metric-inventory")
+@require_auth_root
+async def metric_inventory(
+    request: Request,
+    account_id: str | None = None,
+    page_size: int = Query(500, ge=1, le=1000),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Stream metadata only for an offline scan; requires the existing ROOT authentication."""
+    from fastapi.responses import StreamingResponse
+    from openviking.observability.reporting.inventory import inventory_lines
+    manager = _get_api_key_manager(request)
+    return StreamingResponse(inventory_lines(get_service(), manager, account_id=account_id, page_size=page_size),
+                             media_type="application/x-ndjson")
+
+
 @router.get("/accounts/{account_id}")
 @require_auth_root
 async def get_account(

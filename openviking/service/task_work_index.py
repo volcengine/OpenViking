@@ -27,6 +27,8 @@ class TaskExecutionContext:
     user_id: str
     enqueued_work: Optional[list[tuple[str, str]]] = None
     work_id: Optional[str] = None
+    task_type: str = ""
+    mode: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class QueueTaskMetadata:
     work_id: str
     account_id: str = ""
     user_id: str = ""
+    task_type: str = ""
+    mode: Optional[str] = None
 
 
 _current_task_context: ContextVar[Optional[TaskExecutionContext]] = ContextVar(
@@ -51,6 +55,8 @@ def bind_task_context(
     *,
     enqueued_work: Optional[list[tuple[str, str]]] = None,
     work_id: Optional[str] = None,
+    task_type: str = "",
+    mode: Optional[str] = None,
 ) -> Generator[None, None, None]:
     """Propagate Task ownership to queue messages produced by this coroutine."""
     current = _current_task_context.get()
@@ -65,6 +71,8 @@ def bind_task_context(
             user_id=str(user_id),
             enqueued_work=enqueued_work,
             work_id=work_id,
+            task_type=task_type or (current.task_type if current and current.task_id == str(task_id) else ""),
+            mode=mode if mode is not None else (current.mode if current and current.task_id == str(task_id) else None),
         )
     )
     try:
@@ -173,10 +181,15 @@ def prepare_task_payload(
     if has_authoritative_context:
         payload[TASK_ACCOUNT_ID_FIELD] = account_id
         payload[TASK_USER_ID_FIELD] = user_id
+        if current.task_type:
+            payload["_task_type"] = current.task_type
+        if current.mode is not None:
+            payload["_task_mode"] = current.mode
     if account_id and user_id:
         payload.setdefault("account_id", account_id)
         payload.setdefault("user_id", user_id)
-    return payload, QueueTaskMetadata(task_id, work_id, account_id, user_id)
+    return payload, QueueTaskMetadata(task_id, work_id, account_id, user_id,
+        str(payload.get("_task_type") or ""), payload.get("_task_mode"))
 
 
 def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
@@ -191,7 +204,8 @@ def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
     if not task_id or not work_id:
         return None
     account_id, user_id = _owner_from_payload(payload)
-    return QueueTaskMetadata(str(task_id), str(work_id), account_id, user_id)
+    return QueueTaskMetadata(str(task_id), str(work_id), account_id, user_id,
+        str(payload.get("_task_type") or ""), payload.get("_task_mode"))
 
 
 @contextmanager
@@ -223,6 +237,8 @@ def bind_task_context_from_message(message: Any) -> Generator[None, None, None]:
         metadata.account_id,
         metadata.user_id,
         work_id=metadata.work_id or None,
+        task_type=metadata.task_type,
+        mode=metadata.mode,
     ):
         yield
 

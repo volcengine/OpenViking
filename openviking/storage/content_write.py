@@ -331,6 +331,7 @@ class ContentWriteCoordinator:
                     user_id=ctx.user.user_id,
                     resource_id=uri,
                     task_id=task_id,
+                    meta={"mode": mode},
                 )
             if task is None:
                 raise RuntimeError("Content write Task was not created")
@@ -460,6 +461,8 @@ class ContentWriteCoordinator:
                 ctx.account_id,
                 ctx.user.user_id,
                 enqueued_work=[],
+                task_type=task.task_type,
+                mode=task.meta.get("mode"),
             ):
                 return await self._enqueue_content_write_root(
                     operation=operation,
