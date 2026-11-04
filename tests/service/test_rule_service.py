@@ -580,6 +580,62 @@ async def test_search_passes_all_loaded_rules_at_threshold_one_when_jev_is_missi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("threshold", [0.0, 0.65, 1.0])
+async def test_search_exception_veto_survives_zero_threshold(monkeypatch, threshold):
+    service = RuleService()
+    service.set_dependencies(
+        fs=SimpleNamespace(),
+        resources=SimpleNamespace(),
+        search=SimpleNamespace(),
+        vlm_resolver=None,
+        rules_config=RulesConfig(
+            jev_rule_matcher=JevConfig(provider="typesafe", api_key="key"),
+        ),
+    )
+    scenario = StoredScenario(
+        schema=SCENARIO_SCHEMA,
+        scenario_id="file-operations",
+        name="Files",
+        description="File constraints.",
+        uri="viking://user/alice/memories/rules/file-operations/abstract.md",
+        content="",
+    )
+    rules = [
+        _stored_rule("vetoed"),
+        _stored_rule("ordinary-zero"),
+        _stored_rule("applicable"),
+    ]
+    client = SimpleNamespace(
+        judge_rules=lambda task, inputs: [
+            RuleJevScore(applies_when=0.2, exception=1.0),
+            RuleJevScore(applies_when=0.0, exception=0.0),
+            RuleJevScore(applies_when=1.0, exception=0.0),
+        ],
+        close=lambda: None,
+    )
+    monkeypatch.setattr(
+        "openviking.service.rule_service.RuleJevClient",
+        SimpleNamespace(from_config=lambda config: client),
+    )
+    monkeypatch.setattr(service, "_recall_scenarios", AsyncMock(return_value=[scenario]))
+    monkeypatch.setattr(service, "_load_rules_for_scenarios", AsyncMock(return_value=rules))
+    monkeypatch.setattr(
+        service,
+        "_filter_unrelated_scenarios_with_jev",
+        AsyncMock(return_value=([scenario], None)),
+    )
+    result = await service.search_rules(
+        RuleSearchRequest(task_context="confirmed deletion", rule_probability_threshold=threshold),
+        ctx=_ctx(),
+    )
+    returned = {rule["atomic_id"] for rule in result["rules"]}
+    assert "vetoed" not in returned
+    assert returned == ({"ordinary-zero", "applicable"} if threshold == 0 else {"applicable"})
+    assert result["judge"] == "jev_noul"
+    assert result["delivery"]["complete"] is True
+
+
+@pytest.mark.asyncio
 async def test_jev_rule_client_initialization_failure_passes_rules(monkeypatch):
     service = RuleService()
     service._rules_config = RulesConfig(

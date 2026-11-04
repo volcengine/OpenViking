@@ -265,13 +265,18 @@ in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 | --- | --- |
 | `status` | Authenticated connectivity check; fixed status without secrets |
 | `find` | Search accessible memories, resources and skills |
+| `rule_search` | Check constraints before a planned action or response; return complete compiled Rules |
 | `read` | Read up to 200 lines from a `viking://` URI |
 | `ls` | List up to 100 entries under a `viking://` directory |
 | `remember` | On explicit user request, create a session, add the supplied text and submit memory extraction |
 
+`rule_search` takes `task_context` and optional `rule_probability_threshold`
+(default `0.65`), requires a server with `POST /api/v1/rules/search`, and preserves
+all returned Rule text. Check conditions and exceptions before acting.
+
 With the npm installation, Magpie's current tool naming rules produce
 `magpie-plugin_status`, `magpie-plugin_find`, `magpie-plugin_read`,
-`magpie-plugin_ls` and `magpie-plugin_remember`.
+`magpie-plugin_ls`, `magpie-plugin_rule_search` and `magpie-plugin_remember`.
 Source-folder installations use the folder's name as the prefix instead.
 The tool callback has
 no authenticated caller identity: **enabling tools delegates this file's OV

@@ -393,6 +393,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     assert.match(readFileSync(join(home, ".cursor", "rules", "openviking-memory.mdc"), "utf8"), /OpenViking/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "ov-experience-memory", "SKILL.md"), "utf8"), /OpenViking Experience Memory/);
+    assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-rule-search", "SKILL.md"), "utf8"), /OpenViking Rule Search/);
     const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
     assert.ok(existsSync(join(shared, "agent-hook-runtime.mjs")));
     assert.ok(existsSync(join(shared, "batch-send.mjs")));
@@ -483,6 +484,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     assert.equal(Boolean(cursorServersAfterUninstall.openviking), false);
     assert.equal(existsSync(join(home, ".cursor", "rules", "openviking-memory.mdc")), false);
     assert.equal(existsSync(join(home, ".cursor", "skills", "openviking-memory")), false);
+    assert.equal(existsSync(join(home, ".cursor", "skills", "openviking-rule-search")), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers.openviking), false);
     assert.ok(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers["third-party"]);

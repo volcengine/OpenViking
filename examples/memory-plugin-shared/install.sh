@@ -2657,7 +2657,7 @@ uninstall_agent_integrations() {
   if contains_harness cursor; then
     agent_remove_json_configs "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)"
     rm -f "$HOME/.cursor/rules/openviking-memory.mdc"
-    rm -rf "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" "$HOME/.cursor/skills/ov-experience-memory"
+    rm -rf "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" "$HOME/.cursor/skills/ov-experience-memory" "$HOME/.cursor/skills/openviking-rule-search"
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
@@ -2838,7 +2838,7 @@ install_cursor() {
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
   mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
   cp "$root/hosts/cursor/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
-  for skill in openviking-memory openviking-skills ov-experience-memory; do
+  for skill in openviking-memory openviking-skills ov-experience-memory openviking-rule-search; do
     skill_tmp="$HOME/.cursor/skills/$skill.tmp"
     rm -rf "$skill_tmp"
     cp -R "$root/hosts/cursor/skills/$skill" "$skill_tmp"
@@ -3170,7 +3170,7 @@ validate_hook_host() { # validate_hook_host <client>
       hooks="$HOME/.cursor/hooks.json"; mcp="$(cursor_mcp_path)"; event=sessionStart
       set -- "$@" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc" \
         "$HOME/.cursor/skills/openviking-memory/SKILL.md" "$HOME/.cursor/skills/openviking-skills/SKILL.md" \
-        "$HOME/.cursor/skills/ov-experience-memory/SKILL.md"
+        "$HOME/.cursor/skills/ov-experience-memory/SKILL.md" "$HOME/.cursor/skills/openviking-rule-search/SKILL.md"
       ;;
     zcode) hooks="$HOME/.zcode/cli/config.json"; mcp="$hooks"; event=session-start ;;
     *) hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start ;;
@@ -3581,7 +3581,7 @@ EOF
   if contains_harness cursor; then
     plan_paths Cursor "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" "$HOME/.cursor/rules/openviking-memory.mdc" \
       "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" \
-      "$HOME/.cursor/skills/ov-experience-memory" "$OV_HOME/agent-integrations/cursor"
+      "$HOME/.cursor/skills/ov-experience-memory" "$HOME/.cursor/skills/openviking-rule-search" "$OV_HOME/agent-integrations/cursor"
   fi
   if contains_harness trae; then
     plan_paths TRAE "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" "$OV_HOME/agent-integrations/trae"

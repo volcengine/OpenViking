@@ -67,7 +67,10 @@ export function mcpContentToPi(result) {
 export function toPiResult(tool, result) {
   const content = mcpContentToPi(result);
   const text = joinText(content);
-  const truncated = Buffer.byteLength(text) > MAX_RESULT_BYTES || text.split("\n").length > MAX_RESULT_LINES;
+  // Rules are complete constraints. Cutting one can hide an exception or omit
+  // a later applicable Rule; the ordinary browse/read preview budget cannot apply.
+  const truncated = tool !== "rule_search"
+    && (Buffer.byteLength(text) > MAX_RESULT_BYTES || text.split("\n").length > MAX_RESULT_LINES);
   if (truncated) {
     const hint = "\n[OpenViking] Output truncated. Request fewer items or use a narrower URI, offset or limit.";
     const lines = text.split("\n").slice(0, MAX_RESULT_LINES - 1).join("\n");

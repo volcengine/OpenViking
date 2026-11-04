@@ -1536,8 +1536,10 @@ class AgentLoop:
         structured summary note (the previous note is reused verbatim, only the
         region since it is summarized), and retains the most recent complete turns.
         Summaries remain complete; ``budget_chars`` limits retained recent turns,
-        with cuts only between turns. Fixed instructions, summaries and the newest
-        turn can exceed that budget. Summarization failure is handled best effort.
+        with cuts only between turns. Fixed instructions, summaries, Rule call/result
+        blocks, the latest user message and the newest turn can exceed that budget.
+        Retained turns keep their original order. Summarization failure is handled
+        best effort.
         """
         budget = budget_chars or 240_000
 
@@ -1551,18 +1553,60 @@ class AgentLoop:
         blocks = _compact_split_into_blocks(rest)
         if len(blocks) <= 3:
             return messages
-        to_compact_blocks = blocks[:-3]
-        window_blocks = blocks[-3:]
-
-        flat = [m for block in to_compact_blocks for m in block]
+        # Rules must stay as complete tool results across compaction. A summary
+        # cannot substitute for their exact conditions and exceptions. Retain
+        # the entire call/result block so provider tool-call pairing stays valid.
+        mandatory_indices: set[int] = set()
+        note_indices: set[int] = set()
         previous_summary = ""
-        marker_idx: int | None = None
-        for idx, message in enumerate(flat):
+        latest_user_idx: int | None = None
+        for idx, block in enumerate(blocks):
+            message = block[0]
             content = str(message.get("content") or "")
-            if content.strip().startswith("[Context compaction]"):
-                marker_idx = idx
-                previous_summary = _compact_strip_note_header(content)
-        to_summarize = flat[marker_idx + 1 :] if marker_idx is not None else flat
+            if message.get("role") == "user":
+                if content.strip().startswith("[Context compaction]"):
+                    note_indices.add(idx)
+                    previous_summary = _compact_strip_note_header(content)
+                    continue
+                latest_user_idx = idx
+            has_rules = any(
+                message.get("role") == "tool"
+                and (
+                    message.get("name")
+                    in {
+                        "rule_search",
+                        "openviking_rule_search",
+                        "viking_rule_search",
+                        "ov_rule_search",
+                    }
+                    or (
+                        str(message.get("name", "")).startswith("mcp_")
+                        and str(message.get("name", "")).endswith("_rule_search")
+                    )
+                )
+                for message in block
+            )
+            if has_rules:
+                mandatory_indices.add(idx)
+        # Choose the tail before filtering Rules, so pinning an old Rule cannot
+        # reorder recent turns or silently push the latest user out of context.
+        turn_indices = [
+            idx
+            for idx, block in enumerate(blocks)
+            if idx not in note_indices and block[0].get("role") != "tool"
+        ]
+        if not turn_indices:
+            return messages
+        mandatory_indices.add(turn_indices[-1])
+        if latest_user_idx is not None:
+            mandatory_indices.add(latest_user_idx)
+        window_indices = turn_indices[-3:]
+        to_summarize = [
+            message
+            for idx in turn_indices[:-3]
+            if idx not in mandatory_indices
+            for message in blocks[idx]
+        ]
 
         new_summary = ""
         if to_summarize:
@@ -1599,27 +1643,26 @@ class AgentLoop:
         note_msg = {"role": "user", "content": _compact_build_note(previous_summary, new_summary)}
 
         fixed_chars = _compact_msg_chars(system_msgs) + _compact_msg_chars([note_msg])
+        fixed_chars += sum(_compact_msg_chars(blocks[idx]) for idx in mandatory_indices)
         if task_msg is not None:
             fixed_chars += _compact_msg_chars([task_msg])
         remaining = max(0, budget - fixed_chars)
-        keep_blocks: list[list[dict]] = []
-        kept_chars = 0
-        for block in reversed(window_blocks):
-            if block[0].get("role") == "tool":
+        keep_indices = set(mandatory_indices)
+        for idx in reversed(window_indices):
+            if idx in mandatory_indices:
                 continue
-            size = _compact_msg_chars(block)
-            if keep_blocks and kept_chars + size > remaining:
+            size = _compact_msg_chars(blocks[idx])
+            if size > remaining:
                 break
-            keep_blocks.append(block)
-            kept_chars += size
-        keep_blocks.reverse()
+            keep_indices.add(idx)
+            remaining -= size
 
         out: list[dict] = list(system_msgs)
         if task_msg is not None:
             out.append(task_msg)
         out.append(note_msg)
-        for block in keep_blocks:
-            out.extend(block)
+        for idx in sorted(keep_indices):
+            out.extend(blocks[idx])
         return out
 
     async def _summarize_compact_chunk(

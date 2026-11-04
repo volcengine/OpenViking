@@ -159,6 +159,17 @@ test("result conversion preserves images, avoids structured echoes, and bounds a
   }
 });
 
+test("Rule search keeps every Rule beyond ordinary byte and line budgets", () => {
+  const text = "完整规则\n".repeat(17000) + "LAST RULE";
+  const result = toPiResult("rule_search", {
+    content: [{ type: "text", text }],
+    structuredContent: { result: text },
+  });
+  assert.equal(result.details.truncated, false);
+  assert.deepEqual(result.content, [{ type: "text", text }]);
+  assert.throws(() => toPiResult("rule_search", { isError: true, content: [{ type: "text", text: "judge unavailable" }] }), /judge unavailable/);
+});
+
 test("large tool errors are bounded and non-text content remains readable", () => {
   assert.throws(() => toPiResult("read", { isError: true, content: [{ type: "text", text: "error".repeat(20000) }] }),
     (error) => Buffer.byteLength(error.message) <= MAX_RESULT_BYTES && error.message.includes("Output truncated"));
