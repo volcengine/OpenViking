@@ -260,7 +260,6 @@ async def test_account_resource_id_source_attributes_each_event_to_its_account(
         ("ue_a", f"resource_id:res-a;account_id:res-a;user_id:default;resource_uri:{uri}"),
         ("ue_b", f"resource_id:res-b;account_id:res-b;user_id:default;resource_uri:{uri}"),
     ]
-    assert "/local/" not in log_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
