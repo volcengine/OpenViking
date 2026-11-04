@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import re
 import threading
 import uuid
@@ -286,11 +287,46 @@ class _AsyncVectorAdapter:
         await self.run(_update)
 
 
+def _record_handled_vikingdb_error(error: Exception) -> None:
+    """Keep a swallowed backend error available to the outer metrics wrapper."""
+    from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
+
+    VikingDBEventDataSource.record_handled_error(error)
+
+
 def _backend_operation(method):
     @wraps(method)
     async def call(self, *args, **kwargs):
         async with self.operation():
-            return await method(self, *args, **kwargs)
+            from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
+
+            owns_metric, depth_token, error_token = VikingDBEventDataSource.enter_operation()
+            started_at = time.perf_counter()
+            try:
+                result = await method(self, *args, **kwargs)
+            except Exception as error:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        error=error,
+                    )
+                raise
+            else:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        result=result,
+                        error=VikingDBEventDataSource.handled_error(),
+                    )
+                return result
+            finally:
+                VikingDBEventDataSource.exit_operation(depth_token, error_token)
 
     return call
 
@@ -514,6 +550,7 @@ class _SingleAccountBackend:
             return True
         except Exception as e:
             logger.error("Error creating collection %s: %s", name, e)
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -526,6 +563,7 @@ class _SingleAccountBackend:
             return dropped
         except Exception as e:
             logger.error("Error dropping collection: %s", e)
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -613,6 +651,7 @@ class _SingleAccountBackend:
             payload = self._bind_upsert_payload(data)
         except (PermissionError, ValueError) as exc:
             logger.warning("Rejecting upsert: %s", exc)
+            _record_handled_vikingdb_error(exc)
             return ""
 
         if options.partial_update:
@@ -719,6 +758,7 @@ class _SingleAccountBackend:
                 else "update completed without any updated ids",
             )
         except ValueError as e:
+            _record_handled_vikingdb_error(e)
             message = str(e)
             error_code = "NOT_FOUND" if "not found" in message.lower() else "INVALID_ARGUMENT"
             return UpdateResult(
@@ -730,6 +770,7 @@ class _SingleAccountBackend:
             )
         except Exception as e:
             logger.error("Error updating record: %s", e)
+            _record_handled_vikingdb_error(e)
             return UpdateResult(
                 ok=False,
                 ids=[],
@@ -1123,7 +1164,8 @@ class _SingleAccountBackend:
         try:
             await self.collection_exists()
             return True
-        except Exception:
+        except Exception as e:
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -1140,6 +1182,7 @@ class _SingleAccountBackend:
             }
         except Exception as e:
             logger.error("Error getting stats: %s", e)
+            _record_handled_vikingdb_error(e)
             return {
                 "collections": 0,
                 "total_records": 0,

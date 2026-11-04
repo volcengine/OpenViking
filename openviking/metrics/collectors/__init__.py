@@ -31,6 +31,7 @@ from .service_probe import ServiceProbeCollector
 from .storage_probe import StorageProbeCollector
 from .task_tracker import TaskTrackerCollector
 from .vikingdb import VikingDBCollector
+from .vikingdb_operations import VikingDBOperationCollector
 from .vlm import VLMCollector
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
     "RerankCollector",
     "RagfsMetricCollector",
     "VikingDBCollector",
+    "VikingDBOperationCollector",
     "ObserverHealthCollector",
     "TaskTrackerCollector",
     "ModelUsageCollector",

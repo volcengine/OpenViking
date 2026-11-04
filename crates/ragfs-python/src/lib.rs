@@ -1025,6 +1025,8 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::NotFound(_) => new_py_err("AGFSNotFoundError", msg),
         ragfs::core::Error::AlreadyExists(_) => new_py_err("AGFSAlreadyExistsError", msg),
         ragfs::core::Error::PermissionDenied(_) => new_py_err("AGFSPermissionDeniedError", msg),
+        ragfs::core::Error::QuotaExceeded(_) => new_py_err("AGFSResourceExhaustedError", msg),
+        ragfs::core::Error::RateLimited(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::InvalidPath(_) => new_py_err("AGFSInvalidPathError", msg),
         ragfs::core::Error::NotADirectory(_) => new_py_err("AGFSNotADirectoryError", msg),
         ragfs::core::Error::IsADirectory(_) => new_py_err("AGFSIsADirectoryError", msg),
