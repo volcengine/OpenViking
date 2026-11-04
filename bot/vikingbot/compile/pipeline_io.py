@@ -21,6 +21,7 @@ from openviking.models.model_error import ModelError
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking_cli.exceptions import NotFoundError
 from vikingbot.agent.tools.base import MultimodalToolResult
+from vikingbot.compile.execution import reduce_budget
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.models import COMPILE_STAGING_ROOT, CompileFailure
 from vikingbot.compile.results import FileResponse, RouteBatchResponse
@@ -33,6 +34,8 @@ R = TypeVar("R", bound=BaseModel)
 ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
 # Cache identity for the processing rules used by model calls.
 PROCESSING_VERSION = "compile-pipeline-37"
+# Reduce's continuation protocol has its own cache revision; Map keeps its cache identity.
+REDUCE_PROCESSING_VERSION = "compile-reduce-1"
 # Output-token fallback when the configured VLM provides no value.
 DEFAULT_MAX_TOKENS = 32_000
 # Total attempts per operator job or routing record, including the initial execution.
@@ -366,14 +369,21 @@ class JsonModel:
         agent=False,
         readers=None,
     ) -> R:
-        """Bound each assignment to twice the model timeout, with a 1200-second minimum."""
-        seconds = max(1200, 2 * self.timeout)
+        """Use the shared Reduce deadline or a single-assignment timeout for other work.
+
+        Ordinary assignments have a 1200-second minimum; Reduce agent windows
+        share their group's total allowance rather than resetting it on retry.
+        """
+        budget = reduce_budget.get() if agent and stage == "reduce" else None
+        seconds = budget.remaining() if budget else max(1200, 2 * self.timeout)
         try:
             async with asyncio.timeout(seconds):
                 return await self._ask(
                     stage, system, data, schema, validate, agent=agent, readers=readers
                 )
         except TimeoutError as exc:
+            if budget:
+                raise budget.error("total deadline exhausted") from exc
             raise ModelCallLimitError(
                 f"{stage}: assignment wall-clock budget exhausted ({seconds:g}s)"
             ) from exc
@@ -399,8 +409,13 @@ class JsonModel:
                 resources.snapshots, ensure_ascii=False
             )
         dependencies = dict(resources.hashes) if resources else {}
+        identity = (
+            {**self.identity, "version": REDUCE_PROCESSING_VERSION}
+            if stage == "reduce"
+            else self.identity
+        )
         key = digest(
-            [self.identity, stage, system, data, schema.model_json_schema(), agent, dependencies]
+            [identity, stage, system, data, schema.model_json_schema(), agent, dependencies]
         )
         cached = (
             None

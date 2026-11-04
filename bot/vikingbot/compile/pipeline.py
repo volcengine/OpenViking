@@ -251,7 +251,10 @@ class Pipeline:
                 else:
                     if self.failures:
                         if not inputs:
-                            raise ValueError("No accepted final artifacts remain after failed jobs")
+                            raise ValueError(
+                                "No accepted final artifacts remain after failed jobs: "
+                                + self.failures[0][:500]
+                            )
                         self.warnings.append(
                             "Partial output; unfinished jobs: " + self.failures[0][:500]
                         )

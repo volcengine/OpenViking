@@ -33,6 +33,14 @@ Only file output can use input_unit=file to keep a document's ranges together.
 
 Collects records into groups according to a grouping rule.
 Each group is a collection of records that Reduce will process together.
+Group by the deliverable that requires joint synthesis; use semantic grouping for
+independently producible deliverables. Use all only when splitting the collection
+would break necessary cross-input synthesis or a shared result. Common project
+membership, consistent naming, navigation or generic deduplication alone do not
+justify all. Explain the shared result and why joint processing is necessary in
+instructions. All may produce multiple coupled files; file count alone does not
+determine the mode. All keeps every input in one logical group; it does not reduce
+the amount of work or evidence the downstream task requires.
 
 ### Reduce
 
@@ -172,13 +180,17 @@ class Routing(PlanModel):
 
     mode: Literal["semantic", "all"] = Field(
         default="semantic",
-        description="semantic groups related records using instructions; all puts every record in one group.",
+        description="semantic groups records by independently producible deliverables; all keeps every "
+        "record together only for necessary cross-input synthesis or a shared result. Common project "
+        "membership, naming, navigation or generic deduplication alone do not justify all. "
+        "Multiple coupled output files may share one group.",
     )
     instructions: str = Field(
         default="",
-        description="Which records belong together and why; required for semantic mode. "
-        "Specify the purpose of joint processing and criteria for keeping records separate. "
-        "Must stand alone: Shuffle does not receive the Skill or user instruction.",
+        description="Explain the shared deliverable and why these records need joint processing; "
+        "required for semantic, with criteria for keeping deliverables separate. For all, "
+        "an optional explanation can describe why splitting would break the required synthesis. "
+        "Semantic instructions must stand alone: Shuffle does not receive the Skill or user instruction.",
     )
 
     @model_validator(mode="after")

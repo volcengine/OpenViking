@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import uuid
@@ -14,7 +15,11 @@ from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile import file_ops
-from vikingbot.compile.hashing import content_hash
+from vikingbot.compile.agent_io import make_tool_result_preview
+from vikingbot.compile.agent_io import prepare_assignment as prepare_reduce_assignment
+from vikingbot.compile.checkpoint import CheckpointCompletion, CheckpointTool
+from vikingbot.compile.execution import ReduceExecutionError, reduce_budget
+from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT
 from vikingbot.compile.pipeline_io import TaskFiles, retry_allowed
 from vikingbot.compile.renderer import validate_relative_file_path
@@ -22,17 +27,37 @@ from vikingbot.compile.results import FileResponse, RecordResponse
 from vikingbot.compile.schemas import result_schema
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.providers.base import LLMProvider
+from vikingbot.utils.helpers import cal_str_tokens
 
 
 class ChildProvider(LLMProvider):
-    """Route each child request through the task's bounded, metered provider calls."""
+    """Meter child requests and bound Reduce context without discarding unsaved work.
 
-    def __init__(self, model, schema, stage="agent", *, submit=None):
+    context_tokens reserves output space against the configured text-token capacity;
+    context_chars triggers checkpoint closing. Zero disables the respective check.
+    Terminal tool calls are isolated so checkpoint and final acceptance cannot race.
+    """
+
+    def __init__(
+        self,
+        model,
+        schema,
+        stage="agent",
+        *,
+        submit=None,
+        checkpoint=None,
+        context_tokens=0,
+        context_chars=0,
+    ):
         super().__init__()
         self.model = model
         self.stage = stage
         self.submit = submit
         self.failures = Counter()
+        self.checkpoint = checkpoint
+        self.checkpoint_due = False
+        self.context_tokens = context_tokens
+        self.context_chars = context_chars
 
     def get_default_model(self):
         return self.model.model
@@ -40,12 +65,81 @@ class ChildProvider(LLMProvider):
     def supports_tool_result_media(self, model=None):
         return self.model.provider.supports_tool_result_media(model or self.model.model)
 
+    @staticmethod
+    def request_text(messages, tools):
+        """Estimate text/schema load without treating native media encodings as text tokens.
+
+        The original messages remain intact; provider media quotas still apply.
+        """
+        text_messages = []
+        for message in messages:
+            value = dict(message)
+            if isinstance(value.get("content"), list):
+                value["content"] = [
+                    part if part.get("type") == "text" else {"type": part.get("type")}
+                    for part in value["content"]
+                ]
+            text_messages.append(value)
+        return json.dumps([text_messages, tools], ensure_ascii=False)
+
     async def chat(self, messages, tools=None, **kwargs):
-        """Retry truncated output without executing incomplete tool calls."""
+        """Return a complete, executable response under the window's request budget.
+
+        Truncated or conflicting terminal calls retry before any tool executes;
+        exhausted repairs or context capacity raise a terminal execution error.
+        """
         while True:
+            if self.checkpoint and self.context_chars:
+                if len(self.request_text(messages, tools)) >= self.context_chars:
+                    self.checkpoint_due = True
+            if self.checkpoint_due:
+                tools = [
+                    tool
+                    for tool in tools or []
+                    if tool["function"]["name"] in {"emit", "checkpoint", "write_file", "edit_file"}
+                ]
+                messages = [
+                    *messages,
+                    {
+                        "role": "user",
+                        "content": "This context window is ending. Finish with emit only if all work "
+                        "is complete; otherwise persist the business state and call checkpoint now. "
+                        "Do not start new reading or analysis. A checkpoint is not task completion.",
+                    },
+                ]
+            if self.context_tokens and (
+                cal_str_tokens(self.request_text(messages, tools), text_type="mixed")
+                + self.model.max_tokens
+                > self.context_tokens
+            ):
+                raise ReduceExecutionError(
+                    "Reduce context cannot fit a complete request and output reserve; "
+                    "no history is discarded without a validated checkpoint"
+                )
             response = await self.model.call(
                 self.stage, messages, tools, max_tokens=self.model.max_tokens
             )
+            if self.checkpoint_due and any(
+                call.name not in {"emit", "checkpoint", "write_file", "edit_file"}
+                for call in response.tool_calls
+            ):
+                error = "Window closing: only write_file, edit_file, checkpoint or final emit is allowed"
+                if not retry_allowed(self.failures, error):
+                    raise ReduceExecutionError(error)
+                self.model.metrics["repairs"] += 1
+                messages = [*messages, {"role": "user", "content": error}]
+                continue
+            if (
+                self.checkpoint
+                and any(call.name in {"emit", "checkpoint"} for call in response.tool_calls)
+                and len(response.tool_calls) != 1
+            ):
+                error = "Submit emit or checkpoint alone, without any other tool calls"
+                if not retry_allowed(self.failures, error):
+                    raise ReduceExecutionError(error)
+                self.model.metrics["repairs"] += 1
+                messages = [*messages, {"role": "user", "content": error}]
+                continue
             if response.finish_reason not in {"length", "max_tokens"}:
                 return response
             error = "Agent output was truncated; use smaller writes or content_ref and complete tool calls"
@@ -65,10 +159,10 @@ async def complete_tool_result(result, session_key, *, preserve_complete: bool =
 
 
 async def prepare_assignment(data, sandbox, root):
-    """Store an oversized assignment in private scratch, replacing source bodies with read handles.
+    """Store an oversized single-window assignment with its source read handles.
 
-    The caller retains the full data for lineage validation and enables evidence reads.
-    Candidate bodies use text files so line-based reads do not expand an entire JSON string.
+    Derived record payloads remain inline; candidate bodies use text files. The
+    complete original assignment remains the caller's validation scope.
     """
     assignment = {k: v for k, v in data.items() if k != "original_evidence"}
     assignment["inputs"] = []
@@ -114,6 +208,7 @@ class EmitResult(Tool):
         root="",
         data=None,
         metrics=None,
+        checkpoint=None,
     ):
         self.schema, self.validate = schema, validate
         self.sandbox, self.root = sandbox, root
@@ -123,6 +218,7 @@ class EmitResult(Tool):
         self.last_error = ""
         self.data = data or {}
         self.metrics = metrics
+        self.checkpoint = checkpoint
 
     async def read_content(self, relative: str) -> bytes:
         """Read private scratch or an assigned ready snapshot; foreign snapshots are not accessible."""
@@ -142,6 +238,8 @@ class EmitResult(Tool):
     @property
     def parameters(self):
         parameters = result_schema(self.schema, self.data)
+        if self.checkpoint:
+            parameters["properties"]["completion"] = CheckpointCompletion.model_json_schema()
         if self.sandbox is None:
             return parameters
         parameters["properties"]["result_ref"] = {
@@ -172,7 +270,17 @@ class EmitResult(Tool):
                 relative = validate_relative_file_path(kwargs["result_ref"])
                 raw = await self.sandbox.read_file_bytes(f"{self.root}/{relative}")
                 kwargs = json_repair.loads(raw.decode("utf-8"), stream_stable=True)
-            result = self.schema.model_validate(kwargs)
+            if self.checkpoint:
+                completion = kwargs.get("completion") if isinstance(kwargs, dict) else None
+                self.checkpoint.validate_completion(completion)
+                payload = (
+                    {key: value for key, value in kwargs.items() if key != "completion"}
+                    if isinstance(kwargs, dict)
+                    else kwargs
+                )
+            else:
+                payload = kwargs
+            result = self.schema.model_validate(payload)
             if isinstance(result, RecordResponse):
                 for draft in result.records:
                     if draft.ready_content_ref is not None:
@@ -255,14 +363,32 @@ class EmitResult(Tool):
 def agent_runner(loop, session_key, connection, limits):
     """Bind an isolated child adapter; queueing/cancellation remain owned by Pipeline.
 
-    Each call has fresh history, a private scratch root and the subagent iteration
-    limit. Large files are submitted by reference, then hashed and checked.
-    Skill reads use the authenticated task client.
+    Reduce windows share private scratch and validated progress under a group budget.
+    Other transforms use a single window. Large files are submitted by reference,
+    then hashed and checked; Skill reads use the authenticated task client.
     """
 
     async def run(system, data, schema, validate, model, *, stage="agent"):
-        child_id = uuid.uuid4().hex
-        root = f"{COMPILE_DRAFT_ROOT}/{child_id}"
+        """Return validated output while preserving original assignment scope across windows.
+
+        Only Reduce uses the context-local continuation budget. Missing progress,
+        invalid snapshots or budget exhaustion fail without publishing checkpoints.
+        """
+        budget = reduce_budget.get() if stage == "reduce_agent" else None
+        if budget:
+            fingerprint = digest([system, data, schema.model_json_schema(), model.identity])
+            session = budget.sessions.setdefault(fingerprint, {})
+        else:
+            session = {}
+        root = session.setdefault("root", f"{COMPILE_DRAFT_ROOT}/{uuid.uuid4().hex}")
+        checkpoint = None
+        if budget:
+            checkpoint = session.get("checkpoint")
+            if checkpoint is None:
+                checkpoint = CheckpointTool(
+                    model.files, model.files.sandbox, root, data, fingerprint, model.metrics
+                )
+                session["checkpoint"] = checkpoint
         evidence = EvidenceReader(model.files, data)
         submit = EmitResult(
             schema,
@@ -271,16 +397,21 @@ def agent_runner(loop, session_key, connection, limits):
             root,
             data,
             model.metrics,
+            checkpoint=checkpoint,
         )
-        assignment = data
-        if not model.fits(system, data, schema):
-            assignment = await prepare_assignment(data, model.files.sandbox, root)
+        assignment = session.get("assignment", data)
+        if not model.fits(system, data, schema) and "assignment" not in session:
+            prepare = prepare_reduce_assignment if checkpoint else prepare_assignment
+            assignment = await prepare(data, model.files.sandbox, root)
+            session["assignment"] = assignment
             evidence.delivered.clear()
         registry = ToolRegistry(config=loop.config)
         registry.register(submit)
+        if checkpoint:
+            registry.register(checkpoint)
         if model.resources:
             registry.register(model.resources)
-        if evidence.allowed - evidence.delivered:
+        if evidence.allowed - evidence.delivered or (checkpoint and evidence.allowed):
             registry.register(evidence)
         for name in ("read_file", "write_file", "edit_file"):
             tool = loop.tools.get(name)
@@ -299,8 +430,11 @@ def agent_runner(loop, session_key, connection, limits):
                 "\nUse exec with pipelines, Python or shell commands when they improve efficiency."
             )
         child = copy(loop)
-        child.provider = ChildProvider(model, schema, stage, submit=submit)
-        child._preview_tool_result = complete_tool_result
+        child._preview_tool_result = (
+            make_tool_result_preview(model.files.sandbox, root, max_chars=4096)
+            if checkpoint
+            else complete_tool_result
+        )
         instructions = (
             "\nUse emit to submit. Supplied Skill attachments are complete; "
             "they fulfill the Skill's reading requirements without a tool call. Do not reread them. "
@@ -319,32 +453,125 @@ def agent_runner(loop, session_key, connection, limits):
         )
         if stage == "map_agent":
             instructions = ""  # Map defines its own file access and submission rules.
-        await child._run_agent_loop(
-            messages=[
-                {
-                    "role": "system",
-                    "content": system + instructions,
-                },
-                {"role": "user", "content": json.dumps(assignment, ensure_ascii=False)},
-            ],
-            session_key=session_key,
-            publish_events=False,
-            tool_registry=registry,
-            stop_tool_names=["emit"],
-            openviking_tool_names=set(registry.tool_names),
-            openviking_connection=connection,
-            allow_final_fallback=False,
-            inject_write_experience=False,
-            agent_id=child_id,
-            context_compact_budget=None,
-            max_iterations=limits.subagent_iterations,
-            should_stop=lambda: not submit.can_retry,
-        )
-        if submit.result is None:
-            raise ValueError(
-                "Required agent transform ended without validated output: "
-                + (submit.last_error or "No emit result was submitted")
+        if checkpoint:
+            instructions += (
+                "\nWork in bounded batches. Persist the task-specific cumulative state as JSON "
+                "in your scratch directory; preserve exact data, provenance and unresolved work. "
+                "Use checkpoint before the context window ends, with cumulative processed and "
+                "pending input IDs, remaining synthesis/checks and draft references. Reading an "
+                "input alone does not complete its processing. Checkpoints are not final outputs. "
+                "Continue existing state and drafts rather than rereading or regenerating them. "
+                "After a checkpoint, final emit requires completion accounting for remaining "
+                "inputs (completed_inputs or excluded_inputs with reasons) and pending_tasks=[]. "
+                "Original inputs and historical revisions remain the final validation scope."
             )
-        return submit.result
+
+        async def window_note(iteration):
+            """Reserve closing turns for an explicit checkpoint without changing AgentLoop."""
+            if checkpoint and iteration >= max(1, limits.subagent_iterations - 3):
+                child.provider.checkpoint_due = True
+                return "Window budget is ending: persist state and checkpoint, or emit the complete result."
+            return None
+
+        # A checkpoint present at invocation entry needs rollback after a failed attempt.
+        restore_on_retry = bool(checkpoint and checkpoint.latest)
+        while True:
+            if budget:
+                budget.start_window()
+                model.metrics["reduce_windows"] += 1
+            if checkpoint:
+                checkpoint.submitted = False
+                if checkpoint.latest:
+                    if restore_on_retry:
+                        await checkpoint.restore()
+                        restore_on_retry = False
+                    evidence.delivered.clear()
+                    if "assignment" not in session:
+                        session["assignment"] = await prepare_reduce_assignment(
+                            data, model.files.sandbox, root
+                        )
+                    assignment = session["assignment"]
+            context = dict(assignment)
+            if checkpoint and checkpoint.latest:
+                context["checkpoint"] = {
+                    "manifest_file": checkpoint.latest["manifest_file"],
+                    "next_action": checkpoint.latest["next_action"],
+                    "remaining_inputs": len(checkpoint.latest["pending_inputs"]),
+                    "instructions": "Read the checkpoint manifest and saved state; preserve its "
+                    "completed work and finish the remaining synthesis before final emit.",
+                }
+            base_chars = 0
+            if checkpoint:
+                # Fixed context leaves room for tool results and a checkpoint.
+                base_chars = len(system + instructions) + len(
+                    json.dumps(context, ensure_ascii=False)
+                )
+                base_chars += len(json.dumps(registry.get_definitions(), ensure_ascii=False))
+            child.provider = ChildProvider(
+                model,
+                schema,
+                stage,
+                submit=submit,
+                checkpoint=checkpoint,
+                context_tokens=loop.config.agents.context_window_tokens if checkpoint else 0,
+                context_chars=max(model.budget, base_chars + 16_384) if checkpoint else 0,
+            )
+            messages = [
+                {"role": "system", "content": system + instructions},
+                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+            ]
+            seconds = min(budget.remaining(), budget.window_seconds) if budget else None
+            options = {"status_note_provider": window_note} if checkpoint else {}
+            execution = child._run_agent_loop(
+                messages=messages,
+                session_key=session_key,
+                publish_events=False,
+                tool_registry=registry,
+                stop_tool_names=["emit", "checkpoint"] if checkpoint else ["emit"],
+                openviking_tool_names=set(registry.tool_names),
+                openviking_connection=connection,
+                allow_final_fallback=False,
+                inject_write_experience=False,
+                agent_id=root.rsplit("/", 1)[-1],
+                context_compact_budget=None,
+                max_iterations=limits.subagent_iterations,
+                should_stop=lambda: (
+                    not submit.can_retry or (checkpoint is not None and not checkpoint.can_retry)
+                ),
+                **options,
+            )
+            try:
+                if budget:
+                    async with asyncio.timeout(seconds):
+                        await execution
+                else:
+                    await execution
+            except TimeoutError as exc:
+                if budget:
+                    raise budget.error(
+                        "window deadline exhausted; latest checkpoint retained"
+                    ) from exc
+                raise
+            if submit.result is not None:
+                return submit.result
+            if checkpoint and checkpoint.submitted:
+                continue
+            error = (
+                submit.last_error
+                or (checkpoint.last_error if checkpoint else "")
+                or (
+                    "No emit result or validated checkpoint was submitted"
+                    if checkpoint
+                    else "No emit result was submitted"
+                )
+            )
+            if budget:
+                remaining = (
+                    len(checkpoint.latest["pending_inputs"])
+                    if checkpoint.latest
+                    else len(data.get("inputs", []))
+                )
+                raise budget.error(f"{error}; remaining inputs: {remaining}")
+            raise ValueError("Required agent transform ended without validated output: " + error)
 
     return run

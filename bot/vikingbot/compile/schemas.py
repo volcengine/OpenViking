@@ -34,6 +34,8 @@ def result_schema(schema, data):
         transform = result["$defs"]["Transform"]
         transform["properties"]["output"].pop("default")
         transform["required"] = ["instructions", "output", "execution"]
+        routing = result["$defs"]["Routing"]
+        routing["required"] = ["mode"]
         properties = result["$defs"]["Contract"]["properties"]
         # Model output uses objects for referenced configurations, omitting unused optional entries.
         for name, definition in (

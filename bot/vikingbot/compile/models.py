@@ -35,6 +35,8 @@ class CompileLimits(BaseModel):
     agent_iterations: int = 120
     # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
+    # Total context windows per Reduce group, including failed attempts and the initial window.
+    reduce_max_windows: int = Field(default=4, ge=1)
     # Per-task Map workers, also used for Resource source subagents.
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.
@@ -47,6 +49,7 @@ class CompileLimits(BaseModel):
     accepted_tasks: int = 40
     accepted_tasks_per_principal: int = 10
     salvage_grace_seconds: float = 120
+    # Grace period in seconds for sandbox cleanup and failed Reduce status persistence.
     cleanup_grace_seconds: float = 40
     terminal_task_retention_seconds: float = 24 * 60 * 60
     terminal_task_records: int = 1000

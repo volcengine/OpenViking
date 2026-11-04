@@ -6,16 +6,25 @@ Finalize prepares accepted files for publication and repairs invalid Skill packa
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from functools import partial
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from openviking.core.namespace import relative_uri_path
 from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.compile import file_ops
+from vikingbot.compile.execution import ReduceBudget, reduce_budget
 from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.ops import common
-from vikingbot.compile.pipeline_io import ModelCallError, bounded_jobs, retry_allowed
+from vikingbot.compile.pipeline_io import (
+    MAX_JOB_ATTEMPTS,
+    ModelCallError,
+    bounded_jobs,
+    retry_allowed,
+)
 from vikingbot.compile.plan import Node, Transform
 from vikingbot.compile.results import CombineResponse, FileDraft, FileResponse, Group, Record
 
@@ -183,13 +192,54 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
 
 
 async def reduce_job(runtime: Pipeline, node, group: Group):
-    """Synthesize a work set into records or any supported collection of files."""
-    return await common.job(
-        runtime,
-        f"{node.name}-{group.group_id}",
-        group.records,
-        lambda: reduce_group(runtime, node, group),
-    )
+    """Return a group's synthesized outputs under one shared retry and window budget.
+
+    The deadline covers running/completed status writes and transformation work.
+    Failure reporting uses cleanup_grace_seconds without masking the execution
+    error; cancellation records pending inputs and never starts another attempt.
+    """
+    budget = ReduceBudget(runtime.limits.reduce_max_windows, max(1200, 2 * runtime.model.timeout))
+    token = reduce_budget.set(budget)
+    name = f"{node.name}-{group.group_id}"
+    entry = {"status": "running", "inputs": [record.record_id for record in group.records]}
+    deadline = asyncio.timeout_at(budget.deadline)
+
+    try:
+        async with deadline:
+            budget.remaining()
+            await runtime.files.put(f"jobs/{name}", entry)
+            for attempt in range(MAX_JOB_ATTEMPTS):
+                try:
+                    output = await reduce_group(runtime, node, group)
+                    break
+                except OSError as exc:
+                    if (
+                        attempt == MAX_JOB_ATTEMPTS - 1
+                        or model_error_kind(exc) is ModelErrorKind.INPUT_TOO_LARGE
+                    ):
+                        raise
+                    runtime.metrics["job_retries"] += 1
+            await runtime.files.put(
+                f"jobs/{name}", {**entry, "status": "completed", "output_count": len(output)}
+            )
+            return output
+    except BaseException as exc:
+        error = budget.error("total deadline exhausted") if deadline.expired() else exc
+        state = "failed" if isinstance(error, Exception) else "pending"
+        for record in group.records:
+            runtime.status[record.record_id] = state
+        try:
+            async with asyncio.timeout(runtime.limits.cleanup_grace_seconds):
+                await runtime.files.put(
+                    f"jobs/{name}", {**entry, "status": state, "error": str(error)[:800]}
+                )
+        except Exception as reporting_error:
+            logger.warning("Compile job {} status write failed: {}", name, reporting_error)
+        if error is not exc:
+            raise error from exc
+        raise
+    finally:
+        reduce_budget.reset(token)
 
 
 async def ready_file(runtime: Pipeline, group):
