@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from openviking.models.vlm.base import VLMResponse
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
@@ -20,7 +22,7 @@ from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.extraction_output_protocol import (
     create_extraction_output_protocol,
 )
-from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
 from openviking.session.memory.page_id_map import PageIdMap
 
 
@@ -842,9 +844,9 @@ class TestResolutionRepair:
     @pytest.mark.parametrize(
         ("resolution_skip_code", "has_writable_target", "expected_llm_calls"),
         [
-            (MemoryOperationSkipCode.INVALID_RANGES, False, 2),
+            (MemoryOperationSkipCode.INVALID_RANGES, False, 3),
             (MemoryOperationSkipCode.NO_WRITABLE_TARGET, False, 1),
-            (MemoryOperationSkipCode.NO_WRITABLE_TARGET, True, 2),
+            (MemoryOperationSkipCode.NO_WRITABLE_TARGET, True, 3),
         ],
     )
     @pytest.mark.asyncio
@@ -915,9 +917,16 @@ class TestResolutionRepair:
                     [],
                     AttrDict(events=[{"event_name": "demo", "ranges": "0", "page_id": 100}]),
                 ),
+                (
+                    [],
+                    AttrDict(events=[{"event_name": "demo", "ranges": "0", "page_id": 100}]),
+                ),
             ]
         )
-        loop._check_unread_existing_files = AsyncMock(return_value=[])
+        loop._check_unread_existing_files = AsyncMock(
+            side_effect=[{}, {event_uri: {"content": "existing event"}}, {}]
+        )
+        loop._add_refetch_results_to_messages = AsyncMock()
         loop._validate_patch_operations = AsyncMock(return_value=[])
         loop.finalize_operations = AsyncMock()
 
@@ -942,7 +951,7 @@ class TestResolutionRepair:
         assert event_resolution_attempts == expected_llm_calls
         assert len(final_operations.upsert_operations) == 2
         assert final_operations.upsert_operations[0].uris == (
-            [event_uri] if expected_llm_calls == 2 else []
+            [event_uri] if expected_llm_calls == 3 else []
         )
         assert final_operations.upsert_operations[0].page_id == 100
         assert final_operations.upsert_operations[1].memory_type == "profile"
@@ -953,7 +962,7 @@ class TestResolutionRepair:
             for message in loop._call_llm.await_args_list[-1].args[0]
             if message["role"] == "user" and "Resolution issues:" in message["content"]
         ]
-        if expected_llm_calls == 2:
+        if expected_llm_calls == 3:
             assert len(repair_messages) == 1
             assert f'"reason_code": "{resolution_skip_code.value}"' in repair_messages[0]
             assert '"event_name": "demo"' in repair_messages[0]
@@ -1116,14 +1125,17 @@ class TestResolutionRepair:
         assert changed_id_result.upsert_operations == [failed_event]
         assert duplicate_result.upsert_operations == [failed_event]
 
+    @pytest.mark.parametrize("finish_reason", ["stop", "length"])
     @pytest.mark.asyncio
-    async def test_run_keeps_first_pass_when_event_repair_cannot_be_parsed(self):
+    async def test_run_keeps_validated_first_pass_when_event_repair_fails(self, finish_reason):
         event_schema = TestResolveOperations._event_schema()
         profile_schema = MemoryTypeSchema(
             memory_type="profile",
             directory="viking://user/{{ user_space }}/memories",
             filename_template="profile.md",
-            fields=[],
+            fields=[
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH)
+            ],
         )
         profile_uri = "viking://user/alice/memories/profile.md"
         context_provider = Mock()
@@ -1134,6 +1146,17 @@ class TestResolutionRepair:
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {}
         context_provider.instruction.return_value = "base instruction"
+        old_content = "Prefers a window seat. Budget is 500."
+
+        async def read_existing_file(tool_call):
+            assert tool_call.arguments["uri"] == profile_uri
+            context_provider.read_file_contents[profile_uri] = MemoryFile(
+                uri=profile_uri, memory_type="profile", content=old_content
+            )
+            context_provider.get_extract_context().page_id_map.get_page_id(profile_uri)
+            return {"content": old_content}
+
+        context_provider.execute_tool = AsyncMock(side_effect=read_existing_file)
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
@@ -1149,46 +1172,49 @@ class TestResolutionRepair:
             return []
 
         isolation_handler.calculate_memory_uris.side_effect = calculate_memory_uris
+        failed_event = {"event_name": "demo", "ranges": "99", "page_id": 101}
+        responses = [
+            VLMResponse(
+                content=json.dumps(
+                    {
+                        "events": [failed_event],
+                        "profile": [{"page_id": page_id, "content": content}],
+                    }
+                )
+            )
+            for page_id, content in (
+                (100, "Prefers a window seat."),
+                (1, {"blocks": [{"search": "missing budget", "replace": "Budget is 600."}]}),
+                (1, {"blocks": [{"search": "Budget is 500.", "replace": "Budget is 600."}]}),
+            )
+        ]
+        repair_attempts = 1 if finish_reason == "length" else 2
+        responses.extend(
+            VLMResponse(content="invalid operations", finish_reason=finish_reason)
+            for _ in range(repair_attempts)
+        )
+        vlm = Mock(model="test-model", max_tokens=32768)
+        vlm.get_completion_async = AsyncMock(side_effect=responses)
         loop = ExtractLoop(
-            vlm=Mock(model="test-model"),
+            vlm=vlm,
             viking_fs=Mock(),
             context_provider=context_provider,
             isolation_handler=isolation_handler,
             max_iterations=1,
         )
-        loop._call_llm = AsyncMock(
-            side_effect=[
-                (
-                    [],
-                    AttrDict(
-                        events=[{"event_name": "demo", "ranges": "99", "page_id": 5}],
-                        profile=[{"page_id": 101, "summary": "keep me"}],
-                    ),
-                ),
-                ([], None),
-                ([], None),
-            ]
+        config = SimpleNamespace(
+            memory=SimpleNamespace(link_enabled=False, extraction_output_format="json")
         )
-        loop.finalize_operations = AsyncMock()
-
         with (
-            patch("openviking.session.memory.extract_loop.get_openviking_config") as mock_config,
             patch(
-                "openviking.session.memory.extract_loop.SchemaModelGenerator.generate_all_models"
+                "openviking.session.memory.extract_loop.get_openviking_config", return_value=config
             ),
-            patch(
-                "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
-            ) as mock_create_model,
+            patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
         ):
-            mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
-            mock_create_model.return_value = SimpleNamespace(
-                model_fields={"events": None, "profile": None},
-                model_json_schema=lambda: {},
-            )
-
             final_operations, _ = await loop.run()
 
-        assert loop._call_llm.await_count == 3
+        assert vlm.get_completion_async.await_count == 3 + repair_attempts
+        context_provider.execute_tool.assert_awaited_once()
         assert len(final_operations.upsert_operations) == 2
         assert final_operations.upsert_operations[0].memory_type == "events"
         assert (
@@ -1197,6 +1223,12 @@ class TestResolutionRepair:
         )
         assert final_operations.upsert_operations[1].memory_type == "profile"
         assert final_operations.upsert_operations[1].uris == [profile_uri]
+        assert (
+            await PatchOp(FieldType.STRING).apply(
+                old_content, final_operations.upsert_operations[1].memory_fields["content"]
+            )
+            == "Prefers a window seat. Budget is 600."
+        )
         assert final_operations.errors == []
 
 

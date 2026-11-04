@@ -345,28 +345,10 @@ class ExtractLoop:
                         candidate_operations,
                     )
                     raw_links = base_links
-                    pending_resolution_repair = None
+                    # Refetch and patch retries must keep using the validated base.
                 else:
                     final_operations = candidate_operations
                     raw_links = candidate_links
-                resolution_issues = self._retryable_resolution_issues(final_operations)
-                if resolution_issues and resolution_repair_count == 0:
-                    resolution_repair_count += 1
-                    pending_resolution_repair = (final_operations, raw_links)
-                    max_iterations += 1
-                    self._disable_tools_for_iteration = True
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": self._build_resolution_repair_instruction(resolution_issues),
-                        }
-                    )
-                    tracer.info(
-                        "Extended max_iterations to "
-                        f"{max_iterations} for retry memory target resolution",
-                        console=True,
-                    )
-                    continue
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
@@ -397,6 +379,25 @@ class ExtractLoop:
                         f"Extended max_iterations to {max_iterations} for retry patch repair"
                     )
                     continue
+                # Only cache a fallback after reads and patch validation have completed.
+                resolution_issues = self._retryable_resolution_issues(final_operations)
+                if not patch_errors and resolution_issues and resolution_repair_count == 0:
+                    resolution_repair_count += 1
+                    pending_resolution_repair = (final_operations, raw_links)
+                    max_iterations += 1
+                    self._disable_tools_for_iteration = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._build_resolution_repair_instruction(resolution_issues),
+                        }
+                    )
+                    tracer.info(
+                        "Extended max_iterations to "
+                        f"{max_iterations} for retry memory target resolution",
+                        console=True,
+                    )
+                    continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
@@ -405,6 +406,15 @@ class ExtractLoop:
             # Add format error message if parse failed (max 1 retry). This may raise
             # max_iterations, granting one more attempt after this failure.
             if failure_kind == "budget_exhausted":
+                if pending_resolution_repair is not None:
+                    final_operations, raw_links = pending_resolution_repair
+                    pending_resolution_repair = None
+                    tracer.info(
+                        "Event resolution repair response was cut off by the output budget; "
+                        "keeping the validated first-pass operations",
+                        console=True,
+                    )
+                    break
                 # Truncation is not an ordinary format mistake: a same-cap format
                 # retry would only hit the budget again, and replaying the
                 # truncated output just grows the prompt. Fail fast with the
