@@ -9,8 +9,10 @@ export default defineConfig({
   lang: 'en',
   title: 'OpenViking UI',
   description: 'React UI modules for OpenViking applications.',
-  icon: '/logo.svg',
-  logo: '/logo.svg',
+  // Brand assets mirror docs/images/{nav-logo-light,nav-logo-dark,favicon}.svg.
+  icon: '/favicon.svg',
+  logo: { light: '/logo.svg', dark: '/logo-dark.svg' },
+  logoText: 'OpenViking UI',
   globalStyles: fileURLToPath(new URL('./styles.css', import.meta.url)),
   plugins: [pluginPreview()],
   builderConfig: {
@@ -28,6 +30,7 @@ export default defineConfig({
       {
         lang: 'en',
         label: 'English',
+        title: 'OpenViking UI',
         description: 'React UI modules for OpenViking applications.',
         nav: [
           { text: 'Guide', link: '/guide/getting-started' },
@@ -65,6 +68,7 @@ export default defineConfig({
       {
         lang: 'zh',
         label: '简体中文',
+        title: 'OpenViking UI',
         description: '面向 OpenViking 应用的 React UI 模块。',
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
