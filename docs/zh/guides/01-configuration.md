@@ -2267,12 +2267,6 @@ Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
 
 启动服务前需要设置 `resource_id_env` 指定的环境变量。该变量的值用于标识当前部署的 OpenViking 资源，隔离 account、user 和 URI 相同但 resource 不同的数据。Sink 会自动创建父目录、立即追加事件、按 UTC 每小时滚动文件，并保留 `backup_count` 个历史文件；它不会写入 OpenViking 默认 stdout 日志。
 
-`resource_id_source` 决定 `resource_id` 的来源。默认值 `environment` 按上文读取
-`resource_id_env` 指定的环境变量。在每个 Account 与 resource 一一对应的共享部署中，
-可设为 `account`：每条记录使用其事件自身的 `account_id` 作为 `resource_id`，无需
-设置 `resource_id_env`。同一批次中只要有事件缺少 `account_id`，整批拒绝，不写入
-其中任何记录。`resource_uri` 始终记录 `viking://` URI，不会记录存储路径。
-
 每行格式如下：
 
 ```json
