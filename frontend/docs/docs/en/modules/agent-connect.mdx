@@ -1,0 +1,28 @@
+# AgentConnect
+
+An importable placeholder for agent connection. It currently renders the module name and a placeholder message, so applications can integrate the container before business functionality lands.
+
+## Basic usage
+
+```tsx file="../../_demos/agent-connect-placeholder.tsx" preview
+
+```
+
+## Target capability
+
+Agent selection, connection instructions, and connection status. Credentials and authorization are supplied by the host.
+
+Business Hooks and requests are not implemented yet. The component requires no Provider or credentials.
+
+## Props
+
+The module exports `AgentConnectProps` and `AgentConnectLabels`.
+
+| Property             | Type            | Default                                            | Description                  |
+| -------------------- | --------------- | -------------------------------------------------- | ---------------------------- |
+| `className`          | `string`        | —                                                  | Additional container class.  |
+| `style`              | `CSSProperties` | —                                                  | Container style overrides.   |
+| `labels.title`       | `string`        | `Agent connection`                                 | Visible module name.         |
+| `labels.description` | `string`        | `Placeholder. Functionality is not available yet.` | Visible placeholder message. |
+
+An omitted label inherits its English default. Labels are plain text; the host maps its own translation system into these props.

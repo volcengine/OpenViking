@@ -37,6 +37,32 @@
     "./components/file-preview/style.css": "./dist/components/file-preview/style.css",
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
+    "./modules/file-browser": {
+      "types": "./dist/modules/file-browser/file-browser.d.ts",
+      "import": "./dist/modules/file-browser.js"
+    },
+    "./modules/file-browser/style.css": "./dist/modules/file-browser/style.css",
+    "./modules/console": {
+      "types": "./dist/modules/console/console.d.ts",
+      "import": "./dist/modules/console.js"
+    },
+    "./modules/console/style.css": "./dist/modules/console/style.css",
+    "./modules/agent-connect": {
+      "types": "./dist/modules/agent-connect/agent-connect.d.ts",
+      "import": "./dist/modules/agent-connect.js"
+    },
+    "./modules/agent-connect/style.css": "./dist/modules/agent-connect/style.css",
+    "./modules/task-center": {
+      "types": "./dist/modules/task-center/task-center.d.ts",
+      "import": "./dist/modules/task-center.js"
+    },
+    "./modules/task-center/style.css": "./dist/modules/task-center/style.css",
+    "./modules/user-usage": {
+      "types": "./dist/modules/user-usage/user-usage.d.ts",
+      "import": "./dist/modules/user-usage.js"
+    },
+    "./modules/user-usage/style.css": "./dist/modules/user-usage/style.css",
+    "./modules/style.css": "./dist/modules/style.css",
     "./package.json": "./package.json",
     "./icons": {
       "types": "./dist/icons/index.d.ts",
