@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { MAX_OCCURRENCE_CHECK_ATTEMPTS, TimerSchedule } from './timers.mjs';
 
 export class OVTimerRepository {
@@ -12,7 +13,17 @@ export class OVTimerRepository {
     this.barrier = Promise.resolve();
   }
 
-  async load() {
+  run(operation) {
+    const work = this.barrier.then(operation);
+    this.barrier = work.catch(() => {});
+    return work;
+  }
+
+  load() {
+    return this.run(() => this.readState());
+  }
+
+  async readState() {
     let content;
     try {
       content = (await this.client.json(`/api/v1/content/read?uri=${encodeURIComponent(this.uri)}&offset=0&limit=-1&raw=true`)).result;
@@ -36,25 +47,32 @@ export class OVTimerRepository {
   }
 
   mutate(change) {
-    const work = this.barrier.then(async () => {
-      if (this.needsRefresh) await this.load();
-      const state = structuredClone(this.state);
-      const result = change(state);
-      try {
-        await this.client.json('/api/v1/content/write', {
-          uri: this.uri, content: JSON.stringify(state), mode: 'replace',
-          wait: false, processing_mode: 'vectors_only',
-        });
-      } catch (error) {
-        this.needsRefresh = true;
-        try { await this.load(); } catch {}
-        throw error;
+    return this.run(async () => {
+      let failure;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (this.needsRefresh) {
+          try { await this.readState(); } catch (error) { failure = error; continue; }
+        }
+        const state = structuredClone(this.state);
+        const result = change(state);
+        try {
+          await this.client.json('/api/v1/content/write', {
+            uri: this.uri, content: JSON.stringify(state), mode: 'replace',
+            wait: false, processing_mode: 'vectors_only',
+          });
+          this.state = state;
+          return result;
+        } catch (error) {
+          failure = error;
+          this.needsRefresh = true;
+          try {
+            await this.readState();
+            if (isDeepStrictEqual(this.state, state)) return result;
+          } catch {}
+        }
       }
-      this.state = state;
-      return result;
+      throw failure;
     });
-    this.barrier = work.catch(() => {});
-    return work;
   }
 
   get(timerId) {

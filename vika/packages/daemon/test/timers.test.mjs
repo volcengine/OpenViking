@@ -272,7 +272,7 @@ describe('timer MCP tools', () => {
     assert.equal(first.data.duplicate, false);
     assert.equal(repeat.data.duplicate, true);
     assert.equal(repository.listActive().length, 1);
-    assert.equal(wakeups(), 1);
+    assert.equal(wakeups(), 2);
 
     const listed = await call('list_timers');
     assert.match(listed.text, /看 PR/);

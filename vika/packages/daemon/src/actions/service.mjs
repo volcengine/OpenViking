@@ -1357,8 +1357,12 @@ export class ActionService {
   async createTimer(input, caller) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
     const fence = this.fence(input, caller);
-    const existing = this.timers.findByDecision(fence.connector_instance, fence.event_id);
-    if (existing) return this.timerResult(existing, { duplicate: true });
+    const existing = this.timers.needsRefresh ? null
+      : this.timers.findByDecision(fence.connector_instance, fence.event_id);
+    if (existing) {
+      this.onTimersChanged?.();
+      return this.timerResult(existing, { duplicate: true });
+    }
     const maxRuns = input.max_runs === undefined || input.max_runs === null ? null : Number(input.max_runs);
     if (maxRuns !== null && (!Number.isSafeInteger(maxRuns) || maxRuns < 1)) {
       throw blocked('invalid_input', 'max_runs must be a positive integer or null');
@@ -1369,7 +1373,7 @@ export class ActionService {
       nowMs,
       timezone,
     });
-    const timer = await this.timers.create({
+    const timer = await Promise.resolve().then(() => this.timers.create({
       title: input.title,
       text: input.text,
       timezone,
@@ -1380,8 +1384,7 @@ export class ActionService {
       createdFromEventId: fence.event_id,
       createdFromSource: fence.connector_instance,
       createdAtMs: nowMs,
-    });
-    this.onTimersChanged?.();
+    })).finally(() => this.onTimersChanged?.());
     return this.timerResult(timer, { duplicate: false });
   }
 
@@ -1426,8 +1429,8 @@ export class ActionService {
 
   async cancelTimer(input) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
-    const cancelled = await this.timers.cancel(input.timer_id);
-    if (cancelled) this.onTimersChanged?.();
+    const cancelled = await Promise.resolve().then(() => this.timers.cancel(input.timer_id))
+      .finally(() => this.onTimersChanged?.());
     return {
       text: cancelled ? `Timer cancelled: timer_id=${input.timer_id}.` : `Timer was not active: timer_id=${input.timer_id}.`,
       data: { timer_id: input.timer_id, cancelled },
@@ -1436,6 +1439,7 @@ export class ActionService {
 
   async finishTimerOccurrence(input, caller) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
+    if (this.timers.needsRefresh) await this.timers.load();
     const check = this.timers.getOccurrenceCheck(input.occurrence_id);
     if (!check) throw blocked('unknown_occurrence', 'This timer occurrence has no completion check.');
     let delivery = null;

@@ -4,6 +4,10 @@ import { OVTimerRepository } from '../src/ov-timers.mjs';
 import { OVConnection } from '../src/ov-connection.mjs';
 import { TimerConnector } from '../src/timers.mjs';
 import { fakeOV } from './ov-server-fixture.mjs';
+import { ActionService } from '../src/actions/service.mjs';
+import { Store } from '../src/store.mjs';
+import { chatEvent } from './event-fixture.mjs';
+import { fakeConnectors } from './action-fixture.mjs';
 
 const nowMs = 1_790_000_000_000;
 const input = {
@@ -21,9 +25,68 @@ async function setup(context) {
 }
 
 describe('OV timer storage', () => {
+  it('serializes a delayed refresh with new timer writes', async (context) => {
+    const { client, repository } = await setup(context);
+    await repository.create({ ...input, timerId: 'tm_existing', createdFromEventId: 'evt-existing' });
+    const json = client.json.bind(client);
+    let release;
+    let readStarted;
+    const started = new Promise((resolve) => { readStarted = resolve; });
+    const pending = new Promise((resolve) => { release = resolve; });
+    let delayRead = true;
+    let refreshing = false;
+    let wroteDuringRefresh = false;
+    client.json = async (route, body) => {
+      if (body && refreshing) wroteDuringRefresh = true;
+      const result = await json(route, body);
+      if (!body && delayRead) {
+        delayRead = false;
+        refreshing = true;
+        readStarted();
+        await pending;
+        refreshing = false;
+      }
+      return result;
+    };
+    const refresh = repository.load();
+    await started;
+    const created = repository.create(input);
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    await Promise.all([refresh, created]);
+    assert.equal(wroteDuringRefresh, false);
+    assert.equal(repository.get(input.timerId)?.timerId, input.timerId);
+    await repository.create({ ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' });
+    const restored = await new OVTimerRepository(client, 'primary').load();
+    assert.deepEqual(restored.listActive().map((timer) => timer.timerId), ['tm_existing', 'tm_test', 'tm_second']);
+  });
+
+  it('wakes an idle scheduler when a repeated create finds a loaded timer', async (context) => {
+    const { repository } = await setup(context);
+    await repository.create({ ...input, createdFromEventId: 'evt-create', nextRunAtMs: Date.now() + 3_600_000 });
+    const logger = { info() {}, warn() {}, debug() {}, error() {} };
+    const store = new Store(':memory:', logger);
+    context.after(() => store.close());
+    store.initializeCognition('codex', 'token');
+    store.ingest(chatEvent({ eventId: 'evt-create' }));
+    const connector = new TimerConnector({ repository, autoStart: false, submitEvent: async () => {} });
+    context.after(() => connector.stop());
+    const service = new ActionService({
+      config: { channel: 'lark' }, store, logger, timers: repository,
+      connectors: fakeConnectors(), onTimersChanged: () => connector.wake(),
+    });
+    const result = await service.call('create_timer', {
+      decision_id: 'evt-create', title: 'Reminder', text: 'Check PR',
+      schedule: { type: 'once', run_at_ms: Date.now() + 3_600_000 },
+      delivery: { mode: 'owner' },
+    }, { authority: 'token' });
+    assert.equal(result.data.duplicate, true);
+    assert.notEqual(connector.timer, null);
+  });
+
   for (const operation of ['create', 'cancel']) {
-    it(`refreshes cached state after a committed ${operation} loses its response`, async (context) => {
-      const { client, repository } = await setup(context);
+    it(`confirms ${operation} internally after losing its write response`, async (context) => {
+      const { client, repository, state } = await setup(context);
       if (operation === 'cancel') await repository.create(input);
       const json = client.json.bind(client);
       let loseResponse = true;
@@ -35,66 +98,153 @@ describe('OV timer storage', () => {
         }
         return result;
       };
-      await assert.rejects(operation === 'create' ? repository.create(input) : repository.cancel(input.timerId), /response lost/);
-      assert.equal(Boolean(repository.get(input.timerId)), operation === 'create');
-      await repository.create({ ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' });
+      const requestCount = state.requests.length;
+      const result = await (operation === 'create' ? repository.create(input) : repository.cancel(input.timerId));
+      assert.equal(operation === 'create' ? result.timerId : result, operation === 'create' ? input.timerId : true);
+      assert.equal(state.requests.length, requestCount + 2);
+      assert.deepEqual(state.requests.slice(requestCount).map((request) => request.route), [
+        'POST /api/v1/content/write', 'GET /api/v1/content/read',
+      ]);
       const restored = await new OVTimerRepository(client, 'primary').load();
       assert.equal(Boolean(restored.get(input.timerId)), operation === 'create');
-      assert.equal(restored.get('tm_second').timerId, 'tm_second');
     });
   }
 
-  it('refreshes before further writes when the first refresh fails', async (context) => {
-    const { client, repository, state } = await setup(context);
-    await repository.create(input);
+  it('wakes an idle scheduler after internally confirming a create whose response was lost', async (context) => {
+    const { client, repository } = await setup(context);
+    const logger = { info() {}, warn() {}, debug() {}, error() {} };
+    const store = new Store(':memory:', logger);
+    context.after(() => store.close());
+    store.initializeCognition('codex', 'token');
+    store.ingest(chatEvent({ eventId: 'evt-create' }));
+    const connector = new TimerConnector({ repository, autoStart: false, submitEvent: async () => {} });
+    context.after(() => connector.stop());
+    connector.wake();
+    assert.equal(connector.timer, null);
+    const service = new ActionService({
+      config: { channel: 'lark' }, store, logger, timers: repository,
+      connectors: fakeConnectors(), onTimersChanged: () => connector.wake(),
+    });
     const json = client.json.bind(client);
     let loseResponse = true;
     client.json = async (route, body) => {
       const result = await json(route, body);
       if (body && loseResponse) {
         loseResponse = false;
-        state.down = true;
         throw new Error('Write response lost');
       }
       return result;
     };
-    await assert.rejects(repository.cancel(input.timerId), /response lost/);
-    const second = { ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' };
-    await assert.rejects(repository.create(second), /HTTP 503/);
-    state.down = false;
-    await repository.create(second);
-    assert.equal(repository.get(input.timerId), null);
+    const request = {
+      decision_id: 'evt-create', title: 'Reminder', text: 'Check PR',
+      schedule: { type: 'once', run_at_ms: Date.now() + 3_600_000 },
+      delivery: { mode: 'owner' },
+    };
+    const result = await service.call('create_timer', request, { authority: 'token' });
+    assert.equal(result.data.duplicate, false);
+    assert.notEqual(connector.timer, null);
     const restored = await new OVTimerRepository(client, 'primary').load();
-    assert.deepEqual(restored.listActive().map((timer) => timer.timerId), ['tm_second']);
+    assert.deepEqual(restored.listActive().map((timer) => timer.timerId), [result.data.timer_id]);
   });
 
-  it('does not fire a cancelled timer after its response and cache refresh fail', async (context) => {
-    const { client, repository, state } = await setup(context);
-    await repository.create(input);
+  it('retries an uncommitted write internally and bounds persistent failures', async (context) => {
+    const { client, repository } = await setup(context);
     const json = client.json.bind(client);
-    let loseResponse = true;
+    let writes = 0;
     client.json = async (route, body) => {
-      const result = await json(route, body);
-      if (body && loseResponse) {
-        loseResponse = false;
-        state.down = true;
+      if (body && ++writes === 1) throw new Error('Connection lost before writing');
+      return json(route, body);
+    };
+    assert.equal((await repository.create(input)).timerId, input.timerId);
+    assert.equal(writes, 2);
+    writes = 0;
+    client.json = async (route, body) => {
+      if (body) { writes += 1; throw new Error('Persistent outage'); }
+      return json(route, body);
+    };
+    await assert.rejects(repository.cancel(input.timerId), /Persistent outage/);
+    assert.equal(writes, 3);
+  });
+
+  it('refreshes uncertain state before another mutation instead of losing a committed timer', async (context) => {
+    const { client, repository } = await setup(context);
+    const json = client.json.bind(client);
+    client.json = async (route, body) => {
+      if (body) {
+        await json(route, body);
         throw new Error('Write response lost');
       }
-      return result;
+      throw new Error('Read unavailable');
     };
-    await assert.rejects(repository.cancel(input.timerId), /response lost/);
+    await assert.rejects(repository.create(input));
+    client.json = json;
+    await repository.create({ ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' });
+    const restored = await new OVTimerRepository(client, 'primary').load();
+    assert.deepEqual(restored.listActive().map((timer) => timer.timerId), ['tm_test', 'tm_second']);
+  });
+
+  it('does not fire a cancelled timer while its write result remains uncertain', async (context) => {
+    const { client, repository } = await setup(context);
+    await repository.create(input);
+    const json = client.json.bind(client);
+    client.json = async (route, body) => {
+      if (body) {
+        await json(route, body);
+        throw new Error('Write response lost');
+      }
+      throw new Error('Read unavailable');
+    };
+    await assert.rejects(repository.cancel(input.timerId));
     const submitted = [];
     const connector = new TimerConnector({
       repository, now: () => nowMs, autoStart: false,
       submitEvent: async (event) => submitted.push(event),
     });
     context.after(() => connector.stop());
-    await assert.rejects(connector.fireDueOnce(), /HTTP 503/);
+    await assert.rejects(connector.fireDueOnce());
     assert.equal(submitted.length, 0);
-    state.down = false;
+    client.json = json;
     assert.equal(await connector.fireDueOnce(), false);
+  });
+
+  it('keeps polling an uncertain first create and fires it after OV recovers', async (context) => {
+    const { client, repository } = await setup(context);
+    const logger = { info() {}, warn() {}, debug() {}, error() {} };
+    const store = new Store(':memory:', logger);
+    context.after(() => store.close());
+    store.initializeCognition('codex', 'token');
+    store.ingest(chatEvent({ eventId: 'evt-create' }));
+    const submitted = [];
+    const connector = new TimerConnector({
+      repository, now: () => nowMs, autoStart: false,
+      submitEvent: async (event) => submitted.push(event),
+    });
+    context.after(() => connector.stop());
+    const service = new ActionService({
+      config: { channel: 'lark' }, store, logger, timers: repository, clock: () => nowMs,
+      connectors: fakeConnectors(), onTimersChanged: () => connector.wake(),
+    });
+    const json = client.json.bind(client);
+    client.json = async (route, body) => {
+      if (body) {
+        await json(route, body);
+        throw new Error('Write response lost');
+      }
+      throw new Error('Read unavailable');
+    };
+    await assert.rejects(service.call('create_timer', {
+      decision_id: 'evt-create', title: 'Reminder', text: 'Check PR',
+      schedule: { type: 'once', run_at_ms: nowMs }, delivery: { mode: 'owner' },
+    }, { authority: 'token' }));
+    assert.equal(repository.needsRefresh, true);
+    assert.notEqual(connector.timer, null);
+    await connector.tick();
     assert.equal(submitted.length, 0);
-    assert.equal(repository.getOccurrenceCheck('tm_test:1790000000000'), null);
+    assert.notEqual(connector.timer, null);
+    client.json = json;
+    await connector.tick();
+    assert.equal(submitted.length, 1);
+    assert.equal(repository.needsRefresh, false);
   });
 
   it('persists timers and completion checks and restores them for the same instance', async (context) => {

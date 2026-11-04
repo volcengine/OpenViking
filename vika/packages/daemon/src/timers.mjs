@@ -518,12 +518,12 @@ export class TimerConnector {
     if (this.stopped) return;
     clearTimeout(this.timer);
     const nextWakeAtMs = this.repository.nextWakeAtMs();
-    if (nextWakeAtMs === null) {
+    if (nextWakeAtMs === null && !this.repository.needsRefresh) {
       this.timer = null;
       return;
     }
     const nowMs = this.now();
-    const delay = Math.max(minDelayMs, nextWakeAtMs - nowMs);
+    const delay = Math.max(minDelayMs, nextWakeAtMs === null ? this.idlePollMs : nextWakeAtMs - nowMs);
     this.timer = setTimeout(() => void this.tick(), Math.min(delay, this.idlePollMs));
     this.timer.unref?.();
   }
