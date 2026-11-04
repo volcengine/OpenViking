@@ -90,8 +90,7 @@ Each entry:
 The system handles create vs update automatically:
 - Same `experience_name` as an existing one → updates it in place
 - New `experience_name` → creates a new experience
-- `supersedes` set → proposes replacing the old experience; the final merge verifies
-  that its distinct facts are preserved before explicitly deleting it and migrating its history
+- `supersedes` set → proposes a replacement for the final merge to review
 
 ## Rules
 

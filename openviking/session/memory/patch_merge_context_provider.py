@@ -141,12 +141,9 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         supersedes_policy = ""
         if self.memory_type == "experiences":
             supersedes_policy = """
-For experience patches, `supersedes` is a replacement proposal, not an automatic
-delete. Check the referenced existing experience. If the final canonical output
-preserves all its distinct facts, explicitly delete the old file with that output
-as its replacement (delete_ids with replacement_page_id, or SDK delete with
-replacement). Otherwise keep the old file; never delete solely because a patch
-sets `supersedes`.
+For experiences, treat `supersedes` as a replacement proposal.
+If accepted under the policy above, explicitly delete the old experience with the
+final output as its replacement; otherwise keep it.
 """
         return f"""You are a memory patch merge agent.
 
