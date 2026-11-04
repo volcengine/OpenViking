@@ -9,6 +9,7 @@ Main service class that composes all sub-services and manages infrastructure lif
 import asyncio
 import inspect
 import os
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
@@ -23,7 +24,7 @@ from openviking.service.compile_scheduler import CompileScheduler, build_credent
 from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
 from openviking.service.debug_service import DebugService
-from openviking.service.external_task_service import ExternalTaskService
+from openviking.service.external_task_service import ExternalTaskService, set_external_task_service
 from openviking.service.fs_service import FSService
 from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
@@ -142,7 +143,9 @@ class OpenVikingService:
         self._session_service = SessionService()
         self._debug_service = DebugService()
         self._agent_evolution_service = AgentEvolutionService()
-        self._external_task_service = ExternalTaskService()
+        self._external_task_service = ExternalTaskService(
+            credential_encryptor=build_credential_encryptor(config.encryption)
+        )
         self._compile_service = CompileService(
             config.compile_api,
             self._external_task_service,
@@ -227,6 +230,7 @@ class OpenVikingService:
 
         # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client, service_name=service_name))
+        set_external_task_service(self._external_task_service)
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
@@ -568,6 +572,7 @@ class OpenVikingService:
             user_count,
         )
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+        self._viking_fs.set_global_policy_service(self._privacy_config_service.global_policies)
         self._privacy_sanitizer = PrivacySanitizer(self._privacy_config_service)
         self._viking_fs.set_privacy_sanitizer(self._privacy_sanitizer)
         self._resource_processor.set_privacy_sanitizer(self._privacy_sanitizer)
@@ -624,6 +629,7 @@ class OpenVikingService:
             resource_memory_link_service=self._resource_memory_link_service,
             runtime_config_manager=self._runtime_config_manager,
         )
+        self._external_task_service.register(self._resource_service._connector)
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
@@ -696,8 +702,8 @@ class OpenVikingService:
                 compile_store,
                 self._viking_fs,
             )
-            self._compile_scheduler.credential_encryptor = build_credential_encryptor(
-                self._config.encryption
+            self._compile_scheduler.credential_encryptor = (
+                self._external_task_service.credential_encryptor
             )
             self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
             self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
@@ -1059,27 +1065,47 @@ class OpenVikingService:
             return 0
         return await self._directory_initializer.initialize_account_directories(ctx)
 
-    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
-        """Initialize a new account's workspace under one account Tree lease."""
+    @asynccontextmanager
+    async def account_workspace_lock(self, ctx: RequestContext):
+        """Hold one Tree lease for all account-scoped provisioning writes."""
         self._ensure_initialized()
-        if not self._directory_initializer:
-            return 0, 0
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
         agfs = self._viking_fs._async_agfs
         path = self._viking_fs._uri_to_path("viking://", ctx=ctx)
         guard = PathLockGuard(agfs)
         try:
             try:
-                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+                lease = await guard.acquire(
+                    lambda: agfs.pathlock_acquire_tree(path, timeout_secs=10.0)
+                )
             except LockAcquisitionError as exc:
                 raise ResourceBusyError(
                     f"Account workspace is busy and cannot be initialized now: {ctx.account_id}",
                     uri="viking://",
                 ) from exc
+            yield lease
+        finally:
+            await guard.close()
+
+    async def initialize_account_workspace(
+        self,
+        ctx: RequestContext,
+        *,
+        lease_ref: Any = None,
+    ) -> tuple[int, int]:
+        """Initialize a new account's workspace under one account Tree lease."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0, 0
+        if lease_ref is not None:
+            return await self._directory_initializer.initialize_account_workspace(
+                ctx, lease_ref=lease_ref
+            )
+        async with self.account_workspace_lock(ctx) as lease:
             return await self._directory_initializer.initialize_account_workspace(
                 ctx, lease_ref=lease
             )
-        finally:
-            await guard.close()
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""

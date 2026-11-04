@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -12,6 +12,7 @@ use tracing::{debug, error};
 use crate::core::context::{FsContextInner, FS_CTX};
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
+use crate::lock::types::PathLockError;
 use crate::multibackend::catch_up::{CatchUpTarget, CatchUpWorker};
 use crate::multibackend::checkpoint::{CheckpointReader, CheckpointWorker};
 use crate::multibackend::codec::{decode_segment, sha256_hex};
@@ -26,6 +27,10 @@ use crate::multibackend::router::AccountRouter;
 
 const CATCH_UP_INTERVAL_SECS: u64 = 300;
 const CATCH_UP_FULL_SCAN_TICKS: usize = 6;
+const FLUSH_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(100);
+const FLUSH_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
+const FLUSH_RETRY_MAX_ELAPSED: Duration = Duration::from_secs(180);
+const FLUSH_RETRY_MAX_ATTEMPTS: u32 = 32;
 
 /// Read active account ids from the encrypted or plain primary registry.
 pub(crate) async fn read_active_accounts(primary: &dyn FileSystem) -> Result<HashSet<String>> {
@@ -319,6 +324,13 @@ pub struct FlushWorker {
     metrics: Arc<MultiWriteMetricsSnapshot>,
 }
 
+struct FlushRetryState {
+    events: Vec<PendingEvent>,
+    attempts: u32,
+    started_at: Instant,
+    retry_at: Instant,
+}
+
 impl FlushWorker {
     /// Create a worker using one metadata store and persistence provider.
     pub(crate) fn new(
@@ -349,20 +361,191 @@ impl FlushWorker {
         mut receiver: mpsc::UnboundedReceiver<PendingEvent>,
         pending_events: Arc<AtomicUsize>,
     ) {
-        while let Some(first) = receiver.recv().await {
-            let mut batch = vec![first];
-            while let Ok(event) = receiver.try_recv() {
-                batch.push(event);
+        let mut retries = HashMap::<String, FlushRetryState>::new();
+        let mut receiver_open = true;
+        loop {
+            if retries.is_empty() {
+                if !receiver_open {
+                    break;
+                }
+                let Some(first) = receiver.recv().await else {
+                    receiver_open = false;
+                    continue;
+                };
+                let mut batch = vec![first];
+                while let Ok(event) = receiver.try_recv() {
+                    batch.push(event);
+                }
+                self.flush_fresh_events(batch, &mut retries, &pending_events)
+                    .await;
+                continue;
             }
-            let attempted = batch.len();
-            self.flush_batch(batch).await;
-            pending_events.fetch_sub(attempted, Ordering::Relaxed);
+
+            let (account, retry_at) = retries
+                .iter()
+                .min_by_key(|(_, state)| state.retry_at)
+                .map(|(account, state)| (account.clone(), state.retry_at))
+                .expect("retry map is not empty");
+            if receiver_open {
+                tokio::select! {
+                    event = receiver.recv() => {
+                        match event {
+                            Some(first) => {
+                                let mut batch = vec![first];
+                                while let Ok(event) = receiver.try_recv() {
+                                    batch.push(event);
+                                }
+                                self.flush_fresh_events(batch, &mut retries, &pending_events)
+                                    .await;
+                            }
+                            None => receiver_open = false,
+                        }
+                    }
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(retry_at)) => {
+                        let state = retries.remove(&account).expect("retry account exists");
+                        self.flush_retry(&account, state, &mut retries, &pending_events)
+                            .await;
+                    }
+                }
+            } else {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(retry_at)).await;
+                let state = retries.remove(&account).expect("retry account exists");
+                self.flush_retry(&account, state, &mut retries, &pending_events)
+                    .await;
+            }
         }
     }
 
-    /// Flush one batch while recording and dropping failed events.
-    async fn flush_batch(&mut self, batch: Vec<PendingEvent>) {
+    async fn flush_fresh_events(
+        &mut self,
+        events: Vec<PendingEvent>,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let mut ready = Vec::new();
+        for event in events {
+            if let Some(state) = retries.get_mut(&event.account_id) {
+                state.events.push(event);
+            } else {
+                ready.push(event);
+            }
+        }
+        let attempted = ready.len();
+        let retry = self.flush_batch(ready).await;
+        pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
+
+        let mut retry_by_account = HashMap::<String, Vec<PendingEvent>>::new();
+        for event in retry {
+            retry_by_account
+                .entry(event.account_id.clone())
+                .or_default()
+                .push(event);
+        }
+        for (account, events) in retry_by_account {
+            self.schedule_retry(&account, events, 0, Instant::now(), retries, pending_events);
+        }
+    }
+
+    async fn flush_retry(
+        &mut self,
+        account: &str,
+        state: FlushRetryState,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let elapsed = state.started_at.elapsed();
+        if Self::retry_exhausted(state.attempts, elapsed) {
+            Self::drop_exhausted_retry(
+                &self.store,
+                account,
+                state.events.len(),
+                state.attempts,
+                elapsed,
+                pending_events,
+            );
+            return;
+        }
+        let attempted = state.events.len();
+        let retry = self.flush_batch(state.events).await;
+        pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
+        if retry.is_empty() {
+            return;
+        }
+        self.schedule_retry(
+            account,
+            retry,
+            state.attempts,
+            state.started_at,
+            retries,
+            pending_events,
+        );
+    }
+
+    fn schedule_retry(
+        &self,
+        account: &str,
+        events: Vec<PendingEvent>,
+        attempts: u32,
+        started_at: Instant,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let elapsed = started_at.elapsed();
+        if Self::retry_exhausted(attempts, elapsed) {
+            Self::drop_exhausted_retry(
+                &self.store,
+                account,
+                events.len(),
+                attempts,
+                elapsed,
+                pending_events,
+            );
+            return;
+        }
+
+        let attempts = attempts + 1;
+        let delay = Self::retry_delay(attempts, elapsed);
+        debug!(
+            account,
+            retry_attempts = attempts,
+            delay_ms = delay.as_millis(),
+            event_count = events.len(),
+            "multi-write account initialization deferred by PathLock contention"
+        );
+        retries.insert(
+            account.to_string(),
+            FlushRetryState {
+                events,
+                attempts,
+                started_at,
+                retry_at: Instant::now() + delay,
+            },
+        );
+    }
+
+    fn drop_exhausted_retry(
+        store: &MetadataStore,
+        account: &str,
+        event_count: usize,
+        retry_attempts: u32,
+        elapsed: Duration,
+        pending_events: &AtomicUsize,
+    ) {
+        pending_events.fetch_sub(event_count, Ordering::Relaxed);
+        store.record_worker_error(MultiWriteWorker::Flush);
+        error!(
+            account,
+            retry_attempts,
+            elapsed_ms = elapsed.as_millis(),
+            event_count,
+            "multi-write account initialization retry limit exhausted"
+        );
+    }
+
+    /// Flush one batch while returning events blocked by transient PathLock contention.
+    async fn flush_batch(&mut self, batch: Vec<PendingEvent>) -> Vec<PendingEvent> {
         let mut failed = false;
+        let mut retry = Vec::new();
         let mut accounts = HashMap::<String, Vec<PendingEvent>>::new();
         for event in batch {
             if matches!(event.kind, PendingEventKind::DeleteAccount) {
@@ -414,9 +597,13 @@ impl FlushWorker {
                         self.initialized_accounts.insert(account.clone());
                     }
                     Err(error) => {
-                        failed = true;
-                        error!(account = %account, error = %error,
-                            "multi-write account initialization failed");
+                        if Self::is_retryable_pathlock_error(&error) {
+                            retry.extend(events);
+                        } else {
+                            failed = true;
+                            error!(account = %account, error = %error,
+                                "multi-write account initialization failed");
+                        }
                         continue;
                     }
                 }
@@ -495,6 +682,30 @@ impl FlushWorker {
         if failed {
             self.store.record_worker_error(MultiWriteWorker::Flush);
         }
+        retry
+    }
+
+    fn is_retryable_pathlock_error(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::PathLock(
+                PathLockError::Conflict { .. }
+                    | PathLockError::Timeout { .. }
+                    | PathLockError::Busy { .. }
+            )
+        )
+    }
+
+    fn retry_delay(retry_attempt: u32, elapsed: Duration) -> Duration {
+        let exponent = retry_attempt.saturating_sub(1).min(31);
+        FLUSH_RETRY_INITIAL_DELAY
+            .saturating_mul(1u32 << exponent)
+            .min(FLUSH_RETRY_MAX_DELAY)
+            .min(FLUSH_RETRY_MAX_ELAPSED.saturating_sub(elapsed))
+    }
+
+    fn retry_exhausted(retry_attempts: u32, elapsed: Duration) -> bool {
+        retry_attempts >= FLUSH_RETRY_MAX_ATTEMPTS || elapsed >= FLUSH_RETRY_MAX_ELAPSED
     }
 
     /// Convert one account-root deletion into a durable system-scope marker.

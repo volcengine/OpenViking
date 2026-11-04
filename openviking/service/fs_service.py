@@ -87,6 +87,9 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+_DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS = 60.0
+_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS = 3.0
+
 # Compile waits for directory search visibility without rerunning generation.
 _COMPILE_DIRECTORY_TAG_TIMEOUT_SECONDS = 60.0
 _COMPILE_DIRECTORY_TAG_POLL_SECONDS = 3.0
@@ -246,7 +249,11 @@ class FSService:
         tags_by_uri: Dict[str, List[str]] = {}
         if self._vikingdb:
             uris = list(
-                dict.fromkeys(str(entry.get("uri") or "") for entry in entries if entry.get("uri"))
+                dict.fromkeys(
+                    str(entry["uri"])
+                    for entry in entries
+                    if entry.get("uri") and entry.get("access") != "container"
+                )
             )
             if uris:
                 records = await VikingDBManagerProxy(self._vikingdb, ctx).filter(
@@ -260,6 +267,8 @@ class FSService:
                 for record in records:
                     records_by_uri.setdefault(str(record.get("uri") or ""), []).append(record)
                 for entry in entries:
+                    if entry.get("access") == "container":
+                        continue
                     uri = str(entry.get("uri") or "")
                     levels = {0, 1} if entry.get("isDir", False) else {2}
                     found: List[str] = []
@@ -275,6 +284,17 @@ class FSService:
                     tags_by_uri[uri] = found
         result_entries: List[Dict[str, Any]] = []
         for entry in entries:
+            if entry.get("access") == "container":
+                # Navigation does not grant access to indexed tags or tag matching.
+                if not normalized_tags:
+                    result_entries.append(
+                        {
+                            key: value
+                            for key, value in entry.items()
+                            if key not in {"tags", "search_tags"}
+                        }
+                    )
+                continue
             entry_tags = tags_by_uri.get(str(entry.get("uri") or ""), [])
             if normalized_tags and not set(normalized_tags).issubset(entry_tags):
                 continue
@@ -1500,8 +1520,10 @@ class FSService:
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content, restoring Privacy references for Skills and Sessions."""
+        uri = await self._resolve_uri(uri, ctx)
+        ctx = self._ensure_initialized().authorize_read(ctx, [uri])
         resolved_uri, content = await self._read_content(uri, ctx)
-        if self._privacy_config_service is not None:
+        if self._privacy_config_service is not None and ctx.data_access is None:
             skill_name = get_skill_name_from_uri(resolved_uri)
             session_id = get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
             if skill_name is not None:
@@ -1539,6 +1561,7 @@ class FSService:
         # Resolve id to URI before classify_uri / visible_content which expect
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
+        ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
             if self._privacy_sanitizer is not None
@@ -1564,7 +1587,7 @@ class FSService:
         """Hide memory metadata and sanitize private values in already-read text."""
         if classify_uri(uri).is_memory:
             content = visible_content(content, uri=uri)
-        if self._privacy_sanitizer is not None:
+        if self._privacy_sanitizer is not None and ctx.data_access is None:
             content = (
                 await self._privacy_sanitizer.sanitize(
                     content,
@@ -1852,6 +1875,28 @@ class FSService:
             )
         return records
 
+    async def _wait_for_directory_index(
+        self, uri: str, ctx: RequestContext, expected_levels: set[int]
+    ) -> set[int]:
+        """Return visible levels once expected_levels are searchable; raise on timeout or read error."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS
+        while True:
+            indexed = {record["level"] for record in await self._directory_index_records(uri, ctx)}
+            if expected_levels <= indexed:
+                return indexed
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise OpenVikingError(
+                    f"Directory index is not readable: {uri}",
+                    code="PROCESSING_ERROR",
+                    details={
+                        "expected_levels": sorted(expected_levels),
+                        "actual_levels": sorted(indexed),
+                    },
+                )
+            await asyncio.sleep(min(_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS, remaining))
+
     async def ensure_directory_index(
         self,
         uri: str,
@@ -2001,14 +2046,7 @@ class FSService:
                             raise OpenVikingError(
                                 f"Directory index processing failed: {uri}", code="PROCESSING_ERROR"
                             )
-                        indexed = {
-                            record["level"]
-                            for record in await self._directory_index_records(uri, ctx)
-                        }
-                        if required - indexed:
-                            raise OpenVikingError(
-                                f"Directory index is not readable: {uri}", code="PROCESSING_ERROR"
-                            )
+                        indexed = await self._wait_for_directory_index(uri, ctx, required)
                     result = {
                         "uri": uri,
                         "created_abstract": created_abstract,
