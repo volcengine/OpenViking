@@ -151,8 +151,9 @@ PATCH /api/v1/admin/accounts/{account_id}/configuration
 ```
 
 PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置或替换，`null`
-表示从当前作用域删除该值。对象递归合并，数组整体替换。响应只返回该作用域
-的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
+表示从当前作用域删除该值。对象递归合并，数组整体替换。响应主要返回该作用域
+的显式配置；Account configuration 额外保证 `agent_evolution.enabled` 为实际生效值，
+其他字段不补全默认值。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
 

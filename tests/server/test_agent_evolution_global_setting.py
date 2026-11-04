@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
+from openviking.config.scope import ConfigScope
 from openviking.pyagfs import AGFSNotFoundError
 from openviking.server.app import create_app
 from openviking.server.auth.plugins import DevAuthPlugin
@@ -285,37 +286,30 @@ def test_session_positional_usage_reporter_remains_compatible():
     assert session._agent_evolution_enabled_provider is None
 
 
-async def test_account_settings_admin_api_reads_and_updates_effective_value(
+async def test_account_configuration_reads_and_updates_account_switches(
     settings_http,
 ):
     client, service = settings_http
     service.sessions.set_agent_evolution_config(AgentEvolutionConfig(enabled=False))
 
-    initial = await client.get("/api/v1/admin/accounts/default/settings")
+    initial = await client.get("/api/v1/admin/accounts/default/configuration")
     assert initial.status_code == 200, initial.text
-    assert initial.json()["result"] == {
-        "account_id": "default",
-        "settings": {
-            "agent_evolution": {"enabled": False},
-            "acl": {"enabled": False},
-        },
-        "overrides": {},
-    }
+    assert initial.json()["result"]["account_id"] == "default"
+    assert initial.json()["result"]["settings"] == {"agent_evolution": {"enabled": False}}
+    assert await service.runtime_config_manager.get_settings(ConfigScope.account("default")) == {}
 
     updated = await client.patch(
-        "/api/v1/admin/accounts/default/settings",
+        "/api/v1/admin/accounts/default/configuration",
         json={
-            "agent_evolution": {"enabled": True},
-            "acl": {"enabled": True},
+            "settings": {
+                "agent_evolution": {"enabled": True},
+                "acl": {"enabled": True},
+            }
         },
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["result"]["settings"]["agent_evolution"]["enabled"] is True
     assert updated.json()["result"]["settings"]["acl"] == {"enabled": True}
-    assert updated.json()["result"]["overrides"] == {
-        "agent_evolution": {"enabled": True},
-        "acl": {"enabled": True},
-    }
     assert (await service.runtime_config_manager.get_account("default", "agent_evolution")).enabled
     assert (await service.runtime_config_manager.get_account("default", "acl")).enabled
     assert await service.viking_fs.acl_manager.is_enabled("default")
@@ -370,6 +364,7 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
         "settings": {
             "github": {"token": "account-token"},
             "acl": {"enabled": True},
+            "agent_evolution": {"enabled": False},
         },
     }
 
@@ -378,7 +373,10 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
         json={"settings": {"acl": None}},
     )
     assert removed.status_code == 200, removed.text
-    assert removed.json()["result"]["settings"] == {"github": {"token": "account-token"}}
+    assert removed.json()["result"]["settings"] == {
+        "github": {"token": "account-token"},
+        "agent_evolution": {"enabled": False},
+    }
 
     from openviking.server.auth import get_request_context
 
@@ -399,7 +397,10 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
     try:
         visible = await client.get(url)
         assert visible.status_code == 200, visible.text
-        assert visible.json()["result"]["settings"] == {"github": {"token": "account-token"}}
+        assert visible.json()["result"]["settings"] == {
+            "github": {"token": "account-token"},
+            "agent_evolution": {"enabled": False},
+        }
         denied = await client.patch(
             url, json={"settings": {"vlm": None, "embedding": {"max_retries": 5}}}
         )
@@ -421,14 +422,21 @@ async def test_cluster_agent_evolution_override_is_account_fallback(settings_htt
     assert updated.status_code == 200, updated.text
     assert updated.json()["result"]["settings"] == {"agent_evolution": {"enabled": True}}
     assert await service.sessions.get_agent_evolution_enabled("default")
+    url = "/api/v1/admin/accounts/default/configuration"
+    assert (await client.get(url)).json()["result"]["settings"]["agent_evolution"] == {
+        "enabled": True
+    }
 
-    await service.runtime_config_manager.patch_account(
-        "default", {"agent_evolution": {"enabled": False}}
-    )
+    disabled = await client.patch(url, json={"settings": {"agent_evolution": {"enabled": False}}})
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["result"]["settings"]["agent_evolution"] == {"enabled": False}
     assert not await service.sessions.get_agent_evolution_enabled("default")
 
-    await service.runtime_config_manager.patch_account("default", {"agent_evolution": None})
+    reset = await client.patch(url, json={"settings": {"agent_evolution": None}})
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["result"]["settings"]["agent_evolution"] == {"enabled": True}
     assert await service.sessions.get_agent_evolution_enabled("default")
+    assert await service.runtime_config_manager.get_settings(ConfigScope.account("default")) == {}
 
 
 async def test_legacy_admin_configuration_routes_are_deprecated(settings_http):
@@ -447,13 +455,13 @@ async def test_legacy_admin_configuration_routes_are_deprecated(settings_http):
     assert "/api/v1/admin/settings" not in schema["paths"]
 
 
-async def test_account_settings_admin_api_rejects_non_allowlisted_fields(
+async def test_account_configuration_rejects_non_allowlisted_fields(
     settings_http,
 ):
     client, _ = settings_http
     response = await client.patch(
-        "/api/v1/admin/accounts/default/settings",
-        json={"root_api_key": "not-allowed"},
+        "/api/v1/admin/accounts/default/configuration",
+        json={"settings": {"root_api_key": "not-allowed"}},
     )
 
     assert response.status_code == 400

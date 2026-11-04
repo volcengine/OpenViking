@@ -228,12 +228,14 @@ async def patch_user_config(viking_fs: VikingFS, ctx: RequestContext, patch: dic
 
     def update(current: UserConfig) -> UserConfig:
         payload = current.model_dump(by_alias=True, exclude_none=True)
-        if "ttl" in patch:
-            payload = apply_three_state_patch(payload, {"ttl": patch["ttl"]})
+        payload = apply_three_state_patch(
+            payload, {field: patch[field] for field in ("add_targets", "ttl") if field in patch}
+        )
         if "memory_policy" in patch:
             # Keep the existing whole-policy replacement semantics.
             payload["memory_policy"] = patch["memory_policy"]
         candidate = _user_config_from_payload(payload)
+        current.add_targets = candidate.add_targets
         current.memory_policy = candidate.memory_policy
         current.ttl = candidate.ttl
         return current
@@ -277,34 +279,6 @@ async def delete_user_config(viking_fs: VikingFS, ctx: RequestContext) -> None:
     await _publish_ttl_change(ctx, UserConfig())
 
 
-async def read_user_add_targets(
-    viking_fs: VikingFS,
-    ctx: RequestContext,
-) -> AddTargetsConfig:
-    return (await read_user_config(viking_fs, ctx)).add_targets
-
-
-async def write_user_add_targets(
-    viking_fs: VikingFS,
-    ctx: RequestContext,
-    settings: AddTargetsConfig,
-) -> ResolvedAddTargets:
-    runtime = await validate_add_targets(settings, ctx=ctx, viking_fs=viking_fs)
-
-    def _set(user_config: UserConfig) -> None:
-        user_config.add_targets = settings
-
-    await update_user_config(viking_fs, ctx, _set)
-    return runtime
-
-
-async def delete_user_add_targets(viking_fs: VikingFS, ctx: RequestContext) -> None:
-    def _clear(user_config: UserConfig) -> None:
-        user_config.add_targets = AddTargetsConfig()
-
-    await update_user_config(viking_fs, ctx, _clear)
-
-
 async def read_user_memory_policy(
     viking_fs: VikingFS,
     ctx: RequestContext,
@@ -333,16 +307,9 @@ async def effective_resource_add_target(
     ctx: RequestContext,
     server_config: Optional[ServerConfig],
 ) -> Optional[str]:
-    user_settings = await read_user_add_targets(viking_fs, ctx)
-    if user_settings.resource_uri:
-        return await validate_resource_add_target(
-            user_settings.resource_uri, ctx=ctx, viking_fs=viking_fs
-        )
-    configured = getattr(
-        getattr(getattr(server_config, "user_config_defaults", None), "add_targets", None),
-        "resource_uri",
-        None,
-    )
+    configured = resolve_user_add_targets(
+        await read_user_config(viking_fs, ctx), server_config
+    ).resource_uri
     if configured:
         return await validate_resource_add_target(configured, ctx=ctx, viking_fs=viking_fs)
     return None
@@ -354,23 +321,22 @@ async def effective_skill_add_target(
     ctx: RequestContext,
     server_config: Optional[ServerConfig],
 ) -> Optional[str]:
-    user_settings = await read_user_add_targets(viking_fs, ctx)
-    if user_settings.skill_uri:
-        return await validate_skill_add_target(
-            user_settings.skill_uri, ctx=ctx, viking_fs=viking_fs
-        )
-    configured = getattr(
-        getattr(getattr(server_config, "user_config_defaults", None), "add_targets", None),
-        "skill_uri",
-        None,
-    )
+    configured = resolve_user_add_targets(
+        await read_user_config(viking_fs, ctx), server_config
+    ).skill_uri
     if configured:
         return await validate_skill_add_target(configured, ctx=ctx, viking_fs=viking_fs)
     return None
 
 
-def public_add_targets(settings: AddTargetsConfig) -> dict[str, Optional[str]]:
-    return {
-        "resource_uri": settings.resource_uri,
-        "skill_uri": settings.skill_uri,
-    }
+def resolve_user_add_targets(
+    user_config: UserConfig, server_config: Optional[ServerConfig]
+) -> AddTargetsConfig:
+    """Apply deployment defaults only where the User has no add target."""
+    defaults = (
+        server_config.user_config_defaults.add_targets if server_config else AddTargetsConfig()
+    )
+    return AddTargetsConfig(
+        resource_uri=user_config.add_targets.resource_uri or defaults.resource_uri,
+        skill_uri=user_config.add_targets.skill_uri or defaults.skill_uri,
+    )

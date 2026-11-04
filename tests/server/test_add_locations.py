@@ -7,6 +7,9 @@ import httpx
 import pytest
 
 from openviking.server.config import AddTargetsConfig, UserConfig, load_server_config
+from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import patch_user_config
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
@@ -68,8 +71,9 @@ async def _add_resource(client: httpx.AsyncClient, filename: str, **extra):
     return response.json()["result"]["root_uri"]
 
 
-async def test_add_locations_resource_server_default_and_precedence(
+async def test_resource_add_target_default_and_precedence(
     app,
+    service,
     user_role_client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
@@ -80,22 +84,18 @@ async def test_add_locations_resource_server_default_and_precedence(
     app.state.config.user_config_defaults = UserConfig(
         add_targets=AddTargetsConfig(resource_uri="viking://user/resources")
     )
-    assert (
-        app.state.config.user_config_defaults.add_targets.resource_uri == "viking://~/resources"
-    )
+    assert app.state.config.user_config_defaults.add_targets.resource_uri == "viking://~/resources"
 
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/")
 
-    # The one retained legacy PATCH spelling, proving the same normalization
-    # applies to old request bodies.
-    response = await client.patch(
-        "/api/v1/user-settings/add-locations",
-        json={"resource_uri": "viking://user/resources/project-a"},
+    user_ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.USER)
+    configured = await patch_user_config(
+        service.viking_fs,
+        user_ctx,
+        {"add_targets": {"resource_uri": "viking://~/resources/project-a"}},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()["result"]
-    assert body["effective"]["resource_uri"] == "viking://user/default/resources/project-a"
+    assert configured.add_targets.resource_uri == "viking://user/default/resources/project-a"
 
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/project-a/")
@@ -107,8 +107,7 @@ async def test_add_locations_resource_server_default_and_precedence(
     )
     assert root_uri == "viking://resources/one-off/sample"
 
-    response = await client.delete("/api/v1/user-settings/add-locations")
-    assert response.status_code == 200, response.text
+    await patch_user_config(service.viking_fs, user_ctx, {"add_targets": None})
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/")
     assert "/project-a/" not in root_uri

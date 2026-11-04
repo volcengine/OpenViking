@@ -23,7 +23,7 @@ from openviking.server.auth import (
     require_auth_root_or_admin,
     should_expose_user_key,
 )
-from openviking.server.config import UserConfig
+from openviking.server.config import AddTargetsConfig, ServerConfig, UserConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import (
     ACCOUNT_USER_ASSIGNABLE_ROLES,
@@ -33,6 +33,7 @@ from openviking.server.identity import (
 from openviking.server.models import Response
 from openviking.server.user_config import (
     read_user_config,
+    resolve_user_add_targets,
     validate_add_targets,
     validate_user_memory_policy,
     write_user_config,
@@ -182,12 +183,16 @@ def _authorize_account_config_patch(
         raise PermissionDeniedError(f"Only ROOT can modify account configuration fields: {fields}")
 
 
-def _visible_account_config(
+async def _account_configuration_settings(
     ctx: RequestContext,
-    settings: Mapping[str, object],
+    account_id: str,
 ) -> dict[str, object]:
+    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
+    settings["agent_evolution"] = {
+        "enabled": await get_service().sessions.get_agent_evolution_enabled(account_id)
+    }
     if ctx.role == Role.ROOT:
-        return dict(settings)
+        return settings
     return {
         key: value
         for key, value in settings.items()
@@ -196,6 +201,7 @@ def _visible_account_config(
 
 
 class UserSettingsPatch(BaseModel):
+    add_targets: Optional[AddTargetsConfig] = None
     memory_policy: Optional[dict] = None
     ttl: Optional[dict] = None
 
@@ -465,16 +471,16 @@ async def _check_user_exists(request: Request, account_id: str, user_id: str, ma
         raise NotFoundError(user_id, "user")
 
 
-def _user_settings_result(
-    account_id: str,
-    user_id: str,
+async def _user_settings_result(
+    ctx: RequestContext,
     user_config: UserConfig,
-    default_memory_policy: Optional[dict] = None,
+    server_config: ServerConfig,
+    viking_fs,
 ) -> dict:
     memory_policy_config = (
         user_config.memory_policy
         if user_config.memory_policy is not None
-        else default_memory_policy
+        else server_config.user_config_defaults.memory_policy
     )
     policy = MemoryPolicy.from_dict(memory_policy_config)
     known_memory_types = set(get_default_registry().list_names(include_disabled=False))
@@ -482,9 +488,16 @@ def _user_settings_result(
     memory_policy = policy.to_dict()
     if policy.memory_types is None:
         memory_policy["memory_types"] = sorted(known_memory_types)
+    add_targets = await validate_add_targets(
+        resolve_user_add_targets(user_config, server_config), ctx=ctx, viking_fs=viking_fs
+    )
     return {
-        "account_id": account_id,
-        "user_id": user_id,
+        "account_id": ctx.account_id,
+        "user_id": ctx.user.user_id,
+        "add_targets": {
+            "resource_uri": add_targets.resource_uri,
+            "skill_uri": add_targets.skill_uri,
+        },
         "memory_policy": memory_policy,
         "ttl": user_config.ttl.model_dump(by_alias=True, exclude_none=True)
         if user_config.ttl is not None
@@ -684,13 +697,12 @@ async def get_account_configuration(
     path: Optional[str] = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Return this account layer's explicit runtime configuration."""
+    """Return account settings with the effective Agent Evolution switch."""
     _check_account_access(ctx, account_id)
     manager = await _check_account_exists(request, account_id)
-    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
     result = {
         "account_id": account_id,
-        "settings": _visible_account_config(ctx, settings),
+        "settings": await _account_configuration_settings(ctx, account_id),
     }
     if path is not None:
         from openviking.config.ttl import resolve_effective_ttl, validate_ttl_root
@@ -849,12 +861,11 @@ async def patch_account_configuration(
             await _get_runtime_config_manager().patch_account(account_id, body.settings)
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
-    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
     return Response(
         status="ok",
         result={
             "account_id": account_id,
-            "settings": _visible_account_config(ctx, settings),
+            "settings": await _account_configuration_settings(ctx, account_id),
         },
     )
 
@@ -1150,7 +1161,7 @@ async def get_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Return the configured and effective memory policy for one User."""
+    """Return effective add targets and memory policy, plus explicit User TTL."""
     _check_account_access(ctx, account_id)
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
@@ -1165,11 +1176,11 @@ async def get_user_settings(
     user_config = await read_user_config(service.viking_fs, user_ctx)
     return Response(
         status="ok",
-        result=_user_settings_result(
-            account_id,
-            user_id,
+        result=await _user_settings_result(
+            user_ctx,
             user_config,
-            request.app.state.config.user_config_defaults.memory_policy,
+            request.app.state.config,
+            service.viking_fs,
         ),
     )
 
@@ -1183,7 +1194,7 @@ async def patch_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Patch the allowlisted User memory and TTL policies without restarting."""
+    """Patch User add targets, memory policy and TTL without restarting."""
     _check_account_access(ctx, account_id)
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
@@ -1202,11 +1213,11 @@ async def patch_user_settings(
     user_config = await patch_user_config(service.viking_fs, user_ctx, patch)
     return Response(
         status="ok",
-        result=_user_settings_result(
-            account_id,
-            user_id,
+        result=await _user_settings_result(
+            user_ctx,
             user_config,
-            request.app.state.config.user_config_defaults.memory_policy,
+            request.app.state.config,
+            service.viking_fs,
         ),
     )
 
