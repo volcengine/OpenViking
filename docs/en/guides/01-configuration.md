@@ -2318,6 +2318,14 @@ contract.
 
 Set the environment variable named by `resource_id_env` before starting the server. Its value identifies the deployed OpenViking resource and isolates otherwise identical account, user, and URI combinations. The sink creates the parent directory, appends events immediately, rotates the active file every UTC hour, and retains `backup_count` rotated files. It does not write to the default OpenViking stdout log.
 
+`resource_id_source` selects where `resource_id` comes from. The default
+`environment` reads the variable named by `resource_id_env`, as above. In a
+shared deployment where each Account maps one-to-one to a resource, set it to
+`account`: each record then uses its own event's `account_id` as `resource_id`,
+and `resource_id_env` is not required. A batch containing an event without an
+`account_id` is rejected and no record from it is written. `resource_uri`
+always records the `viking://` URI, never a storage path.
+
 Each line has the following form:
 
 ```json

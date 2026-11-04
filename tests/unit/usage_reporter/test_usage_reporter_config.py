@@ -106,6 +106,30 @@ def test_builtin_file_log_sink_is_built_from_config(tmp_path, monkeypatch):
     reporter.sinks[0].close()
 
 
+def test_account_file_log_sink_is_built_without_resource_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("OV_RESOURCE_ID", raising=False)
+
+    reporter = build_usage_reporter(
+        UsageReporterConfig(
+            enabled=True,
+            extractors=["memory_usage"],
+            sinks=[
+                {
+                    "type": "file_log",
+                    "config": {
+                        "path": str(tmp_path / "usage.log"),
+                        "resource_id_source": "account",
+                    },
+                }
+            ],
+        )
+    )
+
+    assert reporter is not None
+    assert isinstance(reporter.sinks[0], FileLogUsageSink)
+    reporter.sinks[0].close()
+
+
 async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     built_reporters = []
     assigned_reporters = []
