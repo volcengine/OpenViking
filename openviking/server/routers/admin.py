@@ -51,6 +51,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    UnavailableError,
     UnimplementedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -62,6 +63,37 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 _TTL_UNSUPPORTED_MESSAGE = "Redis-backed TTL is not enabled in this deployment."
+
+
+@router.get("/oauth/clients")
+@require_auth_root
+async def list_oauth_clients(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> Response:
+    """List instance-wide OAuth registrations; never expose credential hashes."""
+    store = getattr(request.app.state, "oauth_store", None)
+    if store is None:
+        raise UnavailableError(service="oauth", reason="OAuth subsystem is not enabled")
+    return Response(status="ok", result=await store.list_clients(offset=offset, limit=limit))
+
+
+@router.post("/oauth/clients/{client_id}/revoke")
+@require_auth_root
+async def revoke_oauth_client(
+    client_id: str,
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+) -> Response:
+    """Revoke an application's grants across accounts without removing its registration."""
+    store = getattr(request.app.state, "oauth_store", None)
+    if store is None:
+        raise UnavailableError(service="oauth", reason="OAuth subsystem is not enabled")
+    if await store.get_client(client_id) is None:
+        raise NotFoundError(resource=client_id, resource_type="OAuth client")
+    return Response(status="ok", result=await store.revoke_tokens(client_id=client_id))
 
 
 class CreateAccountRequest(BaseModel):

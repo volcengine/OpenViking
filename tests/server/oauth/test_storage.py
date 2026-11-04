@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 
 import pytest
@@ -301,7 +302,8 @@ async def test_access_token_expired_invisible(store):
 
 
 @pytest.mark.asyncio
-async def test_revoke_tokens_cascades(store):
+@pytest.mark.parametrize("fail_midway", [False, True])
+async def test_revoke_tokens_cascades(store, fail_midway):
     """Revoking a user wipes their access, refresh, and unused codes."""
     await store.insert_access(
         token_plain="at-1",
@@ -371,6 +373,19 @@ async def test_revoke_tokens_cascades(store):
         role="user",
         verified_key_fp=_FP_OTHER,
     )
+
+    if fail_midway:
+        store._conn.execute(
+            "CREATE TRIGGER fail_revoke BEFORE DELETE ON oauth_pending_authorizations "
+            "BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END"
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="injected storage failure"):
+            await store.revoke_tokens(account_id="acct", user_id="alice")
+        assert await store.load_access("at-1") is not None
+        assert await store.peek_refresh("rt-1") is not None
+        assert await store.peek_auth_code("code-alice") is not None
+        assert await store.load_pending_authorization(alice_pending) is not None
+        store._conn.execute("DROP TRIGGER fail_revoke")
 
     counts = await store.revoke_tokens(account_id="acct", user_id="alice")
     assert counts["access_tokens_revoked"] == 1

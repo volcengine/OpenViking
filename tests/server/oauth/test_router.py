@@ -41,6 +41,7 @@ from openviking.server.oauth.provider import (
 )
 from openviking.server.oauth.router import router as oauth_router
 from openviking.server.oauth.storage import OAuthStore
+from openviking.server.routers.admin import router as admin_router
 from openviking_cli.exceptions import OpenVikingError
 
 
@@ -117,6 +118,7 @@ async def app_with_oauth(tmp_path):
 
     app.dependency_overrides[get_request_context] = _fixed_ctx
     app.include_router(oauth_router)
+    app.include_router(admin_router)
 
     sdk_routes = create_auth_routes(
         provider=provider,
@@ -153,6 +155,155 @@ def _pkce_pair() -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # DCR + metadata
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.GLOBAL, Role.ROOT])
+async def test_admin_clients_require_root(app_with_oauth, client, role):
+    from openviking.server.identity import RequestContext
+    from openviking_cli.session.user_id import UserIdentifier
+
+    app, store, _ = app_with_oauth
+    await store.register_client(client_id="managed", redirect_uris=["https://x.test/cb"])
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("acct1", "alice"), role=role
+    )
+    expected = 200 if role == Role.ROOT else 403
+    assert (await client.get("/api/v1/admin/oauth/clients")).status_code == expected
+    response = await client.post("/api/v1/admin/oauth/clients/managed/revoke")
+    assert response.status_code == expected
+    if role == Role.ROOT:
+        assert (await client.post("/api/v1/admin/oauth/clients/missing/revoke")).status_code == 404
+        app.state.oauth_store = None
+        assert (await client.get("/api/v1/admin/oauth/clients")).status_code == 503
+        assert (await client.post("/api/v1/admin/oauth/clients/managed/revoke")).status_code == 503
+        app.state.oauth_store = store
+        app.state.api_key_manager = None
+        assert (await client.get("/api/v1/admin/oauth/clients")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_client_revocation_is_scoped_and_keeps_registration(app_with_oauth, client):
+    from openviking.server.identity import RequestContext
+    from openviking_cli.session.user_id import UserIdentifier
+
+    app, store, provider = app_with_oauth
+    user_context = app.dependency_overrides[get_request_context]
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("acct1", "alice"), role=Role.ROOT
+    )
+    pending_ids = {}
+    for client_id in ("managed", "other"):
+        await store.register_client(
+            client_id=client_id,
+            client_name=client_id,
+            redirect_uris=["https://x.test/cb"],
+            client_secret="never-expose-this",
+        )
+        for account_id in ("acct1", "acct2"):
+            identity = {
+                "client_id": client_id,
+                "account_id": account_id,
+                "user_id": "alice",
+                "role": "user",
+                "scope": "mcp",
+                "resource": None,
+                "authorizing_key_fp": "f" * 64,
+            }
+            await store.insert_access(
+                token_plain=f"ovat_{client_id}-{account_id}", ttl_seconds=3600, **identity
+            )
+            await store.insert_refresh(
+                token_plain=f"ovrt_{client_id}-{account_id}", ttl_seconds=3600, **identity
+            )
+            await store.insert_auth_code(
+                code_plain=f"code-{client_id}-{account_id}",
+                redirect_uri="https://x.test/cb",
+                code_challenge="ch",
+                code_challenge_method="S256",
+                ttl_seconds=300,
+                **identity,
+            )
+        pending_ids[client_id] = await store.create_pending_authorization(
+            client_id=client_id,
+            redirect_uri="https://x.test/cb",
+            redirect_uri_provided_explicitly=True,
+            code_challenge="ch",
+            scopes=["mcp"],
+            resource=None,
+            state=None,
+            display_code=client_id,
+        )
+    for insert_token in (store.insert_access, store.insert_refresh):
+        await insert_token(token_plain="expired-other", ttl_seconds=-1, **identity)
+    listing = (await client.get("/api/v1/admin/oauth/clients?limit=1")).json()["result"]
+    assert listing["total"] == 2 and listing["has_more"]
+    assert listing["items"][0]["active_access_tokens"] == 2
+    assert listing["items"][0]["active_refresh_tokens"] == 2
+    assert set(listing["items"][0]) == {
+        "client_id",
+        "client_name",
+        "redirect_uris",
+        "scope",
+        "token_endpoint_auth_method",
+        "created_at",
+        "active_access_tokens",
+        "active_refresh_tokens",
+    }
+    page2 = (await client.get("/api/v1/admin/oauth/clients?limit=1&offset=1")).json()["result"]
+    assert not page2["has_more"]
+    assert page2["items"][0]["client_id"] != listing["items"][0]["client_id"]
+    revoked = await client.post("/api/v1/admin/oauth/clients/managed/revoke")
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["result"] == {
+        "access_tokens_revoked": 2,
+        "refresh_tokens_revoked": 2,
+        "codes_revoked": 2,
+        "pending_authorizations_revoked": 1,
+    }
+    for account_id in ("acct1", "acct2"):
+        assert await provider.load_access_token(f"ovat_managed-{account_id}") is None
+        assert await provider.load_access_token(f"ovat_other-{account_id}") is not None
+        assert await store.peek_auth_code(f"code-managed-{account_id}") is None
+        assert await store.peek_auth_code(f"code-other-{account_id}") is not None
+        assert await store.peek_refresh(f"ovrt_other-{account_id}") is not None
+    assert await store.load_pending_authorization(pending_ids["managed"]) is None
+    assert await store.load_pending_authorization(pending_ids["other"]) is not None
+    items = (await client.get("/api/v1/admin/oauth/clients")).json()["result"]["items"]
+    managed = next(item for item in items if item["client_id"] == "managed")
+    assert managed["active_access_tokens"] == managed["active_refresh_tokens"] == 0
+    refreshed = await client.post(
+        "/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "ovrt_managed-acct1",
+            "client_id": "managed",
+        },
+    )
+    assert refreshed.status_code == 400
+    repeated = await client.post("/api/v1/admin/oauth/clients/managed/revoke")
+    assert set(repeated.json()["result"].values()) == {0}
+    assert await provider.get_client("managed") is not None
+    app.dependency_overrides[get_request_context] = user_context
+    _, pending_id, _, verifier = await _start_authorize(
+        client, client_id="managed", redirect_uri="https://x.test/cb"
+    )
+    verify = await client.post("/api/v1/auth/oauth-verify", json={"pending_id": pending_id})
+    assert verify.status_code == 200, verify.text
+    status = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
+    auth_code = status.json()["redirect_url"].split("code=")[1].split("&")[0]
+    exchanged = await client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "client_id": "managed",
+            "redirect_uri": "https://x.test/cb",
+            "code_verifier": verifier,
+        },
+    )
+    assert exchanged.status_code == 200, exchanged.text
+    assert await provider.load_access_token(exchanged.json()["access_token"]) is not None
 
 
 @pytest.mark.asyncio
@@ -287,18 +438,21 @@ async def test_authorize_scope_mcp_for_legacy_scopeless_client(app_with_oauth, c
 # ---------------------------------------------------------------------------
 
 
-async def _start_authorize(client, *, redirect_uri="https://claude.ai/cb", state=None):
+async def _start_authorize(
+    client, *, redirect_uri="https://claude.ai/cb", state=None, client_id=None
+):
     """Helper: register a client, kick off /authorize, return (client_id, pending_id, page_url, verifier)."""
-    reg = await client.post(
-        "/register",
-        json={
-            "redirect_uris": [redirect_uri],
-            "client_name": "Claude",
-            "token_endpoint_auth_method": "none",
-        },
-    )
-    assert reg.status_code == 201, reg.text
-    client_id = reg.json()["client_id"]
+    if client_id is None:
+        reg = await client.post(
+            "/register",
+            json={
+                "redirect_uris": [redirect_uri],
+                "client_name": "Claude",
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        assert reg.status_code == 201, reg.text
+        client_id = reg.json()["client_id"]
     verifier, challenge = _pkce_pair()
     params = {
         "client_id": client_id,
