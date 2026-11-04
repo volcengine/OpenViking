@@ -500,3 +500,69 @@ def test_skill_loader_preserves_metadata():
     assert SkillLoader.parse(skill_md)["metadata"] == {
         "vikingbot": {"requires": {"bins": ["lark-cli"]}}
     }
+
+
+@pytest.mark.asyncio
+async def test_skill_operation_updater_preserves_metadata_on_update():
+    existing_skill_md = """---
+name: lark-ov-compile-progress
+description: Track OV Compile progress
+allowed-tools: Read Bash(git:*)
+metadata:
+  vikingbot:
+    requires:
+      bins:
+      - lark-cli
+tags:
+- session-derived
+---
+
+## 核心规范
+- Use lark-cli.
+"""
+    viking_fs = MagicMock()
+    viking_fs.read_file = AsyncMock(return_value=existing_skill_md)
+
+    processor = MagicMock()
+    processor.process_skill = AsyncMock(
+        return_value={"root_uri": "viking://user/default/skills/lark-ov-compile-progress"}
+    )
+    updater = SkillOperationUpdater(
+        registry=_build_skill_registry(),
+        skill_processor=processor,
+        viking_fs=viking_fs,
+    )
+    uri = "viking://user/default/skills/lark-ov-compile-progress/SKILL.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_fields={
+                    "skill_name": "lark-ov-compile-progress",
+                    "description": "Track OV Compile progress accurately",
+                    "content": {
+                        "blocks": [
+                            {
+                                "search": "- Use lark-cli.",
+                                "replace": "- Use lark-cli.\n- Report status.",
+                            }
+                        ]
+                    },
+                },
+                memory_type="session_skills",
+                uris=[uri],
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    await updater.apply_operations(
+        operations,
+        RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+    )
+
+    call = processor.process_skill.await_args.kwargs
+    assert call["data"]["allowed_tools"] == ["Read", "Bash(git:*)"]
+    assert call["data"]["metadata"] == {"vikingbot": {"requires": {"bins": ["lark-cli"]}}}
+
