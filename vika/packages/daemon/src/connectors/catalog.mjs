@@ -95,6 +95,10 @@ const MANIFESTS = Object.freeze({
   email: connectorManifest({
     name: 'email',
     version: EMAIL_VERSION,
+    // No credentials travel over the protocol: the mailbox address, the client
+    // password or the OAuth2 refresh token live in the account file the worker
+    // reads and writes itself, so there is nothing for these schemas to
+    // describe. They stay the empty shape the protocol documents.
     capabilities: ['events', 'actions'],
     actions: {
       'message.reply': { content: ['markdown'], approval: true },

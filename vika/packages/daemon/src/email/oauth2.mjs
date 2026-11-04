@@ -37,6 +37,9 @@ function mailTokens(data, previousRefreshToken = '', now = Date.now()) {
     accessToken: data.access_token,
     refreshToken: typeof data.refresh_token === 'string' && data.refresh_token
       ? data.refresh_token : previousRefreshToken,
+    // `expires_in` is seconds. Absent, zero and unparseable all mean "not told",
+    // for which an hour is the documented default; the floor keeps a server that
+    // answers a very small number from producing an already-expired token.
     expiresAt: now + Math.max(60, Number(data.expires_in) || 3_600) * 1_000,
   };
 }
@@ -44,8 +47,13 @@ function mailTokens(data, previousRefreshToken = '', now = Date.now()) {
 // `tenant` and `clientId` are the owner's own Entra application; both end up in
 // a URL, so only characters a tenant or an app id contains may pass.
 export function endpointFor(oauth2, name) {
-  const tenant = String(oauth2?.tenant || 'common').trim();
-  const clientId = String(oauth2?.clientId ?? '').trim();
+  // Only an absent tenant means `common`; a value of the wrong type is a
+  // mistake and must not be silently replaced by a different endpoint.
+  const raw = oauth2?.tenant;
+  const tenant = raw === undefined || raw === null || raw === '' ? 'common'
+    : typeof raw === 'string' ? raw.trim() : null;
+  if (tenant === null) throw new Error('OAuth2 tenant is invalid');
+  const clientId = typeof oauth2?.clientId === 'string' ? oauth2.clientId.trim() : '';
   // `.` and `..` are path segments, not tenants: they pass the character class
   // and then the URL quietly loses the tenant entirely. A tenant has to have a
   // name in it, so the dots may not be all of it.
@@ -120,8 +128,13 @@ export async function waitForDeviceCode(oauth2, code, {
   const { clientId, url } = endpointFor(oauth2, 'token');
   let intervalMs = Math.max(1_000, Number(code.intervalMs) || 5_000);
   for (;;) {
+    const remaining = code.expiresAt - now();
+    if (remaining <= 0) throw new Error('The Microsoft sign-in code expired; start the sign-in again');
+    // Waiting the whole interval when less than that is left would hold the
+    // owner in a sign-in that has already lapsed. `intervalMs` only grows, so
+    // this is the only thing that keeps `slow_down` from overshooting.
+    await sleep(Math.min(intervalMs, remaining));
     if (now() >= code.expiresAt) throw new Error('The Microsoft sign-in code expired; start the sign-in again');
-    await sleep(intervalMs);
     const { ok, status, data } = await post(fetchImpl, url, {
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
       client_id: clientId,
@@ -174,8 +187,11 @@ export function writePrivateJson(file, value) {
   }
 }
 
-// Only the rotated refresh token changes; everything else in the account file
-// (the owner's `name`, a `username`, the servers) is kept as written.
+// Rewrites the `oauth2` block and leaves every other key as it is, so the
+// owner's `name`, a `username` and the servers survive a refresh. The block
+// itself is written from the three fields below rather than merged: a refresh
+// only ever learns those three, and copying anything else forward would pin a
+// stale value in place.
 //
 // `onlyIfRefreshedFrom` guards against a stale write: a refresh spends one
 // refresh token and gets a new one, and a sign-in done in the meantime leaves a

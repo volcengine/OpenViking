@@ -2210,3 +2210,58 @@ describe('a half-converted account file still starts', () => {
       'the leftover password was not reported');
   });
 });
+
+// The device-code loop waits for the owner to finish signing in, so every
+// detail of how long it waits is something the owner feels. A code that has
+// lapsed must be reported when it lapses, not one interval later.
+describe('the device-code wait respects its own deadline', () => {
+  function clocked() {
+    let now = 1_000_000;
+    const slept = [];
+    return {
+      now: () => now,
+      slept,
+      sleep: async (ms) => { slept.push(ms); now += ms; },
+      advance: (ms) => { now += ms; },
+      elapsed: () => now - 1_000_000,
+    };
+  }
+
+  it('never sleeps past the code expiry', async () => {
+    const c = clocked();
+    const code = { deviceCode: 'd', clientId: 'app-id', expiresAt: c.now() + 3_000, intervalMs: 5_000 };
+    const fetch = async () => ({ ok: false, status: 400, text: async () => JSON.stringify({ error: 'authorization_pending' }) });
+    const error = await waitForDeviceCode({ tenant: 'common', clientId: 'app-id' }, code,
+      { fetch, now: c.now, sleep: c.sleep }).catch((caught) => caught);
+    assert.match(error.message, /expired/);
+    // The interval was 5s but only 3s of code remained.
+    assert.deepEqual(c.slept, [3_000], `slept past the deadline: ${JSON.stringify(c.slept)}`);
+    assert.equal(c.elapsed(), 3_000, 'the wait ended later than the code did');
+  });
+
+  it('does not call the endpoint for a code that has already lapsed', async () => {
+    const c = clocked();
+    let calls = 0;
+    const code = { deviceCode: 'd', clientId: 'app-id', expiresAt: c.now() - 1, intervalMs: 1_000 };
+    const fetch = async () => { calls += 1; return { ok: false, status: 400, text: async () => '{}' }; };
+    const error = await waitForDeviceCode({ tenant: 'common', clientId: 'app-id' }, code,
+      { fetch, now: c.now, sleep: c.sleep }).catch((caught) => caught);
+    assert.match(error.message, /expired/);
+    assert.equal(calls, 0, 'a lapsed code was still sent to the endpoint');
+  });
+});
+
+// A tenant or client id of the wrong type used to be replaced by `common` or an
+// empty string, which called a different endpoint than the file asked for.
+describe('a malformed tenant is refused, not replaced', () => {
+  it('refuses a tenant that is not a string', () => {
+    for (const tenant of [0, false, [], {}]) {
+      assert.throws(() => endpointFor({ tenant, clientId: 'app-id' }, 'token'),
+        /tenant is invalid/, `tenant ${JSON.stringify(tenant)} was replaced`);
+    }
+  });
+
+  it('still defaults an absent tenant to common', () => {
+    assert.match(endpointFor({ clientId: 'app-id' }, 'token').url, /\/common\/oauth2\/v2\.0\/token$/);
+  });
+});
