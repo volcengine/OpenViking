@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use ragfs::cache_runtime::{
     CacheError, CacheRuntime, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, MemoryMockProvider, ScriptRequest, SetCondition, SetOptions, SetResult,
+    ListMoveRequest, MemoryMockProvider, RedisProviderConfig, ScriptRequest, SetCondition,
+    SetOptions, SetResult,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,6 +59,57 @@ async fn async_runtime_supports_the_primitive_contract() {
             .unwrap(),
         vec![None, None, None]
     );
+}
+
+#[tokio::test]
+async fn async_runtime_unlink_removes_every_memory_type() {
+    let provider = Arc::new(MemoryMockProvider::new());
+    let runtime = CacheRuntime::memory_with_provider(Arc::clone(&provider));
+
+    runtime
+        .set(
+            "string",
+            Bytes::from_static(b"value"),
+            SetOptions::default(),
+        )
+        .await
+        .unwrap();
+    runtime
+        .hset("hash", "field", Bytes::from_static(b"value"))
+        .await
+        .unwrap();
+    provider
+        .insert_set_members("set", vec![Bytes::from_static(b"member")])
+        .await;
+    runtime.zadd("zset", 1.0, "member").await.unwrap();
+    runtime
+        .lpush("list", vec![Bytes::from_static(b"item")])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        runtime
+            .unlink(&[
+                "string".to_string(),
+                "hash".to_string(),
+                "set".to_string(),
+                "zset".to_string(),
+                "list".to_string(),
+                "missing".to_string(),
+            ])
+            .await
+            .unwrap(),
+        5
+    );
+    assert_eq!(provider.unlink_count(), 1);
+    assert_eq!(runtime.get("string").await.unwrap(), None);
+    assert_eq!(runtime.hget("hash", "field").await.unwrap(), None);
+    assert!(!runtime.sismember("set", b"member").await.unwrap());
+    assert_eq!(
+        runtime.zscan_match("zset", "*", 100).await.unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(runtime.llen("list").await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -178,6 +230,56 @@ async fn set_queries_return_membership_members_and_cardinality() {
         members,
         vec![Bytes::from_static(b"alpha"), Bytes::from_static(b"beta")]
     );
+}
+
+#[tokio::test]
+async fn hash_and_sorted_set_commands_follow_query_cache_contract() {
+    let runtime = CacheRuntime::memory();
+
+    assert_eq!(runtime.hget("bucket", "page").await.unwrap(), None);
+    assert_eq!(
+        runtime
+            .hset("bucket", "page", Bytes::from_static(b"one"))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .hset("bucket", "page", Bytes::from_static(b"two"))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        runtime.hget("bucket", "page").await.unwrap(),
+        Some(Bytes::from_static(b"two"))
+    );
+
+    assert_eq!(runtime.zadd("idx", 10.0, "bucket").await.unwrap(), 1);
+    assert_eq!(runtime.zadd("idx", 20.0, "bucket").await.unwrap(), 0);
+    assert_eq!(runtime.zadd("idx", 30.0, "other").await.unwrap(), 1);
+    assert_eq!(
+        runtime.zscan_match("idx", "buck*", 100).await.unwrap(),
+        vec!["bucket".to_string()]
+    );
+    assert_eq!(
+        runtime.zrem("idx", &["bucket".to_string()]).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime.zrem("idx", &["other".to_string()]).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime.zscan_match("idx", "*", 100).await.unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn redis_provider_default_ttl_is_300_seconds() {
+    assert_eq!(RedisProviderConfig::default().default_ttl_seconds, 300);
 }
 
 #[tokio::test]
@@ -333,6 +435,20 @@ fn sync_and_async_facades_share_one_provider_instance() {
     .unwrap();
 
     assert_eq!(value, Some(Bytes::from_static(b"value")));
+    assert_eq!(sync.unlink(&["shared".to_string()]).unwrap(), 1);
+
+    let async_runtime = runtime.clone();
+    let value = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move { async_runtime.get("shared").await.unwrap() })
+    })
+    .join()
+    .unwrap();
+
+    assert_eq!(value, None);
 }
 
 #[test]

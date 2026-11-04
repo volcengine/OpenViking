@@ -412,6 +412,25 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | PUT | `/api/v1/skills/{skill_name}` | Update a skill |
 | DELETE | `/api/v1/skills/{skill_name}` | Delete a skill |
 
+### [MCP and Live Context](26-mcp-live-context.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/mcps/validate` | Validate an MCP server and discover tools without saving |
+| POST | `/api/v1/mcps` | Register an MCP server and publish its tool catalog |
+| GET | `/api/v1/mcps` | List registered MCP servers |
+| GET | `/api/v1/mcps/{name}` | Read an MCP server and its current tool definitions |
+| GET | `/api/v1/mcps/status` | Check whether an MCP server is reachable |
+| POST | `/api/v1/mcps/{name}/sync` | Synchronize tools and report affected live context mounts |
+| DELETE | `/api/v1/mcps/{name}` | Remove an MCP server and its tool catalog |
+| POST | `/api/v1/mcps/find` | Search MCP tools semantically |
+| POST | `/api/v1/mcps/invoke` | Invoke an MCP tool |
+| POST | `/api/v1/mcps/mount` | Create or replace one MCP-backed live context node |
+| POST | `/api/v1/mcps/batch-mount` | Create or replace live context nodes in a batch |
+| DELETE | `/api/v1/mcps/mount` | Remove one mount and its node |
+| POST | `/api/v1/mcps/batch-unmount` | Remove mounts and nodes in a batch |
+| GET | `/api/v1/mcps/mounts` | List mounts for an MCP server or tool |
+
 ### [Sessions](05-sessions.md), [Memory](16-memory.md), and [Agent Evolution](19-agent-evolution.md)
 
 | Method | Path | Description |
@@ -534,7 +553,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List group members |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add group members |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a group member |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove group members |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
 | GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in content |
@@ -624,4 +643,4 @@ Choose a reference page by operation type:
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration, ACL, and privacy configuration |
-| Protocols & Extensions | OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |
+| Protocols & Extensions | MCP and live context, OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |
