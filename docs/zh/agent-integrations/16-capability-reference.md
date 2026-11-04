@@ -276,11 +276,11 @@ OpenClaw 和 Hermes 把注入的召回内容限制在 4,000 字符，放不下�
 | `client` | 使用本地压缩器；仅 Claude Code 和 Codex |
 | `auto` | Claude Code 和 Codex 有本地压缩器时使用它，否则发送 `rewrite: "auto"`。其他集成发送 `rewrite: "auto"` |
 
-Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端摘要的有 Claude Code、Codex、OpenCode、DSH、pi、Cursor、TRAE、TRAE CN、ZCode、OpenClaw 和 Hermes 外部插件，且需要服务端支持 context-search rewrite。Hermes 内置 provider 不支持召回摘要。旧值 `1` 和 `0` 分别等同于 `auto` 和 `off`。`no_relevant` 结果会取消本轮注入，插件不能回退到原始块。
+Codex 默认 `auto`，Claude Code 和其他集成默认 `off`。支持服务端摘要的有 Claude Code、Codex、OpenCode、DSH、pi、Cursor、TRAE、TRAE CN、ZCode、OpenClaw 和 Hermes 外部插件，且需要服务端支持 context-search rewrite。Hermes 内置 provider 不支持召回摘要。旧值 `1` 和 `0` 分别等同于 `auto` 和 `off`。`no_relevant` 结果会取消本轮注入，插件不能回退到原始块。
 
 本地压缩器：
 
-- **Claude Code** 用 `claude --version` 检测 `claude`（结果缓存 7 天），执行 `claude -p --model sonnet --effort low --strict-mcp-config`。子进程超时默认 110 秒（`recallCompressTimeoutMs`），但 60 秒的提问 hook 可能更早结束它。少于 1,500 字符的输入不压缩。引用的 URI 按编辑距离匹配回真实的结果 URI，无法匹配的要点会被丢弃。失败时注入本地格式化的结果，或注入渲染好的块。
+- **Claude Code** 用 `claude --version` 检测 `claude`（结果缓存 7 天），执行 `claude -p --model haiku --effort low --strict-mcp-config`（模型可用 `recallCompressModel` 覆盖）。子进程超时默认 110 秒（`recallCompressTimeoutMs`），但 60 秒的提问 hook 可能更早结束它，因此子进程必须在 hook 内完成，digest 才能进入本轮。少于 1,500 字符的输入不压缩。引用的 URI 按编辑距离匹配回真实的结果 URI，无法匹配的要点会被丢弃。失败时注入本地格式化的结果，或注入渲染好的块。
 - **Codex** 从 `~/.codex/models_cache.json` 选择模型（优先 `gpt-5.3-codex-spark`，其次低 effort 的 `gpt-5.6-luna`；缓存 7 天），在只读的临时沙箱中执行 `codex exec`，默认超时 110 秒。运行失败一次后，本地压缩停用到下一次 `SessionStart`。输出上限 4,000 字符；失败时的回退方式与 Claude Code 相同。
 
 这些设置只作用于自动召回。模型显式调用 MCP `search` 时，使用它自己传入的参数。旧服务端的回退和宿主时间预算见[共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)和[调整召回延迟](./19-recall-tuning.md)。

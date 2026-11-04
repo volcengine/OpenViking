@@ -180,7 +180,7 @@ Upgrading from the path-derived peer needs no action: memories written under the
 | `OPENVIKING_RECALL_DEDUP_TURNS`        | `5`          | Cross-turn cooldown: URIs served in the last N turns are skipped          |
 | `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | (off) | Event memories keep their score for this period (`7d`, `12h`) and decay after it, so older events stop outranking recent ones. Sent as `events_time_decay_protection`. |
 | `OPENVIKING_RECALL_QUERY_EXPANSION`    | `auto`       | `auto` lets the server widen short prompts using session context; `off` disables it |
-| `OPENVIKING_RECALL_COMPRESS`           | `auto`       | Digest compression: `off`, `client` (host CLI), `server`, or `auto` (local first, server fallback) |
+| `OPENVIKING_RECALL_COMPRESS`           | `off`        | Digest compression: `off`, `client` (host CLI), `server`, or `auto` (local first, server fallback) |
 | `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`        | Digest bullet ceiling                                                     |
 | `OPENVIKING_SCORE_THRESHOLD`           | `0.35`       | Min relevance score (0–1)                                                |
 | `OPENVIKING_MIN_QUERY_LENGTH`          | `3`          | Skip recall for very short queries                                       |
@@ -369,7 +369,9 @@ Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can neve
 
 ### Digest compression
 
-`recallCompress` decides where the digest is produced and defaults to `auto`. `client` always compresses locally through `claude -p` (Haiku with low effort by default), keeping the token cost on your own subscription. `server` asks OpenViking for the digest. `auto` prefers local and falls back to the server when no healthy host CLI is found. Compressor execution or output-validation failures fall back to the uncompressed context block; an exact `NO_RELEVANT_MEMORY` response from either compressor is a successful empty result and injects nothing. The compressor subprocess runs with all OpenViking hooks disabled so it cannot recurse. The former `OPENVIKING_RECALL_REWRITE` environment variable and `recallRewrite` config key remain supported as lower-priority compatibility aliases.
+`recallCompress` decides where the digest is produced and defaults to `off`. `client` always compresses locally through `claude -p` (Haiku with low effort by default), keeping the token cost on your own subscription. `server` asks OpenViking for the digest. `auto` prefers local and falls back to the server when no healthy host CLI is found.
+
+Compression is opt-in on Claude Code because the local spawn has to finish inside the `UserPromptSubmit` hook, which Claude Code caps at 60 seconds. The compressor's own budget is derived from `recallTimeoutMs` (110s by default) and the spawn assumes a `haiku` the endpoint serves, so on a gateway that routes to a different model the spawn can outlive the hook and take the turn's recall block with it. Set `client` or `auto` — and `recallCompressModel` if `haiku` is not served — once the host CLI is known to compress within that budget. Compressor execution or output-validation failures fall back to the uncompressed context block; an exact `NO_RELEVANT_MEMORY` response from either compressor is a successful empty result and injects nothing. The compressor subprocess runs with all OpenViking hooks disabled so it cannot recurse. The former `OPENVIKING_RECALL_REWRITE` environment variable and `recallRewrite` config key remain supported as lower-priority compatibility aliases.
 
 ### Legacy `claude_code` block in `ov.conf`
 
