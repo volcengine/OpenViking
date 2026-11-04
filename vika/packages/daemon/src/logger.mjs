@@ -27,7 +27,12 @@ export function redactSensitive(value) {
     // every keyword rule above. Where the `=`, `.` and `@` of the plaintext land
     // in the encoding depends on the name's length, so this decodes a candidate
     // rather than matching a fixed prefix.
-    .replace(/\b[A-Za-z0-9+/]{16,}={0,2}/g, (blob) => (decodesToSasl(blob) ? '[REDACTED]' : blob))
+    // A SASL XOAUTH2 string is base64 of `user=...`, so it begins with the
+    // encoding of those five bytes — `dXNlcj` — whatever the login name is.
+    // Anchoring on that is what makes the match start at the string rather than
+    // at whatever base64-looking text sits before it: `/` is in the alphabet,
+    // so a candidate that began a character early would decode out of step.
+    .replace(/dXNlcj[A-Za-z0-9+/]{8,}={0,2}/g, (blob) => (decodesToSasl(blob) ? '[REDACTED]' : blob))
     .replace(/\b(?:sk|t)-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED]')
     .replace(/\b(?:github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{12,})\b/g, '[REDACTED]');
 }

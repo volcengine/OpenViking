@@ -2139,17 +2139,74 @@ describe('a connection that never answers does not hang', () => {
 // keeps it that way if something ever does.
 describe('a SASL XOAUTH2 string is redacted like the token it carries', () => {
   it('redacts the blob and leaves the rest of the line', () => {
-    const token = 'secret-access-token-9f3a';
-    const sasl = xoauth2('me@example.com', token);
+    const sasl = xoauth2('me@example.com', 'secret-access-token-9f3a');
     const cleaned = redactSensitive(`C: A01 AUTHENTICATE XOAUTH2 ${sasl}`);
     assert.ok(!cleaned.includes(sasl), `the SASL string survived: ${cleaned}`);
-    // The decoded form carries the token, so it must not be recoverable either.
-    assert.ok(!Buffer.from(sasl, 'base64').toString('utf8').startsWith('user=') || !cleaned.includes(sasl));
     assert.match(cleaned, /AUTHENTICATE XOAUTH2 \[REDACTED\]/);
     assert.match(cleaned, /^C: A01 /, 'the line lost its context');
   });
 
+  it('finds the blob wherever it starts on the line', () => {
+    // `/` is in the base64 alphabet, so a match a character early decodes out
+    // of step and the string slips through; each of these places it can sit.
+    for (const [where, line] of [
+      ['after a command word', `AUTHENTICATE XOAUTH2 ${xoauth2('me@example.com', 'tok-1')}`],
+      ['after a slash', `/x/${xoauth2('me@example.com', 'tok-2')}`],
+      ['at the start of a line', `${xoauth2('me@example.com', 'tok-3')} trailing`],
+      ['after a quote', `'${xoauth2('me@example.com', 'tok-4')}'`],
+    ]) {
+      const cleaned = redactSensitive(line);
+      assert.ok(cleaned.includes('[REDACTED]'), `not redacted ${where}: ${cleaned}`);
+      for (const token of ['tok-1', 'tok-2', 'tok-3', 'tok-4']) {
+        assert.ok(!cleaned.includes(token), `${token} survived ${where}`);
+      }
+    }
+  });
+
+  it('leaves base64 that is not a SASL string alone', () => {
+    // A JWT and a hash are base64-ish too, and redacting them would cost the
+    // log the detail it exists to keep.
+    for (const line of ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+      `sha256:${'a'.repeat(64)}`]) {
+      assert.equal(redactSensitive(line), line);
+    }
+  });
+
   it('still redacts the token when it is written out plainly', () => {
     assert.ok(!redactSensitive('auth=Bearer secret-access-token-9f3a').includes('secret-access-token-9f3a'));
+  });
+});
+
+// Moving a mailbox to OAuth2 is done by editing the file by hand, as the
+// documentation describes, so a leftover `password` beside the new `oauth2`
+// block is the normal shape of a half-finished edit. It must not stop the
+// mailbox: it worked before the edit and the credential it now uses is right.
+describe('a half-converted account file still starts', () => {
+  it('uses oauth2 and reports the leftover password instead of refusing', async (t) => {
+    const imap = await fakeImap(t, { oauth: ['token-1'] });
+    const smtp = await fakeSmtp(t, { oauth: ['token-1'] });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-half-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const configFile = path.join(directory, 'account.json');
+    fs.writeFileSync(configFile, JSON.stringify({
+      address: ME, password: 'the-old-password',
+      oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+      imap: { host: '127.0.0.1', port: imap.port },
+      smtp: { host: '127.0.0.1', port: smtp.port, secure: true },
+    }), { mode: 0o600 });
+
+    const warnings = [];
+    const logger = { ...quiet, warn: (event, fields) => warnings.push({ event, fields }) };
+    const endpoint = fakeTokenEndpoint({ tokens: [{ accessToken: 'token-1', refreshToken: 'refresh-2' }] });
+    const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000 },
+      null, logger, { connectTls: plainTls, fetch: endpoint.fetch });
+    t.after(() => client.stop().catch(() => {}));
+
+    // The check passes, so the mailbox keeps working.
+    await client.preflight();
+    // The account is the OAuth2 one, and the leftover is named once.
+    assert.equal(client.account.password, undefined, 'the unused password was kept as the credential');
+    assert.deepEqual(warnings.filter((entry) => entry.event === 'email_unused_password').length, 1,
+      'the leftover password was not reported');
   });
 });

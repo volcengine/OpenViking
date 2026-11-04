@@ -234,11 +234,15 @@ export async function askEmail({ prompter, previous = null, fixed = null, taken 
       }
     } catch (error) {
       // A mailbox that signs in but refuses IMAP is not a login failure: the
-      // credential was accepted, so saying "login failed" sends the owner
-      // looking for a password that is already right.
-      out(error instanceof MailboxUnavailableError
-        ? `  ${error.message}\n`
-        : `  ${t('登录失败：', 'Login failed: ')}${usedOauth ? error.message : explain(error, provider, password)}\n`);
+      // credential was accepted, so "login failed" would send the owner looking
+      // for a password that is already right. Re-entering the same values cannot
+      // fix it either, so this one names the setting to change and stops.
+      if (error instanceof MailboxUnavailableError) {
+        out(t(`  登录是成功的，但这个邮箱没有开启 IMAP。\n    去邮箱设置里打开 IMAP（企业邮箱由管理员用 Get-CASMailbox 打开），或让邮箱的所有者给这个账号授权，然后重新运行。\n`,
+          `  The sign-in worked, but IMAP is not enabled for this mailbox.\n    Turn IMAP on for it (an administrator uses Get-CASMailbox), or have its owner grant this account access, then run this again.\n`));
+        throw new EmailCancelled();
+      }
+      out(`  ${t('登录失败：', 'Login failed: ')}${usedOauth ? error.message : explain(error, provider, password)}\n`);
       last = { address, ...hosts };
       if (!await prompter.confirm(t('重新输入？', 'Try again?'))) throw new EmailCancelled();
     }

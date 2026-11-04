@@ -8,7 +8,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { askEmail, emailInstanceId, providerFor, writeEmailAccount } from '../src/email.mjs';
-import { OAuthRequiredError } from '../../daemon/src/email/imap.mjs';
+import { MailboxUnavailableError, OAuthRequiredError } from '../../daemon/src/email/imap.mjs';
 import { Prompter } from '../src/prompt.mjs';
 
 function terminal(answers) {
@@ -199,4 +199,23 @@ test('the account file is private', (t) => {
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['email-qq.json']);
+});
+
+// A mailbox that signs in but refuses IMAP is a setting, not a credential:
+// asking the owner to retype things cannot fix it, and calling it a login
+// failure sends them looking for a password that is already right.
+test('a mailbox with IMAP off names the setting instead of calling it a login failure', async () => {
+  const login = fakeLogin();
+  const { prompter, written } = terminal(['me@outlook.com', 'app-id', '']);
+  // EmailCancelled extends PromptAborted, so the prompt layer's own abort is
+  // what surfaces here; what matters is that it stopped without asking.
+  await assert.rejects(
+    askEmail({ prompter, login, verify: async () => { throw new MailboxUnavailableError('BAD User is authenticated but not connected.'); } }),
+    { name: 'PromptAborted' },
+  );
+  const output = written();
+  assert.match(output, /没有开启 IMAP|IMAP is not enabled/);
+  assert.doesNotMatch(output, /登录失败/);
+  // Nothing to retype, so it does not ask.
+  assert.doesNotMatch(output, /重新输入/);
 });
