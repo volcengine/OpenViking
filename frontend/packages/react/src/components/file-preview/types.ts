@@ -61,11 +61,18 @@ export interface FilePreviewSource {
 
 /**
  * 所有页签的公共字段：页签行的标识与展示，以及内容区标题行里与内容无关的
- * 部分（路径面包屑、复制路径、视图切换、标题行插槽）。
+ * 部分（路径面包屑、复制路径、标题行插槽）。
+ *
+ * 预览/源码切换只属于文件页签：它由组件按文件格式决定是否可用，内容页签的
+ * 正文由宿主自己渲染，需要两种视图时由宿主在 `content` 里自行切换。
  *
  * Fields shared by every tab: the tab row's identity and display, plus the parts
  * of the content header row that do not depend on the content — path breadcrumb,
- * copy path, view switching and the header slots.
+ * copy path and the header slots.
+ *
+ * The preview/source switch belongs to file tabs only: the component decides
+ * whether a file format has both views, while a content tab's body is rendered
+ * by the host, which switches between its own views inside `content`.
  */
 export interface FilePreviewTabBase {
   /**
@@ -118,15 +125,15 @@ export interface FilePreviewTabBase {
   /**
    * 是否显示预览/源码切换，默认 `true`。格式本身没有源码视图时自动隐藏。
    *
-   * 两类页签都可用：内容页签的宿主知道自己的 `content` 有没有源码形态，
-   * 例如目录摘要也能在渲染与源码之间切换。
+   * 只在文件页签上生效。内容页签的正文由宿主渲染，组件没有可切换的两种视图，
+   * 传了也不会渲染切换按钮；宿主需要两种视图时在 `content` 里自行实现。
    *
    * Whether to show the preview/source switch, `true` by default. Hidden
    * automatically when the format has no source view.
    *
-   * Available on both kinds: a content tab's host knows whether its `content`
-   * has a source form, for example a directory summary can also switch between
-   * rendered and source.
+   * Only meaningful on file tabs. A content tab's body is rendered by the host,
+   * so the component has no second view to switch to and renders no control;
+   * a host that needs two views implements the switch inside `content`.
    */
   showViewModeSwitch?: boolean;
   /**
@@ -227,16 +234,16 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
 /**
  * 内容页签，由宿主完全自定义渲染，不经过 FileViewer。
  *
- * 它同样有内容区标题行（路径面包屑、权限标记、复制路径、视图切换与标题行
- * 插槽），但没有 `source`、`resources`、`editing` 与三类状态兜底——这些都属于
+ * 它同样有内容区标题行（路径面包屑、权限标记、复制路径与标题行插槽），但没有
+ * `source`、`resources`、`editing`、预览/源码切换与三类状态兜底——这些都属于
  * 格式渲染的范畴，加载与失败由宿主在 `content` 里自行处理。
  *
  * A content tab fully rendered by the host, bypassing FileViewer.
  *
  * It still has the content header row (path breadcrumb, permission tag, copy
- * path, view switching and the header slots), but no `source`, `resources`,
- * `editing` or state fallbacks — those belong to format rendering, and loading
- * and failure are handled by the host inside `content`.
+ * path and the header slots), but no `source`, `resources`, `editing`, the
+ * preview/source switch or state fallbacks — those belong to format rendering,
+ * and loading and failure are handled by the host inside `content`.
  */
 export interface FilePreviewContentTab extends FilePreviewTabBase {
   /**
@@ -518,11 +525,11 @@ export interface FilePreviewHandle {
  * 完全自定义渲染。当前激活哪个页签由组件内部维护，宿主不感知。
  *
  * 页签行与内容区标题行都由组件内置：页签行显示标题与图标；标题行显示路径
- * 面包屑、权限标记、复制与下载按钮，以及预览/源码切换与编辑入口。除页签
- * 列表本身与默认文案外，其余能力都挂在页签上。
+ * 面包屑、权限标记、复制与下载按钮，以及文件页签的预览/源码切换与编辑入口。
+ * 除页签列表本身与默认文案外，其余能力都挂在页签上。
  *
- * 格式识别、渲染器按需加载、加载与失败的分支、视图切换与编辑态都在内部处理，
- * 以 FileViewer 作为渲染底座，内置支持的格式集合固定，不对外开放。
+ * 格式识别、渲染器按需加载、加载与失败的分支、文件页签的视图切换与编辑态都在
+ * 内部处理，以 FileViewer 作为渲染底座，内置支持的格式集合固定，不对外开放。
  *
  * Content is driven by tabs: each tab either hands `source` to the component
  * for format rendering or renders fully custom `content`. Which tab is active
@@ -530,14 +537,14 @@ export interface FilePreviewHandle {
  *
  * The tab row and the content header row are both built in: the tab row shows
  * a title and an icon, while the header row shows the path breadcrumb,
- * permission tag, copy and download buttons, the preview/source switch and the
- * edit entry. Apart from the tab list and the default copy, everything hangs
- * off a tab.
+ * permission tag, copy and download buttons, plus the preview/source switch and
+ * the edit entry for file tabs. Apart from the tab list and the default copy,
+ * everything hangs off a tab.
  *
  * Format detection, lazy renderer loading, the loading and failure branches,
- * view switching and the editing state are all handled inside, with FileViewer
- * as the rendering base. The supported format set is built in and not exposed
- * for override.
+ * file-tab view switching and the editing state are all handled inside, with
+ * FileViewer as the rendering base. The supported format set is built in and
+ * not exposed for override.
  */
 export interface FilePreviewProps extends Omit<
   HTMLAttributes<HTMLDivElement>,

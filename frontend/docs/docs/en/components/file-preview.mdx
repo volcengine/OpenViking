@@ -2,7 +2,7 @@
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-This is a placeholder implementation: the shell — tab row, header row, tab switching, copy, edit and the ref handle — is complete and interactive. The file body is not wired to the renderer yet, so a file tab falls back to plain text.
+This is a placeholder implementation: the tab row, header row, tab switching, copy, the preview/source switch and the ref handle work, and the file body falls back to plain text until FileViewer is wired in. The editing flow is a skeleton too — it does not yet isolate an in-flight fetch from a tab switch, nor keep the draft when a save fails; both will be handled when the real implementation replaces it.
 
 ## Basic usage
 
@@ -19,7 +19,7 @@ Pass at least one tab. A file tab carries `source`; a content tab carries a node
 | `kind: 'file'`    | The component   | A file, its source, a document |
 | `kind: 'content'` | The host, as-is | Dashboards, graphs, summaries  |
 
-Both share the shell — tab row, path breadcrumb, copy path, view switch and the header slots. They differ only in how the body arrives.
+Both share the shell — tab row, path breadcrumb, copy path and the header slots. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
 
 The active tab is owned by the component. To switch from outside, use the ref handle:
 
@@ -69,7 +69,7 @@ Shared by both kinds:
 | `disabled`           | `boolean`                    | `false`   | Disables the tab.                                  |
 | `onOpenParent`       | `(path: string) => void`     | —         | Back entry on the path breadcrumb.                 |
 | `onCopyPath`         | `(path: string) => void`     | —         | Copy-path button; needs `source.path`.             |
-| `showViewModeSwitch` | `boolean`                    | `true`    | Shows the preview/source switch.                   |
+| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.             |
 | `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                           |
 
 File tabs add:
