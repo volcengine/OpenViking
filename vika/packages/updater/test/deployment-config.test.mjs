@@ -388,6 +388,22 @@ test('requires a complete per-agent self-hosted binding for Ark', () => {
   }
 });
 
+test('passes startup scheduler selection from manifest env and allows process override', () => {
+  const manifest = validManifest();
+  manifest.env = { ...manifest.env, VIKA_SCHEDULER: 'inbox' };
+  withManifest(manifest, (manifestPath) => {
+    const env = { VIKA_CONFIG: manifestPath };
+    const deployment = loadDeploymentManifest(env);
+    applyDeploymentDaemonEnv(env, deployment);
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.VIKA_SCHEDULER, 'inbox');
+    const override = { VIKA_CONFIG: manifestPath, VIKA_SCHEDULER: 'legacy' };
+    applyDeploymentDaemonEnv(override, loadDeploymentManifest(override));
+    applyDeploymentAgentEnv(override, loadDeploymentManifest(override), 'beta');
+    assert.equal(override.VIKA_SCHEDULER, 'legacy');
+  });
+});
+
 test('connects mailboxes only together with the email connector, each account file once', () => {
   const manifest = validManifest();
   const mailboxes = [{ id: 'email-gmail', config: '/srv/vika/secrets/beta-gmail.json' }, { id: 'email-qq', config: '/srv/vika/secrets/beta-qq.json' }];

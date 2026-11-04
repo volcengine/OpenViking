@@ -26,6 +26,18 @@ afterEach(() => {
 });
 
 describe('configuration safety', { concurrency: false }, () => {
+  it('defaults to legacy scheduling and accepts only startup inbox or legacy selection', () => {
+    setEnv('VIKA_SCHEDULER', undefined);
+    assert.equal(getConfig().scheduler, 'legacy');
+    setEnv('VIKA_SCHEDULER', 'inbox');
+    const config = getConfig();
+    assert.equal(config.scheduler, 'inbox');
+    setEnv('VIKA_SCHEDULER', 'legacy');
+    assert.equal(config.scheduler, 'inbox');
+    assert.equal(getConfig().scheduler, 'legacy');
+    setEnv('VIKA_SCHEDULER', 'raft');
+    assert.throws(() => getConfig(), /VIKA_SCHEDULER/);
+  });
   it('resolves relative CLI overrides against the connector cwd while preserving names and absolute paths', () => {
     for (const [envKey, configKey] of [['LARK_CLI_BIN', 'larkCliBin'], ['SLACK_CLI_BIN', 'slackCliBin']]) {
       for (const [value, expected] of [

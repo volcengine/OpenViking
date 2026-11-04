@@ -49,6 +49,7 @@ const HANDLERS = {
   read_meeting_note: 'readMeetingNote',
   read_openviking_session_context: 'readOVSession',
   read_meeting_inbox: 'readMeetingInbox',
+  message_check: 'messageCheck',
   get_time: 'getTime',
   create_timer: 'createTimer',
   list_timers: 'listTimers',
@@ -124,6 +125,8 @@ export class ActionService {
     meetingEnabled = false,
     ovClient = null,
     timers = null,
+    inbox = null,
+    onInboxRead = () => {},
     clock = () => Date.now(),
     onTimersChanged = () => {},
     onNoProgress = null,
@@ -132,7 +135,7 @@ export class ActionService {
   }) {
     Object.assign(this, {
       config, store, connectors, roster, liveness, meetingEnabled, ovClient, timers, clock, onTimersChanged,
-      onNoProgress, loopBreakAfter, logger,
+      onNoProgress, loopBreakAfter, logger, inbox, onInboxRead,
     });
     // Loop guard: duplicate outcomes per input in the current turn, cleared
     // by resetLoopGuard() at every turn end.
@@ -170,6 +173,7 @@ export class ActionService {
   }
 
   offered(tool) {
+    if (tool.inbox) return Boolean(this.inbox);
     if (tool.action) return this.supporting(tool.action, 'actions').length > 0;
     if (tool.query) return this.supporting(tool.query, 'queries').length > 0;
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);
@@ -183,6 +187,20 @@ export class ActionService {
 
   tools() {
     return TOOLS.filter((tool) => this.offered(tool)).map((tool) => publicTool(this.definition(tool)));
+  }
+
+  messageCheck({ scope_key: scopeKey, limit = 100 }) {
+    const result = this.inbox.read({ scopeKey, limit });
+    this.onInboxRead(result.items);
+    const items = result.items.map((item) => ({
+      seq: item.seq, scope_key: item.scopeKey, event_id: item.eventId,
+      source: item.source, text: item.text,
+    }));
+    return {
+      text: [`[Vika inbox] read=${items.length} pending=${result.pending}`,
+        ...items.map((item) => item.text)].join('\n'),
+      data: { items, pending: result.pending },
+    };
   }
 
   definition(tool) {

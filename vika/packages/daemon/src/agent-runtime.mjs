@@ -66,6 +66,7 @@ export class AgentRuntime {
     this.stopping = false;
     this.revision = 0;
     this.cachedModels = [];
+    this.inboxInboundSeqs = new Set();
   }
 
   get threadId() { return this.backend?.threadId ?? null; }
@@ -136,6 +137,7 @@ export class AgentRuntime {
     const freshCognition = this.store.hasCognitionRuntime?.() === false;
     this._assertConnectorSupport(freshTarget.runtime);
     this.runtime = freshCognition ? freshTarget.runtime : persistedRuntime;
+    this._assertConnectorSupport(this.runtime);
     // A daemon generation must never inherit the previous process's authority.
     // If that process crashed with a detached MCP sidecar still alive, rotating
     // the token here fences it before the replacement backend starts.
@@ -158,6 +160,9 @@ export class AgentRuntime {
   // Volc's tool executor is the remote Environment Worker, which only has the
   // Lark CLI path; it cannot reach the daemon's agent tools.
   _assertConnectorSupport(runtime) {
+    if (this.config.scheduler === 'inbox' && getRuntimeDefinition(runtime)?.capabilities.agentTools !== 'core') {
+      throw new Error('Vika inbox scheduling is not supported on the Volc runtime; Core tools are required');
+    }
     if (runtime === 'volc' && this.config.connectors.includes('qq')) {
       throw new Error('QQ is not supported on the Volc runtime');
     }
@@ -199,6 +204,8 @@ export class AgentRuntime {
   // failed on some, a replaced session as abandoned): nobody is told it
   // failed, and what it held is recovered there.
   _turnEnded(kind, info) {
+    info = { ...info, inboundSeqs: [...new Set([...(info.inboundSeqs ?? []), ...this.inboxInboundSeqs])] };
+    this.inboxInboundSeqs.clear();
     if (this.loopBreak) {
       this._stopEnded(kind, info);
       return;
@@ -206,6 +213,10 @@ export class AgentRuntime {
     const callback = kind === 'failed' ? this.onTurnFailed
       : kind === 'succeeded' ? this.onTurnSucceeded : this.onTurnAbandoned;
     callback?.(info);
+  }
+
+  consumeInbox(items) {
+    for (const item of items) if (item.seq !== null && item.seq !== undefined) this.inboxInboundSeqs.add(item.seq);
   }
 
   // Loop breaker, asked for by ActionService when the model keeps redoing a

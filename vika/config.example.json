@@ -10,6 +10,7 @@
     "OPENCODE_BIN": "",
     "VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS": "35000",
     "VIKA_LOG_LEVEL": "info",
+    "VIKA_SCHEDULER": "legacy",
     "VIKA_DRY_RUN": "false",
     "VIKA_IGNORED_SENDER_IDS": "",
     "VIKA_SEND_TIMEOUT_MS": "30000",
