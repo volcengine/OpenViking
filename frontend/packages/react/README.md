@@ -33,7 +33,7 @@ FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯�
 
 ## 公开入口与样式
 
-- 根入口导出各组件与四个业务模块占位组件及其公开类型。具体组件使用 `components/<组件>` 子路径；业务模块使用 `modules/<模块>` 子路径，当前导出占位组件与类型，真实能力迁入后再导出 Hook。不提供 `@openviking/react/components` 或 `@openviking/react/modules` 分类聚合 JS 入口。包导出显式列举，内部文件不开放。
+- 根入口导出 `FileTree`、`AgentConnect` 与四个业务模块占位组件及其公开类型；`FilePreview`、`Tui`、`ScopeSwitcher` 只从各自的 `components/<组件>` 子路径导出。具体组件使用 `components/<组件>` 子路径；业务模块使用 `modules/<模块>` 子路径，当前导出占位组件与类型，真实能力迁入后再导出 Hook。不提供 `@openviking/react/components` 或 `@openviking/react/modules` 分类聚合 JS 入口。包导出显式列举，内部文件不开放。
 - 组件只提供明确列出的分层子路径，不保留旧路径别名。
 - JS 入口共享实现，不隐式加载 CSS。整包、组件集合与单模块样式由同一份源码构建，选择所需范围导入即可。
 

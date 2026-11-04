@@ -26,18 +26,18 @@ The component holds no catalog and no body content. Where the items come from, h
 
 ### AgentConnectProps
 
-| Property      | Type                             | Default  | Description                                                  |
-| ------------- | -------------------------------- | -------- | ------------------------------------------------------------ |
-| `tabs`        | `readonly AgentConnectTab[]`     | Required | Tabs at the top.                                             |
-| `activeTabId` | `string`                         | Required | Active tab id, owned by the host.                            |
-| `items`       | `readonly AgentConnectItem[]`    | Required | Items of the active tab.                                     |
-| `selectedId`  | `string`                         | —        | Selected item id, owned by the host.                         |
-| `detail`      | `AgentConnectDetail`             | —        | Detail of the selected item; no body when omitted.           |
-| `labels`      | `AgentConnectLabels`             | English  | Replaceable copy.                                            |
-| `onTabChange` | `(tabId: string) => void`        | —        | Invoked when a tab is selected.                              |
-| `onSelect`    | `(item) => void`                 | —        | Invoked when an item is selected.                            |
-| `onCopy`      | `(text: string) => void`         | —        | Invoked when the body is copied; no copy control without it. |
-| Other props   | `HTMLAttributes<HTMLDivElement>` | —        | Standard div attributes; `children` is excluded.             |
+| Property      | Type                             | Default  | Description                                                                                                                                 |
+| ------------- | -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs`        | `readonly AgentConnectTab[]`     | Required | Tabs at the top.                                                                                                                            |
+| `activeTabId` | `string`                         | Required | Active tab id, owned by the host.                                                                                                           |
+| `items`       | `readonly AgentConnectItem[]`    | Required | Items of the active tab.                                                                                                                    |
+| `selectedId`  | `string`                         | —        | Selected item id, owned by the host.                                                                                                        |
+| `detail`      | `AgentConnectDetail`             | —        | Detail of the selected item; no body when omitted.                                                                                          |
+| `labels`      | `AgentConnectLabels`             | English  | Replaceable copy.                                                                                                                           |
+| `onTabChange` | `(tabId: string) => void`        | —        | Invoked when a tab is selected.                                                                                                             |
+| `onSelect`    | `(item) => void`                 | —        | Invoked when an item is selected.                                                                                                           |
+| `onCopy`      | `(text: string) => void`         | —        | Invoked after a successful copy, for analytics or extra feedback; the component performs the write. The control still renders when omitted. |
+| Other props   | `HTMLAttributes<HTMLDivElement>` | —        | Standard div attributes; `children` is excluded.                                                                                            |
 
 ### AgentConnectTab
 

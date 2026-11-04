@@ -26,18 +26,18 @@ Agent 接入视图。页签、当前页签的条目与详情正文都由宿主�
 
 ### AgentConnectProps
 
-| 属性          | 类型                             | 默认值 | 说明                                   |
-| ------------- | -------------------------------- | ------ | -------------------------------------- |
-| `tabs`        | `readonly AgentConnectTab[]`     | 必填   | 顶部页签。                             |
-| `activeTabId` | `string`                         | 必填   | 当前页签 id，由宿主持有。              |
-| `items`       | `readonly AgentConnectItem[]`    | 必填   | 当前页签下的条目。                     |
-| `selectedId`  | `string`                         | —      | 当前选中条目 id，由宿主持有。          |
-| `detail`      | `AgentConnectDetail`             | —      | 选中项的详情；不传时右侧不渲染正文。   |
-| `labels`      | `AgentConnectLabels`             | 英文   | 可替换文案。                           |
-| `onTabChange` | `(tabId: string) => void`        | —      | 切换页签时触发。                       |
-| `onSelect`    | `(item) => void`                 | —      | 选中条目时触发。                       |
-| `onCopy`      | `(text: string) => void`         | —      | 复制正文时触发；不传时不渲染复制按钮。 |
-| 其余属性      | `HTMLAttributes<HTMLDivElement>` | —      | 标准 div 属性，`children` 已排除。     |
+| 属性          | 类型                             | 默认值 | 说明                                                                                   |
+| ------------- | -------------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| `tabs`        | `readonly AgentConnectTab[]`     | 必填   | 顶部页签。                                                                             |
+| `activeTabId` | `string`                         | 必填   | 当前页签 id，由宿主持有。                                                              |
+| `items`       | `readonly AgentConnectItem[]`    | 必填   | 当前页签下的条目。                                                                     |
+| `selectedId`  | `string`                         | —      | 当前选中条目 id，由宿主持有。                                                          |
+| `detail`      | `AgentConnectDetail`             | —      | 选中项的详情；不传时右侧不渲染正文。                                                   |
+| `labels`      | `AgentConnectLabels`             | 英文   | 可替换文案。                                                                           |
+| `onTabChange` | `(tabId: string) => void`        | —      | 切换页签时触发。                                                                       |
+| `onSelect`    | `(item) => void`                 | —      | 选中条目时触发。                                                                       |
+| `onCopy`      | `(text: string) => void`         | —      | 复制成功后触发，用于埋点或额外反馈；复制由组件完成。不传时仍渲染复制按钮，只是不通知。 |
+| 其余属性      | `HTMLAttributes<HTMLDivElement>` | —      | 标准 div 属性，`children` 已排除。                                                     |
 
 ### AgentConnectTab
 
