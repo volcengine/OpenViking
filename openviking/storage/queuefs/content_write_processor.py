@@ -18,7 +18,11 @@ from openviking.service.task_work_index import (
 )
 from openviking.storage.context_update_execution import commit_and_enqueue_plan
 from openviking.storage.context_update_plan import ContextUpdatePlan
-from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
+from openviking.storage.pathlock_recovery import (
+    HANDOFF_RECOVERY_MAX_RETRIES,
+    adopt_or_reacquire,
+    prepare_handoff_retry,
+)
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -33,9 +37,16 @@ logger = get_logger(__name__)
 
 
 class ContentWriteProcessor(DequeueHandlerBase):
-    def __init__(self, viking_fs: Any, vikingdb: Any = None) -> None:
+    def __init__(
+        self,
+        viking_fs: Any,
+        vikingdb: Any = None,
+        *,
+        max_requeues: int = -1,
+    ) -> None:
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
+        self._max_requeues = max_requeues
 
     @staticmethod
     def _ctx(msg: ContentWriteMsg) -> RequestContext:
@@ -92,7 +103,12 @@ class ContentWriteProcessor(DequeueHandlerBase):
         )
 
     async def _requeue_lock_handoff(self, msg: ContentWriteMsg, exc: Exception) -> bool:
-        payload = await prepare_handoff_retry(msg, exc, queue="ContentWrite")
+        payload = await prepare_handoff_retry(
+            msg,
+            exc,
+            queue="ContentWrite",
+            max_requeues=self._max_requeues,
+        )
         if payload is None:
             return False
 

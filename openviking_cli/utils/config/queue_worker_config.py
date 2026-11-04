@@ -43,3 +43,10 @@ class QueueWorkersConfig(BaseModel):
     external_task: QueueWorkerConfig = Field(
         default_factory=lambda: QueueWorkerConfig(max_concurrent=10)
     )
+    max_requeues: int = Field(
+        default=-1,
+        description=(
+            "Global cap on replacement deliveries for one tracked QueueFS work item; "
+            "negative disables the cap."
+        ),
+    )
