@@ -2,10 +2,11 @@
 use serde_json::{Value, json};
 use std::{
     fs,
+    path::Path,
     process::{Command, Output, Stdio},
 };
 
-fn run(dir: &std::path::Path, selected: &str, args: &[&str]) -> Output {
+fn cli_command(dir: &Path, selected: &Path) -> Command {
     let home = dir.join("home");
     let settings_dir = home.join(".openviking");
     fs::create_dir_all(&settings_dir).unwrap();
@@ -14,20 +15,26 @@ fn run(dir: &std::path::Path, selected: &str, args: &[&str]) -> Output {
         json!({"language": "en"}).to_string(),
     )
     .unwrap();
-    Command::new(env!("CARGO_BIN_EXE_ov"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ov"));
+    command
         .current_dir(dir)
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env("OPENVIKING_CLI_CONFIG_FILE", selected)
         .env("OPENVIKING_LANG", "en")
         .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    command
+}
+
+fn run(dir: &Path, selected: &str, args: &[&str]) -> Output {
+    cli_command(dir, Path::new(selected))
         .args(args)
         .output()
         .unwrap()
 }
 
-fn seed(dir: &std::path::Path, name: &str, url: &str) {
+fn seed(dir: &Path, name: &str, url: &str) {
     fs::write(
         dir.join(name),
         json!({"url": url, "output": "table"}).to_string(),
@@ -193,9 +200,7 @@ fn reindex_bypasses_proxy_for_loopback_and_reports_truncated_http_bodies() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("ovcli.conf");
         fs::write(&config, json!({"url": base_url, "timeout": 3}).to_string()).unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_ov"))
-            .env("OPENVIKING_CLI_CONFIG_FILE", config)
-            .env("OPENVIKING_LANG", "en")
+        let output = cli_command(dir.path(), &config)
             .env("HTTP_PROXY", &proxy_url)
             .env("http_proxy", &proxy_url)
             .env("NO_PROXY", "")
@@ -210,7 +215,9 @@ fn reindex_bypasses_proxy_for_loopback_and_reports_truncated_http_bodies() {
             ])
             .output()
             .unwrap();
-        let data: Value = serde_json::from_slice(&output.stderr).unwrap();
+        let data: Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+            panic!("expected a JSON error for {status}: {error}; {output:?}")
+        });
         assert_eq!(data["error"]["code"], code, "{data}");
         assert_eq!(peer.join().unwrap().trim_end(), request_target);
         if missing_bytes > 0 {
