@@ -130,6 +130,7 @@ pub async fn find(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    include_provenance: bool,
     events_time_decay_protection: Option<String>,
     output_format: OutputFormat,
     compact: bool,
@@ -148,6 +149,7 @@ pub async fn find(
             context_type,
             tags,
             read_content,
+            include_provenance,
             events_time_decay_protection,
         )
         .await?;
@@ -177,6 +179,7 @@ pub async fn search(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    include_provenance: bool,
     events_time_decay_protection: Option<String>,
     output_format: OutputFormat,
     compact: bool,
@@ -198,6 +201,7 @@ pub async fn search(
             context_type,
             tags,
             read_content,
+            include_provenance,
             events_time_decay_protection,
         )
         .await?;
