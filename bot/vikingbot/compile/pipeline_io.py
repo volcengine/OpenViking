@@ -275,10 +275,6 @@ class JsonModel:
         from vikingbot.agent.loop import _inline_media_bytes
 
         media_bytes = _inline_media_bytes(messages)
-        if media_bytes and not self.provider.supports_tool_result_media(self.model):
-            raise CompileFailure(
-                "UNSUPPORTED_MEDIA", "Compile provider cannot deliver image evidence", stage=stage
-            )
         if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:
             raise CompileFailure(
                 "MEDIA_LIMIT", "Compile image request exceeds the inline media budget", stage=stage

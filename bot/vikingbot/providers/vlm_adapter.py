@@ -710,18 +710,18 @@ class VLMProviderAdapter(LLMProvider):
         return self._default_model
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
-        """Whether every configured backend can deliver image evidence from tools."""
-        return self._tool_result_media_mode(self._vlm) is not None
+        """Accept image evidence without predicting the endpoint's model capabilities."""
+        return True
 
     def should_inline_tool_result_media(self, model: str | None = None) -> bool:
         """Keep ordinary chats native-only; Compile's scoped providers opt in."""
         return self._tool_result_media_mode(self._vlm) == "native"
 
     @staticmethod
-    def _tool_result_media_mode(vlm: Any) -> ToolResultMediaMode | None:
+    def _tool_result_media_mode(vlm: Any) -> ToolResultMediaMode:
         capability = getattr(vlm, "tool_result_media_mode", None)
         mode = capability() if callable(capability) else None
-        return mode if mode in ("native", "user_message") else None
+        return "native" if mode == "native" else "user_message"
 
     # ------------------------------------------------------------------
     # Langfuse helpers
