@@ -324,6 +324,9 @@ _, _, _ = watches, updated, triggered
 
 OpenViking API errors return `*openviking.Error`.
 
+Local imports also return an `INTERNAL` error if the upload response lacks a non-empty
+`temp_file_id`. The SDK stops before sending the import or skill installation request.
+
 ```go
 _, err := client.Read(ctx, "viking://resources/missing.md", 0, -1)
 if openviking.IsCode(err, "NOT_FOUND") {

@@ -194,6 +194,11 @@ triggered, err := client.TriggerWatch(ctx, openviking.WatchRef{
 _, _, _ = watches, updated, triggered
 ```
 
+## 错误处理
+
+本地导入的上传响应缺少非空 `temp_file_id` 时，SDK 返回代码为 `INTERNAL` 的
+`*openviking.Error`，不会继续发送导入或 Skill 安装请求。
+
 ## 验证脚本
 
 编辑 `examples/basic_usage/main.go` 顶部常量：

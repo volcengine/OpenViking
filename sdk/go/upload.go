@@ -140,6 +140,13 @@ func (c *Client) uploadTempFile(ctx context.Context, filePath string) (string, e
 			return "", err
 		}
 	}
+	if result.TempFileID == "" {
+		return "", &Error{
+			Code:       "INTERNAL",
+			Message:    "Upload response did not include temp_file_id",
+			StatusCode: resp.StatusCode,
+		}
+	}
 	return result.TempFileID, nil
 }
 

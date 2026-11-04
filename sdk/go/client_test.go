@@ -1369,6 +1369,73 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 	if result["uri"] != "viking://resources/note.md" {
 		t.Fatalf("result = %#v", result)
 	}
+
+	for _, tc := range []struct {
+		name, response, wantCode string
+	}{
+		{"valid ID", `{"status":"ok","result":{"temp_file_id":"tmp-file"}}`, ""},
+		{"missing result", `{"status":"ok"}`, "INTERNAL"},
+		{"null result", `{"status":"ok","result":null}`, "INTERNAL"},
+		{"missing ID", `{"status":"ok","result":{}}`, "INTERNAL"},
+		{"null ID", `{"status":"ok","result":{"temp_file_id":null}}`, "INTERNAL"},
+		{"empty ID", `{"status":"ok","result":{"temp_file_id":""}}`, "INTERNAL"},
+		{"empty body", "", "INTERNAL"},
+	} {
+		for name, importFile := range map[string]func(*Client) error{
+			"resource": func(c *Client) error {
+				_, err := c.AddResource(context.Background(), filePath, nil)
+				return err
+			},
+			"skill": func(c *Client) error {
+				_, err := c.AddSkill(context.Background(), filePath, nil)
+				return err
+			},
+			"update skill": func(c *Client) error {
+				_, err := c.UpdateSkill(context.Background(), "demo", filePath, nil)
+				return err
+			},
+			"import pack": func(c *Client) error {
+				_, err := c.ImportOVPack(context.Background(), filePath, "resources", nil)
+				return err
+			},
+			"restore pack": func(c *Client) error {
+				_, err := c.RestoreOVPack(context.Background(), filePath, nil)
+				return err
+			},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				uploads, imports := 0, 0
+				client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/api/v1/resources/temp_upload" {
+						uploads++
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, tc.response)
+						return
+					}
+					imports++
+					body := readJSONBody(t, r)
+					if body["temp_file_id"] != "tmp-file" {
+						t.Errorf("import used invalid upload ID: %#v", body)
+					}
+					writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
+				}))
+				defer closeServer()
+				err := importFile(client)
+				if tc.wantCode == "" {
+					if err != nil || uploads != 1 || imports != 1 {
+						t.Fatalf("uploads=%d imports=%d err=%v", uploads, imports, err)
+					}
+				} else {
+					if !IsCode(err, tc.wantCode) || uploads != 1 || imports != 0 {
+						t.Fatalf("uploads=%d imports=%d err=%v; want %s before import", uploads, imports, err, tc.wantCode)
+					}
+					if err.Error() != "INTERNAL: Upload response did not include temp_file_id" {
+						t.Fatalf("unexpected upload error: %v", err)
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestAddResourceSendsNoSplitMode(t *testing.T) {
