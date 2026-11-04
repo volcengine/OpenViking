@@ -296,16 +296,21 @@ async def rewrite_image_uris(
 
     files_processed = 0
     references_rewritten = 0
+    # Sidecars are the only record of the original path -> stored image name
+    # mapping. Keep any sidecar whose documents did not finish rewriting.
+    failed_map_dirs: Set[str] = set()
 
     for md_uri in md_uris:
         # Resolve this markdown file's mapping from the sidecar of the document
         # root containing it (the key is relative to that root).
         path_to_image_name: Dict[str, str] = {}
+        mapping_dir: Optional[str] = None
         for map_dir, file_mappings in mappings_by_dir.items():
             if md_uri.startswith(map_dir + "/"):
                 entry = file_mappings.get(md_uri[len(map_dir) + 1 :])
                 if entry:
                     path_to_image_name = entry
+                    mapping_dir = map_dir
                     break
         if not path_to_image_name:
             continue
@@ -321,11 +326,15 @@ async def rewrite_image_uris(
             }
         except Exception:
             logger.debug(f"[image_rewrite] Failed to list directory {md_dir}")
+            if mapping_dir is not None:
+                failed_map_dirs.add(mapping_dir)
 
         try:
             content = await viking_fs.read_file(md_uri, ctx=ctx)
         except Exception:
             logger.warning(f"[image_rewrite] Failed to read {md_uri}, skipping")
+            if mapping_dir is not None:
+                failed_map_dirs.add(mapping_dir)
             continue
 
         new_content, rewrite_count = _rewrite_content(
@@ -345,9 +354,20 @@ async def rewrite_image_uris(
                 logger.debug(f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}")
             except Exception:
                 logger.warning(f"[image_rewrite] Failed to write {md_uri}")
+                if mapping_dir is not None:
+                    failed_map_dirs.add(mapping_dir)
 
-    # Clean up mapping sidecars — no longer needed after rewrite
+    # Clean up mapping sidecars — no longer needed after rewrite. A sidecar
+    # whose document read/list/write failed is kept: deleting it would drop
+    # the mapping while the markdown still points at local image paths, and
+    # no later retry could rewrite them.
     for map_dir in mappings_by_dir:
+        if map_dir in failed_map_dirs:
+            logger.warning(
+                f"[image_rewrite] Keeping {map_dir}/{IMAGE_MAPPINGS_FILENAME}: "
+                "a mapped document was not rewritten"
+            )
+            continue
         try:
             await viking_fs.rm(
                 f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}",
