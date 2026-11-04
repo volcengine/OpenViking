@@ -726,6 +726,15 @@ class OpenVikingService:
         self._fs_service.compile_versions = self._compile_service.lifecycle.versions
         self._fs_service.compile_lifecycle = self._compile_service.lifecycle
         self._resource_service.compile_versions = self._compile_service.lifecycle.versions
+        from openviking.service.artifact_relations_service import ArtifactRelationsService
+
+        self.artifact_relations = ArtifactRelationsService(
+            compile_store, self._viking_fs, self._queue_manager
+        )
+        self._compile_service.lifecycle.artifact_relations = self.artifact_relations
+        self._compile_service.lifecycle.versions.artifact_relations = self.artifact_relations
+        self._resource_service._skill_processor.artifact_relations = self.artifact_relations
+        await self.artifact_relations.start()
 
         if self._queue_manager:
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
@@ -915,6 +924,8 @@ class OpenVikingService:
             logger.info("RuleCleanupScheduler stopped")
 
         await self._resource_service.close_background_tasks()
+        if getattr(self, "artifact_relations", None) is not None:
+            await self.artifact_relations.stop()
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None

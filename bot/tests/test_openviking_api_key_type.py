@@ -205,6 +205,21 @@ def _patch_http_client(monkeypatch):
     monkeypatch.setattr(ov_server_module.ov, "AsyncHTTPClient", _DummyHTTPClient)
 
 
+@pytest.mark.parametrize("auth_mode", ["dev", "api_key"])
+def test_viking_client_forwards_compile_write_capability(monkeypatch, auth_mode):
+    config = _make_config("user")
+    config.ov_server.auth_mode = auth_mode
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: config)
+    connection = {"compile_write_token": "write-token"}
+    if auth_mode == "api_key":
+        connection["api_key"] = "active-key"
+    client = VikingClient(connection=connection)
+    assert _DummyHTTPClient.instances[0].kwargs["extra_headers"] == {
+        "X-OpenViking-Compile-Write-Token": "write-token"
+    }
+    assert client.auth_mode == auth_mode
+
+
 def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
 

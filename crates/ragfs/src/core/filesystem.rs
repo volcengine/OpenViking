@@ -290,6 +290,24 @@ pub trait FileSystem: Send + Sync + Any {
         )))
     }
 
+    /// Compare whole content atomically, or create exclusively when expected is absent.
+    /// Wrappers must preserve plaintext comparison and backend conditional semantics.
+    async fn conditional_write(
+        &self,
+        path: &str,
+        expected: Option<&[u8]>,
+        data: &[u8],
+    ) -> Result<bool> {
+        match expected {
+            Some(expected) => self.compare_and_write(path, expected, data).await,
+            None => match self.write(path, data, 0, WriteFlag::CreateNew).await {
+                Ok(_) => Ok(true),
+                Err(Error::AlreadyExists(_)) => Ok(false),
+                Err(error) => Err(error),
+            },
+        }
+    }
+
     /// Remove a file only when its full current content equals `expected`.
     ///
     /// # Arguments

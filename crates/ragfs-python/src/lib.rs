@@ -1860,6 +1860,31 @@ impl RAGFSBindingClient {
         git::show_response_to_pydict(py, resp)
     }
 
+    /// Internal fixed-snapshot structure reader.
+    fn git_snapshot_entries(
+        &self, py: Python<'_>, account: String, snapshot: String, path: String,
+    ) -> PyResult<Vec<(String, String, bool)>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        py_detach_blocking(py, move || {
+            self.rt.block_on(svc.snapshot_entries(&account, &snapshot, &path))
+        }).map_err(|e| git::map_git_error(py, e))
+    }
+
+    /// Internal account-scoped content-addressed batch reader.
+    fn git_snapshot_blobs(
+        &self, py: Python<'_>, account: String, oids: Vec<String>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let blobs = py_detach_blocking(py, move || {
+            self.rt.block_on(svc.snapshot_blobs(&account, &oids))
+        }).map_err(|e| git::map_git_error(py, e))?;
+        Ok(blobs.iter().map(|b| PyBytes::new(py, b).into_any().unbind()).collect())
+    }
+
     /// Build a bounded unified text diff outside the Python interpreter.
     #[pyo3(signature = (**kwargs))]
     fn git_diff_text(
@@ -2087,6 +2112,20 @@ impl RAGFSBindingClient {
         Ok(format!("Written {} bytes", len))
     }
 
+    /// Atomically compare plaintext content, or exclusively create a missing file.
+    #[pyo3(signature = (path, expected, data, ctx=None))]
+    fn conditional_write(
+        &self, py: Python<'_>, path: String, expected: Option<Vec<u8>>, data: Vec<u8>,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<bool> {
+        self.write_hooks.check(&path, &data)
+            .map_err(|error| global_policy::write_hook_error(py, error))?;
+        let top = self.top.clone();
+        self.run_scoped(py, build_fs_context(ctx), move || async move {
+            top.conditional_write(&path, expected.as_deref(), &data).await
+        }).map_err(to_py_err)
+    }
+
     /// Create a new empty file.
     #[pyo3(signature = (path, ctx=None))]
     fn create(
@@ -2220,6 +2259,24 @@ impl RAGFSBindingClient {
         let mut m = HashMap::new();
         m.insert("message".to_string(), "renamed".to_string());
         Ok(m)
+    }
+
+    /// Replace a destination with a complete file on the same mount.
+    #[pyo3(signature = (src_path, dst_path, ctx=None))]
+    fn replace(
+        &self,
+        py: Python<'_>,
+        src_path: String,
+        dst_path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(py, fs_ctx, move || async move {
+            top.replace(&src_path, &dst_path).await
+        })
+        .map_err(to_py_err)?;
+        Ok(HashMap::from([("message".to_string(), "replaced".to_string())]))
     }
 
     /// Attempt a same-mount verbatim copy and report whether the fast-path was used.

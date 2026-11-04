@@ -91,7 +91,48 @@ def _write(client, account: str, rel_path: str, body: bytes) -> str:
 def test_git_concurrent_commit_error_class_exists():
     from openviking.pyagfs import GitConcurrentCommitError
     from openviking.pyagfs.exceptions import AGFSClientError
+
     assert issubclass(GitConcurrentCommitError, AGFSClientError)
+
+
+def test_snapshot_manifest_preserves_empty_directories_and_fixed_bodies(client):
+    _write(client, "graph", "resources/wiki/a.md", b"[link](empty/)")
+    client.mkdir("/local/graph/resources/wiki/empty")
+    first = client.git_commit(
+        account="graph",
+        branch="main",
+        paths=["resources/wiki"],
+        message="first",
+        author_name="test",
+        author_email="test@example.com",
+    )
+    snapshot = first["commit_oid"]
+    entries = client.git_snapshot_entries(account="graph", snapshot=snapshot, path="resources/wiki")
+    by_path = {path: (oid, is_dir) for path, oid, is_dir in entries}
+    assert by_path["resources/wiki/empty"][1] is True
+    _write(client, "graph", "resources/wiki/a.md", b"new body")
+    client.rm("/local/graph/resources/wiki/empty")
+    second = client.git_commit(
+        account="graph",
+        branch="main",
+        paths=["resources/wiki"],
+        message="second",
+        author_name="test",
+        author_email="test@example.com",
+    )
+    assert client.git_snapshot_blobs(account="graph", oids=[by_path["resources/wiki/a.md"][0]]) == [
+        b"[link](empty/)"
+    ]
+    assert "resources/wiki/empty" not in {
+        path
+        for path, _, _ in client.git_snapshot_entries(
+            account="graph", snapshot=second["commit_oid"], path="resources/wiki"
+        )
+    }
+    assert (
+        client.git_snapshot_entries(account="graph", snapshot=snapshot, path="resources/wiki")
+        == entries
+    )
 
 
 def test_health_reports_git_enabled(client):
@@ -125,6 +166,29 @@ def test_commit_then_show_roundtrip(client):
     )
     assert shown["bytes"] == b"hello world"
     assert shown["size"] == 11
+
+
+@pytest.mark.parametrize(
+    "content", [b"", b"hello\n", "中文链接".encode(), b"a\r\nb\r\n", b"\x00\xff"]
+)
+def test_artifact_blob_oid_matches_native_snapshot(client, content):
+    """The extraction OID must match ragfs's actual content-addressed blob."""
+    from openviking.service.artifact_relation_links import git_blob_oid
+
+    account = "artifact_oid"
+    path = "resources/content.bin"
+    _write(client, account, path, content)
+    result = client.git_commit(
+        account=account,
+        branch="main",
+        message="verify artifact blob",
+        author_name="test-bot",
+        author_email="test@example.com",
+        paths=[path],
+    )
+    shown = client.git_show(account=account, target_ref=result["commit_oid"], path=path)
+    assert shown["bytes"] == content
+    assert shown["oid"] == git_blob_oid(content)
 
 
 def test_commit_then_show_commit_metadata(client):
@@ -220,23 +284,31 @@ def test_restore_dry_run_does_not_mutate(client):
     account = "acct1"
     _write(client, account, "resources/proj/a.md", b"v1")
     v1 = client.git_commit(
-        account=account, branch="main", message="v1",
-        author_name="a", author_email="a@e",
+        account=account,
+        branch="main",
+        message="v1",
+        author_name="a",
+        author_email="a@e",
         paths=["resources/proj/a.md"],
     )
 
     _write(client, account, "resources/proj/a.md", b"v2")
     client.git_commit(
-        account=account, branch="main", message="v2",
-        author_name="a", author_email="a@e",
+        account=account,
+        branch="main",
+        message="v2",
+        author_name="a",
+        author_email="a@e",
         paths=["resources/proj/a.md"],
     )
 
     res = client.git_restore(
-        account=account, branch="main",
+        account=account,
+        branch="main",
         project_dir="resources/proj",
         source_commit=v1["commit_oid"],
-        author_name="a", author_email="a@e",
+        author_name="a",
+        author_email="a@e",
         dry_run=True,
     )
     assert res["result"] == "dry_run"
@@ -251,23 +323,31 @@ def test_account_isolation(client):
     """A commit under account A is invisible to account B."""
     _write(client, "acct_a", "resources/a.md", b"x")
     client.git_commit(
-        account="acct_a", branch="main", message="m",
-        author_name="n", author_email="e",
+        account="acct_a",
+        branch="main",
+        message="m",
+        author_name="n",
+        author_email="e",
         paths=["resources/a.md"],
     )
 
     from openviking.pyagfs import AGFSNotFoundError
+
     with pytest.raises(AGFSNotFoundError):
         client.git_show(account="acct_b", target_ref="main")
 
 
 def test_feature_disabled_raises(git_disabled_workspace):
     from openviking.pyagfs import AGFSNotSupportedError
+
     c = ragfs_python.RAGFSBindingClient(git_config_path=str(git_disabled_workspace))
     with pytest.raises(AGFSNotSupportedError):
         c.git_commit(
-            account="a", branch="main", message="m",
-            author_name="n", author_email="e",
+            account="a",
+            branch="main",
+            message="m",
+            author_name="n",
+            author_email="e",
         )
 
 
@@ -300,8 +380,11 @@ def test_cas_conflict_surface(client):
     account = "acct_cas"
     _write(client, account, "resources/seed.md", b"seed")
     client.git_commit(
-        account=account, branch="main", message="seed",
-        author_name="n", author_email="e",
+        account=account,
+        branch="main",
+        message="seed",
+        author_name="n",
+        author_email="e",
         paths=["resources/seed.md"],
     )
 
@@ -317,8 +400,11 @@ def test_cas_conflict_surface(client):
         try:
             barrier.wait()
             r = client.git_commit(
-                account=account, branch="main", message=f"commit {path}",
-                author_name="n", author_email="e",
+                account=account,
+                branch="main",
+                message=f"commit {path}",
+                author_name="n",
+                author_email="e",
                 paths=[path],
             )
             results.append(r)
@@ -327,8 +413,10 @@ def test_cas_conflict_surface(client):
 
     t1 = threading.Thread(target=do_commit, args=("resources/a.md",))
     t2 = threading.Thread(target=do_commit, args=("resources/b.md",))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
     # The LocalRefStore mutex + CAS may serialize the two so well that the
     # second sees the new parent and the conflict never surfaces. In that case
@@ -361,18 +449,25 @@ def test_commit_respects_account_ovgitignore(client):
 
     assert resp["result"] == "created"
     assert resp["ignored"] == 1
-    assert client.git_show(
-        account=account,
-        target_ref="main",
-        path="resources/keep.md",
-    )["bytes"] == b"keep"
-    assert client.git_show(
-        account=account,
-        target_ref="main",
-        path=".ovgitignore",
-    )["bytes"] == b"*.log\n"
+    assert (
+        client.git_show(
+            account=account,
+            target_ref="main",
+            path="resources/keep.md",
+        )["bytes"]
+        == b"keep"
+    )
+    assert (
+        client.git_show(
+            account=account,
+            target_ref="main",
+            path=".ovgitignore",
+        )["bytes"]
+        == b"*.log\n"
+    )
 
     from openviking.pyagfs import AGFSNotFoundError
+
     with pytest.raises(AGFSNotFoundError):
         client.git_show(
             account=account,
@@ -386,6 +481,7 @@ def test_commit_invalid_ovgitignore_maps_to_invalid_operation(client):
     _write(client, account, ".ovgitignore", b"!keep.log\n")
 
     from openviking.pyagfs import AGFSInvalidOperationError
+
     with pytest.raises(AGFSInvalidOperationError) as excinfo:
         client.git_commit(
             account=account,
@@ -432,8 +528,11 @@ def test_restore_does_not_apply_current_ovgitignore(client):
 
     assert restored["result"] == "applied"
     assert client.read(f"/local/{account}/resources/proj/a.log") == b"v1"
-    assert client.git_show(
-        account=account,
-        target_ref="main",
-        path="resources/proj/a.log",
-    )["bytes"] == b"v1"
+    assert (
+        client.git_show(
+            account=account,
+            target_ref="main",
+            path="resources/proj/a.log",
+        )["bytes"]
+        == b"v1"
+    )

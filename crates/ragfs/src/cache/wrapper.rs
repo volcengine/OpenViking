@@ -660,6 +660,14 @@ impl FileSystem for CachedFileSystem {
         Ok(written)
     }
 
+    async fn conditional_write(&self, path: &str, expected: Option<&[u8]>, data: &[u8]) -> Result<bool> {
+        let changed = self.backend.conditional_write(path, expected, data).await?;
+        if changed {
+            self.spawn_path_invalidation(path);
+        }
+        Ok(changed)
+    }
+
     async fn read_dir(
         &self,
         path: &str,

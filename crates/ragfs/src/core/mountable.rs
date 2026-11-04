@@ -913,6 +913,16 @@ impl FileSystem for MountableFS {
         mount_info.fs.write(&rel_path, data, offset, flags).await
     }
 
+    async fn conditional_write(
+        &self,
+        path: &str,
+        expected: Option<&[u8]>,
+        data: &[u8],
+    ) -> Result<bool> {
+        let (mount_info, rel_path) = self.find_mount(path).await?;
+        mount_info.fs.conditional_write(&rel_path, expected, data).await
+    }
+
     async fn compare_and_write(
         &self,
         path: &str,

@@ -486,6 +486,7 @@ class ExternalTaskService:
                 await self.cancel_recovered(task_id, account_id, user_id)
                 return True
             if terminal is not None:
+                completion_delay = 0.2
                 while not await self._apply_snapshot(
                     ExternalTaskSnapshot(**terminal),
                     task_id=task_id,
@@ -493,7 +494,13 @@ class ExternalTaskService:
                     user_id=user_id,
                     auth=auth,
                 ):
-                    await asyncio.sleep(provider.poll_interval_seconds)
+                    delay = (
+                        completion_delay
+                        if task.task_type == "compile" and terminal["status"] == "completed"
+                        else provider.poll_interval_seconds
+                    )
+                    await asyncio.sleep(delay)
+                    completion_delay = min(completion_delay * 2, 5.0)
                 return True
             try:
                 started = await provider.on_start(task)
@@ -564,6 +571,7 @@ class ExternalTaskService:
                 user_id=user_id,
             )
         snapshot = None
+        completion_delay = 0.2
         while True:
             if snapshot is None or snapshot.status in _ACTIVE_STATUSES:
                 snapshot = await self._retry(
@@ -586,7 +594,13 @@ class ExternalTaskService:
                 auth=auth,
             ):
                 return
-            await asyncio.sleep(provider.poll_interval_seconds)
+            delay = (
+                completion_delay
+                if task.task_type == "compile" and snapshot.status == "completed"
+                else provider.poll_interval_seconds
+            )
+            await asyncio.sleep(delay)
+            completion_delay = min(completion_delay * 2, 5.0)
 
     async def cancel_recovered(
         self, task_id: str, account_id: str, user_id: str, *, failure: Exception | None = None

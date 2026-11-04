@@ -217,6 +217,19 @@ impl FileSystem for PathLockWrappedFS {
         Self::merge_operation_and_release(result, release)
     }
 
+    async fn conditional_write(
+        &self, path: &str, expected: Option<&[u8]>, data: &[u8],
+    ) -> crate::core::Result<bool> {
+        let requests = [PathLockRequest { path: path.to_string(), kind: PathLockKind::Exact }];
+        if Self::should_bypass_auto_lock(path) || self.should_skip_auto_lock(&requests).await? {
+            return self.inner.conditional_write(path, expected, data).await;
+        }
+        let lease = self.manager.acquire_exact(path, self.manager.default_lock_timeout(), None).await?;
+        let result = self.inner.conditional_write(path, expected, data).await;
+        let release = self.manager.release(&lease).await;
+        Self::merge_operation_and_release(result, release)
+    }
+
     async fn read_dir(
         &self,
         path: &str,

@@ -24,6 +24,7 @@ import hashlib
 import json
 import math
 import random
+import secrets
 import sys
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -108,6 +109,7 @@ def new_record(to: str) -> Dict[str, Any]:
     """Build execution settings for a canonical target URI without claiming a task."""
     return {
         "to": to,
+        "generation": uuid4().hex,
         "compile_type": "compile",  # Compile category for this target.
         "conflicts_num": 0,  # Conflicting files found at successful completion, capped at 100.
         "status": "active",
@@ -126,6 +128,8 @@ def new_record(to: str) -> Dict[str, Any]:
         "scheduled_progress": {},  # Successful scheduled inputs and source progress, isolated from manual runs.
         # Snapshot the per-file version indexes were last synced to.
         "versions_head": None,
+        "version_index_head": None,
+        "wiki_head": None,
         "active_task_id": None,
         "active_operation_id": None,  # Set and cleared with active_task_id.
         "last_run": None,
@@ -139,6 +143,11 @@ def new_record(to: str) -> Dict[str, Any]:
 
 def _normalize_schedule(record: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize stored records in place so disabled schedules are null on reads and writes."""
+    if "version_index_head" not in record:
+        record["version_index_head"] = record.get("versions_head")
+        record["versions_head"] = None
+    record.setdefault("wiki_head", record.get("version_index_head"))
+    record.setdefault("generation", "legacy")
     if not record["auto_update"]:
         record["update_schedule"] = None
     return record
@@ -367,11 +376,14 @@ class CompileStateStore:
                 defaults = new_record(to)
                 for key in (
                     "status",
+                    "generation",
                     "initialized",
                     "progress",
                     "scheduled_progress",
                     "schedule_configured",
                     "versions_head",
+                    "version_index_head",
+                    "wiki_head",
                     "active_task_id",
                     "active_operation_id",
                     "last_run",
@@ -1142,6 +1154,19 @@ class CompileLifecycle:
             await self._fs._async_agfs.pathlock_release(lease)
 
     async def on_start(self, task: Any) -> Any:
+        relations = getattr(self, "artifact_relations", None)
+        if relations is not None and task.meta["request"].get("compile") is not None:
+            async with relations.admission(task.account_id, [task.meta["request"]["to"]]):
+                for to in await relations.containing_targets(
+                    task.account_id, [task.meta["request"]["to"]]
+                ):
+                    record = await self._store.get(task.account_id, to)
+                    if record.get("active_task_id") not in (None, task.task_id):
+                        return "busy"
+                return await self._on_start(task)
+        return await self._on_start(task)
+
+    async def _on_start(self, task: Any) -> Any:
         """Poll missing target state every five seconds for up to 30, then claim and plan."""
         meta = task.meta["request"].get("compile")
         if meta is None:
@@ -1215,6 +1240,7 @@ class CompileLifecycle:
         system_skill = classify_uri(request["skill"]).is_system
         run = run or new_compile_operation(task, record)
         run_meta = run["meta"]
+        run_meta.setdefault("write_token", secrets.token_urlsafe(32))
         run["actor"] = task.user_id
         run["status"] = "running"
         run["started_at"] = time.time()
@@ -1338,7 +1364,21 @@ class CompileLifecycle:
             "skill_snapshot": run_meta.get("skill_snapshot"),
         }
 
+    async def runtime_write_token(self, account_id: str, to: str, task_id: str) -> str:
+        record = await self._store.get(account_id, to)
+        if record is None or record.get("active_task_id") != task_id:
+            raise ConflictError("Compile ownership changed", resource="COMPILE_RUNNING")
+        run = await self._store.get_operation(account_id, to, record["active_operation_id"])
+        return run["meta"]["write_token"]
+
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
+        relations = getattr(self, "artifact_relations", None)
+        if relations is not None and task.meta["request"].get("compile") is not None:
+            async with relations.admission(task.account_id, [task.meta["request"]["to"]]):
+                return await self._on_finish(task, snapshot)
+        return await self._on_finish(task, snapshot)
+
+    async def _on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         """Finalize output and versions; return active status on busy locks."""
         from openviking.server.dependencies import get_service
         from openviking.service.task_tracker import get_task_tracker
@@ -1383,7 +1423,8 @@ class CompileLifecycle:
                         run["status"] = "committing"
                         await self._store.put_operation(account_id, target_to, run)
                     try:
-                        await get_service().fs.finalize_compile_directories(request["to"], ctx)
+                        if not run_meta.get("snapshot_committed"):
+                            await get_service().fs.finalize_compile_directories(request["to"], ctx)
                         async with self._locked_output(request["to"], ctx) as lease:
                             if await tracker.is_cancellation_requested(
                                 task.task_id, account_id=account_id, user_id=task.user_id
@@ -1448,6 +1489,29 @@ class CompileLifecycle:
                         if not exc.retryable:
                             raise
                         return ExternalTaskSnapshot(status="running", stage="committing")
+                relations = getattr(self, "artifact_relations", None)
+                if (
+                    relations is not None
+                    and current
+                    and snapshot.status == "completed"
+                    and run["started_at"] is not None
+                ):
+                    if not run_meta.get("snapshot_committed"):
+                        # A no-change run uses its immutable start output.
+                        run_meta["target_head"] = run_meta["target_base"]
+                        run_meta["snapshot_committed"] = True
+                        await self._store.put_operation(account_id, target_to, run)
+                    head = run_meta["target_head"]
+                    await relations.changed(account_id, target_to, head, operation_id=operation_id)
+                    try:
+                        if not await relations.ready(account_id, target_to, head, operation_id):
+                            return ExternalTaskSnapshot(status="running", stage="building_graph")
+                    except FailedPreconditionError as exc:
+                        snapshot = ExternalTaskSnapshot(
+                            status="failed",
+                            error_code="ARTIFACT_RELATIONS_FAILED",
+                            error_message=str(exc),
+                        )
                 if current and snapshot.status in {"failed", "cancelled"}:
                     if run_meta["target_base"] and not run_meta.get("snapshot_committed"):
                         try:
@@ -1471,6 +1535,14 @@ class CompileLifecycle:
                 run["finished_at"] = time.time()
                 await self._store.put_operation(account_id, target_to, run)
             await self._release(account_id, target_to, task, run)
+            relations = getattr(self, "artifact_relations", None)
+            if relations is not None and run and run["finished_at"] is not None:
+                head = run["meta"].get("target_head")
+                if head:
+                    for ancestor in await relations.containing_targets(account_id, [target_to]):
+                        target = await self._store.get(account_id, ancestor)
+                        if ancestor != target_to and not target.get("active_operation_id"):
+                            await relations.changed(account_id, ancestor, head)
             return snapshot
 
     async def _update_conflicts(self, task: Any, ctx: RequestContext) -> None:
@@ -1541,7 +1613,9 @@ class CompileLifecycle:
                     # The head identifies the content published by completion or rollback.
                     synced = run_meta.get("target_head") or run_meta.get("target_base")
                     if synced:
-                        record["versions_head"] = synced
+                        record["version_index_head"] = synced
+                        if run["status"] == "completed":
+                            record["versions_head"] = synced
                 if record["active_task_id"] == task_id:
                     record["active_task_id"] = None
                     record["active_operation_id"] = None
@@ -1905,6 +1979,26 @@ class CompileVersions:
         return None
 
     async def record_operation(
+        self,
+        uris: List[str],
+        ctx: RequestContext,
+        operation_type: str,
+        params: Dict[str, Any],
+        operation: Callable[[], Awaitable[Any]],
+        *,
+        recursive: bool = False,
+    ) -> Any:
+        relations = getattr(self, "artifact_relations", None)
+        if relations is None:
+            return await self._record_operation(
+                uris, ctx, operation_type, params, operation, recursive=recursive
+            )
+        async with relations.mutation(uris, ctx):
+            return await self._record_operation(
+                uris, ctx, operation_type, params, operation, recursive=recursive
+            )
+
+    async def _record_operation(
         self,
         uris: List[str],
         ctx: RequestContext,
@@ -2296,7 +2390,7 @@ class CompileVersions:
             return
         changes = await self._fs.diff_paths(
             dirs=[record["to"]],
-            base=record.get("versions_head"),
+            base=record.get("version_index_head"),
             head=target_base,
             ctx=ctx,
         )
@@ -2319,7 +2413,7 @@ class CompileVersions:
                     target_base,
                     {"source": "external", "actor": None, "provenance": {}},
                 )
-        if changed and record.get("versions_head"):
+        if changed and record.get("version_index_head"):
             await self._store.mark_content_updated(account_id, record["to"])
 
     async def reconcile_rollback(
@@ -2362,7 +2456,7 @@ class CompileVersions:
                         {"source": "external", "actor": None, "provenance": {}},
                     )
             async with self._store.edit(ctx.account_id, target_to) as record:
-                record["versions_head"] = snapshot
+                record["version_index_head"] = snapshot
                 if any(uri_matches_prefix(uri, target_to) for uri in changed_uris):
                     record["content_updated_at"] = time.time()
 
@@ -2394,7 +2488,7 @@ class CompileVersions:
             grouped.setdefault(record["to"], []).append(uri)
             records[record["to"]] = record
             # Working bytes can differ from the latest version during Compile.
-            if write is not None:
+            if write is not None and edit_source != "compile":
                 previous[uri] = (
                     await self._fs.read_file_bytes(uri, ctx=ctx)
                     if await self._fs.exists(uri, ctx=ctx)
@@ -2407,7 +2501,9 @@ class CompileVersions:
             targets = [
                 uri
                 for uri in targets
-                if write is None or previous[uri] != await self._fs.read_file_bytes(uri, ctx=ctx)
+                if write is None
+                or edit_source == "compile"
+                or previous[uri] != await self._fs.read_file_bytes(uri, ctx=ctx)
             ]
             if not targets:
                 continue

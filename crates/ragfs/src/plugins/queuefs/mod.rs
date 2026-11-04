@@ -45,6 +45,10 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
         mode: 0o222,
     },
     ControlFileSpec {
+        name: "enqueue_unique",
+        mode: 0o222,
+    },
+    ControlFileSpec {
         name: "dequeue",
         mode: 0o444,
     },
@@ -449,8 +453,12 @@ impl FileSystem for QueueFileSystem {
             .ok_or_else(|| Error::InvalidOperation("no operation specified".to_string()))?;
 
         match operation.as_str() {
-            "enqueue" => {
-                let msg = Message::new(data.to_vec());
+            "enqueue" | "enqueue_unique" => {
+                let mut msg = Message::new(data.to_vec());
+                if operation == "enqueue_unique" {
+                    let oid = gix_object::compute_hash(gix_hash::Kind::Sha1, gix_object::Kind::Blob, data);
+                    msg.id = format!("unique:{oid}:{}", msg.id);
+                }
                 let len = data.len() as u64;
                 self.storage.enqueue(&queue_name, msg).await?;
                 Ok(len)
@@ -1060,7 +1068,7 @@ mod tests {
             .read_dir("/test", None, None, None, None)
             .await
             .unwrap();
-        assert_eq!(entries.len(), 8);
+        assert_eq!(entries.len(), 9);
 
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains(&"enqueue".to_string()));

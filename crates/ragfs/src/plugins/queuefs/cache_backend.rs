@@ -22,14 +22,14 @@ use uuid::Uuid;
 
 const CREATE_QUEUE_ID: &str = "queuefs.create_queue.v1";
 const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v1";
-const ENQUEUE_ID: &str = "queuefs.enqueue.v1";
+const ENQUEUE_ID: &str = "queuefs.enqueue.v2";
 const DEQUEUE_ID: &str = "queuefs.dequeue.v1";
 const PEEK_ID: &str = "queuefs.peek.v1";
 const STATUS_ID: &str = "queuefs.status.v1";
 const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v1";
 const ACK_ID: &str = "queuefs.ack.v1";
 const CLEAR_ID: &str = "queuefs.clear.v1";
-const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v1";
+const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v2";
 const ACQUIRE_RECOVERY_LEADER_ID: &str = "queuefs.acquire_recovery_leader.v1";
 const RELEASE_RECOVERY_LEADER_ID: &str = "queuefs.release_recovery_leader.v1";
 
@@ -311,6 +311,7 @@ impl CacheQueueStorage {
                     bytes(&msg.id),
                     bytes(payload),
                     bytes(unix_secs(SystemTime::now()).to_string()),
+                    bytes(msg.pending_key().unwrap_or("")),
                 ],
             )
             .await?,
@@ -642,7 +643,7 @@ async fn recover_stale(
                 "recover_stale",
                 RECOVER_STALE_ID,
                 vec![keys.processing, keys.pending],
-                vec![bytes(instance_key_prefix(key_prefix))],
+                vec![bytes(instance_key_prefix(key_prefix)), bytes(keys.message_prefix)],
             )
             .await?,
         )?)
@@ -891,6 +892,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(recovered.id, message_id);
+        second.remove_queue("jobs").await.unwrap();
+        second.shutdown().await.unwrap();
+        runtime.del(&[queue_names_key(&prefix)]).await.unwrap();
+        runtime.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unique_recovery_keeps_pending_followup_without_requeueing_old_delivery() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime = CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+            endpoints: vec![endpoint],
+            ..crate::cache_runtime::RedisProviderConfig::default()
+        }).await.unwrap();
+        let prefix = format!("queuefs-unique-recovery:{}", Uuid::new_v4());
+        let first = CacheQueueStorage::open(Arc::clone(&runtime), prefix.clone()).await.unwrap();
+        first.create_queue("jobs").await.unwrap();
+        let mut old = Message::new(b"notification".to_vec());
+        old.id = format!("unique:{}:old", "a".repeat(40));
+        let old_id = old.id.clone();
+        first.enqueue("jobs", old).await.unwrap();
+        assert_eq!(first.dequeue("jobs").await.unwrap().unwrap().id, old_id);
+        let mut followup = Message::new(b"notification".to_vec());
+        followup.id = format!("unique:{}:new", "a".repeat(40));
+        let followup_id = followup.id.clone();
+        first.enqueue("jobs", followup).await.unwrap();
+        first.shutdown().await.unwrap();
+        // No background scheduling assumptions: execute the real recovery Lua.
+        recover_stale(&runtime, &prefix, "recovery-test", Duration::from_secs(10))
+            .await.unwrap();
+        let second = CacheQueueStorage::open(Arc::clone(&runtime), prefix.clone()).await.unwrap();
+        assert_eq!(second.status("jobs").await.unwrap(), QueueState { pending: 1, processing: 0 });
+        assert_eq!(second.dequeue("jobs").await.unwrap().unwrap().id, followup_id);
+        second.ack("jobs", &followup_id).await.unwrap();
+        assert_eq!(second.size("jobs").await.unwrap(), 0);
         second.remove_queue("jobs").await.unwrap();
         second.shutdown().await.unwrap();
         runtime.del(&[queue_names_key(&prefix)]).await.unwrap();

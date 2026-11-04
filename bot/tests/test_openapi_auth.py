@@ -144,8 +144,9 @@ class TestOpenAPIAuth:
         assert session_cancelled.json()["status"] == "cancelled"
         assert client.post("/bot/v1/compile/cmp_other/cancel").status_code == 404
 
+    @pytest.mark.parametrize("write_token", [None, "compile-write-token"])
     def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
-        self, message_bus, temp_workspace, monkeypatch
+        self, message_bus, temp_workspace, monkeypatch, write_token
     ):
         class FakeCompileService:
             def __init__(self):
@@ -206,6 +207,8 @@ class TestOpenAPIAuth:
             "X-OpenViking-Account": "default",
             "X-OpenViking-User": "default",
         }
+        if write_token:
+            headers["X-OpenViking-Compile-Write-Token"] = write_token
 
         created = client.post(
             "/runtime/v1/tasks",
@@ -234,7 +237,13 @@ class TestOpenAPIAuth:
         assert created.status_code == 202
         assert status_response.status_code == 200
         assert service.scope == channel._principal_scope("dev")
-        assert service.connection is None
+        if write_token:
+            assert service.connection.model_dump(exclude_none=True) == {
+                "server_url": "http://127.0.0.1:1933",
+                "compile_write_token": write_token,
+            }
+        else:
+            assert service.connection is None
         assert runtime_probes == [{}, {}]
 
     def test_chat_returns_422_for_unsupported_context(self, message_bus, temp_workspace):

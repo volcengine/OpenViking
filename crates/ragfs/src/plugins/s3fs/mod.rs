@@ -909,12 +909,16 @@ impl FileSystem for S3FileSystem {
 
         let dst_key = self.client.build_key(&dst_normalized);
         self.client.copy_object(&src_key, &dst_key).await?;
-        self.client.delete_object(&src_key).await?;
-
+        // Copy is the publication point. Cleanup must neither hide its success
+        // nor prevent readers from invalidating the destination metadata.
+        let cleanup = self.client.delete_object(&src_key).await;
         self.dir_cache.invalidate_parent(&src_normalized).await;
         self.dir_cache.invalidate_parent(&dst_normalized).await;
         self.stat_cache.invalidate(&src_normalized).await;
         self.stat_cache.invalidate(&dst_normalized).await;
+        if let Err(error) = cleanup {
+            tracing::warn!(%error, %src_normalized, "replace published; temporary source cleanup failed");
+        }
 
         Ok(())
     }

@@ -203,6 +203,19 @@ class AsyncAGFSClient:
             return await self.run("write", path, data, ctx=ctx)
         return await self.run("write", path, data, max_retries=max_retries, ctx=ctx)
 
+    async def conditional_write(
+        self,
+        path: str,
+        expected: bytes | None,
+        data: bytes,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> bool:
+        """Backend-atomic whole-file comparison, including exclusive creation."""
+        return await self.run(
+            "conditional_write", path, expected, data, ctx=_fs_ctx_or_default(path, fs_ctx)
+        )
+
     async def mkdir(
         self, path: str, mode: str = "755", *, fs_ctx: Dict[str, str] | None = None
     ) -> Dict[str, Any]:
@@ -274,6 +287,19 @@ class AsyncAGFSClient:
             old_path,
             new_path,
             ctx=_fs_ctx_with_auto_pathlock(old_path, fs_ctx, auto_pathlock),
+        )
+
+    async def replace(
+        self,
+        src_path: str,
+        dst_path: str,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Replace a complete file within one mount, validating any supplied lease."""
+        ensure_same_encryption_account(src_path, dst_path)
+        return await self.run(
+            "replace", src_path, dst_path, ctx=_fs_ctx_or_default(src_path, fs_ctx)
         )
 
     async def cp(

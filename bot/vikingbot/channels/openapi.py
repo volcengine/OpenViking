@@ -959,6 +959,7 @@ class OpenAPIChannel(BaseChannel):
                 role=role,
                 api_key_type=api_key_type,
                 actor_peer_id=actor_peer_id,
+                compile_write_token=str(values.get("compile_write_token") or ""),
             )
             rebuilt["agent_id"] = agent_id
             return OpenVikingConnection(**rebuilt)
@@ -992,6 +993,7 @@ class OpenAPIChannel(BaseChannel):
         role: str = "",
         api_key_type: str = "user",
         actor_peer_id: str = "",
+        compile_write_token: str = "",
     ) -> dict[str, Any]:
         connection: dict[str, Any] = {
             "account_id": account_id,
@@ -1005,6 +1007,8 @@ class OpenAPIChannel(BaseChannel):
             connection["api_key"] = api_key
         if actor_peer_id:
             connection["actor_peer_id"] = actor_peer_id
+        if compile_write_token:
+            connection["compile_write_token"] = compile_write_token
         return {key: value for key, value in connection.items() if value not in ("", None)}
 
     def _resolve_api_key_connection(
@@ -1027,6 +1031,7 @@ class OpenAPIChannel(BaseChannel):
             role=role,
             api_key_type="user",
             actor_peer_id=request.headers.get("X-OpenViking-Actor-Peer", ""),
+            compile_write_token=request.headers.get("X-OpenViking-Compile-Write-Token", ""),
         )
 
     async def _resolve_trusted_connection(self, request: Request) -> dict[str, Any] | None:
@@ -1070,6 +1075,7 @@ class OpenAPIChannel(BaseChannel):
             role=role or "user",
             api_key_type="root",
             actor_peer_id=request.headers.get("X-OpenViking-Actor-Peer", ""),
+            compile_write_token=request.headers.get("X-OpenViking-Compile-Write-Token", ""),
         )
 
     async def _verify_gateway_request(
@@ -1175,7 +1181,18 @@ class OpenAPIChannel(BaseChannel):
         if self._ov_server_auth_mode() == "dev":
             _connection, scope = await self._resolve_request_identity(http_request, auth)
             compile_request._principal_scope = scope
-            compile_request.openviking_connection = None
+            token = http_request.headers.get("X-OpenViking-Compile-Write-Token", "")
+            if (
+                not token
+                and auth.can_trust_forwarded_connection
+                and compile_request.openviking_connection
+            ):
+                token = compile_request.openviking_connection.compile_write_token
+            compile_request.openviking_connection = (
+                OpenVikingConnection(server_url=self._ov_server_url(), compile_write_token=token)
+                if token
+                else None
+            )
             return
 
         if compile_request.openviking_connection is not None:

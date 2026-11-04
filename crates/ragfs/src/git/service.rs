@@ -267,9 +267,12 @@ impl GitService {
                             // the new directory is empty and contributes no listed files.
                             cleanup_exact.insert(p.clone());
                             cleanup_prefixes.push(format!("{}/", p));
+                            if include_path(p) {
+                                set.insert(p.clone());
+                            }
 
                             let listed =
-                                crate::git::enumerate::collect_under(&self.vfs, &account, p)
+                                crate::git::enumerate::collect_snapshot_under(&self.vfs, &account, p, true)
                                     .await?;
                             for rel in listed {
                                 if include_path(&rel) {
@@ -280,7 +283,7 @@ impl GitService {
                             if let Some(t) = prev_tree {
                                 if prev_paths_cache.is_none() {
                                     prev_paths_cache = Some(
-                                        crate::git::tree_builder::flatten(
+                                        crate::git::tree_builder::structure_paths(
                                             self.object_store.as_ref(),
                                             &account,
                                             t,
@@ -337,7 +340,7 @@ impl GitService {
                                 // rather than K independent walks.
                                 if prev_paths_cache.is_none() {
                                     prev_paths_cache = Some(
-                                        crate::git::tree_builder::flatten(
+                                        crate::git::tree_builder::structure_paths(
                                             self.object_store.as_ref(),
                                             &account,
                                             t,
@@ -387,7 +390,7 @@ impl GitService {
                                 // rather than a per-path `lookup` walk.
                                 if prev_paths_cache.is_none() {
                                     prev_paths_cache = Some(
-                                        crate::git::tree_builder::flatten(
+                                        crate::git::tree_builder::structure_paths(
                                             self.object_store.as_ref(),
                                             &account,
                                             t,
@@ -411,7 +414,7 @@ impl GitService {
                             if let Some(t) = prev_tree {
                                 if prev_paths_cache.is_none() {
                                     prev_paths_cache = Some(
-                                        crate::git::tree_builder::flatten(
+                                        crate::git::tree_builder::structure_paths(
                                             self.object_store.as_ref(),
                                             &account,
                                             t,
@@ -462,7 +465,7 @@ impl GitService {
             // snapshot. Deduped via BTreeSet so a path present in both sources
             // is only processed once.
             None => {
-                let listed = crate::git::enumerate::collect_all(&self.vfs, &account).await?;
+                let listed = crate::git::enumerate::collect_snapshot_under(&self.vfs, &account, "", true).await?;
                 let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
                 for p in listed {
                     if include_path(&p) {
@@ -470,7 +473,7 @@ impl GitService {
                     }
                 }
                 if let Some(t) = prev_tree {
-                    let prev_paths = crate::git::tree_builder::flatten(
+                    let prev_paths = crate::git::tree_builder::structure_paths(
                         self.object_store.as_ref(),
                         &account,
                         t,
@@ -550,6 +553,7 @@ impl GitService {
         // last commit, and `(size, mtime_ns)` cannot detect it. `None` (backend
         // could not report a write time) forces every entry down the slow path.
         let index_saved_at_ns: Option<i128> = prev_index.as_ref().and_then(|idx| idx.saved_at_ns);
+        let mut structure_changed = false;
         for rel_path in candidates {
             let abs = format!("/local/{}/{}", account, rel_path);
             // Candidates include previous snapshot blobs. If one has become a
@@ -557,7 +561,20 @@ impl GitService {
             // a file. Its current children are separate, later-sorted candidates.
             let file_info = match self.vfs.stat(&abs).await {
                 Ok(info) if !info.is_dir => Some(info),
-                Ok(_) => None,
+                Ok(_) => {
+                    let previous = match prev_tree {
+                        Some(tree) => crate::git::tree_builder::lookup_cached(
+                            self.object_store.as_ref(), &account, tree, &rel_path,
+                            &mut prev_lookup_cache,
+                        ).await?,
+                        None => None,
+                    };
+                    if !previous.is_some_and(|(_, mode)| mode.is_tree()) {
+                        structure_changed = true;
+                    }
+                    editor.ensure_directory(self.object_store.as_ref(), &account, &rel_path).await?;
+                    continue;
+                },
                 Err(e) if is_not_found(&e) => None,
                 Err(e) => return Err(e.into()),
             };
@@ -669,7 +686,11 @@ impl GitService {
                         editor
                             .remove(self.object_store.as_ref(), &account, &rel_path)
                             .await?;
-                        changed += 1;
+                        if prev_entry.is_some_and(|(_, mode)| mode.is_tree()) {
+                            structure_changed = true;
+                        } else {
+                            changed += 1;
+                        }
                     }
                     // The file is gone (or became a directory): drop its cached blob.
                     if self.index_store.is_some() {
@@ -684,7 +705,7 @@ impl GitService {
         //    (e.g. `touch` of an unchanged file). Persist the refreshed index
         //    keyed on the *current* HEAD so the next commit can still hit the
         //    fast path. Soft-fail on save errors.
-        if changed == 0 {
+        if changed == 0 && !structure_changed {
             let noop_oid = prev_head.unwrap_or_else(|| ObjectId::null(gix_hash::Kind::Sha1));
             if let (Some(store), Some(parent)) = (&self.index_store, prev_head) {
                 let new_index = CommitIndex {
@@ -869,6 +890,56 @@ impl GitService {
                 })
             }
         }
+    }
+
+    /// Read structure from a fixed commit, resolving the subtree root only once.
+    pub async fn snapshot_entries(
+        &self,
+        account: &str,
+        snapshot: &str,
+        path: &str,
+    ) -> Result<Vec<(String, String, bool)>, GitError> {
+        validate_account_id(account)?;
+        validate_relative_path(path)?;
+        let store = self.object_store.as_ref();
+        let commit = resolve_ref(self.ref_store.as_ref(), store, account, snapshot).await?;
+        let root = load_commit_meta(store, account, &commit).await?.tree;
+        let entry = crate::git::tree_builder::lookup(store, account, root, path).await?;
+        let Some((oid, mode)) = entry else {
+            return Err(GitError::PathNotFound(path.into()));
+        };
+        if !mode.is_tree() {
+            return Err(GitError::PathIsDirectory(format!("expected directory: {path}")));
+        }
+        let mut out = vec![(path.to_string(), oid.to_string(), true)];
+        for (relative, oid, is_dir) in
+            crate::git::tree_builder::entries(store, account, oid).await?
+        {
+            out.push((format!("{path}/{relative}"), oid.to_string(), is_dir));
+        }
+        Ok(out)
+    }
+
+    /// Read content-addressed blobs without repeated root-to-leaf lookups.
+    /// OIDs must come from a validated account snapshot manifest.
+    pub async fn snapshot_blobs(
+        &self,
+        account: &str,
+        oids: &[String],
+    ) -> Result<Vec<bytes::Bytes>, GitError> {
+        validate_account_id(account)?;
+        let mut out = Vec::with_capacity(oids.len());
+        for oid in oids {
+            let oid = ObjectId::from_hex(oid.as_bytes())
+                .map_err(|e| GitError::Other(format!("invalid blob oid: {e}")))?;
+            let raw = crate::git::util::read_object(self.object_store.as_ref(), account, &oid).await?;
+            let (kind, _, header) = crate::git::util::parse_object_header(&raw)?;
+            if kind != gix_object::Kind::Blob {
+                return Err(GitError::CorruptedObject("expected blob".into()));
+            }
+            out.push(raw.slice(header..));
+        }
+        Ok(out)
     }
 
     /// List files that changed under `paths` between two commits.

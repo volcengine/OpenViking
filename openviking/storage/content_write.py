@@ -254,12 +254,14 @@ class ContentWriteCoordinator:
         privacy_sanitizer: PrivacySanitizer | None = None,
         commit_content: Callable[..., Awaitable[Any]] | None = None,
         commit_batch: Callable[..., Awaitable[None]] | None = None,
+        on_written: Callable[[str, bytes], None] | None = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
         self._privacy_sanitizer = privacy_sanitizer
         self._content_commit = commit_content
         self._batch_commit = commit_batch
+        self._on_written = on_written
 
     async def _commit_content(self, uris: list[str], lease: Any, write) -> Any:
         """Write bytes and managed versions under the lease before refresh."""
@@ -843,6 +845,8 @@ class ContentWriteCoordinator:
                         if prepared is not None:
                             final_content = prepared.final_bytes
                             committed_resource_plans.append(prepared)
+                        if self._on_written is not None:
+                            self._on_written(uri, final_content)
                         if (
                             not file_only
                             and context_type_for_uri(uri)
@@ -1996,6 +2000,8 @@ class ContentWriteCoordinator:
                     target=prepared.target,
                 ),
             )
+            if self._on_written is not None:
+                self._on_written(uri, prepared.final_bytes)
             has_async_work = bool(
                 prepared.plan.direct_index_actions or prepared.plan.file_refresh is not None
             )
@@ -2672,6 +2678,8 @@ class ContentWriteCoordinator:
             final_bytes = await self._commit_content(
                 [uri], lease, lambda: self._write_in_place(uri, content, **write_kwargs)
             )
+            if self._on_written is not None:
+                self._on_written(uri, final_bytes)
             written_bytes = len(final_bytes)
             if root_task_factory is not None:
                 result = self._build_write_result(

@@ -27,6 +27,11 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn pending_key(&self) -> Option<&str> {
+        self.id.strip_prefix("unique:")?;
+        self.id.rsplit_once(':').map(|(prefix, _)| prefix)
+    }
+
     /// Create a new message with the given data
     pub fn new(data: Vec<u8>) -> Self {
         Self {
@@ -284,6 +289,11 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
+        if let Some(key) = msg.pending_key() {
+            if queue.messages.iter().any(|pending| pending.pending_key() == Some(key)) {
+                return Ok(());
+            }
+        }
         queue.last_enqueue_time = SystemTime::now();
         queue.messages.push_back(msg);
         Ok(())
@@ -494,24 +504,38 @@ impl SQLiteQueueBackend {
 
     fn recover_stale(&self, stale_sec: i64) -> Result<usize> {
         let cutoff = Utc::now().timestamp() - stale_sec.max(0);
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
 
+        let tx = conn.transaction()
+            .map_err(|e| Error::internal(format!("sqlite recovery transaction error: {}", e)))?;
         let changed = if stale_sec <= 0 {
-            conn.execute(
+            tx.execute(
                 "UPDATE queue_messages SET status = 'pending', processing_started_at = NULL WHERE status = 'processing'",
                 [],
             )
         } else {
-            conn.execute(
+            tx.execute(
                 "UPDATE queue_messages SET status = 'pending', processing_started_at = NULL WHERE status = 'processing' AND processing_started_at <= ?1",
                 params![cutoff],
             )
         }
         .map_err(|e| Error::internal(format!("sqlite recover stale error: {}", e)))?;
-
+        // Recovery may merge an interrupted delivery with its already queued
+        // follow-up. Keep one pending notification per unique payload.
+        tx.execute(
+            "DELETE FROM queue_messages WHERE status = 'pending'
+             AND message_id LIKE 'unique:%'
+             AND EXISTS (SELECT 1 FROM queue_messages newer
+                 WHERE newer.queue_name = queue_messages.queue_name
+                 AND newer.status = 'pending' AND newer.id > queue_messages.id
+                 AND substr(newer.message_id, 1, instr(substr(newer.message_id, 8), ':') + 6)
+                   = substr(queue_messages.message_id, 1, instr(substr(queue_messages.message_id, 8), ':') + 6))",
+            [],
+        ).map_err(|e| Error::internal(format!("sqlite recovery deduplication error: {}", e)))?;
+        tx.commit().map_err(|e| Error::internal(format!("sqlite recovery commit error: {}", e)))?;
         Ok(changed)
     }
 
@@ -649,8 +673,13 @@ impl QueueBackend for SQLiteQueueBackend {
         let stored = serde_json::to_string(&StoredMessage::from_message(&msg))?;
         conn.execute(
             "INSERT INTO queue_messages (queue_name, message_id, data, timestamp, status)
-             VALUES (?1, ?2, ?3, ?4, 'pending')",
-            params![queue_name, msg.id, stored, unix_secs(msg.timestamp)],
+             SELECT ?1, ?2, ?3, ?4, 'pending'
+             WHERE ?5 IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM queue_messages WHERE queue_name = ?1
+                 AND status = 'pending' AND message_id LIKE ?5
+             )",
+            params![queue_name, msg.id, stored, unix_secs(msg.timestamp),
+                msg.pending_key().map(|key| format!("{key}:%"))],
         )
         .map_err(|e| Error::internal(format!("sqlite enqueue error: {}", e)))?;
         Ok(())
@@ -1173,6 +1202,28 @@ mod tests {
         let recovered = reopened.dequeue("test").unwrap().unwrap();
         assert_eq!(recovered.id, msg_id);
         assert_eq!(recovered.data, b"recover me");
+    }
+
+    #[test]
+    fn test_unique_notification_survives_sqlite_recovery_without_duplicate_pending() {
+        let (_dir, db_path, mut backend) = sqlite_backend();
+        backend.create_queue("graph").unwrap();
+        let make = |suffix: &str| {
+            let mut message = Message::new(b"same target".to_vec());
+            message.id = format!("unique:{}:{suffix}", "a".repeat(40));
+            message
+        };
+        backend.enqueue("graph", make("one")).unwrap();
+        backend.enqueue("graph", make("duplicate")).unwrap();
+        assert_eq!(backend.size("graph").unwrap(), 1);
+        backend.dequeue("graph").unwrap().unwrap();
+        backend.enqueue("graph", make("followup")).unwrap();
+        drop(backend);
+        let mut reopened =
+            SQLiteQueueBackend::open(&db_path, SQLiteQueueOptions::default()).unwrap();
+        assert_eq!(reopened.size("graph").unwrap(), 1);
+        assert!(reopened.dequeue("graph").unwrap().unwrap().id.ends_with("followup"));
+        assert!(reopened.dequeue("graph").unwrap().is_none());
     }
 
     #[test]

@@ -531,8 +531,10 @@ class FSService:
                 return
 
         versions = self.compile_versions
-        managed = versions is not None and await versions.owning_target(
-            ctx.account_id, directory_uri
+        managed = versions is not None and (
+            await versions.artifact_relations.containing_targets(ctx.account_id, [directory_uri])
+            if getattr(versions, "artifact_relations", None)
+            else await versions.owning_target(ctx.account_id, directory_uri)
         )
 
         async def create():
@@ -628,12 +630,17 @@ class FSService:
         wait: bool = False,
     ) -> Optional[Dict[str, Any]]:
         async def execute() -> Optional[Dict[str, Any]]:
-            return await self._rm(
-                uri,
-                ctx,
-                recursive=recursive,
-                wait=wait,
-            )
+            async def remove():
+                result = await self._rm(uri, ctx, recursive=recursive, wait=wait)
+                if self.compile_versions is not None:
+                    await self.compile_versions.after_remove(uri, ctx)
+                return result
+
+            if self.compile_versions is not None:
+                return await self.compile_versions.record_operation(
+                    [uri], ctx, "rm", {"recursive": recursive}, remove, recursive=True
+                )
+            return await remove()
 
         result, _task_id = await run_tracked_operation(
             "fs_rm",
@@ -997,10 +1004,18 @@ class FSService:
         self._reject_storage_internal_target(to_uri)
         self._reject_file_only_semantic_sidecar_target(to_uri)
         validate_account_memory_template_transfer(to_uri)
-        return await self._finish_transfer_after_caller_cancel(
-            self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
-            operation="copy",
-        )
+
+        async def copy():
+            return await self._finish_transfer_after_caller_cancel(
+                self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
+                operation="copy",
+            )
+
+        if self.compile_versions is not None:
+            return await self.compile_versions.record_operation(
+                [to_uri], ctx, "cp", {"from": from_uri, "to": to_uri}, copy, recursive=True
+            )
+        return await copy()
 
     async def _cp_and_refresh(
         self,
@@ -1095,10 +1110,24 @@ class FSService:
         self._reject_storage_internal_target(to_uri)
         self._reject_file_only_semantic_sidecar_target(to_uri)
         validate_account_memory_template_transfer(to_uri)
-        await self._finish_transfer_after_caller_cancel(
-            self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
-            operation="move",
-        )
+
+        async def move():
+            await self._finish_transfer_after_caller_cancel(
+                self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
+                operation="move",
+            )
+
+        if self.compile_versions is not None:
+            await self.compile_versions.record_operation(
+                [from_uri, to_uri],
+                ctx,
+                "mv",
+                {"from": from_uri, "to": to_uri},
+                move,
+                recursive=True,
+            )
+        else:
+            await move()
 
     async def _mv_and_refresh(
         self,
@@ -1787,6 +1816,8 @@ class FSService:
         resolve_conflicts enables manual conflict resolution.
         """
         viking_fs = self._ensure_initialized()
+        if edit_source == "compile" and not ctx.compile_write_token:
+            edit_source = "agent"
         if commit_content is None and self.compile_versions is not None:
             commit_content = partial(
                 self.compile_versions.record_write,
@@ -1794,11 +1825,23 @@ class FSService:
                 edit_source=edit_source,
                 record_version=edit_source != "compile",
             )
+        relations = getattr(self.compile_versions, "artifact_relations", None)
+        original_commit = commit_content
+
+        async def commit_write(uris, *, lease_ref, write):
+            result = (
+                await original_commit(uris, lease_ref=lease_ref, write=write)
+                if original_commit is not None
+                else await write()
+            )
+            await relations.register_writes(uris, lease_ref, ctx)
+            return result
+
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
             privacy_sanitizer=self._privacy_sanitizer,
-            commit_content=commit_content,
+            commit_content=commit_write if relations is not None else commit_content,
         )
         write = partial(
             coordinator.write,
@@ -1813,7 +1856,13 @@ class FSService:
             acl=acl,
             resolve_conflicts=resolve_conflicts,
         )
-        if self.compile_versions is None or edit_source == "compile":
+        if self.compile_versions is None:
+            return await write()
+        if edit_source == "compile":
+            relations = getattr(self.compile_versions, "artifact_relations", None)
+            if relations is not None:
+                async with relations.mutation([uri], ctx):
+                    return await write()
             return await write()
         return await self.compile_versions.record_operation(
             [uri], ctx, f"{edit_source}_revise", {"mode": mode}, write
@@ -1833,15 +1882,36 @@ class FSService:
     ) -> Dict[str, Any]:
         """Apply multiple file writes and aggregate downstream refresh."""
         viking_fs = self._ensure_initialized()
+        if edit_source == "compile" and not ctx.compile_write_token:
+            edit_source = "agent"
+        relations = getattr(self.compile_versions, "artifact_relations", None)
+        pages = {}
+
+        def on_written(uri, data):
+            from openviking.service.artifact_relation_links import extract_relation_source
+
+            if uri.lower().endswith(".md") and not is_storage_internal_name(uri.rsplit("/", 1)[-1]):
+                pages[uri] = extract_relation_source(data)
+
+        async def finish_batch(*, lease_ref):
+            if edit_source == "compile":
+                if relations is not None:
+                    await relations.merge_compile_sources(pages, ctx)
+            elif self.compile_versions is not None:
+                await self.compile_versions.finish_batch(
+                    ctx=ctx, edit_source=edit_source, lease_ref=lease_ref
+                )
+            if relations is not None:
+                await relations.register_writes(
+                    [operation["uri"] for operation in operations], lease_ref, ctx
+                )
+
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
             privacy_sanitizer=self._privacy_sanitizer,
-            commit_batch=(
-                partial(self.compile_versions.finish_batch, ctx=ctx, edit_source=edit_source)
-                if self.compile_versions is not None and edit_source != "compile"
-                else None
-            ),
+            commit_batch=finish_batch if self.compile_versions is not None else None,
+            on_written=on_written if edit_source == "compile" and relations is not None else None,
             commit_content=(
                 partial(
                     self.compile_versions.record_write,
@@ -1863,7 +1933,12 @@ class FSService:
             defer_processing=defer_processing,
             processing_mode=processing_mode,
         )
-        if self.compile_versions is None or edit_source == "compile":
+        if self.compile_versions is None:
+            return await write()
+        if edit_source == "compile":
+            if relations is not None:
+                async with relations.mutation([operation["uri"] for operation in operations], ctx):
+                    return await write()
             return await write()
         return await self.compile_versions.record_operation(
             [operation["uri"] for operation in operations],

@@ -1,6 +1,6 @@
 //! Async-native Git tree editor for building and modifying tree objects.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use gix_hash::ObjectId;
 use gix_object::bstr::{BString, ByteSlice};
@@ -18,6 +18,7 @@ pub type TreeEntries = BTreeMap<BString, tree::Entry>;
 pub struct TreeEditor {
     pub(crate) root: TreeEntries,
     pub(crate) subtrees: HashMap<BString, TreeEntries>,
+    retained_directories: HashSet<BString>,
 }
 
 impl TreeEditor {
@@ -26,6 +27,7 @@ impl TreeEditor {
         Self {
             root: BTreeMap::new(),
             subtrees: HashMap::new(),
+            retained_directories: HashSet::new(),
         }
     }
 
@@ -42,6 +44,15 @@ impl TreeEditor {
             }
         }
         Ok(components)
+    }
+
+    pub async fn ensure_directory(
+        &mut self, store: &dyn ObjectStore, account: &str, path: &str,
+    ) -> Result<(), GitError> {
+        let parts = Self::split_path(path)?;
+        self.ensure_path_loaded(store, account, &parts, true).await?;
+        self.retained_directories.insert(Self::join_prefix(&parts));
+        Ok(())
     }
 
     /// Join path components into a `dir1/dir2/...` BString key.
@@ -349,7 +360,8 @@ impl TreeEditor {
                     };
 
                     match self.subtrees.get(&child_prefix) {
-                        Some(child_entries) if child_entries.is_empty() => {
+                        Some(child_entries) if child_entries.is_empty()
+                            && !self.retained_directories.contains(&child_prefix) => {
                             // Prune empty subtree.
                             continue;
                         }
@@ -467,6 +479,41 @@ pub async fn flatten(
 
     result.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(result)
+}
+
+/// Enumerate one immutable subtree, including empty directories.
+/// Paths are relative to this subtree; the caller adds the account path.
+pub async fn entries(
+    store: &dyn ObjectStore,
+    account: &str,
+    tree_oid: ObjectId,
+) -> Result<Vec<(String, ObjectId, bool)>, GitError> {
+    let mut result = Vec::new();
+    let mut stack = vec![(String::new(), tree_oid)];
+    while let Some((prefix, oid)) = stack.pop() {
+        for entry in load_tree(store, account, &oid).await?.entries {
+            let path = if prefix.is_empty() {
+                entry.filename.to_string()
+            } else {
+                format!("{prefix}/{}", entry.filename)
+            };
+            let is_dir = entry.mode.is_tree();
+            result.push((path.clone(), entry.oid, is_dir));
+            if is_dir {
+                stack.push((path, entry.oid));
+            }
+        }
+    }
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(result)
+}
+
+pub async fn structure_paths(
+    store: &dyn ObjectStore, account: &str, tree_oid: ObjectId,
+    _filter: &Option<Vec<String>>,
+) -> Result<Vec<(String, ObjectId)>, GitError> {
+    Ok(entries(store, account, tree_oid).await?
+        .into_iter().map(|(path, oid, _)| (path, oid)).collect())
 }
 
 /// Compare two trees and return `(path, change)` for every changed blob, where

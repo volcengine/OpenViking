@@ -2721,6 +2721,7 @@ class ResourceService:
         task_tracker = get_task_tracker()
         task = None
         outcome_recorded = False
+        task_id = task_id or str(uuid4())
         telemetry_id = get_current_telemetry().telemetry_id
         telemetry_cleanup_scheduled = False
 
@@ -2728,6 +2729,7 @@ class ResourceService:
             """Record an ordinary Skill package operation under its content lease."""
             if (
                 self.compile_versions is not None
+                and not ctx.compile_write_token
                 and owner_lease_ref is None
                 and (source_metadata or {}).get("source") != "compile"
                 and (target := await self.compile_versions.owning_target(ctx.account_id, skill_uri))
@@ -2867,6 +2869,10 @@ class ResourceService:
                     )
             return result
         except BaseException as exc:
+            if task is None:
+                task = await task_tracker.get(
+                    task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                )
             if task is not None and not outcome_recorded:
                 failure_message = str(exc) or "Skill processing cancelled"
                 await run_to_completion(

@@ -594,6 +594,15 @@ impl FileSystem for MultiWriteWrappedFS {
         Ok(written)
     }
 
+    async fn conditional_write(&self, path: &str, expected: Option<&[u8]>, data: &[u8]) -> Result<bool> {
+        let event = self.pending_event(path, SegmentEventType::Write, None)?;
+        let changed = self.inner.primary.backend.conditional_write(path, expected, data).await?;
+        if changed {
+            self.submit_event(event);
+        }
+        Ok(changed)
+    }
+
     /// List one directory directly from the primary backend.
     async fn read_dir(
         &self,
@@ -643,6 +652,21 @@ impl FileSystem for MultiWriteWrappedFS {
         for event in events {
             self.submit_event(event);
         }
+        Ok(())
+    }
+
+    /// Replace a primary file and queue destination write and source removal.
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        if self.resolve_context(src_path)?.account_id()
+            != self.resolve_context(dst_path)?.account_id()
+        {
+            return Err(Error::invalid_path("replace paths cross accounts"));
+        }
+        let write = self.pending_event(dst_path, SegmentEventType::Write, None)?;
+        let remove = self.pending_event(src_path, SegmentEventType::Remove, None)?;
+        self.inner.primary.backend.replace(src_path, dst_path).await?;
+        self.submit_event(write);
+        self.submit_event(remove);
         Ok(())
     }
 

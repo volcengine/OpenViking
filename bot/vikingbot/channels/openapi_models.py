@@ -152,6 +152,7 @@ class OpenVikingConnection(BaseModel):
     user_id: Optional[str] = Field(default=None, description="Effective user ID")
     agent_id: Optional[str] = Field(default=None, description="Effective agent ID")
     actor_peer_id: Optional[str] = Field(default=None, description="Effective actor peer ID")
+    compile_write_token: Optional[str] = Field(default=None, repr=False)
     role: Optional[str] = Field(default=None, description="Effective OpenViking role")
     api_key_type: Optional[str] = Field(default=None, description="OpenViking API key type")
     server_url: Optional[str] = Field(default=None, description="OpenViking server URL")

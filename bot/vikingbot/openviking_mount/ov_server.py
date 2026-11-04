@@ -86,6 +86,12 @@ class VikingClient:
         if self._is_dev_mode():
             client_kwargs = {"url": openviking_config.server_url}
             self._apply_actor_peer_scope(client_kwargs)
+            if self._request_connection and self._request_connection.get("compile_write_token"):
+                client_kwargs["extra_headers"] = {
+                    "X-OpenViking-Compile-Write-Token": self._request_connection[
+                        "compile_write_token"
+                    ]
+                }
             if agent_id is None or _is_session_key(agent_id):
                 self.client = ov.AsyncHTTPClient(**client_kwargs)
                 self.agent_id = "default"
@@ -158,11 +164,12 @@ class VikingClient:
             "api_key_type",
             "server_url",
             "actor_peer_id",
+            "compile_write_token",
         ):
             value = connection.get(key)
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
-        if not normalized.get("api_key"):
+        if not normalized.get("api_key") and not normalized.get("compile_write_token"):
             return None
         return normalized
 
@@ -172,7 +179,13 @@ class VikingClient:
         request_role = str(connection.get("role") or "").strip().lower()
         self._request_role = request_role or None
         self.api_key_type = self._normalize_auth_value(connection.get("api_key_type")) or "user"
-        self.auth_mode = "trusted" if self.api_key_type == "root" else "api_key"
+        self.auth_mode = (
+            "dev"
+            if not connection.get("api_key")
+            else "trusted"
+            if self.api_key_type == "root"
+            else "api_key"
+        )
         self.agent_id = connection.get("agent_id") or agent_id
         self.workspace_id = self.agent_id
         self.account_id = connection.get("account_id")
@@ -190,6 +203,10 @@ class VikingClient:
             remote_client_kwargs["user"] = self.admin_user_id
 
         self._apply_actor_peer_scope(remote_client_kwargs)
+        if connection.get("compile_write_token"):
+            remote_client_kwargs["extra_headers"] = {
+                "X-OpenViking-Compile-Write-Token": connection["compile_write_token"]
+            }
         self.client = ov.AsyncHTTPClient(**remote_client_kwargs)
 
     async def _initialize(self):

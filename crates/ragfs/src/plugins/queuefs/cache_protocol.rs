@@ -47,6 +47,14 @@ pub(super) const ENQUEUE_SCRIPT: &str = r#"
 if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then
     return 0
 end
+if ARGV[5] and ARGV[5] ~= '' then
+    local prefix = ARGV[5] .. ':'
+    for _, id in ipairs(redis.call('LRANGE', KEYS[3], 0, -1)) do
+        if string.sub(id, 1, string.len(prefix)) == prefix then
+            return 1
+        end
+    end
+end
 redis.call('SET', KEYS[2], ARGV[3])
 redis.call('RPUSH', KEYS[3], ARGV[2])
 redis.call('HSET', KEYS[4], 'last_updated', ARGV[4])
@@ -149,7 +157,21 @@ for _, member in ipairs(members) do
         local instance = string.sub(member, separator + 1)
         if redis.call('EXISTS', ARGV[1] .. instance .. ':alive') == 0 then
             redis.call('ZREM', KEYS[1], member)
-            redis.call('RPUSH', KEYS[2], id)
+            local prefix = string.match(id, '^(unique:[^:]+:)')
+            local duplicate = false
+            if prefix then
+                for _, pending in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do
+                    if string.sub(pending, 1, string.len(prefix)) == prefix then
+                        duplicate = true
+                        break
+                    end
+                end
+            end
+            if duplicate then
+                redis.call('DEL', ARGV[2] .. id)
+            else
+                redis.call('RPUSH', KEYS[2], id)
+            end
             recovered = recovered + 1
         end
     end

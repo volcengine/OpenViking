@@ -185,6 +185,21 @@ class SkillProcessor:
         preparation: SkillProcessingPreparation,
         viking_fs: VikingFS,
         ctx: RequestContext,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        relations = getattr(self, "artifact_relations", None)
+        if relations is None:
+            return await self._process_prepared_skill(preparation, viking_fs, ctx, **kwargs)
+        root = self._resolve_skill_root_uri(ctx, kwargs.get("target_uri"))
+        uri = f"{root}/{preparation.skill_dict['name']}"
+        async with relations.mutation([uri], ctx):
+            return await self._process_prepared_skill(preparation, viking_fs, ctx, **kwargs)
+
+    async def _process_prepared_skill(
+        self,
+        preparation: SkillProcessingPreparation,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
         *,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
@@ -200,6 +215,14 @@ class SkillProcessor:
         auxiliary_files = preparation.auxiliary_files
         base_path = preparation.base_path
         telemetry = get_current_telemetry()
+        pages = {}
+
+        def on_written(uri: str, data: bytes):
+            if ctx.compile_write_token and uri.lower().endswith(".md"):
+                from openviking.service.artifact_relation_links import extract_relation_source
+
+                pages[uri] = extract_relation_source(data)
+
         lease = None
         # Training supplies its enclosing tree lease. Acquire a separate package
         # reference so background indexing never takes ownership of that lease.
@@ -240,6 +263,7 @@ class SkillProcessor:
                     overview=skill_dict.get("content", ""),
                     ctx=ctx,
                     lease_ref=lease,
+                    on_written=on_written,
                 )
             )
 
@@ -251,6 +275,7 @@ class SkillProcessor:
                     skill_dir_uri=skill_dir_uri,
                     ctx=ctx,
                     lease_ref=lease,
+                    on_written=on_written,
                 )
             )
             telemetry.set(
@@ -274,6 +299,14 @@ class SkillProcessor:
                 )
             if on_package_written is not None:
                 await run_to_completion(lambda: on_package_written(skill_dir_uri, lease))
+            if pages:
+                await self.artifact_relations.merge_compile_sources(pages, ctx)
+            relations = getattr(self, "artifact_relations", None)
+            if relations is not None and owner_lease_ref is None:
+                # Snapshot the complete package while its content lease is
+                # still ours, before the semantic worker adopts that lease.
+                # Updates with an enclosing owner commit after rollback/success.
+                await relations.register_writes([skill_dir_uri], lease, ctx)
             index_start = time.perf_counter()
 
             async def enqueue_package() -> None:
@@ -658,6 +691,7 @@ class SkillProcessor:
         overview: str,
         ctx: RequestContext,
         lease_ref: Dict[str, Any],
+        on_written: Optional[Callable[[str, bytes], None]] = None,
     ):
         """Write main skill content to VikingFS."""
         from openviking.storage.abstract_overview import write_abstract_overview
@@ -684,6 +718,8 @@ class SkillProcessor:
             ctx=ctx,
             lease_ref=lease_ref,
         )
+        if on_written is not None:
+            on_written(skill_md_uri, serialized.encode("utf-8"))
         await write_abstract_overview(
             viking_fs=viking_fs,
             dir_uri=skill_dir_uri,
@@ -703,6 +739,7 @@ class SkillProcessor:
         skill_dir_uri: str,
         ctx: RequestContext,
         lease_ref: Optional[Dict[str, Any]] = None,
+        on_written: Optional[Callable[[str, bytes], None]] = None,
     ):
         """Write auxiliary files to VikingFS."""
         for aux_file in auxiliary_files:
@@ -732,6 +769,7 @@ class SkillProcessor:
                     ctx=ctx,
                     lease_ref=lease_ref,
                 )
+                file_bytes = text_content.encode("utf-8")
             else:
                 await viking_fs.write_file_bytes(
                     aux_uri,
@@ -739,6 +777,8 @@ class SkillProcessor:
                     ctx=ctx,
                     lease_ref=lease_ref,
                 )
+            if on_written is not None:
+                on_written(aux_uri, file_bytes)
 
     async def _enqueue_skill_package(
         self,

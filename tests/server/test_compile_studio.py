@@ -372,6 +372,9 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     runtime_status = "completed"
 
     async def generate(payload, **kwargs):
+        from dataclasses import replace
+
+        compile_ctx = replace(ctx, compile_write_token=kwargs["connection"]["compile_write_token"])
         calls.append(payload["payload"])
         operations = [{"uri": page, "content": "generated"}]
         if runtime_status == "failed":
@@ -379,23 +382,18 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         await service.fs.batch_write(
             root_uri=target,
             operations=operations,
-            ctx=ctx,
+            ctx=compile_ctx,
             defer_processing=True,
             edit_source="compile",
         )
         if runtime_status == "failed":
-            await service.fs.mv("viking://resources/inbox/note.md", f"{target}/imported.md", ctx)
-            await service.fs.cp(
-                "viking://resources/inbox/copy.md", f"{target}/copied.md", recursive=False, ctx=ctx
-            )
-            await service.fs.mv(f"{target}/old.md", f"{target}/renamed.md", ctx)
-            await service.fs.rm(f"{target}/discard.md", ctx, wait=True)
-            await service.fs.batch_write(
-                root_uri=target,
-                operations=[{"uri": page, "content": "ordinary edit"}],
-                ctx=ctx,
-                defer_processing=True,
-            )
+            with pytest.raises(ConflictError, match="Compile is running"):
+                await service.fs.batch_write(
+                    root_uri=target,
+                    operations=[{"uri": page, "content": "ordinary edit"}],
+                    ctx=ctx,
+                    defer_processing=True,
+                )
         return CompileSessionAccepted(session_id="runtime-task")
 
     runtime = SimpleNamespace(
@@ -451,12 +449,19 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         await tracker.get(first, **owner)
     ).error
     assert await service.fs.read(page, ctx) == "generated"
+    response = await client.get("/api/v1/compile/artifact-relations", params={"to": target})
+    assert response.status_code == 200, response.text
+    assert {"uri": page} in response.json()["result"]["nodes"]
+    assert response.json()["result"]["generated_at"].endswith("Z")
 
     # Interrupted finalization reuses durable checkpoints without publishing another version.
     store = service.compile.lifecycle.store
     initial_state = await store.get_by_to(ctx.account_id, target)
     assert initial_state["auto_update"] is False and initial_state["update_schedule"] is None
     assert initial_state["conflicts_num"] == 2
+    publication, _ = await service.artifact_relations.store.get_publication(ctx.account_id, target)
+    assert initial_state["versions_head"] == initial_state["wiki_head"]
+    assert publication.target_snapshot_id == initial_state["versions_head"]
     first_operation_id = initial_state["initial_operation_id"]
     other_target = f"{target}_other"
     async with store.edit(ctx.account_id, other_target, create=True):
@@ -561,8 +566,15 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     for name in ("imported.md", "copied.md", "renamed.md", "partial.md"):
         uri = f"{target}/{name}"
         assert not await service.viking_fs.exists(uri, ctx=ctx)
-    assert not await service.viking_fs.exists("viking://resources/inbox/note.md", ctx=ctx)
+    assert await service.viking_fs.exists("viking://resources/inbox/note.md", ctx=ctx)
     assert await service.fs.read("viking://resources/inbox/copy.md", ctx) == "keep copied"
+    # Ordinary edits resume only after Compile (including graph publication) settles.
+    await service.fs.batch_write(
+        root_uri=target,
+        operations=[{"uri": page, "content": "ordinary edit"}],
+        ctx=ctx,
+        defer_processing=True,
+    )
     for entry in await store.list_operations(ctx.account_id, target):
         manifest = await store.get_outputs(ctx.account_id, target, entry["operation_id"])
         if manifest is not None:

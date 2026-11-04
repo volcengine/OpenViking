@@ -101,6 +101,16 @@ pub async fn collect_under(
     account: &str,
     sub_path: &str,
 ) -> Result<Vec<String>, GitError> {
+    collect_snapshot_under(vfs, account, sub_path, false).await
+}
+
+/// Snapshot manifests also preserve explicitly existing directories.
+pub async fn collect_snapshot_under(
+    vfs: &Arc<dyn FileSystem>,
+    account: &str,
+    sub_path: &str,
+    include_dirs: bool,
+) -> Result<Vec<String>, GitError> {
     let root = if sub_path.is_empty() {
         format!("/local/{}", account)
     } else {
@@ -114,7 +124,7 @@ pub async fn collect_under(
 
     let mut survivors = Vec::new();
     for entry in entries {
-        if entry.info.is_dir {
+        if entry.info.is_dir && !include_dirs {
             continue;
         }
 

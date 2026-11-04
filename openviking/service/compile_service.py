@@ -183,6 +183,7 @@ class CompileAPIClient:
             ("account_id", "X-OpenViking-Account"),
             ("user_id", "X-OpenViking-User"),
             ("actor_peer_id", "X-OpenViking-Actor-Peer"),
+            ("compile_write_token", "X-OpenViking-Compile-Write-Token"),
         ):
             value = str(connection.get(field) or "").strip()
             if value:
@@ -591,6 +592,13 @@ class CompileService:
             )
             if changes is not None:
                 args = {**(args or {}), "changes": changes}
+                if getattr(self._lifecycle, "artifact_relations", None) is not None:
+                    connection = {
+                        **connection,
+                        "compile_write_token": await self._lifecycle.runtime_write_token(
+                            str(connection.get("account_id") or ""), payload["to"], ov_task_id
+                        ),
+                    }
         if args is not None:
             request_payload["args"] = args
         accepted = await self._client().create(

@@ -87,6 +87,11 @@ class AGFSSyncClientProtocol(Protocol):
     def mv(self, old_path: str, new_path: str) -> Dict[str, Any]:
         """Move or rename a path inside AGFS."""
 
+    def replace(
+        self, src_path: str, dst_path: str, ctx: Dict[str, str] | None = None
+    ) -> Dict[str, Any]:
+        """Replace a destination with a complete same-mount file."""
+
     def copy_within_mount(self, src_path: str, dst_path: str) -> Dict[str, Any]:
         """Attempt a same-mount verbatim copy and report whether it was used."""
 
@@ -118,6 +123,16 @@ class AGFSSyncClientProtocol(Protocol):
         continuation_token: str | None = None,
     ) -> Dict[str, Any]:
         """Return one page of flat glob matches for the given AGFS directory."""
+
+    def conditional_write(
+        self,
+        path: str,
+        expected: bytes | None,
+        data: bytes,
+        *,
+        ctx: Dict[str, str] | None = None,
+    ) -> bool:
+        """Atomically compare content or create exclusively."""
 
     def pathlock_acquire_batch_async(
         self,

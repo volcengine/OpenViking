@@ -61,6 +61,15 @@ async def create_compile(
 __all__ = ["router"]
 
 
+@router.get("/compile/artifact-relations")
+async def artifact_relations(
+    to: str = Query(..., min_length=1),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    to = validate_request_viking_uri(resolve_path_variables(to), ctx)
+    return Response(status="ok", result=await get_service().artifact_relations.query(to, ctx))
+
+
 @router.get("/compile/config")
 async def get_compile_config(
     to: str = Query(..., min_length=1),

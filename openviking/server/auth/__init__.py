@@ -141,6 +141,7 @@ async def _build_request_context(
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,
+        compile_write_token=request.headers.get("X-OpenViking-Compile-Write-Token"),
     )
     manager = getattr(request.app.state, "api_key_manager", None)
     deletion = None

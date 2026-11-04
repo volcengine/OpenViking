@@ -1022,10 +1022,17 @@ async def update_skill(
             result.setdefault("warnings", []).extend(cleanup_warnings)
         return result
 
+    async def update_with_admission():
+        relations = getattr(service, "artifact_relations", None)
+        if relations is not None:
+            async with relations.mutation([root_uri], _ctx):
+                return await _update()
+        return await _update()
+
     execution = await run_operation(
         operation="skills.update",
         telemetry=request.telemetry,
-        fn=_update,
+        fn=update_with_admission,
     )
     return Response(
         status="ok",

@@ -106,6 +106,10 @@ impl FileSystem for StatsWrappedFS {
         result
     }
 
+    async fn conditional_write(&self, path: &str, expected: Option<&[u8]>, data: &[u8]) -> Result<bool> {
+        self.inner.conditional_write(path, expected, data).await
+    }
+
     async fn read_dir(
         &self,
         path: &str,

@@ -333,6 +333,42 @@ impl FileSystem for EncryptionWrappedFS {
         Ok(slice_bytes(plaintext, offset, size))
     }
 
+    async fn conditional_write(&self, path: &str, expected: Option<&[u8]>, data: &[u8]) -> Result<bool> {
+        if Self::should_passthrough_content(path) {
+            return self.inner.conditional_write(path, expected, data).await;
+        }
+        let account_id = self.require_account_id()?;
+        // Compare plaintext, but fence the PUT using the exact ciphertext that
+        // was read. Never encrypt `expected`: envelopes have random nonces.
+        let current = match expected {
+            Some(expected) => {
+                let raw = match self.inner.read(path, 0, 0).await {
+                    Ok(raw) => raw,
+                    Err(Error::NotFound(_)) => return Ok(false),
+                    Err(error) => return Err(error),
+                };
+                let plain = if crypto::is_encrypted(&raw) {
+                    self.decrypt_envelope(&account_id, &raw)?
+                } else {
+                    raw.clone()
+                };
+                if plain != expected {
+                    return Ok(false);
+                }
+                Some(raw)
+            }
+            None => None,
+        };
+        let account_key = self.get_account_key(&account_id);
+        let file_key: [u8; 32] = rand::random();
+        let data_iv: [u8; 12] = rand::random();
+        let key_iv: [u8; 12] = rand::random();
+        let ct = crypto::aes_gcm_encrypt(&file_key, &data_iv, data)?;
+        let enc_key = crypto::aes_gcm_encrypt(&account_key, &key_iv, &file_key)?;
+        let envelope = crypto::build_envelope(self.provider_type, &enc_key, &key_iv, &data_iv, &ct);
+        self.inner.conditional_write(path, current.as_deref(), &envelope).await
+    }
+
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
         if Self::should_passthrough_content(path) {
             return self.inner.write(path, data, offset, flags).await;
@@ -517,6 +553,11 @@ impl FileSystem for EncryptionWrappedFS {
         // domains would move ciphertext under a different derived account key and make it unreadable.
         Self::ensure_same_encryption_domain(old_path, new_path)?;
         self.inner.rename(old_path, new_path).await
+    }
+
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        Self::ensure_same_encryption_domain(src_path, dst_path)?;
+        self.inner.replace(src_path, dst_path).await
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
