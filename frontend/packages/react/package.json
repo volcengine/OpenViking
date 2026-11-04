@@ -60,11 +60,11 @@
       "import": "./dist/components/agent-connect.js"
     },
     "./components/agent-connect/style.css": "./dist/components/agent-connect/style.css",
-    "./components/resource-import": {
-      "types": "./dist/components/resource-import/resource-import.d.ts",
-      "import": "./dist/components/resource-import.js"
+    "./components/search": {
+      "types": "./dist/components/search/search.d.ts",
+      "import": "./dist/components/search.js"
     },
-    "./components/resource-import/style.css": "./dist/components/resource-import/style.css",
+    "./components/search/style.css": "./dist/components/search/style.css",
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./package.json": "./package.json",

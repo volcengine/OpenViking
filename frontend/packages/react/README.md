@@ -6,17 +6,17 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 
 ## 模块目录
 
-| 源码目录                                                                 | 公开入口                                       | 职责                             |
-| ------------------------------------------------------------------------ | ---------------------------------------------- | -------------------------------- |
-| [components/file-tree](./src/components/file-tree/README.md)             | `@openviking/react/components/file-tree`       | 目录树渲染、展开、选中与事件回传 |
-| [components/file-preview](./src/components/file-preview/README.md)       | `@openviking/react/components/file-preview`    | 只读预览状态与扩展页签           |
-| [components/tui](./src/components/tui/README.md)                         | `@openviking/react/components/tui`             | 命令输入、执行状态与结果展示     |
-| [components/viking-bot](./src/components/viking-bot/README.md)           | `@openviking/react/components/viking-bot`      | 对话、会话、回复及附件交互       |
-| [components/scope-switcher](./src/components/scope-switcher/README.md)   | `@openviking/react/components/scope-switcher`  | 作用域选择与切换交互             |
-| [components/agent-connect](./src/components/agent-connect/README.md)     | `@openviking/react/components/agent-connect`   | Agent 接入步骤、配置说明及状态   |
-| [components/resource-import](./src/components/resource-import/README.md) | `@openviking/react/components/resource-import` | 导入方式、文件选择、进度及结果   |
-| [pages](./src/pages/README.md)                                           | 尚无公开入口                                   | 页面组合、数据获取与处理         |
-| [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)           | 仅包内使用                                     | 跨模块 Hook 与纯工具             |
+| 源码目录                                                               | 公开入口                                      | 职责                             |
+| ---------------------------------------------------------------------- | --------------------------------------------- | -------------------------------- |
+| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | 目录树渲染、展开、选中与事件回传 |
+| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | 只读预览状态与扩展页签           |
+| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | 命令输入、执行状态与结果展示     |
+| [components/viking-bot](./src/components/viking-bot/README.md)         | `@openviking/react/components/viking-bot`     | 对话、会话、回复及附件交互       |
+| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | 作用域选择与切换交互             |
+| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Agent 接入步骤、配置说明及状态   |
+| [components/search](./src/components/search/README.md)                 | `@openviking/react/components/search`         | 检索入口、方式切换与高级筛选     |
+| [pages](./src/pages/README.md)                                         | 尚无公开入口                                  | 页面组合、数据获取与处理         |
+| [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)         | 仅包内使用                                    | 跨模块 Hook 与纯工具             |
 
 七个业务模块已定义公开的 props 类型，并从各自子路径导出同名占位组件。占位组件只渲染一个固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API；真实实现随视图迁入重写。`StatusBadge` 是已完成的脚手架示例，可从根入口或 `@openviking/react/components/status-badge` 导入。
 组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[pages](./src/pages/README.md) 负责取数、处理业务状态和编排；尚未定义首个页面。
