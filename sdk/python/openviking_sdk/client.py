@@ -725,7 +725,10 @@ class AsyncHTTPClient:
                 data=data,
             )
         result = self._handle_response(response)
-        return result.get("temp_file_id", "")
+        temp_file_id = result.get("temp_file_id") if isinstance(result, dict) else None
+        if not isinstance(temp_file_id, str) or not temp_file_id.strip():
+            raise InternalError("Temporary upload response missing temp_file_id")
+        return temp_file_id
 
     def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Session:
         return Session(self, session_id or "")

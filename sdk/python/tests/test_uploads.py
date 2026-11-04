@@ -5,8 +5,9 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
-from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
+from openviking_sdk import AsyncHTTPClient, OpenVikingError, SyncHTTPClient
 from openviking_sdk.uploads import zip_directory
 
 
@@ -110,3 +111,29 @@ async def test_upload_temp_file_forwards_upload_mode():
         call = fake_http.calls[-1]
         assert call["path"] == "/api/v1/resources/temp_upload"
         assert call["data"] == {"upload_mode": "shared"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upload_result",
+    [None, {}, {"temp_file_id": None}, {"temp_file_id": " "}, {"temp_file_id": 42}],
+)
+async def test_add_resource_stops_after_an_upload_without_an_id(tmp_path, upload_result):
+    source = tmp_path / "demo.md"
+    source.write_text("# Demo", encoding="utf-8")
+    client = AsyncHTTPClient(url="http://test.invalid", api_key="test")
+    paths = []
+
+    def handle(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, json={"status": "ok", "result": upload_result})
+
+    async with httpx.AsyncClient(
+        base_url="http://test.invalid", transport=httpx.MockTransport(handle)
+    ) as http:
+        client._http = http
+        with pytest.raises(OpenVikingError, match="missing temp_file_id") as raised:
+            await client.add_resource(str(source))
+
+    assert raised.value.code == "INTERNAL"
+    assert paths == ["/api/v1/resources/temp_upload"]
