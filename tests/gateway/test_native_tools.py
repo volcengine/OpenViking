@@ -615,7 +615,14 @@ async def test_native_stream_failure_uses_protocol_terminal(running_gateway, pro
         if failure == "truncated":
             events.pop()
         elif failure == "error":
-            events[-1] = {"type": "error", "error": {"message": "upstream failure"}}
+            events[-1] = {
+                "type": "error",
+                "error": {
+                    "type": "upstream_overloaded",
+                    "code": "upstream_rate_limit",
+                    "message": "upstream failure",
+                },
+            }
         elif failure == "incomplete_call" and protocol == "responses":
             events[-1]["type"] = "response.incomplete"
             events[-1]["response"]["status"] = "incomplete"
@@ -631,6 +638,16 @@ async def test_native_stream_failure_uses_protocol_terminal(running_gateway, pro
     )
     assert response.status_code == 200
     events = [SSEDecoder.data(f) for f in SSEDecoder().feed(response.content)]
+    if failure == "error":
+        assert events[-1]["type"] == "error"
+        assert events[-1]["error"] == {
+            "type": "upstream_overloaded",
+            "code": "upstream_rate_limit",
+            "message": "upstream failure",
+        }
+        if protocol == "responses":
+            assert [e["sequence_number"] for e in events] == list(range(len(events)))
+        return
     if protocol == "responses":
         assert events[-1]["type"] == "response.failed"
         failed = events[-1]["response"]
@@ -869,15 +886,18 @@ async def test_native_events_arriving_together_leave_together(protocol):
         )
         loop.adapter.identifier = "fixed"
         writes = []
-        with pytest.raises(ToolLoopError, match="Model stream failed"):
+        with pytest.raises(ToolLoopError, match="Model stream failed") as caught:
             async for write in loop.run(response, None):
                 writes.append(write)
+        writes.append(loop.error(caught.value))
         return writes
 
     one_by_one = await relay([sse(event) for event in [*events, error]])
     together = await relay([b"".join(sse(event) for event in [*events, error])])
-    assert len(together) == 1 < len(one_by_one)
-    assert together[0] == b"".join(one_by_one)
+    assert len(together) == 2 < len(one_by_one)
+    assert b"".join(together) == b"".join(one_by_one)
+    terminal = SSEDecoder.data(SSEDecoder().feed(together[-1])[0])
+    assert terminal["error"] == {"type": "overloaded_error"}
 
 
 def test_streamed_text_append_keeps_the_text_on_a_bad_delta():
