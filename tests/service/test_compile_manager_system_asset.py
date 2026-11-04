@@ -3,7 +3,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -24,9 +24,13 @@ async def test_compile_manager_system_asset_is_mcp_readable_and_read_only(
     monkeypatch,
 ):
     expected = COMPILE_MANAGER_ASSET.read_text()
-    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=expected))
-    service = SimpleNamespace(fs=FSService(viking_fs=viking_fs))
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    viking_fs = SimpleNamespace(
+        authorize_read=Mock(return_value=ctx),
+        read_file=AsyncMock(return_value=expected),
+    )
+    mcps = SimpleNamespace(read_live_context=AsyncMock(return_value=None))
+    service = SimpleNamespace(fs=FSService(viking_fs=viking_fs), mcps=mcps)
     token = mcp_endpoint._mcp_ctx.set(ctx)
     monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
     try:
@@ -37,4 +41,6 @@ async def test_compile_manager_system_asset_is_mcp_readable_and_read_only(
     assert isinstance(content, str)
     assert content.startswith("---\nname: compile-manager\n")
     assert "# Compile 管理" in content
+    viking_fs.authorize_read.assert_called_once_with(ctx, [COMPILE_MANAGER_URI])
     viking_fs.read_file.assert_awaited_once_with(COMPILE_MANAGER_URI, ctx=ctx)
+    mcps.read_live_context.assert_awaited_once_with(expected, ctx)

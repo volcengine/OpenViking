@@ -139,6 +139,7 @@ pub(super) type ProviderDelV1 = unsafe extern "C" fn(
     removed: *mut u64,
     error: *mut OwnedBufferV1,
 ) -> i32;
+pub(super) type ProviderUnlinkV1 = ProviderDelV1;
 pub(super) type ProviderMgetV1 = unsafe extern "C" fn(
     provider: *mut c_void,
     keys: *const ByteSliceV1,
@@ -159,6 +160,28 @@ pub(super) type ProviderIncrbyV1 = unsafe extern "C" fn(
     value: *mut i64,
     error: *mut OwnedBufferV1,
 ) -> i32;
+pub(super) type ProviderExpireV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    duration_ms: u64,
+    applied: *mut u8,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderHgetV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    field: ByteSliceV1,
+    output: *mut OptionalOwnedBufferV1,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderHsetV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    field: ByteSliceV1,
+    value: ByteSliceV1,
+    added: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
 pub(super) type ProviderSismemberV1 = unsafe extern "C" fn(
     provider: *mut c_void,
     key: ByteSliceV1,
@@ -176,6 +199,39 @@ pub(super) type ProviderScardV1 = unsafe extern "C" fn(
     provider: *mut c_void,
     key: ByteSliceV1,
     count: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZaddV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    score: f64,
+    member: ByteSliceV1,
+    added: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZscanV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    pattern: ByteSliceV1,
+    count: u32,
+    output: *mut OwnedBufferArrayV1,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZrangeByScoreV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    min: f64,
+    max: f64,
+    limit: u32,
+    output: *mut OwnedBufferArrayV1,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZremV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    members: *const ByteSliceV1,
+    members_len: usize,
+    removed: *mut u64,
     error: *mut OwnedBufferV1,
 ) -> i32;
 pub(super) type ProviderListPushV1 = unsafe extern "C" fn(
@@ -292,6 +348,14 @@ pub(super) struct ProviderApiV1 {
     pub(super) linsert: Option<ProviderLinsertV1>,
     pub(super) lmove: Option<ProviderLmoveV1>,
     pub(super) execute_script: Option<ProviderExecuteScriptV1>,
+    pub(super) expire: Option<ProviderExpireV1>,
+    pub(super) hget: Option<ProviderHgetV1>,
+    pub(super) hset: Option<ProviderHsetV1>,
+    pub(super) zadd: Option<ProviderZaddV1>,
+    pub(super) zscan: Option<ProviderZscanV1>,
+    pub(super) zrem: Option<ProviderZremV1>,
+    pub(super) unlink: Option<ProviderUnlinkV1>,
+    pub(super) zrangebyscore: Option<ProviderZrangeByScoreV1>,
 }
 
 pub(super) type ProviderEntryV1 = unsafe extern "C" fn() -> *const ProviderApiV1;

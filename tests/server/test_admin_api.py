@@ -8,6 +8,7 @@ import hashlib
 import json
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from unittest.mock import AsyncMock, Mock
 
@@ -75,6 +76,7 @@ class _FakeAGFS:
     def __init__(self):
         self._files = {}
         self._dirs = {"/", "/local"}
+        self.write_contexts = {}
 
     def read(self, path, **_kwargs):
         if path not in self._files:
@@ -84,6 +86,7 @@ class _FakeAGFS:
     def write(self, path, content, **_kwargs):
         self.ensure_parent_dirs(path)
         self._files[path] = content
+        self.write_contexts[path] = _kwargs.get("ctx")
 
     def mv(self, old_path, new_path, **_kwargs):
         self._files[new_path] = self._files.pop(old_path)
@@ -118,6 +121,7 @@ class _FakeVikingFS:
         self.agfs = _FakeAGFS()
         self.files = {}
         self.writes = []
+        self.write_leases = []
 
     async def read_file(self, uri, **_kwargs):
         if uri not in self.files:
@@ -127,8 +131,9 @@ class _FakeVikingFS:
     async def _ensure_access(self, uri, ctx, *, action):
         return None
 
-    async def write_file(self, uri, content, **_kwargs):
+    async def write_file(self, uri, content, **kwargs):
         self.writes.append(uri)
+        self.write_leases.append(kwargs.get("lease_ref"))
         self.files[uri] = content
 
     async def rm(self, uri, **_kwargs):
@@ -140,6 +145,9 @@ class _FakeService:
         self.viking_fs = _FakeVikingFS()
         self.sessions = self
         self.runtime_config_manager = manager_over_source(MemoryConfigSource())
+        self.account_lease = {"lease_ref": "account-provisioning"}
+        self.account_lock_events = []
+        self.workspace_leases = []
 
     async def get_agent_evolution_enabled(self, account_id):
         del account_id
@@ -151,7 +159,16 @@ class _FakeService:
     async def initialize_user_directories(self, ctx):
         return None
 
-    async def initialize_account_workspace(self, ctx):
+    @asynccontextmanager
+    async def account_workspace_lock(self, ctx):
+        self.account_lock_events.append(("acquire", ctx.account_id))
+        try:
+            yield self.account_lease
+        finally:
+            self.account_lock_events.append(("release", ctx.account_id))
+
+    async def initialize_account_workspace(self, ctx, *, lease_ref=None):
+        self.workspace_leases.append(lease_ref)
         return None
 
 
@@ -2029,6 +2046,9 @@ async def test_create_account(
 ):
     """ROOT provisioning applies account settings before initializing storage."""
     settings = {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
+        "parser_api": {"api_key": "parser-private-key"},
         "embedding": {"max_retries": 5},
         "vectordb": {
             "backend": "vikingdb",
@@ -2071,11 +2091,12 @@ async def test_create_account(
         json={"account_id": acct, "admin_user_id": "alice", "settings": settings},
         headers=root_headers(),
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
+    assert "parser-private-key" not in resp.text
 
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
@@ -2090,6 +2111,31 @@ async def test_create_account(
     assert effective.embedding.max_retries == 5
     assert factory.call_args.args[0].vikingdb.host == "https://account.invalid"
     adapter.create_collection.assert_not_called()
+
+    url = f"/api/v1/admin/accounts/{acct}/configuration"
+    admin_headers = {"X-API-Key": body["result"]["user_key"]}
+    visible = await admin_client.get(url, headers=admin_headers)
+    assert visible.json()["result"]["settings"] == {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
+    }
+    updated = await admin_client.patch(
+        url,
+        headers=admin_headers,
+        json={"settings": {"output_language_override": "", "memory": {"extraction_enabled": True}}},
+    )
+    assert updated.status_code == 200, updated.text
+    assert "parser-private-key" not in updated.text
+    denied = await admin_client.patch(
+        url, headers=admin_headers, json={"settings": {"parser_api": None}}
+    )
+    assert denied.status_code == 403, denied.text
+    invalid = await admin_client.patch(
+        url, headers=root_headers(), json={"settings": {"parser_api": {"api_key": " "}}}
+    )
+    assert invalid.status_code == 400, invalid.text
+    stored = await admin_client.get(url, headers=root_headers())
+    assert stored.json()["result"]["settings"]["parser_api"] == settings["parser_api"]
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(
@@ -2145,6 +2191,15 @@ async def test_create_user_paths_accept_initial_user_config(
         headers=root_headers(),
     )
     assert resp.status_code == 200, resp.text
+    service = lightweight_admin_app.state.fake_service
+    assert service.account_lock_events == [("acquire", acct), ("release", acct)]
+    assert service.workspace_leases == [service.account_lease]
+    assert viking_fs.write_leases == [service.account_lease]
+    for path in (
+        f"/local/{acct}/_system/users.json",
+        f"/local/{acct}/_system/groups.json",
+    ):
+        assert viking_fs.agfs.write_contexts[path]["lease_ref"] == "account-provisioning"
 
     alice_settings = await read_user_add_targets(
         viking_fs,

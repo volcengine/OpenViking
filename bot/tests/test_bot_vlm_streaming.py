@@ -100,13 +100,10 @@ async def test_vlm_adapter_streams_openai_content_deltas():
     )
     attach_client(vlm, completions)
     provider = make_adapter(vlm, "gpt-test")
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    messages = [{"role": "tool", "tool_call_id": "read", "content": [image]}]
 
-    events = [
-        event
-        async for event in provider.chat_stream(
-            messages=[{"role": "user", "content": "hi"}],
-        )
-    ]
+    events = [event async for event in provider.chat_stream(messages=messages)]
 
     assert [event.type for event in events] == [
         "content_delta",
@@ -123,6 +120,11 @@ async def test_vlm_adapter_streams_openai_content_deltas():
     assert completions.calls[0]["stream"] is True
     assert completions.calls[0]["stream_options"] == {"include_usage": True}
     assert "thinking" not in completions.calls[0]
+    sent = completions.calls[0]["messages"]
+    assert [m["role"] for m in sent] == ["tool", "user"]
+    assert isinstance(sent[0]["content"], str)
+    assert sent[1]["content"][-1] == image
+    assert messages[0]["content"] == [image]
 
 
 @pytest.mark.asyncio

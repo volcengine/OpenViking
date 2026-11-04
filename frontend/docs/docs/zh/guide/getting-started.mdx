@@ -1,0 +1,66 @@
+# 快速开始
+
+OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
+
+包提供 FileTree、FilePreview 与五种文件类型图标，现有实现的范围与限制见各组件文档。目前没有公开页面或公共 Hook 导出。
+
+## 本地运行
+
+使用 Node.js 22.12 或更新版本。在仓库根目录执行：
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+打开 Rspress 输出的 `/ui/` 地址。英文使用 `/ui/`，简体中文使用 `/ui/zh/`；顶部语言菜单支持在对应页面间切换。
+
+workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档示例通过公开导出使用构建产物，不使用源码别名。React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
+
+## 组织应用代码
+
+- `packages/react/src/components/`：可复用视图，通过 props 接收处理后的数据，通过回调表达用户意图。
+- `packages/react/src/pages/`：预留给页面组合与数据编排，目前没有公开页面实现。
+- `packages/react/src/hooks/` 与 `utils/`：包内共享逻辑，没有公开子路径。
+- `docs/docs/en/` 与 `docs/docs/zh/`：对应的双语文档页面；共用的可运行示例放在 `docs/docs/_demos/`。
+
+应用专属流程、认证和请求留在应用层。组件不获取业务数据，也不依赖应用路由。
+
+## 公开入口
+
+根入口 `@openviking/react` 导出 FileTree 及其公开类型。FileTree 和 FilePreview 也可通过各自的 `components/<模块>` 子路径使用。`@openviking/react/icons` 提供五种文件类型图标。
+
+没有 `components` 或 `pages` 分类聚合 JavaScript 入口。各模块实际范围见[组件概览](../components/)。
+
+## 样式
+
+样式通过 CSS Modules 隔离，变量使用 `--ov-ui-` 前缀，不引入全局 reset。JavaScript 导入不会自动加载 CSS；按需选择整包、组件集合或单模块样式：
+
+```ts
+import '@openviking/react/style.css';
+// 也可选择 @openviking/react/components/style.css
+// 或已有模块的 @openviking/react/components/<模块>/style.css。
+```
+
+Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；页面样式将在实际页面实现后再开放导出。
+
+## 构建与检查
+
+在 `frontend/` 中执行：
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run preview
+```
+
+`lint` 先构建组件库，再通过 Rslint 检查代码规则与类型，并使用 Prettier 检查格式。`typecheck` 检查组件库、构建配置与文档 TypeScript 项目。`test` 构建组件库并验证公开包入口。`build` 生成组件库和静态文档，站点输出到 `docs/doc_build/`。
+
+在 `npm run lint --` 后传入文件或加引号的 glob，可限定格式检查和 lint 的目标；类型检查仍覆盖配置的完整项目。JavaScript 和 TypeScript 文件最多 200 行，不计空行和纯注释行。
+
+## 部署
+
+`frontend/` 下的变更触发 UI 检查。在 `main` 上，现有产品文档部署会将 UI 站点合并到同一完整产物或存储桶的 `/ui/` 路径。npm 发布使用独立的标签触发流程，本地构建与测试不会发布包。

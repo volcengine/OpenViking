@@ -28,6 +28,7 @@ from openviking.core.namespace import (
     uri_parts,
 )
 from openviking.core.namespace_policy import namespace_policy_for_uri
+from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
@@ -1982,6 +1983,12 @@ class ReindexExecutor:
                     bool(getattr(exc, "retryable", False)) or incomplete
                 ):
                     raise
+                VikingDBEventDataSource.record_retry(
+                    backend=str(getattr(vikingdb, "_backend_type", None) or "unknown"),
+                    operation="reindex_inventory",
+                    error=exc,
+                    delay_seconds=retry_delays[attempt],
+                )
                 logger.warning(
                     "Reindex vector inventory was rate limited; retrying uri=%s attempt=%d/%d "
                     "error=%s",

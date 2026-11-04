@@ -1,0 +1,66 @@
+# Getting started
+
+OpenViking UI provides React foundations for building AI application interfaces on OpenViking, the context database for AI agents. The workspace includes Rslib builds, bilingual documentation, layered directory conventions, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration.
+
+The package provides FileTree, FilePreview, and five file-type icons. See the component documentation for the scope and limitations of the current implementations. No application pages or public Hooks are exported.
+
+## Run locally
+
+Use Node.js 22.12 or newer. From the repository root:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Open the `/ui/` address printed by Rspress. English uses `/ui/`; Simplified Chinese uses `/ui/zh/`. The navigation language menu switches between corresponding pages.
+
+The workspace development plugin starts Rslib watch before the documentation server. Documentation examples consume built public exports, rather than source aliases. React and ReactDOM are peer dependencies, supporting React 18.2 and React 19; the documentation application uses React 19.
+
+## Organize application code
+
+- `packages/react/src/components/`: reusable views that receive prepared data through props and report intent through callbacks.
+- `packages/react/src/pages/`: reserved for page composition and data orchestration; there is no public page implementation yet.
+- `packages/react/src/hooks/` and `utils/`: internal shared logic, without public subpaths.
+- `docs/docs/en/` and `docs/docs/zh/`: corresponding documentation pages; shared runnable examples belong in `docs/docs/_demos/`.
+
+Keep application-specific workflows, authentication, and requests in the application layer. Components do not fetch business data or depend on application routing.
+
+## Public entries
+
+The root `@openviking/react` entry exports FileTree and its public types. FileTree and FilePreview are also available through their `components/<module>` subpaths. `@openviking/react/icons` provides five file-type icons.
+
+There are no aggregate `components` or `pages` JavaScript entries. See the [component overview](../components/) for the actual scope of each module.
+
+## Styling
+
+Styles use CSS Modules and the `--ov-ui-` variable prefix. They do not apply a global reset. JavaScript imports do not load CSS automatically; choose the full, component-aggregate, or per-module stylesheet as needed:
+
+```ts
+import '@openviking/react/style.css';
+// Or choose @openviking/react/components/style.css
+// or @openviking/react/components/<module>/style.css for an existing module.
+```
+
+Rslib emits ESM JavaScript, TypeScript declarations, and CSS into `packages/react/dist/`. Each public stylesheet works independently. Page-specific styles will only be exported when pages are implemented.
+
+## Build and check
+
+From `frontend/`:
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run preview
+```
+
+`lint` builds the library, runs Rslint's code-quality and type checks, and checks formatting with Prettier. `typecheck` checks the library, build configuration, and documentation TypeScript projects. `test` builds the library and verifies its public package entries. `build` generates the library and static site; the site output is `docs/doc_build/`.
+
+Pass files or quoted globs after `npm run lint --` to limit formatting and lint targets. Type checking still covers the configured projects. JavaScript and TypeScript files are limited to 200 lines, excluding blank and comment-only lines.
+
+## Deployment
+
+Changes under `frontend/` run the UI checks. On `main`, the existing product documentation deployment includes the UI site under `/ui/` in the same complete site artifact or storage bucket. Package publication uses a separate tag-triggered workflow; local builds and tests do not publish to npm.

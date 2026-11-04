@@ -14,7 +14,9 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
 from litellm import acompletion, completion
-from litellm.types.utils import all_litellm_params
+from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.types.utils import LlmProviders, all_litellm_params
+from litellm.utils import ProviderConfigManager
 
 from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import tracer
@@ -22,7 +24,7 @@ from openviking.utils.message_format import format_messages, sanitize_openai_mes
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, ToolResultMediaMode, VLMBase, VLMResponse
 
 logger = get_logger(__name__)
 
@@ -175,6 +177,22 @@ class LiteLLMVLMProvider(VLMBase):
         litellm.suppress_debug_info = True
         litellm.drop_params = True
 
+    def _declared_provider(self, model: str | None) -> str | None:
+        """Read a transport declaration without changing legacy text routing."""
+        prefix, separator, _ = str(model or "").partition("/")
+        candidates = [str(self._provider_name or "").lower(), prefix.lower() if separator else ""]
+        if _has_litellm_prefix(
+            str(model or ""), (*EXPLICIT_LITELLM_PREFIXES, "openai/", *OLLAMA_LITELLM_PREFIXES)
+        ):
+            candidates.reverse()
+        for candidate in candidates:
+            if candidate and candidate != "litellm":
+                try:
+                    return LlmProviders(candidate).value
+                except ValueError:
+                    pass
+        return None
+
     def _setup_env(self, api_key: str, model: str | None) -> None:
         """Set environment variables based on detected provider."""
         provider = self._provider_name
@@ -219,6 +237,55 @@ class LiteLLMVLMProvider(VLMBase):
         if "/" in resolved_model:
             return resolved_model.split("/", 1)[0].lower()
         return self._detected_provider or detect_provider_by_model(resolved_model) or self.provider
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        """Select a verified image transport without resolving credentials."""
+        provider = self._declared_provider(self.model)
+        if provider is None or not self.model:
+            return None
+        resolved = self._resolve_model(self.model)
+        actual_provider, separator, model = resolved.partition("/")
+        if not separator or actual_provider != provider:
+            return None
+        try:
+            config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(provider)
+            )
+        except ValueError:
+            return None
+        config_type = config if isinstance(config, type) else type(config)
+        if issubclass(config_type, BaseTextCompletionConfig):
+            return None
+        image_protocols = (
+            "OpenAIGPTConfig",
+            "AzureOpenAIConfig",
+            "DashScopeChatConfig",
+            "MoonshotChatConfig",
+            "ZAIChatConfig",
+            "OpenrouterConfig",
+            "NvidiaNimConfig",
+            "HostedVLLMChatConfig",
+            "GithubCopilotConfig",
+            "DatabricksConfig",
+            "MinimaxChatConfig",
+            "MistralConfig",
+            "CohereV2ChatConfig",
+            "GroqChatConfig",
+            "VertexGeminiConfig",
+            "GoogleAIStudioGeminiConfig",
+            "OllamaConfig",
+            "OllamaChatConfig",
+            "AmazonConverseConfig",
+        )
+        # Match exact converters: subclasses may discard images or use another protocol.
+        if config_type in tuple(getattr(litellm, name, None) for name in image_protocols):
+            return "user_message"
+        native_protocols = ("AnthropicConfig", "AzureAnthropicConfig", "VertexAIAnthropicConfig")
+        return (
+            "native"
+            if config_type in tuple(getattr(litellm, name, None) for name in native_protocols)
+            else None
+        )
 
     def _should_forward_api_key(self, model: str) -> bool:
         if not self.api_key:
