@@ -1,4 +1,20 @@
 export default {
+  hostedAddress: 'Service address: {{address}}',
+  showAddress: 'Show service address',
+  hideAddress: 'Hide service address',
+  productName: 'OpenViking',
+  connectTitle: 'Connect to OpenViking',
+  connectDescription:
+    'Connect with an API key using a hosted service or your own deployment.',
+  privateDeployment: 'Self-hosted',
+  hostedService: 'Volcengine',
+  addressPlaceholder: 'e.g. http://your-server:1933',
+  keyPlaceholder: 'Enter your OpenViking personal API key',
+  connectAndEnter: 'Connect and enter',
+  teamTagline: 'Keep every team member’s Agent in sync with the team.',
+  showKey: 'Show API key',
+  hideKey: 'Hide API key',
+
   directoryOptions: 'Choose another data identity (advanced)',
   rootSetupTitle: 'Start using the workbench',
   rootSetupDescription:
