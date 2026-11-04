@@ -10,7 +10,7 @@ import shutil
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +22,8 @@ from pydantic import TypeAdapter
 
 from openviking.core.namespace import classify_uri, relative_uri_path, uri_parts
 from openviking.core.skill_loader import validate_skill_format
+from openviking.models.model_error import ModelErrorKind, model_error_kind
+from openviking.utils.model_retry import rate_limit_retry_delay
 from openviking.utils.path_safety import (
     sanitize_relative_viking_path,
 )
@@ -196,23 +198,89 @@ class CompileCapabilities:
 
 
 class _CompileProvider(LLMProvider):
-    """Share model-call capacity across Compile tasks."""
+    """Share capacity and rate-limit recovery across Compile tasks using one provider.
+
+    Cooling requests retain their existing caller deadlines and retry allowances.
+    Recovery is serialized until a request succeeds; streams are never replayed.
+    """
 
     def __init__(self, provider: LLMProvider, slots: asyncio.Semaphore):
         super().__init__()
         self._provider = provider
         self._slots = slots
+        self._recovery_lock = asyncio.Lock()
+        # Monotonic deadline shared by queued calls; zero means unrestricted admission.
+        self._cooldown_until = 0.0
+        self._rate_limit_attempt = 0
+        # Requests admitted before the same 429 wave share one backoff increment.
+        self._rate_limit_generation = 0
+
+    def _defer_requests(self, generation: int) -> None:
+        """Extend cooldown after a rate-limit response without stacking parallel failures.
+
+        TPM/RPM recovery waits at least one minute; recurring recovery failures
+        reuse the provider retry utility's exponential delay and jitter.
+        """
+        if generation == self._rate_limit_generation:
+            self._rate_limit_attempt += 1
+        self._rate_limit_generation += 1
+        delay = 60.0 + rate_limit_retry_delay(self._rate_limit_attempt)
+        self._cooldown_until = max(self._cooldown_until, time.monotonic() + delay)
+        logger.warning("Compile model rate-limited; shared cooldown is at least {:.1f}s", delay)
+
+    @asynccontextmanager
+    async def _request_capacity(self):
+        """Admit a request after shared cooldown, releasing locks on timeout or cancellation.
+
+        Queued recovery calls hold capacity while waiting so new work cannot
+        bypass cooldown. Only a successful recovery from the current failure
+        generation clears it; earlier in-flight successes cannot reopen traffic.
+        """
+        async with self._slots:
+            recovering = bool(self._cooldown_until)
+            if recovering:
+                await self._recovery_lock.acquire()
+            try:
+                while (remaining := self._cooldown_until - time.monotonic()) > 0:
+                    await asyncio.sleep(remaining)
+                generation = self._rate_limit_generation
+                try:
+                    yield generation
+                except Exception as exc:
+                    if model_error_kind(exc) is ModelErrorKind.RATE_LIMIT_ERROR:
+                        self._defer_requests(generation)
+                    raise
+                else:
+                    if recovering and generation == self._rate_limit_generation:
+                        self._cooldown_until = 0.0
+                        self._rate_limit_attempt = 0
+            finally:
+                if recovering:
+                    self._recovery_lock.release()
 
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
-        """Forward a request under the shared capacity limit."""
-        async with self._slots:
-            return await self._provider.chat(*args, **kwargs)
+        """Forward unchanged requests; coordinate 429 responses before caller retries."""
+        async with self._request_capacity() as generation:
+            response = await self._provider.chat(*args, **kwargs)
+            if (
+                response.finish_reason == "error"
+                and response.error_kind is ModelErrorKind.RATE_LIMIT_ERROR
+            ):
+                self._defer_requests(generation)
+            return response
 
     async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[LLMStreamEvent]:
         """Hold capacity until the stream closes."""
-        async with self._slots:
+        async with self._request_capacity() as generation:
             async with aclosing(self._provider.chat_stream(*args, **kwargs)) as stream:
                 async for event in stream:
+                    if (
+                        event.type == "response"
+                        and event.response is not None
+                        and event.response.finish_reason == "error"
+                        and event.response.error_kind is ModelErrorKind.RATE_LIMIT_ERROR
+                    ):
+                        self._defer_requests(generation)
                     yield event
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
@@ -245,6 +313,7 @@ class BotCompileService:
         )
         self._semaphore = asyncio.Semaphore(self.limits.concurrent_tasks)
         self._model_slots = asyncio.Semaphore(model_concurrency)
+        self._compile_provider = _CompileProvider(self.agent_loop.provider, self._model_slots)
         self._target_locks: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
         self._target_locks_guard = asyncio.Lock()
         self._admission_guard = asyncio.Lock()
@@ -850,7 +919,7 @@ class BotCompileService:
                     if focused_loop is None:
                         focused_loop = AgentLoop(
                             bus=self.agent_loop.bus,
-                            provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
+                            provider=self._compile_provider,
                             workspace=workspace,
                             model=self.agent_loop.model,
                             temperature=self.agent_loop.temperature,
@@ -894,7 +963,7 @@ class BotCompileService:
 
             request_loop = AgentLoop(
                 bus=self.agent_loop.bus,
-                provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
+                provider=self._compile_provider,
                 workspace=workspace,
                 model=self.agent_loop.model,
                 temperature=self.agent_loop.temperature,
@@ -1089,7 +1158,7 @@ class BotCompileService:
         pipeline = Pipeline(
             client=client,
             sandbox=sandbox,
-            provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
+            provider=self._compile_provider,
             model=self.agent_loop.model,
             temperature=self.agent_loop.temperature,
             limits=self.limits,

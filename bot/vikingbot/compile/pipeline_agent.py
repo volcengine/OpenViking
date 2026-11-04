@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import posixpath
+import unicodedata
 import uuid
 from collections import Counter
 from copy import copy
@@ -34,7 +36,7 @@ class ChildProvider(LLMProvider):
     """Meter child requests and bound Reduce context without discarding unsaved work.
 
     context_tokens reserves output space against the configured text-token capacity;
-    context_chars triggers checkpoint closing. Zero disables the respective check.
+    closing starts with headroom for saving state. Zero disables context checks.
     Terminal tool calls are isolated so checkpoint and final acceptance cannot race.
     """
 
@@ -47,7 +49,6 @@ class ChildProvider(LLMProvider):
         submit=None,
         checkpoint=None,
         context_tokens=0,
-        context_chars=0,
     ):
         super().__init__()
         self.model = model
@@ -57,7 +58,8 @@ class ChildProvider(LLMProvider):
         self.checkpoint = checkpoint
         self.checkpoint_due = False
         self.context_tokens = context_tokens
-        self.context_chars = context_chars
+        # Tool IDs connect write requests to successful acknowledgements in this window.
+        self.write_calls: dict[str, tuple[str, str]] = {}
 
     def get_default_model(self):
         return self.model.model
@@ -85,12 +87,16 @@ class ChildProvider(LLMProvider):
     async def chat(self, messages, tools=None, **kwargs):
         """Return a complete, executable response under the window's request budget.
 
-        Truncated or conflicting terminal calls retry before any tool executes;
-        exhausted repairs or context capacity raise a terminal execution error.
+        Truncated responses, conflicting terminal calls and repeated successful
+        writes retry before tool execution; exhausted repairs or capacity are terminal.
         """
         while True:
-            if self.checkpoint and self.context_chars:
-                if len(self.request_text(messages, tools)) >= self.context_chars:
+            if self.checkpoint and self.context_tokens:
+                available = self.context_tokens - self.model.max_tokens
+                # Packing targets do not bound context; reserve 15% of input space for closing.
+                if cal_str_tokens(self.request_text(messages, tools), text_type="mixed") >= (
+                    available * 0.85
+                ):
                     self.checkpoint_due = True
             if self.checkpoint_due:
                 tools = [
@@ -104,6 +110,9 @@ class ChildProvider(LLMProvider):
                         "role": "user",
                         "content": "This context window is ending. Finish with emit only if all work "
                         "is complete; otherwise persist the business state and call checkpoint now. "
+                        "Reuse state and drafts already written; do not rewrite them to prepare a "
+                        "checkpoint. state_ref is saved automatically and must not appear in draft_refs. "
+                        "Repair rejected checkpoint arguments instead of rewriting unchanged files. "
                         "Do not start new reading or analysis. A checkpoint is not task completion.",
                     },
                 ]
@@ -141,6 +150,47 @@ class ChildProvider(LLMProvider):
                 messages = [*messages, {"role": "user", "content": error}]
                 continue
             if response.finish_reason not in {"length", "max_tokens"}:
+                if self.checkpoint:
+                    writes = {
+                        call.id: (
+                            unicodedata.normalize(
+                                "NFC", posixpath.normpath(call.arguments["path"].replace("\\", "/"))
+                            ).casefold(),
+                            digest([call.name, call.arguments]),
+                        )
+                        for call in response.tool_calls
+                        if call.name in {"write_file", "edit_file"}
+                        and isinstance(call.arguments, dict)
+                        and isinstance(call.arguments.get("path"), str)
+                    }
+                    # Shell commands can mutate scratch without file-tool acknowledgements.
+                    if any(call.name == "exec" for call in response.tool_calls):
+                        self.write_calls.clear()
+                        writes.clear()
+                    completed = {}
+                    for message in messages:
+                        if (
+                            message.get("role") == "tool"
+                            and message.get("tool_call_id") in self.write_calls
+                            and isinstance(message.get("content"), str)
+                            and not message["content"].lstrip().startswith("Error:")
+                        ):
+                            path, signature = self.write_calls[message["tool_call_id"]]
+                            completed[path] = signature
+                    if any(completed.get(path) == signature for path, signature in writes.values()):
+                        error = (
+                            "This write already succeeded in this window. Reuse the saved file "
+                            "and continue unfinished work, or emit if finished. Use checkpoint "
+                            "only to hand off unfinished work when the window is ending. "
+                            "Exclude state_ref from draft_refs; repair rejected checkpoint "
+                            "arguments without rewriting unchanged files."
+                        )
+                        if not retry_allowed(self.failures, error):
+                            raise ReduceExecutionError(error)
+                        self.model.metrics["repairs"] += 1
+                        messages = [*messages, {"role": "user", "content": error}]
+                        continue
+                    self.write_calls.update(writes)
                 return response
             error = "Agent output was truncated; use smaller writes or content_ref and complete tool calls"
             if not retry_allowed(self.failures, error):
@@ -455,11 +505,15 @@ def agent_runner(loop, session_key, connection, limits):
             instructions = ""  # Map defines its own file access and submission rules.
         if checkpoint:
             instructions += (
-                "\nWork in bounded batches. Persist the task-specific cumulative state as JSON "
+                "\nComplete assignments directly with emit when they fit this window; writing "
+                "state or calling checkpoint is not required for completion. Work in bounded batches. "
+                "For unfinished work that needs another window, persist cumulative state as JSON "
                 "in your scratch directory; preserve exact data, provenance and unresolved work. "
                 "Use checkpoint before the context window ends, with cumulative processed and "
                 "pending input IDs, remaining synthesis/checks and draft references. Reading an "
                 "input alone does not complete its processing. Checkpoints are not final outputs. "
+                "state_ref is snapshotted automatically: exclude it from draft_refs. Do not "
+                "checkpoint just to defer final emit when the complete result is ready. "
                 "Continue existing state and drafts rather than rereading or regenerating them. "
                 "After a checkpoint, final emit requires completion accounting for remaining "
                 "inputs (completed_inputs or excluded_inputs with reasons) and pending_tasks=[]. "
@@ -500,13 +554,6 @@ def agent_runner(loop, session_key, connection, limits):
                     "instructions": "Read the checkpoint manifest and saved state; preserve its "
                     "completed work and finish the remaining synthesis before final emit.",
                 }
-            base_chars = 0
-            if checkpoint:
-                # Fixed context leaves room for tool results and a checkpoint.
-                base_chars = len(system + instructions) + len(
-                    json.dumps(context, ensure_ascii=False)
-                )
-                base_chars += len(json.dumps(registry.get_definitions(), ensure_ascii=False))
             child.provider = ChildProvider(
                 model,
                 schema,
@@ -514,7 +561,6 @@ def agent_runner(loop, session_key, connection, limits):
                 submit=submit,
                 checkpoint=checkpoint,
                 context_tokens=loop.config.agents.context_window_tokens if checkpoint else 0,
-                context_chars=max(model.budget, base_chars + 16_384) if checkpoint else 0,
             )
             messages = [
                 {"role": "system", "content": system + instructions},

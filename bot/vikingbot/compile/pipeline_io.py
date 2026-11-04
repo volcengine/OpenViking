@@ -35,7 +35,7 @@ ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
 # Cache identity for the processing rules used by model calls.
 PROCESSING_VERSION = "compile-pipeline-37"
 # Reduce's continuation protocol has its own cache revision; Map keeps its cache identity.
-REDUCE_PROCESSING_VERSION = "compile-reduce-1"
+REDUCE_PROCESSING_VERSION = "compile-reduce-2"
 # Output-token fallback when the configured VLM provides no value.
 DEFAULT_MAX_TOKENS = 32_000
 # Total attempts per operator job or routing record, including the initial execution.

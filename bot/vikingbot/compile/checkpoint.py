@@ -44,6 +44,7 @@ class CheckpointRequest(StrictModel):
     draft_refs: list[str] = Field(
         default_factory=list,
         description="Scratch-relative files whose current contents must survive continuation. "
+        "Exclude state_ref, which is saved automatically. Use [] when there are no drafts. "
         "Keep previously checkpointed draft paths in this list.",
     )
 
@@ -179,6 +180,16 @@ class CheckpointTool(Tool):
             state_ref = self._relative(request.state_ref)
             draft_refs = [self._relative(path) for path in request.draft_refs]
             references = [state_ref, *draft_refs]
+            state_identity = unicodedata.normalize("NFC", state_ref).casefold()
+            if any(
+                unicodedata.normalize("NFC", path).casefold() == state_identity
+                for path in draft_refs
+            ):
+                raise ValueError(
+                    "Remove state_ref from draft_refs: state is saved automatically. "
+                    "Resubmit checkpoint with only the other draft paths, or [] if none; "
+                    "do not rewrite the state file."
+                )
             identities = {unicodedata.normalize("NFC", path).casefold() for path in references}
             if len(identities) != len(references):
                 raise ValueError("State and draft references must name distinct files")
