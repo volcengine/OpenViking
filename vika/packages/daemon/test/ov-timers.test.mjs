@@ -25,6 +25,46 @@ async function setup(context) {
 }
 
 describe('OV timer storage', () => {
+  it('does not recreate checks when cancellation commits before queued scheduling', async (context) => {
+    const { client, repository } = await setup(context);
+    await repository.create(input);
+    const json = client.json.bind(client);
+    let release;
+    let writeStarted;
+    const started = new Promise((resolve) => { writeStarted = resolve; });
+    const pending = new Promise((resolve) => { release = resolve; });
+    let delayWrite = true;
+    client.json = async (route, body) => {
+      if (body && delayWrite) {
+        delayWrite = false;
+        writeStarted();
+        await pending;
+      }
+      return json(route, body);
+    };
+    const submitted = [];
+    const connector = new TimerConnector({
+      repository, now: () => nowMs, autoStart: false,
+      submitEvent: async (event) => submitted.push(event),
+    });
+    context.after(() => connector.stop());
+    const cancelled = repository.cancel(input.timerId);
+    await started;
+    const firing = connector.fireDueOnce();
+    release();
+    assert.equal(await cancelled, true);
+    await firing;
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      connector.now = () => nowMs + attempt * 300_000;
+      assert.equal(await connector.fireDueOnce(), false);
+    }
+    assert.equal(submitted.length, 0);
+    const restored = await new OVTimerRepository(client, 'primary').load();
+    assert.equal(restored.get(input.timerId), null);
+    assert.equal(restored.getOccurrenceCheck(`${input.timerId}:${nowMs}`), null);
+    assert.equal(restored.nextWakeAtMs(), null);
+  });
+
   it('serializes a delayed refresh with new timer writes', async (context) => {
     const { client, repository } = await setup(context);
     await repository.create({ ...input, timerId: 'tm_existing', createdFromEventId: 'evt-existing' });

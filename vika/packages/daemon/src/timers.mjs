@@ -390,7 +390,8 @@ export class TimerRepository {
     return this.get(timer.timerId);
   }
 
-  createOccurrenceCheck({ occurrenceId, eventId, nextCheckAtMs, event }) {
+  createOccurrenceCheck({ occurrenceId, eventId, nextCheckAtMs, event, timer = null }) {
+    if (timer && this.get(timer.timerId)?.nextRunAtMs !== timer.nextRunAtMs) return null;
     this.insertOccurrenceCheck.run(occurrenceId, eventId, nextCheckAtMs, JSON.stringify(event));
     return this.getOccurrenceCheck(occurrenceId);
   }
@@ -554,12 +555,14 @@ export class TimerConnector {
     if (!timer) return false;
     const event = eventForTimer(timer, nowMs);
     const occurrenceId = event.data.timer.occurrence_id;
-    await this.repository.createOccurrenceCheck({
+    const created = await this.repository.createOccurrenceCheck({
       occurrenceId,
       eventId: event.id,
       nextCheckAtMs: nowMs + this.occurrenceCheckDelayMs,
       event,
+      timer,
     });
+    if (!created) return true;
     try {
       await this.submitEvent(event);
     } catch (error) {

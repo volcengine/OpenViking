@@ -147,8 +147,10 @@ export class OVTimerRepository {
     });
   }
 
-  createOccurrenceCheck({ occurrenceId, eventId, nextCheckAtMs, event }) {
+  createOccurrenceCheck({ occurrenceId, eventId, nextCheckAtMs, event, timer = null }) {
     return this.mutate((state) => {
+      if (timer && !state.timers.some((current) =>
+        current.timerId === timer.timerId && current.nextRunAtMs === timer.nextRunAtMs)) return null;
       let check = state.timer_occurrence_checks.find((entry) => entry.occurrenceId === occurrenceId);
       if (!check) {
         check = { occurrenceId, eventId, nextCheckAtMs, event, status: 'pending', attempt: 0 };
