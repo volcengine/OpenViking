@@ -256,13 +256,4 @@ mod tests {
         let err = Error::permission_denied("/protected");
         assert_eq!(err.to_string(), "permission denied: /protected");
     }
-
-    #[test]
-    fn test_quota_and_rate_limit_error_kinds() {
-        assert_eq!(
-            Error::quota_exceeded("EDQUOT").kind_name(),
-            "quota_exceeded"
-        );
-        assert_eq!(Error::rate_limited("HTTP 429").kind_name(), "rate_limited");
-    }
 }

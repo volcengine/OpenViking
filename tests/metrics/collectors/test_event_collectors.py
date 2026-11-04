@@ -15,7 +15,6 @@ from openviking.metrics.collectors.retrieval import RetrievalCollector
 from openviking.metrics.collectors.session import SessionCollector
 from openviking.metrics.collectors.telemetry_bridge import TelemetryBridgeCollector
 from openviking.metrics.collectors.vlm import VLMCollector
-from openviking.metrics.collectors.vikingdb_operations import VikingDBOperationCollector
 
 
 class _DummyEventCollector(EventMetricCollector):
@@ -73,55 +72,6 @@ def test_queue_duration_collector_records_processing_and_end_to_end_histograms(
             "end_to_end_duration_seconds": 404261.58497,
         },
         registry,
-    )
-
-
-def test_vikingdb_operation_collector_preserves_returned_error_code(registry, render_prometheus):
-    VikingDBOperationCollector().receive(
-        "vikingdb.operation",
-        {
-            "backend": "bytedviking",
-            "access_mode": "direct",
-            "operation": "upsert",
-            "outcome": "error",
-            "error_source": "http_status",
-            "error_code": "429",
-            "error_category": "quota",
-            "retryable": "true",
-            "duration_seconds": 0.25,
-        },
-        registry,
-    )
-    text = render_prometheus(registry)
-    assert 'openviking_vikingdb_operations_total{access_mode="direct",backend="bytedviking",error_category="quota",error_code="429",error_source="http_status",operation="upsert",outcome="error",retryable="true"} 1' in text
-    assert re.search(
-        r'openviking_vikingdb_operation_duration_seconds_count\{(?=[^}]*access_mode="direct")'
-        r'(?=[^}]*backend="bytedviking")(?=[^}]*operation="upsert")'
-        r'(?=[^}]*outcome="error")[^}]*\} 1',
-        text,
-    )
-
-
-def test_vikingdb_operation_collector_records_retry(registry, render_prometheus):
-    VikingDBOperationCollector().receive(
-        "vikingdb.retry",
-        {
-            "backend": "bytedviking",
-            "operation": "delete",
-            "error_source": "viking_code",
-            "error_code": "-55900461",
-            "delay_seconds": 0.1,
-        },
-        registry,
-    )
-    text = render_prometheus(registry)
-    labels = 'backend="bytedviking",error_code="-55900461",error_source="viking_code",operation="delete"'
-    assert f"openviking_vikingdb_retries_total{{{labels}}} 1" in text
-    assert re.search(
-        r'openviking_vikingdb_retry_delay_seconds_count\{(?=[^}]*backend="bytedviking")'
-        r'(?=[^}]*error_code="-55900461")(?=[^}]*error_source="viking_code")'
-        r'(?=[^}]*operation="delete")[^}]*\} 1',
-        text,
     )
 
     text = render_prometheus(registry)

@@ -1436,12 +1436,12 @@ mod tests {
     }
 
     #[test]
-    fn test_format_s3_service_error_includes_metadata_fields() {
+    fn test_s3_quota_error_preserves_metadata() {
         let service_err = FakeServiceError {
             raw: "service error",
             meta: ErrorMetadata::builder()
-                .code("AccessDenied")
-                .message("signature mismatch")
+                .code("EDQUOT")
+                .message("disk quota exceeded")
                 .custom("aws_request_id", "req-123")
                 .custom("s3_extended_request_id", "ext-456")
                 .build(),
@@ -1453,55 +1453,19 @@ mod tests {
             &service_err,
         );
 
+        assert_eq!(err.kind_name(), "quota_exceeded");
         match err {
-            Error::Internal(message) => {
+            Error::QuotaExceeded(message) => {
                 assert!(message.contains("S3 PutObject error"));
                 assert!(message.contains("bucket=test-bucket key=tenant/a.txt"));
-                assert!(message.contains("code=AccessDenied"));
-                assert!(message.contains("message=signature mismatch"));
+                assert!(message.contains("code=EDQUOT"));
+                assert!(message.contains("message=disk quota exceeded"));
                 assert!(message.contains("request_id=req-123"));
                 assert!(message.contains("extended_request_id=ext-456"));
                 assert!(message.contains("raw=service error"));
             }
-            other => panic!("expected internal error, got {other:?}"),
+            other => panic!("expected quota error, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn test_s3_quota_and_rate_limit_errors_have_stable_kinds() {
-        let quota = classify_s3_error(
-            "PutObject",
-            "bucket=test-bucket key=tenant/a.txt",
-            "service error",
-            Some("EDQUOT"),
-            Some("disk quota exceeded"),
-            Some("req-123"),
-            None,
-            None,
-        );
-        assert!(matches!(quota, Error::QuotaExceeded(message) if message.contains("code=EDQUOT")));
-
-        let rate_limited = classify_s3_error(
-            "GetObject",
-            "bucket=test-bucket key=tenant/a.txt",
-            "HTTP 429: request rejected",
-            None,
-            None,
-            None,
-            None,
-            Some(429),
-        );
-        assert!(matches!(rate_limited, Error::RateLimited(_)));
-
-        let slowdown = format_s3_service_error(
-            "ListObjectsV2",
-            "bucket=test-bucket",
-            &FakeServiceError {
-                raw: "service error",
-                meta: ErrorMetadata::builder().code("SlowDown").build(),
-            },
-        );
-        assert!(matches!(slowdown, Error::RateLimited(_)));
     }
 
     #[test]

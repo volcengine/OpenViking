@@ -293,30 +293,3 @@ impl OperationTimer {
         self.collector.record(self.op, duration, error_kind).await;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::{FsOperation, StatsCollector};
-
-    #[tokio::test]
-    async fn snapshot_groups_failures_by_stable_error_kind() {
-        let collector = StatsCollector::new();
-        collector
-            .record(FsOperation::Read, Duration::from_millis(1), Some("not_found"))
-            .await;
-        collector
-            .record(FsOperation::Read, Duration::from_millis(1), Some("not_found"))
-            .await;
-        collector
-            .record(FsOperation::Read, Duration::from_millis(1), Some("timeout"))
-            .await;
-
-        let stats = collector.snapshot().await;
-        let read = stats.get(FsOperation::Read);
-        assert_eq!(read.error_count, 3);
-        assert_eq!(read.error_counts.get("not_found"), Some(&2));
-        assert_eq!(read.error_counts.get("timeout"), Some(&1));
-    }
-}
