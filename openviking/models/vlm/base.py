@@ -7,7 +7,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.models.model_error import model_error_kind
 from openviking.utils.exceptions import AllCredentialsFailedError
@@ -22,6 +22,19 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+
+ToolResultMediaMode = Literal["native", "user_message"]
+
+
+def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
+    """Choose an image representation supported by every possible fallback."""
+    modes = []
+    for backend in backends:
+        capability = getattr(backend, "tool_result_media_mode", None)
+        modes.append(capability() if callable(capability) else None)
+    if not modes or any(mode not in ("native", "user_message") for mode in modes):
+        return None
+    return "user_message" if "user_message" in modes else "native"
 
 
 class UnsupportedMediaInputError(RuntimeError):
@@ -179,6 +192,10 @@ class VLMBase(ABC):
             str if no tools provided, VLMResponse if tools provided
         """
         pass
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        """Declare image transport, independently of a model's vision capability."""
+        return None
 
     def supports_media(
         self,
@@ -461,6 +478,9 @@ class FailoverVLM(VLMBase):
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode([self.primary, self.backup])
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
@@ -844,6 +864,9 @@ class MultiCredentialVLM(VLMBase):
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode(self._vlm_instances)
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.

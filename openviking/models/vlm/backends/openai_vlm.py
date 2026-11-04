@@ -28,7 +28,7 @@ try:
 except ImportError:
     openai = None
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, ToolResultMediaMode, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = get_logger(__name__)
@@ -83,6 +83,10 @@ class OpenAIVLM(VLMBase):
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort")
         self.keepalive_expiry = config.get("keepalive_expiry")
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode:
+        """Chat Completions carries tool images in associated user messages."""
+        return "user_message"
 
     def _http_client_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"timeout": self.timeout}

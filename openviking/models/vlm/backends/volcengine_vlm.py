@@ -19,7 +19,7 @@ from openviking.utils.message_format import format_messages, sanitize_openai_mes
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMResponse
+from ..base import ToolCall, ToolResultMediaMode, VLMResponse
 from .openai_vlm import OpenAIVLM
 
 logger = get_logger(__name__)
@@ -203,22 +203,9 @@ class VolcEngineVLM(OpenAIVLM):
             size_bytes=size_bytes,
         )
 
-    def supports_tool_result_media(self, model: str | None = None) -> bool:
-        """Return true: the Ark chat API carries image parts inside tool results.
-
-        VolcEngine's OpenAI-compatible endpoint accepts an ``image_url`` content
-        part in a ``role="tool"`` message, so Compile can deliver native image
-        evidence to this backend. OpenAI's own Chat Completions API restricts
-        tool messages to text parts, so that backend stays excluded.
-
-        This states a protocol fact only. Whether the selected model can read
-        the image is a separate question: Ark exposes no model metadata API and
-        deployments commonly address a model through a custom endpoint alias,
-        so the model cannot be classified from its name. Compile therefore
-        delivers the image and degrades when the model rejects it, rather than
-        blocking the whole task.
-        """
-        return True
+    def tool_result_media_mode(self) -> ToolResultMediaMode:
+        """The Ark chat API carries image parts inside native tool results."""
+        return "native"
 
     async def get_media_completion_async(
         self,

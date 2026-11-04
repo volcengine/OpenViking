@@ -367,9 +367,7 @@ class AclManager:
         records: list[dict[str, Any]] = []
         for offset in range(0, len(unique), 100):
             conditions = [PathScope("uri", uri, depth=0) for uri in unique[offset : offset + 100]]
-            records.extend(
-                await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx)
-            )
+            records.extend(await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx))
         return records
 
     async def _scroll_all(
@@ -387,7 +385,7 @@ class AclManager:
                 cursor=cursor,
                 output_fields=output_fields,
                 # ACL resolution must see records the caller's own grants hide.
-                ctx=replace(ctx, bypass_acl=True),
+                ctx=replace(ctx, bypass_acl=True, data_access=None),
             )
             records.extend(page)
             if cursor is None:
@@ -412,7 +410,7 @@ class AclManager:
                 limit=1,
                 cursor=cursor,
                 output_fields=["uri"],
-                ctx=replace(ctx, bypass_acl=True),
+                ctx=replace(ctx, bypass_acl=True, data_access=None),
             )
             for record in records:
                 candidate = record["uri"]
