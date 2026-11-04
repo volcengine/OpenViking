@@ -544,6 +544,7 @@ export class TimerConnector {
   }
 
   async fireDueOnce() {
+    if (this.repository.needsRefresh) await this.repository.load();
     const nowMs = this.now();
     const check = this.repository.nextDueOccurrenceCheck(nowMs);
     const timer = this.repository.nextDue(nowMs);

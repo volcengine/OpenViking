@@ -68,6 +68,35 @@ describe('OV timer storage', () => {
     assert.deepEqual(restored.listActive().map((timer) => timer.timerId), ['tm_second']);
   });
 
+  it('does not fire a cancelled timer after its response and cache refresh fail', async (context) => {
+    const { client, repository, state } = await setup(context);
+    await repository.create(input);
+    const json = client.json.bind(client);
+    let loseResponse = true;
+    client.json = async (route, body) => {
+      const result = await json(route, body);
+      if (body && loseResponse) {
+        loseResponse = false;
+        state.down = true;
+        throw new Error('Write response lost');
+      }
+      return result;
+    };
+    await assert.rejects(repository.cancel(input.timerId), /response lost/);
+    const submitted = [];
+    const connector = new TimerConnector({
+      repository, now: () => nowMs, autoStart: false,
+      submitEvent: async (event) => submitted.push(event),
+    });
+    context.after(() => connector.stop());
+    await assert.rejects(connector.fireDueOnce(), /HTTP 503/);
+    assert.equal(submitted.length, 0);
+    state.down = false;
+    assert.equal(await connector.fireDueOnce(), false);
+    assert.equal(submitted.length, 0);
+    assert.equal(repository.getOccurrenceCheck('tm_test:1790000000000'), null);
+  });
+
   it('persists timers and completion checks and restores them for the same instance', async (context) => {
     const { client, repository } = await setup(context);
     await repository.create(input);
