@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import TracebackType
@@ -114,18 +115,22 @@ class OpenVikingStore(BaseStore):
         self.wait: bool = wait
         self.search_fetch_limit: int = search_fetch_limit
         self._client_cache: Any = None
+        self._client_lock = threading.Lock()
+        self._call_condition = threading.Condition()
+        self._active_calls = 0
         self._owns_client = client is None
         self._closed = False
 
     def close(self) -> None:
         """Close the Store and release its internally created client, if any."""
-        if self._closed:
-            return
-        self._closed = True
-        client = self._client_cache
-        self._client_cache = None
-        if client is not None and self._owns_client:
-            client.close()
+        with self._call_condition:
+            self._closed = True
+            self._call_condition.wait_for(lambda: self._active_calls == 0)
+            with self._client_lock:
+                client = self._client_cache
+                self._client_cache = None
+                if client is not None and self._owns_client:
+                    client.close()
 
     async def aclose(self) -> None:
         """Close the Store without blocking the event loop."""
@@ -321,8 +326,7 @@ class OpenVikingStore(BaseStore):
         limit: int,
         offset: int,
     ) -> list[Any]:
-        result = call_openviking(
-            self._client(),
+        result = self._call(
             "find",
             query=query,
             target_uri=self._index_prefix_uri(namespace_prefix),
@@ -362,7 +366,7 @@ class OpenVikingStore(BaseStore):
         seen: set[str] = set()
         for pattern in ("*.json", "**/*.json"):
             try:
-                result = call_openviking(self._client(), "glob", pattern=pattern, uri=base_uri)
+                result = self._call("glob", pattern=pattern, uri=base_uri)
             except Exception as exc:
                 if not is_not_found_error(exc):
                     raise
@@ -374,17 +378,34 @@ class OpenVikingStore(BaseStore):
         return uris
 
     def _client(self) -> Any:
-        self._raise_if_closed()
-        if self._client_cache is None:
-            self._client_cache = ensure_client(self._connection)
-        return self._client_cache
+        with self._client_lock:
+            self._raise_if_closed()
+            if self._client_cache is None:
+                client = ensure_client(self._connection)
+                if self._closed:
+                    if self._owns_client:
+                        client.close()
+                    self._raise_if_closed()
+                self._client_cache = client
+            return self._client_cache
+
+    def _call(self, method_name: str, /, **kwargs: Any) -> Any:
+        with self._call_condition:
+            self._raise_if_closed()
+            self._active_calls += 1
+        try:
+            return call_openviking(self._client(), method_name, **kwargs)
+        finally:
+            with self._call_condition:
+                self._active_calls -= 1
+                self._call_condition.notify_all()
 
     def _raise_if_closed(self) -> None:
         if self._closed:
             raise RuntimeError("OpenVikingStore is closed")
 
     def _read_record(self, uri: str) -> dict[str, Any]:
-        content = call_openviking(self._client(), "read", uri=uri)
+        content = self._call("read", uri=uri)
         if isinstance(content, bytes):
             content = content.decode("utf-8")
         return json.loads(str(content))
@@ -424,8 +445,7 @@ class OpenVikingStore(BaseStore):
         self._write_replace(uri, content)
 
     def _write_create(self, uri: str, content: str) -> None:
-        call_openviking(
-            self._client(),
+        self._call(
             "write",
             uri=uri,
             content=content,
@@ -434,8 +454,7 @@ class OpenVikingStore(BaseStore):
         )
 
     def _write_replace(self, uri: str, content: str) -> None:
-        call_openviking(
-            self._client(),
+        self._call(
             "write",
             uri=uri,
             content=content,
@@ -445,7 +464,7 @@ class OpenVikingStore(BaseStore):
 
     def _remove(self, uri: str) -> None:
         try:
-            call_openviking(self._client(), "rm", uri=uri, recursive=False)
+            self._call("rm", uri=uri, recursive=False)
         except Exception as exc:
             if not is_not_found_error(exc):
                 raise

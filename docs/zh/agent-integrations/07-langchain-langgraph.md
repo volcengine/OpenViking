@@ -252,6 +252,8 @@ store.close()
 `with OpenVikingStore(...) as store` 或 `async with` 自动清理。
 清理仅释放 Store 内部创建的客户端，注入的客户端仍由调用方管理。
 关闭未使用的 Store 不会创建客户端，关闭后不可复用。
+清理会等待正在执行的后端请求结束，再释放内部创建的客户端。
+异步代码应使用 `aclose()`，避免等待过程阻塞事件循环。
 
 按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
 删除不存在的键不会产生任何影响。
