@@ -12,6 +12,7 @@ import { MailArchive, chunkOffset, needsChunks, readTarget } from '../src/email/
 import { EmailClient, accountTag } from '../src/email/client.mjs';
 import { EmailState } from '../src/email/state.mjs';
 import { ImapConnection, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
+import { requestDeviceCode, waitForDeviceCode } from '../src/email/oauth2.mjs';
 import { buildReply, htmlToText, isOwnMessageId, parseAddresses, parseMail, replyMessageId } from '../src/email/mime.mjs';
 import { normalizeEvent } from '../src/event.mjs';
 import { OVConnection } from '../src/ov-connection.mjs';
@@ -586,6 +587,58 @@ describe('email connector with OAuth2', () => {
     assert.doesNotMatch(error.message, new RegExp(TOKEN));
     assert.equal(endpoint.calls.length, 1);
     client.state.close();
+  });
+});
+
+// The device-code exchanges the setup asks for; a fake endpoint stands in for
+// login.microsoftonline.com.
+describe('Microsoft sign-in', () => {
+  const reply = (status, body) => ({
+    ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body),
+  });
+  const signIn = { tenant: 'contoso.example', clientId: 'app-id' };
+
+  it('names the address and code to type in, and remembers when the code expires', async () => {
+    const at = Date.parse('2026-11-04T00:00:00Z');
+    const code = await requestDeviceCode(signIn, {
+      now: () => at,
+      fetch: async () => reply(200, { device_code: 'device-1', user_code: 'ABCD-EFGH',
+        verification_uri: 'https://microsoft.com/devicelogin', expires_in: 900, interval: 5 }),
+    });
+    assert.deepEqual([code.userCode, code.verificationUri, code.intervalMs], ['ABCD-EFGH', 'https://microsoft.com/devicelogin', 5_000]);
+    // A number, so the expiry check in waitForDeviceCode compares time, not a function's text.
+    assert.equal(code.expiresAt, at + 900_000);
+  });
+
+  it('waits out a pending sign-in and takes the tokens once approved', async () => {
+    let poll = 0;
+    const tokens = await waitForDeviceCode(signIn, { deviceCode: 'device-1', intervalMs: 1, expiresAt: Date.now() + 60_000 }, {
+      now: () => Date.parse('2026-11-04T00:00:00Z'),
+      sleep: async () => {},
+      fetch: async () => {
+        poll += 1;
+        return poll === 1
+          ? reply(400, { error: 'authorization_pending' })
+          : reply(200, { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3_600 });
+      },
+    });
+    assert.equal(poll, 2);
+    assert.deepEqual([tokens.accessToken, tokens.refreshToken], ['at-1', 'rt-1']);
+  });
+
+  it('says the code expired instead of waiting forever, and names the consent step', async () => {
+    await assert.rejects(waitForDeviceCode(signIn, { deviceCode: 'd', intervalMs: 1, expiresAt: 0 }, {
+      now: () => 1, sleep: async () => {},
+    }), /code expired/);
+
+    await assert.rejects(requestDeviceCode(signIn, {
+      fetch: async () => reply(400, { error: 'invalid_client', error_description: 'AADSTS700016: unknown application' }),
+    }), /Microsoft sign-in failed \(invalid_client/);
+
+    // Consent is the one failure whose fix is not in Vika, so it says what is missing.
+    await assert.rejects(requestDeviceCode(signIn, {
+      fetch: async () => reply(400, { error: 'unauthorized_client', error_description: 'AADSTS65001: consent' }),
+    }), /administrator to consent to IMAP\.AccessAsUser\.All and SMTP\.Send/);
   });
 });
 

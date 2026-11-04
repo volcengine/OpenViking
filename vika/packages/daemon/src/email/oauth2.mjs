@@ -101,7 +101,7 @@ export async function requestDeviceCode(oauth2, { fetch: fetchImpl = globalThis.
     userCode: String(data.user_code),
     verificationUri,
     intervalMs: Math.max(1, Number(data.interval) || 5) * 1_000,
-    expiresAt: now + Math.max(60, Number(data.expires_in) || 900) * 1_000,
+    expiresAt: now() + Math.max(60, Number(data.expires_in) || 900) * 1_000,
   };
 }
 
