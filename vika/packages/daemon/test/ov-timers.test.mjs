@@ -21,6 +21,53 @@ async function setup(context) {
 }
 
 describe('OV timer storage', () => {
+  for (const operation of ['create', 'cancel']) {
+    it(`refreshes cached state after a committed ${operation} loses its response`, async (context) => {
+      const { client, repository } = await setup(context);
+      if (operation === 'cancel') await repository.create(input);
+      const json = client.json.bind(client);
+      let loseResponse = true;
+      client.json = async (route, body) => {
+        const result = await json(route, body);
+        if (body && loseResponse) {
+          loseResponse = false;
+          throw new Error('Write response lost');
+        }
+        return result;
+      };
+      await assert.rejects(operation === 'create' ? repository.create(input) : repository.cancel(input.timerId), /response lost/);
+      assert.equal(Boolean(repository.get(input.timerId)), operation === 'create');
+      await repository.create({ ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' });
+      const restored = await new OVTimerRepository(client, 'primary').load();
+      assert.equal(Boolean(restored.get(input.timerId)), operation === 'create');
+      assert.equal(restored.get('tm_second').timerId, 'tm_second');
+    });
+  }
+
+  it('refreshes before further writes when the first refresh fails', async (context) => {
+    const { client, repository, state } = await setup(context);
+    await repository.create(input);
+    const json = client.json.bind(client);
+    let loseResponse = true;
+    client.json = async (route, body) => {
+      const result = await json(route, body);
+      if (body && loseResponse) {
+        loseResponse = false;
+        state.down = true;
+        throw new Error('Write response lost');
+      }
+      return result;
+    };
+    await assert.rejects(repository.cancel(input.timerId), /response lost/);
+    const second = { ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' };
+    await assert.rejects(repository.create(second), /HTTP 503/);
+    state.down = false;
+    await repository.create(second);
+    assert.equal(repository.get(input.timerId), null);
+    const restored = await new OVTimerRepository(client, 'primary').load();
+    assert.deepEqual(restored.listActive().map((timer) => timer.timerId), ['tm_second']);
+  });
+
   it('persists timers and completion checks and restores them for the same instance', async (context) => {
     const { client, repository } = await setup(context);
     await repository.create(input);

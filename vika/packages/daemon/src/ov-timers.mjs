@@ -8,6 +8,7 @@ export class OVTimerRepository {
     const root = client.user ? `viking://user/${client.user}` : 'viking://~';
     this.uri = `${root}/resources/ld/${instanceId}/timers-state.json`;
     this.state = { timers: [], timer_occurrence_checks: [] };
+    this.needsRefresh = false;
     this.barrier = Promise.resolve();
   }
 
@@ -16,13 +17,18 @@ export class OVTimerRepository {
     try {
       content = (await this.client.json(`/api/v1/content/read?uri=${encodeURIComponent(this.uri)}&offset=0&limit=-1&raw=true`)).result;
     } catch (error) {
-      if (error.httpStatus === 404) return this;
+      if (error.httpStatus === 404) {
+        this.state = { timers: [], timer_occurrence_checks: [] };
+        this.needsRefresh = false;
+        return this;
+      }
       throw error;
     }
     try {
       const state = JSON.parse(content);
       if (!Array.isArray(state.timers) || !Array.isArray(state.timer_occurrence_checks)) throw new Error();
       this.state = state;
+      this.needsRefresh = false;
     } catch {
       throw new Error('OV timer state is malformed');
     }
@@ -31,12 +37,19 @@ export class OVTimerRepository {
 
   mutate(change) {
     const work = this.barrier.then(async () => {
+      if (this.needsRefresh) await this.load();
       const state = structuredClone(this.state);
       const result = change(state);
-      await this.client.json('/api/v1/content/write', {
-        uri: this.uri, content: JSON.stringify(state), mode: 'replace',
-        wait: false, processing_mode: 'vectors_only',
-      });
+      try {
+        await this.client.json('/api/v1/content/write', {
+          uri: this.uri, content: JSON.stringify(state), mode: 'replace',
+          wait: false, processing_mode: 'vectors_only',
+        });
+      } catch (error) {
+        this.needsRefresh = true;
+        try { await this.load(); } catch {}
+        throw error;
+      }
       this.state = state;
       return result;
     });
