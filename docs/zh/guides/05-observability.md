@@ -564,6 +564,19 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 - 看某一次具体请求为什么慢、token 花在哪、资源处理卡在哪个阶段：看 `telemetry`
 - 看一段时间内请求量、错误率、时延是否持续恶化：看 `/metrics`
 
+## 可选 Kafka 事件上报
+
+安装 `openviking[reporting]` 并启用 `server.observability.reporting.enabled` 后，
+事件上报读取外部 JSON（`NACOS_CONFIG_FILE`）或配置的 Nacos 服务。
+Kafka 的地址、认证和 topic 来自该配置的 `kafka`，不能写入业务代码。
+该功能默认关闭，业务调用不会因上报失败而中断。
+
+部署可通过 `OV_METRICS_ACCOUNT_ID` 和 `OV_RESOURCE_ID` 绑定外层云账号与实例，
+原始数据空间和成员保留为 `ov_account_id`、`ov_user_id`。仅当部署能够确定模型凭据
+归属时，设置 `OV_MODEL_COST_BEARER=customer` 或 `ov`；未设置时保持 `unknown`。
+事件内明确的归属及 `telemetry.model_cost_bearers` 的精确规则优先，冲突规则保持
+`unknown`。上报不包含原文、提示词或 API Key。
+
 ## 相关文档
 
 - [使用 Prometheus 和 Grafana 查看 OpenViking 指标](11-grafana-prometheus.md) - 从 `/metrics` 到 Prometheus、Grafana dashboard 的完整操作流程

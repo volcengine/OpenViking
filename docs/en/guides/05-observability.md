@@ -572,6 +572,21 @@ The most common labels you will use while investigating dashboards are:
 - To inspect why one specific request was slow, where tokens went, or which stage blocked resource processing, use `telemetry`
 - To inspect whether request volume, error rates, or latency are degrading over time, use `/metrics`
 
+## Optional Kafka event reporting
+
+Install `openviking[reporting]` and enable `server.observability.reporting.enabled`
+to read Kafka connection, authentication and topic settings from an external JSON
+file (`NACOS_CONFIG_FILE`) or the configured Nacos service. Reporting is disabled
+by default and export failures do not interrupt business requests.
+
+Deployments may bind an outer account and instance with `OV_METRICS_ACCOUNT_ID`
+and `OV_RESOURCE_ID`; original space and member identities remain in
+`ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
+only when the deployment knows who owns its model credentials. Otherwise the
+owner stays `unknown`. Explicit event ownership and precise
+`telemetry.model_cost_bearers` rules take precedence; conflicting rules stay
+`unknown`. Events exclude document content, prompts and API keys.
+
 ## Related Documentation
 
 - [Deployment](03-deployment.md) - server setup

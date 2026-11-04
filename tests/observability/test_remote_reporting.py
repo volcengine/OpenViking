@@ -98,6 +98,19 @@ def test_model_cost_mapping_respects_space_and_rejects_ambiguous_ownership():
     assert capture.events[-1]["cost_bearer"] == "unknown"
 
 
+def test_deployment_model_cost_owner_is_external_and_does_not_override_specific_rules(monkeypatch):
+    monkeypatch.setenv("OV_MODEL_COST_BEARER", "customer")
+    capture = Capture()
+    subscriber = runtime.make_subscriber(capture, {"telemetry": {"model_cost_bearers": [
+        {"provider": "provider", "model_name": "platform_model", "cost_bearer": "ov"}]}})
+    subscriber(build_event("vlm.call", {"provider": "provider", "model_name": "customer_model"}))
+    subscriber(build_event("embedding.call", {"provider": "provider", "model_name": "platform_model"}))
+    assert [event["cost_bearer"] for event in capture.events] == ["customer", "ov"]
+    monkeypatch.setenv("OV_MODEL_COST_BEARER", "invalid_owner")
+    subscriber(build_event("vlm.call", {"provider": "provider", "model_name": "customer_model"}))
+    assert capture.events[-1]["cost_bearer"] == "unknown"
+
+
 @pytest.mark.asyncio
 async def test_request_task_attribution_is_isolated_between_concurrent_requests(monkeypatch):
     monkeypatch.setattr(runtime, "_reporter", object())

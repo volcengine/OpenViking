@@ -65,7 +65,12 @@ def make_subscriber(reporter, config):
             rank = max((specificity(item) for item in matching), default=-1)
             bearers = {item["cost_bearer"] for item in matching if specificity(item) == rank}
             if payload.get("cost_bearer") not in {"ov", "customer"}:
-                payload["cost_bearer"] = next(iter(bearers)) if len(bearers) == 1 else "unknown"
+                default_bearer = deployment.get("model_cost_bearer") or os.getenv("OV_MODEL_COST_BEARER")
+                payload["cost_bearer"] = (
+                    next(iter(bearers)) if len(bearers) == 1 else
+                    default_bearer if not matching and default_bearer in {"ov", "customer"} else
+                    "unknown"
+                )
         tasks = source.get("metric_tasks") if name == "http_request" else None
         if tasks:
             for task in tasks:
