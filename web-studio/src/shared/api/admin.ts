@@ -653,12 +653,13 @@ export function updateAdminGroupMember(
 ) {
   const client = createAdminClient(connection)
   const options = {
-    url: `${groupsUrl}/{group_id}/members/{user_id}`,
+    url: `${groupsUrl}/{group_id}/members`,
     path: {
       account_id: connection.accountId,
       group_id: groupId,
-      user_id: userId,
     },
+    headers: { 'Content-Type': 'application/json' },
+    body: { user_ids: [userId] },
   }
   return getOvResult<unknown>(
     add ? client.put(options) : client.delete(options),
