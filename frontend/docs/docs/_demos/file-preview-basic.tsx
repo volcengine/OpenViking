@@ -21,6 +21,7 @@ const dashboard = (
 
 export default function FilePreviewBasic() {
   const [activeHint, setActiveHint] = useState('');
+  const [content, setContent] = useState(markdown);
 
   const tabs: [FilePreviewTab, ...FilePreviewTab[]] = [
     {
@@ -28,13 +29,23 @@ export default function FilePreviewBasic() {
       key: 'file',
       title: 'SKILL.md',
       source: {
-        content: markdown,
+        content,
         fileName: 'SKILL.md',
         path: 'viking://system/compile/llm-wiki/SKILL.md',
       },
       onCopyContent: () => setActiveHint('Content copied'),
       onCopyPath: () => setActiveHint('Path copied'),
-      onOpenParent: (path) => setActiveHint(`Open parent of ${path}`),
+      operations: { openParent: async () => {} },
+      onOpenParent: (path) =>
+        setActiveHint(`Simulated parent navigation: ${path}`),
+      editing: {
+        save: (value) => {
+          setContent(value);
+          return Promise.resolve();
+        },
+        onSave: () => setActiveHint('Content saved'),
+        onCancel: () => setActiveHint('Editing cancelled'),
+      },
     },
     {
       kind: 'content',

@@ -1,3 +1,5 @@
+import { useId } from 'react';
+
 import styles from './file-preview.module.css';
 import type {
   FilePreviewContentTab,
@@ -12,6 +14,8 @@ export interface FilePreviewBodyProps {
   editing: boolean;
   loadingEdit: boolean;
   editFailed: boolean;
+  saving: boolean;
+  saveFailed: boolean;
   draft: string;
   onDraftChange: (value: string) => void;
 }
@@ -24,9 +28,12 @@ export function FilePreviewBody({
   editing,
   loadingEdit,
   editFailed,
+  saving,
+  saveFailed,
   draft,
   onDraftChange,
 }: FilePreviewBodyProps) {
+  const errorId = useId();
   if (contentTab) return contentTab.content;
   if (!fileTab) return null;
 
@@ -50,9 +57,17 @@ export function FilePreviewBody({
 
   if (editing && fileTab.editing) {
     return (
-      <div className={styles.editor}>
+      <div className={styles.editor} aria-busy={saving || undefined}>
+        {saveFailed ? (
+          <div id={errorId} role="alert" className={styles.saveError}>
+            {text.saveFailed}
+          </div>
+        ) : null}
         <textarea
           className={styles.textarea}
+          aria-label={text.edit}
+          aria-describedby={saveFailed ? errorId : undefined}
+          readOnly={saving}
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
         />

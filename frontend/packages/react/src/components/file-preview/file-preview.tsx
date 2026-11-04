@@ -1,10 +1,11 @@
-import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
+import { forwardRef, useImperativeHandle, useState } from 'react';
 
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import { FileIcon } from './file-preview-icons.js';
 import { DEFAULT_LABELS } from './file-preview-labels.js';
 import styles from './file-preview.module.css';
+import { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewComponent,
   FilePreviewFileTab,
@@ -22,6 +23,7 @@ export type {
   FilePreviewHandle,
   FilePreviewHeaderSlots,
   FilePreviewLabels,
+  FilePreviewOperations,
   FilePreviewProps,
   FilePreviewSource,
   FilePreviewTab,
@@ -31,12 +33,6 @@ export type {
 function isFileTab(tab: FilePreviewTab): tab is FilePreviewFileTab {
   return tab.kind === 'file';
 }
-
-/** 进入编辑时向宿主取正文的结果。 */
-type EditRequest =
-  | { status: 'ready'; text: string }
-  | { status: 'abandoned' }
-  | { status: 'failed' };
 
 /**
  * 文件预览的占位实现。
@@ -59,10 +55,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const text = { ...DEFAULT_LABELS, ...labels };
   const [activeKey, setActiveKey] = useState(() => tabs[0].key);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
-  const [editing, setEditing] = useState(false);
-  const [loadingEdit, setLoadingEdit] = useState(false);
-  const [editFailed, setEditFailed] = useState(false);
-  const [draft, setDraft] = useState('');
+  const editor = useFilePreviewEditing();
 
   const activeTab = tabs.find((tab) => tab.key === activeKey) ?? tabs[0];
   const tabText = { ...text, ...activeTab.labels };
@@ -70,72 +63,23 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const fileTab = isFileTab(activeTab) ? activeTab : undefined;
   const contentTab = !isFileTab(activeTab) ? activeTab : undefined;
 
-  // 退出编辑并丢弃草稿：通知原页签，再清空编辑态。切换页签与取消共用。
-  const discardDraft = useCallback(
-    (tab: FilePreviewTab | undefined, value: string) => {
-      if (tab && isFileTab(tab)) tab.editing?.onCancel?.(value);
-      setEditing(false);
-      setLoadingEdit(false);
-      setDraft('');
+  const switchTab = (key: string) => {
+    if (key === activeKey) return true;
+    if (editor.saving) return false;
+    setActiveKey(key);
+    setViewMode('preview');
+    editor.discard(activeTab);
+    return true;
+  };
+
+  useImperativeHandle(ref, () => ({
+    setActiveTab: (key) => {
+      const target = tabs.find((tab) => tab.key === key);
+      if (!target || target.disabled) return false;
+      return switchTab(key);
     },
-    [],
-  );
-
-  const switchTab = useCallback(
-    (key: string) => {
-      if (key === activeKey) return true;
-      if (editing || loadingEdit) discardDraft(activeTab, draft);
-      setEditFailed(false);
-      setActiveKey(key);
-      setViewMode('preview');
-      return true;
-    },
-    [activeKey, activeTab, discardDraft, draft, editing, loadingEdit],
-  );
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      setActiveTab: (key) => {
-        const target = tabs.find((tab) => tab.key === key);
-        if (!target || target.disabled) return false;
-        return switchTab(key);
-      },
-      getActiveTab: () => activeKey,
-    }),
-    [activeKey, switchTab, tabs],
-  );
-
-  // 进入编辑：有 onRequestEdit 时以它的返回值为正文，宿主自行处理取数。
-  const startEdit = useCallback(async (tab: FilePreviewFileTab) => {
-    setEditFailed(false);
-    const request = tab.editing?.onRequestEdit;
-    if (!request) {
-      setDraft(tab.source.content ?? '');
-      setEditing(true);
-      return;
-    }
-
-    setLoadingEdit(true);
-    let result: EditRequest;
-    try {
-      const returned = await request(tab.source);
-      result =
-        returned === undefined
-          ? { status: 'abandoned' }
-          : { status: 'ready', text: returned };
-    } catch {
-      result = { status: 'failed' };
-    }
-    setLoadingEdit(false);
-
-    if (result.status === 'ready') {
-      setDraft(result.text);
-      setEditing(true);
-    } else if (result.status === 'failed') {
-      setEditFailed(true);
-    }
-  }, []);
+    getActiveTab: () => activeKey,
+  }));
 
   const handleTabClick = (tab: FilePreviewTab) => {
     if (tab.disabled) return;
@@ -154,7 +98,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
             type="button"
             role="tab"
             aria-selected={tab.key === activeTab.key}
-            disabled={tab.disabled}
+            disabled={tab.disabled || editor.saving}
             className={styles.tab}
             onClick={() => handleTabClick(tab)}
           >
@@ -171,16 +115,16 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         fileTab={fileTab}
         text={tabText}
         viewMode={viewMode}
-        editing={editing}
+        editing={editor.editing}
+        loadingEdit={editor.loadingEdit}
+        saving={editor.saving}
         onViewModeChange={setViewMode}
         onEditStart={() => {
-          if (fileTab) void startEdit(fileTab);
+          if (fileTab) void editor.start(fileTab);
         }}
-        onEditCancel={() => discardDraft(activeTab, draft)}
+        onEditCancel={() => editor.discard(activeTab)}
         onEditSave={() => {
-          void fileTab?.editing?.onSave(draft);
-          setEditing(false);
-          setDraft('');
+          if (fileTab) void editor.save(fileTab);
         }}
       />
 
@@ -189,11 +133,13 @@ export const FilePreview: FilePreviewComponent = forwardRef<
           fileTab={fileTab}
           contentTab={contentTab}
           text={tabText}
-          editing={editing}
-          loadingEdit={loadingEdit}
-          editFailed={editFailed}
-          draft={draft}
-          onDraftChange={setDraft}
+          editing={editor.editing}
+          loadingEdit={editor.loadingEdit}
+          editFailed={editor.editFailed}
+          saving={editor.saving}
+          saveFailed={editor.saveFailed}
+          draft={editor.draft}
+          onDraftChange={editor.updateDraft}
         />
       </div>
     </div>

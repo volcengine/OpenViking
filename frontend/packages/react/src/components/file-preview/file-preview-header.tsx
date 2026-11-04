@@ -2,6 +2,7 @@ import type { MouseEvent } from 'react';
 
 import { CopyIcon } from './file-preview-icons.js';
 import { readCopyableText } from './file-preview-labels.js';
+import { performPreviewOperation } from './file-preview-operations.js';
 import styles from './file-preview.module.css';
 import type {
   FilePreviewFileTab,
@@ -15,6 +16,8 @@ export interface FilePreviewHeaderProps {
   text: Required<FilePreviewLabels>;
   viewMode: 'preview' | 'source';
   editing: boolean;
+  loadingEdit: boolean;
+  saving: boolean;
   onViewModeChange: (mode: 'preview' | 'source') => void;
   onEditStart: () => void;
   onEditCancel: () => void;
@@ -37,6 +40,8 @@ export function FilePreviewHeader({
   text,
   viewMode,
   editing,
+  loadingEdit,
+  saving,
   onViewModeChange,
   onEditStart,
   onEditCancel,
@@ -55,9 +60,14 @@ export function FilePreviewHeader({
             className={styles.breadcrumb}
             onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
-              fileTab.onOpenParent?.(path);
+              void performPreviewOperation(
+                fileTab.operations?.openParent
+                  ? () => fileTab.operations!.openParent!(path)
+                  : undefined,
+                () => fileTab.onOpenParent?.(path),
+              );
             }}
-            disabled={!fileTab.onOpenParent}
+            disabled={!fileTab.operations?.openParent || saving}
             title={path}
           >
             {path}
@@ -126,7 +136,17 @@ export function FilePreviewHeader({
         ) : null}
 
         {fileTab?.editing && !editing ? (
-          <button type="button" className={styles.button} onClick={onEditStart}>
+          <button
+            type="button"
+            className={styles.button}
+            disabled={
+              loadingEdit ||
+              (!fileTab.editing.loadContent &&
+                fileTab.source.content === undefined &&
+                !fileTab.source.file)
+            }
+            onClick={onEditStart}
+          >
             {text.edit}
           </button>
         ) : null}
@@ -137,6 +157,7 @@ export function FilePreviewHeader({
               type="button"
               className={styles.button}
               onClick={onEditCancel}
+              disabled={saving}
             >
               {text.cancel}
             </button>
@@ -144,17 +165,23 @@ export function FilePreviewHeader({
               type="button"
               className={styles.buttonPrimary}
               onClick={onEditSave}
+              disabled={saving}
             >
               {text.save}
             </button>
           </>
         ) : null}
 
-        {fileTab?.onDownload ? (
+        {fileTab?.operations?.download ? (
           <button
             type="button"
             className={styles.button}
-            onClick={() => fileTab.onDownload?.()}
+            onClick={() => {
+              void performPreviewOperation(
+                fileTab.operations?.download,
+                fileTab.onDownload,
+              );
+            }}
           >
             {text.download}
           </button>

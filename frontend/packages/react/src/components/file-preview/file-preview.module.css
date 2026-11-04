@@ -81,6 +81,7 @@
 
 .header {
   display: flex;
+  flex-wrap: wrap;
   flex: none;
   align-items: center;
   justify-content: space-between;
@@ -131,9 +132,11 @@
 
 .headerActions {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .action {
@@ -244,8 +247,13 @@
 
 .editor {
   display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 240px;
+}
+
+.saveError {
+  padding: 8px 12px;
 }
 
 .textarea {
