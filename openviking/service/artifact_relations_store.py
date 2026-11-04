@@ -156,6 +156,25 @@ class ArtifactRelationsStore:
         except Exception:
             logger.warning("Obsolete artifact build cleanup failed: %s/%s", directory, build_id)
 
+    async def _discard_compile_sources(
+        self, directory: str, operation_id: str | None, ctx: dict
+    ) -> None:
+        """Remove only staging sources owned by the published Compile."""
+        if operation_id is None:
+            return
+        try:
+            sources = await self._read(directory, "relation_sources", RelationSources)
+            if sources is None or sources.compile_operation_id != operation_id:
+                return
+            await self._agfs.rm(
+                f"{directory}/relation_sources.json",
+                fs_ctx={key: val for key, val in ctx.items() if not key.startswith("_")},
+            )
+        except (AGFSNotFoundError, FileNotFoundError):
+            pass
+        except Exception:
+            logger.warning("Compile relation source cleanup failed: %s", directory)
+
     @staticmethod
     def _check_state(state: ArtifactRelationsState) -> None:
         if state.status == "building":
@@ -270,13 +289,16 @@ class ArtifactRelationsStore:
         an in-flight Worker. Legacy requests start their persisted clock once.
         """
         async with self._locked(account_id, to) as (directory, ctx, target):
-            state, graph = await self._publication(directory, ctx, target)
+            state, graph = await self._publication(directory, ctx, target, include_graph=False)
             if (
                 state is None
-                or state.status != "building"
                 or state.compile_operation_id != operation_id
                 or state.target_snapshot_id != snapshot_id
             ):
+                return state, graph
+            if state.status == "ready" and graph is None:
+                state, graph = await self._publication(directory, ctx, target)
+            if state.status != "building":
                 return state, graph
             self._check_owner(target, operation_id, state.target_generation)
             now = time.time()
@@ -306,7 +328,11 @@ class ArtifactRelationsStore:
     ) -> None:
         """Merge one successful Compile batch and invalidate the old baseline stamp."""
         # Validate before acquiring locks or changing stored data.
-        candidate = RelationSources(parser_version=parser_version, pages=pages)
+        candidate = RelationSources(
+            parser_version=parser_version,
+            compile_operation_id=compile_operation_id,
+            pages=pages,
+        )
         async with self._locked(account_id, to) as (directory, ctx, target):
             self._check_owner(target, compile_operation_id)
             state = await self._read(directory, "artifact_relations_state", ArtifactRelationsState)
@@ -317,7 +343,11 @@ class ArtifactRelationsStore:
             ):
                 raise ArtifactRelationsStoreError("Compile output snapshot is already registered")
             sources = await self._read(directory, "relation_sources", RelationSources)
-            if sources is not None and sources.parser_version == parser_version:
+            if (
+                sources is not None
+                and sources.parser_version == parser_version
+                and sources.compile_operation_id == compile_operation_id
+            ):
                 candidate.pages = {**sources.pages, **candidate.pages}
             await self._replace(directory, "relation_sources", candidate, ctx)
 
@@ -340,7 +370,9 @@ class ArtifactRelationsStore:
         async with self._locked(account_id, to) as (directory, ctx, target):
             self._check_owner(target, compile_operation_id)
             candidate.target_generation = target.get("generation", "legacy")
-            state, graph = await self._publication(directory, ctx, target)
+            state, graph = await self._publication(directory, ctx, target, include_graph=False)
+            if state is not None and state.status == "ready" and graph is None:
+                state, graph = await self._publication(directory, ctx, target)
             if state is not None:
                 candidate.published_build_id = state.published_build_id
             if (
@@ -435,6 +467,9 @@ class ArtifactRelationsStore:
             self._check_owner(target, claimed.compile_operation_id, claimed.target_generation)
             state, existing = await self._publication(directory, ctx, target)
             if state is not None and state.status == "ready" and existing == graph:
+                await self._discard_compile_sources(
+                    directory, claimed.compile_operation_id, ctx
+                )
                 return state
             self._check_build(state, claimed)
             publishing = state.model_copy(update={"phase": "publishing"})
@@ -450,6 +485,7 @@ class ArtifactRelationsStore:
                 }
             )
             await self._replace(directory, "artifact_relations_state", ready, ctx)
+            await self._discard_compile_sources(directory, claimed.compile_operation_id, ctx)
             if publishing.published_build_id != claimed.build_id:
                 await self._discard_build(directory, publishing.published_build_id, ctx)
             return ready

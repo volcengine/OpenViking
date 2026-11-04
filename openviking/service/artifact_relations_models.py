@@ -31,6 +31,7 @@ class RelationSources(_Record):
 
     parser_version: str = Field(min_length=1)
     build_id: str | None = Field(default=None, min_length=1)
+    compile_operation_id: str | None = Field(default=None, min_length=1)
     pages: dict[str, RelationSource] = Field(default_factory=dict)
 
 

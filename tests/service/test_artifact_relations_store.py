@@ -221,6 +221,36 @@ async def test_cross_instance_merge_preserves_both_batches(backend):
     )
     _, sources, _ = await two.get_baseline(ACCOUNT, TO)
     assert set(sources.pages) == {PAGE + "0", PAGE + "1"}
+    assert sources.compile_operation_id == "op"
+
+
+@pytest.mark.asyncio
+async def test_new_compile_operation_replaces_staged_sources(backend):
+    store, _ = stores(backend)
+    compile_target(backend)
+    await store.merge_sources(
+        ACCOUNT,
+        TO,
+        {PAGE: RelationSource(blob_oid="old", links=[])},
+        parser_version="v1",
+        compile_operation_id="op",
+    )
+    path = CompileStateStore(backend)._record_path(ACCOUNT, TO)
+    target = json.loads(backend.files[path])
+    target["active_operation_id"] = "next"
+    backend.files[path] = json.dumps(target).encode()
+
+    await store.merge_sources(
+        ACCOUNT,
+        TO,
+        {PAGE + ".new": RelationSource(blob_oid="new", links=[])},
+        parser_version="v1",
+        compile_operation_id="next",
+    )
+
+    _, sources, _ = await store.get_baseline(ACCOUNT, TO)
+    assert set(sources.pages) == {PAGE + ".new"}
+    assert sources.compile_operation_id == "next"
 
 
 @pytest.mark.asyncio
@@ -356,6 +386,36 @@ async def test_cleanup_error_does_not_hide_published_graph(backend):
     backend.cleanup_fails = True
     _, graph = await publish(one)
     assert (await one.get_publication(ACCOUNT, TO))[1] == graph
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["cleaned", "cleanup-fails"])
+async def test_compile_publish_cleans_only_its_staged_sources(backend, cleanup_fails):
+    store, _ = stores(backend)
+    compile_target(backend)
+    await store.merge_sources(
+        ACCOUNT,
+        TO,
+        {PAGE: RelationSource(blob_oid="blob", links=[])},
+        parser_version="markdown-v1",
+        compile_operation_id="op",
+    )
+    await store.request(ACCOUNT, TO, "A", compile_operation_id="op")
+    claimed = await store.claim(ACCOUNT, TO)
+    sources, graph = candidate(claimed)
+    backend.cleanup_fails = cleanup_fails
+
+    state = await store.publish(ACCOUNT, TO, claimed, sources, graph)
+
+    staging = directory(store, backend) + "/relation_sources.json"
+    assert state.status == "ready"
+    assert (await store.get_publication(ACCOUNT, TO))[1] == graph
+    assert (staging in backend.files) is cleanup_fails
+
+    if cleanup_fails:
+        backend.cleanup_fails = False
+        await store.publish(ACCOUNT, TO, claimed, sources, graph)
+        assert staging not in backend.files
 
 
 @pytest.mark.asyncio
@@ -510,7 +570,7 @@ async def test_compile_timeout_survives_restart_and_rejects_late_worker(
     clock.time = lambda: 400.0
     state, graph = await two.check_compile_wait(ACCOUNT, TO, "B", "op", 300)
     assert state.status == "failed" and state.error_code == "ARTIFACT_RELATIONS_TIMEOUT"
-    assert graph == old_graph
+    assert graph is None
     assert (await one.request(ACCOUNT, TO, "B", compile_operation_id="op")).status == "failed"
     if claimed:
         sources, graph = candidate(claimed)
@@ -534,6 +594,21 @@ async def test_compile_retry_does_not_refresh_timeout_clock(backend, monkeypatch
     clock.time = lambda: 400.0
     state, _ = await store.check_compile_wait(ACCOUNT, TO, "A", "op", 300)
     assert state.error_code == "ARTIFACT_RELATIONS_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_building_compile_poll_does_not_load_published_graph(backend):
+    store, _ = stores(backend)
+    await publish(store)
+    compile_target(backend)
+    await store.request(ACCOUNT, TO, "B", compile_operation_id="op")
+    backend.reads.clear()
+
+    await store.request(ACCOUNT, TO, "B", compile_operation_id="op")
+    state, graph = await store.check_compile_wait(ACCOUNT, TO, "B", "op", 300)
+
+    assert state.status == "building" and graph is None
+    assert not any(path.endswith("/artifact_relations.json") for path in backend.reads)
 
 
 @pytest.mark.asyncio
