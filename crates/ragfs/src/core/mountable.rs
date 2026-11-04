@@ -1750,6 +1750,81 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn account_root_pathlock_sidecar_bypasses_multiwrite_account_resolution() {
+        use crate::core::{FsContextInner, FS_CTX};
+        use crate::lock::{
+            FilesystemPathLockProvider, PathLockConfig, PathLockManager, PathLockProvider,
+        };
+        use crate::plugins::LocalFSPlugin;
+
+        let primary = tempfile::tempdir().unwrap();
+        let backup = tempfile::tempdir().unwrap();
+        let mfs = Arc::new(MountableFS::new());
+        mfs.register_plugin(LocalFSPlugin::new()).await;
+        let lock_fs: Arc<dyn FileSystem> = mfs.clone();
+        let lock_provider: Arc<dyn PathLockProvider> =
+            Arc::new(FilesystemPathLockProvider::new(lock_fs.clone(), 30.0));
+        let manager = Arc::new(PathLockManager::new(
+            lock_fs,
+            lock_provider,
+            PathLockConfig::default(),
+        ));
+        mfs.set_pathlock_manager(manager.clone()).await;
+
+        let mut config = multiwrite_test_config("localfs", "localfs", "/local");
+        config.params.insert(
+            "local_dir".to_string(),
+            ConfigValue::String(primary.path().to_string_lossy().into_owned()),
+        );
+        config.backups.as_mut().unwrap().items[0].params = serde_json::json!({
+            "local_dir": backup.path().to_string_lossy(),
+        });
+        mfs.mount(config).await.unwrap();
+        mfs.mkdir("/local/accountzhanghe", 0o755).await.unwrap();
+        mfs.mkdir("/local/other", 0o755).await.unwrap();
+
+        let account_ctx = Arc::new(FsContextInner::new("accountzhanghe"));
+        let lease = FS_CTX
+            .scope(account_ctx.clone(), async {
+                manager
+                    .acquire_tree("/local/accountzhanghe", Duration::ZERO, None)
+                    .await
+            })
+            .await
+            .unwrap();
+
+        let primary_has_sidecar = std::fs::read_dir(primary.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".exact.ovlock.accountzhanghe.")
+        });
+        let backup_has_sidecar = std::fs::read_dir(backup.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".exact.ovlock.accountzhanghe.")
+        });
+        assert!(primary_has_sidecar);
+        assert!(!backup_has_sidecar);
+
+        let error = FS_CTX
+            .scope(
+                account_ctx,
+                mfs.write("/local/other/file.md", b"must fail", 0, WriteFlag::Create),
+            )
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("conflicts with context account 'accountzhanghe'"));
+
+        manager.release(&lease).await.unwrap();
+    }
+
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn shutdown_reaches_cache_queuefs_through_stats_wrapper() {

@@ -532,13 +532,15 @@ three-state: an absent key is unchanged, `null` deletes that layer's value, and
 a concrete value updates it.
 
 The Cluster runtime surface currently contains `agent_evolution`. The Account
-surface contains `feishu`, `agent_evolution`, `github`, `acl`, `vlm`, and
+surface contains `output_language_override`, `memory`, `feishu`, `parser_api`, `agent_evolution`, `github`, `acl`, `vlm`, and
 `query_planner`, all of which are dynamic. Account `vlm` and `query_planner`
 are visible and writable only to ROOT. Each configured section is complete:
 `model` and a non-empty `credentials` array are required, while `timeout` is
 optional. ADMIN responses omit both sections, and ADMIN PATCH requests
-containing either section are rejected. Account `memory` is not on the current API
-surface. Account `embedding` and `vectordb` are also ROOT-only, including reads.
+containing either section are rejected. Account `memory` exposes only
+`extraction_enabled`. Account `embedding` and `vectordb` are also ROOT-only, including reads.
+Account `parser_api` is ROOT-only and requires a nonblank `api_key`. ADMIN responses
+omit it, and ADMIN PATCH requests touching it, including `null`, are rejected.
 `vectordb` can only be supplied in Account creation `settings`; subsequent additions,
 changes and resets are rejected, including ROOT requests. Cluster
 `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, and
@@ -741,7 +743,7 @@ then read and update it through the configuration endpoints:
 | `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Explicit persisted `settings` for that Account |
 | `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Merged explicit `settings` |
 
-`vlm`, `query_planner`, `embedding`, and `vectordb` are sensitive
+`vlm`, `query_planner`, `embedding`, `vectordb`, and `parser_api` are sensitive
 infrastructure settings. Only ROOT can create, read, or modify them. An ADMIN
 GET response for its own Account removes those sections; a PATCH body containing
 any of them immediately returns `403 PERMISSION_DENIED`. ADMIN cannot manage a
@@ -755,14 +757,34 @@ update. Account creation validates `settings` before creating the Account
 directory. A later PATCH first merges the current explicit Account values, then
 validates the complete effective configuration.
 
+**Account Parser Credential**
+
+`settings.parser_api` is dynamic and contains only a required nonblank `api_key`.
+Only ROOT can read, update or reset it:
+
+```json
+{"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
+```
+
+The external parser uses this key for the owning Account's uploads, submission,
+polling and recovery; operational settings remain in Cluster `parser_api`.
+An absent Account section retains the legacy Cluster key. Queues carry owner and
+remote IDs, without credentials. A running call retains its acquired key;
+the next execution or recovery reads the current key. Rotation must preserve
+access to existing IDs under the same remote identity. Remote errors do not trigger
+credential fallback or resubmission. Account settings use the existing configuration
+source and AGFS file encryption when enabled; this does not encrypt `ov.conf`.
+
 **Other Account Configuration Sections**
 
-In addition to model and vector settings, the following `settings` objects are
+In addition to model, vector and parser settings, the following `settings` objects are
 dynamic and both ROOT and the target Account's ADMIN can read and write them:
 
 | Path | Type and constraints | Meaning |
 | --- | --- | --- |
 | `acl.enabled` | Boolean, default `false` | Whether ACL is enabled for this Account |
+| `output_language_override` | Optional string | Output language for generation; absent or `null` uses Cluster, `""` enables automatic detection |
+| `memory.extraction_enabled` | Boolean, default `true` within a configured section | SessionCommit long-term extraction switch; absent or `null` `memory` uses Cluster, a present empty section uses `true` |
 | `agent_evolution.enabled` | Boolean, default `false` | Whether Agent Evolution is enabled; when the Account omits the whole section, the complete Cluster `agent_evolution` section is used for legacy compatibility |
 | `github.token` | String, default empty string | GitHub access token; an empty string means the Account provides no token |
 | `feishu.app_id` | String, optional | Account Feishu App ID |

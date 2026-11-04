@@ -86,6 +86,7 @@ _CANCELLABLE_TASK_TYPES = {
     "add_resource",
     "add_skill",
     "compile",
+    "connector_import",
     "rule_compile",
     "session_commit",
     "admin_reindex",

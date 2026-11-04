@@ -2250,7 +2250,7 @@ async def test_add_resource_rejects_negative_watch_interval(service):
 
 
 async def _seed_watch(service, to_uri="viking://resources/test/foo"):
-    wm = service.watch_scheduler.watch_manager
+    wm = service.watch_manager
     return await wm.create_task(
         path="https://example.com/foo",
         account_id=DEFAULT_CTX.account_id,
