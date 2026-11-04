@@ -136,7 +136,7 @@ async fn flush_worker_retries_account_initialization_after_tree_lock_release() {
         1,
         Vec::new(),
         Some(primary.clone()),
-        Vec::new(),
+        Arc::new(StdMutex::new(HashSet::<ScopeKey>::new())),
         Arc::new(MultiWriteMetricsSnapshot::default()),
     );
     let retry = worker
@@ -204,7 +204,7 @@ async fn flush_worker_processes_other_accounts_while_one_account_retries() {
         1,
         Vec::new(),
         Some(primary.clone()),
-        Vec::new(),
+        Arc::new(StdMutex::new(HashSet::<ScopeKey>::new())),
         Arc::new(MultiWriteMetricsSnapshot::default()),
     );
     let blocked_event = PendingEvent {
