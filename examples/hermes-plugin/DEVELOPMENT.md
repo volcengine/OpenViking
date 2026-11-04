@@ -35,6 +35,8 @@ a dependency generation's interpreter or a profile home. Initialization repairs
 known source and bootstrap adapter entries after an installation move, while
 leaving custom MCP commands and connection policy intact. Discovery keeps a
 shorter deadline than the host so errors can reach the CLI before cancellation.
+The stdio path shares that budget with Hermes's initial retry count and deducts
+child startup time. Direct SDK connections keep one discovery budget.
 
 One task owns each reusable HTTP/MCP connection's SDK context managers. Parallel
 calls share that session. A configuration change retires the old connection

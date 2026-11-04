@@ -319,9 +319,11 @@ cannot change an existing process.
 
 The host's `connect_timeout` bounds startup and discovery (60 seconds by default).
 The adapter reserves up to 10 seconds, or one quarter of a shorter timeout,
-for host startup and error delivery. With the default timeout, it waits up to
-50 seconds for the server. This lets connection errors reach Hermes before
-its outer timeout cancels the connection.
+for host backoff and error delivery. It divides the remaining budget among
+Hermes's initial connection attempts and subtracts each child's elapsed startup
+time, including its bootstrap launcher. With the default timeout on Hermes
+v0.22.7, each attempt has 12.5 seconds including child startup. This lets the
+last connection error reach Hermes before its outer timeout cancels discovery.
 Tools may be unavailable on the first turn while discovery runs. After a longer
 outage, run `/reload-mcp` in the Hermes CLI once OpenViking is ready, or restart
 the gateway. Hermes can defer tools until `tool_search` and temporarily pause

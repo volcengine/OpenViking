@@ -249,7 +249,7 @@ def test_unset_transport_references_are_removed_before_sdk_start(external_provid
     for key in (*mcp._ENV_KEYS, *mcp._TRANSPORT_ENV_KEYS):
         monkeypatch.setenv(key, "${" + key + "}")
 
-    async def serve(_home):
+    async def serve(_home, **_kwargs):
         assert all(key not in mcp.os.environ for key in (*mcp._ENV_KEYS, *mcp._TRANSPORT_ENV_KEYS))
 
     monkeypatch.setattr(mcp, "serve", serve)

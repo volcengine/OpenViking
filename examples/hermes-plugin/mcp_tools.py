@@ -13,6 +13,7 @@ import json
 import os
 import ssl
 import sys
+import time
 from builtins import BaseExceptionGroup
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -59,6 +60,23 @@ class _UnverifiedServerError(RuntimeError):
 
 class _UnsupportedMCPServerError(RuntimeError):
     pass
+
+
+def _launch_age():
+    """Include bootstrap and Windows launcher parents in the host's timeout."""
+    import psutil
+
+    born = time.time()
+    try:
+        process = psutil.Process()
+        born = process.create_time()
+        for parent in process.parents():
+            if parent.cmdline()[-3:] != _BOUND_ARGS:
+                break
+            born = min(born, parent.create_time())
+    except psutil.Error:
+        pass
+    return max(0, time.time() - born)
 
 
 def _leaf_error(exc):
@@ -345,16 +363,19 @@ class Connection:
                 session.task.cancel()
         await asyncio.gather(*(session.task for session in sessions), return_exceptions=True)
 
-    async def discover(self, params):
+    async def discover(self, params, *, startup_elapsed=0, attempts=1):
         """Allow bounded startup recovery for every deployment; never own its process."""
         import httpx2
 
         _, entry, managed = await asyncio.to_thread(self.resolve)
         retry_error = None
         # Hermes's CLI bounds the entire child connection with this timeout.
-        # Reserve time for process startup and delivery of our safe error hint.
+        # Share the budget with its retry ladder, leaving time for backoff and
+        # error delivery; each attempt includes the child's elapsed startup.
         timeout = float(entry.get("connect_timeout") or 60)
-        discovery_timeout = timeout - min(10, timeout / 4)
+        discovery_timeout = max(
+            0.001, (timeout - min(10, timeout / 4)) / max(1, attempts) - startup_elapsed
+        )
         try:
             async with asyncio.timeout(discovery_timeout):
                 while True:
@@ -556,7 +577,7 @@ def validate_connection(ov, values):
     return True, ""
 
 
-async def serve(home: Path, provider_module=None):
+async def serve(home: Path, provider_module=None, *, host_bound=False):
     from mcp.server.lowlevel import Server
     from mcp.server.stdio import stdio_server
 
@@ -564,7 +585,14 @@ async def serve(home: Path, provider_module=None):
 
     async def list_tools(_context, params):
         try:
-            return await connection.discover(params)
+            attempts = 1
+            if host_bound:
+                from tools.mcp_tool import _MAX_INITIAL_CONNECT_RETRIES
+
+                attempts += _MAX_INITIAL_CONNECT_RETRIES
+            return await connection.discover(
+                params, startup_elapsed=_launch_age() if host_bound else 0, attempts=attempts
+            )
         except Exception as exc:
             from mcp.shared.exceptions import MCPError
 
@@ -622,7 +650,7 @@ def run(args):
     for key in (*_ENV_KEYS, *_TRANSPORT_ENV_KEYS):
         if os.environ.get(key) == "${" + key + "}":
             os.environ.pop(key)
-    asyncio.run(serve(Path(raw_home).resolve()))
+    asyncio.run(serve(Path(raw_home).resolve(), host_bound=True))
 
 
 if __name__ == "__main__":

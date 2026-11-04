@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,7 +24,7 @@ def test_unbound_launch_refuses_before_connection(
         monkeypatch.delenv("HERMES_HOME")
     contacted = []
 
-    async def serve(resolved):
+    async def serve(resolved, **_kwargs):
         contacted.append(resolved)
 
     monkeypatch.setattr(adapter, "serve", serve)
@@ -38,7 +39,7 @@ def test_bound_launch_uses_supplied_profile_home(external_provider, monkeypatch)
     monkeypatch.setenv("HERMES_HOME", str(home))
     contacted = []
 
-    async def serve(resolved):
+    async def serve(resolved, **_kwargs):
         contacted.append(resolved)
 
     monkeypatch.setattr(adapter, "serve", serve)
@@ -185,7 +186,10 @@ def test_launcher_migration_keeps_profile_and_mcp_policy(external_provider, laun
     assert (home / "config.yaml").read_bytes() == before
 
 
-def test_discovery_failure_reaches_host_before_its_deadline(external_provider, monkeypatch):
+@pytest.mark.parametrize("startup_elapsed,attempts", [(0, 1), (2, 1), (0, 4)])
+def test_discovery_failure_reaches_host_before_its_deadline(
+    external_provider, monkeypatch, startup_elapsed, attempts
+):
     import asyncio
 
     import httpx2
@@ -194,7 +198,7 @@ def test_discovery_failure_reaches_host_before_its_deadline(external_provider, m
     adapter = importlib.import_module(module.__name__ + ".mcp_tools")
     connection = adapter.Connection(home, module)
     values, entry, managed = connection.resolve()
-    entry["connect_timeout"] = 2
+    entry["connect_timeout"] = 4
     monkeypatch.setattr(connection, "resolve", lambda: (values, entry, managed))
     contacted = []
 
@@ -205,11 +209,45 @@ def test_discovery_failure_reaches_host_before_its_deadline(external_provider, m
     monkeypatch.setattr(connection, "request", unavailable)
 
     async def probe():
-        async with asyncio.timeout(2) as host_deadline:
+        async with asyncio.timeout(4 - startup_elapsed) as host_deadline:
             with pytest.raises(TimeoutError) as caught:
-                await connection.discover(None)
+                await connection.discover(None, startup_elapsed=startup_elapsed, attempts=attempts)
             assert not host_deadline.expired()
             assert "Cannot connect to OpenViking" in adapter._error_hint(caught.value)
 
     asyncio.run(probe())
     assert contacted and all(call == ("tools/list", None) for call in contacted)
+
+
+@pytest.mark.parametrize("wrapper", [False, True])
+def test_launch_age_includes_only_adapter_launcher_parents(external_provider, monkeypatch, wrapper):
+    import psutil
+
+    _, _, module, _ = external_provider("launcher-age")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    caller = SimpleNamespace(
+        cmdline=lambda: ["hermes", "mcp", "test", "openviking"], create_time=lambda: 50
+    )
+    launcher = SimpleNamespace(
+        cmdline=lambda: ["hermes", "openviking", "mcp", "--profile-bound"], create_time=lambda: 80
+    )
+    process = SimpleNamespace(
+        create_time=lambda: 90, parents=lambda: [launcher, caller] if wrapper else [caller]
+    )
+    monkeypatch.setattr(psutil, "Process", lambda: process)
+    monkeypatch.setattr(adapter.time, "time", lambda: 100)
+    assert adapter._launch_age() == (20 if wrapper else 10)
+
+
+def test_launch_age_metadata_failure_keeps_discovery_available(external_provider, monkeypatch):
+    import psutil
+
+    _, _, module, _ = external_provider("launcher-age-error")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+
+    def denied():
+        raise psutil.AccessDenied()
+
+    monkeypatch.setattr(psutil, "Process", denied)
+    monkeypatch.setattr(adapter.time, "time", lambda: 100)
+    assert adapter._launch_age() == 0
