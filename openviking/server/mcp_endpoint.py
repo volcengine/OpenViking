@@ -1380,6 +1380,10 @@ async def tree(
 class StoreMessage(BaseModel):
     role: Literal["user", "assistant"] = Field(description="Message role")
     content: str = Field(description="Message text content")
+    peer_id: Optional[str] = Field(
+        default=None,
+        description="Peer ID for project-scoped memory isolation. Set to group this memory under a specific project/peer.",
+    )
 
 
 @_mcp_error_results()
@@ -1399,9 +1403,9 @@ async def remember(messages: list[StoreMessage]) -> str:
         if msg.content:
             add_async = getattr(session, "add_message_async", None)
             if callable(add_async):
-                await add_async(msg.role, [TextPart(text=msg.content)])
+                await add_async(msg.role, [TextPart(text=msg.content)], peer_id=msg.peer_id)
             else:
-                session.add_message(msg.role, [TextPart(text=msg.content)])
+                session.add_message(msg.role, [TextPart(text=msg.content)], peer_id=msg.peer_id)
             added += 1
     result = await service.sessions.commit_async(session_id, ctx)
     task_id = result.get("task_id")

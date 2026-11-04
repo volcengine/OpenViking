@@ -1609,6 +1609,32 @@ async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
     ]
 
 
+async def test_store_forwards_explicit_peer_id(service, monkeypatch):
+    """Explicit peer_id on StoreMessage is forwarded to Session.add_message_async."""
+    from openviking.session.session import Session
+
+    captured: list[tuple[str, str | None]] = []
+    original = Session.add_message_async
+
+    async def _spy(self, role, parts, peer_id=None, created_at=None):
+        captured.append((role, peer_id))
+        return await original(self, role, parts, peer_id=peer_id, created_at=created_at)
+
+    monkeypatch.setattr(Session, "add_message_async", _spy)
+
+    await remember(
+        messages=[
+            StoreMessage(role="user", content="project preference", peer_id="project-alpha"),
+            StoreMessage(role="assistant", content="global note"),
+        ]
+    )
+
+    assert captured == [
+        ("user", "project-alpha"),
+        ("assistant", None),
+    ]
+
+
 async def test_store_skips_empty_message_content(service, monkeypatch):
     class FakeSession:
         def __init__(self):
