@@ -208,6 +208,26 @@ describe('DurableAgent host protocol', () => {
     assert.equal(completed.metadata.inputTokens, 12);
     assert.equal(completed.metadata.cachedInputTokens, 2);
     assert.equal(completed.metadata.costUsd, 0.01);
+    // The submit side opens the turn; the host's turn_start must not open a
+    // second, never-completed turn in the activity log.
+    const started = store.activities.filter((activity) => activity.kind === 'agent.turn_started');
+    assert.equal(started.length, 1);
+    assert.ok(!started[0].metadata.resumed);
+    await agent.stop();
+  });
+
+  it('keeps one start record for a turn resumed from storage', async () => {
+    const { agent, children, store } = fakeHarness();
+    await agent.start();
+    const child = children[0];
+    // A daemon that reconnects to a run already in flight has no local inbound
+    // items, so the host's turn_start is the only start record it can write.
+    child.feed({ type: 'turn_start', turn: 1 });
+    const started = store.activities.filter((activity) => activity.kind === 'agent.turn_started');
+    assert.equal(started.length, 1);
+    assert.equal(started[0].metadata.resumed, true);
+    child.feed({ type: 'settled', status: 'done', turn: 1 });
+    await waitFor(() => !agent.turnActive);
     await agent.stop();
   });
 

@@ -516,6 +516,12 @@ export class DurableAgent {
       }
       case 'turn_start': {
         this.modelWorking = true;
+        // The submit side already opened this turn with its own
+        // agent.turn_started record, which carries the input. Recording the
+        // host's echo too would open a second turn that never completes in the
+        // activity log. Only a turn resumed from storage (daemon restart) has
+        // no local record and needs this one.
+        const resumed = this.activeItems.length === 0;
         if (!this.turnActive) {
           // A run resumed from storage after a daemon restart has no local
           // inbound items but is still an active turn.
@@ -528,9 +534,11 @@ export class DurableAgent {
             epoch: this.cognitionEpoch,
           });
         }
-        this._recordActivity('agent.turn_started', {
-          metadata: { runtime: DURABLE_RUNTIME.id, resumed: this.activeItems.length === 0 },
-        });
+        if (resumed) {
+          this._recordActivity('agent.turn_started', {
+            metadata: { runtime: DURABLE_RUNTIME.id, resumed: true },
+          });
+        }
         return;
       }
       case 'note':
