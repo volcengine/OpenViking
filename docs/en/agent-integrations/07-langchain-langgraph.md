@@ -257,7 +257,13 @@ store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
 store.put(("users", "ada"), "preferences", None)  # a None value deletes the item
+store.close()
 ```
+
+Use `close()` after synchronous work or `await store.aclose()` after async work. The Store
+also supports `with OpenVikingStore(...) as store` and `async with` for automatic cleanup.
+Cleanup releases only internally created clients; injected clients remain caller-owned.
+Closing an unused Store creates no client, and a closed Store cannot be reused.
 
 Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
 equivalent to `delete()`. Deleting a key that does not exist is a no-op.

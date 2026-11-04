@@ -12,8 +12,90 @@ from openviking_gateway.protocols import SSEDecoder
 from openviking_gateway.tool_loop import HiddenToolLoop
 from openviking_gateway.tool_protocols import ResponseCapture
 from openviking_gateway.tool_protocols.common import ToolLoopError, ToolRound, sse
+from openviking_gateway.tool_protocols.responses import ResponsesProtocol
 
 PATHS = {"responses": "/v1/responses", "anthropic": "/v1/messages"}
+
+
+def test_responses_stream_uses_closed_items_when_terminal_output_is_empty():
+    protocol = ResponsesProtocol({"stream": True})
+    protocol.begin()
+    items = [
+        {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "opaque-signature",
+        },
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Found blue", "annotations": []}],
+        },
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": '{"query":"blue"}',
+            "status": "completed",
+        },
+    ]
+
+    for index, item in enumerate(items):
+        initial = copy.deepcopy(item)
+        if item["type"] == "message":
+            initial["content"] = []
+        if item["type"] == "function_call":
+            initial["arguments"] = ""
+        protocol.accumulate(
+            {"type": "response.output_item.added", "output_index": index, "item": initial}
+        )
+        protocol.accumulate(
+            {"type": "response.output_item.done", "output_index": index, "item": item}
+        )
+
+    protocol.accumulate(
+        {
+            "type": "response.completed",
+            "response": {"status": "completed", "output": [], "usage": {"input_tokens": 10}},
+        }
+    )
+
+    result = protocol.end()
+
+    assert result.output == items
+    assert result.calls == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": '{"query":"blue"}'},
+        }
+    ]
+    assert result.usage == {"input_tokens": 10}
+
+
+@pytest.mark.parametrize(("index", "closed"), [(0, False), (1, True)])
+def test_responses_stream_still_rejects_incomplete_or_gapped_sparse_output(index, closed):
+    protocol = ResponsesProtocol({"stream": True})
+    protocol.begin()
+    item = {"type": "message", "id": "msg_1", "role": "assistant", "content": []}
+    protocol.accumulate({"type": "response.output_item.added", "output_index": index, "item": item})
+    if closed:
+        protocol.accumulate(
+            {"type": "response.output_item.done", "output_index": index, "item": item}
+        )
+    protocol.accumulate(
+        {
+            "type": "response.completed",
+            "response": {"status": "completed", "output": [], "usage": {}},
+        }
+    )
+
+    with pytest.raises(ToolLoopError, match="Responses output items are missing"):
+        protocol.end()
 
 
 def native_response(protocol, number, *, owned=False, mixed=False, custom=False):
