@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 from markdown_it import MarkdownIt
 from pathspec import GitIgnoreSpec
 
-from openviking.pyagfs.exceptions import AGFSNotFoundError
+from openviking.pyagfs.exceptions import AGFSNotFoundError, AGFSResourceExhaustedError
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import OpenVikingError
@@ -70,6 +70,8 @@ class ArtifactRelationGraph:
         self._markdown = MarkdownIt("commonmark")
         self._compile_pages: dict[tuple[str, str, str], dict[str, dict[str, Any]]] = {}
         self._compile_relation_counts: dict[tuple[str, str, str], int] = {}
+        self._compile_byte_counts: dict[tuple[str, str, str], int] = {}
+        self._compile_hint_overflow: set[tuple[str, str, str]] = set()
         self._background: set[asyncio.Task[Any]] = set()
 
     async def get(
@@ -101,11 +103,23 @@ class ArtifactRelationGraph:
                         editable["wiki_head"] = wiki_head
                     record["wiki_head"] = wiki_head
 
+        _, ignore_signature = await self._ignore_state(self._internal_ctx(ctx))
         cached = await self._read_cache(ctx.account_id, record["to"])
-        if await self._cache_current(cached, record["to"], wiki_head, ctx):
+        if await self._cache_current(
+            cached,
+            record["to"],
+            wiki_head,
+            ctx,
+            ignore_signature=ignore_signature,
+        ):
             return await self._response(cached, ctx, stale=False, building=False)
 
-        await self.enqueue_wakeup(ctx.account_id, record["to"], ctx.user.user_id)
+        state = await self._read_state(ctx.account_id, record["to"])
+        state_current = self._state_matches(state, wiki_head, ignore_signature)
+        if state_current and state.get("status") == "failed":
+            self._raise_state_error(state)
+        if not state_current or state.get("status") != "building":
+            await self.enqueue_wakeup(ctx.account_id, record["to"], ctx.user.user_id)
         deadline = time.monotonic() + self._query_wait_seconds
         delay = 0.2
         ready_seen: tuple[Any, Any] | None = None
@@ -116,7 +130,7 @@ class ArtifactRelationGraph:
             if not isinstance(state, dict):
                 continue
             state_head = state.get("target_snapshot_id")
-            if state_head != wiki_head:
+            if not self._state_matches(state, wiki_head, ignore_signature):
                 latest = await self._store.get(ctx.account_id, record["to"])
                 latest_head = (latest or record).get("wiki_head")
                 if latest_head and latest_head != wiki_head:
@@ -136,7 +150,13 @@ class ArtifactRelationGraph:
                 continue
             ready_seen = ready_version
             current = await self._read_cache(ctx.account_id, record["to"])
-            if await self._cache_current(current, record["to"], wiki_head, ctx):
+            if await self._cache_current(
+                current,
+                record["to"],
+                wiki_head,
+                ctx,
+                ignore_signature=ignore_signature,
+            ):
                 return await self._response(current, ctx, stale=False, building=False)
 
         current = await self._read_cache(ctx.account_id, record["to"])
@@ -162,24 +182,31 @@ class ArtifactRelationGraph:
         wiki_head: str,
         parsed_pages: dict[str, dict[str, Any]] | None = None,
         attempts: int = 1,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Reconcile one target to its latest immutable Snapshot."""
         async with self._store.lock_artifact_graph(ctx.account_id, record["to"]):
             current = await self._store.get(ctx.account_id, record["to"])
+            if not self._record_active(current):
+                return None
             head = (current or record).get("wiki_head") or wiki_head
+            internal_ctx = self._internal_ctx(ctx)
+            ignore, ignore_signature = await self._ignore_state(internal_ctx)
             await self._write_state(
                 ctx.account_id,
                 record["to"],
                 head,
                 status="building",
                 attempts=attempts,
+                ignore_signature=ignore_signature,
             )
             try:
                 result = await self._reconcile_once(
                     record["to"],
                     head,
-                    self._internal_ctx(ctx),
+                    internal_ctx,
                     parsed_pages=parsed_pages,
+                    ignore=ignore,
+                    ignore_signature=ignore_signature,
                 )
             except ArtifactGraphError as exc:
                 await self._write_failed_state(
@@ -188,6 +215,7 @@ class ArtifactRelationGraph:
                     head,
                     exc,
                     attempts=attempts,
+                    ignore_signature=ignore_signature,
                 )
                 raise
             except Exception as exc:
@@ -198,6 +226,7 @@ class ArtifactRelationGraph:
                         head,
                         exc,
                         attempts=attempts,
+                        ignore_signature=ignore_signature,
                     )
                 raise
             await self._write_state(
@@ -206,6 +235,7 @@ class ArtifactRelationGraph:
                 head,
                 status="ready",
                 attempts=attempts,
+                ignore_signature=ignore_signature,
             )
             return result
 
@@ -221,6 +251,8 @@ class ArtifactRelationGraph:
         key = (ctx.account_id, record["to"], operation_id)
         parsed_pages = self._compile_pages.pop(key, None)
         self._compile_relation_counts.pop(key, None)
+        self._compile_byte_counts.pop(key, None)
+        self._compile_hint_overflow.discard(key)
         task = asyncio.create_task(
             self.reconcile_graph(
                 record,
@@ -253,22 +285,28 @@ class ArtifactRelationGraph:
         if not uri.lower().endswith(".md") or self._excluded(uri, None):
             return
         if content is None:
-            blob = await self._fs.show_blob_raw(snapshot, path=uri, ctx=ctx)
-            content = blob["bytes"]
-            blob_oid = blob["oid"]
-            size = int(blob.get("size") or len(content))
-        else:
-            blob_oid = hashlib.sha1(
-                f"blob {len(content)}\0".encode("ascii") + content,
-                usedforsecurity=False,
-            ).hexdigest()
-            size = len(content)
+            return
+        blob_oid = hashlib.sha1(
+            f"blob {len(content)}\0".encode("ascii") + content,
+            usedforsecurity=False,
+        ).hexdigest()
+        size = len(content)
         key = (account_id, to, operation_id)
+        if key in self._compile_hint_overflow:
+            return
         pages = self._compile_pages.setdefault(key, {})
         previous = pages.get(uri)
+        if previous is None and len(pages) >= self._max_markdown_files:
+            self._compile_hint_overflow.add(key)
+            return
         count = self._compile_relation_counts.get(key, 0)
+        byte_count = self._compile_byte_counts.get(key, 0)
         if isinstance(previous, dict):
             count -= len(previous.get("related_pages") or ())
+            byte_count -= int(previous.get("size") or 0)
+        if byte_count + size > self._max_markdown_bytes:
+            self._compile_hint_overflow.add(key)
+            return
         remaining = max(0, self._max_relations - count)
         text = content.decode("utf-8", errors="replace")
         related_pages, overflow = self._related_pages(
@@ -285,11 +323,14 @@ class ArtifactRelationGraph:
             "relations_overflow": overflow,
         }
         self._compile_relation_counts[key] = count + len(related_pages)
+        self._compile_byte_counts[key] = byte_count + size
 
     def discard_compile_pages(self, account_id: str, to: str, operation_id: str) -> None:
         key = (account_id, to, operation_id)
         self._compile_pages.pop(key, None)
         self._compile_relation_counts.pop(key, None)
+        self._compile_byte_counts.pop(key, None)
+        self._compile_hint_overflow.discard(key)
 
     def _finish_background(self, task: asyncio.Task[Any]) -> None:
         self._background.discard(task)
@@ -312,7 +353,11 @@ class ArtifactRelationGraph:
         )
         while True:
             record = await self._store.get(account_id, to)
-            if record is None or not record.get("initialized") or not record.get("wiki_head"):
+            if (
+                not self._record_active(record)
+                or not record.get("initialized")
+                or not record.get("wiki_head")
+            ):
                 return
             await self.reconcile_graph(
                 record,
@@ -321,6 +366,8 @@ class ArtifactRelationGraph:
                 attempts=attempt + 1,
             )
             latest = await self._store.get(account_id, to)
+            if not self._record_active(latest):
+                return
             cached = await self._read_cache(account_id, to)
             if latest is None or await self._cache_current(
                 cached,
@@ -371,7 +418,7 @@ class ArtifactRelationGraph:
         """Persist a terminal build failure without replacing the last good graph."""
         async with self._store.lock_artifact_graph(account_id, to):
             record = await self._store.get(account_id, to)
-            if record is None or not record.get("wiki_head"):
+            if not self._record_active(record) or not record.get("wiki_head"):
                 return
             state = await self._read_state(account_id, to)
             if isinstance(state, dict) and state.get("status") in {"ready", "failed"}:
@@ -382,6 +429,9 @@ class ArtifactRelationGraph:
                 record["wiki_head"],
                 error,
                 attempts=attempts,
+                ignore_signature=state.get("ignore_signature")
+                if isinstance(state, dict)
+                else None,
             )
 
     async def _reconcile_once(
@@ -391,11 +441,12 @@ class ArtifactRelationGraph:
         ctx: RequestContext,
         *,
         parsed_pages: dict[str, dict[str, Any]] | None,
+        ignore: GitIgnoreSpec | None,
+        ignore_signature: str,
     ) -> dict[str, Any]:
         to = to.rstrip("/")
         graph = await self._read_cache(ctx.account_id, to)
         sources = await self._read_sources(ctx.account_id, to)
-        ignore, ignore_signature = await self._ignore_state(ctx)
         base = None
         if (
             self._cache_valid(graph, to)
@@ -447,6 +498,10 @@ class ArtifactRelationGraph:
         for edge in self._containment_edges(to, nodes):
             self._add_relation(edges, edge)
 
+        markdown_bytes = sum(
+            int(size) for uri, size in page_sizes.items() if uri not in changed
+        )
+        self._check_limit("markdown_bytes", self._max_markdown_bytes, markdown_bytes)
         page_order = list(dict.fromkeys(changed_markdown))
         page_order.extend(sorted(set(pages) - changed))
         for uri in page_order:
@@ -472,11 +527,33 @@ class ArtifactRelationGraph:
                 if candidate_valid:
                     blob_oid = candidate["blob_oid"]
                     page_size = int(candidate.get("size") or 0)
+                    self._check_limit(
+                        "markdown_bytes",
+                        self._max_markdown_bytes,
+                        markdown_bytes + page_size,
+                    )
                     related_pages = self._valid_targets(candidate["related_pages"], nodes)
                 else:
-                    blob = await self._fs.show_blob_raw(head, path=uri, ctx=ctx)
+                    try:
+                        blob = await self._fs.show_blob_raw(
+                            head,
+                            path=uri,
+                            ctx=ctx,
+                            max_blob_bytes=max(0, self._max_markdown_bytes - markdown_bytes),
+                        )
+                    except AGFSResourceExhaustedError as exc:
+                        raise ArtifactGraphTooLargeError(
+                            "markdown_bytes",
+                            self._max_markdown_bytes,
+                            self._max_markdown_bytes + 1,
+                        ) from exc
                     blob_oid = blob["oid"]
                     page_size = int(blob.get("size") or len(blob["bytes"]))
+                    self._check_limit(
+                        "markdown_bytes",
+                        self._max_markdown_bytes,
+                        markdown_bytes + page_size,
+                    )
                     text = blob["bytes"].decode("utf-8", errors="replace")
                     related, overflow = self._related_pages(
                         text,
@@ -491,6 +568,7 @@ class ArtifactRelationGraph:
                             self._max_relations + 1,
                         )
                     related_pages = sorted(related)
+                markdown_bytes += page_size
                 pages[uri] = {
                     "blob_oid": blob_oid,
                     "related_pages": related_pages,
@@ -512,7 +590,7 @@ class ArtifactRelationGraph:
         self._check_limit(
             "markdown_bytes",
             self._max_markdown_bytes,
-            sum(int(size) for size in page_sizes.values()),
+            markdown_bytes,
         )
         generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         sources_value = {
@@ -566,6 +644,7 @@ class ArtifactRelationGraph:
         *,
         status: str,
         attempts: int,
+        ignore_signature: str | None,
         error: dict[str, Any] | None = None,
     ) -> None:
         await self._store.write_artifact_relations_state(
@@ -573,6 +652,8 @@ class ArtifactRelationGraph:
             to,
             {
                 "schema_version": SCHEMA_VERSION,
+                "parser_version": PARSER_VERSION,
+                "ignore_signature": ignore_signature,
                 "target_snapshot_id": head,
                 "status": status,
                 "attempts": attempts,
@@ -591,6 +672,7 @@ class ArtifactRelationGraph:
         error: Exception,
         *,
         attempts: int,
+        ignore_signature: str | None,
     ) -> None:
         if isinstance(error, ArtifactGraphError):
             code = error.code
@@ -604,12 +686,27 @@ class ArtifactRelationGraph:
             head,
             status="failed",
             attempts=attempts,
+            ignore_signature=ignore_signature,
             error={
                 "code": code,
                 "message": str(error),
                 "details": details,
             },
         )
+
+    @staticmethod
+    def _state_matches(state: Any, head: Any, ignore_signature: str) -> bool:
+        return bool(
+            isinstance(state, dict)
+            and state.get("schema_version") == SCHEMA_VERSION
+            and state.get("parser_version") == PARSER_VERSION
+            and state.get("ignore_signature") == ignore_signature
+            and state.get("target_snapshot_id") == head
+        )
+
+    @staticmethod
+    def _record_active(record: Any) -> bool:
+        return isinstance(record, dict) and record.get("status", "active") == "active"
 
     @staticmethod
     def _raise_state_error(state: dict[str, Any]) -> None:
@@ -646,13 +743,16 @@ class ArtifactRelationGraph:
         to: str,
         head: Any,
         ctx: RequestContext,
+        *,
+        ignore_signature: str | None = None,
     ) -> bool:
         if not self._cache_matches(cache, to, head):
             return False
         sources = await self._read_sources(ctx.account_id, to)
         if not isinstance(sources, dict):
             return False
-        _, ignore_signature = await self._ignore_state(self._internal_ctx(ctx))
+        if ignore_signature is None:
+            _, ignore_signature = await self._ignore_state(self._internal_ctx(ctx))
         return (
             sources.get("schema_version") == SCHEMA_VERSION
             and sources.get("parser_version") == PARSER_VERSION

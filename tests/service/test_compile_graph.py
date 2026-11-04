@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.pyagfs.exceptions import AGFSResourceExhaustedError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_graph import (
     ArtifactGraphError,
@@ -151,6 +152,7 @@ class _SnapshotGraphFs(_GraphFs):
         self.diffs = diffs
         self.blobs = blobs
         self.diff_calls: list[tuple[str | None, str, tuple[str, ...]]] = []
+        self.read_limits: list[tuple[str, int | None]] = []
 
     async def diff_paths(self, *, dirs, base, head, ctx):
         del ctx
@@ -158,10 +160,21 @@ class _SnapshotGraphFs(_GraphFs):
         self.diff_calls.append(key)
         return self.diffs.get(key, [])
 
-    async def show_blob_raw(self, head: str, *, path: str, ctx: RequestContext):
+    async def show_blob_raw(
+        self,
+        head: str,
+        *,
+        path: str,
+        ctx: RequestContext,
+        max_blob_bytes: int | None = None,
+    ):
         del ctx
         self.reads.append(path)
-        return self.blobs[(head, path)]
+        self.read_limits.append((path, max_blob_bytes))
+        blob = self.blobs[(head, path)]
+        if max_blob_bytes is not None and int(blob["size"]) > max_blob_bytes:
+            raise AGFSResourceExhaustedError("blob exceeds configured limit")
+        return blob
 
 
 def _entry(path: str, *, size: int = 1, is_dir: bool = False) -> dict[str, Any]:
@@ -403,7 +416,7 @@ async def test_compile_hint_parses_written_bytes_without_snapshot_read() -> None
         _GraphFs([], {}),
         max_nodes=10,
         max_markdown_files=10,
-        max_markdown_bytes=10,
+        max_markdown_bytes=100,
     )
     content = b"[related](related.md)"
 
@@ -427,6 +440,32 @@ async def test_compile_hint_parses_written_bytes_without_snapshot_read() -> None
         "related_pages": [related],
         "relations_overflow": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_compile_hint_without_written_bytes_does_not_read_snapshot() -> None:
+    target = "viking://resources/wiki"
+    page = f"{target}/page.md"
+    fs = _GraphFs([], {})
+    graph = ArtifactRelationGraph(
+        _GraphStore({"to": target}),
+        fs,
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=10,
+    )
+
+    await graph.capture_compile_page(
+        "default",
+        target,
+        "op",
+        "snapshot",
+        page,
+        _ctx(),
+    )
+
+    assert fs.reads == []
+    assert graph._compile_pages == {}
 
 
 @pytest.mark.asyncio
@@ -606,6 +645,41 @@ async def test_reconcile_enforces_markdown_byte_limit() -> None:
         "maximum": 5,
         "actual": 6,
     }
+    assert fs.read_limits == [(page, 5)]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_passes_remaining_markdown_budget_to_each_blob_read() -> None:
+    target = "viking://resources/wiki"
+    first = f"{target}/a.md"
+    second = f"{target}/b.md"
+    record = {"to": target, "initialized": True, "wiki_head": "head"}
+    store = _GraphStore(record)
+    fs = _SnapshotGraphFs(
+        {
+            (None, "head", (target,)): [
+                {"uri": first, "change_type": "added"},
+                {"uri": second, "change_type": "added"},
+            ],
+        },
+        {
+            ("head", first): {"oid": "a", "size": 4, "bytes": b"aaaa"},
+            ("head", second): {"oid": "b", "size": 4, "bytes": b"bbbb"},
+        },
+    )
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=5,
+    )
+
+    with pytest.raises(ArtifactGraphTooLargeError):
+        await graph.reconcile_graph(record, _ctx(), wiki_head="head")
+
+    assert fs.read_limits == [(first, 5), (second, 1)]
+    assert store.published is None
 
 
 @pytest.mark.asyncio
@@ -720,6 +794,8 @@ async def test_query_surfaces_failed_state_without_rereading_graph() -> None:
     store = _GraphStore(record)
     store.state = {
         "schema_version": 1,
+        "parser_version": 1,
+        "ignore_signature": hashlib.sha256(b"").hexdigest(),
         "target_snapshot_id": "head",
         "status": "failed",
         "attempts": 1,
@@ -749,3 +825,51 @@ async def test_query_surfaces_failed_state_without_rereading_graph() -> None:
 
     assert exc_info.value.code == "ARTIFACT_RELATIONS_TOO_LARGE"
     assert store.cache_reads == 1
+    graph.enqueue_wakeup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deleted_target_worker_does_not_rebuild_graph() -> None:
+    target = "viking://resources/wiki"
+    record = {
+        "to": target,
+        "status": "deleted",
+        "initialized": True,
+        "wiki_head": "head",
+    }
+    store = _GraphStore(record)
+    fs = _SnapshotGraphFs({}, {})
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=10,
+    )
+
+    await graph.reconcile_target("default", target, "alice")
+
+    assert store.state is None
+    assert fs.diff_calls == []
+
+
+@pytest.mark.asyncio
+async def test_target_deleted_before_graph_lock_does_not_rebuild() -> None:
+    target = "viking://resources/wiki"
+    active = {"to": target, "status": "active", "initialized": True, "wiki_head": "head"}
+    deleted = {**active, "status": "deleted"}
+    store = _GraphStore(deleted)
+    fs = _SnapshotGraphFs({}, {})
+    graph = ArtifactRelationGraph(
+        store,
+        fs,
+        max_nodes=10,
+        max_markdown_files=10,
+        max_markdown_bytes=10,
+    )
+
+    result = await graph.reconcile_graph(active, _ctx(), wiki_head="head")
+
+    assert result is None
+    assert store.state is None
+    assert fs.diff_calls == []

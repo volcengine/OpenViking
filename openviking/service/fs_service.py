@@ -2357,10 +2357,16 @@ class FSService:
         ctx: RequestContext,
         *,
         path: str,
+        max_blob_bytes: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Forward to VikingFS.show_blob_raw. Returns ``{"oid", "size", "bytes"}``."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.show_blob_raw(target_ref, path=path, ctx=ctx)
+        return await viking_fs.show_blob_raw(
+            target_ref,
+            path=path,
+            max_blob_bytes=max_blob_bytes,
+            ctx=ctx,
+        )
 
     async def diff(
         self,

@@ -968,9 +968,29 @@ async def test_schedule_retries_initial_failure_and_disables_deleted_targets(ser
 
     async with store.edit(account, target) as record:
         record.update(auto_update=True, update_schedule=schedule)
+    await store.write_artifact_relations(
+        account,
+        target,
+        {
+            "schema_version": 1,
+            "to": target,
+            "target_snapshot_id": "head",
+            "nodes": [],
+            "edges": [],
+        },
+    )
+    await store.write_relation_sources(account, target, {"schema_version": 1})
+    await store.write_artifact_relations_state(
+        account,
+        target,
+        {"schema_version": 1, "status": "ready"},
+    )
     await service.compile.lifecycle.versions.after_remove(target, ctx)
     deleted = await store.get(account, target)
     assert deleted["status"] == "deleted" and deleted["update_schedule"] is None
+    assert await store.read_artifact_relations(account, target) is None
+    assert await store.read_relation_sources(account, target) is None
+    assert await store.read_artifact_relations_state(account, target) is None
     async with store.edit(account, target, create=True):
         pass
     reused = await store.get(account, target)

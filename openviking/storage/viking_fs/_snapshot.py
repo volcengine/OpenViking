@@ -611,6 +611,7 @@ class _SnapshotMixin:
         target_ref: str,
         *,
         path: str,
+        max_blob_bytes: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
         """Like ``show(target_ref, path=...)`` but returns the full envelope.
@@ -623,12 +624,14 @@ class _SnapshotMixin:
         await self._ensure_access(path, real_ctx)
         account = real_ctx.account_id
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=target_ref,
-            path=tree_path,
-        )
+        kwargs: Dict[str, Any] = {
+            "account": account,
+            "target_ref": target_ref,
+            "path": tree_path,
+        }
+        if max_blob_bytes is not None:
+            kwargs["max_blob_bytes"] = max_blob_bytes
+        resp = await self._async_agfs.run("git_show", **kwargs)
         if not isinstance(resp, dict) or "bytes" not in resp:
             raise TypeError(
                 f"git_show returned unexpected shape for blob path: {type(resp).__name__}"

@@ -59,6 +59,22 @@ async def test_show_blob_raw_returns_envelope(viking_fs_with_two_commits):
     assert isinstance(raw["oid"], str) and len(raw["oid"]) == 40
 
 
+async def test_show_blob_raw_passes_blob_size_limit():
+    vfs = _DiffVikingFS(b"old\n", b"new\n")
+    path = "viking://resources/example.md"
+
+    raw = await VikingFS.show_blob_raw(
+        vfs,
+        "from",
+        path=path,
+        max_blob_bytes=123,
+        ctx=_request_context(),
+    )
+
+    assert raw["bytes"] == b"old\n"
+    assert vfs.blob_read_limits == [123]
+
+
 async def test_diff_reads_blobs_from_resolved_commit_oids():
     from_oid = "a" * 40
     to_oid = "b" * 40

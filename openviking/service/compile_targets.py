@@ -230,7 +230,13 @@ class CompileStore(Protocol):
         self, account_id: str, target_to: str, index: Dict[str, Any], lock_token: Any = None
     ) -> None: ...
     async def delete_version_index(self, account_id: str, target_to: str, uri: str) -> None: ...
-    async def clear_output_data(self, account_id: str, target_to: str) -> None: ...
+    async def clear_output_data(
+        self,
+        account_id: str,
+        target_to: str,
+        *,
+        graph_locked: bool = False,
+    ) -> None: ...
     def lock_version_index(
         self, account_id: str, target_to: str, uri: str, inherited_lock: Any = None
     ) -> AsyncContextManager[Any]: ...
@@ -793,12 +799,29 @@ class CompileStateStore:
         """Remove an output's index; a missing index is already deleted."""
         await self.remove(self._version_path(account_id, target_to, uri))
 
-    async def clear_output_data(self, account_id: str, target_to: str) -> None:
-        """Remove output manifests and version indexes, retaining operation history."""
+    async def clear_output_data(
+        self,
+        account_id: str,
+        target_to: str,
+        *,
+        graph_locked: bool = False,
+    ) -> None:
+        """Remove output indexes and derived graph data, retaining operation history."""
         await self.remove(self._versions_dir(account_id, target_to), recursive=True)
         await self.remove(
             f"{self._target_dir(account_id, target_to)}/operation_outputs", recursive=True
         )
+
+        async def clear_graph() -> None:
+            await self.remove(self._artifact_relations_path(account_id, target_to))
+            await self.remove(self._relation_sources_path(account_id, target_to))
+            await self.remove(self._artifact_relations_state_path(account_id, target_to))
+
+        if graph_locked:
+            await clear_graph()
+        else:
+            async with self.lock_artifact_graph(account_id, target_to):
+                await clear_graph()
 
     @asynccontextmanager
     async def lock_version_index(
@@ -2857,8 +2880,18 @@ class CompileVersions:
             if record["status"] == "active":
                 record["wiki_head"] = head
 
-    async def drop_all(self, account_id: str, target_to: str) -> None:
-        await self._store.clear_output_data(account_id, target_to)
+    async def drop_all(
+        self,
+        account_id: str,
+        target_to: str,
+        *,
+        graph_locked: bool = False,
+    ) -> None:
+        await self._store.clear_output_data(
+            account_id,
+            target_to,
+            graph_locked=graph_locked,
+        )
 
     # ---------- target removal ----------
 
@@ -2911,14 +2944,19 @@ class CompileVersions:
         uri = uri.rstrip("/")
         removed = await self._targets_under(ctx.account_id, uri)
         for item in removed:
-            async with self._store.edit(ctx.account_id, item["to"]) as record:
-                record["status"] = "deleted"
-                record["deleted_at"] = time.time()
-                record["auto_update"] = False
-                record["active_task_id"] = None
-                record["active_operation_id"] = None
-                record["execution_context"]["credential"] = None
-                await self.drop_all(ctx.account_id, item["to"])
+            async with self._store.lock_artifact_graph(ctx.account_id, item["to"]):
+                async with self._store.edit(ctx.account_id, item["to"]) as record:
+                    record["status"] = "deleted"
+                    record["deleted_at"] = time.time()
+                    record["auto_update"] = False
+                    record["active_task_id"] = None
+                    record["active_operation_id"] = None
+                    record["execution_context"]["credential"] = None
+                    await self.drop_all(
+                        ctx.account_id,
+                        item["to"],
+                        graph_locked=True,
+                    )
             if self.reschedule is not None:
                 await self.reschedule(ctx.account_id, record)
         if not removed:
