@@ -6,6 +6,7 @@ Skill Processor for OpenViking.
 Handles skill parsing, LLM generation, and storage operations.
 """
 
+import asyncio
 import re
 import shutil
 import tempfile
@@ -26,7 +27,10 @@ from openviking.core.skill_loader import SkillLoader
 from openviking.privacy.reference import parse_privacy_field_reference
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
-from openviking.privacy.skill_extractor import extract_skill_privacy_values
+from openviking.privacy.skill_extractor import (
+    extract_skill_privacy_values,
+    extract_skill_privacy_values_by_rules,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -42,6 +46,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 MAX_SKILL_NAME_LENGTH = 64
+_SKILL_PRIVACY_EXTRACTION_METHOD = "rule"
 
 
 @dataclass
@@ -109,7 +114,11 @@ class SkillProcessor:
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ):
         """Initialize skill processor."""
-        if privacy_config_service is not None and vlm_resolver is None:
+        if (
+            _SKILL_PRIVACY_EXTRACTION_METHOD == "vlm"
+            and privacy_config_service is not None
+            and vlm_resolver is None
+        ):
             raise ValueError(
                 "SkillProcessor requires a VLM resolver when privacy extraction is enabled"
             )
@@ -516,15 +525,22 @@ class SkillProcessor:
             prepared_skill["content"] = sanitized_by_catalog
             prepared_skill["description"] = sanitized_description
         content = sanitized_by_catalog
-        extraction_kwargs = {
-            "skill_name": prepared_skill.get("name", ""),
-            "skill_description": prepared_skill.get("description", ""),
-            "content": content,
-        }
-        if self._vlm_resolver is None:
-            raise RuntimeError("SkillProcessor requires a VLM resolver for account-owned work")
-        extraction_kwargs["vlm"] = await self._vlm_resolver.get_vlm(ctx.account_id)
-        extraction_result = await extract_skill_privacy_values(**extraction_kwargs)
+        if _SKILL_PRIVACY_EXTRACTION_METHOD == "rule":
+            extraction_result = await asyncio.to_thread(
+                extract_skill_privacy_values_by_rules,
+                skill_name=prepared_skill.get("name", ""),
+                content=content,
+                reserved_fields=self._referenced_privacy_fields(prepared_skill, ctx),
+            )
+        else:
+            if self._vlm_resolver is None:
+                raise RuntimeError("SkillProcessor requires a VLM resolver for account-owned work")
+            extraction_result = await extract_skill_privacy_values(
+                skill_name=prepared_skill.get("name", ""),
+                skill_description=prepared_skill.get("description", ""),
+                content=content,
+                vlm=await self._vlm_resolver.get_vlm(ctx.account_id),
+            )
         if not extraction_result.values:
             return prepared_skill, {}
 

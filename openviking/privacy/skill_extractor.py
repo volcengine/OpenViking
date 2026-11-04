@@ -3,10 +3,16 @@
 """Extract sensitive values from skill content."""
 
 from dataclasses import dataclass, field
+from secrets import token_urlsafe
 
 from openviking.config.vlm import VLMHandle
-from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
+from openviking.privacy.rules import find_privacy_matches, is_sensitive_value
+from openviking.privacy.skill_placeholder import (
+    build_placeholder,
+    placeholderize_skill_content_with_blocks,
+)
 from openviking.prompts import render_prompt
+from openviking_cli.exceptions import ResourceExhaustedError
 from openviking_cli.utils.llm import parse_json_from_response
 
 
@@ -44,9 +50,9 @@ async def extract_skill_privacy_values(
         raw_values = data.get("values", {})
         if isinstance(raw_values, dict):
             values = {
-                str(key): "" if value is None else str(value)
+                str(key): value
                 for key, value in raw_values.items()
-                if str(key).strip()
+                if str(key).strip() and isinstance(value, str) and is_sensitive_value(value)
             }
 
     placeholder_result = placeholderize_skill_content_with_blocks(content, skill_name, values)
@@ -56,4 +62,38 @@ async def extract_skill_privacy_values(
         sanitized_content=placeholder_result.sanitized_content,
         original_content_blocks=placeholder_result.original_content_blocks,
         replacement_content_blocks=placeholder_result.replacement_content_blocks,
+    )
+
+
+def extract_skill_privacy_values_by_rules(
+    *, skill_name: str, content: str, reserved_fields: set[str] | None = None
+) -> SkillPrivacyExtractionResult:
+    """Replace detected spans while preserving the surrounding Skill content."""
+    values: dict[str, str] = {}
+    references: dict[str, str] = {}
+    chunks: list[str] = []
+    cursor = 0
+    for match in find_privacy_matches(content):
+        value = content[match.start : match.end]
+        reference = references.get(value)
+        if reference is None:
+            for _ in range(8):
+                key = token_urlsafe(6)
+                # Existing references must keep their field identity.
+                if key not in values and (not reserved_fields or key not in reserved_fields):
+                    break
+            else:
+                raise ResourceExhaustedError("Could not allocate unique Skill privacy field IDs")
+            values[key] = value
+            reference = build_placeholder(skill_name, key)
+            references[value] = reference
+        chunks.extend((content[cursor : match.start], reference))
+        cursor = match.end
+    chunks.append(content[cursor:])
+    return SkillPrivacyExtractionResult(
+        values=values,
+        original_content=content,
+        sanitized_content="".join(chunks),
+        original_content_blocks=list(references),
+        replacement_content_blocks=list(references.values()),
     )

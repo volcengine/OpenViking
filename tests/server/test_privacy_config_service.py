@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,13 +12,23 @@ from openviking.core.namespace import canonical_user_root
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_extractor import build_session_placeholder
-from openviking.privacy.skill_extractor import extract_skill_privacy_values
+from openviking.privacy.skill_extractor import (
+    extract_skill_privacy_values,
+    extract_skill_privacy_values_by_rules,
+)
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
 from openviking.privacy.validation import PRIVACY_MAX_FIELDS, SESSION_PRIVACY_MAX_FIELDS
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import AlreadyExistsError, InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+
+SECRET = (
+    "sk-proj-"
+    + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    + "T3BlbkFJ"
+    + "xY7zA9bC2dE4fG6hJ8kL0mN1pQ3sT5vW"
+)
 
 
 class _MemoryPrivacyStorage:
@@ -234,54 +245,31 @@ async def test_viking_fs_read_propagates_storage_errors(read_method):
 
 
 @pytest.mark.asyncio
-async def test_skill_read_restores_placeholder(service):
+@pytest.mark.parametrize("name", ["restore-skill", "restore-skill-agent-segment"])
+async def test_skill_read_restores_placeholder(service, monkeypatch, name):
     ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_restore"), role=Role.ROOT)
     await service.initialize_user_directories(ctx)
-
+    resolver = SimpleNamespace(
+        get_vlm=AsyncMock(side_effect=AssertionError("Privacy must not resolve VLM"))
+    )
+    monkeypatch.setattr(service._skill_processor, "_vlm_resolver", resolver)
+    content = f'api_key: "{SECRET}"\nbase_url: "https://example.com"\n'
     await service.resources.add_skill(
-        data={
-            "name": "restore-skill",
-            "description": "skill with secret",
-            "content": 'api_key: "secret-xyz"\nbase_url: "https://example.com"\n',
-        },
+        data={"name": name, "description": "skill with secret", "content": content},
         ctx=ctx,
         wait=False,
     )
-
-    skill_file_uri = f"{canonical_user_root(ctx)}/skills/restore-skill/SKILL.md"
+    skill_file_uri = f"{canonical_user_root(ctx)}/skills/{name}/SKILL.md"
     stored = await service.viking_fs.read_file(skill_file_uri, ctx=ctx)
     restored = await service.fs.read(skill_file_uri, ctx=ctx)
-
-    assert "secret-xyz" not in stored
-    assert "{{ov_privacy:skill:restore-skill:api_key}}" in stored
-    assert "secret-xyz" in restored
-    assert "https://example.com" in restored
-
-
-@pytest.mark.asyncio
-async def test_skill_read_restores_placeholder_for_agent_segment_name(service):
-    ctx = RequestContext(
-        user=UserIdentifier.the_default_user("privacy_restore_agent_segment"), role=Role.ROOT
-    )
-    await service.initialize_user_directories(ctx)
-
-    await service.resources.add_skill(
-        data={
-            "name": "restore-skill-agent-segment",
-            "description": "skill with secret",
-            "content": 'api_key: "secret-abc"\nbase_url: "https://example.com"\n',
-        },
-        ctx=ctx,
-        wait=False,
-    )
-
-    restored = await service.fs.read(
-        f"{canonical_user_root(ctx)}/skills/restore-skill-agent-segment/SKILL.md",
-        ctx=ctx,
-    )
-
-    assert "secret-abc" in restored
-    assert "https://example.com" in restored
+    assert SECRET not in stored
+    assert "https://example.com" in stored
+    assert content in restored
+    current = await service.privacy_configs.get_current(ctx, "skill", name)
+    [field] = current.values
+    assert current.values == {field: SECRET}
+    assert f"{{{{ov_privacy:skill:{name}:{field}}}}}" in stored
+    resolver.get_vlm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -359,32 +347,57 @@ async def test_read_preserves_empty_privacy_references(client, service, entrypoi
         assert json.dumps(parts[1]["tool_input"]["rows"]) == json.dumps(expected)
 
 
+def test_rule_extraction_preserves_text_and_reuses_repeated_credentials(monkeypatch):
+    ids = iter(["existing", "field001", "field001", "field002"])
+    monkeypatch.setattr("openviking.privacy.skill_extractor.token_urlsafe", lambda _: next(ids))
+    second = "ghp_" + "xY7zA9bC2dE4fG6hJ8kL0mN1pQ3sT5vW"
+    existing = "{{ov_privacy:skill:extract-block-skill:existing}}"
+    content = (
+        f"标题🙂 `{SECRET}`; URL?token={second}&scope=repo\n"
+        f"再次出现：{SECRET}\n{existing}\n"
+        "password=deploy; OPENAI_API_KEY=magpie; base_url=https://usemagpie.ai\n"
+        r"TOKEN=$K\"; password=$(grep TOKEN config); token=Optional[str]"
+    )
+    result = extract_skill_privacy_values_by_rules(
+        skill_name="extract-block-skill", content=content, reserved_fields={"existing"}
+    )
+    assert list(result.values.values()) == [SECRET, second]
+    first_ref, second_ref = result.replacement_content_blocks
+    assert result.sanitized_content == content.replace(SECRET, first_ref).replace(
+        second, second_ref
+    )
+    assert result.original_content_blocks == [SECRET, second]
+    assert result.original_content == content
+
+
 @pytest.mark.asyncio
-async def test_skill_privacy_extraction_returns_content_blocks():
-    content = 'api_key: "secret-xyz"\nbase_url: "https://example.com"\n'
-
-    async def fake_completion_async(_prompt):
-        return '{"values": {"api_key": "secret-xyz", "base_url": "https://example.com"}}'
-
+async def test_skill_filters_vlm_candidates_before_placeholderization():
+    values = {
+        "api_key": SECRET,
+        "password": "deploy",
+        "base_url": "https://example.com",
+        "token": "magpie",
+        "count": 1234,
+        "credentials": {"api_key": SECRET},
+        "empty": None,
+    }
+    content = json.dumps(values)
     result = await extract_skill_privacy_values(
         skill_name="extract-block-skill",
-        skill_description="skill with secret",
+        skill_description="mixed credentials and business values",
         content=content,
-        vlm=type("VLM", (), {"get_completion_async": staticmethod(fake_completion_async)})(),
+        vlm=type(
+            "VLM",
+            (),
+            {"get_completion_async": AsyncMock(return_value=json.dumps({"values": values}))},
+        )(),
     )
-
-    assert result.values["api_key"] == "secret-xyz"
-    assert result.values["base_url"] == "https://example.com"
+    reference = "{{ov_privacy:skill:extract-block-skill:api_key}}"
+    assert result.values == {"api_key": SECRET}
     assert result.original_content == content
-    assert result.original_content_blocks == ["https://example.com", "secret-xyz"]
-    assert result.replacement_content_blocks == [
-        "{{ov_privacy:skill:extract-block-skill:base_url}}",
-        "{{ov_privacy:skill:extract-block-skill:api_key}}",
-    ]
-    assert result.sanitized_content == (
-        'api_key: "{{ov_privacy:skill:extract-block-skill:api_key}}"\n'
-        'base_url: "{{ov_privacy:skill:extract-block-skill:base_url}}"\n'
-    )
+    assert result.original_content_blocks == [SECRET]
+    assert result.replacement_content_blocks == [reference]
+    assert result.sanitized_content == content.replace(SECRET, reference)
 
 
 @pytest.mark.asyncio
@@ -560,7 +573,6 @@ def test_placeholderization_preserves_quoted_value_matching():
 @pytest.mark.asyncio
 async def test_patch_preserves_equal_fields_and_rotates_only_named_field(monkeypatch):
     category = "credential"
-    from unittest.mock import AsyncMock
 
     privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)

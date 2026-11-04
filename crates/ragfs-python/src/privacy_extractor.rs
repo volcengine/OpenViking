@@ -1,4 +1,4 @@
-//! PyO3 access to fixed-rule credential discovery, separate from file scanning.
+//! PyO3 access to credential format detectors, separate from file scanning.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -19,19 +19,9 @@ impl PyPrivacyExtractor {
         })
     }
 
-    #[pyo3(signature = (content, field_name=None))]
-    fn extract(
-        &self,
-        py: Python<'_>,
-        content: String,
-        field_name: Option<String>,
-    ) -> PyResult<Vec<(usize, usize, String)>> {
+    fn extract(&self, py: Python<'_>, content: String) -> PyResult<Vec<(usize, usize, String)>> {
         let inner = self.inner.clone();
-        py.detach(move || inner.extract(&content, field_name.as_deref()))
+        py.detach(move || inner.extract(&content))
             .map_err(PyValueError::new_err)
-    }
-
-    fn is_sensitive_key(&self, key: &str) -> bool {
-        self.inner.is_sensitive_key(key)
     }
 }

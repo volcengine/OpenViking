@@ -16,7 +16,6 @@ from openviking.privacy.rules import (
     MAX_MATCHES,
     MAX_TEXT_CHARS,
     find_privacy_matches,
-    is_sensitive_key,
 )
 from openviking.privacy.sanitizer import PrivacyReplacement, PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
@@ -87,7 +86,7 @@ def extract_session_privacy_values(
     messages_spec: list[dict],
     *,
     match_registered: _Matcher | None = None,
-) -> tuple[list[dict], dict[str, Any]]:
+) -> tuple[list[dict], dict[str, str]]:
     """Return protected copies and discoveries without modifying caller-owned data."""
     extraction = _SessionExtraction(target_key, match_registered or (lambda _: []))
     return extraction.transform_messages(messages_spec), extraction.values
@@ -162,7 +161,7 @@ class _ExtractionBudget:
 
 
 class _PayloadTransformer:
-    """Traverse only payload fields; default text and field handlers preserve values."""
+    """Traverse payload fields and apply the text handler to string values."""
 
     def __init__(self, budget: _ExtractionBudget | None = None):
         self.budget = budget
@@ -176,9 +175,6 @@ class _PayloadTransformer:
             self.budget.check_text(text)
         return text
 
-    def transform_field(self, key: str, value: Any, depth: int) -> Any:
-        return self.transform_value(value, depth)
-
     def transform_value(self, value: Any, depth: int = 0) -> Any:
         self.check_node(depth)
         if isinstance(value, str):
@@ -191,7 +187,7 @@ class _PayloadTransformer:
                 clean_key = self.transform_text(key)
                 if clean_key in result:
                     raise InvalidArgumentError("Session privacy object key collision")
-                result[clean_key] = self.transform_field(key, item, depth + 1)
+                result[clean_key] = self.transform_value(item, depth + 1)
             return result
         if isinstance(value, (list, tuple)):
             items = [self.transform_value(item, depth + 1) for item in value]
@@ -231,7 +227,7 @@ class _PayloadTransformer:
 
 
 class _SessionExtraction(_PayloadTransformer):
-    """Discover values while copying inputs; sensitive fields are captured whole."""
+    """Discover credential formats while copying message payloads."""
 
     budget: _ExtractionBudget
 
@@ -239,32 +235,19 @@ class _SessionExtraction(_PayloadTransformer):
         super().__init__(_ExtractionBudget())
         self.target_key = target_key
         self.value_matcher = value_matcher
-        self.values: dict[str, Any] = {}
+        self.values: dict[str, str] = {}
         self.text_references: dict[str, str] = {}
-        # Same input budget, with identity handlers: validate and copy, never extract.
-        self.literal = _PayloadTransformer(self.budget)
 
     def transform_part(self, part: Part) -> Part:
         if not isinstance(part, (TextPart, ContextPart, ToolPart, ImagePart)):
             raise InvalidArgumentError("Session privacy received unsupported Part type")
         return super().transform_part(replace(part))
 
-    def transform_field(self, key: str, value: Any, depth: int) -> Any:
-        if not _SESSION_PRIVACY_DISCOVERY_ENABLED or not is_sensitive_key(key):
-            return self.transform_value(value, depth)
-        copied = self.literal.transform_value(value, depth)
-        # Empty strings, references and environment variables retain their meaning.
-        # A neutral name captures Authorization including its authentication scheme.
-        if isinstance(copied, str) and not find_privacy_matches(copied, field_name="password"):
-            return copied
-        return self.get_reference(copied) if copied is not None else None
-
-    def get_reference(self, value: Any) -> str:
+    def get_reference(self, value: str) -> str:
         self.budget.record_match()
-        if isinstance(value, str):
-            matches = self.value_matcher(value)
-            if len(matches) == 1 and matches[0].start == 0 and matches[0].end == len(value):
-                return matches[0].reference
+        matches = self.value_matcher(value)
+        if len(matches) == 1 and matches[0].start == 0 and matches[0].end == len(value):
+            return matches[0].reference
         for _ in range(MAX_FIELD_ID_ATTEMPTS):
             # Six random bytes encode to eight URL-safe characters.
             key = token_urlsafe(6)
@@ -331,7 +314,7 @@ def _merge_spans(
 
 
 def _replace_spans(text: str, replacements: Iterable[PrivacyReplacement]) -> str:
-    chunks = []
+    chunks: list[str] = []
     cursor = 0
     for match in replacements:
         chunks.extend((text[cursor : match.start], match.reference))

@@ -49,6 +49,7 @@ async def test_skill_description_is_sanitized_before_privacy_vlm(
     service,
     monkeypatch,
 ):
+    monkeypatch.setattr("openviking.utils.skill_processor._SKILL_PRIVACY_EXTRACTION_METHOD", "vlm")
     ctx = RequestContext(user=service.user, role=Role.USER)
     secret = "registered-description-value"
     await service.privacy_configs.upsert(
