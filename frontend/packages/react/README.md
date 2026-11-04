@@ -2,7 +2,7 @@
 
 React UI modules for OpenViking applications. The initial scaffold exports `StatusBadge`; the seven business modules export their public props types and ship placeholder components until the views are migrated.
 
-This package is private during initial development and is not published to npm. It inherits the repository's AGPL-3.0-only license.
+This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
 ## 模块目录
 

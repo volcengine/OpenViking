@@ -1,4 +1,4 @@
-import type { FormHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
+import type { FormHTMLAttributes, ReactNode } from 'react';
 
 /**
  * 一个导入来源。组件不内置来源列表，由宿主声明提供哪些、叫什么、带什么字段。

@@ -5,17 +5,18 @@ import {
   useMemo,
   useState,
 } from 'react';
-import type { MouseEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
+import { FilePreviewHeader } from './file-preview-header.js';
+import { FileIcon } from './file-preview-icons.js';
+import { DEFAULT_LABELS } from './file-preview-labels.js';
 import styles from './file-preview.module.css';
-import {
-  type FilePreviewComponent,
-  type FilePreviewContentTab,
-  type FilePreviewFileTab,
-  type FilePreviewHandle,
-  type FilePreviewLabels,
-  type FilePreviewProps,
-  type FilePreviewTab,
+import type {
+  FilePreviewComponent,
+  FilePreviewFileTab,
+  FilePreviewHandle,
+  FilePreviewProps,
+  FilePreviewTab,
 } from './types.js';
 
 export type {
@@ -33,108 +34,8 @@ export type {
   FilePreviewTabBase,
 } from './types.js';
 
-const DEFAULT_LABELS: Required<
-  Pick<
-    FilePreviewLabels,
-    | 'copyContent'
-    | 'copyContentSuccess'
-    | 'copyContentEmpty'
-    | 'copyPath'
-    | 'copyPathSuccess'
-    | 'openParent'
-    | 'edit'
-    | 'save'
-    | 'cancel'
-    | 'preview'
-    | 'source'
-    | 'retry'
-    | 'loadFailed'
-    | 'saveFailed'
-    | 'unsupported'
-  >
-> = {
-  copyContent: 'Copy content',
-  copyContentSuccess: 'Content copied',
-  copyContentEmpty: 'Nothing to copy',
-  copyPath: 'Copy path',
-  copyPathSuccess: 'Path copied',
-  openParent: 'Open parent directory',
-  edit: 'Edit',
-  save: 'Save',
-  cancel: 'Cancel',
-  preview: 'Preview',
-  source: 'Source',
-  retry: 'Retry',
-  loadFailed: 'Failed to load the file',
-  saveFailed: 'Failed to save',
-  unsupported: 'Preview is not supported for this format',
-};
-
 function isFileTab(tab: FilePreviewTab): tab is FilePreviewFileTab {
   return tab.kind === 'file';
-}
-
-/** 从文件页签的 `source` 里取出可复制的纯文本；拿不到时返回 `undefined`。 */
-function readCopyableText(tab: FilePreviewFileTab): string | undefined {
-  const { content } = tab.source;
-  return typeof content === 'string' && content.length > 0
-    ? content
-    : undefined;
-}
-
-function FileIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className={styles.icon}
-      viewBox="0 0 16 16"
-      width="14"
-      height="14"
-    >
-      <path
-        d="M4 1.5h5L12.5 5v9.5h-8.5V1.5Z"
-        fill="none"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.2"
-      />
-      <path
-        d="M9 1.5V5h3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-    </svg>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className={styles.actionIcon}
-      viewBox="0 0 16 16"
-      width="12"
-      height="12"
-    >
-      <rect
-        x="5.5"
-        y="5.5"
-        width="8"
-        height="9"
-        rx="1.2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-      <path
-        d="M10.5 5.5v-2a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-    </svg>
-  );
 }
 
 /**
@@ -161,8 +62,8 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
-  const activeTab =
-    tabs.find((tab) => tab.key === activeKey) ?? (tabs[0] as FilePreviewTab);
+  const activeTab = tabs.find((tab) => tab.key === activeKey) ?? tabs[0];
+  const tabText = { ...text, ...activeTab.labels };
 
   useImperativeHandle(
     ref,
@@ -177,8 +78,6 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     }),
     [activeKey, tabs],
   );
-
-  const tabText = { ...text, ...activeTab.labels };
 
   const copy = useCallback(async (value: string | undefined) => {
     if (!value) return;
@@ -197,21 +96,16 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   };
 
   const fileTab = isFileTab(activeTab) ? activeTab : undefined;
-  const contentTab = !isFileTab(activeTab)
-    ? (activeTab as FilePreviewContentTab)
-    : undefined;
-
-  const headerActions = activeTab.slots?.actions;
-  const titleExtra = activeTab.slots?.titleExtra;
+  const contentTab = !isFileTab(activeTab) ? activeTab : undefined;
 
   const body = useMemo<ReactNode>(() => {
     if (contentTab) return contentTab.content;
+    if (!fileTab) return null;
 
-    const tab = fileTab as FilePreviewFileTab;
-    const { source } = tab;
+    const { source } = fileTab;
     const raw = source.content;
 
-    if (editing && tab.editing) {
+    if (editing && fileTab.editing) {
       return (
         <div className={styles.editor}>
           <textarea
@@ -226,7 +120,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     if (typeof raw !== 'string') {
       return (
         <div className={styles.state}>
-          {tab.slots?.unsupportedFallback ?? (
+          {fileTab.slots?.unsupportedFallback ?? (
             <span className={styles.muted}>
               {source.file || source.url
                 ? 'Binary preview requires FileViewer'
@@ -239,14 +133,10 @@ export const FilePreview: FilePreviewComponent = forwardRef<
 
     return (
       <div className={styles.textBody}>
-        {viewMode === 'source' ? (
-          <pre className={styles.pre}>{raw}</pre>
-        ) : (
-          <pre className={styles.pre}>{raw}</pre>
-        )}
+        <pre className={styles.pre}>{raw}</pre>
       </div>
     );
-  }, [contentTab, draft, editing, fileTab, text.unsupported, viewMode]);
+  }, [contentTab, draft, editing, fileTab, text.unsupported]);
 
   return (
     <div
@@ -272,135 +162,28 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         ))}
       </div>
 
-      <div className={styles.header}>
-        <div className={styles.pathRow}>
-          {fileTab?.source.path ? (
-            <button
-              type="button"
-              className={styles.breadcrumb}
-              onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                event.stopPropagation();
-                fileTab.onOpenParent?.(fileTab.source.path as string);
-              }}
-              disabled={!fileTab.onOpenParent}
-              title={fileTab.source.path}
-            >
-              {fileTab.source.path}
-            </button>
-          ) : (
-            <span className={styles.breadcrumb}>{activeTab.key}</span>
-          )}
-
-          {fileTab && fileTab.onCopyPath && fileTab.source.path ? (
-            <button
-              type="button"
-              className={styles.action}
-              aria-label={tabText.copyPath}
-              title={tabText.copyPath}
-              onClick={() => void copy(fileTab.source.path)}
-            >
-              <CopyIcon />
-            </button>
-          ) : null}
-
-          {titleExtra ? (
-            <span className={styles.titleExtra}>{titleExtra}</span>
-          ) : null}
-        </div>
-
-        <div className={styles.headerActions}>
-          {fileTab && fileTab.showViewModeSwitch !== false ? (
-            <span className={styles.switch}>
-              <button
-                type="button"
-                className={styles.switchItem}
-                data-active={viewMode === 'preview' || undefined}
-                onClick={() => setViewMode('preview')}
-              >
-                {tabText.preview}
-              </button>
-              <button
-                type="button"
-                className={styles.switchItem}
-                data-active={viewMode === 'source' || undefined}
-                onClick={() => setViewMode('source')}
-              >
-                {tabText.source}
-              </button>
-            </span>
-          ) : null}
-
-          {fileTab?.onCopyContent ? (
-            <button
-              type="button"
-              className={styles.action}
-              aria-label={tabText.copyContent}
-              title={
-                readCopyableText(fileTab)
-                  ? tabText.copyContent
-                  : tabText.copyContentEmpty
-              }
-              disabled={!readCopyableText(fileTab)}
-              onClick={() => void copy(readCopyableText(fileTab))}
-            >
-              <CopyIcon />
-            </button>
-          ) : null}
-
-          {fileTab?.editing && !editing ? (
-            <button
-              type="button"
-              className={styles.button}
-              onClick={() => {
-                const next = fileTab.source.content ?? '';
-                setDraft(next);
-                setEditing(true);
-              }}
-            >
-              {tabText.edit}
-            </button>
-          ) : null}
-
-          {fileTab?.editing && editing ? (
-            <>
-              <button
-                type="button"
-                className={styles.button}
-                onClick={() => {
-                  setEditing(false);
-                  fileTab.editing?.onCancel?.(draft);
-                }}
-              >
-                {tabText.cancel}
-              </button>
-              <button
-                type="button"
-                className={styles.buttonPrimary}
-                onClick={() => {
-                  void fileTab.editing?.onSave(draft);
-                  setEditing(false);
-                }}
-              >
-                {tabText.save}
-              </button>
-            </>
-          ) : null}
-
-          {fileTab?.onDownload ? (
-            <button
-              type="button"
-              className={styles.button}
-              onClick={() => fileTab.onDownload?.()}
-            >
-              Download
-            </button>
-          ) : null}
-
-          {headerActions ? (
-            <span className={styles.extraActions}>{headerActions}</span>
-          ) : null}
-        </div>
-      </div>
+      <FilePreviewHeader
+        activeTab={activeTab}
+        fileTab={fileTab}
+        text={tabText}
+        viewMode={viewMode}
+        editing={editing}
+        draft={draft}
+        onViewModeChange={setViewMode}
+        onCopy={copy}
+        onEditStart={() => {
+          setDraft(fileTab?.source.content ?? '');
+          setEditing(true);
+        }}
+        onEditCancel={() => {
+          setEditing(false);
+          fileTab?.editing?.onCancel?.(draft);
+        }}
+        onEditSave={() => {
+          void fileTab?.editing?.onSave(draft);
+          setEditing(false);
+        }}
+      />
 
       <div className={styles.body}>{body}</div>
     </div>

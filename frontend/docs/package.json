@@ -5,12 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "rspress dev --host 0.0.0.0",
-    "check": "tsc --noEmit",
     "build": "rspress build",
     "preview": "rspress preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@openviking/react": "0.0.0",
+    "@openviking/react": "0.1.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
