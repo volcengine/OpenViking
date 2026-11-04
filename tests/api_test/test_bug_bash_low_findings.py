@@ -5,15 +5,25 @@
 
 Each test exercises a specific fix from the batch PR so future refactors
 do not silently regress the behavior.
+
+These checks are unit-level, but they live at the ``tests/api_test`` root
+because that is the only broad test tree CI actually collects: the
+``06. API & CLI Integration Tests`` workflow runs ``pytest .`` from this
+directory (see ``.github/workflows/api_test.yml``).  Keep this file at this
+level: ``tests/api_test/common/`` already holds a ``test_edge_cases.py`` and
+is a plain (non-package) directory, so a same-named module dropped there would
+be imported as a top-level ``test_edge_cases`` instead of a distinct module.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# <repo>/tests/api_test/<this file> -> <repo>
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +183,7 @@ def test_validation_module_uses_typed_exception_handlers():
 
 
 # ---------------------------------------------------------------------------
-# Finding 10: machine-id fallback must be unique per call.
+# Finding 10: the machine-id fallback must stay a stable constant and log.
 # ---------------------------------------------------------------------------
 
 
@@ -181,9 +191,7 @@ def _extract_machine_id_function():
     """Locate the get_or_create_machine_id function from commands.py via AST."""
     import ast
 
-    commands_path = (
-        Path(__file__).resolve().parent.parent / "bot" / "vikingbot" / "cli" / "commands.py"
-    )
+    commands_path = _REPO_ROOT / "bot" / "vikingbot" / "cli" / "commands.py"
     tree = ast.parse(commands_path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "get_or_create_machine_id":
