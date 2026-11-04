@@ -170,10 +170,20 @@ export function writePrivateJson(file, value) {
 
 // Only the rotated refresh token changes; everything else in the account file
 // (the owner's `name`, a `username`, the servers) is kept as written.
-export function saveRefreshToken(file, oauth2) {
+//
+// `onlyIfRefreshedFrom` guards against a stale write: a refresh spends one
+// refresh token and gets a new one, and a sign-in done in the meantime leaves a
+// newer token in the file. The write is skipped when the file no longer holds
+// the token this refresh spent, so the newer credential is never overwritten.
+// Resolves with whether the file was written.
+export function saveRefreshToken(file, oauth2, { onlyIfRefreshedFrom } = {}) {
   let value;
   try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {
     throw new Error('email config file is unreadable or not JSON');
+  }
+  if (onlyIfRefreshedFrom !== undefined
+    && String(value?.oauth2?.refreshToken ?? '') !== onlyIfRefreshedFrom) {
+    return false;
   }
   value.oauth2 = {
     tenant: oauth2.tenant,
@@ -181,6 +191,7 @@ export function saveRefreshToken(file, oauth2) {
     refreshToken: oauth2.refreshToken,
   };
   writePrivateJson(file, value);
+  return true;
 }
 
 // An access token is reused until it is about to expire.

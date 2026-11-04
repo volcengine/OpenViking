@@ -94,6 +94,18 @@ async function hello(session) {
   return reply.lines.map((line) => line.slice(4).toUpperCase());
 }
 
+// A sign-in that failed. Nothing was offered to the server yet, so the caller
+// may refresh the credential and try the same message again: unlike a failure
+// after DATA, this one cannot have delivered anything.
+export class SmtpAuthError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SmtpAuthError';
+    // Retrying with a new credential is safe: no recipient was told anything.
+    this.retryable = true;
+  }
+}
+
 // SASL XOAUTH2. A rejected token comes back as the error challenge first, and
 // the 535 that says so only arrives once the exchange is ended with an empty
 // line; the server's final text is the only useful one to report.
@@ -106,9 +118,9 @@ async function authenticateXoauth2(session, user, accessToken) {
     const final = session.reply();
     session.socket.write('\r\n');
     const reply = await final;
-    throw new Error(`SMTP AUTH XOAUTH2 failed: ${reply.lines.at(-1).slice(0, 200)}`);
+    throw new SmtpAuthError(`SMTP AUTH XOAUTH2 failed: ${reply.lines.at(-1).slice(0, 200)}`);
   }
-  throw new Error(`SMTP AUTH XOAUTH2 failed: ${first.lines.at(-1).slice(0, 200)}`);
+  throw new SmtpAuthError(`SMTP AUTH XOAUTH2 failed: ${first.lines.at(-1).slice(0, 200)}`);
 }
 
 // Opens an authenticated session; `run(session)` does the work, then QUIT.
@@ -133,18 +145,24 @@ export async function withSmtp({ host, port, secure = Number(port) === 465, user
       features = await hello(session);
     }
     const auth = features.find((feature) => feature.startsWith('AUTH')) ?? '';
-    if (accessToken) {
-      if (!/\bXOAUTH2\b/.test(auth)) throw new Error('SMTP server offers no AUTH XOAUTH2');
-      await authenticateXoauth2(session, user, accessToken);
-    } else if (/\bPLAIN\b/.test(auth)) {
-      const token = Buffer.from(`\u0000${user}\u0000${password}`, 'utf8').toString('base64');
-      await session.send(`AUTH PLAIN ${token}`, [235], 'AUTH PLAIN');
-    } else if (/\bLOGIN\b/.test(auth)) {
-      await session.send('AUTH LOGIN', [334]);
-      await session.send(Buffer.from(user, 'utf8').toString('base64'), [334], 'AUTH LOGIN user');
-      await session.send(Buffer.from(password, 'utf8').toString('base64'), [235], 'AUTH LOGIN password');
-    } else {
-      throw new Error('SMTP server offers neither AUTH PLAIN nor AUTH LOGIN');
+    // Everything from here to a successful sign-in is the authentication step:
+    // no message has been offered, so any failure in it is retryable.
+    try {
+      if (accessToken) {
+        if (!/\bXOAUTH2\b/.test(auth)) throw new SmtpAuthError('SMTP server offers no AUTH XOAUTH2');
+        await authenticateXoauth2(session, user, accessToken);
+      } else if (/\bPLAIN\b/.test(auth)) {
+        const token = Buffer.from(`\u0000${user}\u0000${password}`, 'utf8').toString('base64');
+        await session.send(`AUTH PLAIN ${token}`, [235], 'AUTH PLAIN');
+      } else if (/\bLOGIN\b/.test(auth)) {
+        await session.send('AUTH LOGIN', [334]);
+        await session.send(Buffer.from(user, 'utf8').toString('base64'), [334], 'AUTH LOGIN user');
+        await session.send(Buffer.from(password, 'utf8').toString('base64'), [235], 'AUTH LOGIN password');
+      } else {
+        throw new SmtpAuthError('SMTP server offers neither AUTH PLAIN nor AUTH LOGIN');
+      }
+    } catch (error) {
+      throw error instanceof SmtpAuthError ? error : new SmtpAuthError(error.message);
     }
     const result = await run(session);
     await session.send('QUIT', [221]).catch(() => {});
@@ -161,6 +179,11 @@ function envelopeAddress(address) {
 
 // Submits one message. `raw` uses CRLF line ends; lines starting with a dot
 // are stuffed.
+//
+// Once the body has gone out the outcome is uncertain: the server may have
+// queued the message even though its answer did not arrive. Such a failure is
+// marked so the caller reports it instead of trying again — a retry would send
+// a second copy, and SMTP has no idempotency key.
 export function sendMail(account, { from, recipients, raw }) {
   return withSmtp(account, async (session) => {
     await session.send(`MAIL FROM:${envelopeAddress(from)}`, [250], 'MAIL FROM');
@@ -169,7 +192,12 @@ export function sendMail(account, { from, recipients, raw }) {
     const body = raw.replace(/\r?\n/g, '\r\n').replace(/^\./gm, '..');
     const accepted = session.reply();
     session.socket.write(`${body}${body.endsWith('\r\n') ? '' : '\r\n'}.\r\n`);
-    session.expect(await accepted, [250], 'DATA');
+    try {
+      session.expect(await accepted, [250], 'DATA');
+    } catch (error) {
+      error.uncertainDelivery = true;
+      throw error;
+    }
     return { accepted: recipients.length };
   });
 }

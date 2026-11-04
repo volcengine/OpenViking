@@ -3,7 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { verifyAccount } from '../../daemon/src/email/client.mjs';
+import { verifyAccount } from '../../daemon/src/email/account.mjs';
 import { OAuthRequiredError } from '../../daemon/src/email/imap.mjs';
 import { requestDeviceCode, waitForDeviceCode, writePrivateJson } from '../../daemon/src/email/oauth2.mjs';
 import { t } from './i18n.mjs';
@@ -110,6 +110,16 @@ const deviceLogin = {
   wait: (oauth2, code) => waitForDeviceCode(oauth2, code),
 };
 
+// Which kind of mail system an address on an unknown domain belongs to. The
+// address cannot answer this: a Microsoft 365 mailbox lives on the owner's own
+// domain, with none of the known consumer domains in sight.
+async function mailHost({ prompter }) {
+  return await prompter.select(t('这个邮箱属于哪种？', 'Which kind of mailbox is this?'), [
+    { label: t('Microsoft 365 / Outlook（浏览器登录，不需要密码）', 'Microsoft 365 / Outlook (browser sign-in, no password)'), value: 'microsoft' },
+    { label: t('其他邮箱（手动填服务器和密码）', 'Another provider (servers and password entered by hand)'), value: 'other' },
+  ], { initial: 1 });
+}
+
 // A Microsoft mailbox signs in in the browser once; what the Connector keeps
 // afterwards is the refresh token from that sign-in. The account it returns is
 // already checked against IMAP and SMTP with the access token just obtained.
@@ -168,14 +178,12 @@ export async function askEmail({ prompter, previous = null, fixed = null, taken 
         '  Unknown provider: enter its servers. For the password, use the one the mailbox gives to other mail apps, or the login password if it has none.\n'));
     }
     // A known provider brings its own servers and sign-in. Anything else is
-    // the owner's own mail system: a Microsoft 365 mailbox there has no server
-    // names to guess, so they say so, and the answer decides the sign-in. A
+    // the owner's own mail system, and its address alone cannot say whether it
+    // is Microsoft-hosted: a corporate domain gives nothing away. So the owner
+    // says which, and that answer decides both the servers and the sign-in. A
     // server that turns out to refuse passwords still switches (below).
     const microsoft = Boolean(provider?.oauth || fixed?.oauth2)
-      || (!provider && !fixed && await prompter.confirm(t(
-        '这个邮箱是 Microsoft 365 / Outlook 吗（浏览器登录，不需要密码）？',
-        'Is this a Microsoft 365 / Outlook mailbox (browser sign-in, no password)?',
-      ), false));
+      || (!provider && !fixed && await mailHost({ prompter }) === 'microsoft');
     const oauth = microsoft;
     const hosts = fixed ? { imap: fixed.imap, smtp: fixed.smtp }
       : oauth ? (known ?? { imap: { host: 'outlook.office365.com', port: 993 }, smtp: { host: 'smtp.office365.com', port: 587 } })

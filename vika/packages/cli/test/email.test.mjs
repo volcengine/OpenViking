@@ -42,10 +42,10 @@ test('a failed login says why and asks again; an unknown provider asks for its s
     if (password !== 'right') throw new Error('IMAP LOGIN failed: NO LOGIN Login error or password error');
     return { idle: false };
   };
-  // The first answer is the Microsoft question: not a Microsoft mailbox.
+  // The first answer picks the mail system: 2, another provider.
   const { prompter, written } = terminal([
-    'me@corp.example', 'n', '', '', 'mail.corp.example', '587', 'wrong pass', 'y',
-    '', 'n', '', '', '', '', 'right',
+    'me@corp.example', '2', '', '', 'mail.corp.example', '587', 'wrong pass', 'y',
+    '', '2', '', '', '', '', 'right',
   ]);
   const account = await askEmail({ prompter, verify });
   assert.equal(attempts, 2);
@@ -103,7 +103,7 @@ test('a Microsoft mailbox signs in in the browser, and the account keeps only th
 
 test('a corporate Microsoft 365 mailbox is recognized by the owner saying so, and needs no servers', async () => {
   const login = fakeLogin();
-  const { prompter, written } = terminal(['me@corp.example', 'y', 'app-id', 'contoso.onmicrosoft.com']);
+  const { prompter, written } = terminal(['me@corp.example', '1', 'app-id', 'contoso.onmicrosoft.com']);
   const account = await askEmail({ prompter, login, verify: async () => ({ idle: true }) });
   assert.deepEqual(account, {
     address: 'me@corp.example',
@@ -124,7 +124,7 @@ test('a mailbox that turns out to refuse passwords switches to the browser sign-
     if (!options?.credential) throw new OAuthRequiredError();
     return { idle: true };
   };
-  const { prompter, written } = terminal(['me@corp.example', 'n', '', '', '', '', 'some-password', 'app-id', 'contoso.onmicrosoft.com']);
+  const { prompter, written } = terminal(['me@corp.example', '2', '', '', '', '', 'some-password', 'app-id', 'contoso.onmicrosoft.com']);
   const account = await askEmail({ prompter, login, verify });
   assert.deepEqual(account.oauth2, { tenant: 'contoso.onmicrosoft.com', clientId: 'app-id', refreshToken: 'refresh-1' });
   assert.equal(account.password, undefined);
