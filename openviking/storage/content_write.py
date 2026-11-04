@@ -288,6 +288,39 @@ class ContentWriteCoordinator:
             )
         return result.content
 
+    async def _sanitize_sidecar_text(
+        self,
+        content: str,
+        *,
+        uri: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Sanitize an abstract/overview sidecar without touching its frontmatter.
+
+        The system-generated frontmatter (``directory``, ``generated_by``) embeds
+        canonical URIs that are not secrets, and a substituted
+        ``{{ov_privacy:...}}`` scalar breaks the YAML parse — silently stripping
+        the target's description (#6909). The generated body, however, is regular
+        prose and must go through the same privacy substitution as any other
+        content (#6911 review).
+        """
+        if self._privacy_sanitizer is None:
+            return content
+        lines = content.splitlines(keepends=True)
+        if len(lines) >= 2 and lines[0].rstrip("\r\n") == "---":
+            closing = None
+            for index in range(1, len(lines)):
+                if lines[index].rstrip("\r\n") == "---":
+                    closing = index
+                    break
+            if closing is not None:
+                frontmatter = "".join(lines[: closing + 1])
+                body = "".join(lines[closing + 1 :])
+                sanitized_body = await self._sanitize_text(body, uri=uri, ctx=ctx)
+                return frontmatter + sanitized_body
+        # Legacy sidecar without frontmatter: the whole text is body.
+        return await self._sanitize_text(content, uri=uri, ctx=ctx)
+
     async def _sanitize_batch_operations(
         self,
         operations: list[dict[str, Any]],
@@ -528,12 +561,10 @@ class ContentWriteCoordinator:
         if acl is not None and not namespace_policy.supports_acl:
             raise InvalidArgumentError(f"ACL is not supported for namespace: {normalized_uri}")
         if isinstance(content, str):
-            if not is_abstract_overview_uri(normalized_uri):
+            if is_abstract_overview_uri(normalized_uri):
+                content = await self._sanitize_sidecar_text(content, uri=normalized_uri, ctx=ctx)
+            else:
                 content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
-            # System-generated sidecars (.abstract.md / .overview.md) skip privacy
-            # substitution: their frontmatter embeds canonical URIs that are not
-            # secrets, and a substituted {{ov_privacy:...}} scalar breaks the YAML
-            # parse, silently stripping the target's description (#6909).
         content = normalize_account_memory_template_write(normalized_uri, content, mode)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         if acl is not None:

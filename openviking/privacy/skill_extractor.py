@@ -16,13 +16,33 @@ from openviking_cli.utils.llm import parse_json_from_response
 # where the substituted ``{{ov_privacy:...}}`` scalar breaks YAML parsing and
 # silently strips the skill's description (#6909).
 _RESOURCE_LOCATION_RE = re.compile(
-    r"^(?:[A-Za-z][A-Za-z0-9+.-]*)://[^\"']*$|^[A-Za-z]:[\\/].*$|^/.*$"
+    r"^(?:[A-Za-z][A-Za-z0-9+.-]*)://[^\"']*$"  # scheme://… URI
+    r"|^[A-Za-z]:[\\/].*$"  # Windows drive path
+    r"|^/.*$"  # POSIX absolute path
+    r"|^\\\\[^\\].*$"  # UNC share path
+    r"|^\.{1,2}[\\/].*$"  # ./ or ../ relative path
+)
+# A URI is treated as a *credential carrier* — and therefore still registered —
+# when it embeds userinfo or a secret-shaped query parameter. A bare location
+# like ``viking://agent/skills`` is filtered; these are not.
+_SECRET_IN_URI_RE = re.compile(
+    r"://[^/\s]*@"  # userinfo (user:password@)
+    r"|[?&](token|key|secret|password|passwd|sig|signature|credential|access_key|api_key)="  # secret query param
 )
 
 
 def _is_resource_location(value: str) -> bool:
-    """Return True when ``value`` is a URI/path reference rather than a secret."""
-    return _RESOURCE_LOCATION_RE.match(value.strip()) is not None
+    """Return True when ``value`` is a pure location reference, not a secret."""
+    stripped = value.strip()
+    # A quoted value still describes a location; strip quote pairs so
+    # ``"viking://agent/skills"`` is filtered the same as the bare form.
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ("'", '"'):
+        stripped = stripped[1:-1]
+    if not _RESOURCE_LOCATION_RE.match(stripped):
+        return False
+    # Credential-shaped URIs (userinfo or secret-looking query params) are
+    # secrets that happen to be URIs — keep registering them (#6909 review).
+    return _SECRET_IN_URI_RE.search(stripped) is None
 
 
 @dataclass
