@@ -100,6 +100,8 @@ class _GraphStore:
         self.published_sources = None
         self.write_order: list[str] = []
         self.cache_reads = 0
+        self.state_reads = 0
+        self.source_reads = 0
 
     async def get(self, _account_id: str, _target_id: str):
         return self.record
@@ -116,6 +118,7 @@ class _GraphStore:
         self.write_order.append("graph")
 
     async def read_artifact_relations_state(self, _account_id: str, _target_id: str):
+        self.state_reads += 1
         return self.state
 
     async def write_artifact_relations_state(
@@ -125,6 +128,7 @@ class _GraphStore:
         self.write_order.append(f"state:{value['status']}")
 
     async def read_relation_sources(self, _account_id: str, _target_id: str):
+        self.source_reads += 1
         return self.sources
 
     async def write_relation_sources(
@@ -268,18 +272,18 @@ async def test_cache_hit_avoids_tree_lock_and_rebuild() -> None:
         "nodes": [],
         "edges": [],
     }
-    sources = {
+    state = {
         "schema_version": 1,
         "parser_version": 1,
         "ignore_signature": hashlib.sha256(b"").hexdigest(),
-        "to": record["to"],
         "target_snapshot_id": "abc123",
-        "pages": {},
-        "page_sizes": {},
+        "status": "ready",
     }
     fs = _GraphFs([], {})
+    store = _GraphStore(record, cache)
+    store.state = state
     graph = ArtifactRelationGraph(
-        _GraphStore(record, cache, sources),
+        store,
         fs,
         max_nodes=10,
         max_markdown_files=10,
@@ -297,6 +301,8 @@ async def test_cache_hit_avoids_tree_lock_and_rebuild() -> None:
     )
 
     assert result == {**cache, "stale": False, "building": False}
+    assert store.state_reads == 1
+    assert store.source_reads == 0
 
 
 @pytest.mark.asyncio

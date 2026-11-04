@@ -762,18 +762,12 @@ class ArtifactRelationGraph:
     ) -> bool:
         if not self._cache_matches(cache, to, head):
             return False
-        sources = await self._read_sources(ctx.account_id, to)
-        if not isinstance(sources, dict):
+        state = await self._read_state(ctx.account_id, to)
+        if not isinstance(state, dict):
             return False
         if ignore_signature is None:
             _, ignore_signature = await self._ignore_state(self._internal_ctx(ctx))
-        return (
-            sources.get("schema_version") == SCHEMA_VERSION
-            and sources.get("parser_version") == PARSER_VERSION
-            and sources.get("ignore_signature") == ignore_signature
-            and sources.get("to") == to.rstrip("/")
-            and sources.get("target_snapshot_id") == head
-        )
+        return self._state_matches(state, head, ignore_signature) and state.get("status") == "ready"
 
     async def _response(
         self,
