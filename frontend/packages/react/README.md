@@ -1,6 +1,6 @@
 # @openviking/react
 
-React UI modules for OpenViking applications. The initial scaffold exports `StatusBadge`; the seven business modules export their public props types and ship placeholder components until the views are migrated.
+React UI modules for OpenViking applications. The initial scaffold exports `StatusBadge`; six business modules export their public props types and ship placeholder components until the views are migrated, and `search` ships only a placeholder component while its props contract is being finalized.
 
 This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
@@ -18,7 +18,7 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 | [pages](./src/pages/README.md)                                         | 尚无公开入口                                  | 页面组合、数据获取与处理         |
 | [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)         | 仅包内使用                                    | 跨模块 Hook 与纯工具             |
 
-七个业务模块已定义公开的 props 类型，并从各自子路径导出同名占位组件。占位组件只渲染一个固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API；真实实现随视图迁入重写。`StatusBadge` 是已完成的脚手架示例，可从根入口或 `@openviking/react/components/status-badge` 导入。
+六个业务模块已定义公开的 props 类型，并从各自子路径导出同名占位组件；`search` 目前只导出占位组件，props 契约仍在定稿中。占位组件只渲染一个固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API；真实实现随视图迁入重写。`StatusBadge` 是已完成的脚手架示例，可从根入口或 `@openviking/react/components/status-badge` 导入。
 组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[pages](./src/pages/README.md) 负责取数、处理业务状态和编排；尚未定义首个页面。
 
 ### Props 约定

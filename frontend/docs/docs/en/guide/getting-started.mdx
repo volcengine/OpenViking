@@ -61,7 +61,7 @@ npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
 
 Import implemented APIs from `@openviking/react` or a specific `@openviking/react/components/<module>` entry. `components` and `pages` have no category-level JS exports. The former `/tree`, `/preview`, `/console`, `/tui`, and `/viking-bot` paths are replaced by the component paths.
 
-Seven business module entries are reserved: `file-tree`, `file-preview`, `tui`, `viking-bot`, `scope-switcher`, `agent-connect`, and `search`. They export their props types and a placeholder component. Pages and public Hooks have no implementation or exports; the first page is not defined.
+Seven business module entries are reserved: `file-tree`, `file-preview`, `tui`, `viking-bot`, `scope-switcher`, `agent-connect`, and `search`. Six of them export their props types and a placeholder component; `search` currently exports only the placeholder component, and its props contract is still being finalized. Pages and public Hooks have no implementation or exports; the first page is not defined.
 
 ## Styling
 
