@@ -84,8 +84,15 @@ class SmtpSession {
 function connect({ connect: open, secureConnect = false, ...options }) {
   return new Promise((resolve, reject) => {
     const socket = open(options);
-    socket.once(secureConnect ? 'secureConnect' : 'connect', () => resolve(socket));
-    socket.once('error', reject);
+    // A server or a middlebox can accept the connection and then go quiet; without
+    // this the caller waits forever and the worker never returns.
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`SMTP connection to ${options.host}:${options.port} timed out`));
+    }, STEP_TIMEOUT_MS);
+    const settle = (fn) => (value) => { clearTimeout(timer); fn(value); };
+    socket.once(secureConnect ? 'secureConnect' : 'connect', settle(() => resolve(socket)));
+    socket.once('error', settle(reject));
   });
 }
 
@@ -134,14 +141,15 @@ async function authenticateXoauth2(session, user, accessToken) {
 }
 
 // Opens an authenticated session; `run(session)` does the work, then QUIT.
-export async function withSmtp({ host, port, secure = Number(port) === 465, user, password, accessToken,
+async function withSmtp({ host, port, secure = Number(port) === 465, user, password, accessToken,
   connectTls = tls.connect, connectPlain = net.connect }, run) {
   const implicit = secure;
-  const socket = await connect(implicit
-    ? { host, port, servername: host, connect: connectTls, secureConnect: true }
-    : { host, port, connect: connectPlain });
-  let session = new SmtpSession(socket);
+  let session = null;
   try {
+    const socket = await connect(implicit
+      ? { host, port, servername: host, connect: connectTls, secureConnect: true }
+      : { host, port, connect: connectPlain });
+    session = new SmtpSession(socket);
     session.expect(await session.reply(), [220], 'greeting');
     let features = await hello(session);
     if (!implicit) {
@@ -178,7 +186,9 @@ export async function withSmtp({ host, port, secure = Number(port) === 465, user
     await session.send('QUIT', [221]).catch(() => {});
     return result;
   } finally {
-    session.socket.destroy();
+    // Set only once the connection is up; a failed open() has nothing to close
+    // and connect() already destroyed its own socket.
+    session?.socket.destroy();
   }
 }
 
@@ -190,10 +200,11 @@ function envelopeAddress(address) {
 // Submits one message. `raw` uses CRLF line ends; lines starting with a dot
 // are stuffed.
 //
-// Once the body has gone out the outcome is uncertain: the server may have
-// queued the message even though its answer did not arrive. Such a failure is
-// marked so the caller reports it instead of trying again — a retry would send
-// a second copy, and SMTP has no idempotency key.
+// A failure from here on is not retryable: the body may already be queued even
+// though the answer never arrived, and SMTP has no idempotency key, so a second
+// attempt would send a second copy. Nothing is marked in this process because
+// nothing here decides it — client.deliver() retries only what it can prove was
+// never offered, which is SmtpAuthError and nothing else.
 export function sendMail(account, { from, recipients, raw }) {
   return withSmtp(account, async (session) => {
     await session.send(`MAIL FROM:${envelopeAddress(from)}`, [250], 'MAIL FROM');
@@ -202,12 +213,7 @@ export function sendMail(account, { from, recipients, raw }) {
     const body = raw.replace(/\r?\n/g, '\r\n').replace(/^\./gm, '..');
     const accepted = session.reply();
     session.socket.write(`${body}${body.endsWith('\r\n') ? '' : '\r\n'}.\r\n`);
-    try {
-      session.expect(await accepted, [250], 'DATA');
-    } catch (error) {
-      error.uncertainDelivery = true;
-      throw error;
-    }
+    session.expect(await accepted, [250], 'DATA');
     return { accepted: recipients.length };
   });
 }

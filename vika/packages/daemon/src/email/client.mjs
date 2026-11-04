@@ -3,7 +3,7 @@
 
 import { eventMessage } from '../connectors/protocol.mjs';
 import { safeError } from '../logger.mjs';
-import { MAILBOX, accountTag, credentialSource, loadAccount, verifyAccount } from './account.mjs';
+import { EMAIL_VERSION, MAILBOX, accountTag, credentialSource, loadAccount, verifyAccount } from './account.mjs';
 import { MailArchive } from './archive.mjs';
 import { ImapAuthError, ImapConnection } from './imap.mjs';
 import { buildReply, isOwnMessageId, replyMessageId } from './mime.mjs';
@@ -112,7 +112,7 @@ export class EmailClient {
     }
     this.state.prune(Date.now() - this.config.retentionMs);
     // A mailbox is not an IM: notices to the owner never go here.
-    return { version: 'imap-smtp-v2', owner: null };
+    return { version: EMAIL_VERSION, owner: null };
   }
 
   startSubscription(onLine, onUnexpectedExit) {

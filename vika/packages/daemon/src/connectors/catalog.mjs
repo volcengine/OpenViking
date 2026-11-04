@@ -5,6 +5,7 @@ import { WEIXIN_CHANNEL_VERSION } from '../weixin/api.mjs';
 import { TELEGRAM_VERSION } from '../telegram/api.mjs';
 import { QQ_VERSION } from '../qq/api.mjs';
 import { SLACK_VERSION } from '../slack/api.mjs';
+import { EMAIL_VERSION } from '../email/account.mjs';
 import { connectorManifest } from './protocol.mjs';
 import { DOC_COMMENT_CONVERSATION, MAX_COMMENT_CHARS } from '../lark-doc-comments.mjs';
 
@@ -93,7 +94,7 @@ const MANIFESTS = Object.freeze({
   // key: an uncertain send is never retried.
   email: connectorManifest({
     name: 'email',
-    version: 'imap-smtp-v2',
+    version: EMAIL_VERSION,
     capabilities: ['events', 'actions'],
     actions: {
       'message.reply': { content: ['markdown'], approval: true },

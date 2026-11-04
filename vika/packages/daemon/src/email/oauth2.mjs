@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -42,10 +43,15 @@ function mailTokens(data, previousRefreshToken = '', now = Date.now()) {
 
 // `tenant` and `clientId` are the owner's own Entra application; both end up in
 // a URL, so only characters a tenant or an app id contains may pass.
-function endpoint(oauth2, name) {
+export function endpointFor(oauth2, name) {
   const tenant = String(oauth2?.tenant || 'common').trim();
   const clientId = String(oauth2?.clientId ?? '').trim();
-  if (!/^[A-Za-z0-9.-]+$/.test(tenant)) throw new Error('OAuth2 tenant is invalid');
+  // `.` and `..` are path segments, not tenants: they pass the character class
+  // and then the URL quietly loses the tenant entirely. A tenant has to have a
+  // name in it, so the dots may not be all of it.
+  if (!/^[A-Za-z0-9.-]+$/.test(tenant) || !/[A-Za-z0-9]/.test(tenant)) {
+    throw new Error('OAuth2 tenant is invalid');
+  }
   if (!/^[A-Za-z0-9._-]+$/.test(clientId)) throw new Error('OAuth2 client ID is invalid');
   return { clientId, url: `${AUTHORITY}/${tenant}/oauth2/v2.0/${name}` };
 }
@@ -74,24 +80,21 @@ async function post(fetchImpl, url, form) {
 
 // What the owner has to do differs by code, so keep the code and the first
 // line of Microsoft's description; the rest is stack noise.
-function failure(data, status) {
+function failure(data) {
   const code = String(data?.error ?? 'unknown');
   const description = String(data?.error_description ?? '').split('\n')[0].slice(0, 400);
   if (description.includes('AADSTS65001')) {
     return new Error('Microsoft sign-in needs an administrator to consent to '
       + 'IMAP.AccessAsUser.All and SMTP.Send for this application (AADSTS65001)');
   }
-  const error = new Error(`Microsoft sign-in failed (${code}${description ? `: ${description}` : ''})`);
-  error.code = code;
-  error.status = status;
-  return error;
+  return new Error(`Microsoft sign-in failed (${code}${description ? `: ${description}` : ''})`);
 }
 
 // Starts a device-code sign-in: the address and the short code to type there.
 export async function requestDeviceCode(oauth2, { fetch: fetchImpl = globalThis.fetch, now = Date.now } = {}) {
-  const { clientId, url } = endpoint(oauth2, 'devicecode');
+  const { clientId, url } = endpointFor(oauth2, 'devicecode');
   const { ok, status, data } = await post(fetchImpl, url, { client_id: clientId, scope: SCOPE });
-  if (!ok) throw failure(data, status);
+  if (!ok) throw failure(data);
   const verificationUri = String(data.verification_uri ?? data.verification_url ?? '');
   if (!data.device_code || !data.user_code || !verificationUri) {
     throw new Error('Microsoft sign-in did not return a device code');
@@ -114,7 +117,7 @@ export async function waitForDeviceCode(oauth2, code, {
     timer.unref?.();
   }),
 } = {}) {
-  const { clientId, url } = endpoint(oauth2, 'token');
+  const { clientId, url } = endpointFor(oauth2, 'token');
   let intervalMs = Math.max(1_000, Number(code.intervalMs) || 5_000);
   for (;;) {
     if (now() >= code.expiresAt) throw new Error('The Microsoft sign-in code expired; start the sign-in again');
@@ -127,7 +130,7 @@ export async function waitForDeviceCode(oauth2, code, {
     if (ok) return mailTokens(data, '', now());
     if (data?.error === 'authorization_pending') continue;
     if (data?.error === 'slow_down') { intervalMs += 5_000; continue; }
-    throw failure(data, status);
+    throw failure(data);
   }
 }
 
@@ -136,7 +139,7 @@ export async function waitForDeviceCode(oauth2, code, {
 export async function refreshAccessToken(oauth2, { fetch: fetchImpl = globalThis.fetch, now = Date.now } = {}) {
   const refreshToken = String(oauth2?.refreshToken ?? '').trim();
   if (!refreshToken) throw new Error('OAuth2 refresh token is missing');
-  const { clientId, url } = endpoint(oauth2, 'token');
+  const { clientId, url } = endpointFor(oauth2, 'token');
   const { ok, status, data } = await post(fetchImpl, url, {
     grant_type: 'refresh_token',
     client_id: clientId,
@@ -147,7 +150,7 @@ export async function refreshAccessToken(oauth2, { fetch: fetchImpl = globalThis
     if (data?.error === 'invalid_grant') {
       throw new Error('The Microsoft sign-in expired; authorize the mailbox again with `vika login email`');
     }
-    throw failure(data, status);
+    throw failure(data);
   }
   return mailTokens(data, refreshToken, now());
 }
@@ -157,7 +160,10 @@ export async function refreshAccessToken(oauth2, { fetch: fetchImpl = globalThis
 export function writePrivateJson(file, value) {
   const directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.tmp`);
+  // `mode` only applies when the directory is created; one that already exists
+  // keeps whatever permissions it had, so the file's neighbours stay readable.
+  try { fs.chmodSync(directory, 0o700); } catch {}
+  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`);
   try {
     fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     fs.chmodSync(temporary, 0o600);

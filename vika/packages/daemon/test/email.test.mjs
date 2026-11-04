@@ -13,9 +13,9 @@ import { accountTag, credentialSource, loadAccount } from '../src/email/account.
 import { EmailClient } from '../src/email/client.mjs';
 import { EmailState } from '../src/email/state.mjs';
 import { ImapAuthError, ImapConnection, MailboxUnavailableError, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
-import { refreshAccessToken, requestDeviceCode, waitForDeviceCode } from '../src/email/oauth2.mjs';
-import { safeError } from '../src/logger.mjs';
-import { verifySmtp } from '../src/email/smtp.mjs';
+import { endpointFor, refreshAccessToken, requestDeviceCode, waitForDeviceCode, writePrivateJson, xoauth2 } from '../src/email/oauth2.mjs';
+import { redactSensitive, safeError } from '../src/logger.mjs';
+import { SmtpAuthError, verifySmtp } from '../src/email/smtp.mjs';
 import { buildReply, htmlToText, isOwnMessageId, parseAddresses, parseMail, replyMessageId } from '../src/email/mime.mjs';
 import { normalizeEvent } from '../src/event.mjs';
 import { OVConnection } from '../src/ov-connection.mjs';
@@ -1127,9 +1127,12 @@ describe('retries are safe or they are not made', () => {
     const error = await client.deliver({ from: ME, recipients: ['alice@example.com'],
       raw: 'From: me@example.com\r\nTo: alice@example.com\r\n\r\nhi' }).catch((caught) => caught);
     assert.ok(error, 'the send must report the failure');
-    assert.equal(error.uncertainDelivery, true);
-    // It was offered exactly once: a retry could have sent a second copy.
-    assert.equal(smtp.bodies, 1);
+    // The observable contract: it was offered exactly once. A retry could have
+    // sent a second copy, and SMTP has no idempotency key to undo it.
+    assert.equal(smtp.bodies, 1, 'a send whose body went out was retried');
+    // And it is not reported as an authentication failure, which is the one
+    // kind this Connector retries.
+    assert.ok(!(error instanceof SmtpAuthError), 'an uncertain delivery was reported as a sign-in failure');
   });
 });
 
@@ -2070,5 +2073,83 @@ describe('what a fresh token cannot fix is never retried', () => {
     assert.ok(imap.state.commands.includes('AUTHENTICATE'),
       'the AUTHENTICATE command was never sent');
     assert.deepEqual(imap.state.auths, ['token-1'], 'the token was never accepted');
+  });
+});
+
+// An account file holds a refresh token, so the directory around it has to be
+// as private as the file. `mkdirSync`'s mode only applies when the directory is
+// created, which leaves one that already existed at whatever it was.
+describe('the account file and its directory are private', () => {
+  it('tightens a directory that was already there', (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-dir-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    fs.chmodSync(directory, 0o777);
+    const file = path.join(directory, 'account.json');
+    writePrivateJson(file, { address: ME });
+    assert.equal(fs.statSync(directory).mode & 0o777, 0o700, 'the directory kept wider permissions');
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  });
+
+  it('rejects a tenant that would collapse the endpoint path', () => {
+    // An empty tenant means `common`, which is a real endpoint; these are the
+    // ones that pass the character class and then vanish from the path.
+    for (const tenant of ['..', '.', '../common', '...']) {
+      assert.throws(() => endpointFor({ tenant, clientId: 'app-id' }, 'token'),
+        /tenant is invalid/, `tenant ${JSON.stringify(tenant)} was accepted`);
+    }
+    // And the real ones still work.
+    assert.match(endpointFor({ tenant: 'common', clientId: 'app-id' }, 'token').url,
+      /\/common\/oauth2\/v2.0\/token$/);
+    assert.match(endpointFor({ tenant: 'contoso.onmicrosoft.com', clientId: 'app-id' }, 'token').url,
+      /\/contoso\.onmicrosoft\.com\/oauth2\/v2\.0\/token$/);
+  });
+});
+
+// A server, or a middlebox in front of one, can accept the connection and then
+// say nothing. Without a timeout the worker waits forever and every later
+// attempt piles up behind it; a refused connection must also come back at once
+// rather than hanging.
+describe('a connection that never answers does not hang', () => {
+  // The step timeout is a minute, so this case is slow by nature; it is worth
+  // it because the failure mode is "never returns" rather than "wrong answer".
+  it('gives up on a server that accepts and stays silent', { timeout: 90_000 }, async (t) => {
+    const silent = net.createServer(() => { /* accept, never greet */ });
+    await new Promise((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    t.after(() => silent.close());
+    const error = await verifySmtp({ host: '127.0.0.1', port: silent.address().port, secure: true,
+      user: ME, password: PASSWORD, connectTls: plainTls }).catch((caught) => caught);
+    assert.match(error.message, /did not answer in time|timed out/);
+  });
+
+  it('reports a refused connection instead of waiting', async (t) => {
+    // Grab a port and give it back, so nothing is listening on it.
+    const spare = net.createServer();
+    await new Promise((resolve) => spare.listen(0, '127.0.0.1', resolve));
+    const port = spare.address().port;
+    await new Promise((resolve) => spare.close(resolve));
+    const error = await verifySmtp({ host: '127.0.0.1', port, secure: true, user: ME, password: PASSWORD,
+      connectTls: plainTls }).catch((caught) => caught);
+    assert.match(error.message, /ECONNREFUSED|connect/i);
+  });
+});
+
+// The XOAUTH2 string handed to a server is base64 of the login name and the
+// access token, so it reads as an opaque blob to the keyword rules and decodes
+// back into a usable credential. Nothing logs one today; this is the layer that
+// keeps it that way if something ever does.
+describe('a SASL XOAUTH2 string is redacted like the token it carries', () => {
+  it('redacts the blob and leaves the rest of the line', () => {
+    const token = 'secret-access-token-9f3a';
+    const sasl = xoauth2('me@example.com', token);
+    const cleaned = redactSensitive(`C: A01 AUTHENTICATE XOAUTH2 ${sasl}`);
+    assert.ok(!cleaned.includes(sasl), `the SASL string survived: ${cleaned}`);
+    // The decoded form carries the token, so it must not be recoverable either.
+    assert.ok(!Buffer.from(sasl, 'base64').toString('utf8').startsWith('user=') || !cleaned.includes(sasl));
+    assert.match(cleaned, /AUTHENTICATE XOAUTH2 \[REDACTED\]/);
+    assert.match(cleaned, /^C: A01 /, 'the line lost its context');
+  });
+
+  it('still redacts the token when it is written out plainly', () => {
+    assert.ok(!redactSensitive('auth=Bearer secret-access-token-9f3a').includes('secret-access-token-9f3a'));
   });
 });

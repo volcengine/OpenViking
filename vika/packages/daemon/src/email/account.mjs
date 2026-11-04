@@ -11,6 +11,11 @@ import { verifySmtp } from './smtp.mjs';
 // The mailbox the Connector reads. One mailbox per instance.
 export const MAILBOX = 'INBOX';
 
+// What this Connector speaks. The manifest and the check it answers both name
+// it, so it is written once: a mismatch would say the running worker is not the
+// one the manifest describes.
+export const EMAIL_VERSION = 'imap-smtp-v2';
+
 // The account file: { address, imap: { host, port }, smtp: { host, port,
 // secure? }, username?, name? } plus either `password`, a client (app)
 // password, or `oauth2: { tenant, clientId, refreshToken }` for a mailbox whose
@@ -31,6 +36,13 @@ export function loadAccount(file) {
   const oauth2 = value?.oauth2 && typeof value.oauth2 === 'object' ? accountOAuth2(value.oauth2) : null;
   if (!oauth2 && (typeof value.password !== 'string' || !value.password)) {
     throw new Error('email config needs a password or oauth2');
+  }
+  // A file carried over from a password account and given an `oauth2` block is
+  // easy to get wrong by leaving the old `password` in place. Saying so beats
+  // quietly using one of them: the unused credential is a sign the file is not
+  // what its owner thinks it is.
+  if (oauth2 && typeof value.password === 'string' && value.password) {
+    throw new Error('email config has both a password and oauth2; keep only the one this mailbox signs in with');
   }
   const server = (key) => {
     const host = String(value[key]?.host ?? '').trim();
