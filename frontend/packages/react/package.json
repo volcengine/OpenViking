@@ -35,6 +35,11 @@
       "import": "./dist/components/file-preview.js"
     },
     "./components/file-preview/style.css": "./dist/components/file-preview/style.css",
+    "./components/tui": {
+      "types": "./dist/components/tui/tui.d.ts",
+      "import": "./dist/components/tui.js"
+    },
+    "./components/tui/style.css": "./dist/components/tui/style.css",
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./modules/file-browser": {
