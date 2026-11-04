@@ -387,7 +387,7 @@ class ArtifactRelationsStore:
     async def claim(self, account_id: str, to: str) -> ArtifactRelationsState:
         """Claim a queued request. Worker execution serialization belongs to the queue layer."""
         async with self._locked(account_id, to) as (directory, ctx, target):
-            state, _ = await self._publication(directory, ctx, target)
+            state, _ = await self._publication(directory, ctx, target, include_graph=False)
             if state is None or state.status != "building" or state.phase != "queued":
                 raise ArtifactRelationsStoreError("No queued build to claim")
             self._check_owner(target, state.compile_operation_id)

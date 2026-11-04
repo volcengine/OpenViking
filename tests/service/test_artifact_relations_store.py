@@ -305,6 +305,22 @@ async def test_pending_does_not_change_claimed_snapshot(backend):
 
 
 @pytest.mark.asyncio
+async def test_claim_does_not_load_graph_or_sources(backend):
+    store, _ = stores(backend)
+    await publish(store)
+    await store.request(ACCOUNT, TO, "B")
+    backend.reads.clear()
+
+    claimed = await store.claim(ACCOUNT, TO)
+
+    assert claimed.phase == "computing"
+    assert not any(
+        path.endswith(("/artifact_relations.json", "/relation_sources.json"))
+        for path in backend.reads
+    )
+
+
+@pytest.mark.asyncio
 async def test_new_compile_rejects_old_worker(backend):
     one, two = stores(backend)
     await one.request(ACCOUNT, TO, "A")
