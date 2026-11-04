@@ -1,4 +1,4 @@
-import { adminGroupsQuery } from '#/shared/api/admin-membership-queries'
+import { adminGroupsQuery } from './admin-membership-queries'
 import type { AdminConnection } from '#/shared/api/admin'
 import { fetchAdminGroupMembers } from '#/shared/api/admin'
 import { useQueries, useQuery } from '@tanstack/react-query'

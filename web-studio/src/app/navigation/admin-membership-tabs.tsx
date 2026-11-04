@@ -2,7 +2,7 @@ import { useAppConnection } from '#/features/connection/hooks/use-app-connection
 import {
   adminGroupsQuery,
   adminUsersQuery,
-} from '#/shared/api/admin-membership-queries'
+} from '#/features/admin/users/lib/admin-membership-queries'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { UserRoundIcon, UsersRoundIcon } from 'lucide-react'

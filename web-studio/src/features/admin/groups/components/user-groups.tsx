@@ -1,4 +1,4 @@
-import { adminGroupsQuery } from '#/shared/api/admin-membership-queries'
+import { adminGroupsQuery } from '#/features/admin/users/lib/admin-membership-queries'
 import type { AdminConnection } from '#/shared/api/admin'
 import {
   createAdminGroup,

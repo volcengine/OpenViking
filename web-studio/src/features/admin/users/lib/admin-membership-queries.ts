@@ -1,5 +1,5 @@
-import { fetchAdminGroups, fetchAdminUsersPage } from './admin'
-import type { AdminConnection } from './admin'
+import { fetchAdminGroups, fetchAdminUsersPage } from '#/shared/api/admin'
+import type { AdminConnection } from '#/shared/api/admin'
 
 export const DEFAULT_ADMIN_USER_PAGE = { page: 1, pageSize: 20, search: '' }
 

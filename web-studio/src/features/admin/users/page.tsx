@@ -1,4 +1,4 @@
-import { adminUsersQuery } from '#/shared/api/admin-membership-queries'
+import { adminUsersQuery } from './lib/admin-membership-queries'
 import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { ErrorMessage } from '#/shared/components/error-message'
 import { showErrorToast } from '#/shared/lib/error-toast'

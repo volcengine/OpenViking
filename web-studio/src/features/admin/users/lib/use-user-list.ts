@@ -1,4 +1,4 @@
-import { DEFAULT_ADMIN_USER_PAGE } from '#/shared/api/admin-membership-queries'
+import { DEFAULT_ADMIN_USER_PAGE } from './admin-membership-queries'
 import { useState } from 'react'
 
 export function useUserList(scope: string) {
