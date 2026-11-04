@@ -12,9 +12,22 @@ from openviking_gateway.protocols import SSEDecoder
 from openviking_gateway.tool_loop import HiddenToolLoop
 from openviking_gateway.tool_protocols import ResponseCapture
 from openviking_gateway.tool_protocols.common import ToolLoopError, ToolRound, sse
-from openviking_gateway.tool_protocols.responses import ResponsesProtocol
+from openviking_gateway.tool_protocols.responses import ResponsesProtocol, response_error_code
 
 PATHS = {"responses": "/v1/responses", "anthropic": "/v1/messages"}
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        ({"code": "invalid_prompt"}, "invalid_prompt"),
+        ({"code": "upstream_rate_limit"}, "rate_limit_exceeded"),
+        ({"type": "rate_limit_error"}, "rate_limit_exceeded"),
+        ({"code": "provider_capacity"}, "server_error"),
+    ],
+)
+def test_responses_upstream_error_code_is_schema_compatible(detail, expected):
+    assert response_error_code(detail) == expected
 
 
 def test_responses_stream_uses_closed_items_when_terminal_output_is_empty():
@@ -736,7 +749,7 @@ async def test_native_stream_failure_uses_protocol_terminal(running_gateway, pro
         assert failed["status"] == "failed"
         if failure == "error":
             assert failed["error"] == {
-                "code": "upstream_rate_limit",
+                "code": "rate_limit_exceeded",
                 "message": "upstream failure",
             }
         else:
@@ -989,7 +1002,7 @@ async def test_native_events_arriving_together_leave_together(protocol):
     if protocol == "responses":
         assert terminal["type"] == "response.failed"
         assert terminal["response"]["error"] == {
-            "code": "overloaded_error",
+            "code": "server_error",
             "message": "Model stream failed",
         }
     else:
@@ -1054,7 +1067,7 @@ def test_upstream_stream_error_uses_protocol_terminator(protocol):
                 "model": "model",
                 "status": "failed",
                 "error": {
-                    "code": "upstream_rate_limit",
+                    "code": "rate_limit_exceeded",
                     "message": "request to http://internal.example failed",
                 },
                 "incomplete_details": None,

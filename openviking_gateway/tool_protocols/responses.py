@@ -23,6 +23,45 @@ from .common import (
 CLIENT_CALLS = {"function_call", "custom_tool_call"}
 TOOL_OUTPUTS = {"function_call_output", "custom_tool_call_output"}
 ANNOUNCEMENTS = {"response.created", "response.in_progress"}
+RESPONSE_ERROR_CODES = frozenset(
+    {
+        "server_error",
+        "rate_limit_exceeded",
+        "invalid_prompt",
+        "data_residency_mismatch",
+        "bio_policy",
+        "misalignment_policy_violation",
+        "vector_store_timeout",
+        "invalid_image",
+        "invalid_image_format",
+        "invalid_base64_image",
+        "invalid_image_url",
+        "image_too_large",
+        "image_too_small",
+        "image_parse_error",
+        "image_content_policy_violation",
+        "invalid_image_mode",
+        "image_file_too_large",
+        "unsupported_image_media_type",
+        "empty_image_file",
+        "failed_to_download_image",
+        "image_file_not_found",
+    }
+)
+RATE_LIMIT_ERROR_ALIASES = frozenset(
+    {"429", "rate_limit", "rate_limit_error", "too_many_requests", "upstream_rate_limit"}
+)
+
+
+def response_error_code(detail):
+    """Map provider errors into the Responses API's ResponseError code enum."""
+    candidates = (detail.get("code"), detail.get("type"))
+    if any(value in RATE_LIMIT_ERROR_ALIASES for value in candidates):
+        return "rate_limit_exceeded"
+    return next(
+        (value for value in candidates if value in RESPONSE_ERROR_CODES),
+        "server_error",
+    )
 
 
 class ResponsesProtocol(ToolProtocol):
@@ -334,9 +373,8 @@ class ResponsesProtocol(ToolProtocol):
     def upstream_error(self, event) -> list[StreamEvent]:
         detail = event.get("error")
         detail = detail if isinstance(detail, dict) else event
-        code = detail.get("code") or detail.get("type") or "server_error"
         message = detail.get("message") or "Model stream failed"
-        return self.failed(code, message)
+        return self.failed(response_error_code(detail), message)
 
     def failed(self, code, message) -> list[StreamEvent]:
         return [
