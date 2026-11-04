@@ -12,6 +12,7 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor_v3 import SessionCompressorV3
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
@@ -334,6 +335,12 @@ async def test_commit_extracts_once_and_persists_precise_case_links(
         assert targets == {trajectories[name].uri for name in names} | {
             f"{runtime.trainer.policy_set.root_uri}/{name}.md" for name in names
         }
+        case_body = files[runtime.case_uris[case.name]].content
+        linked_section = case_body.split("## Linked Experiences", 1)[1]
+        assert {
+            LinkRenderer.normalize_markdown_target(link.target)
+            for link in LinkRenderer.iter_markdown_links(linked_section)
+        } == {f"../experiences/{name}.md" for name in names}
         assert all(
             any(link["from_uri"] == runtime.case_uris[case.name] for link in files[uri].backlinks)
             for uri in targets

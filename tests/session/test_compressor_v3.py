@@ -1594,6 +1594,7 @@ async def test_v3_training_commits_snapshot_without_rewriting_link_endpoints(mon
             rollout=None,
             batch_finalizer=None,
         ):
+            nonlocal files_after_apply
             del gradients, analysis, rollout
             plan = PolicyUpdatePlan(
                 items=[
@@ -1640,6 +1641,17 @@ async def test_v3_training_commits_snapshot_without_rewriting_link_endpoints(mon
                 ),
                 metadata={},
             )
+            fs.files[exp_uri] = MemoryFileUtils.write(
+                MemoryFile(
+                    uri=exp_uri,
+                    content="new exp content",
+                    memory_type="experiences",
+                    extra_fields={"experience_name": "booking_duplicate_handling"},
+                    links=[link.model_dump() for link in plan.items[0].links],
+                )
+            )
+            fs.files.pop(deleted_exp_uri, None)
+            files_after_apply = dict(fs.files)
             if batch_finalizer is not None:
                 await batch_finalizer(result)
             return result
@@ -1684,7 +1696,7 @@ async def test_v3_training_commits_snapshot_without_rewriting_link_endpoints(mon
         ]
 
     fs = FakeFS()
-    files_after_apply = dict(fs.files)
+    files_after_apply = None
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
@@ -1706,7 +1718,7 @@ async def test_v3_training_commits_snapshot_without_rewriting_link_endpoints(mon
     )
 
     assert result["submitted"] == 1
-    # Link endpoints are persisted inside their owning apply, before this callback.
+    # Compare against the trainer's simulated apply, not the initial files.
     assert fs.files == files_after_apply
     assert fs.commits == [
         {
