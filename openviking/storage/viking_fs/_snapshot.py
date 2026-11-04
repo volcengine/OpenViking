@@ -799,8 +799,9 @@ class _SnapshotMixin:
         dirs: List[str],
         base: Optional[str],
         head: str,
+        include_blob_oids: bool = False,
         ctx: Optional[RequestContext] = None,
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """List files changed under ``dirs`` between two commits.
 
         ``base=None`` treats every file as added. Requires read access only;
@@ -809,18 +810,28 @@ class _SnapshotMixin:
         """
         real_ctx = self._ctx_or_default(ctx)
         await self._ensure_access_many(dirs, real_ctx, action=AclAction.READ)
-        changes = await self._async_agfs.run(
-            "git_diff_paths",
-            account=real_ctx.account_id,
-            base=base,
-            head=head,
-            paths=[self._uri_to_tree_path(uri, ctx=real_ctx) for uri in dirs],
-        )
-        return [
-            {"uri": self._tree_path_to_uri(path), "change_type": change}
-            for path, change in changes
-            if path.rsplit("/", 1)[-1] not in _DERIVED_FILE_NAMES
-        ]
+        kwargs = {
+            "account": real_ctx.account_id,
+            "base": base,
+            "head": head,
+            "paths": [self._uri_to_tree_path(uri, ctx=real_ctx) for uri in dirs],
+        }
+        if include_blob_oids:
+            kwargs["include_blob_oids"] = True
+        changes = await self._async_agfs.run("git_diff_paths", **kwargs)
+        result = []
+        for change in changes:
+            path, change_type = change[:2]
+            if path.rsplit("/", 1)[-1] in _DERIVED_FILE_NAMES:
+                continue
+            item = {
+                "uri": self._tree_path_to_uri(path),
+                "change_type": change_type,
+            }
+            if include_blob_oids:
+                item["blob_oid"] = change[2]
+            result.append(item)
+        return result
 
     def _collect_restore_vector_tasks(
         self,

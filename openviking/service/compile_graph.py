@@ -276,22 +276,34 @@ class ArtifactRelationGraph:
         account_id: str,
         to: str,
         operation_id: str,
-        snapshot: str,
         uri: str,
-        ctx: RequestContext,
         content: bytes | None = None,
     ) -> None:
-        """Keep a validated-by-OID candidate in memory for Compile finalization."""
+        """Parse Compile bytes now and validate them against the final tree later."""
         if not uri.lower().endswith(".md") or self._excluded(uri, None):
             return
+        key = (account_id, to, operation_id)
         if content is None:
+            pages = self._compile_pages.get(key)
+            if pages is not None:
+                previous = pages.pop(uri, None)
+                if isinstance(previous, dict):
+                    self._compile_relation_counts[key] = max(
+                        0,
+                        self._compile_relation_counts.get(key, 0)
+                        - len(previous.get("related_pages") or ()),
+                    )
+                    self._compile_byte_counts[key] = max(
+                        0,
+                        self._compile_byte_counts.get(key, 0)
+                        - int(previous.get("size") or 0),
+                    )
             return
         blob_oid = hashlib.sha1(
             f"blob {len(content)}\0".encode("ascii") + content,
             usedforsecurity=False,
         ).hexdigest()
         size = len(content)
-        key = (account_id, to, operation_id)
         if key in self._compile_hint_overflow:
             return
         pages = self._compile_pages.setdefault(key, {})
@@ -317,7 +329,6 @@ class ArtifactRelationGraph:
         )
         pages[uri] = {
             "blob_oid": blob_oid,
-            "snapshot_id": snapshot,
             "size": size,
             "related_pages": sorted(related_pages),
             "relations_overflow": overflow,
@@ -463,7 +474,13 @@ class ArtifactRelationGraph:
         if base == head:
             return graph
 
-        changes = await self._fs.diff_paths(dirs=[to], base=base, head=head, ctx=ctx)
+        changes = await self._fs.diff_paths(
+            dirs=[to],
+            base=base,
+            head=head,
+            include_blob_oids=True,
+            ctx=ctx,
+        )
         files = (
             {node["uri"] for node in graph["nodes"] if not node["uri"].endswith("/")}
             if base
@@ -471,6 +488,7 @@ class ArtifactRelationGraph:
         )
         pages = dict(sources["pages"]) if base else {}
         page_sizes = dict(sources["page_sizes"]) if base else {}
+        head_blob_oids: dict[str, str] = {}
         changed_markdown: list[str] = []
         for change in changes:
             uri = change["uri"]
@@ -482,6 +500,8 @@ class ArtifactRelationGraph:
             files.add(uri)
             if uri.lower().endswith(".md"):
                 changed_markdown.append(uri)
+                if change.get("blob_oid"):
+                    head_blob_oids[uri] = change["blob_oid"]
             else:
                 pages.pop(uri, None)
                 page_sizes.pop(uri, None)
@@ -510,18 +530,12 @@ class ArtifactRelationGraph:
                 candidate_valid = False
                 if (
                     isinstance(candidate, dict)
-                    and candidate.get("snapshot_id")
+                    and isinstance(candidate.get("blob_oid"), str)
+                    and candidate["blob_oid"]
+                    and candidate.get("blob_oid") == head_blob_oids.get(uri)
                     and not candidate.get("relations_overflow")
                 ):
-                    later_changes = await self._fs.diff_paths(
-                        dirs=[uri],
-                        base=candidate["snapshot_id"],
-                        head=head,
-                        ctx=ctx,
-                    )
-                    candidate_valid = not any(
-                        change["uri"] == uri for change in later_changes
-                    )
+                    candidate_valid = True
                 if candidate_valid and not isinstance(candidate.get("related_pages"), list):
                     candidate_valid = False
                 if candidate_valid:

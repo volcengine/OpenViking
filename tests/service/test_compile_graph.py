@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -15,7 +16,7 @@ from openviking.service.compile_graph import (
     ArtifactGraphTooLargeError,
     ArtifactRelationGraph,
 )
-from openviking.service.compile_targets import CompileStateStore
+from openviking.service.compile_targets import CompileStateStore, CompileVersions
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -154,11 +155,18 @@ class _SnapshotGraphFs(_GraphFs):
         self.diff_calls: list[tuple[str | None, str, tuple[str, ...]]] = []
         self.read_limits: list[tuple[str, int | None]] = []
 
-    async def diff_paths(self, *, dirs, base, head, ctx):
+    async def diff_paths(self, *, dirs, base, head, ctx, include_blob_oids=False):
         del ctx
         key = (base, head, tuple(dirs))
         self.diff_calls.append(key)
-        return self.diffs.get(key, [])
+        changes = [dict(change) for change in self.diffs.get(key, [])]
+        if include_blob_oids:
+            for change in changes:
+                if change["change_type"] == "deleted" or change.get("blob_oid"):
+                    continue
+                blob = self.blobs.get((head, change["uri"]))
+                change["blob_oid"] = blob.get("oid") if blob else None
+        return changes
 
     async def show_blob_raw(
         self,
@@ -424,9 +432,7 @@ async def test_compile_hint_parses_written_bytes_without_snapshot_read() -> None
         "default",
         target,
         "op",
-        "snapshot",
         page,
-        _ctx(),
         content,
     )
 
@@ -435,7 +441,6 @@ async def test_compile_hint_parses_written_bytes_without_snapshot_read() -> None
             f"blob {len(content)}\0".encode("ascii") + content,
             usedforsecurity=False,
         ).hexdigest(),
-        "snapshot_id": "snapshot",
         "size": len(content),
         "related_pages": [related],
         "relations_overflow": False,
@@ -459,13 +464,56 @@ async def test_compile_hint_without_written_bytes_does_not_read_snapshot() -> No
         "default",
         target,
         "op",
-        "snapshot",
         page,
-        _ctx(),
     )
 
     assert fs.reads == []
     assert graph._compile_pages == {}
+
+
+@pytest.mark.asyncio
+async def test_unversioned_compile_write_captures_hint_before_return() -> None:
+    target = "viking://resources/wiki"
+    page = f"{target}/page.md"
+    record = {"to": target, "active_operation_id": "op"}
+    run = {
+        "operation_id": "op",
+        "started_at": 1.0,
+        "finished_at": None,
+        "meta": {"target_base": "base"},
+    }
+    store = SimpleNamespace(
+        get=AsyncMock(return_value=record),
+        get_operation=AsyncMock(return_value=run),
+        mark_content_changed=AsyncMock(),
+    )
+    fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        read_file_bytes=AsyncMock(side_effect=[b"before", b"[related](related.md)"]),
+    )
+    versions = CompileVersions(store, fs)
+    versions.containing_targets = AsyncMock(return_value=[record])
+    versions._commit = AsyncMock()
+    versions.artifact_graph = SimpleNamespace(capture_compile_page=AsyncMock())
+    write = AsyncMock(return_value={"written_bytes": 22})
+
+    result = await versions.record_write(
+        [page],
+        _ctx(),
+        "compile",
+        write=write,
+        record_version=False,
+    )
+
+    assert result == {"written_bytes": 22}
+    versions.artifact_graph.capture_compile_page.assert_awaited_once_with(
+        "default",
+        target,
+        "op",
+        page,
+        b"[related](related.md)",
+    )
+    versions._commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -480,17 +528,15 @@ async def test_reconcile_uses_compile_hint_then_updates_incrementally() -> None:
     fs = _SnapshotGraphFs(
         {
             (None, "h1", (target,)): [
-                {"uri": a, "change_type": "added"},
+                {"uri": a, "change_type": "added", "blob_oid": "oid-a1"},
                 {"uri": b, "change_type": "added"},
                 {"uri": asset, "change_type": "added"},
             ],
-            ("hint-a1", "h1", (a,)): [],
             ("h1", "h2", (target,)): [
-                {"uri": a, "change_type": "modified"},
+                {"uri": a, "change_type": "modified", "blob_oid": "oid-a2"},
                 {"uri": b, "change_type": "deleted"},
                 {"uri": c, "change_type": "added"},
             ],
-            ("hint-a2", "h2", (a,)): [],
         },
         {
             ("h1", b): {"oid": "oid-b1", "size": 3, "bytes": b"# B"},
@@ -512,7 +558,6 @@ async def test_reconcile_uses_compile_hint_then_updates_incrementally() -> None:
         parsed_pages={
             a: {
                 "blob_oid": "oid-a1",
-                "snapshot_id": "hint-a1",
                 "size": 9,
                 "related_pages": [b],
             }
@@ -537,7 +582,6 @@ async def test_reconcile_uses_compile_hint_then_updates_incrementally() -> None:
         parsed_pages={
             a: {
                 "blob_oid": "oid-a2",
-                "snapshot_id": "hint-a2",
                 "size": 8,
                 "related_pages": [c],
             }
@@ -568,11 +612,8 @@ async def test_reconcile_rereads_snapshot_when_compile_hint_changed() -> None:
     fs = _SnapshotGraphFs(
         {
             (None, "head", (target,)): [
-                {"uri": page, "change_type": "added"},
+                {"uri": page, "change_type": "added", "blob_oid": "final-oid"},
                 {"uri": actual, "change_type": "added"},
-            ],
-            ("hint", "head", (page,)): [
-                {"uri": page, "change_type": "modified"},
             ],
         },
         {
@@ -599,7 +640,6 @@ async def test_reconcile_rereads_snapshot_when_compile_hint_changed() -> None:
         parsed_pages={
             page: {
                 "blob_oid": "stale-oid",
-                "snapshot_id": "hint",
                 "size": 8,
                 "related_pages": [],
             }
@@ -741,7 +781,6 @@ async def test_compile_hint_overflow_rereads_bounded_snapshot() -> None:
                 {"uri": page, "change_type": "added"},
                 {"uri": related, "change_type": "added"},
             ],
-            ("hint", "head", (page,)): [],
         },
         {
             ("head", page): {
@@ -765,9 +804,7 @@ async def test_compile_hint_overflow_rereads_bounded_snapshot() -> None:
         "default",
         target,
         "op",
-        "hint",
         page,
-        _ctx(),
         hint,
     )
     captured = graph._compile_pages[("default", target, "op")][page]

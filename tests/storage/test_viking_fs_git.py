@@ -75,6 +75,59 @@ async def test_show_blob_raw_passes_blob_size_limit():
     assert vfs.blob_read_limits == [123]
 
 
+async def test_diff_paths_optionally_returns_blob_oids():
+    class RecordingAGFS:
+        def __init__(self):
+            self.calls = []
+
+        async def run(self, operation, **kwargs):
+            self.calls.append((operation, kwargs))
+            return [
+                ("resources/wiki/a.md", "modified", "a" * 40),
+                ("resources/wiki/deleted.md", "deleted", None),
+            ]
+
+    class DiffPathsVikingFS:
+        def __init__(self):
+            self._async_agfs = RecordingAGFS()
+
+        def _ctx_or_default(self, ctx):
+            return ctx
+
+        async def _ensure_access_many(self, uris, ctx, *, action):
+            pass
+
+        def _uri_to_tree_path(self, uri, *, ctx):
+            return uri.removeprefix("viking://")
+
+        def _tree_path_to_uri(self, path):
+            return f"viking://{path}"
+
+    vfs = DiffPathsVikingFS()
+    changes = await VikingFS.diff_paths(
+        vfs,
+        dirs=["viking://resources/wiki"],
+        base="base",
+        head="head",
+        include_blob_oids=True,
+        ctx=_request_context(),
+    )
+
+    assert changes == [
+        {
+            "uri": "viking://resources/wiki/a.md",
+            "change_type": "modified",
+            "blob_oid": "a" * 40,
+        },
+        {
+            "uri": "viking://resources/wiki/deleted.md",
+            "change_type": "deleted",
+            "blob_oid": None,
+        },
+    ]
+    assert vfs._async_agfs.calls[0][1]["include_blob_oids"] is True
+
+
 async def test_diff_reads_blobs_from_resolved_commit_oids():
     from_oid = "a" * 40
     to_oid = "b" * 40

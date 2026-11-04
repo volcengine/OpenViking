@@ -484,6 +484,7 @@ pub struct DiffPathsRequest {
     pub base: Option<String>,
     pub head: String,
     pub paths: Vec<String>,
+    pub include_blob_oids: bool,
 }
 
 pub fn parse_diff_paths_request(kwargs: &Bound<PyDict>) -> PyResult<DiffPathsRequest> {
@@ -492,6 +493,7 @@ pub fn parse_diff_paths_request(kwargs: &Bound<PyDict>) -> PyResult<DiffPathsReq
         base: optional_str(kwargs, "base")?,
         head: require_str(kwargs, "head")?,
         paths: optional_string_list(kwargs, "paths")?.unwrap_or_default(),
+        include_blob_oids: optional_bool(kwargs, "include_blob_oids", false)?,
     })
 }
 

@@ -2639,9 +2639,23 @@ class CompileVersions:
                             "version_id": None,
                             "snapshot_id": None,
                         }
-        if not record_version:
-            return written
-        if not changed:
+        if self.artifact_graph is not None:
+            for target_to, targets in changed.items():
+                run = compile_runs.get(target_to)
+                if run is None:
+                    continue
+                for uri in targets:
+                    try:
+                        await self.artifact_graph.capture_compile_page(
+                            ctx.account_id,
+                            target_to,
+                            run["operation_id"],
+                            uri,
+                            current_contents.get(uri),
+                        )
+                    except Exception:
+                        logger.exception("Failed to capture Compile relation hint for %s", uri)
+        if not record_version or not changed:
             return written
         affected_targets = {
             record["to"]
@@ -2677,21 +2691,6 @@ class CompileVersions:
                             "meta": run_entry,
                         },
                     )
-            run = compile_runs.get(target_to)
-            if snapshot and run is not None and self.artifact_graph is not None:
-                for uri in targets:
-                    try:
-                        await self.artifact_graph.capture_compile_page(
-                            ctx.account_id,
-                            target_to,
-                            run["operation_id"],
-                            snapshot,
-                            uri,
-                            ctx,
-                            current_contents.get(uri),
-                        )
-                    except Exception:
-                        logger.exception("Failed to capture Compile relation hint for %s", uri)
         if snapshot:
             for target_to in sorted(affected_targets):
                 record = await self._store.get(ctx.account_id, target_to)

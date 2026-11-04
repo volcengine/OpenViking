@@ -185,6 +185,27 @@ def test_restore_roundtrip(client):
         ("resources/proj/b.md", "deleted"),
         ("resources/proj/c.md", "added"),
     ]
+    a_oid = client.git_show(
+        account=account,
+        target_ref=v2_oid,
+        path="resources/proj/a.md",
+    )["oid"]
+    c_oid = client.git_show(
+        account=account,
+        target_ref=v2_oid,
+        path="resources/proj/c.md",
+    )["oid"]
+    assert client.git_diff_paths(
+        account=account,
+        base=v1_oid,
+        head=v2_oid,
+        paths=["resources/proj"],
+        include_blob_oids=True,
+    ) == [
+        ("resources/proj/a.md", "modified", a_oid),
+        ("resources/proj/b.md", "deleted", None),
+        ("resources/proj/c.md", "added", c_oid),
+    ]
 
     restored = client.git_restore(
         account=account,

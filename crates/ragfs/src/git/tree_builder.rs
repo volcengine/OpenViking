@@ -469,16 +469,16 @@ pub async fn flatten(
     Ok(result)
 }
 
-/// Compare two trees and return `(path, change)` for every changed blob, where
-/// `change` is `"added"`, `"modified"` or `"deleted"`. Subtrees whose oid is
-/// identical on both sides are skipped without loading them. `None` stands for
-/// an empty tree. Paths are relative to the compared trees, sorted.
+/// Compare two trees and return `(path, change, head_oid)` for every changed
+/// blob. `head_oid` is absent for deletions. Subtrees whose oid is identical
+/// on both sides are skipped without loading them. `None` stands for an empty
+/// tree. Paths are relative to the compared trees, sorted.
 pub async fn diff_trees(
     store: &dyn ObjectStore,
     account: &str,
     base: Option<ObjectId>,
     head: Option<ObjectId>,
-) -> Result<Vec<(String, &'static str)>, GitError> {
+) -> Result<Vec<(String, &'static str, Option<ObjectId>)>, GitError> {
     let mut out = Vec::new();
     let mut stack = vec![(String::new(), base, head)];
     while let Some((prefix, base, head)) = stack.pop() {
@@ -515,9 +515,9 @@ pub async fn diff_trees(
                 stack.push((path.clone(), old_tree, new_tree));
             }
             match (pick(&old, false), pick(&new, false)) {
-                (None, Some(_)) => out.push((path, "added")),
-                (Some(_), None) => out.push((path, "deleted")),
-                (Some(a), Some(b)) if a != b => out.push((path, "modified")),
+                (None, Some(oid)) => out.push((path, "added", Some(oid))),
+                (Some(_), None) => out.push((path, "deleted", None)),
+                (Some(a), Some(b)) if a != b => out.push((path, "modified", Some(b))),
                 _ => {}
             }
         }

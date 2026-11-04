@@ -1898,13 +1898,14 @@ impl RAGFSBindingClient {
         &self,
         py: Python<'_>,
         kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Vec<(String, String)>> {
+    ) -> PyResult<Py<PyAny>> {
         let svc = self.git_service.clone().ok_or_else(|| {
             git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
         })?;
         let empty = PyDict::new(py);
         let kw = kwargs.unwrap_or(&empty);
         let req = git::parse_diff_paths_request(kw)?;
+        let include_blob_oids = req.include_blob_oids;
         let resp = py_detach_blocking(py, move || {
             self.rt.block_on(svc.diff_paths(
                 &req.account,
@@ -1914,10 +1915,19 @@ impl RAGFSBindingClient {
             ))
         })
         .map_err(|e| git::map_git_error(py, e))?;
-        Ok(resp
-            .into_iter()
-            .map(|(path, change)| (path, change.to_string()))
-            .collect())
+        let result = PyList::empty(py);
+        for (path, change, blob_oid) in resp {
+            if include_blob_oids {
+                result.append((
+                    path,
+                    change,
+                    blob_oid.map(|oid| oid.to_hex().to_string()),
+                ))?;
+            } else {
+                result.append((path, change))?;
+            }
+        }
+        Ok(result.into_any().unbind())
     }
 
     /// Walk snapshot history, optionally filtered to commits touching paths.

@@ -874,15 +874,16 @@ impl GitService {
     /// List files that changed under `paths` between two commits.
     ///
     /// `base = None` compares against an empty tree, so every file is added.
-    /// Each entry is `(account-relative path, "added" | "modified" | "deleted")`.
-    /// A directory missing from one side counts as an empty tree there.
+    /// Each entry includes the account-relative path, change type and the head
+    /// blob OID. The OID is absent for deletions. A directory missing from one
+    /// side counts as an empty tree there.
     pub async fn diff_paths(
         &self,
         account: &str,
         base: Option<&str>,
         head: &str,
         paths: &[String],
-    ) -> Result<Vec<(String, &'static str)>, GitError> {
+    ) -> Result<Vec<(String, &'static str, Option<ObjectId>)>, GitError> {
         validate_account_id(account)?;
         for path in paths {
             validate_relative_path(path)?;
@@ -907,10 +908,10 @@ impl GitService {
                         .map(|(oid, _)| oid);
                 }
             }
-            for (path, change) in
+            for (path, change, blob_oid) in
                 crate::git::tree_builder::diff_trees(store, account, sides[0], sides[1]).await?
             {
-                out.push((format!("{dir}/{path}"), change));
+                out.push((format!("{dir}/{path}"), change, blob_oid));
             }
         }
         Ok(out)
