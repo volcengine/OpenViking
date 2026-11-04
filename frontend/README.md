@@ -1,6 +1,6 @@
 # OpenViking Frontend
 
-React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. Applications supply business UI, data, authentication, and workflow orchestration. FileTree and FilePreview already have implementations; Tui, VikingBot, ScopeSwitcher, AgentConnect, and Search remain placeholders.
+React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. Applications supply business UI, data, authentication, and workflow orchestration. FileTree and FilePreview provide reusable views, alongside five file-type icons.
 
 Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).
 
@@ -30,7 +30,7 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,tui,viking-bot,scope-switcher,agent-connect}`: props types are public; component implementations follow. `packages/react/src/components/search` ships only its placeholder component, with the props contract still being finalized. See the [module map](./packages/react/README.md#模块目录).
+- `packages/react/src/components/{file-tree,file-preview}`: file-tree interaction and tabbed file-preview modules with public props types. See the [module map](./packages/react/README.md#模块目录).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
 - `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.

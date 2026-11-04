@@ -1,31 +1,26 @@
 # @openviking/react
 
-React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration. FileTree and FilePreview have implementations; Tui, VikingBot, ScopeSwitcher, AgentConnect, and Search remain placeholders.
+React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration. FileTree and FilePreview provide reusable views, alongside five file-type icons.
 
 This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
 ## 模块目录
 
-| 源码目录                                                               | 公开入口                                      | 职责                             |
-| ---------------------------------------------------------------------- | --------------------------------------------- | -------------------------------- |
-| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | 目录树渲染、展开、选中与事件回传 |
-| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | 只读预览状态与扩展页签           |
-| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | 命令输入、执行状态与结果展示     |
-| [components/viking-bot](./src/components/viking-bot/README.md)         | `@openviking/react/components/viking-bot`     | 对话、会话、回复及附件交互       |
-| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | 作用域选择与切换交互             |
-| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Agent 接入步骤、配置说明及状态   |
-| [components/search](./src/components/search/README.md)                 | `@openviking/react/components/search`         | 检索入口、方式切换与高级筛选     |
-| [pages](./src/pages/README.md)                                         | 尚无公开入口                                  | 页面组合、数据获取与处理         |
-| [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)         | 仅包内使用                                    | 跨模块 Hook 与纯工具             |
+| 源码目录                                                           | 公开入口                                    | 职责                             |
+| ------------------------------------------------------------------ | ------------------------------------------- | -------------------------------- |
+| [components/file-tree](./src/components/file-tree/README.md)       | `@openviking/react/components/file-tree`    | 目录树渲染、展开、选中与事件回传 |
+| [components/file-preview](./src/components/file-preview/README.md) | `@openviking/react/components/file-preview` | 只读预览状态与扩展页签           |
+| [pages](./src/pages/README.md)                                     | 尚无公开入口                                | 页面组合、数据获取与处理         |
+| [hooks](./src/hooks/README.md)、[utils](./src/utils/README.md)     | 仅包内使用                                  | 跨模块 Hook 与纯工具             |
 
-FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯文本预览、编辑基础。其余五个模块仍为固定尺寸的占位组件，不消费 props；其中 Search 的 props 契约仍在定稿中。这些占位入口不代表已具备相应业务能力。
+FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯文本预览、编辑基础；具体限制见各自文档。包还提供五种文件类型图标。
 组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[pages](./src/pages/README.md) 负责取数、处理业务状态和编排；尚未定义首个页面。
 
 ### Props 约定
 
 同一套 props 由不同宿主接入。宿主之间的流程与接口不同，交互与 UI 对齐，因此：
 
-- 组件只接收**已适配的数据**：文件条目、消息、任务、作用域选项都由宿主映射成包内类型，组件不引用任一宿主的数据模型。
+- 组件只接收**已适配的数据**：文件条目、页签与内容来源由宿主映射成包内类型，组件不引用任一宿主的数据模型。
 - 状态用受控字段表达，回调只上报意图，不返回业务数据。
 - 文案通过 labels 传入，缺省为英文；动态文案由宿主在接入层映射 i18next 或 Starling。
 - 图标、扩展页签、额外字段、工具栏动作通过插槽或节点传入，组件不绑定第三方 UI 库。
@@ -34,7 +29,7 @@ FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯�
 ## 公开入口与样式
 
 - 根入口仅导出 FileTree 及其公开类型；具体组件使用 `components/<模块>` 子路径。不提供 `@openviking/react/components` 或 `@openviking/react/pages` 分类聚合 JS 入口。包导出显式列举，内部文件不开放。
-- 当前私有开发包的旧 `/tree`、`/preview`、`/console`、`/tui` 和 `/viking-bot` 子路径统一替换为上述分层路径，不保留旧路径别名。
+- 组件只提供明确列出的分层子路径，不保留旧路径别名。
 - JS 入口共享实现，不隐式加载 CSS。整包、组件集合与单模块样式由同一份源码构建，选择所需范围导入即可。
 
 | 范围     | CSS 入口                                        |

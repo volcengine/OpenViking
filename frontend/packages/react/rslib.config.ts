@@ -14,13 +14,6 @@ export default defineConfig({
           'components/file-tree': './src/components/file-tree/file-tree.tsx',
           'components/file-preview':
             './src/components/file-preview/file-preview.tsx',
-          'components/tui': './src/components/tui/tui.tsx',
-          'components/viking-bot': './src/components/viking-bot/viking-bot.tsx',
-          'components/scope-switcher':
-            './src/components/scope-switcher/scope-switcher.tsx',
-          'components/agent-connect':
-            './src/components/agent-connect/agent-connect.tsx',
-          'components/search': './src/components/search/search.tsx',
         },
       },
       output: { emitCss: false },
@@ -37,13 +30,6 @@ export default defineConfig({
       'components/file-tree/style': './src/components/file-tree/style.css',
       'components/file-preview/style':
         './src/components/file-preview/style.css',
-      'components/tui/style': './src/components/tui/style.css',
-      'components/viking-bot/style': './src/components/viking-bot/style.css',
-      'components/scope-switcher/style':
-        './src/components/scope-switcher/style.css',
-      'components/agent-connect/style':
-        './src/components/agent-connect/style.css',
-      'components/search/style': './src/components/search/style.css',
     }).map(([name, entry]) => ({
       id: name.replaceAll('/', '-'),
       format: 'esm' as const,

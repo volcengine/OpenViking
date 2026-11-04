@@ -2,7 +2,7 @@
 
 OpenViking UI provides React foundations for building AI application interfaces on OpenViking, the context database for AI agents. The workspace includes Rslib builds, bilingual documentation, layered directory conventions, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration.
 
-FileTree and FilePreview already have implementations. Tui, VikingBot, ScopeSwitcher, AgentConnect, and Search remain placeholders rather than complete business components. No application pages or public Hooks are exported.
+The package provides FileTree, FilePreview, and five file-type icons. See the component documentation for the scope and limitations of the current implementations. No application pages or public Hooks are exported.
 
 ## Run locally
 
@@ -29,7 +29,7 @@ Keep application-specific workflows, authentication, and requests in the applica
 
 ## Public entries
 
-The root `@openviking/react` entry exports FileTree and its public types. FileTree and FilePreview are also available through their `components/<module>` subpaths. The five placeholder modules retain their existing subpaths; their presence does not imply a complete implementation. `@openviking/react/icons` provides five file-type icons.
+The root `@openviking/react` entry exports FileTree and its public types. FileTree and FilePreview are also available through their `components/<module>` subpaths. `@openviking/react/icons` provides five file-type icons.
 
 There are no aggregate `components` or `pages` JavaScript entries. See the [component overview](../components/) for the actual scope of each module.
 

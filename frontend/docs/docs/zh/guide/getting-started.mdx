@@ -2,7 +2,7 @@
 
 OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
 
-FileTree 和 FilePreview 已有实现；Tui、VikingBot、ScopeSwitcher、AgentConnect 和 Search 仍为占位，并非完整业务组件。目前没有公开页面或公共 Hook 导出。
+包提供 FileTree、FilePreview 与五种文件类型图标，现有实现的范围与限制见各组件文档。目前没有公开页面或公共 Hook 导出。
 
 ## 本地运行
 
@@ -29,7 +29,7 @@ workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档�
 
 ## 公开入口
 
-根入口 `@openviking/react` 导出 FileTree 及其公开类型。FileTree 和 FilePreview 也可通过各自的 `components/<模块>` 子路径使用。五个占位模块保留已有子路径，但入口存在不代表已完成相应实现。`@openviking/react/icons` 提供五种文件类型图标。
+根入口 `@openviking/react` 导出 FileTree 及其公开类型。FileTree 和 FilePreview 也可通过各自的 `components/<模块>` 子路径使用。`@openviking/react/icons` 提供五种文件类型图标。
 
 没有 `components` 或 `pages` 分类聚合 JavaScript 入口。各模块实际范围见[组件概览](../components/)。
 
