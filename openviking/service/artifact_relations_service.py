@@ -107,6 +107,7 @@ class ArtifactRelationsService(DequeueHandlerBase):
 
     @asynccontextmanager
     async def mutation(self, uris: list[str], ctx):
+        uris = [normalize_storage_target_uri(uri) for uri in uris]
         async with self.admission(ctx.account_id, uris) as targets:
             scope = _admission.get()
             await self.authorize(ctx.account_id, targets, uris, ctx)

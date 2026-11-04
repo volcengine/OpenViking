@@ -27,12 +27,13 @@ async def test_compile_graph_failure_prevents_success_and_blocks_ordinary_edit(
 ):
     ctx = RequestContext(user=service.user, role=Role.USER, api_key="test-key")
     app.dependency_overrides[get_request_context] = lambda: ctx
-    source, target = "viking://resources/input", "viking://resources/graph-failure"
+    source, target = "viking://resources/input", "viking://resources/graph_failure"
     await service.viking_fs.write_file(source + "/a.md", "input", ctx=ctx)
     await service.viking_fs.mkdir(target, ctx=ctx)
     monkeypatch.setattr(service.fs, "finalize_compile_directories", AsyncMock())
     service.compile.configure_local_backend("http://localhost:1", "")
     observed_wait = []
+    spaced_write_status = []
 
     async def build(*args):
         task = (
@@ -63,6 +64,14 @@ async def test_compile_graph_failure_prevents_success_and_blocks_ordinary_edit(
             defer_processing=True,
             edit_source="compile",
         )
+        response = await client.post(
+            "/api/v1/content/write",
+            json={
+                "uri": target.replace("_", " ") + "/page.md",
+                "content": "ordinary edit",
+            },
+        )
+        spaced_write_status.append(response.status_code)
         return CompileSessionAccepted(session_id="runtime-task")
 
     runtime = SimpleNamespace(
@@ -87,6 +96,7 @@ async def test_compile_graph_failure_prevents_success_and_blocks_ordinary_edit(
         task_id, account_id=ctx.account_id, user_id=ctx.user.user_id, timeout=20
     )
     assert task.status == "failed" and "ARTIFACT_RELATIONS_FAILED" in task.error
+    assert spaced_write_status == [409]
     assert len(observed_wait) == 3 and set(observed_wait) <= {"pending", "running"}
     record = await service.compile.lifecycle.store.get(ctx.account_id, target)
     assert record["versions_head"] is None and record["active_operation_id"] is None

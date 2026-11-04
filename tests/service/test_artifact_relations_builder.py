@@ -108,6 +108,48 @@ async def test_unchanged_source_resolves_new_target_without_rereading_its_body()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_files", "first_dirs", "second_files", "second_dirs", "expected_target"),
+    [
+        (
+            {"a.md": b"[b](b.md)", "b.md": b"target"},
+            (),
+            {"a.md": b"[b](b.md)"},
+            ("b.md",),
+            ROOT + "/b.md/",
+        ),
+        (
+            {"a.md": b"[b](b.md)"},
+            ("b.md",),
+            {"a.md": b"[b](b.md)", "b.md": b"target"},
+            (),
+            ROOT + "/b.md",
+        ),
+    ],
+    ids=["file-to-directory", "directory-to-file"],
+)
+async def test_incremental_equals_full_after_node_type_change(
+    first_files, first_dirs, second_files, second_dirs, expected_target
+):
+    fs = Snapshots()
+    builder = ArtifactRelationsBuilder(fs)
+    ctx = SimpleNamespace(account_id="account")
+    fs.save("a", first_files, first_dirs)
+    sources, graph = await builder.build(ROOT, claim("a"), None, None, ctx)
+    fs.save("b", second_files, second_dirs)
+
+    sources, graph = await builder.build(ROOT, claim("b"), sources, graph, ctx)
+    full_sources, full_graph = await builder.build(ROOT, claim("b"), None, None, ctx)
+
+    assert sources.pages == full_sources.pages
+    assert structure(graph) == structure(full_graph)
+    assert any(
+        edge.type == "references" and edge.from_uri == ROOT + "/a.md" and edge.to == expected_target
+        for edge in graph.edges
+    )
+
+
+@pytest.mark.asyncio
 async def test_compile_reuses_sources_and_ordinary_build_rejects_polluted_baseline():
     fs = Snapshots()
     fs.save("a", {"a.md": b"[missing](missing.md)"})

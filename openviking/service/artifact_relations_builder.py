@@ -63,8 +63,8 @@ def assemble_relations(
     if set(sources.pages) != pages:
         raise ValueError("Sources do not cover exactly the snapshot Markdown pages")
     changed_pages = changed_pages if changed_pages is not None else set(pages)
-    old_nodes = {uri.rstrip("/") for uri in previous.nodes} if previous else set()
-    changed_nodes = old_nodes ^ nodes.keys()
+    old_nodes = set(previous.nodes) if previous else set()
+    changed_nodes = {node.rstrip("/") for node in old_nodes ^ set(nodes.values())}
     # Carry unaffected reference edges forward. Targets disappearing from the
     # structure remove incoming edges even when their source page is unchanged.
     edges = {
@@ -73,6 +73,7 @@ def assemble_relations(
         if edge.type == "references"
         and edge.from_uri in nodes
         and edge.from_uri not in changed_pages
+        and edge.from_uri not in changed_nodes
         and edge.to.rstrip("/") in nodes
         and edge.to.rstrip("/") not in changed_nodes
     }
