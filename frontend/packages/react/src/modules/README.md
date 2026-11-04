@@ -2,6 +2,29 @@
 
 `modules/` 按共同完成的交互流程组织 Hook 与组合视图，共享状态与联动在模块内维护。Hook 负责加载请求、适配数据与维护状态，组合视图把 Hook 返回的数据和操作接入 `components/`。完整页面由宿主组装。
 
+## 当前可接入的占位组件
+
+五个模块已提供可导入的占位组件、Props / Labels 类型和独立样式入口，接入方可以先完成页面布局。当前组件只展示模块名称与占位文案，接受 `className`、`style` 和 `labels`；业务 Hook、共享 Client、Provider 与下文的业务交互仍待实现。
+
+| 模块            | 组件           | 公开入口                                  |
+| --------------- | -------------- | ----------------------------------------- |
+| `file-browser`  | `FileBrowser`  | `@openviking/react/modules/file-browser`  |
+| `console`       | `Console`      | `@openviking/react/modules/console`       |
+| `agent-connect` | `AgentConnect` | `@openviking/react/modules/agent-connect` |
+| `task-center`   | `TaskCenter`   | `@openviking/react/modules/task-center`   |
+| `user-usage`    | `UserUsage`    | `@openviking/react/modules/user-usage`    |
+
+```tsx
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
+
+<FileBrowser
+  labels={{ title: '文件浏览', description: '占位组件，业务能力待接入。' }}
+/>;
+```
+
+五个组件与对应类型也从 `@openviking/react` 根入口导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
+
 ## 职责
 
 - 模块 Hook 默认通过共享 Client 调用开源原生 API，继承 Provider 的请求配置，管理加载、空态、错误、分页、刷新、重试和必要的连接清理。
@@ -37,7 +60,7 @@ React 接入由 `OpenVikingProvider` 通过 Context 下发通用配置，并在 
 
 模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；headers 按不区分大小写的名称合并，局部同名值优先。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。
 
-以下仅为拟定的调用方式，Provider 与业务模块尚未实现，不能作为当前包的可运行示例：
+以下仅为拟定的请求接入方式，Provider 与业务 Hook 尚未实现，不能作为当前包的可运行示例：
 
 ```tsx
 <OpenVikingProvider baseURL={endpoint} headers={getAuthHeaders}>
@@ -57,13 +80,13 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ## 业务模块划分
 
-以下是规划边界与候选目录名，均不代表已有实现或可导入的 API。按实际迁入顺序创建目录与导出。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
+五个模块目录及其占位组件已经建立，以下是各模块后续迁入的目标能力，尚未实现。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
 
 | 模块            | Hook 与业务职责                                                                                         | 组合视图                                                                             |
 | --------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `file-browser`  | 统一管理目录、检索、当前 URI、预览加载与编辑保存；协调定位、刷新、历史与版本对比                        | 组合 `FileTree`、搜索交互与 `FilePreview`，提供目录和内容联动的文件浏览区域          |
 | `console`       | 统一管理 VikingBot / TUI 模式、公共上下文与工具栏；处理对话会话、消息流、附件、记忆提交及命令执行与记录 | 组合 `VikingBot`、`Tui` 与模式切换，提供完整的交互面板                               |
-| `agent-connect` | Agent 目录、接入说明、接入方式与连接状态；通过宿主提供的能力接入凭证或授权                              | 基于 `AgentConnect` 组合左侧导航、右侧详情与步骤                                     |
+| `agent-connect` | Agent 目录、接入说明、接入方式与连接状态；通过宿主提供的能力接入凭证或授权                              | 组合左侧 Agent 导航、右侧详情与接入步骤                                              |
 | `task-center`   | 当前身份可见任务的列表、筛选、详情、执行记录与允许的操作                                                | 任务列表和详情；个人终端本期聚焦资源导入与知识整理任务                               |
 | `user-usage`    | 当前 User 的统计查询、时间范围、加载与失败状态                                                          | 当前 User 的上下文数量、Token、检索与提交统计，不含库 / 空间统计、成员对比或账单费用 |
 
@@ -71,7 +94,7 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ### 文件浏览模块
 
-`file-browser` 覆盖目录导航、搜索与内容预览的整个联动区域，提供统一的 `useFileBrowser` Hook 与 `FileBrowser` 组合视图：
+`file-browser` 计划覆盖目录导航、搜索与内容预览的整个联动区域，提供统一的 `useFileBrowser` Hook 与 `FileBrowser` 组合视图：
 
 - Hook 统一返回目录、搜索、当前资源及预览的数据、状态与操作。内部可拆私有 Hook，宿主也可只使用统一 Hook 自行组装视图。
 - 点击目录节点或搜索结果后，模块协调当前 URI、目录定位与预览加载；切换资源时清理旧请求，避免过期内容覆盖当前预览。
@@ -79,11 +102,11 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 - 组合视图负责区域内的搜索、目录与预览布局。`FileTree`、`FilePreview` 等纯视图组件保持独立，不承担数据加载或跨组件编排。
 - 连接 Agent、导入资源等操作入口通过宿主回调或插槽接入；模块不内置接入弹窗、导入流程或产品引导。配额提示等产品内容也通过宿主插槽接入。
 
-以上均为规划，尚无实现或公开导出。
+以上交互与 `useFileBrowser` 仍为规划；当前仅导出 `FileBrowser` 占位组件和基础类型。
 
 ### 交互面板模块
 
-`console` 覆盖 VikingBot 与 TUI 共用的整个面板，提供统一的 `useConsole` Hook 与 `Console` 组合视图：
+`console` 计划覆盖 VikingBot 与 TUI 共用的整个面板，提供统一的 `useConsole` Hook 与 `Console` 组合视图：
 
 - Hook 统一返回当前模式、公共上下文、对话与命令的数据、状态和操作；模式切换与工具栏操作在模块内协调，宿主也可只使用 Hook 组装视图。
 - VikingBot 与 TUI 使用同一服务、身份与宿主传入的资源上下文；各自维护消息历史、命令记录与运行状态，切换模式时保留各自状态。
@@ -91,7 +114,7 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 - 组合视图负责模式切换、公共工具栏与内容区域，操作按当前模式分发。后续迁入 `VikingBot`、`Tui` 时保持为可独立消费的纯视图组件。
 - 打开资源、定位产物或刷新目录通过事件交给宿主，与 `file-browser` 的联动不依赖对方私有状态；登录、身份切换与产品引导仍由宿主负责。
 
-以上均为规划，尚无实现或公开导出。
+以上交互与 `useConsole` 仍为规划；当前仅导出 `Console` 占位组件和基础类型。
 
 ## 组合与扩展边界
 
@@ -105,8 +128,8 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ## 当前状态与开发入口
 
-当前仅提供目录约定，没有业务模块实现、公开导出或独立构建入口。后续每个模块使用独立的 kebab-case 目录，入口文件与目录同名，从模块入口分别导出 Hook 与组合视图。
+每个模块使用独立的 kebab-case 目录，入口文件与目录同名，已同步提供占位组件、基础类型和独立构建入口。真实业务迁入后，从同一模块入口分别导出 Hook 与组合视图；当前不提供占位 Hook 或请求配置 API。
 
 开发命令和构建入口见 [前端工作区 README](../../../../README.md)，包结构见[包说明](../../README.md)，实施约束见本目录 [AGENTS.md](./AGENTS.md)。
 
-有实际实现后再开放 `@openviking/react/modules/<模块>`，不提供分类聚合 JS 入口。模块 CSS 同时提供 `@openviking/react/modules/style.css` 与 `@openviking/react/modules/<模块>/style.css`；单模块 CSS 包含组合视图自身及所需组件样式，整包 CSS 也须包含模块样式。单独使用 Hook 无需导入 CSS。
+已开放 `@openviking/react/modules/<模块>`，不提供分类聚合 JS 入口。模块 CSS 同时提供 `@openviking/react/modules/style.css` 与 `@openviking/react/modules/<模块>/style.css`，整包 `@openviking/react/style.css` 也包含模块样式。单模块 CSS 当前包含占位视图样式，迁入组合视图后须同步包含所需组件样式；后续单独使用 Hook 无需导入 CSS。

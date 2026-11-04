@@ -1,0 +1,28 @@
+# TaskCenter
+
+An importable placeholder for task center. It currently renders the module name and a placeholder message, so applications can integrate the container before business functionality lands.
+
+## Basic usage
+
+```tsx file="../../_demos/task-center-placeholder.tsx" preview
+
+```
+
+## Target capability
+
+Tasks visible to the current identity, their details, and execution records. The personal terminal focuses on resource import and knowledge organization tasks.
+
+Business Hooks and requests are not implemented yet. The component requires no Provider or credentials.
+
+## Props
+
+The module exports `TaskCenterProps` and `TaskCenterLabels`.
+
+| Property             | Type            | Default                                            | Description                  |
+| -------------------- | --------------- | -------------------------------------------------- | ---------------------------- |
+| `className`          | `string`        | —                                                  | Additional container class.  |
+| `style`              | `CSSProperties` | —                                                  | Container style overrides.   |
+| `labels.title`       | `string`        | `Task center`                                      | Visible module name.         |
+| `labels.description` | `string`        | `Placeholder. Functionality is not available yet.` | Visible placeholder message. |
+
+An omitted label inherits its English default. Labels are plain text; the host maps its own translation system into these props.

@@ -35,6 +35,7 @@ export default defineConfig({
         nav: [
           { text: 'Guide', link: '/guide/getting-started' },
           { text: 'Components', link: '/components/' },
+          { text: 'Modules', link: '/modules/' },
           { text: 'OpenViking docs', link: 'https://docs.openviking.ai/' },
         ],
         sidebar: {
@@ -57,6 +58,27 @@ export default defineConfig({
               ],
             },
           ],
+          '/modules': [
+            {
+              text: 'Modules',
+              items: [{ text: 'Overview', link: '/modules/' }],
+            },
+            {
+              text: 'Core interactions',
+              items: [
+                { text: 'FileBrowser', link: '/modules/file-browser' },
+                { text: 'Console', link: '/modules/console' },
+              ],
+            },
+            {
+              text: 'Supporting capabilities',
+              items: [
+                { text: 'AgentConnect', link: '/modules/agent-connect' },
+                { text: 'TaskCenter', link: '/modules/task-center' },
+                { text: 'UserUsage', link: '/modules/user-usage' },
+              ],
+            },
+          ],
         },
       },
       {
@@ -67,6 +89,7 @@ export default defineConfig({
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
           { text: '组件', link: '/zh/components/' },
+          { text: '业务模块', link: '/zh/modules/' },
           { text: 'OpenViking 文档', link: 'https://docs.openviking.ai/' },
         ],
         sidebar: {
@@ -87,6 +110,36 @@ export default defineConfig({
                   text: 'FilePreview 文件预览',
                   link: '/zh/components/file-preview',
                 },
+              ],
+            },
+          ],
+          '/zh/modules': [
+            {
+              text: '业务模块',
+              items: [{ text: '概览', link: '/zh/modules/' }],
+            },
+            {
+              text: '核心交互',
+              items: [
+                {
+                  text: 'FileBrowser 文件浏览',
+                  link: '/zh/modules/file-browser',
+                },
+                { text: 'Console 交互面板', link: '/zh/modules/console' },
+              ],
+            },
+            {
+              text: '辅助能力',
+              items: [
+                {
+                  text: 'AgentConnect Agent 接入',
+                  link: '/zh/modules/agent-connect',
+                },
+                {
+                  text: 'TaskCenter 任务中心',
+                  link: '/zh/modules/task-center',
+                },
+                { text: 'UserUsage 我的用量', link: '/zh/modules/user-usage' },
               ],
             },
           ],

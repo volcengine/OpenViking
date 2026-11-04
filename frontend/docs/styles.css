@@ -42,6 +42,12 @@
   gap: 12px;
 }
 
+.ov-demo-modules {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
+}
+
 .ov-demo-controls {
   display: flex;
   flex-wrap: wrap;
