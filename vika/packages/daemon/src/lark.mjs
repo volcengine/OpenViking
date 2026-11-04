@@ -28,6 +28,7 @@ const IMAGE_TYPES = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
   '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
 };
+const VIDEO_TYPES = new Set(['.mp4', '.mov']);
 const MAX_CHAT_PAGES = 10;
 // Reading one comment: each lark-cli call, the reply pages read when the
 // comment's own page lacks the reply, and how long a looked-up name is kept.
@@ -309,11 +310,18 @@ export class LarkClient {
   async deliver(target, content, idempotencyKey) {
     const suffix = ['--idempotency-key', idempotencyKey, '--format', 'json'];
     let data;
+    let fallback = null;
     if (content.type === 'markdown') {
       data = await this.im([...target, '--markdown', renderMentions(content.text, content.mentions), ...suffix], 'send message');
     } else if (content.type === 'file') {
+      const ext = path.extname(content.path).toLowerCase();
+      if (VIDEO_TYPES.has(ext)) {
+        const video = await this.deliverVideo(target, content, suffix);
+        if (video.data) return deliveredMessage(video.data);
+        fallback = video.fallback;
+      }
       // lark-cli accepts only cwd-relative upload paths.
-      const flag = IMAGE_TYPES[path.extname(content.path).toLowerCase()] ? '--image' : '--file';
+      const flag = IMAGE_TYPES[ext] ? '--image' : '--file';
       data = await this.im([...target, flag, `./${path.basename(content.path)}`, ...suffix], 'send attachment',
         { cwd: path.dirname(content.path) });
     } else if (content.type === 'file_key') {
@@ -324,7 +332,50 @@ export class LarkClient {
     } else {
       throw new Error(`unsupported Lark content type: ${content.type}`);
     }
-    return deliveredMessage(data);
+    const delivered = deliveredMessage(data);
+    return fallback ? { ...delivered, media_fallback: fallback } : delivered;
+  }
+
+  // Sends .mp4/.mov as a playable media message with an ffmpeg-extracted cover.
+  // Returns { data } on success, or { fallback: reason } so the caller sends a
+  // plain file with the same idempotency key (a rejected request is not recorded).
+  async deliverVideo(target, content, suffix) {
+    const dir = path.dirname(content.path);
+    const name = path.basename(content.path);
+    const coverDir = fs.mkdtempSync(path.join(dir, '.cover-'));
+    try {
+      const cover = path.join(coverDir, 'cover.jpg');
+      try {
+        await this.extractVideoCover(content.path, cover);
+      } catch (error) {
+        return { fallback: `video cover extraction failed (${error.message}); sent as a plain file` };
+      }
+      try {
+        const data = await this.im([...target, '--video', `./${name}`, '--video-cover', `./${path.relative(dir, cover)}`,
+          ...suffix], 'send video', { cwd: dir });
+        return { data };
+      } catch (error) {
+        return { fallback: `video media send failed (${error.message}); sent as a plain file` };
+      }
+    } finally {
+      fs.rmSync(coverDir, { recursive: true, force: true });
+    }
+  }
+
+  async extractVideoCover(input, output) {
+    const timeoutMs = 30_000;
+    let seek = 1;
+    const probe = await this.registry.run(this.config.ffprobeBin || 'ffprobe', [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input,
+    ], { timeoutMs }).catch(() => null);
+    const duration = Number.parseFloat(probe?.code === 0 ? probe.stdout : '');
+    if (Number.isFinite(duration) && duration > 0) seek = Math.min(1, duration / 2);
+    const result = await this.registry.run(this.config.ffmpegBin || 'ffmpeg', [
+      '-y', '-ss', String(seek), '-i', input, '-frames:v', '1', '-q:v', '3', output,
+    ], { timeoutMs });
+    if (result.timedOut) throw new Error('ffmpeg timed out');
+    if (result.code !== 0) throw new Error(`ffmpeg exit ${result.code}`);
+    if (!fs.existsSync(output) || !fs.statSync(output).size) throw new Error('ffmpeg produced no cover');
   }
 
   async cardWithImages({ card, card_images: assets }) {

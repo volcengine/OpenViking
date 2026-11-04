@@ -67,6 +67,58 @@ describe('Lark IM operations', () => {
     ]);
   });
 
+  it('sends videos as playable media with an ffmpeg cover from cwd-relative paths', async () => {
+    const { lark, calls, tempDir } = client((args) => {
+      if (args.includes('-frames:v')) fs.writeFileSync(args.at(-1), 'jpeg');
+      return { message_id: 'om_video12345678' };
+    });
+    const sent = await lark.replyMessage({ message_id: 'om_target1234567', reply_in_thread: true,
+      content: { type: 'file', path: path.join(tempDir, 'demo.mp4'), name: 'demo.mp4' }, idempotency_key: 'kv' });
+    assert.deepEqual(sent, { message_id: 'om_video12345678' });
+    const ffmpeg = calls.find(({ args }) => args.includes('-frames:v'));
+    assert.deepEqual(ffmpeg.args.slice(0, 2), ['-y', '-ss']);
+    const send = calls.at(-1);
+    assert.equal(send.options.cwd, tempDir);
+    assert.ok(send.args.includes('--reply-in-thread'));
+    assert.equal(send.args[send.args.indexOf('--video') + 1], './demo.mp4');
+    const cover = send.args[send.args.indexOf('--video-cover') + 1];
+    assert.match(cover, /^\.\/\.cover-[^/]+\/cover\.jpg$/);
+    assert.ok(!send.args.includes('--file'));
+    assert.equal(send.args[send.args.indexOf('--idempotency-key') + 1], 'kv');
+    assert.deepEqual(fs.readdirSync(tempDir), [], 'temporary cover is removed');
+  });
+
+  it('falls back to a plain file when the video cover cannot be extracted', async () => {
+    const { lark, calls, tempDir } = client(() => ({ message_id: 'om_file123456789' }));
+    const sent = await lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'clip.mov'), name: 'clip.mov' }, idempotency_key: 'kf' });
+    assert.equal(sent.message_id, 'om_file123456789');
+    assert.match(sent.media_fallback, /cover extraction failed.*plain file/);
+    const send = calls.at(-1);
+    assert.ok(!send.args.includes('--video'));
+    assert.equal(send.args[send.args.indexOf('--file') + 1], './clip.mov');
+    assert.equal(send.options.cwd, tempDir);
+  });
+
+  it('falls back to a plain file when the media send is rejected', async () => {
+    const calls = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000 }, {
+      async run(command, args, options) {
+        calls.push({ args, options });
+        if (args.includes('-frames:v')) fs.writeFileSync(args.at(-1), 'jpeg');
+        if (args.includes('--video')) return { code: 1, timedOut: false, stdout: JSON.stringify({ ok: false, error: { message: 'unsupported msg_type' } }), stderr: '' };
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { message_id: 'om_file123456789' } }), stderr: '' };
+      },
+    }, quietLogger);
+    const sent = await lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'demo.mp4'), name: 'demo.mp4' }, idempotency_key: 'kf' });
+    assert.match(sent.media_fallback, /media send failed.*unsupported msg_type/);
+    assert.equal(calls.at(-1).args[calls.at(-1).args.indexOf('--file') + 1], './demo.mp4');
+    assert.equal(calls.at(-1).args[calls.at(-1).args.indexOf('--idempotency-key') + 1], 'kf');
+  });
+
   it('renders inline and prefixed mentions without ever sending @all', () => {
     assert.equal(renderMentions('@Alice owns this', [{ id: 'ou_alice', name: 'Alice' }, { id: 'ou_bob' }]),
       '<at user_id="ou_bob"></at> <at user_id="ou_alice"></at> owns this');
