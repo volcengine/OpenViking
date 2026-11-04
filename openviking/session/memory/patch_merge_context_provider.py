@@ -138,6 +138,16 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
+        supersedes_policy = ""
+        if self.memory_type == "experiences":
+            supersedes_policy = """
+For experience patches, `supersedes` is a replacement proposal, not an automatic
+delete. Check the referenced existing experience. If the final canonical output
+preserves all its distinct facts, explicitly delete the old file with that output
+as its replacement (delete_ids with replacement_page_id, or SDK delete with
+replacement). Otherwise keep the old file; never delete solely because a patch
+sets `supersedes`.
+"""
         return f"""You are a memory patch merge agent.
 
 You are given original memory files and structured memory-file field diffs. Merge them by producing final memory operations that follow the provided JSON schema.
@@ -150,6 +160,7 @@ Reconcile independent extraction patch proposals. Apply this shared policy befor
 choosing a canonical file or deleting any proposal:
 
 {MEMORY_MERGE_POLICY}
+{supersedes_policy}
 
 Normalize URI/path variants for directory/filename fields. Treat path segment
 fields as stable schema identifiers, not free-form labels. Reuse existing

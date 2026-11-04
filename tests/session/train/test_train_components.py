@@ -1059,7 +1059,9 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
             version=1,
             content="old insight",
             status="production",
-            links=[StoredLink(from_uri=old_uri, to_uri=old_history, link_type="derived_from")],
+            links=[
+                StoredLink(from_uri=old_uri, to_uri=old_history, link_type="derived_from").model_dump()
+            ],
         )
     )
     gradients = [
@@ -1100,7 +1102,10 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
 
     class FakeExtractLoop:
         def __init__(self, **kwargs):
-            pass
+            provider = kwargs["context_provider"]
+            if supersedes:
+                assert old_uri in provider.required_file_uris
+                assert provider.read_file_contents[old_uri].content == "old insight"
 
         async def run(self):
             return (

@@ -1071,11 +1071,20 @@ class SessionCompressorV3:
                 extraction_groups.setdefault(feedback, []).append(rollout)
 
             reported_trajectory_uris: set[str] = set()
+            training_failures = MemoryUpdateResult()
             for rollouts in extraction_groups.values():
                 rollout = rollouts[0]
                 candidates = [candidates_by_name[item.case.name] for item in rollouts]
                 case_context = replace(analysis_context, case_candidates=candidates)
-                analysis = await self.rollout_analyzer.analyze(rollout, case_context)
+                try:
+                    analysis = await self.rollout_analyzer.analyze(rollout, case_context)
+                except MemoryUpdateError as exc:
+                    training_failures.errors.extend(exc.result.errors)
+                    training_failures.written_uris.extend(exc.result.written_uris)
+                    training_failures.edited_uris.extend(exc.result.edited_uris)
+                    training_failures.deleted_uris.extend(exc.result.deleted_uris)
+                    logger.warning("Skipping failed trajectory group: %s", exc)
+                    continue
                 analysis.metadata["case_associations_required"] = len(candidates) > 1
                 if collect_memory_diff:
                     # Keep every extracted trajectory, including those with no matching case.
@@ -1140,7 +1149,14 @@ class SessionCompressorV3:
                         ctx=ctx,
                         archive_uri=archive_uri,
                     )
-                    submitted += len(training_rollouts)
+                    apply_result = exp_training_result.apply_result
+                    if apply_result.errors:
+                        for error in apply_result.errors:
+                            training_failures.add_error(exp_root_uri, RuntimeError(error))
+                        training_failures.written_uris.extend(apply_result.written_uris)
+                        training_failures.deleted_uris.extend(apply_result.deleted_uris)
+                    else:
+                        submitted += len(training_rollouts)
                     if collect_memory_diff:
                         memory_diff = await self._build_training_memory_diff(
                             training_result=exp_training_result,
@@ -1170,6 +1186,8 @@ class SessionCompressorV3:
                                 if uri:
                                     skill_uris.append(str(uri))
 
+            if training_failures.errors and strict_extract_errors:
+                raise MemoryUpdateError(training_failures)
             tracer.info(
                 "Submitted commit case memories to streaming train: "
                 f"case_count={len(cases)} submitted={submitted} "
@@ -1184,6 +1202,8 @@ class SessionCompressorV3:
                 "skill_uris": skill_uris,
                 "filtered_exp_gradient_count": filtered_exp_gradient_count,
             }
+            if training_failures.errors:
+                response["error"] = str(MemoryUpdateError(training_failures))
             if collect_memory_diff:
                 response["memory_diff"] = _merge_memory_diffs(
                     memory_diffs,
@@ -1225,14 +1245,10 @@ class SessionCompressorV3:
             persisted_result = getattr(batch_result, "batch_result", None) or batch_result
             apply_result = persisted_result.apply_result
             if apply_result.errors:
-                failed_result = MemoryUpdateResult()
-                failed_result.written_uris = list(apply_result.written_uris)
-                failed_result.deleted_uris = list(apply_result.deleted_uris)
-                for error in apply_result.errors:
-                    failed_result.add_error(
-                        apply_result.updated_policy_set.root_uri, RuntimeError(error)
-                    )
-                raise MemoryUpdateError(failed_result)
+                logger.warning(
+                    "Skipping experience snapshot for partial batch: %s", apply_result.errors
+                )
+                return
             snapshot_apply_result, experience_trajectory_map = _experience_snapshot_provenance(
                 batch_result,
                 fallback_trajectory_uris={trajectory.uri for trajectory in analysis.trajectories},

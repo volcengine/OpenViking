@@ -153,7 +153,13 @@ class MemoryFilePolicyUpdater:
         finally:
             if combined_lease is not None:
                 await viking_fs._async_agfs.pathlock_release(combined_lease)
-        errors = [*preflight_errors, *[f"{uri}: {exc}" for uri, exc in apply_result.errors]]
+        errors_by_uri: dict[str, list[str]] = {}
+        for uri, error in [
+            *preflight_errors,
+            *[(uri, f"{uri}: {exc}") for uri, exc in apply_result.errors],
+        ]:
+            errors_by_uri.setdefault(uri, []).append(error)
+        errors = [error for messages in errors_by_uri.values() for error in messages]
 
         return PolicyApplyResult(
             updated_policy_set=updated_policy_set if not errors else policy_set,
@@ -165,6 +171,7 @@ class MemoryFilePolicyUpdater:
                 "item_count": len(plan.items),
                 "operation_upsert_count": len(operations.upsert_operations),
                 "operation_delete_count": len(operations.delete_file_contents),
+                "errors_by_uri": errors_by_uri,
             },
         )
 
@@ -267,12 +274,12 @@ def _plan_to_resolved_operations(
     plan: PolicyUpdatePlan,
     policy_set: PolicySet,
     updated_policy_set: PolicySet,
-) -> tuple[ResolvedOperations, list[str]]:
+) -> tuple[ResolvedOperations, list[tuple[str, str]]]:
     upserts: list[ResolvedOperation] = []
     deletes: list[MemoryFile] = []
     delete_replacements: dict[str, str] = {}
     links: list[StoredLink] = []
-    errors: list[str] = []
+    errors: list[tuple[str, str]] = []
 
     for item in plan.items:
         uri = _target_uri(item, policy_set.root_uri)
@@ -284,7 +291,10 @@ def _plan_to_resolved_operations(
             != _normalize_guard_content(item.before_content)
         ):
             errors.append(
-                f"base content mismatch for {item.target_name}: expected gradient before_content"
+                (
+                    uri,
+                    f"base content mismatch for {item.target_name}: expected gradient before_content",
+                )
             )
             continue
 
@@ -297,12 +307,12 @@ def _plan_to_resolved_operations(
         if item.kind != "upsert":
             continue
         if item.after_content is None:
-            errors.append(f"missing after_content for {item.target_name}")
+            errors.append((uri, f"missing after_content for {item.target_name}"))
             continue
 
         updated = _find_policy(updated_policy_set, uri=uri, name=item.target_name)
         if updated is None:
-            errors.append(f"planned policy not found after simulation: {item.target_name}")
+            errors.append((uri, f"planned policy not found after simulation: {item.target_name}"))
             continue
 
         upserts.append(

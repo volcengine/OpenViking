@@ -345,6 +345,43 @@ async def test_commit_extracts_once_and_persists_precise_case_links(
 
 
 @pytest.mark.asyncio
+async def test_commit_finishes_other_training_groups_before_reporting_write_failure(
+    commit_runtime, monkeypatch
+):
+    from openviking.session.memory.memory_updater import MemoryUpdateError
+
+    runtime = commit_runtime
+    write_file = runtime.fs.write_file
+    failed_uri = f"{runtime.trainer.policy_set.root_uri}/book.md"
+
+    async def fail_one_experience(uri, content, **kwargs):
+        if uri == failed_uri:
+            raise OSError("experience write failed")
+        await write_file(uri, content, **kwargs)
+
+    monkeypatch.setattr(runtime.fs, "write_file", fail_one_experience)
+    runtime.fs.commit = AsyncMock()
+    evaluator = SimpleNamespace(
+        evaluate=AsyncMock(
+            side_effect=[
+                RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+                RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
+            ]
+        )
+    )
+    with pytest.raises(MemoryUpdateError, match="experience write failed"):
+        await _commit(runtime, [[("book", None)], [("cancel", None)]], evaluator=evaluator)
+
+    assert len(runtime.trainer.calls) == 2
+    assert failed_uri not in runtime.fs.files
+    successful_uri = f"{runtime.trainer.policy_set.root_uri}/cancel.md"
+    assert successful_uri in runtime.fs.files
+    successful = MemoryFileUtils.read(runtime.fs.files[successful_uri], uri=successful_uri)
+    assert any(link["from_uri"] == runtime.case_uris["cancel"] for link in successful.backlinks)
+    assert runtime.fs.commit.await_count == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("evaluation_mode", ["same", "different_feedback", "scores_only"])
 async def test_commit_preserves_evaluator_training_semantics(
     commit_runtime, monkeypatch, evaluation_mode

@@ -375,11 +375,11 @@ def _required_file_uris(
     uris: list[str] = []
     for gradient in gradients:
         uri = gradient.target_uri
-        if not uri:
-            superseded = _find_superseded_policy(_gradient_supersedes(gradient), policy_set)
-            uri = superseded.uri if superseded is not None else None
         if uri and uri not in uris:
             uris.append(uri)
+        superseded = _find_superseded_policy(_gradient_supersedes(gradient), policy_set)
+        if superseded is not None and superseded.uri not in uris:
+            uris.append(superseded.uri)
     return uris
 
 def _seed_read_file_contents(

@@ -320,7 +320,7 @@ async def test_operation_to_patch_omits_raw_operation_metadata():
     assert patch.after_file.content == "new content"
 
 
-async def test_replacement_reacquires_persisted_relation_locks_before_writes(monkeypatch):
+async def test_deletes_reacquire_persisted_relation_locks_before_writes(monkeypatch):
     deleted_uri = "viking://user/u/memories/notes/deleted.md"
     neighbor_uri = "viking://user/u/memories/notes/neighbor.md"
     replacement = _note_op("replacement")
@@ -349,6 +349,28 @@ async def test_replacement_reacquires_persisted_relation_locks_before_writes(mon
             neighbor_uri: MemoryFileUtils.write(neighbor_file),
         }
     )
+    purged_uri = "viking://user/u/memories/notes/purged.md"
+    new_neighbor_uri = "viking://user/u/memories/cases/added.md"
+    purged_file = MemoryFile(uri=purged_uri, memory_type="notes", content="obsolete")
+    new_link = StoredLink(from_uri=new_neighbor_uri, to_uri=purged_uri).model_dump()
+    fs.files[purged_uri] = MemoryFileUtils.write(
+        purged_file.model_copy(update={"backlinks": [new_link]})
+    )
+    fs.files[new_neighbor_uri] = MemoryFileUtils.write(
+        MemoryFile(
+            uri=new_neighbor_uri,
+            memory_type="cases",
+            content="case",
+            links=[new_link],
+            extra_fields={
+                "case_name": "added",
+                "task_signature": "task",
+                "input": "{}",
+                "rubric": "{}",
+                "evidence": "",
+            },
+        )
+    )
     fs.search = AsyncMock(return_value=[])
     monkeypatch.setattr(
         "openviking.session.memory.streaming_memory_updater.get_viking_fs",
@@ -360,7 +382,7 @@ async def test_replacement_reacquires_persisted_relation_locks_before_writes(mon
     )
     operations = ResolvedOperations(
         upsert_operations=[replacement],
-        delete_file_contents=[deleted_file.model_copy(update={"links": []})],
+        delete_file_contents=[deleted_file.model_copy(update={"links": []}), purged_file],
         errors=[],
         delete_replacements={deleted_uri: replacement.uris[0]},
     )
@@ -372,14 +394,16 @@ async def test_replacement_reacquires_persisted_relation_locks_before_writes(mon
         messages=messages,
     )
 
-    acquires = [event for event in fs.events if event[0] == "acquire"]
+    acquires = [event for event in fs.events if event[0] == "acquire_mixed"]
     writes = [event for event in fs.events if event[0] == "write"]
     assert len(acquires) == 2
-    assert "/user/u/memories/notes/neighbor.md" not in acquires[0][1]
-    assert "/user/u/memories/notes/neighbor.md" in acquires[1][1]
+    assert "/user/u/memories/cases/added.md" not in acquires[0][1]
+    assert "/user/u/memories/cases/added.md" in acquires[1][1]
     assert writes
-    assert all(event[2] == {"lease_ref": "memory-batch-lease-2"} for event in writes)
+    assert all(event[2] == {"lease_ref": "memory-mixed-lease"} for event in writes)
     assert fs.events.index(acquires[1]) < min(fs.events.index(event) for event in writes)
+    assert deleted_uri not in fs.files and purged_uri not in fs.files
+    assert MemoryFileUtils.read(fs.files[new_neighbor_uri], uri=new_neighbor_uri).links == []
 
 
 async def test_streaming_apply_migrates_uri_under_one_stable_lease(monkeypatch):
@@ -2045,8 +2069,12 @@ class TestFilterValidLinksTransientErrors:
             lambda: fs,
         )
         return await filter_valid_links(
-            [StoredLink(from_uri="viking://user/u/memories/cases/a.md",
-                        to_uri="viking://user/u/memories/cases/b.md")],
+            [
+                StoredLink(
+                    from_uri="viking://user/u/memories/cases/a.md",
+                    to_uri="viking://user/u/memories/cases/b.md",
+                )
+            ],
             upsert_operations=self._ops("viking://user/u/memories/cases/a.md"),
             delete_file_contents=[],
             ctx=_ctx(),

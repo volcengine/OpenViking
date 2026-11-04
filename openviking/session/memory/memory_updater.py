@@ -113,6 +113,8 @@ async def write_stored_links(
     viking_fs: Any,
     skip_uris: Optional[set] = None,
     lease_ref: Any = None,
+    read_file_contents: Optional[Dict[str, MemoryFile]] = None,
+    errors: Optional[List[Tuple[str, Exception]]] = None,
 ) -> List[str]:
     """Write StoredLinks to their endpoint files' links/backlinks fields.
 
@@ -121,7 +123,9 @@ async def write_stored_links(
     Files listed in skip_uris are skipped (caller handles them in the same write).
     Returns the endpoint URIs that were successfully rewritten.  Callers can
     use this to avoid reporting link-only edits for files that failed the
-    read/modify/write step.
+    read/modify/write step. Missing/empty reads are skipped with a warning;
+    other failures are appended to ``errors`` when supplied. Cached endpoint
+    files must have been read under the caller's lease.
     """
     from openviking.session.memory.merge_op.link_merge import merge_links
 
@@ -138,10 +142,17 @@ async def write_stored_links(
     updated_uris: List[str] = []
     for uri, link_groups in file_links.items():
         try:
-            content = await viking_fs.read_file(uri, ctx=ctx)
-            if not content:
-                continue
-            mf = MemoryFileUtils.read(content, uri=uri)
+            mf = (read_file_contents or {}).get(uri)
+            if mf is None:
+                try:
+                    content = await viking_fs.read_file(uri, ctx=ctx)
+                except (NotFoundError, FileNotFoundError) as exc:
+                    logger.warning("Skipping links to missing memory %s: %s", uri, exc)
+                    continue
+                if not content:
+                    logger.warning("Skipping links to empty memory %s", uri)
+                    continue
+                mf = MemoryFileUtils.read(content, uri=uri)
             if link_groups["links"]:
                 mf.links = merge_links(mf.links, [l.model_dump() for l in link_groups["links"]])
             if link_groups["backlinks"]:
@@ -161,6 +172,8 @@ async def write_stored_links(
             updated_uris.append(uri)
         except Exception as e:
             tracer.error(f"Failed to apply links to {uri}: {e}")
+            if errors is not None:
+                errors.append((uri, e))
     return updated_uris
 
 
@@ -854,6 +867,7 @@ class MemoryUpdateError(Exception):
     """Report apply failures without treating a partial write as safe to replay."""
 
     def __init__(self, result: MemoryUpdateResult):
+        self.result = result
         super().__init__(
             f"Memory update failed ({result.summary()}): "
             + "; ".join(f"{uri}: {error}" for uri, error in result.errors)
@@ -1075,6 +1089,45 @@ class MemoryUpdater:
             split_replacements,
         )
 
+        # Reuse the endpoint reads needed for link writes, before attaching new
+        # backlinks to upserts. Missing memories must not leave one-sided links.
+        link_file_contents: Dict[str, MemoryFile] = {}
+        unavailable_link_uris: set[str] = set()
+        planned_upsert_uris = {uri for op in applicable_upserts for uri in op.uris}
+        for uri in {
+            uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri)
+        } - planned_upsert_uris:
+            if context_type_for_uri(uri) != "memory":
+                continue
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+                if content:
+                    link_file_contents[uri] = MemoryFileUtils.read(content, uri=uri)
+                    continue
+            except (NotFoundError, FileNotFoundError):
+                pass
+            except Exception as exc:
+                result.add_error(uri, exc)
+            unavailable_link_uris.add(uri)
+            logger.warning("Skipping links to unavailable memory %s", uri)
+        original_links = [
+            link
+            for link in original_links
+            if link.from_uri not in unavailable_link_uris
+            and link.to_uri not in unavailable_link_uris
+        ]
+        operations.resolved_links = [
+            link
+            for link in operations.resolved_links
+            if link.from_uri not in unavailable_link_uris
+            and link.to_uri not in unavailable_link_uris
+        ]
+        for op in applicable_upserts:
+            if "case_uris" in op.memory_fields:
+                op.memory_fields["case_uris"] = [
+                    uri for uri in op.memory_fields["case_uris"] if uri not in unavailable_link_uris
+                ]
+
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
@@ -1254,6 +1307,11 @@ class MemoryUpdater:
                 deleted_uris=set(result.deleted_uris),
                 lease_ref=self._transaction_handle,
                 upserted_uris=upserted_uris,
+                read_file_contents={
+                    uri: memory_file
+                    for uri, memory_file in link_file_contents.items()
+                    if uri not in result.edited_uris
+                } if self._transaction_handle is not None else None,
             )
 
         # Referential-integrity guard (issue #5904): after apply, no in-batch
@@ -1762,6 +1820,7 @@ class MemoryUpdater:
         deleted_uris: Optional[set[str]] = None,
         lease_ref: Any = None,
         upserted_uris: Optional[set[str]] = None,
+        read_file_contents: Optional[Dict[str, MemoryFile]] = None,
     ) -> None:
         """Apply links to endpoint files that are NOT in the current upsert batch."""
         viking_fs = self._get_viking_fs()
@@ -1775,18 +1834,15 @@ class MemoryUpdater:
             if context_type_for_uri(uri) != "memory"
         }
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
-        updated_uris = await write_stored_links(
+        await write_stored_links(
             resolved_links,
             ctx,
             viking_fs,
             skip_uris=skip,
             lease_ref=lease_ref,
+            read_file_contents=read_file_contents,
+            errors=result.errors,
         )
-        expected_uris = {
-            uri for link in resolved_links for uri in (link.from_uri, link.to_uri)
-        } - skip
-        for uri in expected_uris - set(updated_uris):
-            result.add_error(uri, ValueError("Failed to persist memory link endpoint"))
 
     async def _inherit_deleted_link_relations(
         self,
