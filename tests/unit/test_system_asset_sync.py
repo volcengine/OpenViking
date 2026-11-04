@@ -13,9 +13,13 @@ from openviking.core.namespace_policy import (
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.viking_fs import VikingFS
+from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking.system_assets.sync import SYSTEM_ASSET_MANIFEST_PATH, SystemAssetSynchronizer
 from openviking_cli.session.user_id import UserIdentifier
-from scripts.build_support.system_assets_manifest import write_system_assets_manifest
+from scripts.build_support.system_assets_manifest import (
+    build_system_assets_manifest,
+    write_system_assets_manifest,
+)
 
 
 class _FakeAGFS:
@@ -298,3 +302,9 @@ async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path):
         )
     assert not agfs.held
     assert agfs.writes == []
+
+
+def test_packaged_system_assets_manifest_is_current():
+    assert (SYSTEM_ASSETS_DIR / "manifest.json").read_bytes() == build_system_assets_manifest(
+        SYSTEM_ASSETS_DIR
+    )

@@ -2,6 +2,7 @@ import copy
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from openviking.service.artifact_relation_links import extract_relation_source
 from openviking.service.artifact_relations_builder import (
@@ -9,7 +10,15 @@ from openviking.service.artifact_relations_builder import (
     SnapshotEntry,
     assemble_relations,
 )
-from openviking.service.artifact_relations_models import ArtifactRelationsState, RelationSources
+from openviking.service.artifact_relations_models import (
+    ArtifactRelations,
+    ArtifactRelationsState,
+    RelationEdge,
+    RelationSource,
+    RelationSources,
+    can_recover_publication,
+    can_use_incremental_sources,
+)
 
 ROOT = "viking://resources/wiki"
 
@@ -187,3 +196,75 @@ def test_builder_rejects_missing_parent_and_incomplete_page_coverage():
             snapshot_id="a",
             build_id="b",
         )
+
+
+def model_graph(build_id="published", snapshot="snapshot-a"):
+    return ArtifactRelations(
+        build_id=build_id,
+        target_snapshot_id=snapshot,
+        generated_at=0,
+        nodes=[ROOT + "/"],
+        edges=[],
+    )
+
+
+@pytest.mark.parametrize("source_build", ["candidate", None])
+def test_unpublished_sources_cannot_be_used_after_content_is_restored(source_build):
+    sources = RelationSources(
+        parser_version="markdown-v1",
+        build_id=source_build,
+        pages={ROOT + "/a.md": RelationSource(blob_oid="blob-b", links=["b.md"])},
+    )
+    assert not can_use_incremental_sources(sources, model_graph(), parser_version="markdown-v1")
+
+
+def test_published_sources_require_the_same_parser_version():
+    sources = RelationSources(parser_version="markdown-v1", build_id="published")
+    assert can_use_incremental_sources(sources, model_graph(), parser_version="markdown-v1")
+    assert not can_use_incremental_sources(sources, model_graph(), parser_version="markdown-v2")
+    assert not can_use_incremental_sources(None, model_graph(), parser_version="markdown-v1")
+    assert not can_use_incremental_sources(sources, None, parser_version="markdown-v1")
+
+
+@pytest.mark.parametrize(
+    "build_id,snapshot,phase,status,expected",
+    [
+        ("candidate", "snapshot-b", "publishing", "building", True),
+        ("published", "snapshot-b", "publishing", "building", False),
+        ("candidate", "snapshot-a", "publishing", "building", False),
+        ("candidate", "snapshot-b", "computing", "building", False),
+        ("candidate", "snapshot-b", "publishing", "failed", False),
+        (None, "snapshot-b", "publishing", "building", False),
+    ],
+)
+def test_only_the_current_publication_can_repair_ready(build_id, snapshot, phase, status, expected):
+    state = ArtifactRelationsState(
+        status=status,
+        target_snapshot_id=snapshot,
+        build_id=build_id,
+        phase=phase,
+    )
+    assert can_recover_publication(state, model_graph("candidate", "snapshot-b")) is expected
+    assert not can_recover_publication(state, None)
+
+
+def test_missing_page_and_parsed_page_without_links_are_distinct():
+    sources = RelationSources(
+        parser_version="markdown-v1",
+        pages={"a.md": RelationSource(blob_oid="blob-a", links=[])},
+    )
+    assert sources.pages["a.md"].links == []
+    assert "b.md" not in sources.pages
+
+
+def test_edges_preserve_the_persisted_from_field():
+    edge = RelationEdge.model_validate(
+        {
+            "from": ROOT + "/a.md",
+            "to": ROOT + "/b.md",
+            "type": "references",
+        }
+    )
+    assert edge.model_dump(by_alias=True)["from"] == edge.from_uri
+    with pytest.raises(ValidationError):
+        RelationEdge.model_validate({"from": "a.md", "to": "b.md", "type": "similarity"})
