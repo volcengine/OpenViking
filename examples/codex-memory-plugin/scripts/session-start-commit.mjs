@@ -185,7 +185,13 @@ async function buildSessionProfileContext({ sessionId = "", source = "", maxByte
       fetchJSONRes,
       cfg.profileTokenBudget,
       activePeerId,
-      { ...cfg, sessionStartMaxBytes: maxBytes > 0 ? Math.max(1, maxBytes - ENVELOPE_BYTES) : 0 },
+      {
+        ...cfg,
+        sessionStartMaxBytes: maxBytes > 0 ? Math.max(1, maxBytes - ENVELOPE_BYTES) : 0,
+        // The logger this file already uses for every other profile stage;
+        // without it a failed read/ls is indistinguishable from an empty profile.
+        log,
+      },
     );
     if (!profile?.block) {
       log("skip", { stage: "profile_inject", reason: "no profile content" });

@@ -103,7 +103,12 @@ export class OpenVikingRuntime {
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config.profileTokenBudget,
       state.config.peerId,
-      state.config,
+      {
+        ...state.config,
+        // A swallowed profile read/ls failure looks exactly like "no profile
+        // yet" to the operator, so it needs the same logger recall already uses.
+        log: (stage, data) => this.log(stage, data),
+      },
     );
     state.profileBlock = profile?.block
       ? [

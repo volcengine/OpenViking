@@ -10,6 +10,7 @@ import { expectExit, runHookScript, withMockOpenViking, writeJson } from "./test
 
 import {
   addAgentMessages,
+  buildAgentProfile,
   commitAgentSession,
   loadAgentHookConfig,
   makeAgentFetchJSON,
@@ -133,6 +134,33 @@ test("agent fetch and commit logging preserve response trace_id", async (t) => {
       error: "commit failed",
     },
   });
+});
+
+/**
+ * Cursor / TRAE / ZCode / Kimi Code / CodeBuddy reach buildProfileBlock only through
+ * buildAgentProfile, so the hook entry's logger has to arrive here — without
+ * it the read/ls failures the profile layer reports stay no-ops and a failed
+ * session start still renders as a nearly empty profile with no why.
+ */
+test("the agent-hook profile path reports read failures through its log", async () => {
+  const logged = [];
+  const fetchJSON = async (path) => {
+    if (path.startsWith("/api/v1/content/read")) return { ok: false, status: 503 };
+    return { ok: true, result: [] };
+  };
+
+  const block = await buildAgentProfile(
+    fetchJSON,
+    { profileTokenBudget: 2000, peerId: "test-peer" },
+    process.cwd(),
+    (stage, data) => logged.push([stage, data]),
+  );
+
+  assert.equal(block, null);
+  assert.equal(logged.length, 2);
+  assert.ok(logged.every(([stage, data]) => stage === "profile_read_failed" && data.status === 503));
+  assert.ok(logged.some(([, data]) => !data.uri.includes("/peers/")));
+  assert.ok(logged.some(([, data]) => data.uri.includes("/peers/test-peer/") && data.uri.endsWith("/profile.md")));
 });
 
 /**

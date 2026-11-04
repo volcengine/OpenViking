@@ -153,6 +153,9 @@ runHookStage({
       profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, effectivePeer.peerId, {
         ...cfg,
         sessionStartMaxBytes: profileMaxBytes,
+        // Without this the read/ls failures this PR surfaces stay no-ops in
+        // production: an unreachable server reads as "user has no profile".
+        log,
       });
       if (profile?.block && sessionId) {
         const repeat = isRepeatInjection(statePath("profile-injections.json"), sessionId, profile.block);
