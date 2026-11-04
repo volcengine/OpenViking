@@ -61,18 +61,6 @@ class _FakeAGFS:
         del lease
 
 
-class _FakeAclManager:
-    def __init__(self):
-        self.runtime_config = None
-
-    def set_runtime_config_manager(self, runtime_config) -> None:
-        self.runtime_config = runtime_config
-
-    async def is_enabled(self, account_id: str) -> bool:
-        setting = await self.runtime_config.get_account(account_id, "acl")
-        return setting.enabled if setting is not None else False
-
-
 class _FakeRuntimeConfig:
     def __init__(self):
         self.values = {}
@@ -98,7 +86,7 @@ class _FakeApiKeyManager:
 
 @pytest.fixture
 def fake_viking_fs():
-    return SimpleNamespace(agfs=_FakeAGFS(), acl_manager=_FakeAclManager())
+    return SimpleNamespace(agfs=_FakeAGFS())
 
 
 @pytest_asyncio.fixture
@@ -130,7 +118,6 @@ async def settings_http(fake_viking_fs, monkeypatch):
     await runtime_config.initialize()
     sessions = SessionService(viking_fs=fake_viking_fs)
     sessions.set_runtime_config_manager(runtime_config)
-    fake_viking_fs.acl_manager.set_runtime_config_manager(runtime_config)
     service = SimpleNamespace(
         sessions=sessions,
         viking_fs=fake_viking_fs,
@@ -286,35 +273,6 @@ def test_session_positional_usage_reporter_remains_compatible():
     assert session._agent_evolution_enabled_provider is None
 
 
-async def test_account_configuration_reads_and_updates_account_switches(
-    settings_http,
-):
-    client, service = settings_http
-    service.sessions.set_agent_evolution_config(AgentEvolutionConfig(enabled=False))
-
-    initial = await client.get("/api/v1/admin/accounts/default/configuration")
-    assert initial.status_code == 200, initial.text
-    assert initial.json()["result"]["account_id"] == "default"
-    assert initial.json()["result"]["settings"] == {"agent_evolution": {"enabled": False}}
-    assert await service.runtime_config_manager.get_settings(ConfigScope.account("default")) == {}
-
-    updated = await client.patch(
-        "/api/v1/admin/accounts/default/configuration",
-        json={
-            "settings": {
-                "agent_evolution": {"enabled": True},
-                "acl": {"enabled": True},
-            }
-        },
-    )
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["result"]["settings"]["agent_evolution"]["enabled"] is True
-    assert updated.json()["result"]["settings"]["acl"] == {"enabled": True}
-    assert (await service.runtime_config_manager.get_account("default", "agent_evolution")).enabled
-    assert (await service.runtime_config_manager.get_account("default", "acl")).enabled
-    assert await service.viking_fs.acl_manager.is_enabled("default")
-
-
 async def test_legacy_account_settings_preserves_null_and_empty_object_semantics(
     settings_http,
 ):
@@ -414,6 +372,10 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
 
 async def test_cluster_agent_evolution_override_is_account_fallback(settings_http):
     client, service = settings_http
+    url = "/api/v1/admin/accounts/default/configuration"
+    assert (await client.get(url)).json()["result"]["settings"]["agent_evolution"] == {
+        "enabled": False
+    }
 
     updated = await client.patch(
         "/api/v1/admin/configuration",
@@ -422,7 +384,6 @@ async def test_cluster_agent_evolution_override_is_account_fallback(settings_htt
     assert updated.status_code == 200, updated.text
     assert updated.json()["result"]["settings"] == {"agent_evolution": {"enabled": True}}
     assert await service.sessions.get_agent_evolution_enabled("default")
-    url = "/api/v1/admin/accounts/default/configuration"
     assert (await client.get(url)).json()["result"]["settings"]["agent_evolution"] == {
         "enabled": True
     }

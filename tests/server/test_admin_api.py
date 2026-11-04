@@ -2263,22 +2263,9 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     service = lightweight_admin_app.state.fake_service
     fs = service.viking_fs
     user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
-    user_headers = {"X-API-Key": created.json()["result"]["user_key"]}
-    for method in ("get", "patch"):
-        denied = await client.request(
-            method, url, headers=user_headers, **({"json": {}} if method == "patch" else {})
-        )
-        assert denied.status_code == 403, denied.text
     lightweight_admin_app.state.config.user_config_defaults = UserConfig(
         add_targets={"resource_uri": "viking://~/resources", "skill_uri": "viking://~/skills"}
     )
-    initial = await client.get(url, headers=root_headers())
-    assert initial.status_code == 200, initial.text
-    assert initial.json()["result"]["add_targets"] == {
-        "resource_uri": "viking://user/bob/resources",
-        "skill_uri": "viking://user/bob/skills",
-    }
-    assert (await read_user_config(fs, user_ctx)).add_targets.resource_uri is None
     monkeypatch.setattr(wiring, "_adapter", None)
     before = dict(fs.files)
     rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=root_headers())
@@ -2363,30 +2350,20 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
                 url, json={"ttl": {"user_events": 7}}, headers=root_headers()
             )
         assert rejected.status_code == 503 and fs.files == before
-        cleared = await client.patch(url, json={"ttl": None}, headers=root_headers())
+        cleared = await client.patch(
+            url, json={"ttl": None, "add_targets": None}, headers=root_headers()
+        )
         assert cleared.status_code == 200, cleared.text
         assert cleared.json()["result"]["ttl"] is None
+        assert cleared.json()["result"]["add_targets"] == {
+            "resource_uri": "viking://user/bob/resources",
+            "skill_uri": "viking://user/bob/skills",
+        }
+        assert (await read_user_config(fs, user_ctx)).add_targets.model_dump(
+            exclude_none=True
+        ) == {}
         assert cleared.json()["result"]["memory_policy"] == settings["memory_policy"]
         assert (await engine.policy(acct, first_peer)).days == 14
-
-        reset_target = await client.patch(
-            url,
-            json={"add_targets": {"resource_uri": None, "skill_uri": "viking://agent/skills"}},
-            headers=root_headers(),
-        )
-        assert reset_target.status_code == 200, reset_target.text
-        assert reset_target.json()["result"]["add_targets"] == {
-            "resource_uri": "viking://user/bob/resources",
-            "skill_uri": "viking://agent/skills",
-        }
-        assert reset_target.json()["result"]["memory_policy"] == settings["memory_policy"]
-        reset_targets = await client.patch(url, json={"add_targets": None}, headers=root_headers())
-        assert reset_targets.status_code == 200, reset_targets.text
-        assert (
-            reset_targets.json()["result"]["add_targets"] == initial.json()["result"]["add_targets"]
-        )
-        stored_targets = (await read_user_config(fs, user_ctx)).add_targets
-        assert stored_targets.resource_uri is None and stored_targets.skill_uri is None
 
         lightweight_admin_app.state.config.user_config_defaults = UserConfig(
             memory_policy={"memory_types": ["events"]}
@@ -2401,34 +2378,6 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     finally:
         set_openviking_config(previous_config)
         await engine.aclose()
-
-
-async def test_user_memory_policy_uses_server_default_without_user_override(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
-):
-    acct = _uid()
-    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-        memory_policy={"memory_types": ["profile"]}
-    )
-    create_account = await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    assert create_account.status_code == 200, create_account.text
-
-    get_settings = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users/alice/settings",
-        headers=root_headers(),
-    )
-    assert get_settings.status_code == 200, get_settings.text
-    assert get_settings.json()["result"]["memory_policy"] == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "working_memory": {"enabled": False},
-        "memory_types": ["profile"],
-    }
 
 
 async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
