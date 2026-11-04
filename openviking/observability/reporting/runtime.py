@@ -53,6 +53,8 @@ def make_subscriber(reporter, config):
             identity = "|".join(str(payload.get(k) or "") for k in ("account_id", "resource_id", "ov_account_id", "task_id", "status", "updated_at"))
             payload["event_id"] = "evt_" + hashlib.sha256(identity.encode()).hexdigest()
             payload["timestamp"] = int(source.get("updated_at") or payload["timestamp"])
+        elif name == "file_mutation" and source.get("operation") == "compile_commit":
+            payload["timestamp"] = int(source.get("updated_at") or payload["timestamp"])
         if name in {"vlm_call", "embedding_call"}:
             # An unclassified billing owner stays unknown, rather than silently charged to OV.
             mappings = config.get("telemetry", {}).get("model_cost_bearers", [])

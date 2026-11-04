@@ -155,3 +155,45 @@ def emit_file_change(uri, ctx, change_type, *, old_uri=None, is_dir=False, opera
     except Exception:
         # Observability must not change a committed storage operation's outcome.
         return
+
+
+def emit_compile_outputs(task, changes, *, snapshot_id, committed_at):
+    """Attribute committed snapshot differences, including writes by external Agents.
+
+    Ordinary HTTP writes cannot inherit the remote Compile Task context. The
+    existing Compile snapshot diff is authoritative; no file content is read.
+    Stable IDs and commit time make finalization retries the same observation.
+    """
+    from .runtime import is_reporting_enabled
+    if not is_reporting_enabled():
+        return
+    try:
+        import hashlib
+        import json
+
+        if (task.task_type != "compile" or not snapshot_id or not committed_at
+                or not task.task_id or not task.account_id or not task.user_id):
+            return
+        target = task.meta["request"]["to"].rstrip("/") + "/"
+        for change in changes:
+            uri, kind = change["uri"], change["change_type"]
+            if not uri.startswith(target) or kind not in {"added", "modified", "deleted"}:
+                continue
+            data = file_metadata(uri)
+            if data is None or data["output_role"] != "business_file":
+                continue
+            identity = json.dumps(
+                [task.account_id, task.user_id, task.task_id, snapshot_id, uri, kind],
+                separators=(",", ":"),
+            )
+            data.update(
+                event_id="evt_" + hashlib.sha256(identity.encode()).hexdigest(),
+                account_id=task.account_id, user_id=task.user_id,
+                task_id=task.task_id, task_type="compile", change_type=kind,
+                operation="compile_commit", is_new_file=kind == "added",
+                updated_at=int(committed_at),
+            )
+            try_publish_event("file_mutation", data)
+    except Exception:
+        # Reporting is optional and cannot interrupt output publication.
+        return

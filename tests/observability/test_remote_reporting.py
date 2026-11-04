@@ -117,6 +117,50 @@ def test_multiple_exporters_share_event_and_task_fanout_ids(monkeypatch):
     assert first.events[0]["event_id"] == second.events[0]["event_id"]
 
 
+def test_compile_snapshot_reports_only_committed_business_changes_with_stable_identity(monkeypatch):
+    from openviking.observability.reporting.facts import emit_compile_outputs
+
+    monkeypatch.setattr(runtime, "_reporter", object())
+    capture = Capture()
+    register_event_subscriber("test_compile_export", runtime.make_subscriber(capture, {}))
+    target = "viking://user/alice/resources/compiled"
+    task = SimpleNamespace(task_id="cmp_one", task_type="compile", account_id="space_one",
+                           user_id="alice", meta={"request": {"to": target}})
+    changes = [{"uri": target + "/result.md", "change_type": "added"},
+               {"uri": target + "/previous.md", "change_type": "modified"},
+               {"uri": target + "/removed.md", "change_type": "deleted"},
+               {"uri": target + "/.abstract.md", "change_type": "added"},
+               {"uri": target + "/.relations.json", "change_type": "added"},
+               {"uri": target + "_other/foreign.md", "change_type": "added"}]
+    for _ in range(2):
+        with bind_task_context("unrelated_task", "other_space", "bob", task_type="content_write"):
+            emit_compile_outputs(task, changes, snapshot_id="committed_head", committed_at=1793806188000)
+    assert len(capture.events) == 6
+    for first, replay in zip(capture.events[:3], capture.events[3:]):
+        assert first["event_id"] == replay["event_id"]
+        assert first["timestamp"] == replay["timestamp"] == 1793806188000
+        assert (first["ov_account_id"], first["ov_user_id"], first["task_id"]) == (
+            "space_one", "alice", "cmp_one")
+        assert first["task_type"] == "compile" and first["operation"] == "compile_commit"
+        assert first["output_role"] == "business_file"
+    assert [x["change_type"] for x in capture.events[:3]] == ["added", "modified", "deleted"]
+    emit_compile_outputs(task, changes, snapshot_id="different_head", committed_at=1793806188000)
+    assert capture.events[0]["event_id"] != capture.events[6]["event_id"]
+
+
+def test_compile_reporting_failure_cannot_change_business_outcome(monkeypatch):
+    from openviking.observability.reporting import facts
+
+    monkeypatch.setattr(runtime, "_reporter", object())
+    task = SimpleNamespace(task_id="cmp_one", task_type="compile", account_id="space_one",
+                           user_id="alice", meta={"request": {"to": "viking://resources/compiled"}})
+    def fail(*args):
+        raise RuntimeError("reporter unavailable")
+    monkeypatch.setattr(facts, "try_publish_event", fail)
+    facts.emit_compile_outputs(task, [{"uri": "viking://resources/compiled/result.md", "change_type": "added"}],
+                               snapshot_id="head", committed_at=1793806188000)
+
+
 def test_model_cost_mapping_respects_space_and_rejects_ambiguous_ownership():
     capture = Capture()
     config = {"telemetry": {"deployment": {"account_id": "cloud", "resource_id": "library", "region": "region"},
