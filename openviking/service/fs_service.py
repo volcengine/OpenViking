@@ -11,7 +11,7 @@ from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -249,7 +249,11 @@ class FSService:
         tags_by_uri: Dict[str, List[str]] = {}
         if self._vikingdb:
             uris = list(
-                dict.fromkeys(str(entry.get("uri") or "") for entry in entries if entry.get("uri"))
+                dict.fromkeys(
+                    str(entry["uri"])
+                    for entry in entries
+                    if entry.get("uri") and entry.get("access") != "container"
+                )
             )
             if uris:
                 records = await VikingDBManagerProxy(self._vikingdb, ctx).filter(
@@ -263,6 +267,8 @@ class FSService:
                 for record in records:
                     records_by_uri.setdefault(str(record.get("uri") or ""), []).append(record)
                 for entry in entries:
+                    if entry.get("access") == "container":
+                        continue
                     uri = str(entry.get("uri") or "")
                     levels = {0, 1} if entry.get("isDir", False) else {2}
                     found: List[str] = []
@@ -278,6 +284,17 @@ class FSService:
                     tags_by_uri[uri] = found
         result_entries: List[Dict[str, Any]] = []
         for entry in entries:
+            if entry.get("access") == "container":
+                # Navigation does not grant access to indexed tags or tag matching.
+                if not normalized_tags:
+                    result_entries.append(
+                        {
+                            key: value
+                            for key, value in entry.items()
+                            if key not in {"tags", "search_tags"}
+                        }
+                    )
+                continue
             entry_tags = tags_by_uri.get(str(entry.get("uri") or ""), [])
             if normalized_tags and not set(normalized_tags).issubset(entry_tags):
                 continue
@@ -1478,6 +1495,43 @@ class FSService:
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
+    async def ensure_remove_access(self, uri: str, ctx: RequestContext) -> None:
+        """Validate the namespace and ACL checks used when removing a file."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.MANAGE)
+
+    async def can_read_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+    ) -> Dict[str, bool]:
+        """Return caller-specific read visibility for each URI."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
+
+    async def get_tags_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+        *,
+        check_access: bool = True,
+    ) -> Dict[str, List[str]]:
+        """Return vector-backed retrieval tags for each URI."""
+        unique_uris = list(dict.fromkeys(uris))
+        if not unique_uris:
+            return {}
+        if check_access:
+            access = await self.can_read_many(unique_uris, ctx)
+            unique_uris = [uri for uri in unique_uris if access.get(uri, False)]
+        entries = [{"uri": uri, "isDir": False} for uri in unique_uris]
+        tagged_entries = await self._attach_and_filter_tags(
+            entries,
+            ctx,
+            tags=None,
+            include_tags=True,
+        )
+        return {str(entry["uri"]): list(entry.get("tags") or []) for entry in tagged_entries}
+
     async def _read_content(
         self, uri: str, ctx: RequestContext, *, max_bytes: int | None = None
     ) -> tuple[str, str]:
@@ -1503,8 +1557,10 @@ class FSService:
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content, restoring Privacy references for Skills and Sessions."""
+        uri = await self._resolve_uri(uri, ctx)
+        ctx = self._ensure_initialized().authorize_read(ctx, [uri])
         resolved_uri, content = await self._read_content(uri, ctx)
-        if self._privacy_config_service is not None:
+        if self._privacy_config_service is not None and ctx.data_access is None:
             skill_name = get_skill_name_from_uri(resolved_uri)
             session_id = get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
             if skill_name is not None:
@@ -1542,6 +1598,7 @@ class FSService:
         # Resolve id to URI before classify_uri / visible_content which expect
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
+        ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
             if self._privacy_sanitizer is not None
@@ -1567,7 +1624,7 @@ class FSService:
         """Hide memory metadata and sanitize private values in already-read text."""
         if classify_uri(uri).is_memory:
             content = visible_content(content, uri=uri)
-        if self._privacy_sanitizer is not None:
+        if self._privacy_sanitizer is not None and ctx.data_access is None:
             content = (
                 await self._privacy_sanitizer.sanitize(
                     content,

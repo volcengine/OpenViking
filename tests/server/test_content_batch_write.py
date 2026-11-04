@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -25,6 +26,7 @@ from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
 from openviking.utils.content_hash import content_md5
 from openviking_cli.exceptions import (
+    ConflictError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -431,7 +433,7 @@ async def test_batch_create_replace_and_upsert_overwrite_or_create(monkeypatch):
         root_uri=root,
         operations=[
             {"uri": existing, "content": "replacement", "mode": "create"},
-            {"uri": created_by_replace, "content": "created", "mode": "replace"},
+            {"uri": created_by_replace, "content": "created", "mode": "replace", "if_absent": True},
             {"uri": created_by_upsert, "content": "upsert", "mode": "upsert"},
         ],
         ctx=ctx,
@@ -445,6 +447,82 @@ async def test_batch_create_replace_and_upsert_overwrite_or_create(monkeypatch):
         created_by_replace: "created",
         created_by_upsert: "upsert",
     }
+
+    with pytest.raises(ConflictError, match="Target already exists"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {"uri": existing, "content": "must not be written"},
+                {"uri": created_by_replace, "content": "overwrite", "if_absent": True},
+            ],
+            ctx=ctx,
+            wait=False,
+        )
+    assert vfs.files[existing] == "replacement"
+    assert vfs.files[created_by_replace] == "created"
+
+
+@pytest.mark.asyncio
+async def test_batch_revision_guard_preserves_conflicts_and_unchanged_results(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://resources/wiki"
+    same = f"{root}/same.md"
+    stale = f"{root}/stale.md"
+    changed = f"{root}/changed.md"
+    vfs = _VFS(root, {same: "same", stale: "newer", changed: "old"})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": same,
+                "content": "same",
+                "expected_sha256": hashlib.sha256(b"same").hexdigest(),
+            },
+            {
+                "uri": stale,
+                "content": "replacement",
+                "expected_sha256": hashlib.sha256(b"old").hexdigest(),
+            },
+            {
+                "uri": changed,
+                "content": "replacement",
+                "expected_sha256": hashlib.sha256(b"old").hexdigest(),
+            },
+        ],
+        ctx=ctx,
+        wait=False,
+        skip_conflicts=True,
+        defer_processing=True,
+    )
+
+    assert result["unchanged"] == [same]
+    assert result["updated"] == [changed]
+    assert [conflict["uri"] for conflict in result["conflicts"]] == [stale]
+    assert vfs.writes == [changed]
+    assert vfs.files[stale] == "newer"
+    assert _last_content_write_payload(_coordinator_queue_for_unit_tests)["result"][
+        "unchanged"
+    ] == [same]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected", ["ABC", "A" * 64, 123])
+async def test_batch_rejects_invalid_revision_before_writing(expected):
+    root = "viking://resources/wiki"
+    vfs = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    with pytest.raises(InvalidArgumentError, match="expected_sha256"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[{"uri": f"{root}/page.md", "content": "new", "expected_sha256": expected}],
+            ctx=ctx,
+            wait=False,
+        )
+    assert vfs.writes == []
 
 
 @pytest.mark.asyncio

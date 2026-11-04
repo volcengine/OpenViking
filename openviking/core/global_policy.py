@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 GLOBAL_POLICY_INVALID = "GLOBAL_POLICY_INVALID"
 GLOBAL_POLICY_SCHEMA_UNSUPPORTED = "GLOBAL_POLICY_SCHEMA_UNSUPPORTED"
+# Keep the ordinary-content boundary aligned with Rust PROTECTED_ROOTS.
+PROTECTED_ROOTS = ("privacy", "sessions")
 
 
 class GlobalPolicyError(ValueError):
@@ -35,6 +37,100 @@ class GlobalPolicyRule:
 
 
 @dataclass(frozen=True)
+class PolicyPathScope:
+    path: str | None
+    recursive: bool
+
+
+def _scope_contains(scope: PolicyPathScope, path: str | None) -> bool:
+    return scope.path == path or (
+        scope.recursive
+        and (scope.path is None or (path is not None and path.startswith(scope.path + "/")))
+    )
+
+
+def _scope_intersection(a: PolicyPathScope, b: PolicyPathScope) -> PolicyPathScope | None:
+    if a.path == b.path:
+        return PolicyPathScope(a.path, a.recursive and b.recursive)
+    if a.recursive and _scope_contains(a, b.path):
+        return b
+    if b.recursive and _scope_contains(b, a.path):
+        return a
+    return None
+
+
+def _finish_scopes(
+    includes: list[PolicyPathScope], excludes: list[PolicyPathScope]
+) -> PolicyScopePlan:
+    exact = {s.path for s in excludes if not s.recursive}
+    recursive = {s.path for s in excludes if s.recursive}
+
+    def covered(scope: PolicyPathScope) -> bool:
+        if None in recursive or scope.path in recursive:
+            return True
+        if not scope.recursive and scope.path in exact:
+            return True
+        parts = scope.path.split("/") if scope.path is not None else []
+        return any("/".join(parts[:i]) in recursive for i in range(1, len(parts)))
+
+    def ordered(scopes):
+        return tuple(sorted(set(scopes), key=lambda s: (s.path or "", s.recursive)))
+
+    remaining = [s for s in includes if not covered(s)]
+    if not remaining:
+        return PolicyScopePlan("denied", (), ())
+    return PolicyScopePlan("allowed", ordered(remaining), ordered(excludes))
+
+
+@dataclass(frozen=True)
+class PolicyScopePlan:
+    status: Literal["allowed", "denied"]
+    includes: tuple[PolicyPathScope, ...]
+    excludes: tuple[PolicyPathScope, ...]
+
+    def allows(self, path: str) -> bool:
+        """Membership requires both the includes and excludes.
+
+        Paths the policy grammar cannot represent fail closed, matching
+        ``is_global_policy_path_allowed``, so enumeration never aborts on an
+        ordinary filename the validator rejects.
+        """
+        try:
+            validate_global_policy_path(path)
+        except GlobalPolicyError:
+            return False
+        return (
+            self.status == "allowed"
+            and any(_scope_contains(s, path) for s in self.includes)
+            and not any(_scope_contains(s, path) for s in self.excludes)
+        )
+
+    def restrict_scope(self, path: str | None, *, recursive: bool = True) -> PolicyScopePlan:
+        request = _validated_scope(path, recursive)
+        if self.status != "allowed":
+            return PolicyScopePlan("denied", (), ())
+        return _finish_scopes(
+            [s for item in self.includes if (s := _scope_intersection(item, request)) is not None],
+            [s for item in self.excludes if (s := _scope_intersection(item, request)) is not None],
+        )
+
+    def has_allowed_descendant(self, path: str | None) -> bool:
+        try:
+            restricted = self.restrict_scope(path)
+        except GlobalPolicyError:
+            return False
+        return any(s.recursive or s.path != path for s in restricted.includes)
+
+
+def _validated_scope(path: str | None, recursive: bool) -> PolicyPathScope:
+    if not isinstance(recursive, bool) or (path is None and not recursive):
+        raise GlobalPolicyError("The owner root requires recursive=True")
+    if path is not None:
+        validate_global_policy_path(path)
+    return PolicyPathScope(path, recursive)
+
+
+@dataclass(frozen=True)
 class GlobalAccessPolicy:
     """Validated parser output. The body is preserved, not sanitized or executed.
 
@@ -54,6 +150,28 @@ class GlobalAccessPolicy:
     def allows_path(self, path: str) -> bool:
         """Evaluate one owner-relative path, failing closed for non-valid policies."""
         return is_global_policy_path_allowed(self, path)
+
+    def restrict_scope(self, path: str | None = None, *, recursive: bool = True) -> PolicyScopePlan:
+        """Clip one user's ordinary-content scope; apply includes AND excludes.
+
+        This computes a request plan, not filesystem existence or final ACL authorization.
+        """
+        request = _validated_scope(path, recursive)
+        if self.status != "valid" or self._native is None:
+            return PolicyScopePlan("denied", (), ())
+        includes = [request] if self.default == "allow" else []
+        excludes = []
+        for rule in self.rules:
+            if rule.effect == "allow" and self.default == "allow":
+                continue
+            overlap = _scope_intersection(request, PolicyPathScope(rule.path, rule.recursive))
+            if overlap is not None:
+                (includes if rule.effect == "allow" else excludes).append(overlap)
+        for root in PROTECTED_ROOTS:
+            overlap = _scope_intersection(request, PolicyPathScope(root, True))
+            if overlap is not None:
+                excludes.append(overlap)
+        return _finish_scopes(includes, excludes)
 
 
 def _native_types():

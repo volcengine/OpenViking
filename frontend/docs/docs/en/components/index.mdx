@@ -1,0 +1,47 @@
+# Components
+
+Reusable React UI modules for OpenViking applications. Each component includes
+usage guidance, interactive examples, and API details. Components include both
+basic controls and composed views: they receive prepared data and state through
+props and report user intent through callbacks. Data fetching and business data
+processing belong to the upper layer.
+
+## Available components
+
+### [Icons](./icons)
+
+Five file-type icons with configurable image dimensions and accessible labels.
+
+### [StatusBadge](./status-badge)
+
+A scaffold example displaying a resource or operation state with a text label and color indicator.
+
+### [FileTree](./file-tree)
+
+A flattened file tree. The host supplies ordered rows; the component renders them and reports selection, expansion and pagination intent.
+
+### [FilePreview](./file-preview)
+
+A tabbed file preview. Each tab either hands a file source to the component or renders a host-owned node; the component owns the tab row, header row and view switching.
+
+### [Tui](./tui)
+
+A command console. The host owns execution; the component renders records and reports submit, cancel and history intent.
+
+### [VikingBot](./viking-bot)
+
+A conversation view. The host owns sessions, streaming and uploads; the component renders messages and reports intent.
+
+### [ScopeSwitcher](./scope-switcher)
+
+A scope breadcrumb. The host declares the levels; the component renders them and reports search and switch intent.
+
+### [AgentConnect](./agent-connect)
+
+Agent selection, onboarding steps and connection status. All content comes from the host.
+
+### [Search](./search)
+
+Search entry, retrieval mode switching and advanced filters. The host declares the modes and filters and owns requests and results.
+
+Tui, VikingBot, ScopeSwitcher, AgentConnect and Search ship as placeholder components: each renders a fixed-size empty shell and consumes no props, so hosts can start against the published package while the real views are migrated. The same props serve every host; hosts differ in flow and data access but share the interaction and UI. See [Getting started](../guide/getting-started) for entry and stylesheet choices.
