@@ -42,6 +42,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import (
@@ -115,6 +116,9 @@ class FileStore(AccountStore):
         configured_watch_interval = params.pop(
             "watch_interval_seconds", watch_interval_seconds
         )
+        configured_read_only = params.pop("read_only", False)
+        if not isinstance(configured_read_only, bool):
+            raise InvalidArgumentError("read_only must be a boolean")
         if not isinstance(configured_watch_enabled, bool):
             raise InvalidArgumentError("watch_enabled must be a boolean")
         if not isinstance(configured_watch_interval, (int, float)):
@@ -127,6 +131,7 @@ class FileStore(AccountStore):
         self._viking_fs = viking_fs
         self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
+        self._read_only = configured_read_only
         self._watch_enabled = configured_watch_enabled
         self._watch_interval_seconds = (
             float(configured_watch_interval)
@@ -165,7 +170,11 @@ class FileStore(AccountStore):
             logger.exception("Failed to persist rollback for account %s", account_id)
 
     async def load(self) -> None:
-        """Load keys into memory (writable startup path; migrates plaintext; see reload())."""
+        """Load persisted identities; only writers bootstrap and migrate the store."""
+        if self._read_only:
+            await self._reload()
+            self._start_watcher()
+            return
         async with self._mutation_lock:
             lease = await self._async_agfs.pathlock_acquire_exact(ACCOUNTS_PATH, timeout_secs=10.0)
             try:
@@ -223,6 +232,10 @@ class FileStore(AccountStore):
             )
         self._start_watcher()
 
+    def _require_writable(self) -> None:
+        if self._read_only:
+            raise PermissionDeniedError("File account store is read-only.")
+
     def _start_watcher(self) -> None:
         if not self._watch_enabled or self._watch_task is not None:
             return
@@ -246,6 +259,9 @@ class FileStore(AccountStore):
     async def _watch_store(self) -> None:
         try:
             last_signature = await self._compute_store_signature()
+            # Changes between load() and this task's first scheduling must not
+            # become the baseline for an older in-memory snapshot.
+            await self._reload()
         except Exception as exc:
             self._cache_available = False
             logger.warning(
@@ -615,6 +631,7 @@ class FileStore(AccountStore):
 
     async def ensure_trusted_identities(self, identities: Dict[str, set[str]]) -> dict[str, int]:
         """Merge trusted identities into the registry without creating API keys."""
+        self._require_writable()
         async with self._mutation_lock:
             return await self._ensure_trusted_identities_unlocked(identities)
 
@@ -1352,6 +1369,7 @@ class FileStore(AccountStore):
 
     async def _write_json(self, path: str, data: dict, lease_ref: object | None = None) -> None:
         """Write a JSON file to AGFS with encryption support."""
+        self._require_writable()
         content = json.dumps(data, ensure_ascii=False, indent=2)
         if isinstance(content, str):
             content = content.encode("utf-8")
@@ -1618,6 +1636,7 @@ class FileStore(AccountStore):
         *,
         lease_ref: object | None = None,
     ) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
             await self._create_account_identity(
@@ -1634,6 +1653,7 @@ class FileStore(AccountStore):
         *,
         lease_ref: object | None = None,
     ) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
             await self._create_account_identity(
@@ -1641,6 +1661,7 @@ class FileStore(AccountStore):
             )
 
     async def create_user(self, account_id: str, user_id: str, role: str) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._create_user_identity(account_id, user_id, role)
 
@@ -1651,6 +1672,7 @@ class FileStore(AccountStore):
         role: str,
         api_key: str,
     ) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._create_user_identity(
                 account_id,
@@ -1660,6 +1682,7 @@ class FileStore(AccountStore):
             )
 
     async def delete_account(self, account_id: str) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
             await self._delete_account_identity(account_id)
@@ -1706,6 +1729,7 @@ class FileStore(AccountStore):
         )
 
     async def set_role(self, account_id: str, user_id: str, role: str) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
             await self._refresh_users_for_management_read_unlocked(account_id)
@@ -1720,6 +1744,7 @@ class FileStore(AccountStore):
         owner_account_id: str,
         owner_user_id: str,
     ) -> tuple[DeletionRecord, bool]:
+        self._require_writable()
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
             if user_id is not None:
@@ -1742,6 +1767,7 @@ class FileStore(AccountStore):
         owner_account_id: str,
         owner_user_id: str,
     ) -> DeletionRecord:
+        self._require_writable()
         async with self._mutation_lock:
             return await self._replace_deletion_task(
                 account_id,
@@ -1755,6 +1781,7 @@ class FileStore(AccountStore):
     async def finish_deletion(
         self, account_id: str, user_id: str | None, task_id: str
     ) -> bool:
+        self._require_writable()
         async with self._mutation_lock:
             return await self._finish_deletion(account_id, user_id, task_id)
 
@@ -1773,6 +1800,7 @@ class FileStore(AccountStore):
     async def create_group(
         self, account_id: str, group_id: str
     ) -> GroupSummary:
+        self._require_writable()
         await self._refresh_accounts_for_management_read()
         return await self._create_group(account_id, group_id)
 
@@ -1798,6 +1826,7 @@ class FileStore(AccountStore):
     async def add_group_members(
         self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
+        self._require_writable()
         async with self._mutation_lock:
             await self._refresh_users_for_management_read_unlocked(account_id)
             return await self._add_group_members(account_id, group_id, user_ids)
@@ -1805,11 +1834,13 @@ class FileStore(AccountStore):
     async def remove_group_members(
         self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
+        self._require_writable()
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
             return await self._remove_group_members(account_id, group_id, user_ids)
 
     async def delete_group(self, account_id: str, group_id: str) -> None:
+        self._require_writable()
         await self._refresh_accounts_for_management_read()
         await self._delete_group(account_id, group_id)
 
@@ -1817,6 +1848,7 @@ class FileStore(AccountStore):
         self, account_id: str, user_id: str, api_key: str,
         *, expected_api_key: str | None = None,
     ) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._set_user_key(
                 account_id,
@@ -1869,6 +1901,7 @@ class FileStore(AccountStore):
     async def revoke_active_api_keys(
         self, account_id: str, user_id: str | None = None
     ) -> None:
+        self._require_writable()
         async with self._mutation_lock:
             await self._revoke_user_keys(account_id, user_id)
 
