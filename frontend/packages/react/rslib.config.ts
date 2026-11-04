@@ -17,10 +17,10 @@ export default defineConfig({
           'components/tui': './src/components/tui/tui.tsx',
           'components/scope-switcher':
             './src/components/scope-switcher/scope-switcher.tsx',
+          'components/agent-connect':
+            './src/components/agent-connect/agent-connect.tsx',
           'modules/file-browser': './src/modules/file-browser/file-browser.tsx',
           'modules/console': './src/modules/console/console.tsx',
-          'modules/agent-connect':
-            './src/modules/agent-connect/agent-connect.tsx',
           'modules/task-center': './src/modules/task-center/task-center.tsx',
           'modules/user-usage': './src/modules/user-usage/user-usage.tsx',
         },
@@ -42,10 +42,11 @@ export default defineConfig({
       'components/tui/style': './src/components/tui/style.css',
       'components/scope-switcher/style':
         './src/components/scope-switcher/style.css',
+      'components/agent-connect/style':
+        './src/components/agent-connect/style.css',
       'modules/style': './src/modules/style.css',
       'modules/file-browser/style': './src/modules/file-browser/style.css',
       'modules/console/style': './src/modules/console/style.css',
-      'modules/agent-connect/style': './src/modules/agent-connect/style.css',
       'modules/task-center/style': './src/modules/task-center/style.css',
       'modules/user-usage/style': './src/modules/user-usage/style.css',
     }).map(([name, entry]) => ({

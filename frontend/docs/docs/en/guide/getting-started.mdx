@@ -2,7 +2,7 @@
 
 OpenViking UI provides React foundations for building AI application interfaces on OpenViking, the context database for AI agents. The workspace includes Rslib builds, bilingual documentation, layered directory conventions, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration.
 
-The package provides FileTree, FilePreview, five file-type icons, and five business module placeholders. See the [component overview](../components/) and [module overview](../modules/) for their current scope. Public business Hooks are not implemented yet.
+The package provides FileTree, FilePreview, Tui, ScopeSwitcher, AgentConnect, five file-type icons, and four business module placeholders. See the [component overview](../components/) and [module overview](../modules/) for their current scope. Public business Hooks are not implemented yet.
 
 ## Run locally
 
@@ -21,7 +21,7 @@ The workspace development plugin starts Rslib watch before the documentation ser
 ## Organize application code
 
 - `packages/react/src/components/`: reusable views that receive prepared data through props and report intent through callbacks.
-- `packages/react/src/modules/`: five importable placeholder components; business Hooks and composed interactions will follow.
+- `packages/react/src/modules/`: four importable placeholder components; business Hooks and composed interactions will follow.
 - `packages/react/src/hooks/` and `utils/`: internal shared logic, without public subpaths.
 - `docs/docs/en/` and `docs/docs/zh/`: corresponding documentation pages; shared runnable examples belong in `docs/docs/_demos/`.
 
@@ -29,7 +29,7 @@ Keep application-specific workflows and authentication in the application layer.
 
 ## Public entries
 
-The root `@openviking/react` entry exports FileTree, the five business module placeholders, and their public types. FileTree and FilePreview are also available through their `components/<module>` subpaths. `@openviking/react/icons` provides five file-type icons.
+The root `@openviking/react` entry exports FileTree, Tui, ScopeSwitcher, AgentConnect, the four business module placeholders, and their public types. Components are also available through their `components/<module>` subpaths. `@openviking/react/icons` provides five file-type icons.
 
 There are no aggregate `components` or `modules` JavaScript entries. Business placeholders use individual `modules/<module>` entries:
 
@@ -40,7 +40,7 @@ import '@openviking/react/modules/file-browser/style.css';
 <FileBrowser />;
 ```
 
-The five placeholders accept `className`, `style`, and replaceable `labels`, and require no Provider. See [Modules](../modules/) for runnable examples and Props types.
+The four placeholders accept `className`, `style`, and replaceable `labels`, and require no Provider. See [Modules](../modules/) for runnable examples and Props types.
 
 Business modules will combine data-loading Hooks with composed views around focused capabilities. Each module entry will export its Hooks separately from its composed view, so hosts can reuse the logic with their own UI. The shared Client will follow the native OpenViking API paths, parameters, and response types. Authentication, account scope, routing, permissions, and complete page flows remain with the host. Business Hooks and cross-module public Hooks have no implementation or exports yet.
 

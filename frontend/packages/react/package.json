@@ -45,6 +45,11 @@
       "import": "./dist/components/scope-switcher.js"
     },
     "./components/scope-switcher/style.css": "./dist/components/scope-switcher/style.css",
+    "./components/agent-connect": {
+      "types": "./dist/components/agent-connect/agent-connect.d.ts",
+      "import": "./dist/components/agent-connect.js"
+    },
+    "./components/agent-connect/style.css": "./dist/components/agent-connect/style.css",
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./modules/file-browser": {
@@ -57,11 +62,6 @@
       "import": "./dist/modules/console.js"
     },
     "./modules/console/style.css": "./dist/modules/console/style.css",
-    "./modules/agent-connect": {
-      "types": "./dist/modules/agent-connect/agent-connect.d.ts",
-      "import": "./dist/modules/agent-connect.js"
-    },
-    "./modules/agent-connect/style.css": "./dist/modules/agent-connect/style.css",
     "./modules/task-center": {
       "types": "./dist/modules/task-center/task-center.d.ts",
       "import": "./dist/modules/task-center.js"
