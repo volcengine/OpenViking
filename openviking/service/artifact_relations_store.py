@@ -10,6 +10,7 @@ coordinates normal work; conditional state writes fence delayed remote I/O.
 from __future__ import annotations
 
 import json
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, TypeVar
 from uuid import uuid4
@@ -236,6 +237,46 @@ class ArtifactRelationsStore:
                 sources = None
             return state, sources, graph
 
+    async def check_compile_wait(
+        self,
+        account_id: str,
+        to: str,
+        snapshot_id: str,
+        operation_id: str,
+        timeout_seconds: float,
+    ) -> tuple[ArtifactRelationsState | None, ArtifactRelations | None]:
+        """Check completion or expire the pinned build under the publication lock.
+
+        Do not acquire the execution lock: a stuck Worker must not block expiry.
+        A completed publication wins the race; otherwise CAS of failed fences
+        an in-flight Worker. Legacy requests start their persisted clock once.
+        """
+        async with self._locked(account_id, to) as (directory, ctx, target):
+            state, graph = await self._publication(directory, ctx, target)
+            if (
+                state is None
+                or state.status != "building"
+                or state.compile_operation_id != operation_id
+                or state.target_snapshot_id != snapshot_id
+            ):
+                return state, graph
+            self._check_owner(target, operation_id, state.target_generation)
+            now = time.time()
+            if state.requested_at is None:
+                state.requested_at = now
+                await self._replace(directory, "artifact_relations_state", state, ctx)
+            elif now - state.requested_at >= timeout_seconds:
+                state = state.model_copy(
+                    update={
+                        "status": "failed",
+                        "phase": None,
+                        "error_code": "ARTIFACT_RELATIONS_TIMEOUT",
+                        "error": f"Artifact relations build timed out after {timeout_seconds:g} seconds",
+                    }
+                )
+                await self._replace(directory, "artifact_relations_state", state, ctx)
+            return state, graph
+
     async def merge_sources(
         self,
         account_id: str,
@@ -276,6 +317,7 @@ class ArtifactRelationsStore:
             phase="queued",
             target_snapshot_id=snapshot_id,
             compile_operation_id=compile_operation_id,
+            requested_at=time.time(),
         )
         async with self._locked(account_id, to) as (directory, ctx, target):
             self._check_owner(target, compile_operation_id)

@@ -206,8 +206,22 @@ class ArtifactRelationsService(DequeueHandlerBase):
         await self.store.request(account_id, to, snapshot_id, compile_operation_id=operation_id)
         await self._enqueue(account_id, to)
 
-    async def ready(self, account_id: str, to: str, snapshot: str, operation: str) -> bool:
-        state, graph = await self.store.get_publication(account_id, to)
+    async def ready(
+        self,
+        account_id: str,
+        to: str,
+        snapshot: str,
+        operation: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> bool:
+        state, graph = (
+            await self.store.get_publication(account_id, to)
+            if timeout_seconds is None
+            else await self.store.check_compile_wait(
+                account_id, to, snapshot, operation, timeout_seconds
+            )
+        )
         if (
             state is None
             or state.compile_operation_id != operation
@@ -215,7 +229,10 @@ class ArtifactRelationsService(DequeueHandlerBase):
         ):
             return False
         if state.status == "failed":
-            raise FailedPreconditionError(f"Artifact relations build failed: {state.error}")
+            raise FailedPreconditionError(
+                f"Artifact relations build failed: {state.error}",
+                details={"reason": state.error_code or "ARTIFACT_RELATIONS_FAILED"},
+            )
         return state.status == "ready" and graph is not None
 
     async def query(self, to: str, ctx) -> dict:
@@ -226,7 +243,10 @@ class ArtifactRelationsService(DequeueHandlerBase):
             raise NotFoundError(to, "compile target")
         state, graph = await self.store.get_publication(ctx.account_id, to)
         if state is not None and state.status == "failed":
-            raise FailedPreconditionError(f"Artifact relations build failed: {state.error}")
+            raise FailedPreconditionError(
+                f"Artifact relations build failed: {state.error}",
+                details={"reason": state.error_code or "ARTIFACT_RELATIONS_FAILED"},
+            )
         if state is None or graph is None:
             raise FailedPreconditionError("Artifact relations are not ready")
         visible = []

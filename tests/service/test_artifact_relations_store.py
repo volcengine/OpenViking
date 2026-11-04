@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 from collections import defaultdict
+from types import SimpleNamespace
 
 import pytest
 
@@ -143,6 +144,13 @@ def published_directory(store, backend):
     root = directory(store, backend)
     state = json.loads(backend.files[root + "/artifact_relations_state.json"])
     return root + "/builds/" + state["published_build_id"]
+
+
+def compile_target(backend):
+    path = CompileStateStore(backend)._record_path(ACCOUNT, TO)
+    target = json.loads(backend.files[path])
+    target.update(active_operation_id="op", active_task_id="task")
+    backend.files[path] = json.dumps(target).encode()
 
 
 def candidate(claimed, link="b.md"):
@@ -463,3 +471,90 @@ async def test_late_io_after_lease_loss_cannot_replace_new_publication(backend, 
     with pytest.raises((ArtifactRelationsStoreError, RuntimeError)):
         await running
     assert (await two.get_publication(ACCOUNT, TO))[1] == latest
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claimed_build", [False, True], ids=["queued", "computing"])
+async def test_compile_timeout_survives_restart_and_rejects_late_worker(
+    backend, monkeypatch, claimed_build
+):
+    clock = SimpleNamespace(time=lambda: 100.0)
+    monkeypatch.setattr("openviking.service.artifact_relations_store.time", clock)
+    one, _ = stores(backend)
+    _, old_graph = await publish(one)
+    compile_target(backend)
+    await one.request(ACCOUNT, TO, "B", compile_operation_id="op")
+    claimed = await one.claim(ACCOUNT, TO) if claimed_build else None
+    clock.time = lambda: 399.0
+    # A fresh instance must use the original durable request time.
+    two = ArtifactRelationsStore(CompileStateStore(backend))
+    await two.request(ACCOUNT, TO, "B", compile_operation_id="op")
+    state, _ = await two.check_compile_wait(ACCOUNT, TO, "B", "op", 300)
+    assert state.status == "building" and state.requested_at == 100
+    clock.time = lambda: 400.0
+    state, graph = await two.check_compile_wait(ACCOUNT, TO, "B", "op", 300)
+    assert state.status == "failed" and state.error_code == "ARTIFACT_RELATIONS_TIMEOUT"
+    assert graph == old_graph
+    assert (await one.request(ACCOUNT, TO, "B", compile_operation_id="op")).status == "failed"
+    if claimed:
+        sources, graph = candidate(claimed)
+        with pytest.raises(ArtifactRelationsStoreError, match="Build ownership"):
+            await one.publish(ACCOUNT, TO, claimed, sources, graph)
+
+
+@pytest.mark.asyncio
+async def test_compile_retry_does_not_refresh_timeout_clock(backend, monkeypatch):
+    clock = SimpleNamespace(time=lambda: 100.0)
+    monkeypatch.setattr("openviking.service.artifact_relations_store.time", clock)
+    store, _ = stores(backend)
+    compile_target(backend)
+    await store.request(ACCOUNT, TO, "A", compile_operation_id="op")
+    first = await store.claim(ACCOUNT, TO)
+    clock.time = lambda: 200.0
+    await store.fail(ACCOUNT, TO, first, "retry", retry=True)
+    await store.request(ACCOUNT, TO, "A", compile_operation_id="op")
+    second = await store.claim(ACCOUNT, TO)
+    assert second.requested_at == 100 and second.attempts == 2
+    clock.time = lambda: 400.0
+    state, _ = await store.check_compile_wait(ACCOUNT, TO, "A", "op", 300)
+    assert state.error_code == "ARTIFACT_RELATIONS_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_completed_graph_wins_expiry_and_mismatched_request_is_untouched(
+    backend, monkeypatch
+):
+    clock = SimpleNamespace(time=lambda: 100.0)
+    monkeypatch.setattr("openviking.service.artifact_relations_store.time", clock)
+    store, _ = stores(backend)
+    compile_target(backend)
+    await store.request(ACCOUNT, TO, "A", compile_operation_id="op")
+    claimed = await store.claim(ACCOUNT, TO)
+    clock.time = lambda: 500.0
+    for snapshot, operation in [("other", "op"), ("A", "other")]:
+        state, _ = await store.check_compile_wait(ACCOUNT, TO, snapshot, operation, 300)
+        assert state.status == "building"
+    sources, graph = candidate(claimed)
+    await store.publish(ACCOUNT, TO, claimed, sources, graph)
+    state, result = await store.check_compile_wait(ACCOUNT, TO, "A", "op", 300)
+    assert state.status == "ready" and result == graph
+
+
+@pytest.mark.asyncio
+async def test_legacy_compile_request_initializes_timeout_once(backend, monkeypatch):
+    clock = SimpleNamespace(time=lambda: 100.0)
+    monkeypatch.setattr("openviking.service.artifact_relations_store.time", clock)
+    store, _ = stores(backend)
+    compile_target(backend)
+    await store.request(ACCOUNT, TO, "A", compile_operation_id="op")
+    path = directory(store, backend) + "/artifact_relations_state.json"
+    raw = json.loads(backend.files[path])
+    del raw["requested_at"]
+    backend.files[path] = json.dumps(raw).encode()
+    clock.time = lambda: 500.0
+    state, _ = await store.check_compile_wait(ACCOUNT, TO, "A", "op", 300)
+    assert state.requested_at == 500
+    other = ArtifactRelationsStore(CompileStateStore(backend))
+    clock.time = lambda: 800.0
+    state, _ = await other.check_compile_wait(ACCOUNT, TO, "A", "op", 300)
+    assert state.status == "failed" and state.requested_at == 500

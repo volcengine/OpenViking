@@ -1,5 +1,6 @@
 """Compile graph failure and target mutation through the real service/API."""
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,6 +10,7 @@ import pytest
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_service import CompileSessionAccepted, CompileSessionStatus
+from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import ConflictError
 
@@ -139,3 +141,89 @@ async def test_skill_package_snapshot_is_registered_before_semantic_handoff(serv
     graph = await service.artifact_relations.query(target, ctx)
     assert observed and {"uri": target + "/SKILL.md"} in graph["nodes"]
     assert any(edge["type"] == "references" for edge in graph["edges"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worker_started", [False, True], ids=["unavailable", "stuck"])
+async def test_compile_graph_timeout_releases_target(
+    service, app, client, monkeypatch, worker_started
+):
+    ctx = RequestContext(user=service.user, role=Role.USER, api_key="test-key")
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    source, target = "viking://resources/input", "viking://resources/graph-timeout"
+    await service.viking_fs.write_file(source + "/a.md", "input", ctx=ctx)
+    await service.viking_fs.mkdir(target, ctx=ctx)
+    monkeypatch.setattr(service.fs, "finalize_compile_directories", AsyncMock())
+    service.compile.configure_local_backend("http://localhost:1", "")
+    clock = SimpleNamespace(time=lambda: 100.0)
+    monkeypatch.setattr("openviking.service.artifact_relations_store.time", clock)
+    waiting, started, resume = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    relations = service.artifact_relations
+    original_ready, original_build = relations.ready, relations.builder.build
+
+    async def ready(*args, **kwargs):
+        waiting.set()
+        return await original_ready(*args, **kwargs)
+
+    async def build(*args):
+        started.set()
+        await resume.wait()
+        return await original_build(*args)
+
+    monkeypatch.setattr(relations, "ready", ready)
+    if worker_started:
+        monkeypatch.setattr(relations.builder, "build", build)
+    else:
+        monkeypatch.setattr(relations, "process", AsyncMock())
+
+    async def generate(payload, **kwargs):
+        trusted = replace(ctx, compile_write_token=kwargs["connection"]["compile_write_token"])
+        await service.fs.batch_write(
+            root_uri=target,
+            operations=[{"uri": target + "/page.md", "content": "generated"}],
+            ctx=trusted,
+            defer_processing=True,
+            edit_source="compile",
+        )
+        return CompileSessionAccepted(session_id="runtime-task")
+
+    runtime = SimpleNamespace(
+        create=generate,
+        get=AsyncMock(return_value=CompileSessionStatus(status="completed", stage="completed")),
+    )
+    monkeypatch.setattr(service.compile, "_client", lambda: runtime)
+    response = await client.post(
+        "/api/v1/compile",
+        json={
+            "from": [source],
+            "to": target,
+            "skill": "viking://system/compile/example-skills/llm-wiki",
+        },
+    )
+    assert response.status_code == 202, response.text
+    task_id = response.json()["result"]["task_id"]
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    execution = asyncio.create_task(service.compile._tasks.execute(task_id, **owner))
+    try:
+        await asyncio.wait_for(waiting.wait(), 10)
+        if worker_started:
+            await asyncio.wait_for(started.wait(), 10)
+        clock.time = lambda: 400.0
+        task = await get_task_tracker().wait(task_id, **owner, timeout=20)
+        assert task.status == "failed" and "ARTIFACT_RELATIONS_TIMEOUT" in task.error
+        state, graph = await relations.store.get_publication(ctx.account_id, target)
+        assert state.error_code == "ARTIFACT_RELATIONS_TIMEOUT" and graph is None
+        record = await service.compile.lifecycle.store.get(ctx.account_id, target)
+        assert record["active_operation_id"] is None and record["active_task_id"] is None
+        assert record["versions_head"] is None
+        # Replay Runtime completion after the failure operation was persisted.
+        replay = await service.compile.lifecycle.on_finish(
+            task, ExternalTaskSnapshot(status="completed")
+        )
+        assert replay.status == "failed" and replay.error_code == "ARTIFACT_RELATIONS_TIMEOUT"
+        await relations.authorize(ctx.account_id, [target], [target + "/page.md"], ctx)
+        response = await client.get("/api/v1/compile/artifact-relations", params={"to": target})
+        assert response.status_code != 200 and "timed out" in response.text
+    finally:
+        resume.set()
+        await asyncio.wait_for(execution, 5)

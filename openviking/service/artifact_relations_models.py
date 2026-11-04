@@ -69,6 +69,9 @@ class ArtifactRelationsState(_Record):
     attempts: int = Field(default=0, ge=0)
     pending: bool = False
     error: str | None = None
+    error_code: str | None = None
+    # Wall-clock request time survives retries/restarts; None is a legacy record.
+    requested_at: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     published_build_id: str | None = Field(default=None, min_length=1)
     revision: str | None = Field(default=None, min_length=1)
 

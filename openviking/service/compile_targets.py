@@ -88,6 +88,7 @@ _operation_outputs: ContextVar[Optional[dict]] = ContextVar("operation_outputs",
 
 
 LOCK_TIMEOUT_SECONDS = 30.0
+COMPILE_GRAPH_TIMEOUT_SECONDS = 300.0
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 SUMMARY_FIELDS = (
     "to",
@@ -1403,6 +1404,15 @@ class CompileLifecycle:
         operation_id = compile_operation_id(task)
         async with self._store.lock_operation(account_id, target_to, operation_id, "finish"):
             run = await self._store.get_operation(account_id, target_to, operation_id)
+            if run is not None and run["finished_at"] is not None:
+                # Runtime may report completed again after a crash between
+                # saving Compile failure and recording the Task outcome.
+                snapshot = ExternalTaskSnapshot(
+                    status=run["status"],
+                    result=run.get("result"),
+                    error_code=run.get("error_code"),
+                    error_message=run.get("error"),
+                )
             if run is not None and run["finished_at"] is None:
                 run_meta = run["meta"]
                 ctx = task_ctx(task.account_id, task.user_id)
@@ -1504,12 +1514,18 @@ class CompileLifecycle:
                     head = run_meta["target_head"]
                     await relations.changed(account_id, target_to, head, operation_id=operation_id)
                     try:
-                        if not await relations.ready(account_id, target_to, head, operation_id):
+                        if not await relations.ready(
+                            account_id,
+                            target_to,
+                            head,
+                            operation_id,
+                            timeout_seconds=COMPILE_GRAPH_TIMEOUT_SECONDS,
+                        ):
                             return ExternalTaskSnapshot(status="running", stage="building_graph")
                     except FailedPreconditionError as exc:
                         snapshot = ExternalTaskSnapshot(
                             status="failed",
-                            error_code="ARTIFACT_RELATIONS_FAILED",
+                            error_code=exc.details.get("reason", "ARTIFACT_RELATIONS_FAILED"),
                             error_message=str(exc),
                         )
                 if current and snapshot.status in {"failed", "cancelled"}:
@@ -1532,6 +1548,8 @@ class CompileLifecycle:
                         await get_service().fs.finalize_compile_directories(request["to"], ctx)
                     await self._update_conflicts(task, ctx)
                 run["status"] = snapshot.status
+                if snapshot.status == "failed":
+                    run["error_code"] = snapshot.error_code
                 run["finished_at"] = time.time()
                 await self._store.put_operation(account_id, target_to, run)
             await self._release(account_id, target_to, task, run)
