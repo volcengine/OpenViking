@@ -19,6 +19,8 @@ No shell wrapper is needed anymore: the plugin ships a stdio MCP proxy that read
 
 After a session has been captured and processed, start a new conversation and ask about a specific fact from it to check cross-session recall.
 
+> **Running behind a bridge, or does your host tag user messages?** For example, Claude Code or Codex inside a chat bridge such as botmux. Turn on [host envelope normalization](../guides/01-configuration.md#host-envelope) in the server's `ov.conf`; otherwise the bridge's notes are stored as the user's words and used as search queries.
+
 <details>
 <summary><b>Manual setup</b></summary>
 

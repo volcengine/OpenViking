@@ -39,6 +39,8 @@ Hooks can run outside the sandbox after you trust them.
 
 Hook 关闭时，MCP 工具仍可能正常使用。自动召回需要 `UserPromptSubmit`，捕获需要 `Stop`，其余生命周期提交见下表。之前跳过设置的，可以回到 `/hooks` 启用相关条目。
 
+> **通过桥接层使用，或宿主会给用户消息加标签？** 例如 Claude Code / Codex 跑在 botmux 这类聊天桥接里。请在服务端 `ov.conf` 打开[宿主外壳归一化](../guides/01-configuration.md#host-envelope)，否则桥接层的说明块会被当成用户原话写入记忆，也会被拿去检索。
+
 <details>
 <summary><b>手动安装</b></summary>
 
