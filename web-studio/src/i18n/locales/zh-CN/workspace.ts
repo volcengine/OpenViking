@@ -1243,9 +1243,8 @@ const workspace = {
       idHint: '当前 Account 内唯一的标识，创建后不可修改。',
       manage: '管理成员',
       delete: '删除用户组',
-      deleteHint: '请先移除组内所有成员，再删除用户组。',
       deleteDescription:
-        '确定删除 {{group}}？资源中的 ACL 引用不会被清理，重新创建相同 ID 可能恢复原有授权。',
+        '确定删除 {{group}} 并移除该组的成员关系？用户本身会保留。资源中的 ACL 引用不会被清理，重新创建相同 ID 可能恢复原有授权。',
       empty: '暂无用户组。',
       notJoined: '未加入用户组',
       search: '搜索用户组',

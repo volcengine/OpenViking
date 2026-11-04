@@ -82,26 +82,23 @@ it('creates a trimmed group ID using the management connection and refreshes the
   expect(api.groups.mock.calls.length).toBeGreaterThan(1)
 })
 
-it('blocks nonempty deletion and requires confirmation for empty groups', async () => {
-  const user = mount()
-  const populated = (await screen.findByText('engineering')).closest('tr')!
-  expect(
-    within(populated)
-      .getByRole('button', { name: 'groups.delete' })
-      .hasAttribute('disabled'),
-  ).toBe(true)
-  const empty = screen.getByText('empty').closest('tr')!
-  await user.click(within(empty).getByRole('button', { name: 'groups.delete' }))
-  expect(api.remove).not.toHaveBeenCalled()
-  await user.click(
-    within(screen.getByRole('alertdialog')).getByRole('button', {
-      name: 'groups.delete',
-    }),
-  )
-  await waitFor(() =>
-    expect(api.remove).toHaveBeenCalledWith(connection, 'empty'),
-  )
-})
+it.each(['engineering', 'empty'])(
+  'requires confirmation before deleting group %s regardless of member count',
+  async (groupId) => {
+    const user = mount()
+    const row = (await screen.findByText(groupId)).closest('tr')!
+    await user.click(within(row).getByRole('button', { name: 'groups.delete' }))
+    expect(api.remove).not.toHaveBeenCalled()
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'groups.delete',
+      }),
+    )
+    await waitFor(() =>
+      expect(api.remove).toHaveBeenCalledWith(connection, groupId),
+    )
+  },
+)
 
 it('adds and removes members, disables duplicate additions and searches account users', async () => {
   const user = mount()
@@ -158,7 +155,7 @@ it('adds and removes members, disables duplicate additions and searches account 
 })
 
 it('keeps a failed deletion open and refreshes potentially stale member counts', async () => {
-  api.remove.mockRejectedValue(new Error('Group must be empty before deletion'))
+  api.remove.mockRejectedValue(new Error('Storage temporarily unavailable'))
   const user = mount()
   await screen.findByText('empty')
   await user.click(
