@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { verifyAccount } from '../../daemon/src/email/account.mjs';
+import { MailboxUnavailableError } from '../../daemon/src/email/imap.mjs';
 import { OAuthRequiredError } from '../../daemon/src/email/imap.mjs';
 import { requestDeviceCode, waitForDeviceCode, writePrivateJson } from '../../daemon/src/email/oauth2.mjs';
 import { t } from './i18n.mjs';
@@ -125,7 +126,7 @@ async function mailHost({ prompter }) {
 // already checked against IMAP and SMTP with the access token just obtained.
 // `previous` is a saved `oauth2` block, whose app and tenant are reused on a
 // re-authorization so only the browser step is asked again.
-async function microsoftMailbox({ prompter, address, hosts, previous, verify, login = deviceLogin }) {
+async function microsoftMailbox({ prompter, address, hosts, previous, saved = null, verify, login = deviceLogin }) {
   const out = (text) => prompter.write(text);
   const clientId = previous?.clientId ?? (await prompter.text(
     t('Microsoft 应用（客户端）ID', 'Microsoft app (client) ID'),
@@ -143,12 +144,32 @@ async function microsoftMailbox({ prompter, address, hosts, previous, verify, lo
   ));
   const tokens = await login.wait(oauth2, code);
   out(t(`  正在登录 ${hosts.imap.host} 和 ${hosts.smtp.host}…\n`, `  Logging in to ${hosts.imap.host} and ${hosts.smtp.host}…\n`));
-  const account = { address, imap: hosts.imap, smtp: hosts.smtp,
-    oauth2: { ...oauth2, refreshToken: tokens.refreshToken } };
-  const { idle } = await verify({ ...account, user: address }, { credential: { accessToken: tokens.accessToken } });
+  const account = renewed(saved, { address, imap: hosts.imap, smtp: hosts.smtp,
+    oauth2: { ...oauth2, refreshToken: tokens.refreshToken } });
+  // Check with the name both protocols will sign in with, not the address: an
+  // alias mailbox answers IMAP but refuses SMTP AUTH, so verifying with the
+  // address would report a working mailbox as broken.
+  const { idle } = await verify({ ...account, user: loginName(saved, address) },
+    { credential: { accessToken: tokens.accessToken } });
   out(t(`  收信和发信都登录成功${idle ? '' : '（这个邮箱不推送新邮件，每分钟查一次）'}\n`,
     `  Receiving and sending both work${idle ? '' : ' (this mailbox does not push new mail, so Vika checks every minute)'}\n`));
   return account;
+}
+
+// Renewing a saved account replaces its credential, not the owner's own fields.
+// The account file is written whole, so anything left out of the returned
+// object is gone — and `username` is the one field an alias or shared mailbox
+// cannot do without: Exchange accepts the alias for IMAP but not for SMTP AUTH.
+function renewed(saved, replacement) {
+  if (!saved) return replacement;
+  const { password, oauth2, ...kept } = saved;
+  return { ...kept, ...replacement };
+}
+
+// What the protocols sign in with: the saved login name when there is one.
+function loginName(saved, address) {
+  const username = typeof saved?.username === 'string' ? saved.username.trim() : '';
+  return username || address;
 }
 
 // Asks until both logins succeed. Resolves with the account file's content.
@@ -191,14 +212,14 @@ export async function askEmail({ prompter, previous = null, fixed = null, taken 
     let password = '';
     let usedOauth = oauth;
     try {
-      if (oauth) return await microsoftMailbox({ prompter, address, hosts, previous: fixed?.oauth2 ?? null, verify, login });
+      if (oauth) return await microsoftMailbox({ prompter, address, hosts, previous: fixed?.oauth2 ?? null, saved: fixed, verify, login });
       const typed = await prompter.secret(provider?.password ?? t('密码', 'Password'));
       // A known provider's client password never has spaces; Gmail shows it in groups of four.
       password = provider ? typed.replace(/\s+/g, '') : typed;
-      const account = { address, password, ...hosts };
+      const account = renewed(fixed, { address, password, ...hosts });
       out(t(`  正在登录 ${hosts.imap.host} 和 ${hosts.smtp.host}…\n`, `  Logging in to ${hosts.imap.host} and ${hosts.smtp.host}…\n`));
       try {
-        const { idle } = await verify({ ...account, user: address });
+        const { idle } = await verify({ ...account, user: loginName(fixed, address) });
         out(t(`  收信和发信都登录成功${idle ? '' : '（这个邮箱不推送新邮件，每分钟查一次）'}\n`,
           `  Receiving and sending both work${idle ? '' : ' (this mailbox does not push new mail, so Vika checks every minute)'}\n`));
         return account;
@@ -209,10 +230,15 @@ export async function askEmail({ prompter, previous = null, fixed = null, taken 
         out(t('  这个邮箱不接受密码登录，改用 Microsoft 账号授权。\n',
           '  This mailbox does not take passwords; signing in with a Microsoft account instead.\n'));
         usedOauth = true;
-        return await microsoftMailbox({ prompter, address, hosts, previous: null, verify, login });
+        return await microsoftMailbox({ prompter, address, hosts, previous: null, saved: fixed, verify, login });
       }
     } catch (error) {
-      out(`  ${t('登录失败：', 'Login failed: ')}${usedOauth ? error.message : explain(error, provider, password)}\n`);
+      // A mailbox that signs in but refuses IMAP is not a login failure: the
+      // credential was accepted, so saying "login failed" sends the owner
+      // looking for a password that is already right.
+      out(error instanceof MailboxUnavailableError
+        ? `  ${error.message}\n`
+        : `  ${t('登录失败：', 'Login failed: ')}${usedOauth ? error.message : explain(error, provider, password)}\n`);
       last = { address, ...hosts };
       if (!await prompter.confirm(t('重新输入？', 'Try again?'))) throw new EmailCancelled();
     }

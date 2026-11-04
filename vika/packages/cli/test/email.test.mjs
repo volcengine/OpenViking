@@ -144,6 +144,28 @@ test('re-authorizing a Microsoft mailbox asks only for the browser step', async 
   assert.doesNotMatch(written(), /客户端|租户/);
 });
 
+// The account file is written whole, so a field left out of what the wizard
+// returns is gone. `username` carries the login name of an alias or shared
+// mailbox, which our own docs tell the owner to type by hand — losing it on
+// the next re-authorization breaks sending while receiving keeps working.
+test('re-authorizing keeps the login name and the display name', async () => {
+  const login = fakeLogin({ tokens: { accessToken: 'fresh', refreshToken: 'refresh-9' } });
+  const saved = { address: 'alias@outlook.com', username: 'primary@outlook.com', name: 'Bennett Xu',
+    imap: { host: 'outlook.office365.com', port: 993 }, smtp: { host: 'smtp-mail.outlook.com', port: 587 },
+    oauth2: { tenant: 'consumers', clientId: 'saved-app', refreshToken: 'old' } };
+  const checked = [];
+  const { prompter } = terminal([]);
+  const account = await askEmail({ prompter, fixed: saved, login,
+    verify: async (given) => { checked.push(given); return { idle: true }; } });
+
+  assert.equal(account.username, 'primary@outlook.com', 'the login name was dropped from the account');
+  assert.equal(account.name, 'Bennett Xu', 'the display name was dropped from the account');
+  assert.equal(account.address, 'alias@outlook.com');
+  // And the check signs in the way both protocols will: with the login name,
+  // not the address, since an alias answers IMAP but refuses SMTP AUTH.
+  assert.equal(checked[0].user, 'primary@outlook.com', 'the mailbox was checked with the wrong login name');
+});
+
 test('a browser sign-in that fails says so and offers to try again', async () => {
   const login = fakeLogin({ fail: new Error('The Microsoft sign-in code expired; start the sign-in again') });
   const { prompter, written } = terminal(['me@outlook.com', 'app-id', '', 'n']);
