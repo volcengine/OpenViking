@@ -467,6 +467,9 @@ function turnStatus(turn) {
   if (!turn.endRow) {
     // 隐式回合没有结束行且后面已有别的回合：只是数据不全，不是还在跑
     if (turn.implicit && state.model?.turns.at(-1) !== turn) return { text: '记录不全', cls: 'ok' };
+    // 最后一个回合也可能是守护进程重启时留下的孤立步骤（没有 turn_started、
+    // 也没有 turn_completed）：只有运行时确实还在跑才显示进行中。
+    if (turn.implicit && state.service?.activeTurns === 0) return { text: '记录不全', cls: 'ok' };
     return { text: '进行中', cls: 'running' };
   }
   const status = turn.endRow.status || turn.meta.status;
@@ -733,7 +736,9 @@ function renderLive() {
     dom.liveText.textContent = '历史会话';
     return;
   }
-  if (lastTurn && !lastTurn.endRow) {
+  // 最后一个回合没有结束行时，只有运行时确实还在跑才显示忙碌；
+  // 守护进程重启留下的孤立步骤不应让状态栏一直停在“思考中”。
+  if (lastTurn && !lastTurn.endRow && service.activeTurns !== 0) {
     const step = lastTurn.steps.at(-1);
     const what = step?.type === 'tool' && step.running ? `工具 ${step.label}` : '思考中';
     dom.live.classList.add('busy');
