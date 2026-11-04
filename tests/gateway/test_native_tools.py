@@ -11,7 +11,7 @@ from test_app import enable_tools
 from openviking_gateway.protocols import SSEDecoder
 from openviking_gateway.tool_loop import HiddenToolLoop
 from openviking_gateway.tool_protocols import ResponseCapture
-from openviking_gateway.tool_protocols.common import ToolRound, sse
+from openviking_gateway.tool_protocols.common import ToolLoopError, ToolRound, sse
 
 PATHS = {"responses": "/v1/responses", "anthropic": "/v1/messages"}
 
@@ -621,7 +621,9 @@ async def test_native_stream_failure_uses_protocol_terminal(running_gateway, pro
                     "type": "upstream_overloaded",
                     "code": "upstream_rate_limit",
                     "message": "upstream failure",
+                    "request_id": "private-request-id",
                 },
+                "provider_metadata": {"endpoint": "http://internal.example"},
             }
         elif failure == "incomplete_call" and protocol == "responses":
             events[-1]["type"] = "response.incomplete"
@@ -638,21 +640,26 @@ async def test_native_stream_failure_uses_protocol_terminal(running_gateway, pro
     )
     assert response.status_code == 200
     events = [SSEDecoder.data(f) for f in SSEDecoder().feed(response.content)]
-    if failure == "error":
+    if failure == "error" and protocol == "anthropic":
         assert events[-1]["type"] == "error"
         assert events[-1]["error"] == {
             "type": "upstream_overloaded",
             "code": "upstream_rate_limit",
             "message": "upstream failure",
         }
-        if protocol == "responses":
-            assert [e["sequence_number"] for e in events] == list(range(len(events)))
         return
     if protocol == "responses":
         assert events[-1]["type"] == "response.failed"
         failed = events[-1]["response"]
         assert failed["status"] == "failed"
-        assert failed["error"]["code"] == "server_error"
+        if failure == "error":
+            assert failed["error"] == {
+                "code": "upstream_rate_limit",
+                "message": "upstream failure",
+            }
+        else:
+            assert failed["error"]["code"] == "server_error"
+            assert failed["error"]["message"]
         assert failed["id"] == events[0]["response"]["id"]
         assert [e["sequence_number"] for e in events] == list(range(len(events)))
         assert not any(item["type"] == "function_call" for item in failed["output"])
@@ -897,7 +904,84 @@ async def test_native_events_arriving_together_leave_together(protocol):
     assert len(together) == 2 < len(one_by_one)
     assert b"".join(together) == b"".join(one_by_one)
     terminal = SSEDecoder.data(SSEDecoder().feed(together[-1])[0])
-    assert terminal["error"] == {"type": "overloaded_error"}
+    if protocol == "responses":
+        assert terminal["type"] == "response.failed"
+        assert terminal["response"]["error"] == {
+            "code": "overloaded_error",
+            "message": "Model stream failed",
+        }
+    else:
+        assert terminal["error"] == {
+            "type": "overloaded_error",
+            "message": "Model stream failed",
+        }
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
+def test_upstream_stream_error_uses_protocol_terminator(protocol):
+    from types import SimpleNamespace
+
+    prepared = SimpleNamespace(
+        body=request_body(protocol, True),
+        protocol=protocol,
+        root={"policy": {}},
+        metrics={},
+        tools_active=True,
+        reply_lead="",
+    )
+    loop = HiddenToolLoop(
+        prepared,
+        SimpleNamespace(allowed={"openviking_search"}),
+        None,
+        ResponseCapture(protocol),
+    )
+    upstream = {
+        "type": "error",
+        "error": {
+            "type": "upstream_overloaded",
+            "code": "upstream_rate_limit",
+            "message": "request to http://internal.example failed",
+            "request_id": "private-request-id",
+        },
+        "provider_metadata": {"region": "private-region"},
+    }
+    loop.adapter.begin()
+    with pytest.raises(ToolLoopError, match="Model stream failed") as caught:
+        list(loop.decode(SSEDecoder(), sse(upstream)))
+
+    wire = loop.error(caught.value)
+    values = [
+        SSEDecoder.data(frame)
+        for frame in SSEDecoder().feed(wire)
+        if b"[DONE]" not in frame
+    ]
+    expected = {
+        "type": "error",
+        "error": {
+            "type": "upstream_overloaded",
+            "code": "upstream_rate_limit",
+            "message": "request to http://internal.example failed",
+        },
+    }
+    if protocol == "responses":
+        expected = {
+            "type": "response.failed",
+            "response": {
+                "id": loop.adapter.identifier,
+                "object": "response",
+                "model": "model",
+                "status": "failed",
+                "error": {
+                    "code": "upstream_rate_limit",
+                    "message": "request to http://internal.example failed",
+                },
+                "incomplete_details": None,
+                "output": [],
+            },
+            "sequence_number": 0,
+        }
+    assert values == [expected]
+    assert wire.endswith(b"data: [DONE]\n\n") == (protocol == "chat")
 
 
 def test_streamed_text_append_keeps_the_text_on_a_bad_delta():

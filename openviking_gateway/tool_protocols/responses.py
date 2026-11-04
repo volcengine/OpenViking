@@ -10,6 +10,7 @@ from ..protocols import string_type, text_content
 from .common import (
     PREFIX,
     SUMMARY_HEADROOM,
+    StreamEvent,
     SummaryError,
     ToolLoopError,
     ToolProtocol,
@@ -323,7 +324,17 @@ class ResponsesProtocol(ToolProtocol):
     def terminal(self, final):
         return [{"type": "response." + self.finish, "response": final}]
 
-    def error(self, message):
+    def error(self, message) -> list[StreamEvent]:
+        return self.failed("server_error", message)
+
+    def upstream_error(self, event) -> list[StreamEvent]:
+        detail = event.get("error")
+        detail = detail if isinstance(detail, dict) else event
+        code = detail.get("code") or detail.get("type") or "server_error"
+        message = detail.get("message") or "Model stream failed"
+        return self.failed(code, message)
+
+    def failed(self, code, message) -> list[StreamEvent]:
         return [
             {
                 "type": "response.failed",
@@ -332,7 +343,7 @@ class ResponsesProtocol(ToolProtocol):
                     "object": "response",
                     "model": self.body.get("model"),
                     "status": "failed",
-                    "error": {"code": "server_error", "message": message},
+                    "error": {"code": code, "message": message},
                     "incomplete_details": None,
                     "output": self.visible,
                 },
