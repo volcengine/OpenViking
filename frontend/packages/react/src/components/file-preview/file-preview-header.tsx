@@ -15,9 +15,7 @@ export interface FilePreviewHeaderProps {
   text: Required<FilePreviewLabels>;
   viewMode: 'preview' | 'source';
   editing: boolean;
-  draft: string;
   onViewModeChange: (mode: 'preview' | 'source') => void;
-  onCopy: (value: string | undefined) => Promise<void>;
   onEditStart: () => void;
   onEditCancel: () => void;
   onEditSave: () => void;
@@ -31,7 +29,6 @@ export function FilePreviewHeader({
   viewMode,
   editing,
   onViewModeChange,
-  onCopy,
   onEditStart,
   onEditCancel,
   onEditSave,
@@ -66,7 +63,7 @@ export function FilePreviewHeader({
             className={styles.action}
             aria-label={text.copyPath}
             title={text.copyPath}
-            onClick={() => void onCopy(path)}
+            onClick={() => fileTab.onCopyPath?.(path)}
           >
             <CopyIcon />
           </button>
@@ -110,7 +107,10 @@ export function FilePreviewHeader({
                 : text.copyContentEmpty
             }
             disabled={!readCopyableText(fileTab)}
-            onClick={() => void onCopy(readCopyableText(fileTab))}
+            onClick={() => {
+              const value = readCopyableText(fileTab);
+              if (value) fileTab.onCopyContent?.(value);
+            }}
           >
             <CopyIcon />
           </button>
@@ -147,7 +147,7 @@ export function FilePreviewHeader({
             className={styles.button}
             onClick={() => fileTab.onDownload?.()}
           >
-            Download
+            {text.download}
           </button>
         ) : null}
 

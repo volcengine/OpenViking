@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import { FileTreeEntryRowView } from './file-tree-entry-row.js';
 import styles from './file-tree.module.css';
 import { Spinner } from './file-tree-icons.js';
@@ -14,6 +16,43 @@ export function isWholeTreeError(rows: readonly FileTreeRow[]) {
   return row?.kind === 'error' && !row.parentId;
 }
 
+interface StateRowProps {
+  row: FileTreeRow;
+  ctx: FileTreeRowContext;
+  /** 行自身的附加属性，例如 `aria-busy` 与色调标记。 */
+  attributes?: Record<string, unknown>;
+  tone?: 'error';
+  children: ReactNode;
+}
+
+/**
+ * 状态行外壳：与条目行一致地应用 `getRowAttributes`，让宿主能给加载、分页、
+ * 失败与空态行追加高亮或埋点属性。
+ */
+function StateRow({ row, ctx, attributes, tone, children }: StateRowProps) {
+  const {
+    className: extraClassName,
+    style: extraStyle,
+    ...extraAttributes
+  } = ctx.getRowAttributes?.(row) ?? {};
+
+  return (
+    <div
+      role="treeitem"
+      aria-level={row.depth + 1}
+      aria-selected={false}
+      {...attributes}
+      {...extraAttributes}
+      {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
+      className={[styles.childRow, extraClassName].filter(Boolean).join(' ')}
+      data-tone={tone}
+      style={{ ...rowIndent(row), ...extraStyle }}
+    >
+      {children}
+    </div>
+  );
+}
+
 /** 非条目行：加载中、加载更多、失败与空态都只占一行，不参与选中。 */
 function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
   const { text, onLoadMore, onRetry } = ctx;
@@ -21,30 +60,15 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
   switch (row.kind) {
     case 'loading':
       return (
-        <div
-          role="treeitem"
-          aria-level={row.depth + 1}
-          aria-selected={false}
-          aria-busy="true"
-          {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
-          className={styles.childRow}
-          style={rowIndent(row)}
-        >
+        <StateRow row={row} ctx={ctx} attributes={{ 'aria-busy': true }}>
           <span className={styles.toggleSpacer} />
           <Spinner />
           <span className={styles.muted}>{text.loading}</span>
-        </div>
+        </StateRow>
       );
     case 'load-more':
       return (
-        <div
-          role="treeitem"
-          aria-level={row.depth + 1}
-          aria-selected={false}
-          {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
-          className={styles.childRow}
-          style={rowIndent(row)}
-        >
+        <StateRow row={row} ctx={ctx}>
           <button
             type="button"
             className={styles.childAction}
@@ -54,19 +78,11 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
             {row.loading ? <Spinner /> : null}
             {text.loadMore}
           </button>
-        </div>
+        </StateRow>
       );
     case 'error':
       return (
-        <div
-          role="treeitem"
-          aria-level={row.depth + 1}
-          aria-selected={false}
-          {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
-          className={styles.childRow}
-          data-tone="error"
-          style={rowIndent(row)}
-        >
+        <StateRow row={row} ctx={ctx} tone="error">
           <span className={styles.muted}>{row.message ?? text.error}</span>
           <button
             type="button"
@@ -75,20 +91,13 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
           >
             {text.retry}
           </button>
-        </div>
+        </StateRow>
       );
     case 'empty':
       return (
-        <div
-          role="treeitem"
-          aria-level={row.depth + 1}
-          aria-selected={false}
-          {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
-          className={styles.childRow}
-          style={rowIndent(row)}
-        >
+        <StateRow row={row} ctx={ctx}>
           <span className={styles.muted}>{text.empty}</span>
-        </div>
+        </StateRow>
       );
     default:
       return <FileTreeEntryRowView row={row} ctx={ctx} />;

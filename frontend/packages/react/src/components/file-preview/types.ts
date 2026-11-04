@@ -262,37 +262,49 @@ export interface FilePreviewContentTab extends FilePreviewTabBase {
  * 编辑能力。不传即为只读。
  *
  * 编辑态、草稿与保存中状态都由组件内部维护，宿主不需要也不应该感知；
- * 宿主只负责两件事：进入编辑前提供内容，以及收到保存请求时落盘。
+ * 宿主只负责两件事：按需取回可编辑的正文，以及收到保存请求时落盘。取正文是
+ * 数据操作，由宿主执行后通过 `content`、`loading` 与 `errorMessage` 传回，
+ * 组件不读取回调返回值。
  *
  * Editing capability. Omit it for a read-only preview.
  *
  * The editing state, the draft and the saving state all live inside the
- * component; the host neither sees nor controls them. The host only provides
- * the content before editing starts and persists it when a save is requested.
+ * component; the host neither sees nor controls them. The host only fetches the
+ * editable text when asked and persists it when a save is requested. Fetching
+ * is a data operation: the host runs it and reports back through `content`,
+ * `loading` and `errorMessage`, and the component never reads a callback's
+ * return value.
  */
 export interface FilePreviewEditing {
   /**
-   * 用户点击编辑时调用，返回进入编辑所需的完整内容。
+   * 用户点击编辑时上报的意图，不返回内容。
    *
-   * 不传时组件直接用页签里已有的内容进入编辑：`content` 直接使用，
-   * `file` 读取其文本，`url` 因无法在浏览器端直接读取而视为不可编辑。
+   * 预览内容被截断、需要另取全文时，宿主在这里发起请求，并把结果通过
+   * `content` 传回。不传时组件直接用页签已有的内容进入编辑。
    *
-   * 传入后组件改用返回值，适用于预览内容被截断、需要另行拉取全文的场景；
-   * 返回 `undefined` 表示放弃本次编辑，组件保持预览态。
-   *
-   * Invoked when the user starts editing, returning the full content to edit.
-   *
-   * When omitted the component edits what the tab already holds: `content`
-   * is used as is, `file` is read as text, and `url` counts as not editable
-   * because the browser cannot read it directly.
-   *
-   * When provided the return value wins, which suits truncated previews that
-   * need the full text fetched elsewhere. Returning `undefined` abandons the
-   * edit and the component stays in the preview state.
+   * Reports that the user started editing. It returns nothing: a host that
+   * needs the full text because the preview was truncated starts the request
+   * here and reports the result through `content`. When omitted the component
+   * edits what the tab already holds.
    */
-  onRequestEdit?: (
-    source: FilePreviewSource,
-  ) => Promise<string | undefined> | string | undefined;
+  onRequestEdit?: (source: FilePreviewSource) => void;
+  /**
+   * 宿主取回的完整正文，进入编辑时使用；不传则用页签已有的 `source.content`。
+   * The full text the host fetched, used when editing starts. Falls back to the
+   * tab's own `source.content` when omitted.
+   */
+  content?: string;
+  /**
+   * 是否正在取回正文。为 `true` 时编辑区展示加载态。
+   * Whether the text is being fetched. A loading state is shown while true.
+   */
+  loading?: boolean;
+  /**
+   * 取回正文失败的原因。设置后编辑区展示失败态与该文案。
+   * Why fetching the text failed. The editor shows a failure state with this
+   * message when set.
+   */
+  errorMessage?: string;
   /**
    * 保存草稿时调用。抛错或 reject 时组件展示失败提示并保留草稿。
    * Invoked when the draft is saved. A thrown error or rejection keeps the
@@ -466,6 +478,21 @@ export interface FilePreviewLabels {
    * Message shown when the format cannot be previewed.
    */
   unsupported?: string;
+  /**
+   * 取回正文时的加载提示。
+   * Message shown while the text is being fetched.
+   */
+  loading?: string;
+  /**
+   * 下载按钮文案。
+   * Label of the download button.
+   */
+  download?: string;
+  /**
+   * 二进制文件尚未接入渲染器时的提示。
+   * Message shown while binary rendering is not wired up yet.
+   */
+  binaryUnsupported?: string;
 }
 
 /**

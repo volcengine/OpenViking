@@ -46,7 +46,7 @@ previewRef.current?.setActiveTab('dashboard');
 - `slots.errorFallback`
 - `slots.unsupportedFallback`
 
-编辑态同样在内部。宿主只提供 `editing.onRequestEdit`（进入编辑前调用，便于截断的预览拉取全文）与 `editing.onSave`。
+编辑态同样在内部。宿主提供 `editing.onSave`，可选提供 `editing.onRequestEdit`——它只上报意图、不返回内容。预览被截断时宿主在这里发起取全文的请求，再通过 `editing.content` 回传结果，取数过程与失败分别由 `editing.loading`、`editing.errorMessage` 表达。
 
 ## 属性
 
