@@ -28,6 +28,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Destroy/rotate GLOBAL or change its group membership | Y | N | N | N |
 | Change an existing role to or from GLOBAL | N | N | N | N |
 | Manage groups and membership | Y | Y (own account) | N | N |
+| Read/update User settings | Y | Y (own account, non-GLOBAL) | Y (self) | N |
 | Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) | N |
 | Change user role between USER and ADMIN | Y | Y (own account) | N | N |
 
@@ -1062,10 +1063,11 @@ compatibility.
 
 ### user_settings
 
-ROOT can manage any User and ADMIN can manage Users in its own account. Ordinary
-USER callers cannot use this endpoint. It accepts `add_targets`, `memory_policy`,
-and `ttl`. The shared top-level `memory_types` filter controls which memory
-schemas may be extracted.
+ROOT can read and update any User's settings. ADMIN can read and update non-GLOBAL
+Users in its own account. USER callers can read and update only their own settings:
+both `account_id` and `user_id` in the URL must match the authenticated identity.
+The endpoint accepts `add_targets`, `memory_policy`, and `ttl`. The shared top-level
+`memory_types` filter controls which memory schemas may be extracted.
 User memories are routed to Self or Peer according to each message's `peer_id`;
 Agent memory types remain Self-only.
 
@@ -1108,10 +1110,10 @@ Content-Type: application/json
 
 `add_targets` supports sparse updates: omitted fields remain unchanged, a null
 field restores its default, and `add_targets: null` removes all User add-target
-overrides. Resolved defaults are never persisted. New callers use this
-administrator endpoint. The following legacy endpoints continue to let ordinary
-users manage their own targets in this release. They are deprecated and scheduled
-for removal in the next release:
+overrides. Resolved defaults are never persisted. New callers use this endpoint;
+USER callers must target their own `account_id` and `user_id`. The following legacy
+endpoints continue to let ordinary users manage their own targets in this release.
+They are deprecated and scheduled for removal in the next release:
 
 ```http
 GET /api/v1/user-settings/add-locations

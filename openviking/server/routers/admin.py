@@ -1154,7 +1154,7 @@ async def get_user(
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def get_user_settings(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
@@ -1163,6 +1163,8 @@ async def get_user_settings(
 ):
     """Return effective add targets and memory policy, plus explicit User TTL."""
     _check_account_access(ctx, account_id)
+    if ctx.role == Role.USER and user_id != ctx.user.user_id:
+        raise PermissionDeniedError("USER can only access their own settings")
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
@@ -1186,7 +1188,7 @@ async def get_user_settings(
 
 
 @router.patch("/accounts/{account_id}/users/{user_id}/settings")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def patch_user_settings(
     body: UserSettingsPatch,
     request: Request,
@@ -1196,6 +1198,8 @@ async def patch_user_settings(
 ):
     """Patch User add targets, memory policy and TTL without restarting."""
     _check_account_access(ctx, account_id)
+    if ctx.role == Role.USER and user_id != ctx.user.user_id:
+        raise PermissionDeniedError("USER can only access their own settings")
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)

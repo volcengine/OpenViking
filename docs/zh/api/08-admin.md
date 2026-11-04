@@ -28,6 +28,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | 销毁/轮换 GLOBAL、变更其用户组 | Y | N | N | N |
 | 将现有角色与 GLOBAL 相互转换 | N | N | N | N |
 | 管理用户组和成员 | Y | Y（本 account） | N | N |
+| 读取/修改 User settings | Y | Y（本 account，非 GLOBAL） | Y（自身） | N |
 | 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） | N |
 | 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N | N |
 
@@ -918,7 +919,8 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ### user_settings
 
-ROOT 可管理任意 User，ADMIN 仅可管理所属 account 内的 User，普通 USER 无权调用。
+ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
+USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
 User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
@@ -958,8 +960,8 @@ Content-Type: application/json
 
 `add_targets` 支持逐字段更新：省略字段表示保留，字段设为 `null` 恢复该项默认值，
 整个 `add_targets` 设为 `null` 清除用户的添加位置设置。返回的默认值不会写回存储。
-新调用通过这个管理员接口维护添加位置。以下旧接口本版本继续保留普通用户
-管理自身添加位置的能力，已标记 deprecated，计划下个版本移除：
+新调用通过此接口维护添加位置，USER 使用自身的 `account_id` 和 `user_id`。
+以下旧接口本版本继续保留普通用户管理自身添加位置的能力，已标记 deprecated，计划下个版本移除：
 
 ```http
 GET /api/v1/user-settings/add-locations

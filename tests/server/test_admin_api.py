@@ -2249,6 +2249,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         headers=root_headers(),
     )
     assert created.status_code == 200, created.text
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     created = await client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={
@@ -2259,6 +2260,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         headers=root_headers(),
     )
     assert created.status_code == 200, created.text
+    user_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     url = f"/api/v1/admin/accounts/{acct}/users/bob/settings"
     service = lightweight_admin_app.state.fake_service
     fs = service.viking_fs
@@ -2266,9 +2268,29 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     lightweight_admin_app.state.config.user_config_defaults = UserConfig(
         add_targets={"resource_uri": "viking://~/resources", "skill_uri": "viking://~/skills"}
     )
+    other_acct = _uid()
+    created = await client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other_acct, "admin_user_id": "bob"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    before = dict(fs.files)
+    for method in ("GET", "PATCH"):
+        body = (
+            {"json": {"memory_policy": {"memory_types": ["events"]}}} if method == "PATCH" else {}
+        )
+        for headers, target in (
+            (user_headers, url.replace("/bob/", "/alice/")),
+            (user_headers, url.replace(acct, other_acct)),
+            (admin_headers, url.replace(acct, other_acct)),
+        ):
+            denied = await client.request(method, target, headers=headers, **body)
+            assert denied.status_code == 403, denied.text
+            assert fs.files == before
     monkeypatch.setattr(wiring, "_adapter", None)
     before = dict(fs.files)
-    rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=root_headers())
+    rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=user_headers)
     assert rejected.status_code == 501 and fs.files == before
 
     engine = DirectoryTTL(resource_id="settings-contract", timezone_name="UTC")
@@ -2291,10 +2313,14 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
                 "memory_policy": {"memory_types": ["experiences"]},
                 "ttl": {"sessions": 7, "peer_events": 3, "user_events": "disabled"},
             },
-            headers=root_headers(),
+            headers=user_headers,
         )
         assert patched.status_code == 200, patched.text
-        settings = (await client.get(url, headers=root_headers())).json()["result"]
+        loaded = await client.get(url, headers=user_headers)
+        assert loaded.status_code == 200, loaded.text
+        settings = loaded.json()["result"]
+        admin_view = await client.get(url, headers=admin_headers)
+        assert admin_view.status_code == 200 and admin_view.json()["result"] == settings
         assert settings["add_targets"] == {
             "resource_uri": "viking://user/bob/resources/project-a",
             "skill_uri": "viking://user/bob/skills",
@@ -2326,7 +2352,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
 
         writes_before_noop = len(fs.writes)
         noop = await client.patch(
-            url, json={"memory_policy": persisted.memory_policy}, headers=root_headers()
+            url, json={"memory_policy": persisted.memory_policy}, headers=admin_headers
         )
         assert noop.status_code == 200 and len(fs.writes) == writes_before_noop
         patched = await client.patch(
