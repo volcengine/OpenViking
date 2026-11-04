@@ -152,6 +152,14 @@ class ReindexExecutor:
         "memory": {"vectors_only", "semantic_and_vectors"},
     }
 
+    def __init__(self, vlm_resolver: Any = None, vector_config_resolver: Any = None) -> None:
+        # Account-scoped resolvers (#5323). Semantic/embedding work is dispatched
+        # through the semantic/embedding queues, which resolve VLM and vector
+        # config per message account via the same service resolvers; keep them
+        # here so callers (service core, snapshot restore) can pass them through.
+        self.vlm_resolver = vlm_resolver
+        self.vector_config_resolver = vector_config_resolver
+
     @staticmethod
     def _effective_file_vectorization_concurrency() -> int:
         config = get_openviking_config().reindex
