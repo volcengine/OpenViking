@@ -136,7 +136,7 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 
 草稿只有你能确认，只认第一次，三天后过期。首次启动只从之后到达的邮件开始；订阅和群发邮件标为 `kind=email.list`，自动回复（含多数退信）和它自己的回信直接跳过；程序自动发出的通知（安全告警、任务失败等）照常交给 Agent 判断。
 
-在 `vika setup` 里勾选邮箱接入（新建或修改实例都行，可以连续接几个）：输入邮箱地址和专用密码，Gmail、QQ、163/126/yeah.net 自动带出服务器，其他邮箱手填。先实际登录一次 IMAP 和 SMTP，成功才保存。已经接了邮箱的实例，在 `vika setup` 修改它时会给一个邮箱菜单：再接一个、给某个邮箱换密码，或者移除某个；只是换密码的话，`vika login email` 更快。回信从邮件所在的那个邮箱发出，待确认的草稿上会写明发件邮箱。
+在 `vika setup` 里勾选邮箱接入（新建或修改实例都行，可以连续接几个）：输入邮箱地址和专用密码，Gmail、QQ、163/126/yeah.net 自动带出服务器，其他邮箱手填；Microsoft 365 / Outlook.com 的邮箱不填密码，改成浏览器授权一次（见下文）。先实际登录一次 IMAP 和 SMTP，成功才保存。已经接了邮箱的实例，在 `vika setup` 修改它时会给一个邮箱菜单：再接一个、给某个邮箱换密码（OAuth2 邮箱是重新授权），或者移除某个；只是换密码的话，`vika login email` 更快。回信从邮件所在的那个邮箱发出，待确认的草稿上会写明发件邮箱。
 
 每个邮箱的账号存在 `~/.vika/email/<实例>/<邮箱名>.json`（0600），实例配置里是它们的列表：
 
@@ -163,7 +163,20 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 }
 ```
 
-`password` 是邮箱给第三方客户端用的专用密码，按邮箱账号生成一次，IMAP 和 SMTP 共用：Gmail 叫应用密码（需先开两步验证，填写时去掉空格），QQ/163 叫授权码（需先在设置里开启 IMAP/SMTP）。SMTP 在 465 端口用直连 TLS，其他端口用 STARTTLS，可用 `smtp.secure` 覆盖；可选 `username`（默认同 `address`）和 `name`（回信的发件人名）。只用 OAuth 的邮箱（如 Outlook）暂不支持。方舟 Self-hosted Ark 用不了 Agent 工具，因此不支持邮箱。
+`password` 是邮箱给第三方客户端用的专用密码，按邮箱账号生成一次，IMAP 和 SMTP 共用：Gmail 叫应用密码（需先开两步验证，填写时去掉空格），QQ/163 叫授权码（需先在设置里开启 IMAP/SMTP）。SMTP 在 465 端口用直连 TLS，其他端口用 STARTTLS，可用 `smtp.secure` 覆盖；可选 `username`（默认同 `address`）和 `name`（回信的发件人名）。方舟 Self-hosted Ark 用不了 Agent 工具，因此不支持邮箱。
+
+邮箱关掉了密码登录时（Microsoft 365、Outlook.com），账号文件改用 `oauth2` 代替 `password`：
+
+```json
+{
+  "address": "you@contoso.com",
+  "oauth2": { "tenant": "common", "clientId": "<Entra 应用 ID>", "refreshToken": "<浏览器授权后留下>" },
+  "imap": { "host": "outlook.office365.com", "port": 993 },
+  "smtp": { "host": "smtp.office365.com", "port": 587 }
+}
+```
+
+`oauth2` 和 `password` 二选一。`vika setup` / `vika login email` 认得出这类邮箱：给出一个代码，在 `https://microsoft.com/devicelogin` 用该邮箱的账号登录一次即可，`refreshToken` 由向导写回，daemon 刷新时也会把轮换后的新值原子写回。手写时需要一个自己的 Entra 应用：注册为公共客户端，加上「Office 365 Exchange Online」的**委托**权限 `IMAP.AccessAsUser.All` 与 `SMTP.Send` 并由租户管理员同意，再把应用 ID 和租户填进来。IMAP 与 SMTP AUTH 须在邮箱上开启（管理员用 `Get-CASMailbox <邮箱> | fl ImapEnabled,SmtpClientAuthenticationDisabled` 核对）。OAuth2 目前只覆盖微软系邮箱。
 
 ## 文档附件与交互卡片
 
