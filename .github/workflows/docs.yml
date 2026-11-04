@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'docs/**'
+      - 'frontend/**'
+      - '.github/actions/build-ui/**'
       - '.github/workflows/_docs.yml'
       - '.github/workflows/_docs-deploy.yml'
       - '.github/workflows/docs.yml'
@@ -11,6 +13,8 @@ on:
     branches: [ main ]
     paths:
       - 'docs/**'
+      - 'frontend/**'
+      - '.github/actions/build-ui/**'
       - '.github/workflows/_docs.yml'
       - '.github/workflows/_docs-deploy.yml'
       - '.github/workflows/docs.yml'

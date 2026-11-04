@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import re
 import threading
 import uuid
@@ -25,6 +26,7 @@ from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
     ACL_GRANT_FIELDS,
     ACL_MODE_FIELD,
+    EMPTY_ACL_GRANT,
     AclAction,
     AclManager,
     AclUpdate,
@@ -32,6 +34,7 @@ from openviking.storage.acl import (
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.scope_filter import build_scope_filter, merge_filters
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -284,11 +287,46 @@ class _AsyncVectorAdapter:
         await self.run(_update)
 
 
+def _record_handled_vikingdb_error(error: Exception) -> None:
+    """Keep a swallowed backend error available to the outer metrics wrapper."""
+    from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
+
+    VikingDBEventDataSource.record_handled_error(error)
+
+
 def _backend_operation(method):
     @wraps(method)
     async def call(self, *args, **kwargs):
         async with self.operation():
-            return await method(self, *args, **kwargs)
+            from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
+
+            owns_metric, depth_token, error_token = VikingDBEventDataSource.enter_operation()
+            started_at = time.perf_counter()
+            try:
+                result = await method(self, *args, **kwargs)
+            except Exception as error:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        error=error,
+                    )
+                raise
+            else:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        result=result,
+                        error=VikingDBEventDataSource.handled_error(),
+                    )
+                return result
+            finally:
+                VikingDBEventDataSource.exit_operation(depth_token, error_token)
 
     return call
 
@@ -384,6 +422,10 @@ class _SingleAccountBackend:
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
         result = {k: v for k, v in filtered.items() if v is not None}
+        # Raw writes (including transfer rollback) also encode explicit empty grants.
+        for grant_field in ACL_GRANT_FIELDS:
+            if result.get(grant_field) == []:
+                result[grant_field] = [EMPTY_ACL_GRANT]
         # Full-record writes must not carry legacy invalid tags through a merge.
         if "search_tags" in result:
             result["search_tags"] = normalize_search_tags(
@@ -508,6 +550,7 @@ class _SingleAccountBackend:
             return True
         except Exception as e:
             logger.error("Error creating collection %s: %s", name, e)
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -520,6 +563,7 @@ class _SingleAccountBackend:
             return dropped
         except Exception as e:
             logger.error("Error dropping collection: %s", e)
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -607,6 +651,7 @@ class _SingleAccountBackend:
             payload = self._bind_upsert_payload(data)
         except (PermissionError, ValueError) as exc:
             logger.warning("Rejecting upsert: %s", exc)
+            _record_handled_vikingdb_error(exc)
             return ""
 
         if options.partial_update:
@@ -713,6 +758,7 @@ class _SingleAccountBackend:
                 else "update completed without any updated ids",
             )
         except ValueError as e:
+            _record_handled_vikingdb_error(e)
             message = str(e)
             error_code = "NOT_FOUND" if "not found" in message.lower() else "INVALID_ARGUMENT"
             return UpdateResult(
@@ -724,6 +770,7 @@ class _SingleAccountBackend:
             )
         except Exception as e:
             logger.error("Error updating record: %s", e)
+            _record_handled_vikingdb_error(e)
             return UpdateResult(
                 ok=False,
                 ids=[],
@@ -1117,7 +1164,8 @@ class _SingleAccountBackend:
         try:
             await self.collection_exists()
             return True
-        except Exception:
+        except Exception as e:
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -1134,6 +1182,7 @@ class _SingleAccountBackend:
             }
         except Exception as e:
             logger.error("Error getting stats: %s", e)
+            _record_handled_vikingdb_error(e)
             return {
                 "collections": 0,
                 "total_records": 0,
@@ -3161,37 +3210,27 @@ class VikingVectorIndexBackend:
         *,
         acl_enabled: bool,
     ) -> Optional[FilterExpr]:
-        filters: List[FilterExpr] = []
-        if context_type:
-            filters.append(Eq("context_type", context_type))
-
         targets = [target_dir for target_dir in target_directories or [] if target_dir]
         tenant_filter = self._tenant_filter(ctx, acl_enabled=acl_enabled)
-        if tenant_filter and not acl_enabled and self._targets_within_visible_roots(ctx, targets):
+        if (
+            tenant_filter
+            and not acl_enabled
+            and ctx.data_access is None
+            and self._targets_within_visible_roots(ctx, targets)
+        ):
             # The target scopes are already narrower than the tenant-visible
             # roots. Keep account isolation, but avoid recursively evaluating
             # the broader path scopes as an additional filter.
             tenant_filter = Eq("account_id", ctx.account_id)
-        if tenant_filter:
-            filters.append(tenant_filter)
-
-        if targets:
-            uri_conds: List[FilterExpr] = [
-                PathScope("uri", target_dir, depth=-1) for target_dir in targets
-            ]
-            if uri_conds:
-                filters.append(Or(uri_conds))
-
-        if extra_filter:
-            if isinstance(extra_filter, dict):
-                filters.append(RawDSL(extra_filter))
-            else:
-                filters.append(extra_filter)
-
-        if level:
-            filters.append(In("level", level))
-
-        return self._merge_filters(*filters)
+        return build_scope_filter(
+            context_type=context_type,
+            base_filter=tenant_filter,
+            target_directories=targets,
+            target_depth=-1,
+            wrap_single_target=True,
+            extra_filter=extra_filter,
+            level=level,
+        )
 
     @staticmethod
     def _targets_within_visible_roots(ctx: RequestContext, targets: List[str]) -> bool:
@@ -3219,6 +3258,8 @@ class VikingVectorIndexBackend:
             return None
 
         account_filter = Eq("account_id", ctx.account_id)
+        if ctx.data_access is not None:
+            account_filter = And([account_filter, ctx.data_access.query_filter()])
         if not acl_enabled:
             return And(
                 [
@@ -3250,21 +3291,4 @@ class VikingVectorIndexBackend:
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr | Dict[str, Any]]) -> Optional[FilterExpr]:
-        non_empty: List[FilterExpr] = []
-        for item in filters:
-            if not item:
-                continue
-            if isinstance(item, dict):
-                item = RawDSL(item)
-            if (
-                isinstance(item, RawDSL)
-                and item.payload.get("op") == "and"
-                and not item.payload.get("conds")
-            ):
-                continue
-            non_empty.append(item)
-        if not non_empty:
-            return None
-        if len(non_empty) == 1:
-            return non_empty[0]
-        return And(non_empty)
+        return merge_filters(*filters)

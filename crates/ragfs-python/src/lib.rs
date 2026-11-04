@@ -13,6 +13,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
@@ -218,7 +219,6 @@ fn validate_leader_ttl_secs(v: f64) -> PyResult<Duration> {
     }
 }
 
-use ragfs::cache::{CachePolicy, CacheTraversalMode};
 use ragfs::cache_runtime::{CacheError, CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
 use ragfs::core::builder::{
     CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig, EncryptionConfig,
@@ -236,6 +236,7 @@ use ragfs::lock::{
     PathLockHandoffRef, PathLockKind, PathLockManager, PathLockRequest,
 };
 use ragfs::metrics::{RagfsMetric, RagfsMetricValue};
+use ragfs::write_hook::WriteHookRegistry;
 
 /// Parse an optional listing sort field and return the matching RagFS value.
 fn parse_list_sort_by(value: Option<&str>) -> PyResult<Option<ListSortBy>> {
@@ -319,9 +320,6 @@ struct RagfsCacheConfig {
     runtime_enabled: bool,
     provider: CacheProviderKind,
     service_name: String,
-    max_file_size_bytes: usize,
-    traversal_mode: CacheTraversalMode,
-    bypass_prefixes: Vec<String>,
     priority_ttl_seconds: u64,
     redis: RedisCacheConfig,
     dynamic: DynamicCacheConfig,
@@ -369,9 +367,6 @@ impl Default for RagfsCacheConfig {
             runtime_enabled: false,
             provider: CacheProviderKind::Redis,
             service_name: String::new(),
-            max_file_size_bytes: CachePolicy::default().max_file_size(),
-            traversal_mode: CacheTraversalMode::Backend,
-            bypass_prefixes: Vec::new(),
             priority_ttl_seconds: 0,
             redis: RedisCacheConfig::default(),
             dynamic: DynamicCacheConfig::default(),
@@ -402,9 +397,9 @@ impl Default for RedisCacheConfig {
             sentinel_password: String::new(),
             db: 0,
             pool_size: 32,
-            connect_timeout_ms: 1_000,
-            command_timeout_ms: 20,
-            default_ttl_seconds: 3_600,
+            connect_timeout_ms: 10_000,
+            command_timeout_ms: 0,
+            default_ttl_seconds: 300,
             tls_insecure_skip_verify: false,
         }
     }
@@ -446,7 +441,8 @@ impl RagfsCacheConfig {
             cachefs: CacheFsConfig {
                 enabled: self.enabled,
                 service_name: self.service_name.clone(),
-                policy: cache_policy_from_config(self),
+                priority_ttl: (self.priority_ttl_seconds > 0)
+                    .then(|| Duration::from_secs(self.priority_ttl_seconds)),
             },
         })
     }
@@ -650,16 +646,8 @@ fn cache_config_from_canonical_ov_conf_with_runtime(
         let cachefs = cachefs
             .as_object()
             .ok_or_else(|| "storage.agfs.cachefs must be an object".to_string())?;
-        config.max_file_size_bytes =
-            usize_field(cachefs, "max_file_size_bytes", config.max_file_size_bytes)?;
-        config.priority_ttl_seconds = u64_field_allow_zero(
-            cachefs,
-            "priority_ttl_seconds",
-            config.priority_ttl_seconds,
-        )?;
-        config.traversal_mode =
-            traversal_mode(string_field(cachefs, "traversal_mode", "backend")?)?;
-        config.bypass_prefixes = string_array_field(cachefs, "bypass_prefixes")?;
+        config.priority_ttl_seconds =
+            u64_field_allow_zero(cachefs, "priority_ttl_seconds", config.priority_ttl_seconds)?;
     }
 
     if !config.runtime_enabled {
@@ -734,14 +722,10 @@ fn cache_config_from_value(
     config.service_name = service_name.to_string();
     config.enabled = bool_field(cache, "enabled", config.enabled)?;
     config.runtime_enabled = bool_field(cache, "runtime_enabled", config.enabled)?;
-    let provider = string_field(cache, "provider", "redis")?;
-    config.provider = provider_kind(provider)?;
-    config.max_file_size_bytes =
-        usize_field(cache, "max_file_size_bytes", config.max_file_size_bytes)?;
     config.priority_ttl_seconds =
         u64_field_allow_zero(cache, "priority_ttl_seconds", config.priority_ttl_seconds)?;
-    config.traversal_mode = traversal_mode(string_field(cache, "traversal_mode", "backend")?)?;
-    config.bypass_prefixes = string_array_field(cache, "bypass_prefixes")?;
+    let provider = string_field(cache, "provider", "redis")?;
+    config.provider = provider_kind(provider)?;
 
     if let Some(redis) = cache.get("redis") {
         let redis = redis
@@ -812,7 +796,7 @@ fn parse_redis_config(
     config.db = i64_field(redis, "db", config.db)?;
     config.pool_size = usize_field(redis, "pool_size", config.pool_size)?;
     config.connect_timeout_ms = u64_field(redis, "connect_timeout_ms", config.connect_timeout_ms)?;
-    config.command_timeout_ms = u64_field(redis, "command_timeout_ms", config.command_timeout_ms)?;
+    config.command_timeout_ms = u64_field_allow_zero(redis, "command_timeout_ms", config.command_timeout_ms)?;
     config.default_ttl_seconds =
         u64_field_allow_zero(redis, "default_ttl_seconds", config.default_ttl_seconds)?;
     config.tls_insecure_skip_verify = bool_field(
@@ -841,16 +825,6 @@ fn provider_kind(value: String) -> Result<CacheProviderKind, String> {
         "dynamic" => Ok(CacheProviderKind::Dynamic),
         other => Err(format!(
             "unsupported cache.provider: {other}; expected redis or dynamic"
-        )),
-    }
-}
-
-fn traversal_mode(value: String) -> Result<CacheTraversalMode, String> {
-    match value.as_str() {
-        "backend" => Ok(CacheTraversalMode::Backend),
-        "cached_traversal" => Ok(CacheTraversalMode::CachedTraversal),
-        other => Err(format!(
-            "unsupported cachefs.traversal_mode: {other}; expected backend or cached_traversal"
         )),
     }
 }
@@ -988,18 +962,8 @@ fn string_array_field_or_default(
     }
 }
 
-fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
-    let priority_ttl = (config.priority_ttl_seconds > 0)
-        .then(|| Duration::from_secs(config.priority_ttl_seconds));
-    config.bypass_prefixes.iter().fold(
-        CachePolicy::new(config.max_file_size_bytes)
-            .with_traversal_mode(config.traversal_mode)
-            .with_priority_ttl(priority_ttl),
-        |policy, prefix| policy.with_bypass_prefix(prefix),
-    )
-}
-
 mod git;
+mod global_policy;
 mod privacy;
 mod privacy_extractor;
 
@@ -1036,6 +1000,8 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::NotFound(_) => new_py_err("AGFSNotFoundError", msg),
         ragfs::core::Error::AlreadyExists(_) => new_py_err("AGFSAlreadyExistsError", msg),
         ragfs::core::Error::PermissionDenied(_) => new_py_err("AGFSPermissionDeniedError", msg),
+        ragfs::core::Error::QuotaExceeded(_) => new_py_err("AGFSResourceExhaustedError", msg),
+        ragfs::core::Error::RateLimited(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::InvalidPath(_) => new_py_err("AGFSInvalidPathError", msg),
         ragfs::core::Error::NotADirectory(_) => new_py_err("AGFSNotADirectoryError", msg),
         ragfs::core::Error::IsADirectory(_) => new_py_err("AGFSIsADirectoryError", msg),
@@ -1578,6 +1544,8 @@ struct RAGFSBindingClient {
     leader_leases: Arc<AsyncMutex<HashMap<String, LeaderLease>>>,
     /// Blocks leader operations during close and waits in-flight operations out.
     leader_closing: Arc<AsyncRwLock<bool>>,
+    /// Write-time hooks applied before any filesystem write.
+    write_hooks: WriteHookRegistry,
 }
 
 impl RAGFSBindingClient {
@@ -1779,6 +1747,9 @@ impl RAGFSBindingClient {
             },
         };
 
+        let mut write_hooks = WriteHookRegistry::new();
+        ragfs::global_policy::register_write_hooks(&mut write_hooks);
+
         Ok(Self {
             mountable: stack.mountable,
             top: stack.top,
@@ -1790,6 +1761,7 @@ impl RAGFSBindingClient {
             service_name: service_name.unwrap_or_else(|| "ragfs".to_string()),
             leader_leases: Arc::new(AsyncMutex::new(HashMap::new())),
             leader_closing: Arc::new(AsyncRwLock::new(false)),
+            write_hooks,
         })
     }
 
@@ -2091,6 +2063,11 @@ impl RAGFSBindingClient {
 
     /// Write data to file.
     ///
+    /// Registered write hooks run before the filesystem is touched. The
+    /// reserved GLOBAL policy path is validated as a v1 policy; invalid content
+    /// raises ``GlobalPolicyError`` (``GLOBAL_POLICY_INVALID``) or
+    /// ``UnsupportedGlobalPolicySchemaError`` (``GLOBAL_POLICY_SCHEMA_UNSUPPORTED``).
+    ///
     /// Args:
     ///     path: File path
     ///     data: File content as bytes
@@ -2105,6 +2082,9 @@ impl RAGFSBindingClient {
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let _ = max_retries; // not applicable for local binding
+        self.write_hooks
+            .check(&path, &data)
+            .map_err(|error| global_policy::write_hook_error(py, error))?;
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
         let len = data.len();
@@ -3370,8 +3350,26 @@ impl RAGFSBindingClient {
 #[pymodule]
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
+    m.add_class::<global_policy::PyUserGlobalPolicy>()?;
     m.add_class::<privacy::PyPrivacyMatcher>()?;
     m.add_class::<privacy_extractor::PyPrivacyExtractor>()?;
+    let global_policy_error = m.py().get_type::<global_policy::GlobalPolicyError>();
+    global_policy_error.setattr(
+        "code",
+        ragfs::global_policy::GlobalPolicyError::INVALID_CODE,
+    )?;
+    m.add("GlobalPolicyError", global_policy_error)?;
+    let unsupported_global_policy_error = m
+        .py()
+        .get_type::<global_policy::UnsupportedGlobalPolicySchemaError>();
+    unsupported_global_policy_error.setattr(
+        "code",
+        ragfs::global_policy::GlobalPolicyError::UNSUPPORTED_SCHEMA_CODE,
+    )?;
+    m.add(
+        "UnsupportedGlobalPolicySchemaError",
+        unsupported_global_policy_error,
+    )?;
     m.add_function(wrap_pyfunction!(reopen_tracing_file, m)?)?;
 
     // Import the Python business exception so native code raises the same type
@@ -3638,7 +3636,6 @@ mod tests {
         assert!(!cache_config.enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Redis);
         assert_eq!(cache_config.service_name, "test-service");
-        assert_eq!(cache_config.traversal_mode, CacheTraversalMode::Backend);
 
         fs::remove_file(path).unwrap();
     }
@@ -3878,10 +3875,7 @@ mod tests {
                 },
                 "storage": {
                     "agfs": {
-                        "cachefs": {
-                            "backend": "cache",
-                            "traversal_mode": "cached_traversal"
-                        },
+                        "cachefs": {"backend": "cache"},
                         "queuefs": {"backend": "cache"}
                     }
                 }
@@ -3895,10 +3889,6 @@ mod tests {
         assert!(cache_config.runtime_enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Redis);
         assert_eq!(cache_config.service_name, "tenant-a");
-        assert_eq!(
-            cache_config.traversal_mode,
-            CacheTraversalMode::CachedTraversal
-        );
         assert_eq!(cache_config.redis.mode, "sentinel");
         assert_eq!(cache_config.redis.master_name.as_deref(), Some("mymaster"));
         assert_eq!(cache_config.redis.command_timeout_ms, 750);
@@ -4046,32 +4036,6 @@ mod tests {
 
             assert!(error.contains(provider));
         }
-    }
-
-    #[test]
-    fn cache_config_rejects_invalid_traversal_mode() {
-        let path = std::env::temp_dir().join(format!(
-            "openviking-invalid-cache-traversal-{}.json",
-            std::process::id()
-        ));
-        fs::write(
-            &path,
-            r#"{
-                "service_name": "test-service",
-                "cache": {"provider": "redis", "params": {}},
-                "storage": {"agfs": {"cachefs": {
-                    "backend": "cache",
-                    "traversal_mode": "bogus"
-                }}}
-            }"#,
-        )
-        .unwrap();
-
-        let error = cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap_err();
-
-        assert!(error.contains("traversal_mode"));
-
-        fs::remove_file(path).unwrap();
     }
 
     #[test]

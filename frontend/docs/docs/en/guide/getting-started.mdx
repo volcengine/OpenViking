@@ -1,0 +1,97 @@
+# Getting started
+
+OpenViking UI is a React library workspace inside the OpenViking repository. This first version provides the build and documentation foundation, with `StatusBadge` as an example module.
+
+The package is currently private and has not been published to npm. File trees, previews, and TUI modules have not been migrated yet.
+
+## Run locally
+
+Use Node.js 22.12 or newer. From the repository root:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Open the `/ui/` address printed by Rspress. The site uses the same base path locally and in production.
+
+Use the language menu in the navigation bar to switch between English and Simplified Chinese. English keeps the `/ui/` routes; Chinese is available under `/ui/zh/`.
+
+## Use the example
+
+Within this workspace, import the public package and its stylesheet:
+
+```tsx
+import { StatusBadge } from '@openviking/react';
+import '@openviking/react/style.css';
+
+export default function Example() {
+  return <StatusBadge status="ready">Connected</StatusBadge>;
+}
+```
+
+React and ReactDOM are peer dependencies. The declared range supports React 18.2 and React 19; the documentation application uses React 19.
+
+The official workspace development plugin starts the library's Rslib watcher before the documentation server. Development and production demos both consume the built package exports, checking the same JavaScript and stylesheet applications will use. Rslib emits ESM JavaScript, TypeScript declarations, and `style.css` into `packages/react/dist/`; the public stylesheet entry remains `@openviking/react/style.css`.
+
+## Build and check
+
+```bash
+npm run lint
+npm run lint:fix
+npm run typecheck
+npm run build
+npm run preview
+```
+
+The static site is generated in `frontend/docs/doc_build/`. The library can also be built separately with `npm run build:lib`. The check commands build the library first so demos can resolve its declarations. `npm run lint` runs Rslint's code-quality and type checks and checks formatting with Prettier. `npm run lint:fix` applies available lint fixes and formats files. `npm run typecheck` uses TypeScript's `tsc --noEmit` to check the library, build configuration, and documentation projects, without formatting or lint rules. TypeScript also generates the library declarations.
+
+Pass files, directories, or quoted globs after `--` to limit formatting and lint rules. Without arguments, `lint` and `lint:fix` check the whole frontend workspace. Type checking always covers the complete configured TypeScript projects, including when lint targets specific files. Type errors require manual correction.
+
+JavaScript and TypeScript files, including JSX and TSX, are limited to 200 lines per file, excluding blank and comment-only lines. Exceeding this limit fails lint.
+
+```bash
+npm run lint -- packages/react/src/index.ts
+npm run lint -- packages/react/src/index.ts docs/rspress.config.ts
+npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
+```
+
+## Public entries
+
+Import implemented APIs from `@openviking/react` or a specific `@openviking/react/components/<module>` entry. `components` and `pages` have no category-level JS exports. The former `/tree`, `/preview`, `/console`, `/tui`, and `/viking-bot` paths are replaced by the component paths.
+
+Seven business module entries are reserved: `file-tree`, `file-preview`, `tui`, `viking-bot`, `scope-switcher`, `agent-connect`, and `resource-import`. They export no components yet. Pages and public Hooks have no implementation or exports; the first page is not defined.
+
+## Styling
+
+Choose the full, component-aggregate, or single-component stylesheet. Each works independently; JS imports do not load styles. Reserved business modules currently have empty stylesheets.
+
+```tsx
+import { StatusBadge } from '@openviking/react/components/status-badge';
+import '@openviking/react/components/status-badge/style.css';
+// Alternatively: @openviking/react/components/style.css or @openviking/react/style.css
+```
+
+When pages are implemented, they will provide `pages/style.css` and `pages/<page>/style.css`; each page stylesheet will include its required component styles. There are no page CSS exports yet.
+
+Module styles are scoped with CSS Modules and do not require Tailwind, Arco, or a global reset. Theme colors can be changed on a containing element:
+
+```css
+.my-workbench {
+  --ov-ui-status-ready: #187347;
+  --ov-ui-status-processing: #2563c5;
+  --ov-ui-status-error: #c43838;
+  --ov-ui-radius: 6px;
+}
+```
+
+The documentation provides light and dark theme examples. Applications choose colors appropriate to their own backgrounds.
+
+## Deployment
+
+Changes under `frontend/` run the UI check workflow. On `main`, the existing product documentation deployments build the UI site and include it under `/ui/` in the same artifact or storage bucket.
+
+GitHub Pages publishes a complete site artifact, so the component site is assembled with the product documentation before deployment. TOS deployment uses the existing repository credentials. npm publication is a separate future step.
+
+For usage and interactive examples, see [StatusBadge](../components/status-badge).

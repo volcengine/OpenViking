@@ -1,0 +1,111 @@
+# FilePreview
+
+A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
+
+This is a placeholder implementation: the tab row, header row, tab switching, copy, the preview/source switch and the ref handle work, and the file body falls back to plain text until FileViewer is wired in. The editing flow is a skeleton too — it does not yet isolate an in-flight fetch from a tab switch, nor keep the draft when a save fails; both will be handled when the real implementation replaces it.
+
+## Basic usage
+
+Pass at least one tab. A file tab carries `source`; a content tab carries a node the host renders itself.
+
+```tsx file="../../_demos/file-preview-basic.tsx" preview
+
+```
+
+## Two tab kinds
+
+| Kind              | Rendered by     | Typical use                    |
+| ----------------- | --------------- | ------------------------------ |
+| `kind: 'file'`    | The component   | A file, its source, a document |
+| `kind: 'content'` | The host, as-is | Dashboards, graphs, summaries  |
+
+Both share the shell — tab row, path breadcrumb, copy path and the header slots. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
+
+The active tab is owned by the component. To switch from outside, use the ref handle:
+
+```tsx
+const previewRef = useRef<FilePreviewHandle>(null);
+previewRef.current?.setActiveTab('dashboard');
+```
+
+## Where content comes from
+
+`source` accepts three mutually exclusive inputs, checked in order:
+
+- `content` — inline text, wrapped into a `File` named after `fileName`.
+- `file` — a `File` or `Blob`, passed through.
+- `url` — an accessible link; the component performs no authentication.
+
+`fileName` is required and drives both format detection and the default tab title.
+
+## States
+
+Loading, failure and unsupported formats are not props — the component decides them from the content and the file name. All three can be replaced through `slots`:
+
+- `slots.loadingFallback`
+- `slots.errorFallback`
+- `slots.unsupportedFallback`
+
+Editing is internal too. The host supplies `editing.onSave`, and optionally `editing.onRequestEdit` — called before editing starts, returning the full text so a truncated preview can fetch it first. Returning `undefined` abandons the edit; a rejection shows the load-failure message.
+
+## Props
+
+| Property    | Type                                             | Default  | Description                                                    |
+| ----------- | ------------------------------------------------ | -------- | -------------------------------------------------------------- |
+| `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required | At least one tab; the first is shown initially.                |
+| `labels`    | `FilePreviewLabels`                              | English  | Default copy for every tab; a tab can override field by field. |
+| Other props | `HTMLAttributes<HTMLDivElement>`                 | —        | Standard div attributes.                                       |
+
+### Per-tab fields
+
+Shared by both kinds:
+
+| Property             | Type                         | Default   | Description                                        |
+| -------------------- | ---------------------------- | --------- | -------------------------------------------------- |
+| `key`                | `string`                     | Required  | Unique tab key.                                    |
+| `title`              | `ReactNode`                  | File name | What the tab row shows. Required for content tabs. |
+| `icon`               | `ReactNode`                  | By format | Tab icon.                                          |
+| `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.             |
+| `disabled`           | `boolean`                    | `false`   | Disables the tab.                                  |
+| `onOpenParent`       | `(path: string) => void`     | —         | Back entry on the path breadcrumb.                 |
+| `onCopyPath`         | `(path: string) => void`     | —         | Copy-path button; needs `source.path`.             |
+| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.             |
+| `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                           |
+
+File tabs add:
+
+| Property        | Type                            | Default  | Description                             |
+| --------------- | ------------------------------- | -------- | --------------------------------------- |
+| `source`        | `FilePreviewSource`             | Required | The content and file name.              |
+| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.     |
+| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only. |
+| `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.         |
+| `onCopyContent` | `(text: string) => void`        | —        | Copy-content button.                    |
+| `onDownload`    | `() => void`                    | —        | Download button.                        |
+| `onOpenUri`     | `(uri: string) => void`         | —        | Navigate to a URI in the content.       |
+
+```tsx
+import { FilePreview } from '@openviking/react/components/file-preview';
+import '@openviking/react/components/file-preview/style.css';
+```
+
+## Accessibility
+
+The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-selected`. Every icon-only control carries an accessible name through `aria-label` and a `title` tooltip. The path breadcrumb is a button only when `onOpenParent` is supplied.
+
+## Theme tokens
+
+| CSS variable         | Default                   | Purpose                        |
+| -------------------- | ------------------------- | ------------------------------ |
+| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         | Row separators and borders.    |
+| `--ov-ui-text-muted` | `#8f959e`                 | Secondary text and icons.      |
+| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         | Hover background.              |
+| `--ov-ui-accent`     | `#2563c5`                 | Breadcrumb and primary button. |
+| `--ov-ui-focus-ring` | `#2563c5`                 | Keyboard focus ring.           |
+| `--ov-ui-radius`     | `6px`                     | Corner radius.                 |
+| `--ov-ui-surface`    | `canvas`                  | Selected tab background.       |
+| `--ov-ui-font-mono`  | `ui-monospace, monospace` | Body and editor text.          |
+
+## Implementation scope
+
+The component renders the shell and reports intent. Reading, saving, downloading and permissions belong to the host.

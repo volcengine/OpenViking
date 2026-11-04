@@ -107,9 +107,18 @@ class MemoryCompileRunner:
     task_type = "compile"
     task_id_prefix = "cmp_"
 
-    def __init__(self, fs: FSService, vikingdb: Any = None) -> None:
+    def __init__(
+        self,
+        fs: FSService,
+        vikingdb: Any = None,
+        *,
+        runtime_config_manager: Any = None,
+        vlm_resolver=None,
+    ) -> None:
         self._fs = fs
         self._vikingdb = vikingdb
+        self._runtime_config_manager = runtime_config_manager
+        self._vlm_resolver = vlm_resolver
         # Keep strong references so background tasks are not garbage collected.
         self._running: set[asyncio.Task[None]] = set()
 
@@ -341,7 +350,16 @@ class MemoryCompileRunner:
         if not memory_types:
             return result
         config = get_openviking_config()
-        vlm = config.vlm.get_vlm_instance()
+        vlm = (
+            await self._vlm_resolver.get_vlm(ctx.account_id)
+            if self._vlm_resolver is not None
+            else config.vlm.get_vlm_instance()
+        )
+        from openviking.config.generation import get_output_language_override
+
+        output_language_override = await get_output_language_override(
+            self._runtime_config_manager, ctx.account_id, cluster_config=config
+        )
         provider = ConsolidationExtractContextProvider(
             memory_types=memory_types,
             target_directory=target,
@@ -349,6 +367,7 @@ class MemoryCompileRunner:
             memory_registry=registry,
             ctx=ctx,
             viking_fs=viking_fs,
+            output_language_override=output_language_override,
         )
 
         extract_context = provider.get_extract_context()

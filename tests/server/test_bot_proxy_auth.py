@@ -462,8 +462,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(tasks_router_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(
-        external_task_service_module,
-        "get_queue_manager",
+        "openviking.storage.queuefs.get_queue_manager",
         lambda: SimpleNamespace(enqueue=AsyncMock()),
     )
     connection = {"api_key": "active-user-key", "request_id": "compile-request-123", **identity}
@@ -491,7 +490,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert restored is not None
     listed = (await tracker.list_tasks(**owner))[0]
     assert restored.to_dict() == listed.to_dict() == task.to_dict()
-    auth = await tracker.get_task_auth(task.task_id, **owner)
+    stored_auth = await tracker.get_task_auth(task.task_id, **owner)
+    assert "active-user-key" not in json.dumps(stored_auth)
+    auth = await tasks._task_auth(task.task_id, **owner)
     assert auth["external_request_private"] == private_payload
     assert auth["openviking_connection"] == connection
     external_task_id = await service.submit(
@@ -596,7 +597,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     tracker = TaskTracker(store)
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
-    monkeypatch.setattr(external_task_service_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
     monkeypatch.setattr(
         "openviking.storage.queuefs.external_task_processor.get_queue_manager", lambda: manager
     )

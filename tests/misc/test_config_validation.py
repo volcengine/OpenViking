@@ -10,6 +10,7 @@ import pytest
 
 from openviking.utils.agfs_utils import (
     RagfsBindingConfig,
+    _cache_shares_redis_backend,
     _generate_plugin_config,
     create_agfs_client,
     mount_agfs_backend,
@@ -194,27 +195,25 @@ def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
 def test_top_level_cache_provider_params_build_redis_binding_config():
     assert OpenVikingConfig.from_dict({}).service_name == "openviking-server"
 
-    config = OpenVikingConfig.from_dict(
-        {
-            "service_name": "tenant-a",
-            "cache": {
-                "provider": "redis",
-                "params": {
-                    "mode": "sentinel",
-                    "endpoints": [
-                        "redis://sentinel-1:26379",
-                        "redis://sentinel-2:26379",
-                    ],
-                    "master_name": "mymaster",
-                    "command_timeout_ms": 1000,
-                },
+    config = OpenVikingConfig.from_dict({
+        "service_name": "tenant-a",
+        "cache": {
+            "provider": "redis",
+            "params": {
+                "mode": "sentinel",
+                "endpoints": [
+                    "redis://sentinel-1:26379",
+                    "redis://sentinel-2:26379",
+                ],
+                "master_name": "mymaster",
+                "command_timeout_ms": 1000,
             },
-            "storage": {
-                "workspace": "/tmp/ov-test",
-                "agfs": {"cachefs": {"backend": "cache"}},
-            },
-        }
-    )
+        },
+        "storage": {
+            "workspace": "/tmp/ov-test",
+            "agfs": {"cachefs": {"backend": "cache"}},
+        },
+    })
 
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
@@ -233,22 +232,20 @@ def test_top_level_cache_provider_params_build_redis_binding_config():
 
 
 def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
-    config = OpenVikingConfig.model_validate(
-        {
-            "service_name": "queue-runtime",
-            "cache": {
-                "provider": "redis",
-                "params": {"endpoints": ["redis://redis:6379"]},
+    config = OpenVikingConfig.model_validate({
+        "service_name": "queue-runtime",
+        "cache": {
+            "provider": "redis",
+            "params": {"endpoints": ["redis://redis:6379"]},
+        },
+        "storage": {
+            "workspace": "/tmp/ov-test",
+            "agfs": {
+                "cachefs": {"backend": "local"},
+                "queuefs": {"backend": "cache"},
             },
-            "storage": {
-                "workspace": "/tmp/ov-test",
-                "agfs": {
-                    "cachefs": {"backend": "local"},
-                    "queuefs": {"backend": "cache"},
-                },
-            },
-        }
-    )
+        },
+    })
 
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
@@ -269,23 +266,21 @@ def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
 
 
 def test_top_level_cache_params_ignore_removed_replica_read_config():
-    config = OpenVikingConfig.model_validate(
-        {
-            "cache": {
-                "provider": "redis",
-                "params": {
-                    "mode": "cluster",
-                    "endpoints": [
-                        "redis://cluster-1:6379",
-                        "redis://cluster-2:6379",
-                    ],
-                    "db": 0,
-                    "read_from_replica": True,
-                },
+    config = OpenVikingConfig.model_validate({
+        "cache": {
+            "provider": "redis",
+            "params": {
+                "mode": "cluster",
+                "endpoints": [
+                    "redis://cluster-1:6379",
+                    "redis://cluster-2:6379",
+                ],
+                "db": 0,
+                "read_from_replica": True,
             },
-            "storage": {"agfs": {"queuefs": {"backend": "cache"}}},
-        }
-    )
+        },
+        "storage": {"agfs": {"queuefs": {"backend": "cache"}}},
+    })
 
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
@@ -296,14 +291,12 @@ def test_top_level_cache_params_ignore_removed_replica_read_config():
 
 def test_cache_backend_requires_top_level_cache_config():
     with pytest.raises(ValueError, match="top-level cache config"):
-        OpenVikingConfig.model_validate(
-            {
-                "storage": {
-                    "workspace": "/tmp/ov-test",
-                    "agfs": {"cachefs": {"backend": "cache"}},
-                }
+        OpenVikingConfig.model_validate({
+            "storage": {
+                "workspace": "/tmp/ov-test",
+                "agfs": {"cachefs": {"backend": "cache"}},
             }
-        )
+        })
 
 
 def test_top_level_cache_repr_hides_provider_params():
@@ -316,14 +309,12 @@ def test_top_level_cache_repr_hides_provider_params():
 
 
 def test_unused_top_level_cache_does_not_parse_provider_params():
-    config = OpenVikingConfig.model_validate(
-        {
-            "cache": {
-                "provider": "future-provider",
-                "params": {"provider_owned": True},
-            }
+    config = OpenVikingConfig.model_validate({
+        "cache": {
+            "provider": "future-provider",
+            "params": {"provider_owned": True},
         }
-    )
+    })
 
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
@@ -336,46 +327,56 @@ def test_unused_top_level_cache_does_not_parse_provider_params():
 
 
 def test_openviking_config_dump_uses_only_canonical_cache_schema():
-    config = OpenVikingConfig.model_validate(
-        {
-            "cache": {"provider": "redis", "params": {}, "enabled": True},
-            "storage": {"agfs": {"cachefs": {"backend": "cache"}}},
-        }
-    )
+    config = OpenVikingConfig.model_validate({
+        "cache": {"provider": "redis", "params": {}, "enabled": True},
+        "storage": {
+            "agfs": {
+                "cachefs": {
+                    "backend": "cache",
+                    "max_file_size_bytes": 1024,
+                    "traversal_mode": "cached_traversal",
+                    "bypass_prefixes": ["/queue"],
+                }
+            }
+        },
+    })
 
     dumped = config.model_dump(mode="json")
+    binding = RagfsBindingConfig(
+        agfs=config.storage.agfs,
+        cache=config.cache,
+    ).to_binding_dict()
 
     assert dumped["cache"] == {"provider": "redis", "params": {}}
-    assert dumped["storage"]["agfs"]["cachefs"]["backend"] == "cache"
+    assert dumped["storage"]["agfs"]["cachefs"] == {"backend": "cache", "priority_ttl_seconds": 0}
     assert "cache" not in dumped["storage"]["agfs"]
+    assert "max_file_size_bytes" not in binding["cache"]
+    assert "traversal_mode" not in binding["cache"]
+    assert "bypass_prefixes" not in binding["cache"]
 
 
 def test_openviking_config_rejects_removed_queuefs_redis_schema():
     with pytest.raises(ValueError, match="backend='redis'.*removed"):
-        OpenVikingConfig.model_validate(
-            {
-                "storage": {
-                    "agfs": {
-                        "queuefs": {
-                            "backend": "redis",
-                            "redis": {"endpoints": ["redis://redis:6379"]},
-                        }
+        OpenVikingConfig.model_validate({
+            "storage": {
+                "agfs": {
+                    "queuefs": {
+                        "backend": "redis",
+                        "redis": {"endpoints": ["redis://redis:6379"]},
                     }
                 }
             }
-        )
+        })
 
 
 def test_rediss_scheme_enables_tls_without_boolean_flag():
-    config = OpenVikingConfig.model_validate(
-        {
-            "cache": {
-                "provider": "redis",
-                "params": {"endpoints": ["rediss://redis.example.com:6380"]},
-            },
-            "storage": {"agfs": {"cachefs": {"backend": "cache"}}},
-        }
-    )
+    config = OpenVikingConfig.model_validate({
+        "cache": {
+            "provider": "redis",
+            "params": {"endpoints": ["rediss://redis.example.com:6380"]},
+        },
+        "storage": {"agfs": {"cachefs": {"backend": "cache"}}},
+    })
 
     binding = RagfsBindingConfig(config.storage.agfs, cache=config.cache).to_binding_dict()
 
@@ -837,19 +838,17 @@ def test_agfs_pathlock_config_validates_provider_and_expiry(tmp_path):
 
 def test_redis_pathlock_enables_shared_runtime_without_cachefs(tmp_path):
     """Redis PathLock alone should enable the configured Redis Runtime."""
-    config = OpenVikingConfig.from_dict(
-        {
-            "cache": {
-                "provider": "redis",
-                "params": {"endpoints": ["redis://redis:6379"]},
-            },
-            "storage": {
-                "workspace": str(tmp_path),
-                "agfs": {"pathlock": {"provider": "cache"}},
-            },
-            "service_name": "prod-a",
-        }
-    )
+    config = OpenVikingConfig.from_dict({
+        "cache": {
+            "provider": "redis",
+            "params": {"endpoints": ["redis://redis:6379"]},
+        },
+        "storage": {
+            "workspace": str(tmp_path),
+            "agfs": {"pathlock": {"provider": "cache"}},
+        },
+        "service_name": "prod-a",
+    })
 
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
@@ -1301,3 +1300,86 @@ if __name__ == "__main__":
 
         traceback.print_exc()
         sys.exit(1)
+
+
+def _mysql_watch_store_config(watch_params):
+    mysql = {"user": "u", "password": "p", "database": "d"}
+    return {
+        "storage": {
+            "watch_store": {"provider": "mysql", "params": {**mysql, **watch_params}},
+        },
+    }
+
+
+def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
+    assert OpenVikingConfig.from_dict({}).storage.watch_store.provider == "file"
+    with pytest.raises(ValueError, match="'file' or 'mysql'"):
+        OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "sqlite"}}})
+
+
+def test_mysql_watch_store_requires_credential_encryption_key():
+    with pytest.raises(ValueError, match="credential_encryption_key"):
+        OpenVikingConfig.from_dict(_mysql_watch_store_config({}))
+    config = OpenVikingConfig.from_dict(
+        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+    )
+    assert config.storage.watch_store.provider == "mysql"
+    assert config.storage.task_store.provider == "file"
+    assert config.storage.agfs.pathlock.provider == "filesystem"
+
+
+def test_watch_leader_provider_config():
+    assert OpenVikingConfig.from_dict({}).watch_leader_provider == "auto"
+    assert OpenVikingConfig.from_dict({"watch_leader_provider": "local"}).watch_leader_provider == "local"
+    with pytest.raises(ValueError, match="watch_leader_provider"):
+        OpenVikingConfig.from_dict({"watch_leader_provider": "redis"})
+
+
+def test_cache_priority_ttl_requires_shared_redis_backend(tmp_path):
+    agfs = AGFSConfig(
+        path=str(tmp_path),
+        cachefs={"backend": "cache", "priority_ttl_seconds": 7200},
+    )
+    cache = CacheConfig(provider="redis", params={})
+
+    shared = RagfsBindingConfig(
+        agfs=agfs,
+        cache=cache,
+        shared_redis_backend=True,
+    ).to_binding_dict()
+    isolated = RagfsBindingConfig(
+        agfs=agfs,
+        cache=cache,
+        shared_redis_backend=False,
+    ).to_binding_dict()
+
+    assert shared["cache"]["priority_ttl_seconds"] == 7200
+    assert isolated["cache"]["priority_ttl_seconds"] == 0
+
+
+def test_cache_shared_redis_backend_detection():
+    cache = {
+        "provider": "redis",
+        "params": {"endpoints": ["redis://127.0.0.1:6379"]},
+    }
+
+    assert _cache_shares_redis_backend(
+        cache,
+        {"queuefs": {"backend": "cache"}},
+        None,
+    )
+    assert _cache_shares_redis_backend(
+        cache,
+        {"pathlock": {"provider": "cache"}},
+        None,
+    )
+    assert _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["redis://127.0.0.1:6379"]}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["redis://127.0.0.1:6380"]}},
+    )
