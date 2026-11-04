@@ -1225,7 +1225,10 @@ async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(read_visible=read_visible),
+            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
+        ),
     )
     requested = next(iter(arguments.values()))
     expected = requested if isinstance(requested, list) else [requested]
