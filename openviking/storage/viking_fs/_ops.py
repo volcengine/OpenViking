@@ -169,6 +169,24 @@ class _OpsMixin:
         else:
             raw = b""
 
+        if not raw:
+            # AGFS read returns empty bytes for a non-existent file instead of
+            # raising (see read_file), so an empty result needs a stat to tell
+            # "missing" apart from a genuinely empty file. A non-empty result
+            # already proves the file exists and is readable.
+            try:
+                stat = await self._async_agfs.stat(path)
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    raise NotFoundError(uri, "file") from exc
+                raise
+            if isinstance(stat, dict) and stat.get("isDir", False):
+                raise InvalidArgumentError(
+                    f"Directory URI is not readable as a file: {uri}. "
+                    "List it first, then read a file URI.",
+                    details={"resource": uri, "expected": "file", "actual": "directory"},
+                )
+
         return raw
 
     async def write(
