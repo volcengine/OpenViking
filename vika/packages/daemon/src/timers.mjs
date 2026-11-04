@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 const TIMER_ID_PREFIX = 'tm_';
 export const DEFAULT_OCCURRENCE_CHECK_DELAY_MS = 5 * 60 * 1000;
-const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
+export const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
 
 function number(value) {
   return typeof value === 'bigint' ? Number(value) : value;

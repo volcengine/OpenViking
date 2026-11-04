@@ -1465,7 +1465,6 @@ export class ActionService {
     if (input.delivery) {
       delivery = await this.call(input.delivery.tool, {
         ...input.delivery.input,
-        decision_id: check.eventId,
         decision_instance: 'timer',
       }, { authority: caller.authority, via: caller.trace.via });
       if (delivery.data?.dry_run) {

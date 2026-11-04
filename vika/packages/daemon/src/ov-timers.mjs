@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { TimerSchedule } from './timers.mjs';
+import { MAX_OCCURRENCE_CHECK_ATTEMPTS, TimerSchedule } from './timers.mjs';
 
 export class OVTimerRepository {
   constructor(client, instanceId) {
@@ -77,7 +77,8 @@ export class OVTimerRepository {
   }
 
   nextOccurrenceCheck() {
-    return [...this.state.timer_occurrence_checks].sort((left, right) => left.nextCheckAtMs - right.nextCheckAtMs)[0] ?? null;
+    return this.state.timer_occurrence_checks.filter((check) => check.status !== 'exhausted')
+      .sort((left, right) => left.nextCheckAtMs - right.nextCheckAtMs)[0] ?? null;
   }
 
   nextDueOccurrenceCheck(nowMs = Date.now()) {
@@ -158,7 +159,9 @@ export class OVTimerRepository {
   rescheduleOccurrenceCheck(occurrenceId, { attempt, nextCheckAtMs }) {
     return this.mutate((state) => {
       const check = state.timer_occurrence_checks.find((entry) => entry.occurrenceId === occurrenceId);
-      if (check && check.status !== 'completed') Object.assign(check, { status: 'pending', attempt, nextCheckAtMs });
+      if (check && check.status !== 'completed') Object.assign(check, {
+        status: attempt >= MAX_OCCURRENCE_CHECK_ATTEMPTS ? 'exhausted' : 'pending', attempt, nextCheckAtMs,
+      });
       return check ?? null;
     });
   }
