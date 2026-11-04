@@ -13,7 +13,7 @@ from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import InvalidArgumentError
 
 _TEXT_FIELDS = {
-    "text": ("text",),
+    "text": ("text", "original_text"),
     "context": ("abstract",),
     "tool": ("tool_output", "tool_output_externalization_error"),
 }

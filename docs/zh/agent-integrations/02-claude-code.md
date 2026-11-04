@@ -19,6 +19,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 可以在新会话中询问已保存的信息，验证跨会话召回是否生效。
 
+> **通过桥接层使用，或宿主会给用户消息加标签？** 例如 Claude Code / Codex 跑在 botmux 这类聊天桥接里。请在服务端 `ov.conf` 打开[宿主外壳归一化](../guides/01-configuration.md#host-envelope)，否则桥接层的说明块会被当成用户原话写入记忆，也会被拿去检索。
+
 <details>
 <summary><b>手动安装</b></summary>
 

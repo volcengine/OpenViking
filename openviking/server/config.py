@@ -2,16 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Server configuration for OpenViking HTTP Server."""
 
+import re
 import sys
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
+from openviking.utils.host_envelope import HostEnvelope, resolve_envelopes
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.config_loader import (
@@ -328,6 +330,133 @@ class ToolOutputExternalizationConfig(BaseModel):
     failure_mode: Literal["reject", "preserve_raw", "preview_only"] = "preserve_raw"
 
 
+# Element names as hosts write them in ``<name ...>``; same rule as the gateway's
+# ``client_rules`` tag lists.
+_TAG_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]*")
+
+
+def _check_tags(tags: List[str]) -> List[str]:
+    if bad := [tag for tag in tags if not _TAG_NAME.fullmatch(tag)]:
+        raise ValueError(f"tag names must be ASCII letters, digits, _ . : or -: {bad}")
+    return tags
+
+
+class HostEnvelopeSpec(BaseModel):
+    """A user-defined host envelope; see ``openviking.utils.host_envelope.HostEnvelope``."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    detect_any: List[str]
+    strip: List[str] = Field(default_factory=list)
+    extract: Optional[str] = None
+
+    @field_validator("detect_any", "strip")
+    @classmethod
+    def _tags(cls, value: List[str]) -> List[str]:
+        return _check_tags(value)
+
+    @field_validator("extract")
+    @classmethod
+    def _extract_tag(cls, value: Optional[str]) -> Optional[str]:
+        return value if value is None else _check_tags([value])[0]
+
+
+class TagChanges(BaseModel):
+    """``add`` appends to a built-in tag list, ``remove`` drops entries written exactly as there."""
+
+    model_config = ConfigDict(extra="forbid")
+    add: List[str] = Field(default_factory=list)
+    remove: List[str] = Field(default_factory=list)
+
+    @field_validator("add")
+    @classmethod
+    def _tags(cls, value: List[str]) -> List[str]:
+        return _check_tags(value)
+
+    def apply(self, packaged: Tuple[str, ...], where: str) -> Tuple[str, ...]:
+        if unknown := sorted(set(self.remove).difference(packaged)):
+            logger.warning("server.host_envelope.changes.%s: no such entry %s", where, unknown)
+        kept = [tag for tag in packaged if tag not in set(self.remove)]
+        return tuple(dict.fromkeys([*kept, *self.add]))
+
+
+class HostEnvelopeChanges(BaseModel):
+    """Edits to one built-in envelope, so later releases still extend the rest of it."""
+
+    model_config = ConfigDict(extra="forbid")
+    detect_any: TagChanges = Field(default_factory=TagChanges)
+    strip: TagChanges = Field(default_factory=TagChanges)
+
+
+class HostEnvelopeConfig(BaseModel):
+    """Strip agent-host scaffolding from user turns before they are understood or searched.
+
+    ``envelopes`` names the envelopes to try, in order; the first one that matches a turn
+    wins. Names refer to built-ins or to entries in ``custom``. Empty means off.
+    ``changes`` adds or removes tags of a built-in envelope, in the shape the gateway's
+    ``client_rules`` uses for its packaged lists.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    envelopes: List[str] = Field(default_factory=list)
+    custom: List[HostEnvelopeSpec] = Field(default_factory=list)
+    changes: Dict[str, HostEnvelopeChanges] = Field(default_factory=dict)
+    messages: bool = True
+    search: bool = True
+
+    @model_validator(mode="after")
+    def _check_names(self) -> "HostEnvelopeConfig":
+        found, unknown = resolve_envelopes(self.changes)
+        if unknown:
+            raise ValueError(f"server.host_envelope.changes: unknown built-in {unknown}")
+        for envelope in found:
+            self._changed(envelope)  # an emptied detect list fails here
+        self.resolve()  # fail at startup, not on the first message
+        return self
+
+    def _changed(self, envelope: HostEnvelope) -> HostEnvelope:
+        change = next(
+            (c for name, c in self.changes.items() if name.strip().lower() == envelope.name),
+            None,
+        )
+        if change is None:
+            return envelope
+        return HostEnvelope(
+            name=envelope.name,
+            detect_any=change.detect_any.apply(envelope.detect_any, f"{envelope.name}.detect_any"),
+            strip=change.strip.apply(envelope.strip, f"{envelope.name}.strip"),
+            extract=envelope.extract,
+        )
+
+    def resolve(self) -> List[HostEnvelope]:
+        custom = {
+            spec.name.strip().lower(): HostEnvelope(
+                name=spec.name.strip().lower(),
+                detect_any=tuple(spec.detect_any),
+                strip=tuple(spec.strip),
+                extract=spec.extract,
+            )
+            for spec in self.custom
+        }
+        resolved = []
+        for raw in self.envelopes:
+            name = str(raw or "").strip().lower()
+            if name in custom:
+                resolved.append(custom[name])
+                continue
+            found, unknown = resolve_envelopes([name])
+            if unknown:
+                raise ValueError(f"server.host_envelope: unknown envelope {raw!r}")
+            resolved.extend(self._changed(envelope) for envelope in found)
+        return resolved
+
+    def for_messages(self) -> List[HostEnvelope]:
+        return self.resolve() if self.messages else []
+
+    def for_search(self) -> List[HostEnvelope]:
+        return self.resolve() if self.search else []
+
+
 class AccountStoreConfig(BaseModel):
     """Startup-only selection of the complete account store provider."""
 
@@ -404,6 +533,7 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+    host_envelope: HostEnvelopeConfig = Field(default_factory=HostEnvelopeConfig)
 
     @field_validator("user_config_defaults", mode="before")
     @classmethod

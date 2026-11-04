@@ -15,6 +15,8 @@ class TextPart:
 
     text: str = ""
     type: Literal["text"] = "text"
+    # The text as the host sent it, kept when host-envelope normalization changed ``text``.
+    original_text: Optional[str] = None
 
 
 @dataclass
@@ -97,7 +99,7 @@ def part_from_dict(data: Dict[str, Any]) -> Part:
     """
     part_type = data.get("type", "text")
     if part_type == "text":
-        return TextPart(text=data.get("text", ""))
+        return TextPart(text=data.get("text", ""), original_text=data.get("original_text"))
     elif part_type == "context":
         return ContextPart(
             uri=data.get("uri", ""),
