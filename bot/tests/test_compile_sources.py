@@ -9,7 +9,7 @@ from dataclasses import asdict
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock, call, create_autospec
 
 import httpx
 import pytest
