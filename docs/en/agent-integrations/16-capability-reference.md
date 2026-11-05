@@ -24,7 +24,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 
 ### Agent-callable tools
 
-"Server MCP tools" means whatever the server's `tools/list` returns: 21 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
+"Server MCP tools" means whatever the server's `tools/list` returns: 22 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
 
 | Integration | How it connects | Tools the agent can call |
 |---|---|---|
@@ -38,8 +38,8 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [OpenCode](#opencode) | npm plugin that adds an MCP entry | Server MCP tools, named `openviking_<tool>` |
 | [DSH](#dsh) | In-process Cordis plugin plus an MCP proxy | Server MCP tools, named `mcp__openviking__<tool>` |
 | [pi](#pi) | Native extension with a built-in MCP client | Server MCP tools, registered as `openviking_<tool>` after the MCP handshake succeeds |
-| [OpenClaw](#openclaw) | Context-engine plugin | 15 native tools, 14 enabled by default |
-| [Hermes](#hermes) | Hermes memory provider | 6 native `viking_*` tools |
+| [OpenClaw](#openclaw) | Context-engine plugin | 16 native tools, 15 enabled by default |
+| [Hermes](#hermes) | Hermes memory provider | 7 native `viking_*` tools in the updated external plugin; 6 in older bundled providers |
 | [MCP clients, Agent Plugins](#other-integrations) | MCP only | Server MCP tools |
 | [ov CLI](#ov-cli) | Command-line client | Every operation as an explicit command; no agent involved |
 
@@ -84,7 +84,7 @@ Every MCP-based integration exposes the same server-defined tools and keeps no c
 
 | Group | Tools |
 |---|---|
-| Search and browse | `find`, `search`, `read`, `download`, `list`, `tree`, `grep`, `glob` |
+| Search and browse | `find`, `search`, `rule_search`, `read`, `download`, `list`, `tree`, `grep`, `glob` |
 | Write | `remember`, `write`, `edit`, `add_resource`, `add_skill` |
 | Delete | `forget` |
 | Watched resources | `list_watches`, `cancel_watch` (not yet available on the commercial edition) |
@@ -108,6 +108,35 @@ Host differences:
 - **pi** registers the tools only when the session is not bypassed, the health check passes, the OpenViking session exists, and the `/mcp` handshake returns a tool list. If the handshake fails, that session has no OpenViking tools, but recall, sync, and takeover continue, and a later turn retries the handshake. `mcpEnabled: false` turns the bridge off. A root API key is refused on `/mcp` with 403, so a credential chain that ends at `ov.conf`'s `server.root_api_key` produces a session without tools.
 - **Codex** passes its MCP server only the environment variables listed in `.mcp.json` `env_vars`.
 
+### Rule search across agents
+
+Rule search is a read-only, model-callable check before an action or response subject to
+constraints. Pass `task_context` with the user goal, planned action, and relevant facts;
+`rule_probability_threshold` defaults to `0.65`. Results preserve complete Rule blocks.
+Evaluate each Rule's `applies_when`, `exception`, and `content` and comply with every
+applicable Rule. A failed or unavailable check is not an empty set of Rules.
+
+| Integration | Registered tool |
+|---|---|
+| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
+| DSH / Desktop | `mcp__openviking__rule_search` |
+| OpenCode, pi, VikingBot | `openviking_rule_search` |
+| VikingBot through MCP | `mcp_<server_name>_rule_search` |
+| Microsoft Agent Framework through MCP | Dynamically discovered `rule_search`, with an optional configured prefix |
+| OpenClaw, Open WebUI | `ov_rule_search` |
+| Hermes external plugin, LangChain / LangGraph | `viking_rule_search` |
+| Magpie | `magpie-plugin_rule_search` (source installs use their folder prefix) |
+
+Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients.
+Native REST adapters require the updated plugin. The shared `openviking-rule-search`
+skill ships with Claude Code, Codex/TraeCode CLI, Cursor, CodeBuddy, OpenCode, DSH,
+pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
+Keep existing MCP opt-in and tool allowlist settings enabled. This adds a query entrypoint;
+it does not install an automatic per-turn check or enforcement hook.
+
+Hermes catalog installations are pinned by the Hermes catalog and need its pin updated
+to receive the new plugin; older bundled providers keep their original tools.
+
 ### OpenClaw tools
 
 OpenClaw registers its own tools instead of passing MCP tools through.
@@ -115,6 +144,7 @@ OpenClaw registers its own tools instead of passing MCP tools through.
 | Group | Tools | Notes |
 |---|---|---|
 | Memory | `memory_recall`, `memory_store`, `memory_forget` | `memory_recall` searches memory; `memory_store` commits through a temporary session |
+| Rules | `ov_rule_search` | Complete applicable constraints; enabled by default, selectable with the `rules` group |
 | Resources and skills | `ov_search`, `ov_read`, `ov_multi_read`, `ov_list`, `add_skill`, `add_resource` | `ov_search` covers resources and the user's skills by default. `add_resource` is off by default and also needs `enableAddResourceTool` |
 | Session archives | `ov_archive_search`, `ov_archive_expand` | Search and expand archived history |
 | Large tool output | `openviking_tool_result_read`, `openviking_tool_result_search`, `openviking_tool_result_list` | Read tool output the server stored separately |
@@ -122,7 +152,7 @@ OpenClaw registers its own tools instead of passing MCP tools through.
 
 ### Hermes tools
 
-Hermes has six tools: `viking_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`. There is no skill tool. `viking_remember` submits a fact through its own session and returns before extraction finishes; extraction may add, merge, or skip the fact. See [Hermes](#hermes) for the differences between the bundled provider and the external plugin.
+The updated Hermes external plugin has seven tools: `viking_search`, `viking_rule_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`. There is no skill installation tool. `viking_remember` submits a fact through its own session and returns before extraction finishes; extraction may add, merge, or skip the fact. Older bundled providers have the original six tools. See [Hermes](#hermes) for distribution differences.
 
 <a id="_3-5-type-boundaries-for-writes-and-deletes"></a><a id="_3-5-1-write-boundary"></a><a id="_3-5-2-delete-boundary"></a>
 
@@ -548,15 +578,15 @@ Settings that apply only to some integrations:
 
 | Integration | Status line | Commands | Skills shipped | Setup wizard |
 |---|---|---|---|---|
-| Claude Code | Yes | `/openviking-memory:ov` shows server status, identity, and where injected context came from | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `ov-memory-doctor` | Yes |
-| Codex, TraeCode CLI 2.0 | No | None | Same four as Claude Code | Yes |
-| Cursor | No | None | An always-on rule plus `openviking-memory`, `openviking-skills`, `ov-experience-memory` | Installer menu |
+| Claude Code | Yes | `/openviking-memory:ov` shows server status, identity, and where injected context came from | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor` | Yes |
+| Codex, TraeCode CLI 2.0 | No | None | Same five as Claude Code | Yes |
+| Cursor | No | None | An always-on rule plus `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search` | Installer menu |
 | TRAE, TRAE CN, ZCode | No | None | None | Installer menu |
-| OpenCode | No | None | The same three as Cursor, only when the plugin registers its MCP server | Yes |
-| DSH | No | None | The same three as Cursor | No |
-| CodeBuddy Code | No | None | The same three as Cursor | No |
-| pi | Yes | `/viking`, `/viking commit` | The same three as Cursor, unless `mcpEnabled` is `false` | Yes |
-| OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Three plugin skills | Yes; checks the key's role and version compatibility |
+| OpenCode | No | None | The same four as Cursor, only when the plugin registers its MCP server | Yes |
+| DSH | No | None | The same four as Cursor | No |
+| CodeBuddy Code | No | None | The same four as Cursor | No |
+| pi | Yes | `/viking`, `/viking commit` | The same four as Cursor, unless `mcpEnabled` is `false` | Yes |
+| OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Four plugin skills, including `openviking-rule-search` | Yes; checks the key's role and version compatibility |
 | Hermes (bundled) | No | None | None | Yes; `hermes memory status` lists environment overrides |
 | ov CLI | No | The CLI itself | None | `ov config` |
 
