@@ -151,8 +151,9 @@ PATCH /api/v1/admin/accounts/{account_id}/configuration
 ```
 
 PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置或替换，`null`
-表示从当前作用域删除该值。对象递归合并，数组整体替换。响应只返回该作用域
-的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
+表示从当前作用域删除该值。对象递归合并，数组整体替换。响应主要返回该作用域
+的显式配置；Account configuration 额外保证 `agent_evolution.enabled` 为实际生效值，
+其他字段不补全默认值。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
 
@@ -2244,9 +2245,8 @@ Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
 
 支持的 add target URI：
 
-- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
-- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://~/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
-- 旧写法兼容：早期配置中的 `viking://user/resources` 和 `viking://user/skills` 会在配置加载时自动归一化为 `viking://~/resources` 和 `viking://~/skills`，并打印一条 info 日志。新配置请直接使用 `viking://~/...`；在 `add_targets` 之外，无 uid 的写法会在请求入口被拒绝。
+- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
+- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。支持 `viking://~/skills` 和 `viking://agent/skills`。
 
 ### 运行时配置来源 {#runtime-configuration-source}
 
