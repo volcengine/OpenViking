@@ -537,7 +537,9 @@ class FeishuAccessor(DataAccessor):
 
             if doc_type == "folder":
                 temp_dir = Path(
-                    tempfile.mkdtemp(prefix="ov_feishu_folder_", dir=get_parser_download_temp_dir())
+                    tempfile.mkdtemp(
+                        prefix="ov_feishu_folder_", dir=get_parser_download_temp_dir()
+                    )
                 )
                 plan = self._new_import_plan(temp_dir, kwargs)
                 plan.source_url = source_str
@@ -575,7 +577,9 @@ class FeishuAccessor(DataAccessor):
 
             if doc_type == "wiki" and recursive_wiki(kwargs):
                 temp_dir = Path(
-                    tempfile.mkdtemp(prefix="ov_feishu_wiki_", dir=get_parser_download_temp_dir())
+                    tempfile.mkdtemp(
+                        prefix="ov_feishu_wiki_", dir=get_parser_download_temp_dir()
+                    )
                 )
                 plan = self._new_import_plan(temp_dir, kwargs)
                 plan.source_url = source_str
@@ -1943,7 +1947,9 @@ class FeishuAccessor(DataAccessor):
 
     @classmethod
     def _mindnote_element_payload(cls, element: Dict[str, Any], element_type: str) -> Any:
-        payload_key = {"user": "mention_user", "doc": "mention_doc"}.get(element_type, element_type)
+        payload_key = {"user": "mention_user", "doc": "mention_doc"}.get(
+            element_type, element_type
+        )
         return element.get(payload_key) if element.get(payload_key) is not None else element
 
     @staticmethod
