@@ -5,6 +5,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { OpenVikingProvider } from '@openviking/react/client';
+import { mergeProviderConfig } from '../src/client/options.ts';
 
 test('the Provider renders its children', () => {
   const html = renderToStaticMarkup(
@@ -33,28 +34,42 @@ test('mounting the Provider sends no request', () => {
   assert.equal(called, false);
 });
 
-test('the Provider accepts both editions of identity fields', () => {
-  // 开源版：apiKey 映射为 X-API-Key。商业版：不带 apiKey，靠浏览器 Cookie。
-  assert.doesNotThrow(() =>
-    renderToStaticMarkup(
-      createElement(OpenVikingProvider, {
-        baseURL: 'https://ov.test',
-        apiKey: 'sk-1',
-        accountId: 'acc_1',
-        userId: 'user_1',
-        resourceId: 'lib_1',
-      }),
-    ),
+test('a nested Provider inherits the address and credential it does not declare', () => {
+  const outer = mergeProviderConfig(undefined, {
+    baseURL: 'https://ov.test/gateway',
+    apiKey: 'outer-key',
+    accountId: 'acc_1',
+  });
+
+  const inner = mergeProviderConfig(outer, { userId: 'other-user' });
+
+  assert.equal(
+    inner.baseURL,
+    'https://ov.test/gateway',
+    'address is inherited',
   );
-  assert.doesNotThrow(() =>
-    renderToStaticMarkup(
-      createElement(OpenVikingProvider, {
-        baseURL: 'https://ov.test',
-        accountId: 'acc_1',
-        userId: 'user_1',
-        resourceId: 'lib_1',
-        credentials: 'include',
-      }),
-    ),
+  assert.equal(inner.identity.apiKey, 'outer-key', 'credential is inherited');
+  assert.equal(inner.identity.accountId, 'acc_1');
+  assert.equal(inner.identity.userId, 'other-user', 'only userId changes');
+});
+
+test('an explicit empty value clears the inherited field', () => {
+  const outer = mergeProviderConfig(undefined, {
+    baseURL: 'https://ov.test',
+    apiKey: 'outer-key',
+  });
+
+  const inner = mergeProviderConfig(outer, { apiKey: '' });
+
+  assert.equal(inner.identity.apiKey, '', 'the field is explicitly cleared');
+});
+
+test('an inner baseURL wins, and an empty one means same origin', () => {
+  const outer = mergeProviderConfig(undefined, { baseURL: 'https://ov.test' });
+
+  assert.equal(
+    mergeProviderConfig(outer, { baseURL: 'https://other.test' }).baseURL,
+    'https://other.test',
   );
+  assert.equal(mergeProviderConfig(outer, { baseURL: '' }).baseURL, '');
 });

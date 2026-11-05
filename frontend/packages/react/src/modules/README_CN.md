@@ -63,31 +63,37 @@ React 接入由 `@openviking/react/client` 的 `OpenVikingProvider` 通过 Conte
 | `resourceId`  | 当前库；数据面接口需要它                                                                                               |
 | `credentials` | 传给 `fetch` 的 `RequestCredentials`。默认 `same-origin`；商业版跨源调用时设为 `include`                               |
 
-模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。四个模块的 `FileBrowserProps`、`ConsoleProps`、`TaskCenterProps` 与 `UserUsageProps` 均已声明该字段。
+模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值，显式传空字符串则清除它。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。四个模块的 `FileBrowserProps`、`ConsoleProps`、`TaskCenterProps` 与 `UserUsageProps` 均已声明该字段。
 
 Provider 已实现；业务 Hook 尚未实现，因此模块目前还不会发起请求。宿主在应用根部配置一次：
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
 
-<OpenVikingProvider baseURL={endpoint} headers={getAuthHeaders}>
+<OpenVikingProvider
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
   <FileBrowser />
   <Console />
 </OpenVikingProvider>;
 ```
 
-模块用 `useOvClient` 取客户端，并传入自己的覆盖配置，逐字段叠加在 Provider 之上：
+模块通过内部 Hook 取客户端，只传需要覆盖的字段，例如访问另一个库时：
 
 ```ts
-const client = useOvClient({ headers: { 'X-OpenViking-User': userId } });
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
   path: '/api/v1/fs/ls',
   query: { uri },
+  options: { resourceId: libraryId },
 });
 ```
 
-`useOvClient` 在 Provider 之外同样可用，模块只带自己的覆盖配置即可独立运行；纯视图组件完全不需要 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
+该 Hook 不对外导出：宿主不需要知道模块会发什么请求。纯视图组件完全不需要 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
 
 - **路径只有一处拼接**：Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
 - **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。JSON 响应保留 `result` 及分页等外层元数据；上传、下载和流式响应按接口契约处理，不统一强转 JSON。

@@ -2,16 +2,16 @@ import { OvClientError } from './errors.js';
 import {
   buildQuery,
   joinUrl,
+  mergeIdentityLayers,
   resolveClientOptions,
-  resolveIdentityHeaders,
-  resolveOptions,
+  resolveIdentityLayer,
+  resolveRequestOptions,
 } from './options.js';
 import type {
   OvClient,
   OvClientOptions,
   OvErrorEnvelope,
   OvRequestSpec,
-  OvResolvedOptions,
   OvSuccessEnvelope,
 } from './types.js';
 
@@ -21,6 +21,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readEnvelope(value: unknown): OvErrorEnvelope & OvSuccessEnvelope {
   return isRecord(value) ? value : {};
+}
+
+/** 请求被调用方主动取消时保留 `AbortError` 语义，便于调用方区分。 */
+function isAbortError(error: unknown): boolean {
+  return (
+    isRecord(error) &&
+    (error.name === 'AbortError' || error.code === 'ABORT_ERR')
+  );
+}
+
+/**
+ * 把传输层的拒绝归一成 {@link OvClientError}。调用方主动取消时保留原始错误，
+ * 以便按 `AbortError` 判断；其余网络失败带上原始错误作为 cause。
+ *
+ * Normalises a transport rejection into {@link OvClientError}. A caller-requested
+ * abort keeps the original error so it can be recognised as an `AbortError`;
+ * every other network failure carries the original error as its cause.
+ */
+function normalizeTransportError(error: unknown, signal?: AbortSignal): never {
+  if (isAbortError(error) || signal?.aborted) {
+    throw error;
+  }
+  throw new OvClientError({
+    code: 'NETWORK_ERROR',
+    message: error instanceof Error ? error.message : 'Network request failed',
+    cause: error,
+  });
 }
 
 /**
@@ -44,7 +71,6 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
   // 只记录原始配置：函数形式的身份字段每次请求都要重新求值，因此不能缓存求值
   // 结果。
   const defaults = options;
-  let resolved: OvResolvedOptions | undefined;
 
   const client: OvClient = {
     get baseURL() {
@@ -52,26 +78,35 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
     },
 
     async request<TResult>(spec: OvRequestSpec): Promise<TResult> {
-      // 客户端级配置求值一次即可复用，除非身份字段是函数。
-      resolved ??= await resolveClientOptions(defaults);
-      const parent: OvResolvedOptions =
-        typeof defaults.apiKey === 'function'
-          ? await resolveClientOptions(defaults)
-          : resolved;
-
-      const localHeaders = await resolveIdentityHeaders(spec.options);
-      const effective = resolveOptions(spec.options, parent, localHeaders);
+      const baseLayer = await resolveIdentityLayer(defaults);
+      const localLayer = await resolveIdentityLayer(spec.options);
+      const parent = await resolveClientOptions(defaults);
+      const effective = resolveRequestOptions(
+        spec.options,
+        parent,
+        mergeIdentityLayers(baseLayer, localLayer),
+      );
 
       const url =
         joinUrl(effective.baseURL, spec.path) + buildQuery(spec.query);
 
-      const response = await fetchImpl(url, {
-        method: spec.method,
-        headers: effective.headers,
-        body: spec.body === undefined ? undefined : JSON.stringify(spec.body),
-        credentials: effective.credentials,
-        signal: effective.signal,
-      });
+      const hasBody = spec.body !== undefined;
+      const headers = hasBody
+        ? { 'content-type': 'application/json', ...effective.headers }
+        : effective.headers;
+
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method: spec.method,
+          headers,
+          body: hasBody ? JSON.stringify(spec.body) : undefined,
+          credentials: effective.credentials,
+          signal: effective.signal,
+        });
+      } catch (error) {
+        normalizeTransportError(error, effective.signal);
+      }
 
       const body: unknown = await response.json().catch(() => undefined);
       const envelope = readEnvelope(body);

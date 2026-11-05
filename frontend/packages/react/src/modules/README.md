@@ -63,31 +63,37 @@ React integration is provided by `OpenVikingProvider` from `@openviking/react/cl
 | `resourceId`  | Current library; data-plane requests need it                                                                                                                                                                   |
 | `credentials` | `RequestCredentials` for `fetch`. Defaults to `same-origin`; the commercial edition sets `include` for cross-origin calls                                                                                      |
 
-Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. Every module's `FileBrowserProps`, `ConsoleProps`, `TaskCenterProps` and `UserUsageProps` already declares this field.
+Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. Every module's `FileBrowserProps`, `ConsoleProps`, `TaskCenterProps` and `UserUsageProps` already declares this field.
 
 The Provider is implemented; the business Hooks are not, so a module does not request anything yet. The host configures it once at the application root:
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
 
-<OpenVikingProvider baseURL={endpoint} headers={getAuthHeaders}>
+<OpenVikingProvider
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
   <FileBrowser />
   <Console />
 </OpenVikingProvider>;
 ```
 
-A module reads the client with `useOvClient` and passes its own overrides, which apply field by field on top of the Provider:
+Inside a module, the client comes from an internal hook. A module passes only the fields it needs to override, for example when it addresses another library:
 
 ```ts
-const client = useOvClient({ headers: { 'X-OpenViking-User': userId } });
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
   path: '/api/v1/fs/ls',
   query: { uri },
+  options: { resourceId: libraryId },
 });
 ```
 
-`useOvClient` also works outside a Provider, so a module runs standalone with only its own overrides; pure view components need no Provider at all. The current identity may be distributed through Context, where `accountId` corresponds to the data space and `userId` to the user within it; identity scope and request configuration are maintained separately. Business parameters such as URI and query text are still passed as module / Hook inputs.
+That hook is not exported: a host never needs to know which requests a module sends. Pure view components need no Provider at all. The current identity may be distributed through Context, where `accountId` corresponds to the data space and `userId` to the user within it; identity scope and request configuration are maintained separately. Business parameters such as URI and query text are still passed as module / Hook inputs.
 
 - **Paths are joined in one place only**: the Client keeps the `baseURL` path prefix. For example `/gateway/openviking` plus `/api/v1/fs/ls` yields `/gateway/openviking/api/v1/fs/ls`, and a leading `/` in an API path never drops the gateway prefix. Modules join no domain or service prefix.
 - **Responses are parsed only in the Client**: HTTP failures are distinguished from a native `status: 'error'` response, preserving the server error code, status and request identifier. JSON responses keep `result` and outer metadata such as paging; upload, download and streaming responses follow the API contract and are not coerced to JSON uniformly.

@@ -8,6 +8,7 @@ export type {
   OvClient,
   OvClientOptions,
   OvErrorEnvelope,
+  OvIdentityValue,
   OvQueryValue,
   OvRequestOptions,
   OvRequestSpec,

@@ -2,9 +2,16 @@ import { createContext, useContext, useMemo } from 'react';
 import type { ReactNode } from 'react';
 
 import { createOvClient } from './client.js';
+import { mergeProviderConfig, type OvProviderBase } from './options.js';
 import type { OvClient, OvClientOptions } from './types.js';
 
-const OvClientContext = createContext<OvClient | null>(null);
+/** Provider 已解析的配置，供嵌套 Provider 继续继承。 */
+interface OvClientScope {
+  client: OvClient;
+  base: OvProviderBase;
+}
+
+const OvClientContext = createContext<OvClientScope | null>(null);
 
 /**
  * {@link OpenVikingProvider} 的属性。字段与 {@link OvClientOptions} 同形：
@@ -24,6 +31,9 @@ export interface OpenVikingProviderProps extends OvClientOptions {
  * 开源版传 `apiKey`、`accountId`、`userId`；商业版由浏览器 Cookie 鉴权，只传
  * `accountId`、`userId`、`resourceId`，并按需把 `credentials` 设为 `include`。
  *
+ * 嵌套时内层只覆盖自己声明的字段，其余继承外层：外层配好服务地址与凭证后，
+ * 内层可以只改 `userId`。显式传空字符串表示清除继承到的值。
+ *
  * 不传 `baseURL` 时按浏览器同源请求。挂载本身不发请求，也不读取浏览器里保存
  * 的凭证。
  *
@@ -35,6 +45,11 @@ export interface OpenVikingProviderProps extends OvClientOptions {
  * commercial edition authenticates with a browser cookie, so it passes
  * `accountId`, `userId` and `resourceId`, and sets `credentials` to `include`
  * where needed.
+ *
+ * Nesting overrides only the fields the inner Provider declares and inherits the
+ * rest, so an outer Provider can own the service address and credential while an
+ * inner one changes only `userId`. An explicit empty string clears an inherited
+ * value.
  *
  * Without `baseURL` it targets the browser's own origin. Mounting it sends no
  * request and reads no credential stored in the browser.
@@ -50,20 +65,10 @@ export function OpenVikingProvider({
   fetch,
   children,
 }: OpenVikingProviderProps) {
-  // 按字段而不是按对象依赖，调用方每次渲染传入新对象时不会重建客户端。
-  const client = useMemo(
-    () =>
-      createOvClient({
-        baseURL,
-        apiKey,
-        accountId,
-        userId,
-        resourceId,
-        credentials,
-        signal,
-        fetch,
-      }),
-    [
+  const parent = useContext(OvClientContext);
+
+  const value = useMemo<OvClientScope>(() => {
+    const base = mergeProviderConfig(parent?.base, {
       baseURL,
       apiKey,
       accountId,
@@ -71,12 +76,32 @@ export function OpenVikingProvider({
       resourceId,
       credentials,
       signal,
-      fetch,
-    ],
-  );
+    });
+
+    return {
+      base,
+      client: createOvClient({
+        ...base.identity,
+        baseURL: base.baseURL,
+        credentials: base.credentials,
+        signal: base.signal,
+        fetch,
+      }),
+    };
+  }, [
+    parent,
+    baseURL,
+    apiKey,
+    accountId,
+    userId,
+    resourceId,
+    credentials,
+    signal,
+    fetch,
+  ]);
 
   return (
-    <OvClientContext.Provider value={client}>
+    <OvClientContext.Provider value={value}>
       {children}
     </OvClientContext.Provider>
   );
@@ -91,5 +116,5 @@ export function OpenVikingProvider({
  * send, so it has no reason to use this directly.
  */
 export function useOvClient(): OvClient | null {
-  return useContext(OvClientContext);
+  return useContext(OvClientContext)?.client ?? null;
 }

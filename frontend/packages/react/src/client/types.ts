@@ -1,12 +1,20 @@
 /**
- * 一次请求的身份与作用域。字段省略表示继承上层配置。
+ * 一个身份字段的取值：字符串，或每次请求重新求值的函数。
+ * Value of one identity field: a string, or a function re-evaluated per request.
+ */
+export type OvIdentityValue = string | (() => string | Promise<string>);
+
+/**
+ * 一次请求的身份与作用域。字段省略表示继承上层配置；显式传空字符串表示移除
+ * 该字段继承到的值，请求里不再发送对应请求头。
  *
  * 这些字段一一对应 OpenViking 的请求头，宿主传值即可，不需要自己组装 header：
  * `apiKey` → `X-API-Key`，`accountId` → `X-OpenViking-Account`，`userId` →
  * `X-OpenViking-User`，`resourceId` → `V-Resource-Id`。
  *
  * Identity and scope of one request. An omitted field inherits from the layer
- * above.
+ * above; an explicit empty string removes the inherited value so the header is
+ * not sent.
  *
  * The fields map one to one onto OpenViking's request headers, so a host passes
  * values instead of assembling headers: `apiKey` → `X-API-Key`, `accountId` →
@@ -14,6 +22,15 @@
  * `V-Resource-Id`.
  */
 export interface OvRequestOptions {
+  /**
+   * 服务地址及可选网关前缀，不含原生接口的 `/api/v1`。省略时继承上层配置，
+   * 空字符串表示同源请求。
+   *
+   * Service address with an optional gateway prefix, excluding the native
+   * `/api/v1`. Omitted inherits the layer above; an empty string means a
+   * same-origin request.
+   */
+  baseURL?: string;
   /**
    * 凭证。开源版为 `X-API-Key` 的取值；商业版由浏览器 Cookie 承载，无需传入。
    * 函数形式每次请求重新求值，可读取轮换后的凭证。
@@ -23,23 +40,23 @@ export interface OvRequestOptions {
    * there. A function is re-evaluated on every request, so it can read a rotated
    * credential.
    */
-  apiKey?: string | (() => string | Promise<string>);
+  apiKey?: OvIdentityValue;
   /**
    * OpenViking 账号 ID，对应数据空间。
    * OpenViking account ID, which corresponds to the data space.
    */
-  accountId?: string;
+  accountId?: OvIdentityValue;
   /**
    * 账号内的用户 ID。
    * User ID within the account.
    */
-  userId?: string;
+  userId?: OvIdentityValue;
   /**
    * 当前库 ID。数据面接口需要它确定请求落在哪个库。
    * Current library ID. Data-plane requests need it to know which library they
    * address.
    */
-  resourceId?: string;
+  resourceId?: OvIdentityValue;
   /**
    * 调用方中止请求的信号。
    * Signal the caller uses to abort the request.
@@ -48,17 +65,12 @@ export interface OvRequestOptions {
 }
 
 /**
- * 创建客户端时的配置。在 {@link OvRequestOptions} 之上增加服务地址与传输层设置。
- * Configuration when creating a client: {@link OvRequestOptions} plus the
- * service address and transport settings.
+ * 创建客户端时的配置。在 {@link OvRequestOptions} 之上增加 Cookie 策略与传输层
+ * 设置。
+ * Configuration when creating a client: {@link OvRequestOptions} plus the cookie
+ * policy and transport settings.
  */
 export interface OvClientOptions extends OvRequestOptions {
-  /**
-   * 服务地址及可选网关前缀，不含原生接口的 `/api/v1`。空字符串表示同源请求。
-   * Service address with an optional gateway prefix, excluding the native
-   * `/api/v1`. An empty string means a same-origin request.
-   */
-  baseURL?: string;
   /**
    * 是否携带浏览器 Cookie。商业版的数据面与控制面接口都依赖 Cookie 鉴权，
    * 跨源调用时需要设为 `include`。
@@ -104,9 +116,9 @@ export interface OvRequestSpec {
   query?: Readonly<Record<string, OvQueryValue>>;
   body?: unknown;
   /**
-   * 本次请求的身份与作用域覆盖，例如切换到另一个库。
-   * Identity and scope override for this request, for example switching to
-   * another library.
+   * 本次请求的身份、作用域与服务地址覆盖，例如切换到另一个库或另一个网关。
+   * Identity, scope and service-address override for this request, for example
+   * switching to another library or another gateway.
    */
   options?: OvRequestOptions;
 }
