@@ -1672,7 +1672,7 @@ async function setupFlow({
   live?.resume();
   const id = state.id;
   const mail = mailPlan(state);
-  for (const { config, account } of mail.write) writeEmailAccount(config, account);
+  for (const { config, account } of mail.write) await writeEmailAccount(config, account);
   writeRoleFile(state, id);
 
   fs.mkdirSync(state.workspace, { recursive: true, mode: 0o700 });

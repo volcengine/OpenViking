@@ -4,6 +4,8 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import lockfile from 'proper-lockfile';
+import { safeError } from '../logger.mjs';
 
 // Microsoft's OAuth2 endpoints for Exchange Online mailboxes: the device-code
 // sign-in a person completes once, the refreshes the Connector does on its own
@@ -19,6 +21,10 @@ const TIMEOUT_MS = 30_000;
 // An error body is a short JSON document; a proxy page could be long.
 const MAX_BODY_CHARS = 100_000;
 const EXPIRY_MARGIN_MS = 5 * 60_000;
+const LOCK_OPTIONS = {
+  stale: 60_000,
+  retries: { retries: 120, factor: 1.1, minTimeout: 50, maxTimeout: 1_000, randomize: true },
+};
 
 // `user=<address>^Aauth=Bearer <access token>^A^A`, base64: the initial
 // response both IMAP AUTHENTICATE XOAUTH2 and SMTP AUTH XOAUTH2 carry.
@@ -64,7 +70,11 @@ export function endpointFor(oauth2, name) {
   return { clientId, url: `${AUTHORITY}/${tenant}/oauth2/v2.0/${name}` };
 }
 
-async function post(fetchImpl, url, form) {
+function timeoutSignal(signal) {
+  return signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS);
+}
+
+async function post(fetchImpl, url, form, { signal } = {}) {
   let response;
   let text;
   try {
@@ -73,17 +83,35 @@ async function post(fetchImpl, url, form) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(form).toString(),
       redirect: 'error',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: timeoutSignal(signal),
     });
     text = (await response.text()).slice(0, MAX_BODY_CHARS);
   } catch (error) {
-    throw new Error(`Microsoft sign-in endpoint is unreachable: ${error.message}`);
+    if (signal?.aborted) throw signal.reason;
+    const failure = new Error(`Microsoft sign-in endpoint is unreachable: ${error.message}`, { cause: error });
+    failure.retryable = true;
+    failure.timedOut = error.name === 'TimeoutError' || error.code === 23;
+    throw failure;
   }
   let data;
   try { data = JSON.parse(text); } catch {
     throw new Error(`Microsoft sign-in endpoint answered HTTP ${response.status} with something unreadable`);
   }
   return { ok: response.ok, status: response.status, data };
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    timer.unref?.();
+    const abort = () => { clearTimeout(timer); reject(signal.reason); };
+    function done() {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 // What the owner has to do differs by code, so keep the code and the first
@@ -99,9 +127,9 @@ function failure(data) {
 }
 
 // Starts a device-code sign-in: the address and the short code to type there.
-export async function requestDeviceCode(oauth2, { fetch: fetchImpl = globalThis.fetch, now = Date.now } = {}) {
+export async function requestDeviceCode(oauth2, { fetch: fetchImpl = globalThis.fetch, now = Date.now, signal } = {}) {
   const { clientId, url } = endpointFor(oauth2, 'devicecode');
-  const { ok, status, data } = await post(fetchImpl, url, { client_id: clientId, scope: SCOPE });
+  const { ok, data } = await post(fetchImpl, url, { client_id: clientId, scope: SCOPE }, { signal });
   if (!ok) throw failure(data);
   const verificationUri = String(data.verification_uri ?? data.verification_url ?? '');
   if (!data.device_code || !data.user_code || !verificationUri) {
@@ -120,10 +148,7 @@ export async function requestDeviceCode(oauth2, { fetch: fetchImpl = globalThis.
 // normal answer meanwhile, `slow_down` asks for a longer wait, anything else
 // ends the sign-in.
 export async function waitForDeviceCode(oauth2, code, {
-  fetch: fetchImpl = globalThis.fetch, now = Date.now, sleep = (ms) => new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  }),
+  fetch: fetchImpl = globalThis.fetch, now = Date.now, sleep: sleepImpl = sleep, signal,
 } = {}) {
   const { clientId, url } = endpointFor(oauth2, 'token');
   let intervalMs = Math.max(1_000, Number(code.intervalMs) || 5_000);
@@ -133,14 +158,31 @@ export async function waitForDeviceCode(oauth2, code, {
     // Waiting the whole interval when less than that is left would hold the
     // owner in a sign-in that has already lapsed. `intervalMs` only grows, so
     // this is the only thing that keeps `slow_down` from overshooting.
-    await sleep(Math.min(intervalMs, remaining));
+    await sleepImpl(Math.min(intervalMs, remaining), signal);
     if (now() >= code.expiresAt) throw new Error('The Microsoft sign-in code expired; start the sign-in again');
-    const { ok, status, data } = await post(fetchImpl, url, {
-      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      client_id: clientId,
-      device_code: code.deviceCode,
-    });
-    if (ok) return mailTokens(data, '', now());
+    let answer;
+    try {
+      answer = await post(fetchImpl, url, {
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        client_id: clientId,
+        device_code: code.deviceCode,
+      }, { signal });
+    } catch (error) {
+      // RFC 8628 3.5: a timed-out poll must back off before it is retried.
+      // Other transport failures are transient too, but authorization errors
+      // and a cancelled wait still end immediately.
+      if (!error.retryable || signal?.aborted) throw error;
+      if (error.timedOut) intervalMs = Math.min(intervalMs * 2, 60 * 60_000);
+      continue;
+    }
+    const { ok, data } = answer;
+    if (ok) {
+      const tokens = mailTokens(data, '', now());
+      if (!tokens.refreshToken) {
+        throw new Error('Microsoft sign-in returned no refresh token; grant offline_access and authorize again');
+      }
+      return tokens;
+    }
     if (data?.error === 'authorization_pending') continue;
     if (data?.error === 'slow_down') { intervalMs += 5_000; continue; }
     throw failure(data);
@@ -219,4 +261,70 @@ export function saveRefreshToken(file, oauth2, { onlyIfRefreshedFrom } = {}) {
 // An access token is reused until it is about to expire.
 export function tokenFresh(tokens, now = Date.now()) {
   return Boolean(tokens) && tokens.expiresAt - EXPIRY_MARGIN_MS > now;
+}
+
+// Both daemon refreshes and a CLI sign-in replace this shared file. Every
+// writer takes the same lock, so neither can overwrite the other mid-write.
+// Releasing is deliberately best-effort: the completed transaction and its
+// original error are more important than a stale lock's cleanup failure.
+export async function withAccountFileLock(file, operation, { logger, acquireLock } = {}) {
+  if (!acquireLock) {
+    // The writer also creates new account files. proper-lockfile needs a real
+    // path for its lock bookkeeping, so create an empty 0600 placeholder first;
+    // writePrivateJson still replaces it atomically inside the lock.
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const fd = fs.openSync(file, 'a', 0o600);
+    fs.closeSync(fd);
+  }
+  const release = acquireLock ? await acquireLock(file) : await lockfile.lock(file, {
+    ...LOCK_OPTIONS,
+    realpath: false,
+    onCompromised: (error) => { throw error; },
+  });
+  try {
+    return await operation();
+  } finally {
+    try { await release(); } catch (error) {
+      logger?.warn('email_token_lock_release', { error: safeError(error) });
+    }
+  }
+}
+
+// The account file is shared state, not merely a cache. A lock must cover the
+// whole read -> refresh -> write sequence: the process-local inFlight promise
+// cannot stop another daemon from spending the same rotating refresh token.
+// While holding it, reload the file so a sign-in or a refresh completed by a
+// different process wins instead of being overwritten by this older account.
+export async function refreshAccessTokenLocked(account, options = {}) {
+  return withAccountFileLock(account.file, async () => {
+    const current = loadAccountFile(account.file);
+    const currentOauth2 = current?.oauth2 && typeof current.oauth2 === 'object' ? current.oauth2 : null;
+    if (!currentOauth2) throw new Error('email config no longer has oauth2');
+    if (typeof currentOauth2.refreshToken !== 'string' || !currentOauth2.refreshToken.trim()) {
+      throw new Error('email config oauth2.refreshToken must be a non-empty string');
+    }
+    Object.assign(account.oauth2, {
+      tenant: currentOauth2.tenant,
+      clientId: currentOauth2.clientId,
+      refreshToken: String(currentOauth2.refreshToken ?? '').trim(),
+    });
+    const refreshed = await refreshAccessToken(account.oauth2, options);
+    if (refreshed.refreshToken !== account.oauth2.refreshToken) {
+      account.oauth2.refreshToken = refreshed.refreshToken;
+      try {
+        saveRefreshToken(account.file, account.oauth2, { onlyIfRefreshedFrom: currentOauth2.refreshToken });
+      } catch (error) {
+        options.logger?.warn('email_token_not_saved', { error: safeError(error) });
+      }
+    }
+    return refreshed;
+  }, options);
+}
+
+function loadAccountFile(file) {
+  let value;
+  try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {
+    throw new Error('email config file is unreadable or not JSON');
+  }
+  return value;
 }

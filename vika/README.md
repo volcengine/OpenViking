@@ -176,7 +176,7 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 }
 ```
 
-`oauth2` 和 `password` 二选一。`vika setup` / `vika login email` 认得出这类邮箱：给出一个代码，在 `https://microsoft.com/devicelogin` 用该邮箱的账号登录一次即可，`refreshToken` 由向导写回，daemon 刷新时也会把轮换后的新值原子写回。OAuth2 目前只覆盖微软系邮箱。
+正常账号文件只保留 `oauth2` 或 `password` 其中一种。手工从密码迁移到 OAuth2 时若暂时忘了删旧的 `password`，程序仍使用 `oauth2` 启动并告警一次，以免升级即断邮；这只是迁移兼容，不是推荐配置。重新授权成功后写回的文件会移除旧密码。`vika setup` / `vika login email` 认得出这类邮箱：给出一个代码，在 `https://microsoft.com/devicelogin` 用该邮箱的账号登录一次即可，`refreshToken` 由向导写回，daemon 刷新时也会把轮换后的新值原子写回。OAuth2 目前只覆盖微软系邮箱。
 
 ### 前置条件
 
@@ -189,7 +189,9 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 
    漏掉这一步的表现容易被误判为登录失败：浏览器授权成功、令牌也换到了，但 Exchange 在认证通过后的第一条命令上回 `BAD User is authenticated but not connected.`。按 RFC 3501，`BAD` 表示命令本身不被接受、`NO` 才表示命令失败，所以这不是凭据问题，刷新令牌或重试都无用。Vika 会把这种情况报成邮箱设置问题而不是登录失败，据此去开 IMAP 即可。
 
-然后在账号文件里填应用 ID 和租户。企业邮箱的租户填自己的租户 ID 或域名，个人 Outlook.com 填 `consumers` 或 `common`。
+然后在账号文件里填应用 ID 和租户。企业邮箱的租户填自己的租户 ID 或域名，个人 Outlook.com 填 `consumers` 或 `common`。这三个 `oauth2` 字段必须是字符串，不能把数字、数组或对象当成 ID/令牌。
+
+等待浏览器授权时，TTY 下按 `r` 会取消旧等待并生成一个新的设备码，按 `←` / `Esc` 取消授权。网络超时后程序继续用同一个设备码轮询，并按 RFC 8628 加倍等待间隔，不会越过代码有效期；设备码过期后需重新发起授权。成功授权必须取得 `refreshToken`，否则不会保存一个下次启动就不能用的账号。
 
 ### 读共享邮箱 / 账号用别名登录时
 
@@ -216,7 +218,7 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 
 ### 令牌刷新与重试
 
-access token 在临近过期前刷新，一次刷新只发一个请求：IMAP 连接与 SMTP 发信同时需要凭据时，后到的一方等同一个结果，避免用同一个 refresh token 并发刷新（后者会失败，或把更旧的令牌写回覆盖新的）。轮换后的 refresh token 只在账号文件里仍是本次用掉的那个时才写回，所以期间另做的登录不会被覆盖。IMAP 连接或 SMTP 登录被服务器拒绝时各自换一个新令牌重试一次；**报文已经发出的失败不重试**，因为那封信可能已经投递，重发会造成重复。
+access token 在临近过期前刷新。IMAP 连接与 SMTP 发信同时需要凭据时，同一 Connector 进程内后到的一方等同一个结果；不同进程共用账号文件时，刷新事务还会用 `.lock` 文件互斥，锁内先重读最新凭据再刷新并写回，避免重复消费同一个 refresh token 或覆盖另一次登录。IMAP 的 `AUTHENTICATE` 返回 `NO`、SMTP AUTH 返回 `535` 时才换一个新令牌重试一次；`454` 等服务器临时故障或机制不支持不刷新令牌。**报文已经发出的失败不重试**，因为那封信可能已经投递，重发会造成重复。
 
 ## 文档附件与交互卡片
 

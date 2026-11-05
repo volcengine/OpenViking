@@ -6,10 +6,10 @@ import path from 'node:path';
 import { verifyAccount } from '../../daemon/src/email/account.mjs';
 import { MailboxUnavailableError } from '../../daemon/src/email/imap.mjs';
 import { OAuthRequiredError } from '../../daemon/src/email/imap.mjs';
-import { requestDeviceCode, waitForDeviceCode, writePrivateJson } from '../../daemon/src/email/oauth2.mjs';
+import { requestDeviceCode, waitForDeviceCode, withAccountFileLock, writePrivateJson } from '../../daemon/src/email/oauth2.mjs';
 import { t } from './i18n.mjs';
 import { vikaHome } from './manifest.mjs';
-import { PromptAborted } from './prompt.mjs';
+import { GoBack, PromptAborted } from './prompt.mjs';
 
 // The mailbox steps of `vika setup` and `vika login email`: an address and the
 // provider's credential — a client password, or a browser sign-in for the
@@ -107,8 +107,8 @@ function explain(error, provider, password) {
 
 // The device-code sign-in the mailbox Connector speaks; tests pass their own.
 const deviceLogin = {
-  start: (oauth2) => requestDeviceCode(oauth2),
-  wait: (oauth2, code) => waitForDeviceCode(oauth2, code),
+  start: (oauth2, options) => requestDeviceCode(oauth2, options),
+  wait: (oauth2, code, options) => waitForDeviceCode(oauth2, code, options),
 };
 
 // Which kind of mail system an address on an unknown domain belongs to. The
@@ -119,6 +119,52 @@ async function mailHost({ prompter }) {
     { label: t('Microsoft 365 / Outlook（浏览器登录，不需要密码）', 'Microsoft 365 / Outlook (browser sign-in, no password)'), value: 'microsoft' },
     { label: t('其他邮箱（手动填服务器和密码）', 'Another provider (servers and password entered by hand)'), value: 'other' },
   ], { initial: 1 });
+}
+
+class DeviceLoginRestart extends Error {}
+
+// A TTY owner can abandon the pending HTTP request/sleep, or discard this code
+// and request a fresh one. Without a TTY there is no key to watch; the existing
+// error-and-confirm retry remains the scripted interface.
+async function browserTokens({ prompter, oauth2, login }) {
+  for (;;) {
+    if (!prompter.tty) {
+      const code = await login.start(oauth2);
+      prompter.write(t(`\n  打开 ${code.verificationUri}，输入代码 ${code.userCode}，用这个邮箱的 Microsoft 账号登录。\n  授权完成后会自动继续。\n\n`,
+        `\n  Open ${code.verificationUri}, enter the code ${code.userCode}, then sign in with this mailbox's Microsoft account.\n  Vika continues by itself once that is done.\n\n`));
+      return await login.wait(oauth2, code);
+    }
+    const controller = new AbortController();
+    const options = { signal: controller.signal };
+    const cancel = (str, key = {}) => {
+      if (str === '\x1b' || key.name === 'left' || key.name === 'escape') controller.abort(new GoBack());
+    };
+    const renew = (str) => {
+      if (str === 'r' && !controller.signal.aborted) controller.abort(new DeviceLoginRestart());
+    };
+    try {
+      // The initial devicecode request can hang too; install the controls
+      // before it starts, not only once its response has arrived. watchKey is
+      // one-shot, so a repeatable r belongs in this scoped keypress listener.
+      prompter.input.setRawMode(true);
+      prompter.input.resume();
+      prompter.input.on('keypress', cancel);
+      prompter.input.on('keypress', renew);
+      const code = await login.start(oauth2, options);
+      prompter.write(t(`\n  打开 ${code.verificationUri}，输入代码 ${code.userCode}，用这个邮箱的 Microsoft 账号登录。\n  按 r 重新生成代码，按 ← / Esc 取消授权。\n\n`,
+        `\n  Open ${code.verificationUri}, enter the code ${code.userCode}, then sign in with this mailbox's Microsoft account.\n  Press r for a new code, or ← / Esc to cancel.\n\n`));
+      return await login.wait(oauth2, code, options);
+    } catch (error) {
+      if (error instanceof DeviceLoginRestart) continue;
+      if (controller.signal.aborted) throw controller.signal.reason;
+      throw error;
+    } finally {
+      prompter.input.off('keypress', cancel);
+      prompter.input.off('keypress', renew);
+      prompter.input.setRawMode(false);
+      prompter.input.pause();
+    }
+  }
 }
 
 // A Microsoft mailbox signs in in the browser once; what the Connector keeps
@@ -137,12 +183,7 @@ async function microsoftMailbox({ prompter, address, hosts, previous, saved = nu
     { initial: 'common' },
   )).trim() || 'common');
   const oauth2 = { tenant, clientId };
-  const code = await login.start(oauth2);
-  out(t(
-    `\n  打开 ${code.verificationUri}，输入代码 ${code.userCode}，用这个邮箱的 Microsoft 账号登录。\n  授权完成后会自动继续。\n\n`,
-    `\n  Open ${code.verificationUri}, enter the code ${code.userCode}, then sign in with this mailbox's Microsoft account.\n  Vika continues by itself once that is done.\n\n`,
-  ));
-  const tokens = await login.wait(oauth2, code);
+  const tokens = await browserTokens({ prompter, oauth2, login });
   out(t(`  正在登录 ${hosts.imap.host} 和 ${hosts.smtp.host}…\n`, `  Logging in to ${hosts.imap.host} and ${hosts.smtp.host}…\n`));
   const account = renewed(saved, { address, imap: hosts.imap, smtp: hosts.smtp,
     oauth2: { ...oauth2, refreshToken: tokens.refreshToken } });
@@ -233,6 +274,7 @@ export async function askEmail({ prompter, previous = null, fixed = null, taken 
         return await microsoftMailbox({ prompter, address, hosts, previous: null, saved: fixed, verify, login });
       }
     } catch (error) {
+      if (error instanceof GoBack || error instanceof PromptAborted) throw error;
       // A mailbox that signs in but refuses IMAP is not a login failure: the
       // credential was accepted, so "login failed" would send the owner looking
       // for a password that is already right. Re-entering the same values cannot
@@ -258,8 +300,8 @@ export function mailboxesOf(agent) {
 }
 
 // The account file is the only place the credential lives: 0600, written whole.
-export function writeEmailAccount(file, account) {
-  writePrivateJson(file, account);
+export async function writeEmailAccount(file, account) {
+  await withAccountFileLock(file, () => writePrivateJson(file, account));
 }
 
 export function readEmailAccount(file) {

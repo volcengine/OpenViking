@@ -75,7 +75,9 @@ class SmtpSession {
 
   expect(reply, codes, step) {
     if (!codes.includes(reply.code)) {
-      throw new Error(`SMTP ${step} failed: ${reply.lines.at(-1).slice(0, 200)}`);
+      const error = new Error(`SMTP ${step} failed: ${reply.lines.at(-1).slice(0, 200)}`);
+      error.smtpCode = reply.code;
+      throw error;
     }
     return reply;
   }
@@ -113,9 +115,10 @@ function authMechanisms(features) {
     .join(' ');
 }
 
-// A sign-in that failed. Nothing was offered to the server yet, so the caller
-// may refresh the credential and try the same message again: unlike a failure
-// after DATA, this one cannot have delivered anything.
+// The server rejected the credential (535, RFC 4954 section 6). Nothing was
+// offered yet, so a caller may refresh it and try the same message again.
+// Temporary server failures and an unsupported mechanism have other remedies;
+// they are not proof that the access token is stale.
 export class SmtpAuthError extends Error {
   constructor(message) {
     super(message);
@@ -135,9 +138,13 @@ async function authenticateXoauth2(session, user, accessToken) {
     const final = session.reply();
     session.socket.write('\r\n');
     const reply = await final;
-    throw new SmtpAuthError(`SMTP AUTH XOAUTH2 failed: ${reply.lines.at(-1).slice(0, 200)}`);
+    const message = `SMTP AUTH XOAUTH2 failed: ${reply.lines.at(-1).slice(0, 200)}`;
+    if (reply.code === 535) throw new SmtpAuthError(message);
+    throw new Error(message);
   }
-  throw new SmtpAuthError(`SMTP AUTH XOAUTH2 failed: ${first.lines.at(-1).slice(0, 200)}`);
+  const message = `SMTP AUTH XOAUTH2 failed: ${first.lines.at(-1).slice(0, 200)}`;
+  if (first.code === 535) throw new SmtpAuthError(message);
+  throw new Error(message);
 }
 
 // Opens an authenticated session; `run(session)` does the work, then QUIT.
@@ -163,11 +170,11 @@ async function withSmtp({ host, port, secure = Number(port) === 465, user, passw
       features = await hello(session);
     }
     const auth = authMechanisms(features);
-    // Everything from here to a successful sign-in is the authentication step:
-    // no message has been offered, so any failure in it is retryable.
+    // Only an explicit 535 means the credential was refused. Even during AUTH,
+    // a timeout or a 454 is a transport/server problem, not a stale token.
     try {
       if (accessToken) {
-        if (!/\bXOAUTH2\b/.test(auth)) throw new SmtpAuthError('SMTP server offers no AUTH XOAUTH2');
+        if (!/\bXOAUTH2\b/.test(auth)) throw new Error('SMTP server offers no AUTH XOAUTH2');
         await authenticateXoauth2(session, user, accessToken);
       } else if (/\bPLAIN\b/.test(auth)) {
         const token = Buffer.from(`\u0000${user}\u0000${password}`, 'utf8').toString('base64');
@@ -180,7 +187,9 @@ async function withSmtp({ host, port, secure = Number(port) === 465, user, passw
         throw new SmtpAuthError('SMTP server offers neither AUTH PLAIN nor AUTH LOGIN');
       }
     } catch (error) {
-      throw error instanceof SmtpAuthError ? error : new SmtpAuthError(error.message);
+      if (error instanceof SmtpAuthError) throw error;
+      if (error.smtpCode === 535) throw new SmtpAuthError(error.message);
+      throw error;
     }
     const result = await run(session);
     await session.send('QUIT', [221]).catch(() => {});

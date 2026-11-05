@@ -98,7 +98,7 @@ export async function loginCommand([connector, requested, ...extra], {
       mailboxes.map((candidate) => ({ label: shown(candidate), value: candidate })));
     const account = await connect.email({ prompter, fixed: mailbox.account,
       taken: mailboxes.filter((other) => other !== mailbox).map((other) => other.address).filter(Boolean) });
-    writeEmailAccount(mailbox.config, account);
+    await writeEmailAccount(mailbox.config, account);
     if (!await restart({ agent, prompter, env, control })) return 1;
     prompter.write(t(`\n${agent.displayName}（${agent.id}）的邮箱 ${account.address} 已更新。\n`, `\nMailbox ${account.address} is updated for ${agent.displayName} (${agent.id}).\n`));
     return 0;

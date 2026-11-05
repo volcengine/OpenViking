@@ -275,8 +275,11 @@ export class ImapConnection {
     // The greeting does not always carry the capabilities; the mechanism check
     // below needs them before anything is sent.
     await this.command('CAPABILITY');
-    if (this.capabilities.has('LOGINDISABLED') && this.capabilities.has('AUTH=XOAUTH2')) {
-      throw new OAuthRequiredError();
+    if (this.capabilities.has('LOGINDISABLED')) {
+      // RFC 3501 6.2.3: LOGINDISABLED alone forbids LOGIN. Only the additional
+      // XOAUTH2 capability says that Microsoft's browser sign-in can replace it.
+      if (this.capabilities.has('AUTH=XOAUTH2')) throw new OAuthRequiredError();
+      throw new Error('IMAP server refuses LOGIN; this mailbox needs a different authentication mechanism');
     }
     await this.command('LOGIN', `${quote(user)} ${quote(password)}`);
     await this.command('CAPABILITY');

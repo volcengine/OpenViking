@@ -166,6 +166,99 @@ test('re-authorizing keeps the login name and the display name', async () => {
   assert.equal(checked[0].user, 'primary@outlook.com', 'the mailbox was checked with the wrong login name');
 });
 
+test('a terminal can renew a device code or cancel its pending wait', { timeout: 3_000 }, async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  output.resume();
+  const prompter = new Prompter({ input, output });
+  let started = 0;
+  let aborted = 0;
+  const login = {
+    start: async () => ({ deviceCode: `device-${++started}`, userCode: `CODE-${started}`,
+      verificationUri: 'https://microsoft.com/devicelogin' }),
+    wait: (oauth, code, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => { aborted += 1; reject(signal.reason); }, { once: true });
+    }),
+  };
+  const renewing = askEmail({ prompter, login, verify: async () => ({ idle: true }) });
+  input.write('me@outlook.com\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('app-id\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('r');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  input.write('r');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(started, 3, 'each r requested exactly one fresh device code');
+  assert.ok(aborted >= 2, 'renewing did not cancel the old polling operation');
+  input.write('\x1b[D');
+  await assert.rejects(renewing, { name: 'GoBack' });
+  assert.equal(input.listenerCount('keypress'), 0, 'the authorization wait left a key listener behind');
+  prompter.close();
+});
+
+test('Escape cancels the device-code wait', { timeout: 3_000 }, async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  output.resume();
+  const prompter = new Prompter({ input, output });
+  const login = {
+    start: async () => ({ deviceCode: 'device', userCode: 'CODE', verificationUri: 'https://microsoft.com/devicelogin' }),
+    wait: (oauth, code, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  };
+  const pending = askEmail({ prompter, login, verify: async () => ({ idle: true }) });
+  input.write('me@outlook.com\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('app-id\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\x1b');
+  await assert.rejects(pending, { name: 'GoBack' });
+  assert.equal(input.listenerCount('keypress'), 0);
+});
+
+test('a pending device-code request also accepts renew and cancellation keys', { timeout: 3_000 }, async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  output.resume();
+  const prompter = new Prompter({ input, output });
+  let starts = 0;
+  const login = {
+    start: (oauth, { signal }) => new Promise((resolve, reject) => {
+      starts += 1;
+      if (starts > 1) resolve({ deviceCode: 'next', userCode: 'NEXT', verificationUri: 'https://microsoft.com/devicelogin' });
+      else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+    wait: (oauth, code, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  };
+  const pending = askEmail({ prompter, login, verify: async () => ({ idle: true }) });
+  input.write('me@outlook.com\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('app-id\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('r');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(starts, 2, 'r did not abort the pending initial request and start a fresh one');
+  input.write('\x1b');
+  await assert.rejects(pending, { name: 'GoBack' });
+  assert.equal(input.listenerCount('keypress'), 0);
+});
+
 test('a browser sign-in that fails says so and offers to try again', async () => {
   const login = fakeLogin({ fail: new Error('The Microsoft sign-in code expired; start the sign-in again') });
   const { prompter, written } = terminal(['me@outlook.com', 'app-id', '', 'n']);
@@ -191,11 +284,11 @@ test('a new password keeps the saved servers; an address already watched is refu
   assert.equal(emailInstanceId('x@gmail.com', ['email-gmail', 'email-gmail-x']), 'email-gmail-2');
 });
 
-test('the account file is private', (t) => {
+test('the account file is private', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-email-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'email', 'primary', 'email-qq.json');
-  writeEmailAccount(file, { address: 'a@qq.com', password: 'p' });
+  await writeEmailAccount(file, { address: 'a@qq.com', password: 'p' });
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['email-qq.json']);

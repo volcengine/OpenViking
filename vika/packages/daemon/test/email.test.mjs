@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
+import { fork } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -12,8 +14,8 @@ import { MailArchive, chunkOffset, needsChunks, readTarget } from '../src/email/
 import { accountTag, credentialSource, loadAccount } from '../src/email/account.mjs';
 import { EmailClient } from '../src/email/client.mjs';
 import { EmailState } from '../src/email/state.mjs';
-import { ImapAuthError, ImapConnection, MailboxUnavailableError, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
-import { endpointFor, refreshAccessToken, requestDeviceCode, waitForDeviceCode, writePrivateJson, xoauth2 } from '../src/email/oauth2.mjs';
+import { ImapAuthError, ImapConnection, MailboxUnavailableError, OAuthRequiredError, fetchAttributes, parseResponse } from '../src/email/imap.mjs';
+import { endpointFor, refreshAccessToken, requestDeviceCode, waitForDeviceCode, withAccountFileLock, writePrivateJson, xoauth2 } from '../src/email/oauth2.mjs';
 import { redactSensitive, safeError } from '../src/logger.mjs';
 import { SmtpAuthError, verifySmtp } from '../src/email/smtp.mjs';
 import { buildReply, htmlToText, isOwnMessageId, parseAddresses, parseMail, replyMessageId } from '../src/email/mime.mjs';
@@ -43,7 +45,7 @@ function mail({ from = 'Alice <alice@example.com>', to = ME, subject = 'Thursday
 // response with a continuation instead of taking it on the command line.
 async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = null, saslIr = true,
   refusal = 'AUTHENTICATE failed.', mailboxRefusal = null, capabilityRefusal = null, closeDuringAuth = false,
-  badAuth = null } = {}) {
+  badAuth = null, loginDisabled = false } = {}) {
   const accepted = new Set([].concat(oauth ?? []).filter(Boolean));
   let expectedUser = ME;
   const state = { mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [],
@@ -59,7 +61,8 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
     let pendingAuth = null;
     const sasl = (token) => Buffer.from(`user=${expectedUser}\u0001auth=Bearer ${token}\u0001\u0001`, 'utf8').toString('base64');
     const capability = () => `IMAP4rev1 IDLE${gmail ? ' X-GM-EXT-1' : ''}`
-      + (accepted.size ? ` AUTH=XOAUTH2 LOGINDISABLED${saslIr ? ' SASL-IR' : ''}` : '');
+      + (accepted.size ? ` AUTH=XOAUTH2${saslIr ? ' SASL-IR' : ''}` : '')
+      + (accepted.size || loginDisabled ? ' LOGINDISABLED' : '');
     const answer = (tag, response) => {
       const token = [...accepted].find((each) => sasl(each) === response);
       if (token) {
@@ -210,7 +213,7 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true, oauth = 
 
 // A scripted SMTP submission server; `messages` are what it accepted. `oauth`
 // makes it advertise and accept only XOAUTH2, like Exchange Online.
-async function fakeSmtp(t, { oauth = null, ehlo = null } = {}) {
+async function fakeSmtp(t, { oauth = null, ehlo = null, authFailure = null } = {}) {
   const messages = [];
   let bodies = 0;
   let breakAfterData = false;
@@ -256,6 +259,7 @@ async function fakeSmtp(t, { oauth = null, ehlo = null } = {}) {
           const lines = ehlo ?? (accepted.size ? ['250-fake', '250 AUTH XOAUTH2'] : ['250-fake', '250 AUTH PLAIN LOGIN']);
           socket.write(`${lines.join('\r\n')}\r\n`);
         } else if (line.startsWith('AUTH XOAUTH2 ')) {
+          if (authFailure) { socket.write(`${authFailure}\r\n`); continue; }
           const response = line.slice('AUTH XOAUTH2 '.length).trim();
           const token = [...accepted].find((each) => Buffer.from(`user=${expectedUser}\u0001auth=Bearer ${each}\u0001\u0001`).toString('base64') === response);
           if (token) {
@@ -266,6 +270,7 @@ async function fakeSmtp(t, { oauth = null, ehlo = null } = {}) {
             challenge = true;
           }
         } else if (line.startsWith('AUTH PLAIN ')) {
+          if (authFailure) { socket.write(`${authFailure}\r\n`); continue; }
           const [, user, password] = Buffer.from(line.slice(11), 'base64').toString('utf8').split('\u0000');
           socket.write(user === ME && password === PASSWORD ? '235 ok\r\n' : '535 bad credentials\r\n');
         } else if (line.startsWith('MAIL FROM:')) { current.from = line.slice(10); socket.write('250 ok\r\n'); }
@@ -306,6 +311,9 @@ function fakeTokenEndpoint({ tokens, onRefresh } = {}) {
     const body = token.error
       ? { error: token.error, error_description: 'AADSTS70000: the grant is invalid' }
       : { access_token: token.accessToken, refresh_token: token.refreshToken, expires_in: 3_600 };
+    if (token.error === 'slow_down' || token.error === 'authorization_pending') {
+      return { ok: false, status: 400, text: async () => JSON.stringify({ error: token.error }) };
+    }
     return { ok: !token.error, status: token.error ? 400 : 200, text: async () => JSON.stringify(body) };
   };
   return { fetch, calls };
@@ -660,6 +668,53 @@ describe('Microsoft sign-in', () => {
     });
     assert.equal(poll, 2);
     assert.deepEqual([tokens.accessToken, tokens.refreshToken], ['at-1', 'rt-1']);
+  });
+
+  it('adds five seconds to every later poll after slow_down', async () => {
+    const slept = [];
+    const endpoint = fakeTokenEndpoint({ tokens: [{ error: 'slow_down' },
+      { accessToken: 'at', refreshToken: 'rt' }] });
+    await waitForDeviceCode(signIn, { deviceCode: 'd', intervalMs: 5_000, expiresAt: 60_000 }, {
+      now: () => 1, sleep: async (ms) => slept.push(ms), fetch: endpoint.fetch,
+    });
+    assert.deepEqual(slept, [5_000, 10_000]);
+  });
+
+  it('refuses a device authorization that leaves no long-lived credential', async () => {
+    await assert.rejects(waitForDeviceCode(signIn, { deviceCode: 'd', intervalMs: 1, expiresAt: 10 }, {
+      now: () => 1,
+      sleep: async () => {},
+      fetch: async () => reply(200, { access_token: 'short-lived', expires_in: 3_600 }),
+    }), /no refresh token/);
+    // A refresh response may omit a rotated token: the previous one remains.
+    const refreshed = await refreshAccessToken({ ...signIn, refreshToken: 'saved-refresh' }, {
+      fetch: async () => reply(200, { access_token: 'at-2', expires_in: 3_600 }),
+    });
+    assert.equal(refreshed.refreshToken, 'saved-refresh');
+  });
+
+  it('backs off after a timed-out poll, and stops promptly on cancellation', async () => {
+    let now = 1_000;
+    let calls = 0;
+    const slept = [];
+    const tokens = await waitForDeviceCode(signIn, { deviceCode: 'd', intervalMs: 5_000, expiresAt: now + 60_000 }, {
+      now: () => now,
+      sleep: async (ms) => { slept.push(ms); now += ms; },
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('The operation timed out'), { name: 'TimeoutError' });
+        return reply(200, { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3_600 });
+      },
+    });
+    assert.equal(tokens.accessToken, 'at-1');
+    assert.deepEqual(slept, [5_000, 10_000], 'RFC 8628 requires a reduced polling rate after a timeout');
+
+    const controller = new AbortController();
+    const waiting = waitForDeviceCode(signIn, { deviceCode: 'd', intervalMs: 60_000, expiresAt: Date.now() + 120_000 },
+      { signal: controller.signal });
+    const reason = new Error('owner cancelled');
+    controller.abort(reason);
+    await assert.rejects(waiting, (error) => error === reason);
   });
 
   it('says the code expired instead of waiting forever, and names the consent step', async () => {
@@ -1514,6 +1569,94 @@ function rotatingEndpoint({ steps, delayMs = 0, onAnswer = null } = {}) {
   };
 }
 
+describe('account-file lock failure and competing writers', () => {
+  it('keeps the result or original error when lock cleanup fails', async () => {
+    const releaseError = new Error('lock cleanup failed');
+    const warnings = [];
+    const logger = { warn: (...args) => warnings.push(args) };
+    const acquireLock = async () => async () => { throw releaseError; };
+    assert.equal(await withAccountFileLock('/unused', async () => 'done', { acquireLock, logger }), 'done');
+    const original = new Error('original refresh failure');
+    await assert.rejects(withAccountFileLock('/unused', async () => { throw original; }, { acquireLock, logger }),
+      (error) => error === original);
+    assert.equal(warnings.length, 2);
+    assert.ok(warnings.every(([event]) => event === 'email_token_lock_release'));
+  });
+
+  it('makes a concurrent login writer wait for the refresh transaction', async () => {
+    const file = accountFile();
+    try {
+      let releaseRefresh;
+      const gate = new Promise((resolve) => { releaseRefresh = resolve; });
+      const fetch = async () => {
+        await gate;
+        return { ok: true, status: 200,
+          text: async () => JSON.stringify({ access_token: 'at', refresh_token: 'refresh-2', expires_in: 3_600 }) };
+      };
+      const credential = credentialSource(file.account, { fetch });
+      const refresh = credential();
+      await until(() => fs.existsSync(`${file.file}.lock`));
+      const login = withAccountFileLock(file.file, () => file.signInAgain('new-sign-in'));
+      let loginWrote = false;
+      login.then(() => { loginWrote = true; });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(loginWrote, false, 'login bypassed the lock held by the refresh');
+      releaseRefresh();
+      await Promise.all([refresh, login]);
+      assert.equal(file.saved().oauth2.refreshToken, 'new-sign-in');
+    } finally { file.cleanup(); }
+  });
+});
+
+describe('two real processes sharing one account file', () => {
+  it('spends a rotating refresh token once, even with both first answers held', async (t) => {
+    const file = accountFile();
+    t.after(() => file.cleanup());
+    const calls = [];
+    const gates = [];
+    const fetch = async (url, init) => {
+      const form = Object.fromEntries(new URLSearchParams(init.body));
+      calls.push(form);
+      const second = form.refresh_token === 'refresh-2';
+      await new Promise((resolve) => gates.push(resolve));
+      const body = { access_token: second ? 'access-2' : 'access-1',
+        refresh_token: second ? 'refresh-3' : 'refresh-2', expires_in: 3_600 };
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    };
+    const credential = credentialSource(file.account, { fetch });
+    const endpoint = http.createServer(async (request, response) => {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      const reply = await fetch('', { body });
+      response.writeHead(reply.status, { 'Content-Type': 'application/json' });
+      response.end(await reply.text());
+    });
+    await new Promise((resolve) => endpoint.listen(0, '127.0.0.1', resolve));
+    t.after(() => endpoint.close());
+    const local = credential();
+    const child = fork(new URL('email-refresh-process.mjs', import.meta.url), { stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+    t.after(() => { if (child.connected) child.disconnect(); child.kill(); });
+    const remote = new Promise((resolve, reject) => {
+      child.once('message', (message) => message.ok ? resolve(message) : reject(new Error(message.error)));
+      child.once('error', reject);
+    });
+    child.send({ file: file.file, endpoint: `http://127.0.0.1:${endpoint.address().port}/token` });
+    // Hold both responses long enough that the old implementation would have
+    // issued R1 twice. The file lock now lets only the parent through first.
+    await until(() => calls.length === 1 && gates.length === 1);
+    assert.equal(calls[0].refresh_token, 'refresh-1');
+    gates.shift()();
+    assert.equal((await local).accessToken, 'access-1');
+    await until(() => calls.length === 2 && gates.length === 1);
+    assert.equal(calls[1].refresh_token, 'refresh-2', 'the child spent the already-rotated token');
+    gates.shift()();
+    assert.equal((await remote).accessToken, 'access-2');
+    assert.equal(calls.length, 2);
+    assert.equal(file.saved().oauth2.refreshToken, 'refresh-3');
+    assert.ok(!fs.existsSync(`${file.file}.lock`), 'the inter-process lock was left behind');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The contract a refresh storm must not break: one refresh on the wire, and
 // every caller of that refresh gets the same access token.
@@ -2133,6 +2276,49 @@ describe('a connection that never answers does not hang', () => {
   });
 });
 
+describe('authentication capability and SMTP status semantics', () => {
+  it('offers Microsoft OAuth only when both capabilities support that choice', async (t) => {
+    const imap = await fakeImap(t, { oauth: ['token'] });
+    const connection = new ImapConnection({ host: '127.0.0.1', port: imap.port, connect: plainTls });
+    await connection.connect();
+    const error = await connection.login(ME, PASSWORD).catch((caught) => caught);
+    connection.close();
+    assert.ok(error instanceof OAuthRequiredError);
+    assert.ok(!imap.state.commands.includes('LOGIN'));
+  });
+
+  it('never sends LOGIN when the server disables it without offering Microsoft OAuth', async (t) => {
+    const imap = await fakeImap(t, { loginDisabled: true });
+    const connection = new ImapConnection({ host: '127.0.0.1', port: imap.port, connect: plainTls });
+    await connection.connect();
+    const error = await connection.login(ME, PASSWORD).catch((caught) => caught);
+    connection.close();
+    assert.match(error.message, /refuses LOGIN/);
+    assert.ok(!imap.state.commands.includes('LOGIN'), 'a password was sent despite LOGINDISABLED');
+  });
+
+  for (const status of [454, 504, 534]) {
+    it(`does not refresh a token for SMTP ${status}`, async (t) => {
+      const smtp = await fakeSmtp(t, { oauth: ['access-1'], authFailure: `${status} 4.7.0 server cannot authenticate` });
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-smtp-status-'));
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+      const configFile = path.join(directory, 'account.json');
+      fs.writeFileSync(configFile, JSON.stringify({ address: ME,
+        oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+        imap: { host: '127.0.0.1', port: 1 }, smtp: { host: '127.0.0.1', port: smtp.port, secure: true } }));
+      const endpoint = fakeTokenEndpoint({ tokens: [{ accessToken: 'access-1', refreshToken: 'refresh-2' }] });
+      const client = new EmailClient({ emailConfigFile: configFile, dataDir: directory, retentionMs: 1 },
+        null, quiet, { connectTls: plainTls, fetch: endpoint.fetch });
+      client.account = loadAccount(configFile);
+      client.credential = credentialSource(client.account, { fetch: endpoint.fetch });
+      const error = await client.deliver({ from: ME, recipients: [ME], raw: 'From: me@example.com\r\n\r\nhi' })
+        .catch((caught) => caught);
+      assert.ok(!(error instanceof SmtpAuthError));
+      assert.equal(endpoint.calls.length, 1, 'a server/mechanism failure consumed a new refresh token');
+    });
+  }
+});
+
 // The XOAUTH2 string handed to a server is base64 of the login name and the
 // access token, so it reads as an opaque blob to the keyword rules and decodes
 // back into a usable credential. Nothing logs one today; this is the layer that
@@ -2263,5 +2449,17 @@ describe('a malformed tenant is refused, not replaced', () => {
 
   it('still defaults an absent tenant to common', () => {
     assert.match(endpointFor({ clientId: 'app-id' }, 'token').url, /\/common\/oauth2\/v2\.0\/token$/);
+  });
+
+  it('rejects non-string account ids instead of coercing them', () => {
+    const file = accountFile();
+    try {
+      for (const [key, value] of [['tenant', {}], ['clientId', {}], ['refreshToken', 0]]) {
+        const saved = file.saved();
+        saved.oauth2 = { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1', [key]: value };
+        fs.writeFileSync(file.file, JSON.stringify(saved));
+        assert.throws(() => loadAccount(file.file), new RegExp(`oauth2.${key} must be a string`));
+      }
+    } finally { file.cleanup(); }
   });
 });

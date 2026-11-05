@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { safeError } from '../logger.mjs';
 import { ImapConnection } from './imap.mjs';
-import { refreshAccessToken, saveRefreshToken, tokenFresh } from './oauth2.mjs';
+import { refreshAccessTokenLocked, tokenFresh } from './oauth2.mjs';
 import { verifySmtp } from './smtp.mjs';
 
 // The mailbox the Connector reads. One mailbox per instance.
@@ -67,13 +67,19 @@ export function loadAccount(file) {
 // The two identifiers are the owner's own Entra application; the refresh token
 // is the credential the sign-in left behind.
 function accountOAuth2(value) {
-  const tenant = String(value.tenant || 'common').trim();
-  const clientId = String(value.clientId ?? '').trim();
-  const refreshToken = String(value.refreshToken ?? '').trim();
-  if (!/^[A-Za-z0-9.-]+$/.test(tenant)) throw new Error('email config oauth2.tenant must be a tenant id or domain');
-  if (!clientId) throw new Error('email config needs oauth2.clientId');
+  const tenant = value.tenant === undefined || value.tenant === null || value.tenant === '' ? 'common' : value.tenant;
+  if (typeof tenant !== 'string') throw new Error('email config oauth2.tenant must be a string');
+  if (typeof value.clientId !== 'string') throw new Error('email config oauth2.clientId must be a string');
+  if (typeof value.refreshToken !== 'string') throw new Error('email config oauth2.refreshToken must be a string');
+  const cleanTenant = tenant.trim();
+  const clientId = value.clientId.trim();
+  const refreshToken = value.refreshToken.trim();
+  if (!/^[A-Za-z0-9.-]+$/.test(cleanTenant) || !/[A-Za-z0-9]/.test(cleanTenant)) {
+    throw new Error('email config oauth2.tenant must be a tenant id or domain');
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(clientId)) throw new Error('email config oauth2.clientId is invalid');
   if (!refreshToken) throw new Error('email config needs oauth2.refreshToken');
-  return { tenant, clientId, refreshToken };
+  return { tenant: cleanTenant, clientId, refreshToken };
 }
 
 // What a connection signs in with: the saved password, or an access token
@@ -95,22 +101,9 @@ export function credentialSource(account, { fetch: fetchImpl = globalThis.fetch,
     if (!account.oauth2) return { password: account.password };
     if (!stale && tokenFresh(tokens, now())) return { accessToken: tokens.accessToken };
     if (!inFlight) {
-      const usedRefreshToken = account.oauth2.refreshToken;
-      inFlight = (async () => {
-        const refreshed = await refreshAccessToken(account.oauth2, { fetch: fetchImpl, now });
-        tokens = refreshed;
-        if (refreshed.refreshToken !== account.oauth2.refreshToken) {
-          account.oauth2.refreshToken = refreshed.refreshToken;
-          try {
-            // Only when the file still holds the token this refresh spent: a
-            // sign-in done meanwhile has a newer one, and that one is kept.
-            saveRefreshToken(account.file, account.oauth2, { onlyIfRefreshedFrom: usedRefreshToken });
-          } catch (error) {
-            logger?.warn('email_token_not_saved', { error: safeError(error) });
-          }
-        }
-        return refreshed;
-      })().finally(() => { inFlight = null; });
+      inFlight = refreshAccessTokenLocked(account, { fetch: fetchImpl, now, logger })
+        .then((refreshed) => { tokens = refreshed; return refreshed; })
+        .finally(() => { inFlight = null; });
     }
     // A failed refresh is not cached: the next caller tries again.
     return { accessToken: (await inFlight).accessToken };
