@@ -3,6 +3,7 @@
 
 import pytest
 from openviking_sdk import AsyncHTTPClient
+from openviking_sdk.config import resolve_client_config
 
 
 def test_explicit_arguments_win_over_env(monkeypatch):
@@ -53,3 +54,39 @@ def test_url_is_required_when_missing_everywhere(monkeypatch):
 
     with pytest.raises(ValueError, match="url is required"):
         AsyncHTTPClient()
+
+
+@pytest.mark.parametrize("timeout", [0, -1, -0.5, float("nan"), float("inf"), True, 1e7])
+def test_explicit_timeout_must_be_positive_and_representable(timeout):
+    with pytest.raises(ValueError, match="Invalid timeout value for 'timeout'"):
+        resolve_client_config(url="http://127.0.0.1:1933", timeout=timeout)
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "nan", "inf", "1e7", "not-a-number"])
+def test_env_timeout_is_validated(monkeypatch, raw):
+    monkeypatch.delenv("OPENVIKING_CLI_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("OPENVIKING_TIMEOUT", raw)
+
+    with pytest.raises(ValueError, match="OPENVIKING_TIMEOUT"):
+        resolve_client_config(url="http://127.0.0.1:1933")
+
+
+def test_ovcli_timeout_is_validated(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text('{"url": "http://127.0.0.1:1933", "timeout": -1}')
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.delenv("OPENVIKING_TIMEOUT", raising=False)
+
+    with pytest.raises(ValueError, match="ovcli.timeout"):
+        resolve_client_config()
+
+
+def test_valid_timeout_values_are_accepted(monkeypatch):
+    monkeypatch.delenv("OPENVIKING_CLI_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("OPENVIKING_TIMEOUT", raising=False)
+
+    assert resolve_client_config(url="http://127.0.0.1:1933", timeout=0.5).timeout == 0.5
+    assert resolve_client_config(url="http://127.0.0.1:1933", timeout=1e6).timeout == 1e6
+
+    monkeypatch.setenv("OPENVIKING_TIMEOUT", "12.5")
+    assert resolve_client_config(url="http://127.0.0.1:1933").timeout == 12.5

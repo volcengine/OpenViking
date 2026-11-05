@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 from dataclasses import dataclass
 from difflib import get_close_matches
@@ -13,6 +14,12 @@ from typing import Optional
 
 OPENVIKING_CLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"
 DEFAULT_OVCLI_CONF = Path.home() / ".openviking" / "ovcli.conf"
+
+# Upper bound for a single-request timeout. The CLI validates the same setting with
+# ``timeout_is_valid`` (crates/ov_cli/src/config.rs); without an equivalent guard the
+# SDK forwards the value to the platform timeout machinery, which raises
+# ``OverflowError: timeout doesn't fit into C timeval`` instead of a config error.
+MAX_TIMEOUT_SECONDS = 1_000_000.0
 
 
 @dataclass(frozen=True)
@@ -88,14 +95,25 @@ def _optional_bool(value: object, *, path: str) -> Optional[bool]:
     return value
 
 
-def _optional_float(value: object, *, path: str) -> Optional[float]:
+def _parse_timeout(value: object, *, path: str) -> float:
+    """Validate a timeout in seconds so the failure names the setting, not the socket."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"Invalid timeout value for '{path}': expected a positive number of seconds"
+        )
+    timeout = float(value)
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > MAX_TIMEOUT_SECONDS:
+        raise ValueError(
+            f"Invalid timeout value for '{path}': expected a positive, finite number of "
+            f"seconds no greater than {MAX_TIMEOUT_SECONDS:.0f}"
+        )
+    return timeout
+
+
+def _optional_timeout(value: object, *, path: str) -> Optional[float]:
     if value is None:
         return None
-    if isinstance(value, bool):
-        raise ValueError(f"Invalid value for '{path}': expected number")
-    if not isinstance(value, (int, float)):
-        raise ValueError(f"Invalid value for '{path}': expected number")
-    return float(value)
+    return _parse_timeout(value, path=path)
 
 
 def _parse_extra_headers(value: object, *, path: str) -> dict[str, str]:
@@ -187,7 +205,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         if actor_peer_id is not None and agent_id is not None:
             raise ValueError("actor_peer_id cannot be used with agent_id")
 
-        timeout = _optional_float(data.get("timeout"), path="ovcli.timeout")
+        timeout = _optional_timeout(data.get("timeout"), path="ovcli.timeout")
         profile = _optional_bool(data.get("profile"), path="ovcli.profile")
 
         # Parse LDAP config
@@ -294,11 +312,18 @@ def resolve_client_config(
         resolved_actor_peer_id = cli_config.agent_id
 
     if timeout is not None:
-        resolved_timeout = timeout
+        resolved_timeout = _parse_timeout(timeout, path="timeout")
     else:
-        env_timeout = os.getenv("OPENVIKING_TIMEOUT")
+        env_timeout = (os.getenv("OPENVIKING_TIMEOUT") or "").strip()
         if env_timeout:
-            resolved_timeout = float(env_timeout)
+            try:
+                env_timeout_value = float(env_timeout)
+            except ValueError as exc:
+                raise ValueError(
+                    "Invalid timeout value for 'OPENVIKING_TIMEOUT': "
+                    "expected a positive number of seconds"
+                ) from exc
+            resolved_timeout = _parse_timeout(env_timeout_value, path="OPENVIKING_TIMEOUT")
         elif cli_config is not None:
             resolved_timeout = cli_config.timeout
         else:
