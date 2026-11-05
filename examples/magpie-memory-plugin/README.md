@@ -50,7 +50,7 @@ environment; editing the file applies to the next operation without restarting.
       "enabled": true,
       "autoRecall": true,
       "autoCapture": true,
-      "recallContextTimeoutMs": 700,
+      "recallContextTimeoutMs": 2000,
       "recallMaxTokens": 1600,
       "recallPeerScope": "all",
       "mcpEnabled": false
@@ -85,7 +85,7 @@ to enabled; explicit `autoCapture: false` in host options or client settings is
 preserved. Host options override scoped settings, which override shared settings.
 
 Magpie's **Options** editor now accepts `autoRecall`, `autoCapture`, `mcpEnabled`,
-`recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
+`captureWithoutSession`, `recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
 options override the corresponding file settings for this plugin; connection
 credentials and identity always remain file-owned. `gatewayTimeoutMs` controls
 the host's hook budget. The package supplies an example, not saved defaults;
@@ -93,6 +93,33 @@ omitted keys retain the file/default behavior. Hooks and tools use the same
 options. Memory tools are disabled by default; set `mcpEnabled: true` to enable
 them. Automatic capture is enabled by default and needs no additional setting;
 set `autoCapture: false` to disable it.
+
+`captureWithoutSession` is a Magpie-only boolean, default `false`. If the client
+cannot send a stable session ID, opt in through Magpie's Options:
+
+```json
+{
+  "autoCapture": true,
+  "captureWithoutSession": true
+}
+```
+
+It can also be set in `ovcli.conf` under `plugin.magpie` (or shared `plugin`),
+with the same host → scoped → shared precedence. A real session ID always takes
+priority. Only capture uses the derived ID; recall remains stateless without a
+host session. The fallback hashes the agent, working directory, protocol and
+first user message after the existing capture shaping/filters. Model changes do
+not change this ID; existing connection/credential isolation still applies.
+
+This is approximate grouping: independent conversations with identical opening
+messages in the same client scope may merge. If their histories diverge, capture
+skips snapshots that conflict with the history already written. Rewriting or
+removing the opening message can split a conversation or skip unknown history.
+Start a new conversation after enabling it; existing histories are not backfilled.
+`autoCapture: false` still disables all automatic capture. For file settings without
+a host override, turning this option off pauses queued derived-session snapshots;
+turning it back on lets them resume. Queued snapshots retain their enqueue-time
+host overrides, just as they do for `autoCapture`.
 
 File settings `plugin.magpie.bypassSession: true` or `bypassSessionPatterns`
 matching the Magpie session ID or working directory skip automatic recall and
@@ -113,8 +140,17 @@ controlled by `mcpEnabled`.
   turn. Retries and later turns replay the original snapshot.
 - Only host-classified `local` and `magpie-key` origins receive memory. Shared
   gateway keys, forwarded traffic and unknown origins are skipped. Without a
-  session ID, new user requests use stateless recall: no persisted ledger, profile
-  replay or conversation capture. Repeated requests may retrieve different context.
+  session ID, new user requests use stateless recall: no persisted recall ledger or
+  profile replay. Capture is also skipped unless `captureWithoutSession: true`.
+  Repeated requests may retrieve different context.
+  With capture enabled and the fallback off, the first eligible sessionless user request logs
+  `OpenViking capture: no-session` once per plugin-host process, explaining that
+  capture is unavailable and suggesting a stable session header or explicit
+  `captureWithoutSession` opt-in with its grouping limitation. Check Magpie's
+  plugin-host logs; this warning contains no message text or credentials and does
+  not replace the recall status. Current Magpie hosts ignore custom `report()`
+  codes, so a separate capture status in the UI requires host support.
+  Native-owned, disabled, bypassed and auxiliary requests do not trigger the warning.
   The file's OV credentials remain the authority.
 - Only a new textual user message triggers retrieval. Tool continuations replay
   known context without retrieving. Magpie skips its own internal title/classifier
@@ -141,11 +177,37 @@ controlled by `mcpEnabled`.
   against every duplicate. Disabling `autoRecall` prevents new searches while
   replaying known history; disabling the plugin entirely disables both.
 - The shared context builder owns query settings, budgets and result relevance.
-  Default recall timeout is 700 ms inside Magpie's default 1000 ms hook budget.
-  Increasing it requires raising Magpie's `gatewayTimeoutMs` with I/O margin.
-  Cancellation reaches the HTTP request. Query filters use the shared parser.
+  Default recall timeout is 2000 ms. Set `recallContextTimeoutMs` in Magpie's
+  Options or `plugin.magpie` to customize it; explicit existing values are preserved.
+  The actual HTTP timeout is also capped by the client `timeout`, 9000 ms, and
+  the host hook budget minus elapsed setup time and a 200 ms allowance for result
+  assembly, state I/O and serialization. Search and profile share this internal
+  deadline; a timed-out read does not discard the other read's completed result.
+  If less than 100 ms remains, no new HTTP requests start. Host cancellation still
+  discards the hook result. The host exposes no remaining chain deadline, so the
+  allowance cannot guarantee completion before an earlier external cancellation.
+  Query filters use the shared parser.
 - Default peer scope is the configured user's cross-project context. Actor scope
   requires an explicit `actor_peer_id`; a missing peer skips enhancement.
+
+For hosted/remote services, save both budgets in Magpie's **Options** (merge these
+keys into existing options):
+
+```json
+{
+  "recallContextTimeoutMs": 2000,
+  "gatewayTimeoutMs": 3000
+}
+```
+
+The package's Options example includes these values, but upgrading does not rewrite
+saved options. Magpie defaults to a 1000 ms hook budget when `gatewayTimeoutMs` is
+omitted; the plugin then shortens its HTTP wait to fit that budget. Existing
+installations must set it explicitly to use the full 2000 ms recall budget. Keep
+it above the recall budget with room for configuration and state I/O (Magpie permits up to 10000 ms).
+If increasing recall beyond 2000 ms, increase both budgets and ensure the client
+`timeout` in `ovcli.conf` (seconds) is sufficient. Failed recall still lets the
+model request continue.
 
 ### Local replay state
 
