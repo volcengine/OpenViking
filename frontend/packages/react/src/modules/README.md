@@ -6,7 +6,9 @@ English / [中文](README_CN.md)
 
 ## Placeholder components available today
 
-Four modules ship importable placeholder components, Props / Labels types and standalone stylesheet entries, so an integrator can finish page layout first. The current components show only a module name and placeholder copy and accept `className`, `style` and `labels`; business Hooks, the shared Client, the Provider and the interactions described below are still to come.
+Four modules ship importable placeholder components, public Props / Labels / Slots types and standalone stylesheet entries, so an integrator can finish page layout first. The props are settled: each module declares its request options, controlled state, callbacks, slots and copy. The components themselves still render only a module name and placeholder copy, and consume none of those props yet; business Hooks and the interactions described below are still to come.
+
+Because a module loads its own data, no prop carries data. A host supplies configuration, the controlled value and the copy; the module reports changes through callbacks.
 
 | Module         | Component     | Public entry                             |
 | -------------- | ------------- | ---------------------------------------- |
@@ -19,15 +21,10 @@ Four modules ship importable placeholder components, Props / Labels types and st
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser
-  labels={{
-    title: 'File browser',
-    description: 'Placeholder component; capability to follow.',
-  }}
-/>;
+<FileBrowser labels={{ title: 'File browser' }} />;
 ```
 
-The four components and their types are also exported from the `@openviking/react` root entry. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
+The four components and their main Props types are also exported from the `@openviking/react` root entry; Labels, Slots and the enum types come from the module subpath. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
 
 ## Responsibilities
 
@@ -53,34 +50,51 @@ Hosts can use components alone, reuse module Hooks and assemble the view themsel
 
 ## Request conventions and default configuration
 
-The shared Client takes the native OpenViking API's method, path, query / body and response DTOs as its contract, maintained in the framework-agnostic boundary of `packages/client/`. Migration reuses the existing OpenAPI-generated SDK and Axios Client; Bot streaming requests keep Fetch / SSE and share the service address and auth-header logic with REST. Module Hooks consume native data and derive the state and operations a view needs, so hosts need not maintain a data protocol per module. The following is the target contract and has not been migrated into the shared library yet.
+The shared Client takes the native OpenViking API's method, path, query / body and response DTOs as its contract, maintained in `src/client/` and exported from `@openviking/react/client`. It ships a `fetch`-based `createOvClient` plus the contract modules depend on — request shape, configuration resolution, `OvClient` and `OvClientError`. The code has no React dependency, so it can move to its own package once a consumer outside React appears. Module Hooks consume native data and derive the state and operations a view needs, so hosts need not maintain a data protocol per module.
 
-React integration is provided by `OpenVikingProvider`, which distributes common configuration through Context and reuses a stable Client within each Provider instance. The Context does not cache business data; mounting a Provider fetches nothing and reads no credentials saved in the browser.
+React integration is provided by `OpenVikingProvider` from `@openviking/react/client`, which distributes common configuration through Context and reuses a stable Client within each Provider instance. A host passes identity values — `apiKey`, `accountId`, `userId`, `resourceId` — and the Client assembles the headers; modules read the client through an internal hook and never build a request themselves. The Context does not cache business data; mounting a Provider fetches nothing and reads no credentials saved in the browser.
 
-| Configuration | Convention                                                                                                                                                                                                                         |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `baseURL`     | Service address with an optional gateway prefix, excluding the native `/api/v1`; defaults to an empty string meaning a same-origin browser request. Server-side requests supply an absolute address explicitly                     |
-| `headers`     | Request headers, or a header function evaluated per request that may read the latest sign-in credential asynchronously; `X-API-Key`, Bearer or identity headers are supplied explicitly by the host, never guessed from the domain |
+| Configuration | Convention                                                                                                                                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseURL`     | Service address with an optional gateway prefix, excluding the native `/api/v1`; defaults to an empty string meaning a same-origin browser request. Server-side requests supply an absolute address explicitly |
+| `apiKey`      | The credential. In the open-source edition it becomes `X-API-Key`; the commercial edition carries it in the browser cookie. A function is re-evaluated per request                                             |
+| `accountId`   | OpenViking account, which corresponds to the data space                                                                                                                                                        |
+| `userId`      | User within the account                                                                                                                                                                                        |
+| `resourceId`  | Current library; data-plane requests need it                                                                                                                                                                   |
+| `credentials` | `RequestCredentials` for `fetch`. Defaults to `same-origin`; the commercial edition sets `include` for cross-origin calls                                                                                      |
 
-Module components and standalone Hooks share one optional `requestOptions` override type, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; headers merge by case-insensitive name with the local value winning. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once.
+Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. Every module's `FileBrowserProps`, `ConsoleProps`, `TaskCenterProps` and `UserUsageProps` already declares this field.
 
-The following is only the proposed request integration; the Provider and business Hooks are not implemented and cannot serve as a runnable example of the current package:
+The Provider is implemented; the business Hooks are not, so a module does not request anything yet. The host configures it once at the application root:
 
 ```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+
 <OpenVikingProvider baseURL={endpoint} headers={getAuthHeaders}>
-  <FileBrowser {...browserProps} />
-  <Console {...consoleProps} />
-</OpenVikingProvider>
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>;
 ```
 
-Standalone Hook usage passes `requestOptions` the same way; without a Provider the full configuration can be supplied explicitly, and pure view components need no Provider. The current identity may be distributed through Context, where `accountId` corresponds to the data space and `userId` to the user within it; identity scope and request configuration are maintained separately. Business parameters such as URI and query text are still passed as module / Hook inputs.
+A module reads the client with `useOvClient` and passes its own overrides, which apply field by field on top of the Provider:
+
+```ts
+const client = useOvClient({ headers: { 'X-OpenViking-User': userId } });
+const rows = await client.request<FsEntry[]>({
+  method: 'GET',
+  path: '/api/v1/fs/ls',
+  query: { uri },
+});
+```
+
+`useOvClient` also works outside a Provider, so a module runs standalone with only its own overrides; pure view components need no Provider at all. The current identity may be distributed through Context, where `accountId` corresponds to the data space and `userId` to the user within it; identity scope and request configuration are maintained separately. Business parameters such as URI and query text are still passed as module / Hook inputs.
 
 - **Paths are joined in one place only**: the Client keeps the `baseURL` path prefix. For example `/gateway/openviking` plus `/api/v1/fs/ls` yields `/gateway/openviking/api/v1/fs/ls`, and a leading `/` in an API path never drops the gateway prefix. Modules join no domain or service prefix.
 - **Responses are parsed only in the Client**: HTTP failures are distinguished from a native `status: 'error'` response, preserving the server error code, status and request identifier. JSON responses keep `result` and outer metadata such as paging; upload, download and streaming responses follow the API contract and are not coerced to JSON uniformly.
 - **Configuration and identity changes must be isolated**: requests, cache keys and subscriptions are isolated by the effective service address and the host's current connection / identity scope. Switching service or account cancels old requests and ignores stale results; dynamic headers do not substitute for an identity-switch signal, and an API Key is never put into a cache key in plain text.
 - **Adaptation is centralised at the integration boundary**: native APIs need only an address and headers; any extra wrapping for existing gateways is adapted uniformly by the host at the shared Client boundary, preserving cancellation signals, response status and streams. Capabilities that cannot be expressed equivalently are integrated through an explicit extension of the contract, not a per-module host branch.
 
-Provider inheritance follows [React Context](https://react.dev/reference/react/useContext); the request layer migration references the [existing Client wrapper](../../../../../web-studio/src/shared/api/ov-client/client.ts). These conventions are verified together when the Client, the Provider and the first module are implemented.
+Provider inheritance follows [React Context](https://react.dev/reference/react/useContext); the request layer migration references the [existing Client wrapper](../../../../../web-studio/src/shared/api/ov-client/client.ts). The transport and the Provider follow these conventions; they are verified again when the first module Hook is implemented.
 
 ## Business module breakdown
 

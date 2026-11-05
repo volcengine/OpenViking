@@ -40,13 +40,13 @@ import '@openviking/react/modules/file-browser/style.css';
 <FileBrowser />;
 ```
 
-四个占位组件均接受 `className`、`style` 和可替换的 `labels`，无需 Provider。可运行示例与 Props 类型见[业务模块](../modules/)。
+四个模块的 props 已定型——请求配置、受控状态、回调、插槽与文案——但占位组件本体仍只消费 `className`、`style` 与一个文案字段，且均无需 Provider。可运行示例与完整属性表见[业务模块](../modules/)。
 
-业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口分别导出 Hook 和组合视图，接入方可只复用 Hook 并自行组装 UI。共享 Client 遵循 OpenViking 原生 API 的路径、入参和响应类型；认证、账号作用域、路由、权限及完整页面流程由宿主负责。业务 Hook 及跨模块公共 Hook 当前尚无实现或导出。
+业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口分别导出 Hook 和组合视图，接入方可只复用 Hook 并自行组装 UI。认证、账号作用域、路由、权限及完整页面流程由宿主负责。业务 Hook 及跨模块公共 Hook 当前尚无实现或导出。
 
 模块规划聚焦个人终端：`file-browser` 将目录、搜索和预览作为一个整体，统一维护资源选择、结果定位、内容加载与刷新联动；宿主可按需受控指定当前资源。`console` 将对话视图与 TUI 作为一个交互面板，内部协调模式切换、工具栏和公共上下文，各自保留会话与命令状态。Agent 接入、任务管理和当前 User 的用量统计分别接入。宿主负责模块间布局、导航与联动；产品引导、资源与 Skill 导入流程及同步配置由宿主负责，经验看板和会话内容通过文件浏览模块的预览扩展接入，管理后台不在此范围内。这些交互仍为规划，当前模块组件仅展示占位内容。
 
-请求配置将通过 `OpenVikingProvider` 下发：`baseURL` 和 headers，鉴权由宿主明确提供。共享 Client 将复用现有 OpenAPI 生成 SDK 与 Axios 请求层；Fetch / SSE 调用共用其服务地址与鉴权头生成逻辑。模块和独立 Hook 可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。Client 和 Provider 当前仍为规划，尚无实现或导出。
+请求配置通过 `@openviking/react/client` 的 `OpenVikingProvider` 下发：`baseURL` 与身份字段（`apiKey`、`accountId`、`userId`、`resourceId`），请求头由 Client 组装。请求客户端已作为 `@openviking/react/client` 子路径落地：基于 `fetch` 的 `createOvClient`，以及 `OvRequestOptions`、`OvClient` 与 `OvClientError`。模块和独立 Hook 可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。Provider 已实现并导出；模块 Hook 尚未实现。
 
 ## 样式
 
