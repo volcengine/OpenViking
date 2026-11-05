@@ -141,6 +141,51 @@ async def test_compaction_preserves_entire_parallel_rule_tool_turn(loop):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("old_turn_in_tail", [False, True])
+@pytest.mark.parametrize("summary_fails", [False, True])
+async def test_expired_rules_preserve_parallel_write_progress(
+    loop, old_turn_in_tail, summary_fails
+):
+    if summary_fails:
+        loop.provider.chat.side_effect = RuntimeError("Summary service unavailable")
+    old_rule = tool_turn("rule_search", "old-rules", "OLD RULE BODY " * 1_000)
+    write = tool_turn("write_file", "draft-write", "Saved draft successfully at /draft/report.md.")
+    old_rule[0]["content"] = "Saving completed draft."
+    old_rule[0]["tool_calls"].extend(write[0]["tool_calls"])
+    old_rule.append(write[1])
+    progress = (
+        []
+        if old_turn_in_tail
+        else [
+            {"role": "assistant", "content": "Other progress."},
+            *tool_turn("read_file", "read", "Next source."),
+        ]
+    )
+    messages = [
+        *history_prefix(),
+        *old_rule,
+        *progress,
+        *tool_turn("rule_search", "new-rules", "Current Rule."),
+        {"role": "assistant", "content": "Continue from saved draft."},
+    ]
+    result = await loop._compact_tool_loop(messages, SESSION, budget_chars=2_000)
+    summary_input = "\n".join(
+        str(call.args) + str(call.kwargs) for call in loop.provider.chat.await_args_list
+    )
+    retained = "\n".join(str(message.get("content", "")) for message in result)
+    assert "/draft/report.md" in retained + summary_input
+    assert "Saved draft successfully" in retained + summary_input
+    if summary_fails:
+        assert write[1] in result
+    assert "OLD RULE BODY" not in retained + summary_input
+    assert all(
+        call["id"] != "old-rules" for message in result for call in message.get("tool_calls", [])
+    )
+    assert_tool_pairs(result)
+    assert _compact_msg_chars(result) <= 2_000
+
+
+@pytest.mark.asyncio
 async def test_repeated_large_rule_queries_fit_budget_after_recompaction(loop):
     messages = history_prefix()
     for index in range(6):

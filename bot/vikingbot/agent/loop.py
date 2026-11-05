@@ -61,7 +61,30 @@ def _is_tool_result_success(result: Any) -> bool:
 
 
 def _compact_msg_chars(messages: list[dict]) -> int:
-    return sum(len(json.dumps(m, ensure_ascii=False, default=str)) for m in messages)
+    """Count text and message structure; inline image bytes have a separate limit."""
+    total = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            budget_content = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in {"image_url", "input_image"}:
+                    image_url = part.get("image_url")
+                    url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                    if isinstance(url, str) and _base64_data_url_bytes(url) > 0:
+                        bounded_url = url.split(",", 1)[0] + ",[inline media]"
+                        part = {
+                            **part,
+                            "image_url": (
+                                {**image_url, "url": bounded_url}
+                                if isinstance(image_url, dict)
+                                else bounded_url
+                            ),
+                        }
+                budget_content.append(part)
+            message = {**message, "content": budget_content}
+        total += len(json.dumps(message, ensure_ascii=False, default=str))
+    return total
 
 
 def _is_rule_result(message: dict) -> bool:
@@ -1578,6 +1601,31 @@ class AgentLoop:
             if any(_is_rule_result(message) for message in block):
                 rule_indices.append(idx)
         expired_rules = set(rule_indices[:-1])
+        for idx in expired_rules:
+            # A Rule lookup may share its turn with writes or other useful work.
+            # Expire only its own call/result pair, leaving that progress available
+            # for retention or summarization in the original order.
+            block = blocks[idx]
+            expired_ids = {
+                message.get("tool_call_id") for message in block if _is_rule_result(message)
+            }
+            progress = []
+            for message in block:
+                if _is_rule_result(message):
+                    continue
+                if message.get("tool_calls"):
+                    calls = [
+                        call for call in message["tool_calls"] if call.get("id") not in expired_ids
+                    ]
+                    message = {**message}
+                    if calls:
+                        message["tool_calls"] = calls
+                    else:
+                        message.pop("tool_calls")
+                        if not message.get("content"):
+                            continue
+                progress.append(message)
+            blocks[idx] = progress
         if rule_indices:
             latest_rules = rule_indices[-1]
             mandatory_indices.add(latest_rules)
@@ -1612,7 +1660,7 @@ class AgentLoop:
         turn_indices = [
             idx
             for idx, block in enumerate(blocks)
-            if idx not in note_indices and block[0].get("role") != "tool"
+            if block and idx not in note_indices and block[0].get("role") != "tool"
         ]
         if not turn_indices:
             if _compact_msg_chars(messages) > budget:
@@ -1621,13 +1669,14 @@ class AgentLoop:
         mandatory_indices.add(turn_indices[-1])
         if latest_user_idx is not None:
             mandatory_indices.add(latest_user_idx)
-        window_indices = [idx for idx in turn_indices[-3:] if idx not in expired_rules]
-        to_summarize = [
-            message
-            for idx in turn_indices[:-3]
-            if idx not in mandatory_indices and idx not in expired_rules
-            for message in blocks[idx]
+        window_indices = turn_indices[-3:]
+        older_indices = set(turn_indices[:-3])
+        summary_indices = [
+            idx
+            for idx in turn_indices
+            if idx not in mandatory_indices and (idx in older_indices or idx in expired_rules)
         ]
+        to_summarize = [message for idx in summary_indices for message in blocks[idx]]
 
         new_summary = ""
         if to_summarize:
@@ -1660,6 +1709,10 @@ class AgentLoop:
             except Exception as exc:
                 logger.warning("Tool-loop compaction summarization failed: {}", exc)
                 new_summary = ""
+            if not new_summary:
+                # Keep progress accompanying expired lookups if the summary cannot
+                # preserve it. The final budget check still prevents an oversized request.
+                mandatory_indices.update(idx for idx in summary_indices if idx in expired_rules)
 
         note_msg = {"role": "user", "content": _compact_build_note(previous_summary, new_summary)}
         if expired_rules:
