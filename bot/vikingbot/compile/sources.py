@@ -29,7 +29,7 @@ class CompileSourceRange:
     frontmatter, enclosing headings and a table header when they fit the repeat budget.
     Continuation flags identify cuts inside an oversized line or table row;
     these fragments require their adjacent ranges for complete interpretation.
-    Images keep zero offsets and carry their original bytes and hash instead of text.
+    Images keep zero offsets and carry a model rendition and original resource hash.
     """
 
     uri: str
@@ -175,7 +175,7 @@ def split_source(
 def pack_source_batches(
     sources: Iterable[tuple[str, str | CompileSourceRange]], limits: CompileLimits
 ) -> list[list[CompileSourceRange]]:
-    """Pack exact source ranges and image references within existing text/media budgets.
+    """Pack exact source ranges and image references around a soft text target.
 
     Adjacent ranges may share a batch when they fit. Small files share remaining
     capacity; original URIs remain the citation targets for all ranges. Source text
@@ -184,33 +184,14 @@ def pack_source_batches(
     batches: list[list[CompileSourceRange]] = []
     batch: list[CompileSourceRange] = []
     size = 0
-    image_count = media_bytes = 0
     for uri, content in sources:
         for part in split_source(uri, content, limits.source_batch_chars):
-            chars, part_bytes = part.input_chars, 0
-            if part.image:
-                from vikingbot.agent.loop import _inline_media_bytes
-
-                part_bytes = _inline_media_bytes([{"content": [part.image]}])
-                if (
-                    chars > limits.source_batch_chars
-                    or part_bytes > VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
-                ):
-                    raise CompileFailure(
-                        "MEDIA_LIMIT", "Image exceeds the source batch budget", stage="pipeline"
-                    )
-            if batch and (
-                size + chars > limits.source_batch_chars
-                or image_count + bool(part.image) > VikingMultiReadTool._MAX_INLINE_IMAGES
-                or media_bytes + part_bytes > VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
-            ):
+            chars = part.input_chars
+            if batch and size + chars > limits.source_batch_chars:
                 batches.append(batch)
                 batch, size = [], 0
-                image_count = media_bytes = 0
             batch.append(part)
             size += chars
-            image_count += bool(part.image)
-            media_bytes += part_bytes
     if batch:
         batches.append(batch)
     return batches

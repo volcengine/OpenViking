@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 from datetime import datetime
 from pathlib import Path
@@ -425,9 +426,16 @@ async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_limits_media_across_parallel_tool_results(make_loop, monkeypatch):
-    monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
-
+async def test_agent_loop_preserves_media_across_parallel_tool_results(make_loop):
+    content = [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/png;base64,"
+                + base64.b64encode(b"x" * (4 * 1024 * 1024)).decode()
+            },
+        }
+    ]
     provider = _MediaProvider([[_image_call("call-1", "first"), _image_call("call-2", "second")]])
     loop = make_loop(provider=provider, max_iterations=2)
 
@@ -435,20 +443,26 @@ async def test_agent_loop_limits_media_across_parallel_tool_results(make_loop, m
         messages=[{"role": "user", "content": "read both"}],
         session_key=SessionKey(type="cli", channel_id="default", chat_id="media-budget"),
         publish_events=False,
-        tool_registry=_ImageRegistry(),
+        tool_registry=_ImageRegistry(content),
     )
 
     assert final == "done"
     tool_messages = [message for message in provider.calls[1] if message["role"] == "tool"]
     assert isinstance(tool_messages[0]["content"], list)
-    assert isinstance(tool_messages[1]["content"], str)
-    assert "make this model request exceed" in tool_messages[1]["content"]
+    assert isinstance(tool_messages[1]["content"], list)
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(make_loop, monkeypatch):
-    monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
-
+async def test_agent_loop_preserves_media_across_consecutive_tool_rounds(make_loop):
+    content = [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/png;base64,"
+                + base64.b64encode(b"x" * (4 * 1024 * 1024)).decode()
+            },
+        }
+    ]
     provider = _MediaProvider(
         [[_image_call("call-1", "image-1")], [_image_call("call-2", "image-2")]]
     )
@@ -458,7 +472,7 @@ async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(make_
         messages=[{"role": "user", "content": "read two images in sequence"}],
         session_key=SessionKey(type="cli", channel_id="default", chat_id="media-rounds"),
         publish_events=False,
-        tool_registry=_ImageRegistry(),
+        tool_registry=_ImageRegistry(content),
     )
 
     assert final == "done"
@@ -466,8 +480,7 @@ async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(make_
     assert isinstance(first_round_tool["content"], list)
 
     tool_messages = [message for message in provider.calls[-1] if message["role"] == "tool"]
-    assert isinstance(tool_messages[0]["content"], str)
-    assert "earlier tool result was omitted" in tool_messages[0]["content"]
+    assert isinstance(tool_messages[0]["content"], list)
     assert isinstance(tool_messages[1]["content"], list)
 
 
