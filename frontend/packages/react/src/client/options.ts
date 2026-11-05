@@ -186,6 +186,8 @@ export interface OvProviderBase {
   baseURL?: string;
   credentials?: RequestCredentials;
   signal?: AbortSignal;
+  /** 传输层覆盖。内层未声明时继承外层，否则内层会丢掉外层的自定义 fetch。 */
+  fetch?: typeof globalThis.fetch;
   identity: OvIdentityConfig;
 }
 
@@ -211,6 +213,7 @@ export function mergeProviderConfig(
     baseURL: local.baseURL ?? inherited?.baseURL,
     credentials: local.credentials ?? inherited?.credentials,
     signal: local.signal ?? inherited?.signal,
+    fetch: local.fetch ?? inherited?.fetch,
     identity: { ...inherited?.identity, ...declared },
   };
 }

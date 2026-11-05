@@ -109,7 +109,25 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
         normalizeTransportError(error, effective.signal);
       }
 
-      const body: unknown = await response.json().catch(() => undefined);
+      // 先读文本再解析：读取失败是传输失败（含取消），必须上报；只有解析失败
+      // 才是「响应不是 JSON」，此时按无正文处理。
+      let raw: string;
+      try {
+        raw = await response.text();
+      } catch (error) {
+        normalizeTransportError(error, effective.signal);
+      }
+
+      let body: unknown;
+      if (raw.trim()) {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          // 不是 JSON 就按原文返回，不把二进制或纯文本响应强转成对象。
+          body = raw;
+        }
+      }
+
       const envelope = readEnvelope(body);
       const requestId = response.headers.get('x-request-id') ?? undefined;
 

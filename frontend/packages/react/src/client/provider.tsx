@@ -76,6 +76,7 @@ export function OpenVikingProvider({
       resourceId,
       credentials,
       signal,
+      fetch,
     });
 
     return {
@@ -85,7 +86,8 @@ export function OpenVikingProvider({
         baseURL: base.baseURL,
         credentials: base.credentials,
         signal: base.signal,
-        fetch,
+        // 内层没声明 fetch 时用继承来的那一份，否则内层子树会退回全局 fetch。
+        fetch: base.fetch,
       }),
     };
   }, [

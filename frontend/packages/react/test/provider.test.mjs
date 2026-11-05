@@ -73,3 +73,26 @@ test('an inner baseURL wins, and an empty one means same origin', () => {
   );
   assert.equal(mergeProviderConfig(outer, { baseURL: '' }).baseURL, '');
 });
+
+test('an inner Provider inherits the outer transport', () => {
+  const outerFetch = async () => new Response('{}');
+  const outer = mergeProviderConfig(undefined, {
+    baseURL: 'https://ov.test',
+    fetch: outerFetch,
+  });
+
+  const inner = mergeProviderConfig(outer, { userId: 'other-user' });
+
+  assert.equal(inner.fetch, outerFetch, 'the transport is inherited');
+});
+
+test('an inner Provider can replace the transport explicitly', () => {
+  const outerFetch = async () => new Response('{}');
+  const innerFetch = async () => new Response('{}');
+  const outer = mergeProviderConfig(undefined, { fetch: outerFetch });
+
+  assert.equal(
+    mergeProviderConfig(outer, { fetch: innerFetch }).fetch,
+    innerFetch,
+  );
+});
