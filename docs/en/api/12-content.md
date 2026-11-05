@@ -221,6 +221,7 @@ Write a file and automatically refresh related semantics and vectors.
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
 | tag_mode | string | No | `replace` | Tag update mode: `replace` overwrites tags, `append` merges by key, and `clear` removes existing tags without requiring `tags` |
+| resolve_conflicts | bool | No | false | Resolve conflicts |
 
 **Notes**
 
@@ -232,6 +233,7 @@ Write a file and automatically refresh related semantics and vectors.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
 - Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
 - When non-empty `tags` are supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags`, or using `tags: []` with `tag_mode: "replace"`, preserves existing tags. Use `tag_mode: "clear"` to remove all existing tags; `clear` ignores any supplied tag values.
+- `resolve_conflicts=true` indicates that the edit is intended to resolve conflicts.
 
 
 **Python SDK**
@@ -547,6 +549,59 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 ```
 
 `ov get <uri> <local-path>` downloads through the HTTP API above and writes the file to a local path.
+
+---
+
+### ensure_directory_index()
+
+Ensure semantic indexes for one existing directory without replacing its L0/L1 content or tags. If both `.abstract.md` and `.overview.md` are absent, create only L0 using `fallback_abstract`. Existing summaries remain unchanged; only missing indexes are built, without an LLM call. Files, unsupported namespaces, empty or malformed summaries, and permission failures return errors.
+
+**Python SDK**
+
+```python
+result = client.ensure_directory_index(
+    uri="viking://resources/project/",
+    fallback_abstract="This is the compile generated folder",
+    wait=True,
+)
+client.set_tags(
+    uri="viking://resources/project/",
+    tags=["compile_target=true"],
+    mode="append",
+    recursive=False,
+)
+```
+
+TypeScript exposes `client.ensureDirectoryIndex(uri, fallbackAbstract, { wait: true })`; Go exposes `client.EnsureDirectoryIndex(ctx, uri, fallbackAbstract, nil)` with readiness waiting enabled by default.
+
+**HTTP API**
+
+```http
+POST /api/v1/content/ensure_directory_index
+Content-Type: application/json
+
+{
+  "uri": "viking://resources/project/",
+  "fallback_abstract": "This is the compile generated folder",
+  "wait": true
+}
+```
+
+`uri` and a non-empty `fallback_abstract` are required. `wait` defaults to `true`: the response confirms that indexes for all existing summary levels are readable. With `wait=false`, missing indexes are queued and the result includes `task_id`; `indexed_levels` lists only levels already readable at response time. The operation checks directory write access and does not process descendants.
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/project",
+    "created_abstract": true,
+    "indexed_levels": [0],
+    "vector_status": "complete"
+  }
+}
+```
 
 ---
 

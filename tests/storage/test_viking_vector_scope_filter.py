@@ -156,11 +156,16 @@ async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("reader_grants", "allowed"), [([], False), (["1:user:reader"], True)])
-async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
-    vector_backend_factory, tmp_path, reader_grants, allowed
+@pytest.mark.parametrize(("mode", "allowed"), [("restricted", False), ("inherit", True)])
+async def test_acl_resolution_preserves_revocation_and_inheritance(
+    vector_backend_factory, tmp_path, mode, allowed
 ):
     reader = RequestContext(user=UserIdentifier("acct", "reader"), role=Role.USER)
+    admin = RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN)
+    parent = "viking://resources/parent"
+    target = f"{parent}/target"
+    leaf = f"{target}/rules.md"
+    grants = ["1:user:reader"]
     backend = vector_backend_factory(
         config=VectorDBBackendConfig(
             backend="local",
@@ -169,6 +174,11 @@ async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
             path=str(tmp_path / "acl_vectors"),
         )
     )
+    search = {
+        "ctx": reader,
+        "query_vector": [1.0, 0.0, 0.0, 0.0],
+        "target_directories": [target],
+    }
     try:
         assert await backend.create_collection(
             "context", CollectionSchemas.context_collection("context", 4)
@@ -184,21 +194,39 @@ async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
                     "level": 2,
                     "updated_at": "2026-01-01T00:00:00Z",
                     "vector": [1.0, 0.0, 0.0, 0.0],
-                    "acl_mode": mode,
+                    "acl_mode": record_mode,
                     "acl_direct_grants": direct,
                     "acl_inherited_grants": inherited,
                 }
-                for record_id, uri, mode, direct, inherited in (
-                    ("dir", "viking://resources/private", "restricted", reader_grants, []),
-                    ("file", "viking://resources/private/rules.md", "inherit", [], reader_grants),
+                for record_id, uri, record_mode, direct, inherited in (
+                    ("parent", parent, "restricted", grants, []),
+                    ("dir", target, mode, grants, grants),
+                    ("file", leaf, "inherit", [], grants),
                 )
             ],
-            ctx=RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN),
+            ctx=admin,
         )
+        assert {row["id"] for row in await backend.search_in_tenant(**search)} == {"dir", "file"}
 
-        acl = await backend.acl_manager.resolve("viking://resources/private/rules.md", reader)
+        await backend.acl_manager.set_acl(target, [], admin)
+        saved = {row["id"]: row for row in await backend.get_strict(["dir", "file"], ctx=admin)}
+        assert saved["dir"]["acl_mode"] == mode
+        assert saved["dir"]["acl_direct_grants"] == ["none"]
+        assert saved["dir"]["acl_inherited_grants"] == grants
+        assert saved["file"]["acl_direct_grants"] == ["none"]
+        assert saved["file"]["acl_inherited_grants"] == (grants if allowed else ["none"])
+        visible = {"dir", "file"} if allowed else set()
+        assert {row["id"] for row in await backend.search_in_tenant(**search)} == visible
 
+        # Resolution must still see a restricted record hidden from this caller.
+        acl = await backend.acl_manager.resolve(leaf, reader)
         assert acl_allows(acl, reader, AclAction.READ) is allowed
+
+        # An ordinary update must not restore revoked access or discard inheritance.
+        updated = {**saved["dir"], "abstract": "updated"}
+        assert await backend.upsert(updated, ctx=admin) == "dir"
+        assert (await backend.get_strict(["dir"], ctx=admin))[0] == updated
+        assert {row["id"] for row in await backend.search_in_tenant(**search)} == visible
     finally:
         await backend.close()
 

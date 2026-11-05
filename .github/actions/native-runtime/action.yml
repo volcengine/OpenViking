@@ -1,0 +1,50 @@
+name: Prepare native test runtime
+description: Build once or restore a validated stable-ABI bundle from this workflow run
+inputs:
+  artifact:
+    description: Same-run native bundle name; empty builds locally
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Install runtime and test dependencies without building the project
+      shell: bash
+      run: |
+        uv sync --frozen --extra test --no-install-project
+        uv pip install setuptools setuptools_scm wheel cmake maturin
+    - name: Download same-run native bundle
+      if: inputs.artifact != ''
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}
+        path: .cache/native
+    - name: Validate and restore native bundle
+      if: inputs.artifact != ''
+      shell: bash
+      run: uv run --no-sync python .github/scripts/native_bundle.py restore .cache/native/runtime.tar.gz
+    - uses: dtolnay/rust-toolchain@v1
+      if: inputs.artifact == ''
+      with:
+        toolchain: stable
+    - uses: ./.github/actions/compiler-cache
+      if: inputs.artifact == ''
+    - name: Build native runtime
+      if: inputs.artifact == ''
+      shell: bash
+      env:
+        OV_REQUIRE_RAGFS_BUILD: '1'
+        OV_SKIP_STUDIO_BUILD: '1'
+      run: uv run --no-sync python setup.py build_ext --inplace
+    - name: Verify native imports
+      shell: bash
+      run: |
+        uv run --no-sync python -c "import openviking.lib.ragfs_python; import openviking.storage.vectordb.engine as engine; assert engine.ENGINE_VARIANT != 'unavailable', 'Native engine was not loaded'"
+    - name: Install Python entry points without recompiling native code
+      shell: bash
+      env:
+        OV_SKIP_CPP_BUILD: '1'
+        OV_SKIP_RAGFS_BUILD: '1'
+        OV_SKIP_OV_BUILD: '1'
+        OV_SKIP_STUDIO_BUILD: '1'
+        OV_REQUIRE_RAGFS_BUILD: '0'
+      run: uv pip install --no-deps --no-build-isolation --editable .

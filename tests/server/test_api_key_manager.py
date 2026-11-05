@@ -185,23 +185,111 @@ async def test_management_writer_preserves_a_trusted_identity_from_another_insta
 ):
     """A stale manager write must merge, rather than replace, a trusted registry update."""
     acct = _uid()
-    await manager.create_account(acct, "admin")
+    original_key = await manager.create_account(acct, "admin")
+    other_account = f"{acct}_other"
+    other_key = await manager.create_account(other_account, "admin")
+    assert original_key[:8] == other_key[:8]
 
     replica = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await replica.load()
 
     await manager.ensure_trusted_identities({acct: {"trusted-user"}})
+    rotated_key = await manager.regenerate_key(acct, "admin")
+    remote_key = await manager.register_user(acct, "remote-user")
     assert await replica.has_user(acct, "trusted-user") is False
 
     await replica.register_user(acct, "managed-user")
+    assert (await replica.resolve_identity(rotated_key)).user_id == "admin"
+    assert (await replica.resolve_identity(remote_key)).user_id == "remote-user"
+    with pytest.raises(UnauthenticatedError):
+        await replica.resolve_identity(original_key)
+    assert (await replica.resolve_identity(other_key)).account_id == other_account
 
     verifier = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await verifier.load()
     assert {item["user_id"] for item in await _list_users(verifier, acct)} == {
         "admin",
         "trusted-user",
+        "remote-user",
         "managed-user",
     }
+    await replica.delete_account(acct)
+    assert (await replica.resolve_identity(other_key)).account_id == other_account
+
+
+@pytest.mark.parametrize("missing_read", [False, True])
+async def test_registry_diagnostics_distinguish_missing_reads_without_exposing_keys(
+    manager: APIKeyManager, manager_service, monkeypatch: pytest.MonkeyPatch, missing_read: bool
+):
+    from openviking.server.account_stores import file
+
+    acct = _uid()
+    admin_key = await manager.create_account(acct, "admin")
+    agfs = manager_service.viking_fs.agfs
+    read = agfs.read
+    registry_path = f"/local/{acct}/_system/users.json"
+    original_registry = read(registry_path)
+    messages = []
+    monkeypatch.setattr(file.logger, "warning", lambda fmt, *args: messages.append(fmt % args))
+    monkeypatch.setattr(file.logger, "debug", lambda fmt, *args: messages.append(fmt % args))
+
+    if missing_read:
+
+        def injected_read(path, *args, **kwargs):
+            if path == f"/local/{acct}/_system/users.json":
+                raise AGFSNotFoundError("injected missing registry read")
+            return read(path, *args, **kwargs)
+
+        monkeypatch.setattr(agfs, "read", injected_read)
+
+    if missing_read:
+        with pytest.raises(FailedPreconditionError, match="User registry is missing"):
+            await manager.register_user(acct, "new-user")
+        assert read(registry_path) == original_registry
+        monkeypatch.setattr(agfs, "read", read)
+        assert await manager.get_registered_user_role(acct, "admin") == Role.ADMIN
+        assert await manager.get_registered_user_role(acct, "new-user") is None
+        assert (await manager.resolve_identity(admin_key)).role == Role.ADMIN
+        user_key = "unused-test-credential"
+    else:
+        user_key = await manager.register_user(acct, "new-user")
+    diagnostics = "\n".join(messages)
+    if missing_read:
+        assert "registry_missing" in diagnostics
+        assert "attempts=3" in diagnostics
+    else:
+        assert "members=1 updated=1 deleted=0" in diagnostics
+    assert ("save_written" in diagnostics) is not missing_read
+    assert all(key not in diagnostics for key in (ROOT_KEY, admin_key, user_key))
+
+
+async def test_first_default_user_has_an_initialized_registry(manager: APIKeyManager):
+    key = await manager.register_user("default", "admin", "admin")
+    assert (await manager.resolve_identity(key)).role == Role.ADMIN
+    assert await _list_users(manager, "default", expose_key=False) == [
+        {"user_id": "admin", "role": "admin"}
+    ]
+
+
+async def test_default_initialization_preserves_existing_users(
+    manager: APIKeyManager, manager_service, monkeypatch
+):
+    key = await manager.register_user("default", "admin", "admin")
+    agfs = manager_service.viking_fs.agfs
+    read = agfs.read
+    original_registry = read("/local/default/_system/users.json")
+
+    def missing_accounts(path, *args, **kwargs):
+        if path.endswith("/_system/accounts.json"):
+            raise AGFSNotFoundError("Injected missing account registry")
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(agfs, "read", missing_accounts)
+    with pytest.raises(FailedPreconditionError, match="Account registry is missing"):
+        await manager.load()
+    monkeypatch.setattr(agfs, "read", read)
+    assert read("/local/default/_system/users.json") == original_registry
+    assert (await manager.resolve_identity(key)).role == Role.ADMIN
 
 
 async def test_concurrent_management_registration_of_same_user_rejects_second_writer(
@@ -729,7 +817,7 @@ async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):
 
 
 async def test_user_and_group_persistence_across_reload(manager_service):
-    """Reload preserves keys/groups, while user deletion removes membership."""
+    """Batch membership is atomic, idempotent, durable, and removed with the user."""
     mgr1 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr1.load()
 
@@ -739,9 +827,19 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     created_group = await mgr1.create_group(acct, "engineering")
     assert created_group == {"group_id": "engineering", "member_count": 0}
     group_id = created_group["group_id"]
-    assert await mgr1.add_group_member(acct, group_id, "bob") is True
-    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert await mgr1.add_group_members(acct, group_id, ["bob"]) is True
+
+    await mgr1.create_account(_uid(), "outsider")
+    with pytest.raises(NotFoundError):
+        await mgr1.add_group_members(acct, group_id, ["alice", "outsider"])
     assert await mgr1.get_group_members(acct, group_id) == ["bob"]
+    assert await mgr1.get_user_group_ids(acct, "alice") == ()
+
+    members = ["alice", "bob", "bob"]
+    assert await mgr1.add_group_members(acct, group_id, members) is True
+    assert await mgr1.add_group_members(acct, group_id, members) is True
+    assert await mgr1.get_group_members(acct, group_id) == ["alice", "bob"]
+    assert await mgr1.get_groups(acct) == [{"group_id": group_id, "member_count": 2}]
 
     mgr2 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr2.load()
@@ -750,6 +848,8 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     assert identity.account_id == acct
     assert identity.user_id == "alice"
     assert identity.role == Role.ADMIN
+    assert await mgr2.get_group_members(acct, group_id) == ["alice", "bob"]
+    assert await mgr2.get_user_group_ids(acct, "alice") == (group_id,)
     assert await mgr2.get_user_group_ids(acct, "bob") == (group_id,)
 
     await mgr2.begin_deletion(
@@ -759,6 +859,12 @@ async def test_user_and_group_persistence_across_reload(manager_service):
         owner_account_id=acct,
         owner_user_id="alice",
     )
+    assert await mgr2.remove_group_members(acct, group_id, ["alice", "missing", "alice"]) is True
+    assert await mgr2.remove_group_members(acct, group_id, ["alice", "missing"]) is False
+    with pytest.raises(FailedPreconditionError):
+        await mgr2.add_group_members(acct, group_id, ["alice", "bob"])
+    assert await mgr2.get_group_members(acct, group_id) == ["bob"]
+    assert await mgr2.get_user_group_ids(acct, "alice") == ()
     await mgr2.finish_deletion(acct, "bob", "delete-bob")
 
     mgr3 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)

@@ -12,6 +12,7 @@ from openviking.service.core import OpenVikingService
 from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -21,6 +22,8 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     config = SimpleNamespace(
         default_account="default",
         default_user="default",
+        service_name="default",
+        agent_evolution=AgentEvolutionConfig(),
         storage=object(),
         embedding=SimpleNamespace(
             max_concurrent=10,
@@ -33,6 +36,7 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
         queue_workers=SimpleNamespace(
             external_parse=SimpleNamespace(max_concurrent=9),
             add_resource=SimpleNamespace(max_concurrent=7),
+            reindex=SimpleNamespace(max_concurrent=4),
             session_commit=SimpleNamespace(max_concurrent=5),
             external_task=SimpleNamespace(max_concurrent=6),
         ),
@@ -152,7 +156,8 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     )
     service._session_service = SimpleNamespace(set_session_expiry_adapter=lambda _: None)
     service._runtime_config_manager = None
-    service._watch_scheduler = None
+    service._watch_runtime = None
+    service._watch_manager = None
     service._session_auto_commit_scheduler = None
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None

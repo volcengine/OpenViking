@@ -1,0 +1,10 @@
+# Shared source, not a Python build artifact.
+!/packages/lib/
+
+node_modules/
+dist/
+doc_build/
+.rspress/
+.rspress-cache/
+*.tsbuildinfo
+*.tgz

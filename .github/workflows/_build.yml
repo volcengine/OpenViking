@@ -45,6 +45,29 @@ on:
         default: '["3.10"]'
 
 jobs:
+  build-studio:
+    name: Build shared Studio bundle
+    if: inputs.build_wheels
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: web-studio/package-lock.json
+    - name: Build Studio
+      working-directory: web-studio
+      run: |
+        npm ci
+        npm run build -- --base=/studio/
+        test -f dist/index.html
+    - uses: actions/upload-artifact@v7
+      with:
+        name: studio-bundle-${{ github.sha }}
+        path: web-studio/dist/
+        if-no-files-found: error
+
   build-sdist:
     name: Build source distribution py3.12
     if: inputs.build_sdist
@@ -89,7 +112,7 @@ jobs:
         echo "=== Git Describe ==="
         git describe --tags --long --dirty --always
         echo "=== Setuptools SCM Version ==="
-        uv run --frozen python -m setuptools_scm
+        uv run --no-sync python -m setuptools_scm
         echo "=== Git Status (Ignored included) ==="
         git status --ignored
         echo "=== Check openviking/_version.py ==="
@@ -112,6 +135,7 @@ jobs:
         echo "::notice::Build sdist Version: $VERSION"
 
   build-linux:
+    needs: build-studio
     name: Build distribution on Linux ${{ matrix.arch }} (glibc 2.31) py${{ matrix.python-version }}
     # Run if Linux runners are requested (explicit labels or generic 'linux')
     if: >-
@@ -165,13 +189,6 @@ jobs:
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
         git fetch --force --tags
 
-    - name: Set up Node.js for Studio build (Linux)
-      uses: actions/setup-node@v6
-      with:
-        node-version: '22'
-        cache: npm
-        cache-dependency-path: web-studio/package-lock.json
-
     - name: Build CPython (Dynamic Selection)
       run: |
         # Map short version to full version for our specific build environment
@@ -214,15 +231,15 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
+    - uses: ./.github/actions/compiler-cache
+      with:
+        target: ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}
 
     - name: Create venv (Linux)
       run: uv venv --python "$PYTHON_BIN"
 
     - name: Seed pip (Linux)
-      run: uv run python -m ensurepip --upgrade
-
-    - name: Install dependencies
-      run: uv sync --frozen
+      run: .venv/bin/python -m ensurepip --upgrade
 
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm cmake wheel build
@@ -237,7 +254,7 @@ jobs:
           else
             rm -f openviking/_version.py
             rm -rf openviking.egg-info
-            env -u OPENVIKING_VERSION -u SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING uv run --frozen python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+            env -u OPENVIKING_VERSION -u SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING uv run --no-sync python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
           fi
         )
         echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
@@ -272,7 +289,7 @@ jobs:
         echo "=== Git Describe ==="
         git describe --tags --long --dirty --always
         echo "=== Setuptools SCM Version ==="
-        uv run --frozen python -m setuptools_scm
+        uv run --no-sync python -m setuptools_scm
         echo "=== Git Status (Ignored included) ==="
         git status --ignored
         echo "=== Check openviking/_version.py ==="
@@ -280,7 +297,15 @@ jobs:
         echo "=== Verify pre-built artifacts survived clean ==="
         ls -la openviking/bin/ || true
 
+    - name: Restore shared Studio bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: studio-bundle-${{ github.sha }}
+        path: openviking/web_studio/dist/
+
     - name: Build package (Wheel Only)
+      env:
+        OV_SKIP_OV_BUILD: '1'
       run: uv build --wheel
 
     - name: Check bundled ov version matches wheel
@@ -308,7 +333,7 @@ jobs:
     - name: Repair wheels (Linux)
       run: |
         uv pip install auditwheel
-        uv run auditwheel repair dist/*.whl -w dist_fixed
+        uv run --no-sync auditwheel repair dist/*.whl -w dist_fixed
         rm dist/*.whl
         mv dist_fixed/*.whl dist/
         rmdir dist_fixed
@@ -398,6 +423,7 @@ jobs:
         echo "::notice::Build Wheel Version (Linux ${{ matrix.arch }} glibc 2.31 py${{ matrix.python-version }}): $VERSION"
 
   build-other:
+    needs: build-studio
     name: Build non-Linux distributions
     # Run only when non-Linux runners are explicitly requested
     if: inputs.build_wheels && (contains(inputs.os_json, 'macos') || contains(inputs.os_json, 'windows'))
@@ -451,12 +477,6 @@ jobs:
       uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: stable
-    - name: Set up Node.js for Studio build
-      uses: actions/setup-node@v6
-      with:
-        node-version: '22'
-        cache: npm
-        cache-dependency-path: web-studio/package-lock.json
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -472,8 +492,12 @@ jobs:
         choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
         choco install mingw
 
-    - name: Install dependencies
-      run: uv sync --frozen
+    - uses: ./.github/actions/compiler-cache
+      with:
+        target: ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-msvc' || 'host' }}
+
+    - name: Create build environment without installing the project
+      run: uv venv
 
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm cmake wheel build
@@ -492,7 +516,7 @@ jobs:
           else
             rm -f openviking/_version.py
             rm -rf openviking.egg-info
-            env -u OPENVIKING_VERSION -u SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING uv run --frozen python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+            env -u OPENVIKING_VERSION -u SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING uv run --no-sync python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
           fi
         )
         echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
@@ -538,7 +562,7 @@ jobs:
         echo "=== Git Describe ==="
         git describe --tags --long --dirty --always
         echo "=== Setuptools SCM Version ==="
-        uv run --frozen python -m setuptools_scm
+        uv run --no-sync python -m setuptools_scm
         echo "=== Git Status (Ignored included) ==="
         git status --ignored
         echo "=== Check openviking/_version.py ==="
@@ -546,7 +570,15 @@ jobs:
         echo "=== Verify pre-built artifacts survived clean ==="
         ls -la openviking/bin/ || true
 
+    - name: Restore shared Studio bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: studio-bundle-${{ github.sha }}
+        path: openviking/web_studio/dist/
+
     - name: Build package (Wheel Only)
+      env:
+        OV_SKIP_OV_BUILD: '1'
       run: uv build --wheel
 
     - name: Check bundled ov version matches wheel

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
 
 from openviking.core.namespace import canonical_user_root
+from openviking.privacy.global_policy import UserGlobalPolicyService
 from openviking.privacy.helpers import (
     canonicalize_values,
     config_root_uri,
@@ -38,7 +39,13 @@ class UserPrivacyConfigService:
 
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
+        self._global_policies = UserGlobalPolicyService(viking_fs)
         self._catalog_revisions: dict[tuple[str, str], int] = {}
+
+    @property
+    def global_policies(self) -> UserGlobalPolicyService:
+        """Owner-scoped GLOBAL access policy cache with TTL and FIFO eviction."""
+        return self._global_policies
 
     def catalog_revision(self, ctx: RequestContext) -> int:
         """Return the process-local revision of the caller's active value catalog."""

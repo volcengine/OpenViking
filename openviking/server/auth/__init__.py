@@ -121,9 +121,15 @@ async def _build_request_context(
     plugin.get_request_context_checks(request.url.path, identity)
     account_id = identity.account_id or "default"
     user_id = identity.user_id or "default"
-    group_ids = identity.group_ids
+    has_auth_groups = (
+        plugin.auth_mode == AuthMode.API_KEY.value
+        and not identity.from_oauth
+        and identity.group_ids is not None
+    )
+    group_ids = identity.group_ids or ()
     if (
-        not group_ids
+        not has_auth_groups
+        and not group_ids
         and identity.role != Role.ROOT
         and _uses_local_account_store(plugin)
     ):
@@ -139,7 +145,8 @@ async def _build_request_context(
     manager = getattr(request.app.state, "api_key_manager", None)
     deletion = None
     if (
-        _uses_local_account_store(plugin)
+        not has_auth_groups
+        and _uses_local_account_store(plugin)
         and ctx.role != Role.ROOT
         and manager is not None
         and hasattr(manager, "get_deletion")

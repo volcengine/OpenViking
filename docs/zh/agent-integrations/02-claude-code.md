@@ -45,7 +45,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 </details>
 
-安装完成后，在 Claude Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一条提示词接入 Agent](../getting-started/07-agent-onboarding.md)。
+安装完成后，在 Claude Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
 
 ## 验证
 

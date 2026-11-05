@@ -1,0 +1,27 @@
+﻿Onboarding sample verification / 入门样例验证
+Date / 日期: 2026-10-28
+Samples / 样例: v1 (fictional / 虚构)
+Server, CLI, VikingBot: OpenViking 0.5.2, ov 0.5.2, VikingBot 0.5.2
+Mode: isolated localhost service and storage; a separate API Key account for OVPack.
+模型 / Models: volcengine doubao-seed-2.1-lite (Agent/VLM), doubao-embedding-vision (1024-dimensional embedding), Agent Plan endpoint.
+
+Verified / 已实测:
+- Resource: Chinese and English four-file packs imported. Agent semantic search, source reads and answers checked for direct, combined and unknown facts.
+- Memory: Chinese Cape session explicitly committed; memory_diff and memory body checked. A new VikingBot session searched/read the memory and used its conventions. Unrelated arithmetic answered 42 without using Cape background.
+- Skill: two inputs in each language; actual SKILL.md read traces and both generated briefs checked. Read/text-only tool scope.
+- VikingBot: initial task and follow-up in one session preserved the task statuses.
+- Gateway: two chat/completions requests, capture, idle submission, completed extraction, memory_diff and new-session recall checked. Public Python client's recall phase executed separately.
+- Compile: Chinese and English source packs compiled into index.md and entity/lighthouse.md; actual body and source URIs checked. Chinese compile completed in about 61 seconds.
+- Snapshot: two explicit commits, old content, diff, dry-run, restore, new commit and completed reindex task checked. Scope: onboarding-versions-v1 only; 1 file written, 0 deleted.
+- OVPack: separate test account; export then import under a new parent; all 4 source texts and root abstract/overview matched; 14 manifest file checksums/sizes matched; scoped retrieval succeeded; duplicate import was rejected with default conflict policy.
+
+Observed conditions / 实测条件:
+- English resource embedding initially returned UnsupportedModel at the provider. Rebuilding only vectors later succeeded with the same configured model; subsequent retrieval worked.
+- OVPack on a dev-mode 0.5.2 service returned 403. The API Key account path passed and is now the tutorial prerequisite.
+- Gateway recalled another fictional project's memory as well as the requested project. The answer used the requested conventions but included unnecessary cross-project explanation. Evaluate relevance as well as successful recall; use a fresh identity or isolated storage for repeat trials.
+- Asynchronous observation windows in tutorials are initial check periods, not completion-time guarantees.
+
+Limits / 未验证项:
+- No cloud/enterprise environment was used. No production site was published.
+- Memory, Bot conversation, Gateway and data-management execution used Chinese examples; their English tutorial text was synchronized and checked, not every translated command was replayed.
+- Human independent-use review and before/after usability comparison are pending.

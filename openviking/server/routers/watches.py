@@ -8,15 +8,15 @@ single-resource endpoint accepts either path parameter ``{task_id}`` or
 query parameter ``?to_uri=``. Cross-key conflict returns 400.
 """
 
-import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.resource import watch_manager as wm_mod
 from openviking.resource.watch_manager import WatchManager, WatchTask
+from openviking.resource.watch_pagination import DEFAULT_WATCH_PAGE_SIZE, MAX_WATCH_PAGE_SIZE
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -30,13 +30,21 @@ from openviking_cli.exceptions import (
 
 router = APIRouter(prefix="/api/v1", tags=["watches"])
 
-# Strong refs for in-flight fire-and-forget trigger tasks. Python asyncio
-# only keeps weak references to tasks created via asyncio.create_task, so a
-# task without an external strong reference can be garbage-collected
-# mid-execution and silently aborted. We hold each task here until it
-# completes and discard via done_callback. See
-# https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
-_BACKGROUND_TRIGGER_TASKS: set[asyncio.Task] = set()
+
+class WatchCredentialState(BaseModel):
+    """Owner-bound lifecycle notification from the managed credential resolver."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str = Field(min_length=1)
+    resource_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    ov_user_id: str = Field(min_length=1)
+    ov_account_id: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    platform: str = Field(min_length=1)
+    version: int = Field(gt=0, strict=True)
+    authorized: bool = Field(strict=True)
 
 
 class UpdateWatchRequest(BaseModel):
@@ -53,6 +61,16 @@ class UpdateWatchRequest(BaseModel):
     is_active: Optional[bool] = None
     reason: Optional[str] = None
     instruction: Optional[str] = None
+    credential_state: Optional[WatchCredentialState] = None
+
+    @model_validator(mode="after")
+    def _credential_update_is_separate(self):
+        if self.credential_state is not None and any(
+            value is not None
+            for value in (self.is_active, self.watch_interval, self.reason, self.instruction)
+        ):
+            raise ValueError("credential_state must be updated separately")
+        return self
 
     @field_validator("watch_interval")
     @classmethod
@@ -73,21 +91,10 @@ class UpdateWatchRequest(BaseModel):
 
 def _wm() -> WatchManager:
     svc = get_service()
-    scheduler = getattr(svc, "watch_scheduler", None)
-    if scheduler is None or not scheduler.is_running:
-        raise FailedPreconditionError("Watch scheduler not running")
-    wm = scheduler.watch_manager
+    wm = getattr(svc, "watch_manager", None)
     if wm is None:
-        raise FailedPreconditionError("Watch scheduler not running")
+        raise FailedPreconditionError("Watch service not initialized")
     return wm
-
-
-def _scheduler():
-    svc = get_service()
-    scheduler = getattr(svc, "watch_scheduler", None)
-    if scheduler is None or not scheduler.is_running:
-        raise FailedPreconditionError("Watch scheduler not running")
-    return scheduler
 
 
 def _identity(ctx: RequestContext):
@@ -148,6 +155,12 @@ def _translate_perm(exc: wm_mod.PermissionDeniedError, target: str) -> Permissio
 async def list_or_get_watch(
     active_only: bool = Query(False, description="Only return tasks with is_active=true"),
     to_uri: Optional[str] = Query(None, description="If set, return the single task with this URI"),
+    limit: Optional[int] = Query(
+        None, ge=1, le=MAX_WATCH_PAGE_SIZE, description="Page size; enables cursor pagination"
+    ),
+    cursor: Optional[str] = Query(
+        None, max_length=2048, description="Next-page cursor returned by the previous page"
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List watch tasks, or look one up by ``to_uri``.
@@ -156,15 +169,37 @@ async def list_or_get_watch(
     returns the single matching task object (404 if missing). When both
     ``to_uri`` and ``active_only=true`` are supplied, a paused task at that
     URI still 404s — the active-only filter stays consistent in both modes.
+    With ``limit`` or ``cursor``, lists newest first and adds ``has_more`` and
+    ``next_cursor``. A cursor without a limit uses a page size of 100.
     """
     wm = _wm()
     account_id, user_id, role = _identity(_ctx)
     if to_uri:
+        if limit is not None or cursor is not None:
+            raise InvalidArgumentError("Pagination cannot be combined with to_uri lookup")
         to_uri = validate_request_viking_uri(to_uri, _ctx, field_name="to_uri")
         task = await wm.get_task_by_uri(to_uri, account_id, user_id, role)
         if task is None or (active_only and not task.is_active):
             raise NotFoundError(to_uri, "watch_task")
         return Response(status="ok", result=task.to_dict())
+    if limit is not None or cursor is not None:
+        page = await wm.get_tasks_page(
+            account_id,
+            user_id,
+            role,
+            active_only=active_only,
+            limit=limit if limit is not None else DEFAULT_WATCH_PAGE_SIZE,
+            cursor=cursor,
+        )
+        return Response(
+            status="ok",
+            result={
+                "tasks": page.tasks,
+                "total": page.total,
+                "has_more": page.next_cursor is not None,
+                "next_cursor": page.next_cursor,
+            },
+        )
     tasks = await wm.get_all_tasks(account_id, user_id, role, active_only=active_only)
     return Response(
         status="ok", result={"tasks": [t.to_dict() for t in tasks], "total": len(tasks)}
@@ -216,6 +251,7 @@ async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestC
             is_active=body.is_active,
             reason=body.reason,
             instruction=body.instruction,
+            credential_state=body.credential_state.model_dump() if body.credential_state else None,
         )
     except wm_mod.PermissionDeniedError as e:
         raise _translate_perm(e, target.to_uri or target.task_id) from e
@@ -304,22 +340,15 @@ async def delete_watch_by_uri(
 
 
 async def _trigger_impl(target: WatchTask):
-    """Dispatch a scheduling request without waiting for execution.
-
-    `WatchScheduler.schedule_task` awaits `_execute_task` inline, which runs
-    the full re-ingest (re-fetch + re-parse + re-embed) and can take many
-    seconds. We don't want HTTP requests blocked for that long, so the call
-    is fired off via `asyncio.create_task` and the response returns
-    immediately with ``scheduled=true``. Actual success/failure is observable
-    via subsequent `GET /watches/{task_id}` (last_execution_time updates).
-    """
-    scheduler = _scheduler()
-    task = asyncio.create_task(scheduler.schedule_task(target.task_id))
-    _BACKGROUND_TRIGGER_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TRIGGER_TASKS.discard)
+    """Report whether an ingestion Task was submitted or reused."""
+    receipt = await _wm().trigger(target.task_id)
     return Response(
         status="ok",
-        result={"task_id": target.task_id, "to_uri": target.to_uri, "scheduled": True},
+        result={
+            "task_id": target.task_id,
+            "to_uri": target.to_uri,
+            "scheduled": receipt is not None,
+        },
     )
 
 
@@ -339,11 +368,11 @@ async def trigger_watch_by_id(
     ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Immediately schedule the watch task for execution (fire-and-forget).
+    """Submit or reuse the Watch's current ingestion before returning.
 
-    Dispatches the scheduling request asynchronously and returns right away;
-    the actual re-fetch runs in the background. Poll
-    ``GET /watches/{task_id}.last_execution_time`` to confirm completion.
+    Waits for resource submission, including credential restoration and any
+    Connector acceptance request. Processing continues in the background; poll
+    ``GET /watches/{task_id}`` for the recorded execution outcome.
     """
     task = await _resolve_task(task_id, to_uri, _ctx)
     return await _trigger_impl(task)
@@ -354,6 +383,6 @@ async def trigger_watch_by_uri(
     to_uri: str = Query(..., description="Target URI of the watch task"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Trigger by to_uri (fire-and-forget; see by-id variant for semantics)."""
+    """Submit or reuse a Watch by to_uri; see the by-id variant for semantics."""
     task = await _resolve_task(None, to_uri, _ctx)
     return await _trigger_impl(task)

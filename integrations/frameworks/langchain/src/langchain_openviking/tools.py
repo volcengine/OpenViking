@@ -143,6 +143,32 @@ def create_openviking_tools(
         )
         return _format_retrieval_result(result)
 
+    def viking_rule_search(
+        task_context: Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=64000,
+                description="User goal, planned action, and facts affecting Rule applicability.",
+            ),
+        ],
+        rule_probability_threshold: Annotated[
+            float,
+            Field(ge=0, le=1, description="Minimum applicability probability."),
+        ] = 0.65,
+    ) -> str:
+        """Check constraints before a planned action or response and return complete compiled Rules."""
+        result = call_openviking(
+            get_client(),
+            "rule_search",
+            task_context=task_context,
+            options={"rule_probability_threshold": rule_probability_threshold},
+        )
+        rendered = item_value(result, "rendered")
+        if not isinstance(rendered, str):
+            raise ValueError("OpenViking Rule search returned no rendered Rules")
+        return rendered
+
     def viking_browse(
         uri: Annotated[
             str,
@@ -496,6 +522,7 @@ def create_openviking_tools(
     all_tools: dict[str, StructuredTool] = {
         "viking_find": StructuredTool.from_function(viking_find),
         "viking_search": StructuredTool.from_function(viking_search),
+        "viking_rule_search": StructuredTool.from_function(viking_rule_search),
         "viking_browse": StructuredTool.from_function(viking_browse),
         "viking_read": StructuredTool.from_function(viking_read),
         "viking_grep": StructuredTool.from_function(viking_grep),
@@ -519,6 +546,7 @@ def _profile_tool_names(profile: str, *, allow_forget: bool) -> list[str]:
     retrieval = [
         "viking_find",
         "viking_search",
+        "viking_rule_search",
         "viking_browse",
         "viking_read",
         "viking_grep",

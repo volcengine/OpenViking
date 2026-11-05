@@ -1,0 +1,43 @@
+# FileBrowser
+
+Directory navigation, search and content preview as one module. The module loads its own data; the host supplies configuration, the controlled current resource, slots and copy.
+
+The component is a placeholder: it renders the module name and a placeholder message. The props below are settled, so applications can integrate the container and wire their state now; the composite view and `useFileBrowser` follow.
+
+## Basic usage
+
+```tsx file="../../_demos/file-browser-placeholder.tsx" preview
+
+```
+
+## What the module owns
+
+- Directory, search, current URI and preview loading, coordinated inside the module: clicking a directory node or a search result moves the selection and loads the preview, and switching resources drops stale requests.
+- Refreshing the affected directory, search results and preview after a save, rename or delete.
+- The layout of the search, directory and preview area.
+
+## What the host owns
+
+- Request configuration through the Provider, overridable per module through `requestOptions`.
+- Sign-in, account scope, routing and permissions.
+- Entries such as connecting an agent or importing resources, injected through `slots.toolbar`. The module embeds no connection dialog, import flow or onboarding.
+- Views with their own loading logic, such as experience dashboards, injected through `slots.previewTabs`.
+
+## Props
+
+The module exports `FileBrowserProps` from the subpath and the root entry, and `FileBrowserLabels` and `FileBrowserSlots` from the subpath only.
+
+| Property         | Type                            | Default | Description                                                                                                                                 |
+| ---------------- | ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestOptions` | `OvRequestOptions`              | —       | Request configuration override, applied field by field over the nearest Provider.                                                           |
+| `uri`            | `string`                        | —       | The controlled current resource URI. When given, the host owns the current resource and the module only reports switch intent.              |
+| `defaultUri`     | `string`                        | —       | Initial resource URI when uncontrolled. Nothing is selected when omitted.                                                                   |
+| `onUriChange`    | `(uri: string \| null) => void` | —       | Called after the current resource changes; `null` when the selection is cleared.                                                            |
+| `slots`          | `FileBrowserSlots`              | —       | `toolbar`, `previewTabs` and `quotaHint`; see above for what goes in each.                                                                  |
+| `labels`         | `FileBrowserLabels`             | —       | Replaceable copy: `title`, `searchPlaceholder`, `searchEmpty`, `empty`, `error` and `retry`. An omitted label inherits its English default. |
+| `className`      | `string`                        | —       | Additional container class.                                                                                                                 |
+| `style`          | `CSSProperties`                 | —       | Container style overrides.                                                                                                                  |
+
+Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
+
+The placeholder component itself consumes `className`, `style` and `labels.title` only.

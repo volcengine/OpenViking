@@ -117,10 +117,16 @@ pub enum SnapshotShowResult {
     },
 }
 
+/// A Compile submission returns either an immediate task or saved target scheduling settings.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompileAccepted {
-    pub task_id: String,
+    /// Present only when this request submits an immediate Compile task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub status: String,
+    /// The saved schedule's next ISO 8601 trigger time; null when scheduling is disabled.
+    #[serde(default)]
+    pub next_run_at: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
     #[serde(default)]
@@ -415,7 +421,7 @@ impl HttpClient {
             body["acl"] = acl;
         }
         // Omit the default so the request stays valid for servers without edit_source.
-        if edit_source != "agent" {
+        if edit_source != "manual" {
             body["edit_source"] = Value::from(edit_source);
         }
         self.post("/api/v1/content/write", &body).await
@@ -3069,7 +3075,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_create_deserializes_http_202_body() {
+    async fn compile_create_deserializes_task_and_schedule_responses() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind");
@@ -3114,7 +3120,23 @@ mod tests {
             )
             .await
             .expect("202 response body should deserialize");
-        assert_eq!(accepted.task_id, "cmp_1");
+        assert_eq!(accepted.task_id.as_deref(), Some("cmp_1"));
+
+        let scheduled: super::CompileAccepted = serde_json::from_value(serde_json::json!({
+            "to": "viking://resources/wiki",
+            "status": "active",
+            "auto_update": true,
+            "next_run_at": "2026-10-26T00:00:00+08:00"
+        }))
+        .expect("saved Compile schedules should deserialize without a task");
+        assert!(scheduled.task_id.is_none());
+        assert_eq!(
+            scheduled.next_run_at.as_deref(),
+            Some("2026-10-26T00:00:00+08:00")
+        );
+        let output = serde_json::to_value(scheduled).expect("schedule output should serialize");
+        assert!(output.get("task_id").is_none());
+        assert_eq!(output["next_run_at"], "2026-10-26T00:00:00+08:00");
     }
 
     #[tokio::test]

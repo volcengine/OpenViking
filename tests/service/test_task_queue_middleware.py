@@ -167,6 +167,39 @@ async def test_enqueue_failure_records_failed_work(tracked_queue):
     assert task.error == "write failed"
 
 
+@pytest.mark.parametrize("state", [WorkState.PENDING, WorkState.RUNNING])
+@pytest.mark.parametrize("failure", [OSError("write failed"), asyncio.CancelledError()])
+async def test_failed_replacement_enqueue_preserves_existing_work(tracked_queue, state, failure):
+    queue, tracker, transport = tracked_queue
+    message = await enqueue_task(queue, tracker, transport)
+    metadata = extract_task_metadata(message)
+    if state is WorkState.RUNNING:
+        await tracker.start_work("task-1", metadata.work_id, **OWNER)
+    transport.write.side_effect = failure
+    enqueued_work = []
+
+    with (
+        bind_task_context("task-1", "account", "user", enqueued_work=enqueued_work),
+        pytest.raises(type(failure)),
+    ):
+        await queue.enqueue(json.loads(message["data"]))
+
+    assert await tracker.get_work_state("task-1", metadata.work_id, **OWNER) is state
+    assert (await tracker.get("task-1", **OWNER)).status is TaskStatus.RUNNING
+    assert enqueued_work == []
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            await tracker.complete("task-1", {"recovered": True}, **OWNER)
+            return ProcessResult.success({"recovered": True})
+
+    queue.set_dequeue_handler(Handler())
+    result = await queue.process_dequeued(message)
+    assert result.value == {"recovered": True}
+    assert await tracker.get_work_state("task-1", metadata.work_id, **OWNER) is WorkState.DONE
+    assert (await tracker.get("task-1", **OWNER)).status is TaskStatus.COMPLETED
+
+
 async def test_cancelled_enqueue_discards_uncommitted_work(tracked_queue):
     queue, tracker, transport = tracked_queue
     await create_task(tracker)
