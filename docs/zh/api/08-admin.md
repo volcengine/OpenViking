@@ -951,10 +951,6 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 展开。两处都未设置时，该字段为 `null`，由添加操作采用自身的默认目标规则。
 `add_resource` 的显式 `to` / `parent`、`add_skill` 的显式 `target_uri` 仍然优先。
 
-配置添加位置时校验 URI 格式和个人空间归属，不检查目标目录的写权限；GET/PATCH
-响应也不检查目录写权限。保存配置不会授予资源访问权限，实际调用 `add_resource`
-或 `add_skill` 时仍会校验目标写权限。默认目录不可写不会阻止读取或修改记忆策略、TTL。
-
 ```http
 PATCH /api/v1/admin/accounts/acme/users/alice/settings
 Content-Type: application/json
