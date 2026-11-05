@@ -62,12 +62,6 @@ export interface FileBrowserProps extends Omit<
   'onSelect' | 'children'
 > {
   /**
-   * 请求配置覆盖，逐字段覆盖最近的 Provider。
-   * Request configuration override, applied field by field over the nearest
-   * Provider.
-   */
-  requestOptions?: OvRequestOptions;
-  /**
    * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。
    * The controlled current resource URI. When given, the host owns the current
    * resource and the module only reports switch intent.
@@ -94,4 +88,10 @@ export interface FileBrowserProps extends Omit<
    * Replaceable copy; English by default.
    */
   labels?: FileBrowserLabels;
+  /**
+   * 请求配置覆盖，逐字段覆盖最近的 Provider。
+   * Request configuration override, applied field by field over the nearest
+   * Provider.
+   */
+  requestOptions?: OvRequestOptions;
 }
