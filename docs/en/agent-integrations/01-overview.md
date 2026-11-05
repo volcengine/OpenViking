@@ -19,6 +19,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **VikingBot** | [VikingBot Installation and Configuration](../guides/17-vikingbot.md) — built-in Agent with the `openviking_rule_search` tool (Beta) |
 | **Multiple local coding agents / a desktop UI** | [OpenViking Helper](./14-openviking-helper.md) — visual agent setup, session inspection, and memory management |
 | **Any Agent Plugins 1.0 client** | [Agent Plugins 1.0 Package](./15-agent-plugins.md) — one portable package: `openviking-memory` skill plus the OpenViking MCP tools |
+| **Other Claude Code plugin-compatible clients** | [Install from the OpenViking marketplace](#claude-code-plugin-compatible-clients-install-the-plugin-directly) |
 | **Manus / Claude Desktop / ChatGPT / other MCP clients** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
 | **Chat clients / SDK and API apps / other clients without a plugin** | [OpenViking Gateway](../guides/15-gateway.md) — point any client that takes a base URL and an API key at the gateway; it recalls memory and saves conversations with nothing to install in the client |
 | **ZCode / CodeBuddy Code / AstrBot / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
@@ -27,28 +28,25 @@ Some agents, such as Claude Code, Codex, OpenCode, pi and DSH, can use either th
 
 ## Claude Code plugin-compatible clients: install the plugin directly
 
-Before picking a client-specific page, check whether your client already loads the Claude Code plugin spec. OpenViking publishes its memory plugin through a standard `.claude-plugin/marketplace.json`, and several clients resolve that marketplace with their own plugin commands, so the same plugin installs with no per-client integration work:
+OpenViking publishes `openviking-memory@openviking` through `.claude-plugin/marketplace.json`. For clients with a Claude Code plugin installer, register `volcengine/OpenViking` as a marketplace and install the plugin using the client's commands. Follow the linked client documentation for version requirements and plugin management:
 
-| Client | Claude Code compatibility evidence |
-|--------|------------------------------------|
-| GitHub Copilot | Official docs: looks up `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` |
-| Factory Droid | Official docs: translates Claude layouts; marketplace falls back to `.claude-plugin/marketplace.json` |
-| Qoder | Marketplace resolution falls back to `.claude-plugin/marketplace.json` |
-| Grok Build (xAI) | Official docs: "fully compatible with Claude Code with zero configuration" |
-| CodeBuddy / WorkBuddy (Tencent) | Official docs: `.claude-plugin/` fallback; `${CLAUDE_PLUGIN_ROOT}` aliased |
-| Devin for Terminal | Official changelog: Claude-compatible manifest used when no `.devin-plugin/` is present |
-| MiniMax Code (0.4.0+) | Source: `CLAUDE_MANIFEST_PATH = '.claude-plugin/plugin.json'` |
-| OpenClaw | Official docs: auto-detects Claude bundle layouts |
-| Qwen Code | Source: fetches `.claude-plugin/marketplace.json` on extension install |
-| Oh My Pi | Source: dedicated `claude-plugins` discovery provider |
+| Client documentation | Add marketplace | Install plugin |
+|----------------------|-----------------|----------------|
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing) | `copilot plugin marketplace add volcengine/OpenViking` | `copilot plugin install openviking-memory@openviking` |
+| [Factory Droid](https://docs.factory.com/harness/plugins) | `droid plugin marketplace add volcengine/OpenViking` | `droid plugin install openviking-memory@openviking` |
+| [Qoder CLI](https://docs.qoder.com/cli/plugins-reference) | `qoder plugins marketplace add volcengine/OpenViking` | `qoder plugins install openviking-memory@openviking` |
+| [CodeBuddy CLI](https://www.codebuddy.ai/docs/cli/plugins-reference) | `codebuddy plugin marketplace add volcengine/OpenViking` | `codebuddy plugin install openviking-memory@openviking` |
+| [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/extension/introduction/) | `qwen extensions sources add volcengine/OpenViking` | `qwen extensions install volcengine/OpenViking:openviking-memory` |
+| [Oh My Pi](https://github.com/can1357/oh-my-pi/blob/main/docs/marketplace.md) | `omp plugin marketplace add volcengine/OpenViking` | `omp plugin install openviking-memory@openviking` |
 
-If your client appears above (or its docs mention a Claude Code compatibility layer), add the OpenViking marketplace and install `openviking-memory@openviking` with the client's own plugin command — for example, in GitHub Copilot:
+Qoder's marketplace commands require its marketplace feature to be enabled. For example, the complete GitHub Copilot CLI installation is:
 
 ```bash
 copilot plugin marketplace add volcengine/OpenViking
+copilot plugin install openviking-memory@openviking
 ```
 
-Then install the `openviking-memory` plugin from the `openviking` marketplace using the same plugin command. Only fall back to the client-specific pages above when the host has no Claude Code compatibility layer.
+Configure the server connection as described in [Claude Code manual setup](./02-claude-code.md#install), then start a new client session and check that the plugin's MCP server and lifecycle hooks are active. When the client cannot install this plugin, use its dedicated integration above, [MCP](./06-mcp-clients.md), or the [gateway](../guides/15-gateway.md).
 
 ## Compare integrations side by side
 

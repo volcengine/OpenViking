@@ -19,6 +19,7 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 | **VikingBot** | [VikingBot 安装与配置](../guides/17-vikingbot.md) — 内置 Agent，提供 `openviking_rule_search` 规则搜索工具（Beta） |
 | **多个本地开发 Agent / 希望使用桌面界面** | [OpenViking Helper](./14-openviking-helper.md) — 可视化完成 Agent 接入、会话分析和记忆管理 |
 | **任意支持 Agent Plugins 1.0 的客户端** | [Agent Plugins 1.0 插件包](./15-agent-plugins.md) — 一个可移植的包：`openviking-memory` 技能 + OpenViking MCP 工具 |
+| **其他支持 Claude Code 插件的客户端** | [从 OpenViking 插件市场安装](#支持-claude-code-插件规范的客户端-直接安装插件) |
 | **Manus / Claude Desktop / ChatGPT / 其他 MCP 客户端** | [MCP 客户端](./06-mcp-clients.md) — 任何兼容 MCP 的客户端直接对接内置 `/mcp` 端点 |
 | **聊天客户端 / SDK 与 API 应用 / 其他没有插件的客户端** | [OpenViking 网关](../guides/15-gateway.md) — 能填 Base URL 和 API Key 的客户端都能接入网关，由网关召回记忆、保存对话，客户端里不用装任何东西 |
 | **ZCode / CodeBuddy Code / AstrBot / …** | [社区插件](./08-community-plugins.md) — 社区维护的各运行时集成 |
@@ -27,28 +28,25 @@ Claude Code、Codex、OpenCode、pi、DSH 等 Agent 既能用自己的插件，�
 
 ## 支持 Claude Code 插件规范的客户端：直接安装插件
 
-挑选某个客户端专属页面之前，先检查你的客户端是否已原生加载 Claude Code 插件规范。OpenViking 通过标准的 `.claude-plugin/marketplace.json` 发布记忆插件，不少客户端会用自家插件命令解析这个 marketplace，无需逐家写集成即可安装同一插件：
+OpenViking 通过 `.claude-plugin/marketplace.json` 发布 `openviking-memory@openviking`。使用支持 Claude Code 插件安装的客户端时，将 `volcengine/OpenViking` 添加为插件市场，再使用对应命令安装插件。版本要求和插件管理方式见各客户端的官方文档：
 
-| 客户端 | Claude Code 兼容性证据 |
-|--------|------------------------|
-| GitHub Copilot | 官方文档：会查找 `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` |
-| Factory Droid | 官方文档：翻译 Claude 布局，marketplace 回退读 `.claude-plugin/marketplace.json` |
-| Qoder | marketplace 解析回退到 `.claude-plugin/marketplace.json` |
-| Grok Build（xAI） | 官方文档："fully compatible with Claude Code with zero configuration" |
-| CodeBuddy / WorkBuddy（腾讯） | 官方文档：`.claude-plugin/` 回退；`${CLAUDE_PLUGIN_ROOT}` 为别名 |
-| Devin for Terminal | 官方 changelog：无 `.devin-plugin/` 时使用 Claude 兼容 manifest |
-| MiniMax Code（0.4.0+） | 源码：`CLAUDE_MANIFEST_PATH = '.claude-plugin/plugin.json'` |
-| OpenClaw | 官方文档：auto-detects Claude bundle layouts |
-| Qwen Code | 源码：安装扩展时抓取 `.claude-plugin/marketplace.json` |
-| Oh My Pi | 源码：专门的 `claude-plugins` discovery provider |
+| 客户端文档 | 添加插件市场 | 安装插件 |
+|------------|-------------|----------|
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing) | `copilot plugin marketplace add volcengine/OpenViking` | `copilot plugin install openviking-memory@openviking` |
+| [Factory Droid](https://docs.factory.com/harness/plugins) | `droid plugin marketplace add volcengine/OpenViking` | `droid plugin install openviking-memory@openviking` |
+| [Qoder CLI](https://docs.qoder.com/cli/plugins-reference) | `qoder plugins marketplace add volcengine/OpenViking` | `qoder plugins install openviking-memory@openviking` |
+| [CodeBuddy CLI](https://www.codebuddy.ai/docs/cli/plugins-reference) | `codebuddy plugin marketplace add volcengine/OpenViking` | `codebuddy plugin install openviking-memory@openviking` |
+| [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/extension/introduction/) | `qwen extensions sources add volcengine/OpenViking` | `qwen extensions install volcengine/OpenViking:openviking-memory` |
+| [Oh My Pi](https://github.com/can1357/oh-my-pi/blob/main/docs/marketplace.md) | `omp plugin marketplace add volcengine/OpenViking` | `omp plugin install openviking-memory@openviking` |
 
-如果客户端在上表中（或其文档提到 Claude Code 兼容层），用客户端自己的插件命令添加 OpenViking marketplace 并安装 `openviking-memory@openviking`，例如在 GitHub Copilot 中：
+Qoder 的插件市场命令需要启用对应功能。例如 GitHub Copilot CLI 的完整安装命令为：
 
 ```bash
 copilot plugin marketplace add volcengine/OpenViking
+copilot plugin install openviking-memory@openviking
 ```
 
-然后用同一插件命令安装 `openviking` marketplace 中的 `openviking-memory` 插件。仅当宿主没有 Claude Code 兼容层时，才回退使用上文各客户端专属页面。
+按照 [Claude Code 手动安装说明](./02-claude-code.md#安装)配置服务端连接，启动新的客户端会话，确认插件的 MCP 服务与生命周期 hooks 已启用。客户端无法安装此插件时，使用上方的专属集成、[MCP 接入](./06-mcp-clients.md)或[网关](../guides/15-gateway.md)。
 
 ## 横向对比各集成能力
 

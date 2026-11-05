@@ -438,7 +438,7 @@ python -m pip install --upgrade --force-reinstall openviking
 
 服务端健康检查通过后，还需要给客户端接上自动记忆。不要默认手写一套 MCP + hooks 集成：
 
-1. 先检查用户的客户端是否加载 Claude Code 插件规范（见[选择 Agent 接入方式](../agent-integrations/01-overview.md)中"支持 Claude Code 插件规范的客户端"一节）。若支持，直接用客户端自己的插件命令从 `openviking` marketplace 安装 `openviking-memory@openviking`，无需手动接线。
+1. 查看客户端的插件安装文档，按照[插件市场注册与安装命令](../agent-integrations/01-overview.md#支持-claude-code-插件规范的客户端-直接安装插件)添加 `volcengine/OpenViking`，安装 `openviking-memory@openviking`，配置服务端连接，再在新会话中验证 MCP 服务与生命周期 hooks。
 2. 仅当客户端没有 Claude Code 兼容层时，才按 [Agent 集成](../agent-integrations/01-overview.md)中的对应页面（客户端专属插件、MCP 客户端或网关）手动接入。
 
 ## 其他详细参考
