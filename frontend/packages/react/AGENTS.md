@@ -13,27 +13,9 @@
 
 ## Props 字段顺序
 
-公开 Props 的字段顺序由两条彼此独立的规则共同决定。
+公开 Props 按 必选参数 → 可选参数 → 回调 → 插槽 → 文案 → `requestOptions` 排列，回调一律可选。同一类别内保持逻辑相邻，例如受控值与其回调、初始值与其受控值。
 
-**必选性**：必选字段在前，可选字段在后，让使用者先看到必须提供的内容。
-
-**字段类别**：按 参数 → 回调 → 插槽 → 文案 → `requestOptions` 等低频配置 排列。
-
-两条规则组合时，先按必选性分组，组内再按类别排列。回调一律可选，因此「必选回调」不存在；省略回调表示该交互不启用或不通知，不得设为必选。
-
-```ts
-interface ExampleProps {
-  rows: readonly Row[]; // 必选参数
-  selectedId?: string; // 可选参数
-  onSelect?: (row: Row) => void; // 回调
-  slots?: ExampleSlots; // 插槽
-  labels?: ExampleLabels; // 文案
-  requestOptions?: OvRequestOptions; // 低频配置
-}
-```
-
-- 同一类别内保持逻辑相邻，例如受控值与其回调、初始值与其受控值。
-- 该顺序由 lint 规则 `ov-ui/props-order` 检查，作用于 `packages/react/src/**/types.ts`。
+由 lint 规则 `ov-ui/props-order` 检查，作用于 `packages/react/src/**/types.ts`。
 
 ## useEffect 使用门槛
 

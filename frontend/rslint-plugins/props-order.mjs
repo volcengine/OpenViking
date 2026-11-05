@@ -6,10 +6,18 @@
  * - 字段类别：参数 → 回调 → 插槽 → 文案 → 低频配置。
  *
  * 先按必选性分组，组内再按类别排列。回调一律可选，因此「必选回调」本身即违规。
+ *
+ * 回调按类型判定：函数类型的字段是回调，与命名无关。`onXxx` 上报意图、
+ * `renderXxx` 返回节点、`getXxx` 取值都属于回调；`disableXxx` 这类布尔开关是
+ * 参数。
  */
 
-/** 低频配置字段，永远排在最后。 */
-const TAIL_FIELDS = ['slots', 'labels', 'requestOptions'];
+/** 按名称判定的字段类别。 */
+const NAMED_KINDS = {
+  slots: 'slots',
+  labels: 'labels',
+  requestOptions: 'config',
+};
 
 /** 字段类别，数字越小越靠前。 */
 const KIND = {
@@ -28,26 +36,41 @@ const KIND_NAME = {
   [KIND.config]: 'config',
 };
 
-/** 判断一个字段的类别。 */
-function kindOf(name) {
-  if (name === 'slots') return KIND.slots;
-  if (name === 'labels') return KIND.labels;
-  if (TAIL_FIELDS.includes(name)) return KIND.config;
-  // on* 是事件回调；render* / get* 返回节点或值，同属回调类别。
-  if (/^(on[A-Z]|render[A-Z]|get[A-Z])/.test(name)) return KIND.callback;
-  return KIND.parameter;
+/** 字段的 TypeScript 类型节点。 */
+function typeNodeOf(member) {
+  return member.typeAnnotation?.typeAnnotation;
 }
 
-/** 判断是否是事件回调，用于「回调必须可选」的检查。 */
-function isEventCallback(name) {
-  return /^on[A-Z]/.test(name);
+/** 函数类型（含可选调用的简写）即回调。 */
+function isFunctionType(member) {
+  const type = typeNodeOf(member);
+  if (!type) return false;
+  if (type.type === 'TSFunctionType') return true;
+  // `(x) => void` 与 `new () => T` 都算；交叉类型里含函数也算。
+  if (type.type === 'TSIntersectionType') {
+    return type.types.some((part) => part.type === 'TSFunctionType');
+  }
+  return false;
+}
+
+/** 判断一个字段的类别。 */
+function kindOf(member) {
+  const name = member.key.name;
+  const named = NAMED_KINDS[name];
+  if (named) return KIND[named];
+  if (isFunctionType(member)) return KIND.callback;
+  return KIND.parameter;
 }
 
 /** 按两条规则算出排序键。 */
 function sortKeyOf(member) {
   const optional = member.optional === true;
-  const kind = kindOf(member.key.name);
-  return (optional ? 1 : 0) * 10 + kind;
+  return (optional ? 1 : 0) * 10 + kindOf(member);
+}
+
+function describe(member) {
+  const optional = member.optional === true ? 'optional' : 'required';
+  return `${optional} ${KIND_NAME[kindOf(member)]}`;
 }
 
 const rule = {
@@ -62,7 +85,7 @@ const rule = {
       order:
         'Props field "{{name}}" ({{actual}}) must not follow "{{previous}}" ({{previousDesc}}). Order: required parameters, optional parameters, callbacks, slots, labels, requestOptions.',
       callbackRequired:
-        'Props field "{{name}}" is an event callback and must be optional.',
+        'Props field "{{name}}" is a callback and must be optional.',
     },
   },
 
@@ -83,7 +106,7 @@ const rule = {
         for (const member of members) {
           const name = member.key.name;
 
-          if (isEventCallback(name) && member.optional !== true) {
+          if (isFunctionType(member) && member.optional !== true) {
             context.report({
               node: member,
               messageId: 'callbackRequired',
@@ -110,11 +133,6 @@ const rule = {
     };
   },
 };
-
-function describe(member) {
-  const optional = member.optional === true ? 'optional' : 'required';
-  return `${optional} ${KIND_NAME[kindOf(member.key.name)]}`;
-}
 
 export default {
   meta: { name: 'props-order' },
