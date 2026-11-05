@@ -1471,6 +1471,7 @@ export function FilePreview({
   const [activeDirectoryLevels, setActiveDirectoryLevels] = useState<
     Set<DirectoryLevelId>
   >(new Set(['abstract', 'overview']))
+  const [directoryTab, setDirectoryTab] = useState<DirectoryLevelId>('abstract')
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loadingEditor, setLoadingEditor] = useState(false)
@@ -1499,6 +1500,7 @@ export function FilePreview({
     setSaving(false)
     setEditorContent('')
     setActiveDirectoryLevels(new Set(['abstract', 'overview']))
+    setDirectoryTab('abstract')
   }, [file?.uri])
 
   useEffect(() => {
@@ -1694,9 +1696,16 @@ export function FilePreview({
   const availableDirectoryLevels = directoryPreview.levels.filter(
     (level) => level.document !== null || level.content.trim(),
   )
-  const visibleDirectoryLevels = availableDirectoryLevels.filter((level) =>
-    activeDirectoryLevels.has(level.id),
-  )
+  const activeDirectoryTab =
+    availableDirectoryLevels.find((level) => level.id === directoryTab) ??
+    availableDirectoryLevels.at(0)
+  const visibleDirectoryLevels = ide
+    ? activeDirectoryTab
+      ? [activeDirectoryTab]
+      : []
+    : availableDirectoryLevels.filter((level) =>
+        activeDirectoryLevels.has(level.id),
+      )
   const showHeader = !(hideDirectoryHeader && file.isDir)
   const previewFile = resolvedFile || file
   const sizeLabel = formatSize(previewFile.sizeBytes ?? previewFile.size, {
@@ -1815,6 +1824,22 @@ export function FilePreview({
           : toolbar
         : null}
 
+      {ide && file.isDir && availableDirectoryLevels.length > 0 ? (
+        <div className="flex shrink-0 gap-4 border-b bg-background px-3">
+          {availableDirectoryLevels.map((level) => (
+            <button
+              key={level.id}
+              type="button"
+              aria-pressed={activeDirectoryTab?.id === level.id}
+              className="border-b-2 border-transparent px-1 py-2 text-sm text-muted-foreground aria-pressed:border-foreground aria-pressed:font-medium aria-pressed:text-foreground"
+              onClick={() => setDirectoryTab(level.id)}
+            >
+              {level.name} {t(level.label)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {!editing && markdownMode === 'preview' && previewContent ? (
         <div className="min-h-0 flex-1 overflow-auto p-6">{previewContent}</div>
       ) : editing && preview?.content != null ? (
@@ -1911,7 +1936,13 @@ export function FilePreview({
         </div>
       ) : (
         <ScrollArea className="min-h-0 flex-1">
-          <div className="mx-auto min-h-full w-full max-w-5xl p-4">
+          <div
+            className={
+              ide && file.isDir
+                ? 'min-h-full w-full p-4'
+                : 'mx-auto min-h-full w-full max-w-5xl p-4'
+            }
+          >
             {isMarkdown && !editing && !ide ? (
               <div className="mb-3 inline-flex overflow-hidden rounded-md border">
                 <button
@@ -1933,7 +1964,7 @@ export function FilePreview({
 
             {file.isDir ? (
               <div className="grid gap-4">
-                {availableDirectoryLevels.length > 0 ? (
+                {!ide && availableDirectoryLevels.length > 0 ? (
                   <div className="flex flex-wrap gap-2 border-b pb-3">
                     {availableDirectoryLevels.map((level) => {
                       const active = activeDirectoryLevels.has(level.id)
@@ -1987,15 +2018,19 @@ export function FilePreview({
                     {visibleDirectoryLevels.map((level, index) => (
                       <section key={level.id} className="grid gap-2">
                         {index > 0 ? <div className="border-t" /> : null}
-                        <header className="flex items-center gap-2 text-xs">
-                          <span className="font-mono font-semibold uppercase tracking-wide text-primary">
-                            {level.name}
-                          </span>
-                          <span className="font-medium">{t(level.label)}</span>
-                          <span className="text-muted-foreground">
-                            {t(level.title)}
-                          </span>
-                        </header>
+                        {!ide ? (
+                          <header className="flex items-center gap-2 text-xs">
+                            <span className="font-mono font-semibold uppercase tracking-wide text-primary">
+                              {level.name}
+                            </span>
+                            <span className="font-medium">
+                              {t(level.label)}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {t(level.title)}
+                            </span>
+                          </header>
+                        ) : null}
                         {level.document ? (
                           <OkfMetadataPanel
                             metadata={level.document.metadata}
@@ -2004,7 +2039,9 @@ export function FilePreview({
                           />
                         ) : null}
                         {level.content.trim() ? (
-                          <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
+                          <article
+                            className={`prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20 ${ide ? '' : 'rounded-md border bg-muted/20 p-3'}`}
+                          >
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
                               urlTransform={transformDirectoryMarkdownUrl}

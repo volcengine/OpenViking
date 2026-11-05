@@ -33,13 +33,22 @@ export function WorkbenchDirectory({
   const ownSessionsRoot = `viking://user/${encodeURIComponent(connection.userId)}/sessions`
   const isSessionsRoot = uri.replace(/\/$/, '') === ownSessionsRoot
   const [showFiles, setShowFiles] = useState(false)
-  const sessionId = sessionIdFromDirectory(uri)
+  const sessionId = uri.startsWith(`${ownSessionsRoot}/`)
+    ? sessionIdFromDirectory(uri)
+    : null
   const query = useVikingFsList(uri, {
     output: 'agent',
     showAllHidden: true,
     nodeLimit: 500,
   })
-  if (isExperienceDirectory(uri))
+  const entries = sortTreeEntries(
+    visibleContextEntries(query.data?.entries ?? []),
+  )
+  if (
+    isExperienceDirectory(uri) &&
+    query.isSuccess &&
+    !entries.some((entry) => entry.isDir)
+  )
     return (
       <div className={styles.directory}>
         <AgentExperienceRoute
@@ -63,9 +72,6 @@ export function WorkbenchDirectory({
         </div>
       </div>
     )
-  const entries = sortTreeEntries(
-    visibleContextEntries(query.data?.entries ?? []),
-  )
   return (
     <div className={styles.directory}>
       <div className={styles.directoryHeading}>

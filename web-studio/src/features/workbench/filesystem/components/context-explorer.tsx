@@ -391,12 +391,21 @@ export function ContextTreeNode({
   useEffect(() => {
     if (!isSelected) return
 
-    window.requestAnimationFrame(() => {
-      rowRef.current?.scrollIntoView({
-        block: 'center',
-        inline: 'nearest',
-      })
+    const frame = window.requestAnimationFrame(() => {
+      const row = rowRef.current
+      const tree = row?.closest<HTMLElement>(`.${styles.tree}`)
+      if (!row || !tree) return
+
+      const bounds = row.getBoundingClientRect()
+      const top = tree.getBoundingClientRect().top + tree.clientTop
+      const bottom = top + tree.clientHeight
+      if (bounds.top < top) {
+        tree.scrollTop += bounds.top - top
+      } else if (bounds.bottom > bottom) {
+        tree.scrollTop += bounds.bottom - bottom
+      }
     })
+    return () => window.cancelAnimationFrame(frame)
   }, [entry.uri, isSelected])
 
   const toggle = useCallback(() => {

@@ -82,7 +82,7 @@
 }
 .modelTableGrid {
   display: grid;
-  grid-template-columns: 56px minmax(220px, 1fr) 140px 154px 100px 94px 240px;
+  grid-template-columns: 56px minmax(220px, 1fr) 140px 154px 100px 94px 248px;
   align-items: center;
 }
 .modelTableHeader {
@@ -197,7 +197,6 @@
   align-items: center;
   gap: 12px;
   padding: 0 16px;
-  position: relative;
 }
 .modelRowActions > button {
   padding: 0;
@@ -215,17 +214,24 @@
   color: #ff2458;
 }
 .modelRowActions > .modelRowMore {
-  position: absolute;
-  right: 0;
-  width: 20px;
+  margin-left: auto;
+  width: 24px;
   height: 24px;
   opacity: 0;
-  background: var(--background);
+  pointer-events: none;
+  color: var(--muted-foreground);
 }
 .modelTableRow:hover .modelRowMore,
 .modelRowMore:focus-visible,
 .modelRowMore[aria-expanded='true'] {
   opacity: 1;
+}
+.modelTableRow:hover .modelRowMore:not(:disabled),
+.modelRowMore[aria-expanded='true'] {
+  pointer-events: auto;
+}
+.modelTableRow:hover .modelRowMore:disabled {
+  opacity: 0.4;
 }
 :global(.dark) .modelTableHeader,
 :global(.dark) .modelAddAction {

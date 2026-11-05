@@ -3,7 +3,11 @@ import { useQueryClient } from '@tanstack/react-query'
 import styles from './workbench.module.css'
 import { WorkbenchDirectory } from './components/workbench-directory'
 import { ExperienceDetail } from '#/features/workbench/agent-experience/$experienceUri'
-import { isExperienceFile } from './lib/document-kind'
+import {
+  isExperienceFile,
+  usesWorkbenchDirectoryView,
+} from './lib/document-kind'
+import { useDocumentGuard } from './lib/use-document-guard'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
@@ -148,18 +152,12 @@ function FilesystemWorkbench() {
   const [documentToolbar, setDocumentToolbar] = useState<HTMLDivElement | null>(
     null,
   )
-  const [documentDirty, setDocumentDirty] = useState(false)
-  const dirtyRef = useRef(false)
-  const handleDirtyChange = useCallback((dirty: boolean) => {
-    dirtyRef.current = dirty
-    setDocumentDirty(dirty)
-  }, [])
-  const confirmDocumentNavigation = useCallback(() => {
-    if (dirtyRef.current && !window.confirm(t('ide.discard'))) return false
-    dirtyRef.current = false
-    setDocumentDirty(false)
-    return true
-  }, [t])
+  const {
+    dirty: documentDirty,
+    dirtyRef,
+    onDirtyChange: handleDirtyChange,
+    confirmNavigation: confirmDocumentNavigation,
+  } = useDocumentGuard(selectedFile?.uri, t('ide.discard'))
   useBlocker({
     shouldBlockFn: ({ current, next }) => {
       const previousDocument = current.search as { file?: string; uri?: string }
@@ -330,7 +328,7 @@ function FilesystemWorkbench() {
   const revealResource = useCallback(
     async (rawUri: string) => {
       const cleaned = cleanVikingUri(rawUri)
-      if (!cleaned || !confirmDocumentNavigation()) return
+      if (!cleaned) return
 
       setOpeningUri(cleaned)
       const targetUri = normalizeFilesystemResourceUri(cleaned)
@@ -344,6 +342,7 @@ function FilesystemWorkbench() {
           ? normalizeDirUri(normalized)
           : normalizeDirUri(parentUri(normalized))
 
+        if (!confirmDocumentNavigation(normalized)) return
         setCurrentUri(nextCurrentUri)
         setSelectedFile({
           ...stat,
@@ -359,23 +358,6 @@ function FilesystemWorkbench() {
           uri: nextCurrentUri,
         })
       } catch (error) {
-        const fallbackIsDir = targetUri.endsWith('/')
-        const normalized = fallbackIsDir
-          ? normalizeDirUri(targetUri)
-          : normalizeFileUri(targetUri)
-        const nextCurrentUri = fallbackIsDir
-          ? normalized
-          : normalizeDirUri(parentUri(normalized))
-
-        setCurrentUri(nextCurrentUri)
-        setSelectedFile(null)
-        setExpandedKeys((prev) =>
-          mergeExpanded(prev, getAncestorUris(nextCurrentUri)),
-        )
-        syncSearch({
-          file: undefined,
-          uri: nextCurrentUri,
-        })
         showErrorToast(error, t('readFailed', { uri: cleaned }))
       } finally {
         setOpeningUri(null)
@@ -386,8 +368,8 @@ function FilesystemWorkbench() {
 
   const handleSelectDirectory = useCallback(
     (entry: VikingFsEntry) => {
-      if (!confirmDocumentNavigation()) return
       const normalized = normalizeDirUri(entry.uri)
+      if (!confirmDocumentNavigation(normalized)) return
       setCurrentUri(normalized)
       setSelectedFile({ ...entry, isDir: true, uri: normalized })
       setExpandedKeys((prev) =>
@@ -400,8 +382,11 @@ function FilesystemWorkbench() {
 
   const handleSelectFile = useCallback(
     (entry: VikingFsEntry) => {
-      if (!confirmDocumentNavigation()) return
       const normalized = normalizeFileUri(entry.uri)
+      const targetUri = isDirectoryLevelFile(normalized)
+        ? normalizeDirUri(parentUri(normalized))
+        : normalized
+      if (!confirmDocumentNavigation(targetUri)) return
       if (isDirectoryLevelFile(normalized)) {
         const dirUri = normalizeDirUri(parentUri(normalized))
         setCurrentUri(dirUri)
@@ -450,8 +435,8 @@ function FilesystemWorkbench() {
 
   const handleNavigateDirectory = useCallback(
     (rawUri: string) => {
-      if (!confirmDocumentNavigation()) return
       const normalized = normalizeDirUri(rawUri)
+      if (!confirmDocumentNavigation(normalized)) return
       setCurrentUri(normalized)
       setSelectedFile(createEntryFromUri(normalized, true))
       setExpandedKeys((prev) =>
@@ -830,7 +815,7 @@ function FilesystemWorkbench() {
             ) : null}
           </div>
           <div className="filesystem-preview min-h-0 flex-1">
-            {selectedIsDirectory ? (
+            {selectedIsDirectory && usesWorkbenchDirectoryView(selectedUri) ? (
               <WorkbenchDirectory
                 key={selectedUri}
                 uri={selectedUri}

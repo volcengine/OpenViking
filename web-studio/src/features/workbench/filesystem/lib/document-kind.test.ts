@@ -3,9 +3,22 @@ import {
   isExperienceDirectory,
   isExperienceFile,
   sessionIdFromDirectory,
+  usesWorkbenchDirectoryView,
 } from './document-kind'
 
 describe('IDE document views', () => {
+  it('keeps ordinary directories on the L0/L1 preview path', () => {
+    expect(usesWorkbenchDirectoryView('viking://user/alice/memories/')).toBe(
+      false,
+    )
+    expect(usesWorkbenchDirectoryView('viking://resources/wiki/')).toBe(false)
+    expect(usesWorkbenchDirectoryView('viking://user/alice/sessions/')).toBe(
+      true,
+    )
+    expect(
+      usesWorkbenchDirectoryView('viking://user/alice/memories/experiences/'),
+    ).toBe(true)
+  })
   it('recognizes canonical and peer-scoped experience directories', () => {
     for (const uri of [
       'viking://user/alice/memories/experiences/',

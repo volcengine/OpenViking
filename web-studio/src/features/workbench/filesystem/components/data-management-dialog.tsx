@@ -1,5 +1,5 @@
 import { Loader2Icon, UploadIcon } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -69,7 +69,9 @@ export function DataManagementDialog({
   const controller = useRef(new AbortController())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [commits, setCommits] = useState<SnapshotCommit[] | null>(null)
+  const historyLoading = commits === null && historyError === null
   const [message, setMessage] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [transferTab, setTransferTab] = useState('export')
@@ -77,35 +79,43 @@ export function DataManagementDialog({
     'fail',
   )
 
-  useEffect(() => {
-    const signal = controller.current.signal
-    if (mode === 'history') {
-      void listSnapshots(source, uri, signal)
-        .then((items) => {
-          if (!signal.aborted) setCommits(items)
-        })
-        .catch((cause) => {
-          if (!signal.aborted) setError(errorMessage(cause))
-        })
-    }
-    return () => controller.current.abort()
-  }, [mode, source, uri])
+  const loadHistory = useCallback(
+    async (signal: AbortSignal) => {
+      setHistoryError(null)
+      try {
+        const items = await listSnapshots(source, uri, signal)
+        if (!signal.aborted) setCommits(items)
+      } catch (cause) {
+        if (signal.aborted) return
+        setHistoryError(errorMessage(cause))
+      }
+    },
+    [source, uri],
+  )
 
-  async function run(action: () => Promise<void>) {
+  useEffect(() => {
+    const request = new AbortController()
+    controller.current = request
+    if (mode === 'history') {
+      setCommits(null)
+      void loadHistory(request.signal)
+    }
+    return () => request.abort()
+  }, [mode, loadHistory])
+
+  async function run(action: (signal: AbortSignal) => Promise<void>) {
+    const signal = controller.current.signal
     setBusy(true)
     setError('')
     try {
-      await action()
+      await action(signal)
     } catch (cause) {
-      if (!controller.current.signal.aborted) {
-        setError(errorMessage(cause))
-      }
+      if (!signal.aborted) setError(errorMessage(cause))
     } finally {
-      if (!controller.current.signal.aborted) setBusy(false)
+      if (!signal.aborted) setBusy(false)
     }
   }
 
-  const signal = controller.current.signal
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[90dvh] min-w-0 overflow-x-hidden overflow-y-auto sm:max-w-2xl">
@@ -122,13 +132,14 @@ export function DataManagementDialog({
               className="flex gap-2"
               onSubmit={(event) => {
                 event.preventDefault()
-                if (!message.trim() || busy) return
-                void run(async () => {
+                if (!message.trim() || busy || historyLoading) return
+                void run(async (signal) => {
                   await commitSnapshot(source, uri, message.trim(), signal)
-                  setCommits(await listSnapshots(source, uri, signal))
+                  if (signal.aborted) return
                   setMessage('')
                   onChanged()
                   toast.success(t('snapshotSaved'))
+                  await loadHistory(signal)
                 })
               }}
             >
@@ -140,7 +151,10 @@ export function DataManagementDialog({
                 placeholder={t('message')}
                 value={message}
               />
-              <Button disabled={busy || !message.trim()} type="submit">
+              <Button
+                disabled={busy || historyLoading || !message.trim()}
+                type="submit"
+              >
                 {t('saveSnapshot')}
               </Button>
             </form>
@@ -148,11 +162,15 @@ export function DataManagementDialog({
               {t('snapshotScope')}
             </div>
             {commits === null ? (
-              <p>{t('loading')}</p>
+              historyError !== null ? null : (
+                <p role="status">{t('loading')}</p>
+              )
             ) : commits.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('noSnapshots')}
-              </p>
+              historyError === null && (
+                <p className="text-sm text-muted-foreground">
+                  {t('noSnapshots')}
+                </p>
+              )
             ) : (
               <ul className="max-h-56 space-y-2 overflow-y-auto">
                 {commits.map((commit) => (
@@ -174,6 +192,13 @@ export function DataManagementDialog({
                   </li>
                 ))}
               </ul>
+            )}
+            {historyError !== null && (
+              <p role="alert" className="break-words text-sm text-destructive">
+                {historyError.includes('snapshot log scan limit exceeded:')
+                  ? t('historyScanLimit')
+                  : historyError || t('historyLoadFailed')}
+              </p>
             )}
             {!isDirectory && commits && commits.length > 0 && (
               <div className="flex justify-end">
@@ -213,7 +238,7 @@ export function DataManagementDialog({
               <Button
                 disabled={busy || !isDirectory}
                 onClick={() =>
-                  void run(async () => {
+                  void run(async (signal) => {
                     const blob = await exportOvpack(source, uri, signal)
                     if (signal.aborted) return
                     downloadBlob(blob, uri)
@@ -302,7 +327,7 @@ export function DataManagementDialog({
                 disabled={busy || !isDirectory || !file}
                 aria-busy={busy}
                 onClick={() =>
-                  void run(async () => {
+                  void run(async (signal) => {
                     if (!file) return
                     await importOvpack(source, uri, file, conflict, signal)
                     if (signal.aborted) return
