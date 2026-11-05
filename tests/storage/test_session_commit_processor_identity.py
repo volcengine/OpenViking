@@ -8,6 +8,7 @@ worker binds the committing account/user (so tokens are not attributed to
 "__unknown__") and resets the context afterwards.
 """
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -17,6 +18,7 @@ import pytest
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
 from openviking.session.session import Session
+from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
@@ -97,11 +99,19 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
         lambda: _QueueManager(),
     )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-
-    result = await processor._process(_make_msg(), ctx)
-
-    assert result is False
-    assert queued == [("SessionCommit", _make_msg().to_dict())]
+    wait = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.sleep", wait, raising=False
+    )
+    message = _make_msg()
+    for _ in range(8):
+        assert await processor._process(message, ctx) is False
+        message = SessionCommitMsg.from_dict(queued[-1][1])
+    assert [call.args[0] for call in wait.call_args_list] == [1, 2, 4, 8, 16, 30, 30, 30]
+    assert all(name == "SessionCommit" for name, _ in queued)
+    processor._session_service.session.return_value._processed = True
+    assert await processor._process(message, ctx) is True
+    assert len(queued) == wait.await_count == 8
     assert get_root_observability_context() is None
 
 
@@ -124,3 +134,43 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_returning()
     marker = json.loads(viking_fs.files[marker_uri])
     assert marker["stage"] == "cancelled"
     assert marker["error"] == "session commit cancelled"
+
+
+async def test_deferred_wait_keeps_delivery_on_shutdown_and_allows_other_sessions(monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def wait(_delay):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr("openviking.storage.queuefs.session_commit_processor.sleep", wait)
+    tracker = SimpleNamespace(create=AsyncMock())
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.get_task_tracker", lambda: tracker
+    )
+    blocked = _FakeSession({}, processed=False)
+    ready = _FakeSession({}, processed=True)
+    processor = SessionCommitProcessor(
+        SimpleNamespace(
+            session=lambda ctx, session_id, **kw: blocked if session_id == "sess-1" else ready
+        )
+    )
+    queue = NamedQueue(Mock(), "/queue", "SessionCommit", dequeue_handler=processor)
+    queue._ensure_initialized = AsyncMock()
+    queue._read_queue_message = AsyncMock(
+        return_value={"id": "delivery-1", "data": _make_msg().to_dict()}
+    )
+    queue.ack = AsyncMock()
+    task = asyncio.create_task(queue.dequeue())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        other = _make_msg()
+        other.session_id = "other-session"
+        assert (
+            await processor.on_dequeue({"data": other.to_dict()})
+        ).outcome is ProcessOutcome.SUCCESS
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    queue.ack.assert_not_awaited()

@@ -34,6 +34,8 @@ class SessionCommitMsg:
     # Version 1 snapshots explicitly encode WM. Version 0 (before default-off)
     # omitted true; only queued work, never saved user intent, inherits that value.
     memory_policy_version: int = 1
+    # Persist bounded backoff across deliveries/restarts while a predecessor is pending.
+    predecessor_wait_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
