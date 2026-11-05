@@ -1,5 +1,6 @@
 import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { cn } from '#/shared/lib/utils'
 
@@ -61,11 +62,16 @@ export function HomePage({
   const hasPersonalIdentity =
     connectionRole === 'user' &&
     (serverMode !== 'api_key' || Boolean(connection.apiKey.trim()))
+  const hasWorkspaceUsage =
+    !management &&
+    serverMode === 'api_key' &&
+    connectionRole === 'admin' &&
+    Boolean(connection.apiKey.trim())
   const canQueryMetrics =
     !isConnectionRoleLoading &&
     connectionRole !== 'unknown' &&
     headers !== null &&
-    (management || hasPersonalIdentity)
+    (management || hasPersonalIdentity || hasWorkspaceUsage)
   const metricsScopeKey = {
     scopeKey,
     identity: getMetricsScopeKey(connection, connectionRole, management),
@@ -107,6 +113,9 @@ export function HomePage({
 
   const summary = dashboard.data
   const identityUnavailable = !isConnectionRoleLoading && !canQueryMetrics
+  const hasManagementCredential =
+    serverMode === 'api_key' &&
+    (connectionRole === 'admin' || connectionRole === 'root')
   const metricsUnavailable = identityUnavailable || isDisabledPayload(summary)
   const unavailableMessage = identityUnavailable
     ? headers === null
@@ -129,53 +138,75 @@ export function HomePage({
       )}
     >
       {!management ? (
-        <h1 className="text-xl font-semibold">{t('myUsage')}</h1>
+        <h1 className="text-xl font-semibold">
+          {t(hasWorkspaceUsage ? 'workspaceUsage' : 'myUsage')}
+        </h1>
       ) : null}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-4">
-        <ContextDataPanel
-          data={summary?.context_counts}
-          disabled={metricsUnavailable}
-          disabledMessage={unavailableMessage}
-          isError={dashboard.isError}
-          isLoading={isMetricsLoading}
-          t={t}
-        />
-        <TodayTokensPanel
-          data={summary?.today_tokens}
-          disabled={metricsUnavailable}
-          disabledMessage={unavailableMessage}
-          isError={dashboard.isError}
-          isLoading={isMetricsLoading}
-          t={t}
-        />
-        <TodayRetrievalsPanel
-          data={summary?.today_retrievals}
-          disabled={metricsUnavailable}
-          disabledMessage={unavailableMessage}
-          isError={dashboard.isError}
-          isLoading={isMetricsLoading}
-          t={t}
-        />
-      </div>
+      {!management && identityUnavailable ? (
+        <div className="rounded-[20px] bg-muted/50 p-6 text-sm text-muted-foreground">
+          <p>
+            {hasManagementCredential
+              ? t('personalUsageManagementScope', { userId: connection.userId })
+              : unavailableMessage}
+          </p>
+          {hasManagementCredential ? (
+            <Link
+              to="/admin/dashboard"
+              className="mt-3 inline-block font-medium text-primary hover:underline"
+            >
+              {t('viewWorkspaceUsage')}
+            </Link>
+          ) : null}
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-4">
+            <ContextDataPanel
+              data={summary?.context_counts}
+              disabled={metricsUnavailable}
+              disabledMessage={unavailableMessage}
+              isError={dashboard.isError}
+              isLoading={isMetricsLoading}
+              t={t}
+            />
+            <TodayTokensPanel
+              data={summary?.today_tokens}
+              disabled={metricsUnavailable}
+              disabledMessage={unavailableMessage}
+              isError={dashboard.isError}
+              isLoading={isMetricsLoading}
+              t={t}
+            />
+            <TodayRetrievalsPanel
+              data={summary?.today_retrievals}
+              disabled={metricsUnavailable}
+              disabledMessage={unavailableMessage}
+              isError={dashboard.isError}
+              isLoading={isMetricsLoading}
+              t={t}
+            />
+          </div>
 
-      <TokenTrendPanel
-        showTotal={!management}
-        data={tokenSeries.data}
-        disabled={identityUnavailable}
-        disabledMessage={unavailableMessage}
-        isError={tokenSeries.isError}
-        isLoading={isSeriesLoading}
-        t={t}
-      />
+          <TokenTrendPanel
+            showTotal={!management}
+            data={tokenSeries.data}
+            disabled={identityUnavailable}
+            disabledMessage={unavailableMessage}
+            isError={tokenSeries.isError}
+            isLoading={isSeriesLoading}
+            t={t}
+          />
 
-      <ContextCommitsPanel
-        data={contextCommits.data}
-        disabled={identityUnavailable}
-        disabledMessage={unavailableMessage}
-        isError={contextCommits.isError}
-        isLoading={isCommitsLoading}
-        t={t}
-      />
+          <ContextCommitsPanel
+            data={contextCommits.data}
+            disabled={identityUnavailable}
+            disabledMessage={unavailableMessage}
+            isError={contextCommits.isError}
+            isLoading={isCommitsLoading}
+            t={t}
+          />
+        </>
+      )}
     </div>
   )
 }

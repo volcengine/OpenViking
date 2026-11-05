@@ -87,9 +87,6 @@ const workspace = {
       brand: 'OpenViking',
       open: 'Studio settings',
       settings: 'Settings',
-      defaultEntry: 'Default entry',
-      workbench: 'Workbench',
-      management: 'Administration',
       language: 'Language',
       theme: 'Theme',
       light: 'Light',
@@ -1683,8 +1680,12 @@ const workspace = {
   },
   home: {
     myUsage: 'My usage',
+    workspaceUsage: 'Workspace usage',
     personalUsageAccessRequired:
-      'Connect with a User identity to view personal usage.',
+      'The current connection has no verified User identity for personal usage.',
+    personalUsageManagementScope:
+      'The current user ({{userId}}) is connected with management permissions. The statistics API returns workspace usage for this role, so individual usage is unavailable.',
+    viewWorkspaceUsage: 'View workspace statistics',
     contextCommits: {
       description:
         'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',

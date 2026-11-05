@@ -1,9 +1,4 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import type { StudioMode } from '#/features/connection/lib/studio-mode'
-import {
-  readPreferredMode,
-  savePreferredMode,
-} from '#/features/connection/lib/studio-mode'
 import { cn } from '#/shared/lib/utils'
 import { Link } from '@tanstack/react-router'
 import { Popover, PopoverContent, PopoverTrigger } from '#/shared/ui/popover'
@@ -15,7 +10,6 @@ import {
   LockKeyholeIcon,
   LanguagesIcon,
   MoonIcon,
-  PanelsTopLeftIcon,
   PieChartIcon,
   SettingsIcon,
   ShieldCheckIcon,
@@ -27,7 +21,6 @@ import { useTheme } from 'next-themes'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
-const ENTRY_MODES = ['workbench', 'management'] as const
 const LANGUAGE_OPTIONS = [
   { value: 'zh-CN', label: '中文' },
   { value: 'en', label: 'English' },
@@ -69,10 +62,8 @@ function SettingsAvatar({
 }
 
 export function StudioSettingsMenu({
-  canManage,
   managementMode,
 }: {
-  canManage: boolean
   managementMode: boolean
 }) {
   const { t, i18n } = useTranslation('appShell')
@@ -89,7 +80,6 @@ export function StudioSettingsMenu({
   const activeProfile = profiles.find(
     (profile) => profile.id === activeProfileId,
   )
-  const workbenchKey = activeProfile?.workbenchIdentity?.apiKey
   const userName = connection.userId.trim()
   const showUser =
     !managementMode &&
@@ -113,24 +103,9 @@ export function StudioSettingsMenu({
     serverMode !== 'dev' &&
     Boolean(showUser ? connection.apiKey : connection.adminApiKey)
   const [open, setOpen] = React.useState(false)
-  const [preferredMode, setPreferredMode] = React.useState(() =>
-    readPreferredMode(connection, activeProfileId),
-  )
   const language = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh')
     ? 'zh-CN'
     : 'en'
-  const effectiveDefault =
-    preferredMode !== 'management' &&
-    (connection.apiKey ||
-      workbenchKey ||
-      serverMode === 'trusted' ||
-      serverMode === 'dev')
-      ? 'workbench'
-      : 'management'
-  function chooseDefault(mode: StudioMode) {
-    savePreferredMode(connection, mode, activeProfileId)
-    setPreferredMode(mode)
-  }
   const segmentClass = (active: boolean) =>
     cn(
       'flex min-h-7 items-center justify-center gap-1 rounded-md px-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
@@ -331,41 +306,6 @@ export function StudioSettingsMenu({
                   })}
                 </div>
               </div>
-              {canManage ? (
-                <div className="flex items-center justify-between gap-3 px-3 py-2">
-                  <span className="flex items-center gap-3 text-sm">
-                    <PanelsTopLeftIcon className="size-4 text-muted-foreground" />
-                    {t('studioSettings.defaultEntry')}
-                  </span>
-                  <div
-                    role="group"
-                    aria-label={t('studioSettings.defaultEntry')}
-                    className="flex rounded-lg bg-muted p-0.5"
-                  >
-                    {ENTRY_MODES.map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        aria-pressed={effectiveDefault === mode}
-                        disabled={
-                          mode === 'workbench' &&
-                          !connection.apiKey &&
-                          !workbenchKey &&
-                          serverMode !== 'trusted' &&
-                          serverMode !== 'dev'
-                        }
-                        className={segmentClass(effectiveDefault === mode)}
-                        onClick={() => chooseDefault(mode)}
-                      >
-                        {effectiveDefault === mode ? (
-                          <CheckIcon className="size-3" />
-                        ) : null}
-                        {t(`studioSettings.${mode}`)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
               <Link
                 to={
                   managementMode ? '/admin/connections/new' : '/connections/new'

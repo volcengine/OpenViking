@@ -119,7 +119,6 @@ export function StudioHeader({
         ) : null}
         <StudioSettingsMenu
           key={`${connection.baseUrl}:${connection.accountId}`}
-          canManage={canManage && !isGatewayHost}
           managementMode={managementMode}
         />
       </div>

@@ -85,9 +85,6 @@ const workspace = {
       brand: 'OpenViking',
       open: 'Studio 设置',
       settings: '设置',
-      defaultEntry: '默认入口',
-      workbench: '工作台',
-      management: '管理模式',
       language: '语言',
       theme: '主题',
       light: '浅色',
@@ -1608,7 +1605,11 @@ const workspace = {
   },
   home: {
     myUsage: '我的使用数据',
-    personalUsageAccessRequired: '请使用 User 身份连接后查看个人使用数据。',
+    workspaceUsage: '数据空间用量',
+    personalUsageAccessRequired: '当前连接未识别到可查询个人用量的 User 身份。',
+    personalUsageManagementScope:
+      '当前用户（{{userId}}）使用管理权限连接。统计接口在此权限下返回数据空间用量，暂无法单独查看该用户的用量。',
+    viewWorkspaceUsage: '查看数据空间统计',
     contextCommits: {
       description:
         '按 4 小时聚合资源、技能、会话消息和提交写入，鼠标悬停可查看明细。',
