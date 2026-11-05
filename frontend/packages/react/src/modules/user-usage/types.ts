@@ -67,12 +67,6 @@ export interface UserUsageProps extends Omit<
   'children'
 > {
   /**
-   * 请求配置覆盖，逐字段覆盖最近的 Provider。
-   * Request configuration override, applied field by field over the nearest
-   * Provider.
-   */
-  requestOptions?: OvRequestOptions;
-  /**
    * 统计的起始日期，格式为 `YYYY-MM-DD`（宿主本地时区）。省略时由模块取最近
    * 七天。
    * Start date of the statistics as `YYYY-MM-DD` in the host's local time zone.
@@ -105,4 +99,10 @@ export interface UserUsageProps extends Omit<
    * Replaceable copy; English by default.
    */
   labels?: UserUsageLabels;
+  /**
+   * 请求配置覆盖，逐字段覆盖最近的 Provider。
+   * Request configuration override, applied field by field over the nearest
+   * Provider.
+   */
+  requestOptions?: OvRequestOptions;
 }
