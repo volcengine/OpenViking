@@ -1,6 +1,8 @@
 # AgentConnect
 
-Agent 接入视图。宿主传入页签、当前页签的条目与选中项详情；组件渲染列表与详情，按需复制正文，并上报切换意图。
+English / [中文](README_CN.md)
+
+An agent connection view. The host supplies the tabs, the items of the active tab and the selected item's detail; the component renders the list and the detail, copies the body when asked, and reports switch intent.
 
 ```tsx
 import { AgentConnect } from '@openviking/react/components/agent-connect';
@@ -18,36 +20,36 @@ import '@openviking/react/components/agent-connect/style.css';
 />;
 ```
 
-目录从哪来、正文怎么渲染，都由宿主决定——组件不碰这些。复制正文是组件自己的职责。
+Where the catalog comes from and how the body is rendered are the host's business — the component does not touch them. Copying the body is the component's own job.
 
-## 为什么正文是「宿主给的节点」
+## Why the body is a host-supplied node
 
-接入说明天然是 Markdown 与代码块，且不同宿主的目录来源并不一致：一处从远程 JSON 拉取，另一处可能是本地文件。如果组件自己取数、自己渲染 Markdown，它就必须知道宿主的目录地址、缓存策略与 Markdown 方言，最后和某个文档站绑死。
+Connection instructions are naturally Markdown with code blocks, and hosts do not share one catalog source: one fetches a remote JSON document, another may read local files. If the component fetched the catalog and rendered Markdown itself, it would have to know the host's catalog address, caching strategy and Markdown dialect, and end up tied to one documentation site.
 
-这里反过来：**宿主提供条目与正文，组件只负责排版与上报**。
+This component goes the other way: **the host provides the items and the body, and the component lays them out, copies the body and reports intent.**
 
-- 正文是节点，宿主可以传 Markdown 渲染结果、纯文本或任意组件。
-- 复制用的纯文本与展示用的正文分开：展示可以带格式，复制必须是干净文本。
-- 页签与选中项都是受控的，组件不缓存目录。
+- The body is a node, so the host can pass rendered Markdown, plain text or any component.
+- The plain text for copying is separate from the body used for display: display can be formatted, while copying must be clean text.
+- Tabs and the selected item are controlled; the component caches no catalog.
 
-## 组件负责什么
+## What the component owns
 
-- 渲染页签行与当前页签的高亮。
-- 渲染左侧条目列表：图标、名称、一句话说明与选中态。
-- 渲染右侧详情：标题、图标、说明、标签、正文与复制按钮。
-- 复制：由组件完成，成功后通知已复制的文本。
+- Rendering the tab row and highlighting the active tab.
+- Rendering the left item list: icon, name, one-line summary and selected state.
+- Rendering the right detail: title, icon, description, tags, body and the copy control.
+- Copying: done by the component, notifying the copied text on success.
 
-## 组件不负责什么
+## What the component does not own
 
-- 不请求目录，不渲染 Markdown，不判断某项是否可接入。
-- 不维护页签、选中项与正文——全部受控。
-- 不接管路由与埋点：切换页签与选中条目只上报意图，`onCopy` 只是复制成功后的通知。
-- 不内置任何具体 Agent 的名称或接入方式，条目完全由宿主声明。
+- It does not fetch the catalog, render Markdown or judge whether an item is connectable.
+- It does not own the tabs, the selected item or the body — all controlled.
+- It does not take over routing or analytics: switching tabs and selecting an item report intent, and `onCopy` is only a success notification.
+- It does not embed any specific agent name or access method; items are entirely declared by the host.
 
-## 文档与开发
+## Docs and development
 
-- 属性表与可运行示例见[组件文档](../../../../../docs/docs/en/components/agent-connect.mdx)（[中文](../../../../../docs/docs/zh/components/agent-connect.mdx)）。
-- 开发与构建命令见[前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
-- 独立样式入口 `@openviking/react/components/agent-connect/style.css`，与 JS 入口分离，可按需引入。
+- The props table and runnable examples are in the [component docs](../../../../../docs/docs/en/components/agent-connect.mdx) ([Chinese](../../../../../docs/docs/zh/components/agent-connect.mdx)).
+- Development and build commands are in the [UI workspace README](../../../../../README.md); module conventions are in the [package README](../../../README.md).
+- The standalone stylesheet entry is `@openviking/react/components/agent-connect/style.css`, separate from the JS entry and imported on demand.
 
-当前是占位组件：只渲染固定尺寸的空壳，不消费 props。上述为目标行为。
+This is currently a placeholder component: it renders a fixed-size empty shell and consumes no props. The above describes the target behavior.

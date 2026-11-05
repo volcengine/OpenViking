@@ -1,12 +1,12 @@
 # FilePreview
 
-多格式文件预览。宿主给出内容与文件名，组件负责格式识别、渲染器加载、标题栏、页签、视图切换与编辑。
+English / [中文](README_CN.md)
 
-> **当前是占位实现。** 外壳（页签行、内容区标题行、页签切换、复制、编辑、ref 句柄）
-> 已按最终形态实现，可以直接交互；文件正文尚未接入 FileViewer，文件页签暂以纯文本
-> 降级展示。下文描述的是目标行为。
+Multi-format file preview. The host supplies the content and file name; the component handles format detection, renderer loading, the header, tabs, view switching and editing.
 
-调用方不需要知道这是 Markdown 还是 PDF，也不需要注册渲染器——文件名决定一切：
+> **This is currently a placeholder implementation.** The shell (tab row, content header row, tab switching, copying, editing, the ref handle) is implemented in its final shape and is interactive today; the file body is not yet wired to FileViewer, and file tabs fall back to plain text. The behavior described below is the target.
+
+The caller does not need to know whether this is Markdown or PDF, and does not register renderers — the file name decides everything:
 
 ```tsx
 <FilePreview
@@ -20,51 +20,51 @@
 />
 ```
 
-## 为什么以 FileViewer 为底座
+## Why FileViewer is the foundation
 
-多格式预览的难点不在渲染单个格式，而在格式路由、渲染器按需加载、大文件准入与状态机。这些已经有成熟实现，重写一遍只会得到一份更差的版本。
+The hard part of multi-format preview is not rendering one format but format routing, on-demand renderer loading, large-file admission and the state machine. Those already have mature implementations; rewriting them only produces a worse copy.
 
-因此本组件以 [`@ark-design/ui`](https://www.npmjs.com/package/@ark-design/ui) 的 `FileViewerCore` 作为渲染底座，在它之上补齐 OpenViking 需要的部分：标题行、页签、视图切换、编辑与业务插槽。
+So this component builds on `FileViewerCore` from [`@ark-design/ui`](https://www.npmjs.com/package/@ark-design/ui) and fills in what OpenViking needs on top: header row, tabs, view switching, editing and business slots.
 
-`@ark-design/ui` 是**可选 peer dependency**：只有使用本模块的消费方需要安装，不装时其余模块不受影响。
+`@ark-design/ui` is an **optional peer dependency**: only consumers of this module need to install it, and other modules are unaffected without it.
 
 ```bash
 npm install @ark-design/ui
 ```
 
-内置渲染器覆盖代码、纯文本、JSON、Markdown、HTML、表格、PDF、Word、PowerPoint、音视频、CAD 与 3D 模型。无扩展名的文件按文件名匹配，例如 `Dockerfile` 与 `Makefile`。支持范围固定，不对外开放覆盖。
+The built-in renderers cover code, plain text, JSON, Markdown, HTML, spreadsheets, PDF, Word, PowerPoint, audio and video, CAD and 3D models. Extensionless files match by name, for example `Dockerfile` and `Makefile`. The supported set is fixed and not open to override.
 
-## 内容由页签驱动
+## Content is driven by tabs
 
-预览的内容是页签列表，每个页签的正文有两种来源：
+Preview content is a list of tabs, and each tab's body has one of two sources:
 
-| 类型              | 渲染路径                 | 典型用途                      |
-| ----------------- | ------------------------ | ----------------------------- |
-| `kind: 'file'`    | 经 FileViewer 按格式渲染 | 文件原文、源码、文档          |
-| `kind: 'content'` | 完全由宿主渲染           | 经验看板、wiki 看板、目录摘要 |
+| Kind              | Render path                      | Typical use                                   |
+| ----------------- | -------------------------------- | --------------------------------------------- |
+| `kind: 'file'`    | Rendered by FileViewer by format | File source, code, documents                  |
+| `kind: 'content'` | Fully rendered by the host       | Experience dashboards, wiki boards, summaries |
 
-两类页签共享外壳——页签行、内容区标题行（路径面包屑、复制、权限标记、标题行插槽），差异只在正文怎么来。当前激活哪个页签由组件内部维护，宿主不感知；需要从外部跳转时用 ref 句柄的 `setActiveTab`。
+Both tab kinds share the shell — the tab row and the content header row (path breadcrumb, copy, permission marker, header slots) — and differ only in where the body comes from. The active tab is internal state; the host does not track it, and external jumps use the ref handle's `setActiveTab`.
 
-选中目录时首个页签可以是 L0/L1 摘要这类内容页签，因此组件不假设第一个一定是文件。
+When a directory is selected the first tab may be a content tab such as an L0/L1 summary, so the component never assumes the first tab is a file.
 
-## 状态由组件判定
+## State is decided by the component
 
-加载中、加载失败与格式不支持不通过 props 表达，组件根据内容与文件类型自行判定：没有内容即加载中，内容带错误即失败，文件名没有匹配的渲染器即不支持。三种状态都可以通过插槽换成宿主自己的内容。
+Loading, failure and unsupported format are not expressed through props; the component derives them from the content and file type: no content means loading, content carrying an error means failure, and a file name with no matching renderer means unsupported. All three states can be replaced with host content through slots.
 
-编辑态同理：草稿、保存中与失败提示都在组件内部。宿主通过 `editing.loadContent` 提供完整文本，通过异步 `editing.save` 执行保存；`editing.onSave` 仅在保存成功后通知已保存的文本，失败时保留草稿并显示提示。`editing.onCancel` 在草稿被丢弃后通知，保存成功不触发它。
+Editing works the same way: the draft, the saving state and failure hints are all internal. The host supplies the full text through `editing.loadContent` and performs the save through the async `editing.save`; `editing.onSave` notifies only after a successful save with the saved text, while a failure keeps the draft and shows a hint. `editing.onCancel` notifies after the draft is discarded and does not fire on a successful save.
 
-执行能力与成功通知分开：文件操作由 `operations.openParent`、`operations.download`、`operations.openUri` 提供，成功后才触发对应的 `onOpenParent`、`onDownload`、`onOpenUri`。省略执行方法时该操作不可用，省略通知不影响操作。失败时不触发成功通知。
+Execution capability and success notification are separate: file operations come from `operations.openParent`, `operations.download` and `operations.openUri`, and only after success do `onOpenParent`, `onDownload` and `onOpenUri` fire. Omitting an executor makes that operation unavailable; omitting a notification does not affect it. Nothing fires on failure.
 
-复制由组件完成。`onCopyPath` 与 `onCopyContent` 分别在路径、正文复制成功后通知已复制的值，失败时不触发；省略回调不影响复制。提供路径时显示路径复制按钮，文件页签的正文复制按钮在没有可复制文本时禁用。
+Copying is done by the component. `onCopyPath` and `onCopyContent` notify the copied value after a successful path or body copy and do not fire on failure; omitting them does not disable copying. A path copy control appears when a path is present, and a file tab's body copy control is disabled when there is no copyable text.
 
-## 组件不负责什么
+## What the component does not own
 
-- 不发起业务请求。下载、保存与导航由宿主提供执行能力；成功通知不负责执行这些操作。
-- 不判断谁能看、谁能改——权限标记由宿主渲染后从插槽传入。
-- 不内置业务内容。看板、图谱、摘要都通过页签或插槽注入，组件不知道它们是什么。
+- It makes no business requests. Downloads, saves and navigation are executed by the host; the success notifications do not perform them.
+- It does not judge who may view or edit — permission markers are rendered by the host and passed in through a slot.
+- It embeds no business content. Dashboards, graphs and summaries are injected through tabs or slots, and the component does not know what they are.
 
-## 文档与开发
+## Docs and development
 
-- 属性表与可运行示例见文档站 `Components → FilePreview`（待随实现补充）。
-- 开发与构建命令见[前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
-- 独立样式入口 `@openviking/react/components/file-preview/style.css`，与 JS 入口分离，可按需引入。
+- The props table and runnable examples are in the docs site under `Components → FilePreview` (to be completed alongside the implementation).
+- Development and build commands are in the [UI workspace README](../../../../../README.md); module conventions are in the [package README](../../../README.md).
+- The standalone stylesheet entry `@openviking/react/components/file-preview/style.css` is separate from the JS entry and can be imported on demand.
