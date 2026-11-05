@@ -64,6 +64,7 @@ from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import (
     ConflictError,
@@ -173,6 +174,7 @@ class CompileStore(Protocol):
     async def get_by_to(
         self, account_id: str, to: str, *, include_deleted: bool = False
     ) -> Optional[Dict[str, Any]]: ...
+    async def ancestor_targets(self, account_id: str, uri: str) -> List[Dict[str, Any]]: ...
     def edit(
         self, account_id: str, to: str, *, create: bool = False
     ) -> AsyncContextManager[Dict[str, Any]]: ...
@@ -355,6 +357,26 @@ class CompileStateStore:
         if record is not None and not include_deleted and record.get("status") != "active":
             return None
         return record
+
+    async def ancestor_targets(self, account_id: str, uri: str) -> List[Dict[str, Any]]:
+        """Return all active targets containing ``uri``, nearest target first."""
+        if not uri.startswith("viking://"):
+            return []
+        classification = classify_uri(uri)
+        content_index = classification.content_index
+        if classification.is_system or (
+            content_index is not None
+            and classification.parts[content_index : content_index + 2] == ("memories", "rules")
+        ):
+            return []
+        records = []
+        candidate: Optional[VikingURI] = VikingURI(uri.rstrip("/"))
+        while candidate is not None and candidate.scope:
+            record = await self.get_by_to(account_id, str(candidate))
+            if record is not None:
+                records.append(record)
+            candidate = candidate.parent
+        return records
 
     @asynccontextmanager
     async def edit(
@@ -876,6 +898,7 @@ def new_compile_operation(task: Any, record: Dict[str, Any]) -> Dict[str, Any]:
             "target_base": None,
             "target_head": None,
             "snapshot_committed": False,
+            "graph_requested_snapshot": None,
             "content_changed": False,  # Content changes requiring a finalization timestamp.
             "base": None,
             "head": None,
@@ -1512,7 +1535,12 @@ class CompileLifecycle:
                         run_meta["snapshot_committed"] = True
                         await self._store.put_operation(account_id, target_to, run)
                     head = run_meta["target_head"]
-                    await relations.changed(account_id, target_to, head, operation_id=operation_id)
+                    if run_meta.get("graph_requested_snapshot") != head:
+                        await relations.changed(
+                            account_id, target_to, head, operation_id=operation_id
+                        )
+                        run_meta["graph_requested_snapshot"] = head
+                        await self._store.put_operation(account_id, target_to, run)
                     try:
                         if not await relations.ready(
                             account_id,
@@ -1977,24 +2005,8 @@ class CompileVersions:
         self, account_id: str, uri: str, *, metadata_lease: Any = None
     ) -> Optional[Dict[str, Any]]:
         """Find an active target by URI ancestry; return None when none contains ``uri``."""
-        # Mutation hooks strip trailing slashes from the root URI.
-        if not uri.startswith("viking://"):
-            return None
-        classification = classify_uri(uri)
-        content_index = classification.content_index
-        # System assets and rule memories are outside Compile target ownership.
-        if classification.is_system or (
-            content_index is not None
-            and classification.parts[content_index : content_index + 2] == ("memories", "rules")
-        ):
-            return None
-        candidate: Optional[VikingURI] = VikingURI(uri)
-        while candidate is not None and candidate.scope:
-            record = await self._store.get_by_to(account_id, str(candidate))
-            if record is not None:
-                return record
-            candidate = candidate.parent
-        return None
+        targets = await self._store.ancestor_targets(account_id, uri)
+        return targets[0] if targets else None
 
     async def record_operation(
         self,
@@ -2006,14 +2018,41 @@ class CompileVersions:
         *,
         recursive: bool = False,
     ) -> Any:
+        uris = [normalize_storage_target_uri(uri) for uri in uris]
         relations = getattr(self, "artifact_relations", None)
         if relations is None:
             return await self._record_operation(
                 uris, ctx, operation_type, params, operation, recursive=recursive
             )
-        async with relations.mutation(uris, ctx):
+        if recursive:
+            discovered = await self._store.list_summaries(ctx.account_id)
+            relation_targets = [
+                item["to"]
+                for item in discovered
+                if item.get("status") == "active"
+                and any(uri == "viking://" or overlaps(uri.rstrip("/"), item["to"]) for uri in uris)
+            ]
+            operation_targets = discovered
+        else:
+            ancestors = {}
+            nearest = {}
+            for uri in dict.fromkeys(uris):
+                containing = await self._store.ancestor_targets(ctx.account_id, uri)
+                for record in containing:
+                    ancestors[record["to"]] = record
+                if containing:
+                    nearest[containing[0]["to"]] = summarize(containing[0])
+            operation_targets = list(nearest.values())
+            relation_targets = list(ancestors)
+        async with relations.mutation(uris, ctx, targets=relation_targets, rediscover=recursive):
             return await self._record_operation(
-                uris, ctx, operation_type, params, operation, recursive=recursive
+                uris,
+                ctx,
+                operation_type,
+                params,
+                operation,
+                recursive=recursive,
+                discovered_targets=operation_targets,
             )
 
     async def _record_operation(
@@ -2025,6 +2064,7 @@ class CompileVersions:
         operation: Callable[[], Awaitable[Any]],
         *,
         recursive: bool = False,
+        discovered_targets: Optional[List[Dict[str, Any]]] = None,
     ) -> Any:
         """Execute one call and persist its outcome once per managed target.
 
@@ -2035,7 +2075,9 @@ class CompileVersions:
         entries = []
         created_at = time.time()
         operation_id = make_operation_id(created_at, f"op_{uuid4().hex}")
-        if recursive:
+        if discovered_targets is not None:
+            targets = discovered_targets
+        elif recursive:
             targets = await self._store.list_summaries(ctx.account_id)
         else:
             by_to = {}

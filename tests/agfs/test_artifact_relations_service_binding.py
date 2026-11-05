@@ -210,6 +210,77 @@ async def test_unmanaged_write_does_not_create_graph_snapshot(environment):
 
 
 @pytest.mark.asyncio
+async def test_managed_write_discovers_nested_targets_without_summary_scan(environment):
+    service, fs, ctx = environment
+    nested = ROOT + "/nested"
+    async with service._targets.edit(ctx.account_id, nested, create=True):
+        pass
+    service._targets.list_summaries = AsyncMock(
+        side_effect=AssertionError("Ordinary writes must not enumerate Compile targets")
+    )
+    service._enqueue = AsyncMock()
+
+    await save(service, fs, ctx, {nested + "/page.md": b"page"})
+
+    assert service._enqueue.await_count == 2
+    assert {call.args[1] for call in service._enqueue.await_args_list} == {ROOT, nested}
+
+
+@pytest.mark.asyncio
+async def test_repeated_change_registers_and_enqueues_once(environment):
+    service, fs, ctx = environment
+    await fs.write(ROOT + "/page.md", b"page", ctx)
+    head = (await fs.commit(paths=[ROOT], ctx=ctx, message="snapshot"))["commit_oid"]
+    service._enqueue = AsyncMock()
+
+    await service.changed(ctx.account_id, ROOT, head)
+    state_path = (
+        service.store._directory(ctx.account_id, ROOT)
+        + "/"
+        + (await service._targets.get(ctx.account_id, ROOT))["generation"]
+        + "/artifact_relations_state.json"
+    )
+    first_state = await fs._async_agfs.read(state_path)
+    await service.changed(ctx.account_id, ROOT, head)
+
+    assert service._enqueue.await_count == 1
+    assert await fs._async_agfs.read(state_path) == first_state
+
+
+@pytest.mark.asyncio
+async def test_start_runs_recovery_once(environment):
+    service, _, _ = environment
+    service.recover = AsyncMock()
+
+    await service.start()
+    await service._recovery_task
+    await service.stop()
+
+    service.recover.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recovery_only_reenqueues_existing_queued_state(environment):
+    service, fs, ctx = environment
+    await fs.write(ROOT + "/page.md", b"page", ctx)
+    head = (await fs.commit(paths=[ROOT], ctx=ctx, message="snapshot"))["commit_oid"]
+    await service.changed(ctx.account_id, ROOT, head)
+    state_path = (
+        service.store._directory(ctx.account_id, ROOT)
+        + "/"
+        + (await service._targets.get(ctx.account_id, ROOT))["generation"]
+        + "/artifact_relations_state.json"
+    )
+    first_state = await fs._async_agfs.read(state_path)
+    service._enqueue = AsyncMock()
+
+    await service.recover()
+
+    service._enqueue.assert_awaited_once_with(ctx.account_id, ROOT)
+    assert await fs._async_agfs.read(state_path) == first_state
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("completed_compile", [False, True], ids=["ordinary", "completed-compile"])
 async def test_idle_recovery_reads_status_without_loading_graph(environment, completed_compile):
     service, fs, ctx = environment

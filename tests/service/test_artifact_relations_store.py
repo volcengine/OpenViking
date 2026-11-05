@@ -490,6 +490,20 @@ async def test_repeated_compile_poll_does_not_reset_queued_retry_attempts(backen
 
 
 @pytest.mark.asyncio
+async def test_repeated_request_transition_does_not_rewrite_state(backend):
+    store, _ = stores(backend)
+    state, notify = await store.request_transition(ACCOUNT, TO, "A")
+    path = directory(store, backend) + "/artifact_relations_state.json"
+    first_bytes = backend.files[path]
+
+    repeated, notify_again = await store.request_transition(ACCOUNT, TO, "A")
+
+    assert notify and not notify_again
+    assert repeated.revision == state.revision
+    assert backend.files[path] == first_bytes
+
+
+@pytest.mark.asyncio
 async def test_compile_snapshot_freezes_batch_merges(backend):
     one, _ = stores(backend)
     target = new_record(TO)
@@ -608,6 +622,29 @@ async def test_building_compile_poll_does_not_load_published_graph(backend):
     state, graph = await store.check_compile_wait(ACCOUNT, TO, "B", "op", 300)
 
     assert state.status == "building" and graph is None
+    assert not any(path.endswith("/artifact_relations.json") for path in backend.reads)
+
+
+@pytest.mark.asyncio
+async def test_compile_baseline_does_not_load_unused_published_graph(backend):
+    store, _ = stores(backend)
+    await publish(store)
+    compile_target(backend)
+    await store.merge_sources(
+        ACCOUNT,
+        TO,
+        {PAGE: RelationSource(blob_oid="new", links=[])},
+        parser_version="markdown-v1",
+        compile_operation_id="op",
+    )
+    await store.request(ACCOUNT, TO, "B", compile_operation_id="op")
+    backend.reads.clear()
+
+    state, sources, graph = await store.get_baseline(ACCOUNT, TO)
+
+    assert state.target_snapshot_id == "B"
+    assert sources.compile_operation_id == "op"
+    assert graph is None
     assert not any(path.endswith("/artifact_relations.json") for path in backend.reads)
 
 

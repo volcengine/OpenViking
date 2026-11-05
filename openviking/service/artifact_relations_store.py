@@ -263,8 +263,10 @@ class ArtifactRelationsStore:
         self, account_id: str, to: str
     ) -> tuple[ArtifactRelationsState | None, RelationSources | None, ArtifactRelations | None]:
         async with self._locked(account_id, to) as (directory, ctx, target):
-            state, graph = await self._publication(directory, ctx, target)
+            state, graph = await self._publication(directory, ctx, target, include_graph=False)
             source_dir = directory
+            if state is not None and state.compile_operation_id is None:
+                state, graph = await self._publication(directory, ctx, target)
             if state and not state.compile_operation_id and state.published_build_id:
                 source_dir += "/builds/" + state.published_build_id
             try:
@@ -351,15 +353,15 @@ class ArtifactRelationsStore:
                 candidate.pages = {**sources.pages, **candidate.pages}
             await self._replace(directory, "relation_sources", candidate, ctx)
 
-    async def request(
+    async def request_transition(
         self,
         account_id: str,
         to: str,
         snapshot_id: str,
         *,
         compile_operation_id: str | None = None,
-    ) -> ArtifactRelationsState:
-        """Persist intent; the queue layer must separately ensure reliable notification."""
+    ) -> tuple[ArtifactRelationsState, bool]:
+        """Persist intent and report whether a new queued notification is required."""
         candidate = ArtifactRelationsState(
             status="building",
             phase="queued",
@@ -384,16 +386,17 @@ class ArtifactRelationsStore:
                     and state.target_snapshot_id == snapshot_id
                 )
             ):
-                return state
+                return state, False
             if (
                 state is not None
                 and state.status == "ready"
                 and graph is not None
                 and graph.target_snapshot_id == snapshot_id
             ):
-                state = state.model_copy(update={"compile_operation_id": compile_operation_id})
-                await self._replace(directory, "artifact_relations_state", state, ctx)
-                return state
+                if state.compile_operation_id != compile_operation_id:
+                    state = state.model_copy(update={"compile_operation_id": compile_operation_id})
+                    await self._replace(directory, "artifact_relations_state", state, ctx)
+                return state, False
             if state is not None and state.compile_operation_id == compile_operation_id:
                 if compile_operation_id is not None and state.target_snapshot_id != snapshot_id:
                     raise ArtifactRelationsStoreError(
@@ -404,17 +407,34 @@ class ArtifactRelationsStore:
                     and state.phase == "queued"
                     and state.target_snapshot_id == snapshot_id
                 ):
-                    return state
+                    return state, False
                 if state.status == "building" and state.phase != "queued":
-                    state = state.model_copy(
-                        update={"pending": state.pending or state.target_snapshot_id != snapshot_id}
-                    )
-                    await self._replace(directory, "artifact_relations_state", state, ctx)
-                    return state
+                    pending = state.pending or state.target_snapshot_id != snapshot_id
+                    if pending != state.pending:
+                        state = state.model_copy(update={"pending": pending})
+                        await self._replace(directory, "artifact_relations_state", state, ctx)
+                    return state, False
                 if state.status == "ready" and state.target_snapshot_id == snapshot_id:
-                    return state
+                    return state, False
             await self._replace(directory, "artifact_relations_state", candidate, ctx)
-            return candidate
+            return candidate, True
+
+    async def request(
+        self,
+        account_id: str,
+        to: str,
+        snapshot_id: str,
+        *,
+        compile_operation_id: str | None = None,
+    ) -> ArtifactRelationsState:
+        """Persist intent; retained for callers that do not own queue notification."""
+        state, _ = await self.request_transition(
+            account_id,
+            to,
+            snapshot_id,
+            compile_operation_id=compile_operation_id,
+        )
+        return state
 
     async def claim(self, account_id: str, to: str) -> ArtifactRelationsState:
         """Claim a queued request. Worker execution serialization belongs to the queue layer."""
@@ -467,9 +487,7 @@ class ArtifactRelationsStore:
             self._check_owner(target, claimed.compile_operation_id, claimed.target_generation)
             state, existing = await self._publication(directory, ctx, target)
             if state is not None and state.status == "ready" and existing == graph:
-                await self._discard_compile_sources(
-                    directory, claimed.compile_operation_id, ctx
-                )
+                await self._discard_compile_sources(directory, claimed.compile_operation_id, ctx)
                 return state
             self._check_build(state, claimed)
             publishing = state.model_copy(update={"phase": "publishing"})

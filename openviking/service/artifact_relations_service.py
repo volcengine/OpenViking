@@ -16,7 +16,7 @@ from openviking.service.artifact_relations_store import (
     ArtifactRelationsStore,
     ArtifactRelationsStoreError,
 )
-from openviking.service.compile_targets import commit_snapshot, overlaps, task_ctx
+from openviking.service.compile_targets import commit_snapshot, task_ctx
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.utils.path_safety import normalize_storage_target_uri
@@ -43,18 +43,29 @@ class ArtifactRelationsService(DequeueHandlerBase):
         self._recovery_task = None
 
     async def containing_targets(self, account_id: str, uris: list[str]) -> list[str]:
-        return sorted(
-            item["to"]
-            for item in await self._targets.list_summaries(account_id)
-            if item.get("status") == "active"
-            and any(uri == "viking://" or overlaps(uri.rstrip("/"), item["to"]) for uri in uris)
-        )
+        """Resolve containing targets through direct ancestor state lookups."""
+        targets = {}
+        for uri in dict.fromkeys(uris):
+            if uri == "viking://":
+                for item in await self._targets.list_summaries(account_id):
+                    if item.get("status") == "active":
+                        targets[item["to"]] = None
+                continue
+            for record in await self._targets.ancestor_targets(account_id, uri):
+                targets[record["to"]] = None
+        return sorted(targets)
 
     @asynccontextmanager
-    async def admission(self, account_id: str, uris: list[str]):
+    async def admission(
+        self, account_id: str, uris: list[str], *, targets: list[str] | None = None
+    ):
         """Serialize overlapping modification and Compile ownership transitions."""
         inherited = _admission.get()
-        targets = await self.containing_targets(account_id, uris)
+        targets = (
+            sorted(set(targets))
+            if targets is not None
+            else await self.containing_targets(account_id, uris)
+        )
         if (
             inherited
             and inherited["held"]
@@ -85,6 +96,8 @@ class ArtifactRelationsService(DequeueHandlerBase):
         matched = False
         for to in targets:
             target = await self._targets.get(account_id, to)
+            if target is None or target.get("status") != "active":
+                continue
             operation = target.get("active_operation_id")
             if not operation:
                 continue
@@ -106,9 +119,16 @@ class ArtifactRelationsService(DequeueHandlerBase):
             raise ConflictError("Compile write authorization expired", resource="COMPILE_RUNNING")
 
     @asynccontextmanager
-    async def mutation(self, uris: list[str], ctx):
+    async def mutation(
+        self,
+        uris: list[str],
+        ctx,
+        *,
+        targets: list[str] | None = None,
+        rediscover: bool = False,
+    ):
         uris = [normalize_storage_target_uri(uri) for uri in uris]
-        async with self.admission(ctx.account_id, uris) as targets:
+        async with self.admission(ctx.account_id, uris, targets=targets) as targets:
             scope = _admission.get()
             await self.authorize(ctx.account_id, targets, uris, ctx)
             try:
@@ -116,12 +136,11 @@ class ArtifactRelationsService(DequeueHandlerBase):
             finally:
                 # Includes partial success. A fixed subtree commit also captures
                 # directory-only changes; Worker reads no mutable working bytes.
-                # A directory move may create a Compile target at its new URI.
-                # Include it even though it did not exist when admission began.
-                final_targets = sorted(
-                    set(targets) | set(await self.containing_targets(ctx.account_id, uris))
-                )
-                for to in final_targets:
+                final_targets = set(targets)
+                if rediscover:
+                    # Exact Compile targets may migrate to a move destination.
+                    final_targets.update(await self.containing_targets(ctx.account_id, uris))
+                for to in sorted(final_targets):
                     if to in scope["registered"]:
                         continue
                     target = await self._targets.get(ctx.account_id, to)
@@ -199,12 +218,19 @@ class ArtifactRelationsService(DequeueHandlerBase):
         self, account_id: str, to: str, snapshot_id: str, *, operation_id: str | None = None
     ) -> None:
         """Caller holds modification admission through commit and registration."""
-        async with self._targets.edit(account_id, to) as target:
-            if target.get("active_operation_id") != operation_id:
-                raise ArtifactRelationsStoreError("Compile ownership changed")
-            target["wiki_head"] = snapshot_id
-        await self.store.request(account_id, to, snapshot_id, compile_operation_id=operation_id)
-        await self._enqueue(account_id, to)
+        target = await self._targets.get(account_id, to)
+        if target is None or target.get("active_operation_id") != operation_id:
+            raise ArtifactRelationsStoreError("Compile ownership changed")
+        if target.get("wiki_head") != snapshot_id:
+            async with self._targets.edit(account_id, to) as target:
+                if target.get("active_operation_id") != operation_id:
+                    raise ArtifactRelationsStoreError("Compile ownership changed")
+                target["wiki_head"] = snapshot_id
+        _, notify = await self.store.request_transition(
+            account_id, to, snapshot_id, compile_operation_id=operation_id
+        )
+        if notify:
+            await self._enqueue(account_id, to)
 
     async def ready(
         self,
@@ -335,31 +361,26 @@ class ArtifactRelationsService(DequeueHandlerBase):
                     if not head:
                         continue
                     state = await self.store.get_state(account, to)
-                    if state and state.status == "failed" and state.target_snapshot_id == head:
-                        continue
                     if (
                         state
-                        and state.status == "ready"
+                        and state.status == "building"
+                        and state.phase == "queued"
                         and state.target_snapshot_id == head
-                        and (operation is None or state.compile_operation_id == operation)
+                        and state.compile_operation_id == operation
                     ):
-                        continue
-                    await self.store.request(account, to, head, compile_operation_id=operation)
-                    await self._enqueue(account, to)
+                        await self._enqueue(account, to)
                 except Exception:
                     logger.exception("Artifact relations recovery failed for %s/%s", account, to)
 
     async def start(self) -> None:
         self._manager.get_queue(QUEUE, dequeue_handler=self, allow_create=True)
-        self._recovery_task = asyncio.create_task(self._recover_loop())
+        self._recovery_task = asyncio.create_task(self._recover_once())
 
-    async def _recover_loop(self) -> None:
-        while True:
-            try:
-                await self.recover()
-            except Exception:
-                logger.exception("Artifact relations recovery scan failed")
-            await asyncio.sleep(10)
+    async def _recover_once(self) -> None:
+        try:
+            await self.recover()
+        except Exception:
+            logger.exception("Artifact relations recovery scan failed")
 
     async def stop(self) -> None:
         if self._recovery_task is not None:

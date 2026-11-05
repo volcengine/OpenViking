@@ -34,6 +34,8 @@ async def test_compile_graph_failure_prevents_success_and_blocks_ordinary_edit(
     service.compile.configure_local_backend("http://localhost:1", "")
     observed_wait = []
     spaced_write_status = []
+    changed = AsyncMock(wraps=service.artifact_relations.changed)
+    monkeypatch.setattr(service.artifact_relations, "changed", changed)
 
     async def build(*args):
         task = (
@@ -98,6 +100,7 @@ async def test_compile_graph_failure_prevents_success_and_blocks_ordinary_edit(
     assert task.status == "failed" and "ARTIFACT_RELATIONS_FAILED" in task.error
     assert spaced_write_status == [409]
     assert len(observed_wait) == 3 and set(observed_wait) <= {"pending", "running"}
+    changed.assert_awaited_once()
     record = await service.compile.lifecycle.store.get(ctx.account_id, target)
     assert record["versions_head"] is None and record["active_operation_id"] is None
     response = await client.get("/api/v1/compile/artifact-relations", params={"to": target})
