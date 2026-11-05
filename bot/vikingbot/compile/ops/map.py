@@ -94,18 +94,21 @@ read_skill_resource provides local paths for Skill scripts and their dependencie
 Submit the complete result through emit without extra prose.
 """
 
-_TEXT_SOURCE_SCOPE = """
-## Current text assignment
+_SOURCE_RECORD_SCOPE = """
+## Current source assignment
 
-This call extracts records from the text inputs assigned above. Other source units
-are processed separately and their facts are combined in later steps.
+This call extracts records from the assigned inputs. The processing task above
+defines this job's output; overall deliverable requirements do not expand it.
+Other source units are processed separately. Later steps combine their facts and
+produce the complete deliverables, including any full-document tables and index.
+Do not expand this partial assignment to build those task-wide artifacts.
+
 A cited image URI is a link, not assigned image evidence. Preserve that URI, but
-omit visual values that are unavailable in this assignment. Missing visual values
-do not make the text extraction incomplete and are not contradictory observations.
-Do not recover them by downloading images, inspecting sibling pipeline artifacts,
-or implementing OCR in shell commands. Submit the supported text facts through emit.
-When native image evidence is assigned, read_evidence can deliver it to the model;
-it must not be reconstructed from ASCII pixel dumps.
+omit values that are unavailable in these inputs. Missing values do not make this
+extraction incomplete and are not contradictory observations. Do not recover them
+by downloading unassigned images, inspecting sibling pipeline artifacts or building
+OCR scripts. Use read_evidence to view assigned native images, without reconstructing
+them as ASCII pixel dumps. Submit the supported records through emit.
 """
 
 
@@ -174,12 +177,8 @@ async def map_job(runtime: Pipeline, node, item, *, system: str):
     """Expand one packed Map assignment without a parent agent spawning children."""
     index, records = item
     transform = getattr(runtime.contract, node.task)
-    if (
-        node.source == "sources"
-        and transform.output == "records"
-        and all(runtime.evidence.get(r.record_id, {}).get("media_kind") != "image" for r in records)
-    ):
-        system += _TEXT_SOURCE_SCOPE
+    if node.source == "sources" and transform.output == "records":
+        system += _SOURCE_RECORD_SCOPE
     name = f"{node.name}-{index}"
     return await common.job(
         runtime,
