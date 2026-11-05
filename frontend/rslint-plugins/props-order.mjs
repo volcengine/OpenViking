@@ -7,8 +7,11 @@
  *
  * 先按必选性分组，组内再按类别排列。回调一律可选，因此「必选回调」本身即违规。
  *
- * 回调按类型判定：函数类型的字段是回调，与命名无关。`onXxx` 上报意图、
- * `renderXxx` 返回节点、`getXxx` 取值都属于回调；`disableXxx` 这类布尔开关是
+ * 回调按类型判定，与命名和书写形式无关：
+ * - 函数类型 `(x) => void`、构造函数类型 `new () => T`；
+ * - 指向上述类型的同文件类型别名，允许别名套别名；
+ * - 方法签名 `renderItem(): void` 与交叉类型里的函数成员。
+ * 因此 `onXxx`、`renderXxx`、`getXxx` 都是回调，而 `disableXxx` 这类布尔开关是
  * 参数。
  */
 
@@ -36,41 +39,80 @@ const KIND_NAME = {
   [KIND.config]: 'config',
 };
 
-/** 字段的 TypeScript 类型节点。 */
+/** 从接口成员或方法签名取出类型节点。 */
 function typeNodeOf(member) {
   return member.typeAnnotation?.typeAnnotation;
 }
 
-/** 函数类型（含可选调用的简写）即回调。 */
-function isFunctionType(member) {
-  const type = typeNodeOf(member);
+/**
+ * 判断一个类型节点是否为可调用类型。`aliases` 是本文件的类型别名表，用于把
+ * `type Render = () => void` 这样的引用解析回函数类型。
+ */
+function isCallableType(type, aliases, seen = new Set()) {
   if (!type) return false;
-  if (type.type === 'TSFunctionType') return true;
-  // `(x) => void` 与 `new () => T` 都算；交叉类型里含函数也算。
-  if (type.type === 'TSIntersectionType') {
-    return type.types.some((part) => part.type === 'TSFunctionType');
+
+  switch (type.type) {
+    case 'TSFunctionType':
+    case 'TSConstructorType':
+      return true;
+
+    case 'TSTypeReference': {
+      // 只解析同文件的本地别名；外部类型无法在语法层面判断。
+      if (type.typeName.type !== 'Identifier') return false;
+      const name = type.typeName.name;
+      if (seen.has(name)) return false;
+      const target = aliases.get(name);
+      if (!target) return false;
+      seen.add(name);
+      return isCallableType(target, aliases, seen);
+    }
+
+    case 'TSIntersectionType':
+    case 'TSUnionType':
+      return type.types.some((part) => isCallableType(part, aliases, seen));
+
+    case 'TSParenthesizedType':
+      return isCallableType(type.typeAnnotation, aliases, seen);
+
+    default:
+      return false;
   }
-  return false;
+}
+
+/** 一个字段是否是回调。 */
+function isCallbackMember(member, aliases) {
+  // 方法签名 `renderItem(): void` 等价于函数类型的属性。
+  if (member.type === 'TSMethodSignature') return true;
+  return isCallableType(typeNodeOf(member), aliases);
 }
 
 /** 判断一个字段的类别。 */
-function kindOf(member) {
-  const name = member.key.name;
-  const named = NAMED_KINDS[name];
+function kindOf(member, aliases) {
+  const named = NAMED_KINDS[member.key.name];
   if (named) return KIND[named];
-  if (isFunctionType(member)) return KIND.callback;
+  if (isCallbackMember(member, aliases)) return KIND.callback;
   return KIND.parameter;
 }
 
 /** 按两条规则算出排序键。 */
-function sortKeyOf(member) {
+function sortKeyOf(member, aliases) {
   const optional = member.optional === true;
-  return (optional ? 1 : 0) * 10 + kindOf(member);
+  return (optional ? 1 : 0) * 10 + kindOf(member, aliases);
 }
 
-function describe(member) {
+function describe(member, aliases) {
   const optional = member.optional === true ? 'optional' : 'required';
-  return `${optional} ${KIND_NAME[kindOf(member)]}`;
+  return `${optional} ${KIND_NAME[kindOf(member, aliases)]}`;
+}
+
+/** 取出接口体里的一级字段，含方法签名。 */
+function membersOf(node) {
+  return node.body.body.filter(
+    (member) =>
+      (member.type === 'TSPropertySignature' ||
+        member.type === 'TSMethodSignature') &&
+      member.key.type === 'Identifier',
+  );
 }
 
 const rule = {
@@ -90,23 +132,25 @@ const rule = {
   },
 
   create(context) {
+    // 同文件的类型别名表。Props 通常与别名写在同一个 types.ts 里；跨文件的
+    // 别名无法在语法层面解析。
+    const aliases = new Map();
+
     return {
+      TSTypeAliasDeclaration(node) {
+        aliases.set(node.id.name, node.typeAnnotation);
+      },
+
       TSInterfaceDeclaration(node) {
         // 只检查公开的 Props 接口。
         if (!/Props$/.test(node.id.name)) return;
 
-        const members = node.body.body.filter(
-          (member) =>
-            member.type === 'TSPropertySignature' &&
-            member.key.type === 'Identifier',
-        );
-
         let previous = null;
 
-        for (const member of members) {
+        for (const member of membersOf(node)) {
           const name = member.key.name;
 
-          if (isFunctionType(member) && member.optional !== true) {
+          if (isCallbackMember(member, aliases) && member.optional !== true) {
             context.report({
               node: member,
               messageId: 'callbackRequired',
@@ -114,16 +158,16 @@ const rule = {
             });
           }
 
-          const key = sortKeyOf(member);
+          const key = sortKeyOf(member, aliases);
           if (previous !== null && key < previous.key) {
             context.report({
               node: member,
               messageId: 'order',
               data: {
                 name,
-                actual: describe(member),
+                actual: describe(member, aliases),
                 previous: previous.name,
-                previousDesc: describe(previous.member),
+                previousDesc: describe(previous.member, aliases),
               },
             });
           }
