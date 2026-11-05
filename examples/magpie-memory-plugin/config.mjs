@@ -70,13 +70,15 @@ export async function loadConfig(env = process.env, options = {}) {
   if (!Array.isArray(nativeAgents) || nativeAgents.some((agent) => typeof agent !== "string" || !agent.trim())) {
     throw Object.assign(new Error("OpenViking: invalid"), { code: "invalid" });
   }
-  const captureWithoutSession = options.captureWithoutSession ?? scoped?.captureWithoutSession ?? file.plugin?.captureWithoutSession ?? false;
-  if (typeof captureWithoutSession !== "boolean") {
+  const captureWithoutSession = options.captureWithoutSession ?? scoped?.captureWithoutSession ?? file.plugin?.captureWithoutSession;
+  if (captureWithoutSession != null && typeof captureWithoutSession !== "boolean") {
     throw Object.assign(new Error("OpenViking: invalid"), { code: "invalid" });
   }
   // Host options may tune behavior, never connection credentials or identity.
   const allowed = ["autoRecall", "autoCapture", "mcpEnabled", "recallMaxTokens", "recallContextTimeoutMs"];
   const overrides = Object.fromEntries(Object.entries(options || {}).filter(([key]) => allowed.includes(key)));
+  // Preserve Magpie's strict boolean validation and nullish fallback before resolving the schema default.
+  if (captureWithoutSession != null) overrides.captureWithoutSession = captureWithoutSession;
   const settingsFile = { ...file, plugin: { ...file.plugin, magpie: { ...scoped, ...overrides } } };
   const { settings, configured, sources } = resolveSettings("magpie", { env: {}, cliFile: settingsFile });
   if (!configured.has("mcpEnabled")) settings.mcpEnabled = false;
@@ -98,7 +100,7 @@ export async function loadConfig(env = process.env, options = {}) {
     recallRewrite: normalizeRewriteMode(settings.recallCompress),
     extraHeaders: file.extra_headers || {}, path: files.cliPath,
     explicitMcpOptIn: options.mcpEnabled === true || (options.mcpEnabled === undefined && scoped?.mcpEnabled === true),
-    nativeAgents, captureWithoutSession,
+    nativeAgents,
   };
   for (const knob of KNOBS.filter((knob) => knob.sendOnlyWhenConfigured)) {
     config[`${knob.name}Configured`] = configured.has(knob.name);

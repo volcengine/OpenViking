@@ -57,8 +57,9 @@ test("Magpie applies its defaults without changing shared plugin defaults", asyn
   await f.save({ plugin: { captureWithoutSession: true, magpie: { captureWithoutSession: false } } });
   assert.equal((await loadConfig(f.env)).captureWithoutSession, false);
   assert.equal((await loadConfig(f.env, { captureWithoutSession: true })).captureWithoutSession, true);
-  await f.save({ plugin: { captureWithoutSession: true } });
+  await f.save({ plugin: { captureWithoutSession: true, magpie: { captureWithoutSession: null } } });
   assert.equal((await loadConfig(f.env)).captureWithoutSession, true);
+  assert.equal((await loadConfig(f.env, { captureWithoutSession: false })).captureWithoutSession, false);
   await assert.rejects(loadConfig(f.env, { captureWithoutSession: "true" }), /invalid/);
   await f.save();
   assert.equal((await loadConfig(f.env, { recallContextTimeoutMs: 4500 })).recallContextTimeoutMs, 4500);
