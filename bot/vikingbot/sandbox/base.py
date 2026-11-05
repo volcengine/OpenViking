@@ -225,6 +225,11 @@ class SandboxBackend(ABC):
                 await close()
         return total
 
+    @property
+    def persistent_workspace(self) -> Path | None:
+        """Host directory retaining all workspace files after stop, when guaranteed."""
+        return None
+
     def local_file_path(self, path: str) -> Path | None:
         """Return a safe host path when this sandbox workspace is host-accessible."""
         sandbox_path = self._resolve_path(path)

@@ -22,7 +22,12 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.queue import MessageBus
 from vikingbot.compile import entry, file_ops
 from vikingbot.compile.hashing import content_hash
-from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
+from vikingbot.compile.models import (
+    COMPILE_STAGING_ROOT,
+    CompileFailure,
+    CompileLimits,
+    SanitizedCompileRequest,
+)
 from vikingbot.compile.ops import common
 from vikingbot.compile.ops.common import job, pack, payload
 from vikingbot.compile.ops.reduce import reduce_group, resolve_files
@@ -38,20 +43,79 @@ from vikingbot.compile.results import (
     Record,
     RecordResponse,
 )
+from vikingbot.compile.sandbox import CompileSandboxManager
 from vikingbot.compile.service import BotCompileService, _CompileProvider
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.compile.sources import read_source, split_source
 from vikingbot.config import loader
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import Config, SandboxConfig, SessionKey
 from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
+from vikingbot.sandbox.backends.opensandbox import OpenSandboxBackend
+from vikingbot.sandbox.base import SandboxFileInfo
 from vikingbot.session.manager import SessionManager
 
 from openviking.models.model_error import ModelError, ModelErrorKind
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["managed", "remote", "mismatched_mount", "backup_failure"])
+async def test_compile_cleanup_preserves_evidence_before_releasing_sandbox(
+    tmp_path, monkeypatch, mode
+):
+    workspace = tmp_path / "task"
+    relative = f"{COMPILE_STAGING_ROOT}/sources/evidence.json"
+    saved = workspace / relative
+    saved.parent.mkdir(parents=True)
+    saved.write_bytes(b"already persisted")
+    mounted = workspace if mode == "managed" else tmp_path / "another-mount"
+    backend = OpenSandboxBackend(
+        SandboxConfig.model_validate(
+            {"backends": {"opensandbox": {"managed": mode in {"managed", "mismatched_mount"}}}}
+        ),
+        SessionKey(type="compile", channel_id="test", chat_id="cleanup"),
+        workspace,
+        host_workspace=mounted,
+    )
+    listing = AsyncMock(return_value=[SandboxFileInfo(relative, 15)])
+    reading = AsyncMock(return_value=b"remote evidence")
+    if mode == "managed":
+        listing.side_effect = AssertionError("A mounted workspace needs no remote enumeration")
+    if mode == "backup_failure":
+        reading.side_effect = OSError("remote copy unavailable")
+    monkeypatch.setattr(backend, "list_files", listing)
+    monkeypatch.setattr(backend, "read_file_bytes", reading)
+    manager = create_autospec(CompileSandboxManager, instance=True)
+    manager.get_sandbox.return_value = backend
+    manager.get_workspace_path.return_value = workspace
+    client = create_autospec(VikingClient, instance=True)
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits(cleanup_grace_seconds=2)
+    await service._cleanup_execution_resources(
+        sandbox_manager=manager,
+        session_key=SessionKey(type="compile", channel_id="test", chat_id="cleanup"),
+        client=client,
+        workspace_parent=workspace,
+        preserve_workspace=True,
+    )
+    manager.clear_credentials.assert_awaited_once()
+    client.close.assert_awaited_once()
+    if mode == "backup_failure":
+        manager.cleanup_session.assert_not_awaited()
+        assert saved.read_bytes() == b"already persisted"
+    else:
+        manager.cleanup_session.assert_awaited_once()
+        assert saved.read_bytes() == (
+            b"already persisted" if mode == "managed" else b"remote evidence"
+        )
+    if mode == "managed":
+        listing.assert_not_awaited()
+        reading.assert_not_awaited()
 
 
 class MemoryFiles:
