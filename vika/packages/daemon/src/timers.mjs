@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 const TIMER_ID_PREFIX = 'tm_';
 export const DEFAULT_OCCURRENCE_CHECK_DELAY_MS = 5 * 60 * 1000;
 export const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
+export const OCCURRENCE_CHECK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function number(value) {
   return typeof value === 'bigint' ? Number(value) : value;
@@ -330,8 +331,18 @@ export class TimerRepository {
   nextWakeAtMs() {
     const timer = this.nextActive();
     const check = this.nextOccurrenceCheck();
-    const values = [timer?.nextRunAtMs, check?.nextCheckAtMs].filter((value) => Number.isSafeInteger(value));
+    const values = [timer?.nextRunAtMs, check?.nextCheckAtMs, this.nextOccurrenceCleanupAtMs()].filter((value) => Number.isSafeInteger(value));
     return values.length === 0 ? null : Math.min(...values);
+  }
+
+  nextOccurrenceCleanupAtMs() {
+    const row = this.db.prepare("SELECT MIN(next_check_at_ms) AS next FROM timer_occurrence_checks WHERE status = 'exhausted'").get();
+    return row.next === null ? null : number(row.next) + OCCURRENCE_CHECK_RETENTION_MS + 1;
+  }
+
+  pruneOccurrenceChecks(nowMs) {
+    this.db.prepare("DELETE FROM timer_occurrence_checks WHERE status = 'exhausted' AND next_check_at_ms < ?")
+      .run(nowMs - OCCURRENCE_CHECK_RETENTION_MS);
   }
 
   create({
@@ -547,6 +558,8 @@ export class TimerConnector {
   async fireDueOnce() {
     if (this.repository.needsRefresh) await this.repository.load();
     const nowMs = this.now();
+    const cleanupAtMs = this.repository.nextOccurrenceCleanupAtMs();
+    if (cleanupAtMs !== null && cleanupAtMs <= nowMs) await this.repository.pruneOccurrenceChecks(nowMs);
     const check = this.repository.nextDueOccurrenceCheck(nowMs);
     const timer = this.repository.nextDue(nowMs);
     if (check && (!timer || check.nextCheckAtMs <= timer.nextRunAtMs)) {

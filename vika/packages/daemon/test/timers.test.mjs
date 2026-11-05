@@ -484,7 +484,7 @@ describe('timer MCP tools', () => {
       assert.equal(submitted, 5);
       assert.equal(repository.getOccurrenceCheck(occurrenceId).attempt, 5);
       assert.equal(repository.getOccurrenceCheck(occurrenceId).status, 'exhausted');
-      assert.equal(repository.nextWakeAtMs(), null);
+      assert.equal(repository.nextWakeAtMs(), 1_790_606_300_001);
       assert.equal(await connector.fireDueOnce(), false);
       assert.equal((await call('cancel_timer', { timer_id: 'tm_limit' })).data.cancelled, true);
       assert.equal(repository.getOccurrenceCheck(occurrenceId), null);

@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { MAX_OCCURRENCE_CHECK_ATTEMPTS, TimerSchedule } from './timers.mjs';
+import { MAX_OCCURRENCE_CHECK_ATTEMPTS, OCCURRENCE_CHECK_RETENTION_MS, TimerSchedule } from './timers.mjs';
 
 export class OVTimerRepository {
   constructor(client, instanceId) {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(instanceId)) throw new Error('OV timers require a valid instance id');
     this.client = client;
     const root = client.user ? `viking://user/${client.user}` : 'viking://~';
-    this.uri = `${root}/resources/ld/${instanceId}/timers-state.json`;
+    this.uri = `${root}/resources/vika/${instanceId}/timers-state.json`;
     this.state = { timers: [], timer_occurrence_checks: [] };
     this.needsRefresh = false;
     this.barrier = Promise.resolve();
@@ -33,6 +33,7 @@ export class OVTimerRepository {
         this.needsRefresh = false;
         return this;
       }
+      this.needsRefresh = true;
       throw error;
     }
     try {
@@ -48,29 +49,24 @@ export class OVTimerRepository {
 
   mutate(change) {
     return this.run(async () => {
+      if (this.needsRefresh) await this.readState();
+      const state = structuredClone(this.state);
+      const result = change(state);
+      if (isDeepStrictEqual(state, this.state)) return result;
       let failure;
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (this.needsRefresh) {
-          try { await this.readState(); } catch (error) { failure = error; continue; }
-        }
-        const state = structuredClone(this.state);
-        const result = change(state);
         try {
           await this.client.json('/api/v1/content/write', {
             uri: this.uri, content: JSON.stringify(state), mode: 'replace',
-            wait: false, processing_mode: 'vectors_only',
+            wait: true, processing_mode: 'vectors_only',
           });
           this.state = state;
           return result;
         } catch (error) {
           failure = error;
-          this.needsRefresh = true;
-          try {
-            await this.readState();
-            if (isDeepStrictEqual(this.state, state)) return result;
-          } catch {}
         }
       }
+      this.needsRefresh = true;
       throw failure;
     });
   }
@@ -105,9 +101,22 @@ export class OVTimerRepository {
   }
 
   nextWakeAtMs() {
-    const values = [this.nextActive()?.nextRunAtMs, this.nextOccurrenceCheck()?.nextCheckAtMs]
+    const values = [this.nextActive()?.nextRunAtMs, this.nextOccurrenceCheck()?.nextCheckAtMs, this.nextOccurrenceCleanupAtMs()]
       .filter((value) => Number.isSafeInteger(value));
     return values.length ? Math.min(...values) : null;
+  }
+
+  nextOccurrenceCleanupAtMs() {
+    const values = this.state.timer_occurrence_checks.filter((check) => check.status === 'exhausted')
+      .map((check) => check.nextCheckAtMs + OCCURRENCE_CHECK_RETENTION_MS + 1);
+    return values.length ? Math.min(...values) : null;
+  }
+
+  pruneOccurrenceChecks(nowMs) {
+    return this.mutate((state) => {
+      state.timer_occurrence_checks = state.timer_occurrence_checks.filter((check) =>
+        check.status !== 'exhausted' || check.nextCheckAtMs >= nowMs - OCCURRENCE_CHECK_RETENTION_MS);
+    });
   }
 
   create({ timerId = `tm_${randomUUID().replaceAll('-', '').slice(0, 24)}`, createdAtMs = Date.now(), ...input }) {

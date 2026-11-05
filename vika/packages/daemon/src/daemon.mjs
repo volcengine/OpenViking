@@ -141,7 +141,21 @@ export class PersonalAgentDaemon {
       await this.checkOpenViking(ovClient);
       this.timers = this.config.timerStorage === 'sqlite'
         ? new TimerRepository(this.store.db)
-        : await new OVTimerRepository(ovClient, this.config.instanceId).load();
+        : new OVTimerRepository(ovClient, this.config.instanceId);
+      if (this.config.timerStorage !== 'sqlite') {
+        try {
+          await this.timers.load();
+        } catch (error) {
+          const status = error.httpStatus;
+          if (!(error instanceof OVUnavailableError)
+            || (status >= 400 && status < 500 && status !== 408 && status !== 429)) throw error;
+          this.logger.warn('timer_storage_unavailable_at_startup', { error: safeError(error) });
+          this.recordSystemActivity('system.timers_unavailable', {
+            summary: '定时器暂时不可用：继续收发消息，恢复后自动加载定时器',
+            status: 'DEGRADED',
+          });
+        }
+      }
       this.runMaintenance();
 
       this.connectors = new ConnectorManager(

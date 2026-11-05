@@ -208,6 +208,11 @@ export class ActionService {
       try { validateInput(this.definition(tool).inputSchema, input); } catch (error) { throw blocked('invalid_input', error.message); }
       this.assertAuthority(authority);
       trace.runtime = this.store.getCognitionState().runtime;
+      if (tool.timer && this.timers.needsRefresh) {
+        try { await this.timers.load(); } catch {
+          throw blocked('timer_unavailable', 'Timer state is temporarily unavailable. Try again after OpenViking recovers.');
+        }
+      }
       let result = await this[HANDLERS[name]](input, caller);
       // Only a call that changed nothing says STOP: a success after a refused
       // attempt (decision_ambiguous fixed with decision_instance) is a fix.

@@ -25,6 +25,96 @@ async function setup(context) {
 }
 
 describe('OV timer storage', () => {
+  it('loads existing timers from the vika namespace', async (context) => {
+    const server = await fakeOV(context);
+    const client = new OVConnection({ url: server.url, user: 'alice' });
+    server.state.files.set('viking://user/alice/resources/vika/primary/timers-state.json', JSON.stringify({
+      timers: [{ ...input, runCount: 0, lastRunAtMs: null }], timer_occurrence_checks: [],
+    }));
+    const repository = await new OVTimerRepository(client, 'primary').load();
+    assert.equal(repository.get(input.timerId)?.title, 'Reminder');
+  });
+
+  it('waits for indexing before consecutive writes and immediate completion', async (context) => {
+    const { client, repository } = await setup(context);
+    const json = client.json.bind(client);
+    let locked = false;
+    client.json = async (route, body) => {
+      if (!body) return json(route);
+      if (locked) throw new Error('File is locked by indexing');
+      const result = await json(route, body);
+      locked = true;
+      const indexed = new Promise((resolve) => setTimeout(() => { locked = false; resolve(); }, 20));
+      if (body.wait) await indexed;
+      return result;
+    };
+    await Promise.all([
+      repository.create(input),
+      repository.create({ ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' }),
+    ]);
+    const connector = new TimerConnector({
+      repository, now: () => nowMs, autoStart: false, submitEvent: async () => {},
+    });
+    await connector.fireDueOnce();
+    const occurrenceId = 'tm_test:1790000000000';
+    await repository.markOccurrenceCompleted(occurrenceId);
+    const restored = await new OVTimerRepository(client, 'primary').load();
+    assert.equal(restored.get(input.timerId).runCount, 1);
+    assert.equal(restored.getOccurrenceCheck(occurrenceId).status, 'completed');
+    assert.equal(restored.listActive().length, 2);
+  });
+
+  it('does not write when timer or check state is unchanged', async (context) => {
+    const { repository, state } = await setup(context);
+    await repository.create(input);
+    const occurrence = {
+      occurrenceId: 'tm_test:1790000000000', eventId: 'timer:test', nextCheckAtMs: nowMs, event: {},
+    };
+    await repository.createOccurrenceCheck(occurrence);
+    await repository.markOccurrenceCompleted(occurrence.occurrenceId);
+    state.requests.length = 0;
+    await repository.create(input);
+    await repository.createOccurrenceCheck(occurrence);
+    await repository.createOccurrenceCheck({ ...occurrence, timer: { ...input, nextRunAtMs: nowMs - 1 } });
+    await repository.cancel('tm_missing');
+    await repository.markOccurrenceCompleted(occurrence.occurrenceId);
+    await repository.rescheduleOccurrenceCheck(occurrence.occurrenceId, { attempt: 1, nextCheckAtMs: nowMs + 300_000 });
+    assert.equal(state.requests.filter((request) => request.route === 'POST /api/v1/content/write').length, 0);
+  });
+
+  it('expires exhausted checks after seven days even without active timers', async (context) => {
+    const { client, repository } = await setup(context);
+    const baseMs = Date.now();
+    const checks = [
+      { occurrenceId: 'tm_old:1', status: 'exhausted', nextCheckAtMs: baseMs - 604_800_001 },
+      { occurrenceId: 'tm_legacy:1', status: 'exhausted', nextCheckAtMs: baseMs - 604_800_001 },
+      { occurrenceId: 'tm_recent:1', status: 'exhausted', nextCheckAtMs: baseMs },
+      { occurrenceId: 'tm_pending:1', status: 'pending', nextCheckAtMs: baseMs + 900_000_000 },
+    ];
+    for (const check of checks) {
+      await repository.createOccurrenceCheck({ ...check, eventId: check.occurrenceId, event: {} });
+    }
+    await repository.mutate((state) => {
+      for (const check of checks) Object.assign(state.timer_occurrence_checks.find((entry) => entry.occurrenceId === check.occurrenceId), check);
+    });
+    assert.ok(repository.nextWakeAtMs() <= baseMs);
+    const connector = new TimerConnector({
+      repository, now: () => baseMs, autoStart: false, submitEvent: async () => assert.fail('No reminder is due'),
+    });
+    await connector.fireDueOnce();
+    let restored = await new OVTimerRepository(client, 'primary').load();
+    assert.equal(restored.getOccurrenceCheck('tm_old:1'), null);
+    assert.equal(restored.getOccurrenceCheck('tm_legacy:1'), null);
+    assert.equal(restored.getOccurrenceCheck('tm_recent:1').status, 'exhausted');
+    assert.equal(restored.getOccurrenceCheck('tm_pending:1').status, 'pending');
+    assert.equal(repository.nextWakeAtMs(), baseMs + 604_800_001);
+    connector.now = () => baseMs + 604_800_001;
+    await connector.fireDueOnce();
+    restored = await new OVTimerRepository(client, 'primary').load();
+    assert.equal(restored.getOccurrenceCheck('tm_recent:1'), null);
+    assert.equal(restored.getOccurrenceCheck('tm_pending:1').status, 'pending');
+  });
+
   it('does not recreate checks when cancellation commits before queued scheduling', async (context) => {
     const { client, repository } = await setup(context);
     await repository.create(input);
@@ -125,7 +215,7 @@ describe('OV timer storage', () => {
   });
 
   for (const operation of ['create', 'cancel']) {
-    it(`confirms ${operation} internally after losing its write response`, async (context) => {
+    it(`retries ${operation} without reading back after losing its write response`, async (context) => {
       const { client, repository, state } = await setup(context);
       if (operation === 'cancel') await repository.create(input);
       const json = client.json.bind(client);
@@ -143,14 +233,14 @@ describe('OV timer storage', () => {
       assert.equal(operation === 'create' ? result.timerId : result, operation === 'create' ? input.timerId : true);
       assert.equal(state.requests.length, requestCount + 2);
       assert.deepEqual(state.requests.slice(requestCount).map((request) => request.route), [
-        'POST /api/v1/content/write', 'GET /api/v1/content/read',
+        'POST /api/v1/content/write', 'POST /api/v1/content/write',
       ]);
       const restored = await new OVTimerRepository(client, 'primary').load();
       assert.equal(Boolean(restored.get(input.timerId)), operation === 'create');
     });
   }
 
-  it('wakes an idle scheduler after internally confirming a create whose response was lost', async (context) => {
+  it('wakes an idle scheduler after retrying a create whose response was lost', async (context) => {
     const { client, repository } = await setup(context);
     const logger = { info() {}, warn() {}, debug() {}, error() {} };
     const store = new Store(':memory:', logger);
@@ -185,6 +275,27 @@ describe('OV timer storage', () => {
     assert.notEqual(connector.timer, null);
     const restored = await new OVTimerRepository(client, 'primary').load();
     assert.deepEqual(restored.listActive().map((timer) => timer.timerId), [result.data.timer_id]);
+  });
+
+  it('reports failure after three lost write responses even when content was saved', async (context) => {
+    const { client, repository, state } = await setup(context);
+    const json = client.json.bind(client);
+    const payloads = [];
+    client.json = async (route, body) => {
+      if (!body) assert.fail('Failed writes must not be confirmed by reading back');
+      payloads.push(body.content);
+      await json(route, body);
+      throw new Error('Write response lost');
+    };
+    state.requests.length = 0;
+    await assert.rejects(repository.create(input), /Write response lost/);
+    assert.equal(payloads.length, 3);
+    assert.equal(new Set(payloads).size, 1);
+    assert.deepEqual(state.requests.map((request) => request.route), [
+      'POST /api/v1/content/write', 'POST /api/v1/content/write', 'POST /api/v1/content/write',
+    ]);
+    assert.equal(repository.get(input.timerId), null);
+    assert.equal(repository.needsRefresh, true);
   });
 
   it('retries an uncommitted write internally and bounds persistent failures', async (context) => {
@@ -343,7 +454,7 @@ describe('OV timer storage', () => {
     state.down = true;
     await assert.rejects(new OVTimerRepository(client, 'primary').load(), /HTTP 503/);
     state.down = false;
-    state.files.set('viking://user/alice/resources/ld/primary/timers-state.json', '{broken');
+    state.files.set('viking://user/alice/resources/vika/primary/timers-state.json', '{broken');
     await assert.rejects(new OVTimerRepository(client, 'primary').load(), /malformed/);
   });
 

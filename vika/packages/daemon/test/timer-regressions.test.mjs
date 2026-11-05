@@ -58,7 +58,7 @@ for (const backend of ['sqlite', 'ov']) {
     const check = state.repository.getOccurrenceCheck(`tm_test:${nowMs}`);
     assert.equal(check.status, 'exhausted');
     assert.equal(check.attempt, 5);
-    assert.equal(state.repository.nextWakeAtMs(), null);
+    assert.equal(state.repository.nextWakeAtMs(), 1_790_606_600_001);
     state.advance();
     assert.equal(await state.connector.fireDueOnce(), false);
     assert.equal(state.events.length, 6);
@@ -67,6 +67,26 @@ for (const backend of ['sqlite', 'ov']) {
     assert.equal(state.repository.getOccurrenceCheck(check.occurrenceId).status, 'completed');
     assert.equal(await state.connector.fireDueOnce(), true);
     assert.equal(state.repository.getOccurrenceCheck(check.occurrenceId), null);
+  });
+
+  it(`${backend} cleans exhausted checks after seven days without submitting events`, async (context) => {
+    const state = await setup(context);
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      state.advance();
+      await state.connector.fireDueOnce();
+    }
+    state.connector.now = () => 1_790_606_600_000;
+    assert.equal(await state.connector.fireDueOnce(), false);
+    assert.equal(state.repository.getOccurrenceCheck('tm_test:1790000000000').status, 'exhausted');
+    state.connector.now = () => 1_790_606_600_001;
+    assert.equal(await state.connector.fireDueOnce(), false);
+    assert.equal(state.repository.getOccurrenceCheck('tm_test:1790000000000'), null);
+    assert.equal(state.repository.nextWakeAtMs(), null);
+    assert.equal(state.events.length, 6);
+    if (backend === 'ov') {
+      const restored = await new OVTimerRepository(state.client, 'primary').load();
+      assert.equal(restored.getOccurrenceCheck('tm_test:1790000000000'), null);
+    }
   });
 
   it(`${backend} finishes from the current check when the original event is absent`, async (context) => {
