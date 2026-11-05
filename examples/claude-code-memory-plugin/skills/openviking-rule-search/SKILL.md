@@ -32,3 +32,8 @@ server-qualified variant; use the exact registered name.
 - Do not omit known facts from `task_context` to force a preferred result.
 - A missing tool or failed request does not mean no Rules apply. Report the unavailable
   check instead of substituting ordinary memory search for Rule search.
+- `delivery.complete=false` means some matched Rules are absent from the inline context.
+  Read omitted compiled Rule URIs or the saved full result in bounded sections before acting.
+  Do not repeat an identical oversized search or treat the delivered subset as a complete check.
+  If the remaining Rules cannot be retrieved, report the incomplete check and pause the action.
+- After context compaction expires older Rule lookups, refresh Rules for the current task.

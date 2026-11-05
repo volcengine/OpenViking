@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+from openviking.utils.rule_delivery import MAX_RULE_RESULT_CHARS, bound_rule_text
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.remote_skills import SkillRuntimeContext
@@ -61,6 +62,14 @@ def _is_tool_result_success(result: Any) -> bool:
 
 def _compact_msg_chars(messages: list[dict]) -> int:
     return sum(len(json.dumps(m, ensure_ascii=False, default=str)) for m in messages)
+
+
+def _is_rule_result(message: dict) -> bool:
+    name = str(message.get("name", ""))
+    return message.get("role") == "tool" and (
+        name in {"rule_search", "openviking_rule_search", "viking_rule_search", "ov_rule_search"}
+        or (name.startswith("mcp_") and name.endswith("_rule_search"))
+    )
 
 
 def _base64_data_url_bytes(url: str) -> int:
@@ -1535,11 +1544,10 @@ class AgentLoop:
         Keeps system messages and the original task, folds older turns into a
         structured summary note (the previous note is reused verbatim, only the
         region since it is summarized), and retains the most recent complete turns.
-        Summaries remain complete; ``budget_chars`` limits retained recent turns,
-        with cuts only between turns. Fixed instructions, summaries, Rule call/result
-        blocks, the latest user message and the newest turn can exceed that budget.
-        Retained turns keep their original order. Summarization failure is handled
-        best effort.
+        Retain the latest Rule lookup with complete blocks within its inline budget.
+        Expired lookups are explicitly marked missing rather than summarized as
+        constraints. Keep call/result pairing and the latest user correction.
+        Refuse an oversized context if fixed instructions alone prevent fitting.
         """
         budget = budget_chars or 240_000
 
@@ -1551,15 +1559,13 @@ class AgentLoop:
         rest = messages[i + 1 :] if task_msg is not None else messages[i:]
 
         blocks = _compact_split_into_blocks(rest)
-        if len(blocks) <= 3:
-            return messages
-        # Rules must stay as complete tool results across compaction. A summary
-        # cannot substitute for their exact conditions and exceptions. Retain
-        # the entire call/result block so provider tool-call pairing stays valid.
+        # Never summarize Rule bodies into replacement constraints. The latest
+        # bounded lookup stays in its original call/result block.
         mandatory_indices: set[int] = set()
         note_indices: set[int] = set()
         previous_summary = ""
         latest_user_idx: int | None = None
+        rule_indices: list[int] = []
         for idx, block in enumerate(blocks):
             message = block[0]
             content = str(message.get("content") or "")
@@ -1569,25 +1575,38 @@ class AgentLoop:
                     previous_summary = _compact_strip_note_header(content)
                     continue
                 latest_user_idx = idx
-            has_rules = any(
-                message.get("role") == "tool"
-                and (
-                    message.get("name")
-                    in {
-                        "rule_search",
-                        "openviking_rule_search",
-                        "viking_rule_search",
-                        "ov_rule_search",
-                    }
-                    or (
-                        str(message.get("name", "")).startswith("mcp_")
-                        and str(message.get("name", "")).endswith("_rule_search")
-                    )
-                )
-                for message in block
-            )
-            if has_rules:
-                mandatory_indices.add(idx)
+            if any(_is_rule_result(message) for message in block):
+                rule_indices.append(idx)
+        expired_rules = set(rule_indices[:-1])
+        if rule_indices:
+            latest_rules = rule_indices[-1]
+            mandatory_indices.add(latest_rules)
+            # Account for JSON escaping (notably newline-heavy results) and for
+            # parallel tool results sharing a single lookup block.
+            rule_count = sum(_is_rule_result(message) for message in blocks[latest_rules])
+            rule_budget = min(MAX_RULE_RESULT_CHARS, max(80, budget // (4 * rule_count)))
+            blocks[latest_rules] = [
+                {
+                    **message,
+                    "content": await self._preview_tool_result(
+                        message["content"],
+                        session_key,
+                        preserve_complete=True,
+                        rule_budget=rule_budget,
+                    ),
+                }
+                if _is_rule_result(message) and isinstance(message.get("content"), str)
+                else message
+                for message in blocks[latest_rules]
+            ]
+        if len(blocks) <= 3 and not expired_rules:
+            bounded = [
+                *system_msgs,
+                *([task_msg] if task_msg is not None else []),
+                *(message for block in blocks for message in block),
+            ]
+            if _compact_msg_chars(bounded) <= budget:
+                return bounded
         # Choose the tail before filtering Rules, so pinning an old Rule cannot
         # reorder recent turns or silently push the latest user out of context.
         turn_indices = [
@@ -1596,15 +1615,17 @@ class AgentLoop:
             if idx not in note_indices and block[0].get("role") != "tool"
         ]
         if not turn_indices:
+            if _compact_msg_chars(messages) > budget:
+                raise ValueError("Context exceeds output budget: fixed instructions cannot fit.")
             return messages
         mandatory_indices.add(turn_indices[-1])
         if latest_user_idx is not None:
             mandatory_indices.add(latest_user_idx)
-        window_indices = turn_indices[-3:]
+        window_indices = [idx for idx in turn_indices[-3:] if idx not in expired_rules]
         to_summarize = [
             message
             for idx in turn_indices[:-3]
-            if idx not in mandatory_indices
+            if idx not in mandatory_indices and idx not in expired_rules
             for message in blocks[idx]
         ]
 
@@ -1641,6 +1662,11 @@ class AgentLoop:
                 new_summary = ""
 
         note_msg = {"role": "user", "content": _compact_build_note(previous_summary, new_summary)}
+        if expired_rules:
+            note_msg["content"] += (
+                "\n\n[Rule history] delivery.complete=false. Older Rule lookups expired; "
+                "refresh applicable Rules before acting on constraints absent from the latest lookup."
+            )
 
         fixed_chars = _compact_msg_chars(system_msgs) + _compact_msg_chars([note_msg])
         fixed_chars += sum(_compact_msg_chars(blocks[idx]) for idx in mandatory_indices)
@@ -1663,6 +1689,11 @@ class AgentLoop:
         out.append(note_msg)
         for idx in sorted(keep_indices):
             out.extend(blocks[idx])
+        if _compact_msg_chars(out) > budget:
+            raise ValueError(
+                "Context exceeds output budget after compaction; fixed instructions, "
+                "latest user input or newest tool turn must be reduced before requesting the model."
+            )
         return out
 
     async def _summarize_compact_chunk(
@@ -1762,13 +1793,15 @@ class AgentLoop:
         session_key: SessionKey,
         *,
         preserve_complete: bool = False,
+        rule_budget: int = MAX_RULE_RESULT_CHARS,
     ) -> Any:
-        """Save text exceeding 8,000 characters and return a bounded head/tail preview.
+        """Save large text and return a bounded preview or complete Rule blocks.
 
         Non-text results pass through. Saving failures are explicit in the preview;
         original tool outcomes still determine success and stop conditions.
         """
-        if preserve_complete or not isinstance(result, str) or len(result) <= 8_000:
+        limit = rule_budget if preserve_complete else 8_000
+        if not isinstance(result, str) or len(result) <= limit:
             return result
         path = f"{TOOL_RESULT_DIRECTORY}/{uuid.uuid4().hex}.txt"
         try:
@@ -1785,6 +1818,8 @@ class AgentLoop:
                 f"{type(exc).__name__}. Only this preview is available; "
                 "retrieve smaller sections from the original source if needed."
             )
+        if preserve_complete:
+            return bound_rule_text(result, rule_budget, notice)
         return f"{result[:4_000]}\n\n[Output truncated. {notice}]\n\n{result[-2_000:]}"
 
     async def _run_agent_loop(
@@ -1916,11 +1951,12 @@ class AgentLoop:
                 active_turn.history_items.extend(accepted_steers)
             steer_memory_events.extend(accepted_steers)
 
-            if context_compact_budget is not None:
+            if context_compact_budget is not None or _compact_msg_chars(messages) > 240_000:
+                budget = context_compact_budget or 240_000
                 current_chars = _compact_msg_chars(messages)
-                if compact_pending or current_chars > context_compact_budget:
+                if compact_pending or current_chars > budget:
                     messages = await self._compact_tool_loop(
-                        messages, session_key, budget_chars=context_compact_budget
+                        messages, session_key, budget_chars=budget
                     )
                     compact_pending = False
                     # Fixed task content can exceed the save threshold; wait for new content.
@@ -1962,6 +1998,9 @@ class AgentLoop:
                 disabled_tools=disabled_tools,
                 skill_runtime=skill_runtime,
             )
+            budget = context_compact_budget or 240_000
+            if _compact_msg_chars(messages) > budget:
+                messages = await self._compact_tool_loop(messages, session_key, budget_chars=budget)
             visible_tool_names = {
                 str(definition.get("function", {}).get("name") or "")
                 for definition in tool_definitions
@@ -2405,6 +2444,11 @@ class AgentLoop:
                         ),
                     }
                 )
+                budget = context_compact_budget or 240_000
+                if _compact_msg_chars(messages) > budget:
+                    messages = await self._compact_tool_loop(
+                        messages, session_key, budget_chars=budget
+                    )
                 (
                     response,
                     _streamed_content,

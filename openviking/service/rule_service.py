@@ -2208,6 +2208,9 @@ existing_rules:
             index
             for index, (rule, score) in enumerate(zip(inputs, scores, strict=True))
             if rule.exception
+            # A zero probability is evidence that the exception does not apply,
+            # including when the caller selects a zero retrieval threshold.
+            and score.exception > 0.0
             and score.exception >= exception_veto_threshold
             and (not rule.applies_when or score.exception > score.applies_when)
         )

@@ -209,6 +209,23 @@ class _ImageRegistry:
         )
 
 
+@pytest.mark.asyncio
+async def test_final_fallback_bounds_context_even_without_compaction_setting(make_loop):
+    provider = _MediaProvider([[_image_call("call-1", "source " * 1_000)]])
+    loop = make_loop(provider=provider, max_iterations=1)
+    task = {"role": "user", "content": "Original task " + "x" * 239_000}
+    final, *_ = await loop._run_agent_loop(
+        messages=[task],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="budget-fallback"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(),
+    )
+    assert final == "done"
+    assert len(provider.calls) == 2
+    assert all(loop_module._compact_msg_chars(messages) <= 240_000 for messages in provider.calls)
+    assert task in provider.calls[-1]
+
+
 class _SteerProvider(LLMProvider):
     def __init__(self):
         super().__init__()

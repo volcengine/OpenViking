@@ -334,8 +334,10 @@ The extension also ships the `openviking-memory`, `openviking-skills`, `ov-exper
 On a server advertising `rule_search`, `openviking_rule_search` takes `task_context`
 and an optional `rule_probability_threshold` (default `0.65`). It returns complete
 compiled Rules for a constraint check before a planned action or response.
-Rule results bypass the ordinary MCP result preview budget so no constraint or exception
-is cut off. Reconnect after a server upgrade to refresh the tools.
+Rule results share the 50 KiB / 2,000-line inline budget. Delivery stops between
+complete Rule blocks so no condition or exception is cut off; omitted Rules are
+explicitly marked with `delivery.complete=false` and a retrieval URI when available.
+Check remaining Rules before acting. Reconnect after a server upgrade to refresh the tools.
 
 The canonical `/viking` command (type `/viking` in pi's chat) displays connection status, session info, how many tools registered — or the handshake error when none did — and accepts `commit` for manual synchronous commit.
 

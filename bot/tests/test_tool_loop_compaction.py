@@ -4,7 +4,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from vikingbot.agent.loop import AgentLoop
+from vikingbot.agent.loop import AgentLoop, _compact_msg_chars
 from vikingbot.config.schema import SessionKey
 from vikingbot.providers.base import LLMProvider, LLMResponse
 
@@ -82,6 +82,7 @@ async def test_compaction_keeps_rule_lookup_after_user_correction(loop, rule_too
 
     assert correction in result
     assert rule_turn[-1] in result
+    assert _compact_msg_chars(result) <= 850
     assert_original_order(messages, result)
     assert result[-1] == rule_turn[-1]
     assert_tool_pairs(result)
@@ -110,7 +111,8 @@ async def test_compaction_preserves_latest_user_when_rules_exceed_budget(
     result = await loop._compact_tool_loop(messages, SESSION, budget_chars=900)
 
     assert correction in result
-    assert rule_turn[-1] in result
+    assert any(m.get("tool_call_id") == "old-rules" for m in result)
+    assert _compact_msg_chars(result) <= 900
     assert result[-1] == messages[-1]
     assert_original_order(messages, result)
     assert_tool_pairs(result)
@@ -132,10 +134,48 @@ async def test_compaction_preserves_entire_parallel_rule_tool_turn(loop):
 
     result = await loop._compact_tool_loop(messages, SESSION, budget_chars=900)
 
-    for message in rule_turn:
-        assert message in result
+    assert rule_turn[0] in result
+    assert read_turn[1] in result
+    assert _compact_msg_chars(result) <= 900
+    assert_tool_pairs(result)
+
+
+@pytest.mark.asyncio
+async def test_repeated_large_rule_queries_fit_budget_after_recompaction(loop):
+    messages = history_prefix()
+    for index in range(6):
+        messages.extend(
+            tool_turn("mcp_openviking_rule_search", f"rules-{index}", "rule\n" * 11_000)
+        )
+    result = await loop._compact_tool_loop(messages, SESSION, budget_chars=240_000)
+    again = await loop._compact_tool_loop(result, SESSION, budget_chars=240_000)
+
+    assert _compact_msg_chars(result) <= 240_000
+    assert _compact_msg_chars(again) <= 240_000
+    assert_tool_pairs(again)
+    assert any("delivery.complete=false" in m.get("content", "") for m in again)
+
+
+@pytest.mark.asyncio
+async def test_short_rule_history_is_also_bounded(loop):
+    messages = [*history_prefix()[:2], *tool_turn("rule_search", "large", "rule\n" * 100_000)]
+    result = await loop._compact_tool_loop(messages, SESSION, budget_chars=240_000)
+    assert _compact_msg_chars(result) <= 240_000
     assert_tool_pairs(result)
     assert_original_order(messages, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_rule", [False, True])
+async def test_compaction_refuses_context_when_fixed_instructions_exceed_budget(loop, with_rule):
+    messages = [
+        {"role": "system", "content": "Mandatory instruction " * 100},
+        {"role": "user", "content": "Keep this correction verbatim."},
+    ]
+    if with_rule:
+        messages.extend(tool_turn("rule_search", "rules", "Complete Rule."))
+    with pytest.raises(ValueError, match="Context exceeds output budget"):
+        await loop._compact_tool_loop(messages, SESSION, budget_chars=900)
 
 
 @pytest.mark.asyncio

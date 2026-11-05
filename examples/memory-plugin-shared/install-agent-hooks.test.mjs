@@ -77,6 +77,49 @@ function runUninstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
+test("Cursor preserves unmanaged and user-modified skills on install and uninstall", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-cursor-ownership-"));
+  const skill = join(home, ".cursor", "skills", "openviking-rule-search");
+  try {
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, "SKILL.md"), "My hand-installed rule workflow.\n");
+    writeFileSync(join(skill, "custom.txt"), "Keep this file.\n");
+    runInstall(home, "cursor");
+    assert.equal(readFileSync(join(skill, "SKILL.md"), "utf8"), "My hand-installed rule workflow.\n");
+    runUninstall(home, "cursor");
+    assert.equal(readFileSync(join(skill, "custom.txt"), "utf8"), "Keep this file.\n");
+
+    rmSync(skill, { recursive: true });
+    runInstall(home, "cursor");
+    const original = readFileSync(join(skill, "SKILL.md"), "utf8");
+    runInstall(home, "cursor");
+    assert.equal(readFileSync(join(skill, "SKILL.md"), "utf8"), original);
+    writeFileSync(join(skill, "SKILL.md"), "My edited managed skill.\n");
+    runInstall(home, "cursor");
+    assert.equal(readFileSync(join(skill, "SKILL.md"), "utf8"), "My edited managed skill.\n");
+    runUninstall(home, "cursor");
+    assert.equal(readFileSync(join(skill, "SKILL.md"), "utf8"), "My edited managed skill.\n");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Cursor preserves a same-named symlink and its target", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-cursor-link-"));
+  try {
+    const target = join(home, "custom-skill");
+    mkdirSync(target);
+    writeFileSync(join(target, "SKILL.md"), "External skill.\n");
+    mkdirSync(join(home, ".cursor", "skills"), { recursive: true });
+    symlinkSync(target, join(home, ".cursor", "skills", "openviking-rule-search"));
+    runInstall(home, "cursor");
+    runUninstall(home, "cursor");
+    assert.equal(readFileSync(join(home, ".cursor", "skills", "openviking-rule-search", "SKILL.md"), "utf8"), "External skill.\n");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("Kimi installs a self-contained native bundle without legacy config edits", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-kimi-hooks-"));
   try {
