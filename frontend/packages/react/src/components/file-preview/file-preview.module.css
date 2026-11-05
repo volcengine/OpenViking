@@ -1,0 +1,292 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.tabRow {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+}
+
+.tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--ov-ui-radius, 6px) var(--ov-ui-radius, 6px) 0 0;
+  background: none;
+  color: var(
+    --ov-ui-text-muted,
+    color-mix(in srgb, currentColor 62%, transparent)
+  );
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab:hover:not(:disabled) {
+  color: inherit;
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.tab[aria-selected='true'] {
+  border-color: var(--ov-ui-border, rgb(0 0 0 / 8%));
+  background: var(--ov-ui-surface, canvas);
+  color: inherit;
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline-offset: -2px;
+}
+
+.tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tabTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iconSlot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--ov-ui-icon, color-mix(in srgb, currentColor 62%, transparent));
+}
+
+.icon {
+  display: block;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+}
+
+.pathRow {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.breadcrumb {
+  min-width: 0;
+  padding: 2px 4px;
+  overflow: hidden;
+  border: none;
+  border-radius: var(--ov-ui-radius, 6px);
+  background: none;
+  color: var(--ov-ui-accent, #2563c5);
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.breadcrumb:disabled {
+  color: inherit;
+  cursor: default;
+}
+
+.breadcrumb:not(:disabled):hover {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.titleExtra {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.headerActions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-radius: var(--ov-ui-radius, 6px);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.action:hover:not(:disabled) {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.actionIcon {
+  display: block;
+}
+
+.button,
+.buttonPrimary {
+  padding: 3px 10px;
+  border-radius: var(--ov-ui-radius, 6px);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button {
+  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  background: none;
+  color: inherit;
+}
+
+.button:hover {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.buttonPrimary {
+  border: 1px solid transparent;
+  background: var(--ov-ui-accent, #2563c5);
+  color: #fff;
+}
+
+.switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--ov-ui-radius, 6px);
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.switchItem {
+  padding: 2px 10px;
+  border: none;
+  border-radius: calc(var(--ov-ui-radius, 6px) - 2px);
+  background: none;
+  color: var(
+    --ov-ui-text-muted,
+    color-mix(in srgb, currentColor 62%, transparent)
+  );
+  font: inherit;
+  cursor: pointer;
+}
+
+.switchItem[data-active] {
+  background: var(--ov-ui-surface, canvas);
+  color: inherit;
+}
+
+.switchItem:focus-visible {
+  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline-offset: -2px;
+}
+
+.extraActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.textBody {
+  padding: 12px;
+}
+
+.pre {
+  margin: 0;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 240px;
+}
+
+.saveError {
+  padding: 8px 12px;
+}
+
+.textarea {
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 0;
+  padding: 12px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: none;
+}
+
+.textarea:focus-visible {
+  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline-offset: -2px;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  padding: 24px;
+}
+
+.muted {
+  color: var(
+    --ov-ui-text-muted,
+    color-mix(in srgb, currentColor 62%, transparent)
+  );
+}

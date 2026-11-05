@@ -1,0 +1,51 @@
+# Icons
+
+File-type icons are available from the public `@openviking/react/icons` entry. They share the workspace's SVG sources and ship with the React package.
+
+## Live example
+
+Use the size controls to resize the five decorative icons. The separate PDF icon demonstrates a meaningful `alt` label at 24 × 24 pixels.
+
+```tsx file="../../_demos/icons-basic.tsx" preview
+
+```
+
+## Available icons
+
+| Export      | File type            |
+| ----------- | -------------------- |
+| `AudioIcon` | Audio                |
+| `PdfIcon`   | PDF                  |
+| `PptIcon`   | Presentation         |
+| `VideoIcon` | Video                |
+| `WordIcon`  | Word-processing file |
+
+## Props
+
+Each component renders an `img` and accepts its standard non-ref props, except `src` and `srcSet`, which are owned by the component.
+
+| Property    | Type               | Default | Description                                    |
+| ----------- | ------------------ | ------- | ---------------------------------------------- |
+| `width`     | `number \| string` | `16`    | Image width.                                   |
+| `height`    | `number \| string` | `16`    | Image height.                                  |
+| `alt`       | `string`           | `''`    | Accessible description; empty for decoration.  |
+| `className` | `string`           | —       | Adds a class to the image element.             |
+| Other props | Image attributes   | —       | Standard image attributes, including `aria-*`. |
+
+```tsx
+import { PdfIcon } from '@openviking/react/icons';
+
+export default function Example() {
+  return <PdfIcon width={24} height={24} className="file-icon" alt="PDF" />;
+}
+```
+
+## Accessibility
+
+Leave `alt` empty when adjacent text already identifies the file type. For an icon that conveys information on its own, supply a descriptive `alt` value in the application's language. Icons are non-interactive; applications own button semantics, keyboard interaction, and focus styles when placing an icon inside a control.
+
+## Assets and styling
+
+SVGs are embedded in the built JavaScript as data URLs. No separate SVG request or stylesheet import is needed for these icons. Applications with a Content Security Policy must allow `data:` in `img-src` to display them.
+
+Use `width`, `height`, `className`, or `style` to size and position the image. Its SVG colors are fixed artwork; changing CSS `color` does not recolor it.

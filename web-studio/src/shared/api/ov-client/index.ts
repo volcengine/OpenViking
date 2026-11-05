@@ -1,6 +1,10 @@
 export * from '#/gen/ov-client'
 
-export { createOvClient, ovClient } from '#/shared/api/ov-client/client'
+export {
+  createOvClient,
+  getOvClient,
+  ovClient,
+} from '#/shared/api/ov-client/client'
 export {
   OvClientError,
   getOvResult,

@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
+import openviking_sdk
 import pytest
 from langgraph.store.base import (
     GetOp,
@@ -220,3 +221,72 @@ def test_store_keeps_namespace_validation_and_persisted_values(stores):
     assert store.list_namespaces() == sorted(NAMESPACES)
     for number, namespace in enumerate(NAMESPACES):
         assert store.get(namespace, "item").value == {"number": number}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("initialized", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("context_manager", [False, True])
+async def test_store_closes_only_owned_clients(
+    monkeypatch, owned, initialized, asynchronous, context_manager
+):
+    instances = []
+
+    class Client(InMemoryOpenVikingClient):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.close_count = 0
+            instances.append(self)
+
+        def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+            try:
+                return super().read(uri, offset=offset, limit=limit)
+            except FileNotFoundError:
+                raise NotFoundError(uri)
+
+        def close(self):
+            self.close_count += 1
+            super().close()
+
+    monkeypatch.setattr(openviking_sdk, "SyncHTTPClient", Client)
+    store = OpenVikingStore(url="http://127.0.0.1:1933", client=None if owned else Client())
+
+    async def use_store():
+        if initialized:
+            if asynchronous:
+                await store.aput(("memory",), "note", {"text": "stored"})
+            else:
+                store.put(("memory",), "note", {"text": "stored"})
+
+    if context_manager:
+        if asynchronous:
+            async with store:
+                await use_store()
+        else:
+            with store:
+                await use_store()
+    else:
+        await use_store()
+        if asynchronous:
+            await store.aclose()
+        else:
+            store.close()
+
+    await store.aclose()
+    store.close()
+    assert len(instances) == (1 if initialized or not owned else 0)
+    assert all(client.close_count == (1 if owned else 0) for client in instances)
+    for operation in (
+        lambda: store.get(("memory",), "note"),
+        lambda: store.put(("memory",), "note", {"text": "after close"}),
+        lambda: store.delete(("memory",), "note"),
+        lambda: store.search(("memory",)),
+        lambda: store.search(("memory",), query="note"),
+        store.list_namespaces,
+        lambda: store.batch([]),
+    ):
+        with pytest.raises(RuntimeError, match="OpenVikingStore is closed"):
+            operation()
+    with pytest.raises(RuntimeError, match="OpenVikingStore is closed"):
+        await store.aget(("memory",), "note")

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Issue #6713: native images must remain readable, cited evidence in Compile."""
 
+import asyncio
 import base64
 import json
 from dataclasses import asdict
@@ -27,7 +28,7 @@ from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import ChildProvider, complete_tool_result
 from vikingbot.compile.pipeline_io import ModelCallError
 from vikingbot.compile.results import CombineResponse, FileResponse, RecordResponse
-from vikingbot.compile.service import BotCompileService
+from vikingbot.compile.service import BotCompileService, _CompileProvider
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.compile.sources import read_source, split_source
 from vikingbot.config import loader
@@ -68,7 +69,9 @@ def runtime():
         read_raw=AsyncMock(return_value="# Cedar\n![settings](diagram.png)\n"),
         read_content=AsyncMock(return_value="visible text"),
     )
-    provider = SimpleNamespace(supports_tool_result_media=Mock(return_value=True), chat=AsyncMock())
+    provider = SimpleNamespace(
+        supports_tool_result_media=Mock(return_value=False), chat=AsyncMock()
+    )
     pipeline = Pipeline(
         client=client,
         provider=provider,
@@ -435,7 +438,8 @@ async def test_pipeline_stages_can_reread_original_images(runtime, stage, schema
     with pytest.raises(ValueError, match="outside this assignment"):
         await reader.execute(source_range="foreign")
     result = await reader.execute(source_range=image.record_id)
-    assert ChildProvider(pipeline.model, schema).supports_tool_result_media()
+    assert ChildProvider(pipeline.model, schema).should_inline_tool_result_media()
+    pipeline.model.provider.supports_tool_result_media.assert_not_called()
     assert await complete_tool_result(result, "session", preserve_complete=True) is result
 
 
@@ -443,7 +447,6 @@ async def test_pipeline_stages_can_reread_original_images(runtime, stage, schema
 @pytest.mark.parametrize(
     "problem,code",
     [
-        ("provider", "UNSUPPORTED_MEDIA"),
         ("format", "INVALID_ARGUMENT"),
         ("size", "SOURCE_READ_FAILED"),
     ],
@@ -451,16 +454,14 @@ async def test_pipeline_stages_can_reread_original_images(runtime, stage, schema
 async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem, code):
     pipeline, _ = runtime
     uri = URI
-    if problem == "provider":
-        pipeline.model.provider.supports_tool_result_media.return_value = False
-    elif problem == "format":
+    if problem == "format":
         uri = URI.replace(".png", ".svg")
     else:
         pipeline.client.stat.return_value = {
             "size": VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES + 1
         }
     with pytest.raises(CompileFailure) as caught:
-        await read_source(pipeline.client, uri, pipeline.model.provider)
+        await read_source(pipeline.client, uri)
     assert caught.value.code == code
     pipeline.client.read_raw.assert_not_awaited()
     pipeline.client.download_bytes.assert_not_awaited()
@@ -471,7 +472,7 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
 async def test_text_reads_remain_exact_even_without_media_support(runtime, name):
     pipeline, _ = runtime
     pipeline.model.provider.supports_tool_result_media.return_value = False
-    text = await read_source(pipeline.client, f"viking://resources/{name}", pipeline.model.provider)
+    text = await read_source(pipeline.client, f"viking://resources/{name}")
     assert text == pipeline.client.read_raw.return_value
     assert "".join(p.content for p in split_source(TEXT, text, 1024)) == text
     assert all(p.as_assignment() == asdict(p) for p in split_source(TEXT, text, 1024))
@@ -541,7 +542,7 @@ async def test_runtime_memory_child_fetches_native_image_from_reference(runtime,
             return "vision-test"
 
         def supports_tool_result_media(self, model=None):
-            return True
+            return False
 
         async def chat(self, messages, **kwargs):
             self.calls += 1
@@ -588,7 +589,7 @@ async def test_runtime_memory_child_fetches_native_image_from_reference(runtime,
     await sandbox.start()
     loop = AgentLoop(
         bus=MessageBus(),
-        provider=provider,
+        provider=_CompileProvider(provider, asyncio.Semaphore(1)),
         workspace=tmp_path,
         model="vision-test",
         config=config,

@@ -1,4 +1,5 @@
 import activity from './en/activity'
+import arranger from './en/arranger'
 import compile from './en/compile'
 import dataManagement from './en/data-management'
 import gateway from './en/gateway'
@@ -13,6 +14,7 @@ import workspace from './en/workspace'
 const en = {
   studio,
   onboarding,
+  arranger,
   gateway,
   dataManagement,
   compile,

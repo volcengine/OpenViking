@@ -1,0 +1,31 @@
+# Modules
+
+Five placeholder components are available for integrating the personal-terminal layout. Each renders a module name and a replaceable placeholder message. Business Hooks, API requests, and module interactions will be added as the implementations land.
+
+| Module                             | Component      | Target capability |
+| ---------------------------------- | -------------- | ----------------- |
+| [`file-browser`](./file-browser)   | `FileBrowser`  | File browser.     |
+| [`console`](./console)             | `Console`      | Console.          |
+| [`agent-connect`](./agent-connect) | `AgentConnect` | Agent connection. |
+| [`task-center`](./task-center)     | `TaskCenter`   | Task center.      |
+| [`user-usage`](./user-usage)       | `UserUsage`    | My usage.         |
+
+## Preview
+
+This example uses the public module entries and the aggregate module stylesheet. The grid belongs to this documentation example; applications choose their own layout.
+
+```tsx file="../../_demos/modules-basic.tsx" preview
+
+```
+
+## Import and styles
+
+Import a component and its Props / Labels types from `@openviking/react/modules/<module>`. The five components and their types are also exported from `@openviking/react`.
+
+JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.css` for one module, `@openviking/react/modules/style.css` for all modules, or `@openviking/react/style.css` for the full library. Each stylesheet works independently. There is no aggregate `@openviking/react/modules` JavaScript entry.
+
+The current placeholders accept `className`, `style`, and `labels`. They do not require a Provider. Business Hooks, the shared Client, and `OpenVikingProvider` are planned and are not exported yet.
+
+## Host responsibilities
+
+Hosts own page layout, authentication, account scope, routing, and permissions. Product onboarding, resource and Skill import flows, and synchronization settings remain in the host. Administration is outside these module boundaries.

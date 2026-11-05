@@ -183,6 +183,9 @@ def test_queue_worker_concurrency_rejects_non_positive_value(value):
 
 def test_parser_and_compile_api_validation():
     assert ParserApiConfig(max_concurrent=9) == ParserApiConfig()
+    assert ParserApiConfig(enable=True, host="https://parser.example.test").api_key == ""
+    with pytest.raises(ValueError, match="parser_api.host is required"):
+        ParserApiConfig(enable=True)
     with pytest.raises(ValueError, match="compile_api.base_url must include scheme"):
         CompileApiConfig(base_url="compile.example.com")
 
