@@ -9,7 +9,7 @@ import { EventEmitter } from "node:events";
 import { loadConfig } from "../config.mjs";
 import { queueCapture, nativeOwner, captureDirectory, finishCapture, prepareCapture } from "../capture.mjs";
 import { captureMessages, completedReply } from "../capture-messages.mjs";
-import { runCaptureWorker } from "../capture-worker.mjs";
+import { deliverSnapshot, runCaptureWorker } from "../capture-worker.mjs";
 import { connectionScope } from "../scope.mjs";
 import { onRequest, onResponse } from "../hooks.mjs";
 import { recallRequest } from "../runtime.mjs";
@@ -642,6 +642,47 @@ for (const protocol of ["chat", "anthropic", "responses", "gemini"]) {
   });
 }
 
+for (const takeover of ["system-envelope", "user-envelope", "nativeAgents"]) {
+  test(`sessionless ${takeover} takeover clears pending capture and persists ownership`, async (t) => {
+    const f = await fixture(t);
+    const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
+    t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ status: "ok", result: { rendered: "Recalled preference" } }), { headers: { "content-type": "application/json" } }));
+    const context = () => ({ ...f.ctx, session: "", state: {}, success: true, query: "My preference?", options: { captureWithoutSession: true } });
+    const first = context();
+    await onRequest({ messages: [f.messages[0]] }, first);
+    await onResponse(finalChat(f.messages[1].content), first);
+    const directory = captureDirectory(f.cfg, { ...first, session: first.state.capture.session });
+    const pending = join(directory, "pending");
+    const names = await readdir(pending);
+    assert.equal(names.length, 1);
+    // Retain a worker's already-read copy to test the ownership check too.
+    const snapshot = JSON.parse(await readFile(join(pending, names[0]), "utf8"));
+    const native = context();
+    const messages = [...f.messages, { role: "user", content: "Next question" }];
+    const envelope = "<openviking-context>\nNative memory\n</openviking-context>";
+    if (takeover === "system-envelope") messages.unshift({ role: "system", content: envelope });
+    else if (takeover === "user-envelope") messages[0] = { ...messages[0], content: `${messages[0].content}\n\n${envelope}` };
+    else native.options.nativeAgents = [native.agent];
+    assert.equal(await onRequest({ messages }, native), undefined);
+    assert.equal(native.state.nativeOwner, true);
+    assert.equal(native.session, "");
+    assert.equal(native.state.capture, undefined);
+    await assert.rejects(readdir(pending), { code: "ENOENT" });
+    await readFile(join(directory, "native-owner"));
+    assert.equal(await deliverSnapshot(f.cfg.dataDir, snapshot, { call: f.call }), "native");
+    const later = context();
+    await onRequest({ messages: [f.messages[0]] }, later);
+    assert.equal(later.state.nativeOwner, true);
+    assert.equal(later.state.capture, undefined);
+    await f.drain();
+    assert.equal(f.creates.length, 0);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.commits.length, 0);
+  });
+}
+
 test("disabling sessionless capture pauses queued snapshots and response capture", async (t) => {
   const f = await fixture(t);
   f.file.plugin.magpie.captureWithoutSession = true;
@@ -674,7 +715,7 @@ test("sessionless hooks warn once without masking recall or queuing capture", as
   const reports = [];
   const ctx = { ...f.ctx, session: "", query: "Latest question", state: {}, report: (...args) => reports.push(args) };
   const body = { model: "m", messages: [f.messages[0]] };
-  for (const options of [{ autoCapture: false, captureWithoutSession: true }, { nativeAgents: [ctx.agent], captureWithoutSession: true }]) {
+  for (const options of [{ autoCapture: false, captureWithoutSession: true }, { nativeAgents: [ctx.agent], captureWithoutSession: false }]) {
     await onRequest(body, { ...ctx, state: {}, options });
   }
   for (const patch of [{ origin: "remote" }, { kind: "auxiliary" }]) {

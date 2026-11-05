@@ -99,16 +99,17 @@ export async function queueCapture(cfg, ctx, messages, { launch = true } = {}) {
 export async function prepareCapture(body, ctx, cfg, options) {
   if (!cfg.enabled || bypassedSession(cfg, ctx) || !["local", "magpie-key"].includes(ctx.origin)) return;
   if (isAuxiliaryRequest(body, ctx)) return;
-  if (await nativeOwner(cfg, ctx, body)) { ctx.state && (ctx.state.nativeOwner = true); return; }
-  if (!cfg.autoCapture) return;
-  const conversation = describeConversation(body, ctx.protocol);
-  if (!conversation) return;
-  const first = captureMessages([conversation.messages[conversation.users[0]]], ctx.protocol, cfg)?.[0]?.source_message_ids[0];
-  if (!first) return;
-  if (!ctx.session?.trim() && cfg.captureWithoutSession) {
+  const conversation = describeConversation(body, ctx.protocol, { allowNativeContext: true });
+  const first = conversation && captureMessages([conversation.messages[conversation.users[0]]], ctx.protocol, cfg)?.[0]?.source_message_ids[0];
+  if (!ctx.session?.trim() && cfg.captureWithoutSession && first) {
     // Keep the host context unchanged: fallback identity belongs only to capture.
     ctx = { ...ctx, derivedSession: true, session: `derived-${recallDigest(JSON.stringify([ctx.agent || "", ctx.cwd || "", ctx.protocol, first]))}` };
   }
+  // Resolve the capture scope before yielding so native takeover also retires
+  // derived queues and remains effective when later requests lose the marker.
+  if (ctx.derivedSession && bypassedSession(cfg, ctx)) return;
+  if (await nativeOwner(cfg, ctx, body)) { ctx.state && (ctx.state.nativeOwner = true); return; }
+  if (!cfg.autoCapture || !conversation || !first) return;
   if (!ctx.session?.trim()) {
     if (conversation.fresh && !warnedMissingSession) {
       warnedMissingSession = true;
@@ -118,7 +119,6 @@ export async function prepareCapture(body, ctx, cfg, options) {
     }
     return;
   }
-  if (ctx.derivedSession && (bypassedSession(cfg, ctx) || await nativeOwner(cfg, ctx, body))) return;
   // Never bind across an earlier assistant/tool exchange, even if only one
   // human user remains after client-side trimming or an identity switch.
   const before = captureMessages(conversation.messages.slice(0, conversation.users[0]), ctx.protocol, cfg);
