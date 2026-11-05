@@ -62,12 +62,6 @@ export interface ConsoleProps extends Omit<
   'onSelect' | 'children'
 > {
   /**
-   * 请求配置覆盖，逐字段覆盖最近的 Provider。
-   * Request configuration override, applied field by field over the nearest
-   * Provider.
-   */
-  requestOptions?: OvRequestOptions;
-  /**
    * 受控的当前模式。传入时由宿主决定模式，模块只上报切换意图。
    * The controlled mode. When given, the host owns the mode and the module only
    * reports switch intent.
@@ -105,4 +99,10 @@ export interface ConsoleProps extends Omit<
    * Replaceable copy; English by default.
    */
   labels?: ConsoleLabels;
+  /**
+   * 请求配置覆盖，逐字段覆盖最近的 Provider。
+   * Request configuration override, applied field by field over the nearest
+   * Provider.
+   */
+  requestOptions?: OvRequestOptions;
 }

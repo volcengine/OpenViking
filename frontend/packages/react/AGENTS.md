@@ -11,6 +11,12 @@
 - 依赖可选 peer 的组件不进入根入口：`FilePreview` 的类型引用 `@ark-design/ui`，放进根声明会让该可选 peer 对只用其他根导出的消费者变成必需。
 - 新增或调整导出时，同步维护 `package.json` 的 `exports`、Rslib 入口与声明路径，并从真实打包产物验证根入口与各子路径都能解析。
 
+## Props 字段顺序
+
+公开 Props 按 必选参数 → 可选参数 → 回调 → 插槽 → 文案 → `requestOptions` 排列，回调一律可选。同一类别内保持逻辑相邻，例如受控值与其回调、初始值与其受控值。
+
+由 lint 规则 `ov-ui/props-order` 检查，作用于 `packages/react/src/**/types.ts`。
+
 ## useEffect 使用门槛
 
 - 新增或修改组件、自定义 Hook 时，非必要不使用 `useEffect`。只有需要在渲染提交后，将组件与明确的外部系统保持同步，且更直接的声明式 API、事件处理或已有专用 Hook 无法满足时，才允许使用。

@@ -58,12 +58,6 @@ export interface TaskCenterProps extends Omit<
   'onSelect' | 'children'
 > {
   /**
-   * 请求配置覆盖，逐字段覆盖最近的 Provider。
-   * Request configuration override, applied field by field over the nearest
-   * Provider.
-   */
-  requestOptions?: OvRequestOptions;
-  /**
    * 受控的选中任务 id。传入时由宿主决定选中项，模块只上报选择意图。
    * The controlled selected task id. When given, the host owns the selection and
    * the module only reports select intent.
@@ -76,12 +70,6 @@ export interface TaskCenterProps extends Omit<
    */
   defaultSelectedTaskId?: string;
   /**
-   * 选中任务变化后触发；清除选中时传入 `null`。
-   * Called after the selected task changes; `null` when the selection is
-   * cleared.
-   */
-  onSelectedTaskChange?: (taskId: string | null) => void;
-  /**
    * 只保留这些状态的任务。省略时不按状态过滤。
    * Keep only tasks in these statuses. No status filter when omitted.
    */
@@ -93,6 +81,12 @@ export interface TaskCenterProps extends Omit<
    */
   taskTypes?: readonly string[];
   /**
+   * 选中任务变化后触发；清除选中时传入 `null`。
+   * Called after the selected task changes; `null` when the selection is
+   * cleared.
+   */
+  onSelectedTaskChange?: (taskId: string | null) => void;
+  /**
    * 插槽，见 {@link TaskCenterSlots}。
    * Slots, see {@link TaskCenterSlots}.
    */
@@ -102,4 +96,10 @@ export interface TaskCenterProps extends Omit<
    * Replaceable copy; English by default.
    */
   labels?: TaskCenterLabels;
+  /**
+   * 请求配置覆盖，逐字段覆盖最近的 Provider。
+   * Request configuration override, applied field by field over the nearest
+   * Provider.
+   */
+  requestOptions?: OvRequestOptions;
 }
