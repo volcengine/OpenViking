@@ -15,7 +15,7 @@
 
 公开 Props 按 必选参数 → 可选参数 → 回调 → 插槽 → 文案 → `requestOptions` 排列，回调一律可选。同一类别内保持逻辑相邻，例如受控值与其回调、初始值与其受控值。
 
-由 lint 规则 `ov-ui/props-order` 检查，作用于 `packages/react/src/**/types.ts`。回调按类型判定，函数类型、指向函数的同文件类型别名与方法签名同等对待；跨文件的类型别名无法在语法层面解析，因此不要在公开 Props 里用外部类型别名声明回调。
+由 lint 规则 `ov-ui/props-order` 检查，作用于 `packages/react/src/**/types.ts`。回调直接写成内联函数类型，不要用类型别名、getter 或泛型包装——规则只认函数类型，其他写法会被漏检。
 
 ## useEffect 使用门槛
 
