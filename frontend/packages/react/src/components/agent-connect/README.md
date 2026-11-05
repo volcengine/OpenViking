@@ -1,6 +1,6 @@
 # AgentConnect
 
-Agent 接入视图。宿主传入页签、当前页签的条目与选中项详情；组件渲染列表与详情，并上报切换与复制意图。
+Agent 接入视图。宿主传入页签、当前页签的条目与选中项详情；组件渲染列表与详情，按需复制正文，并上报切换意图。
 
 ```tsx
 import { AgentConnect } from '@openviking/react/components/agent-connect';
@@ -14,11 +14,11 @@ import '@openviking/react/components/agent-connect/style.css';
   detail={detail}
   onTabChange={setActiveTabId}
   onSelect={setSelectedId}
-  onCopy={copyText}
+  onCopy={trackCopy}
 />;
 ```
 
-目录从哪来、正文怎么渲染、复制意味着什么，都由宿主决定——组件不碰这些。
+目录从哪来、正文怎么渲染，都由宿主决定——组件不碰这些。复制正文是组件自己的职责。
 
 ## 为什么正文是「宿主给的节点」
 
@@ -41,7 +41,7 @@ import '@openviking/react/components/agent-connect/style.css';
 
 - 不请求目录，不渲染 Markdown，不判断某项是否可接入。
 - 不维护页签、选中项与正文——全部受控。
-- 不接管路由与埋点：切换页签、选中条目与复制都只上报意图。
+- 不接管路由与埋点：切换页签与选中条目只上报意图，`onCopy` 只是复制成功后的通知。
 - 不内置任何具体 Agent 的名称或接入方式，条目完全由宿主声明。
 
 ## 文档与开发
