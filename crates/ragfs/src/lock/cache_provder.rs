@@ -1705,6 +1705,10 @@ mod refresh_tests;
 mod time_tests;
 
 #[cfg(test)]
+#[path = "cache_clock_perf_tests.rs"]
+mod clock_perf_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
