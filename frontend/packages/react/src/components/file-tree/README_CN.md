@@ -4,6 +4,8 @@
 
 面向资源浏览的目录树。宿主把树状态展平成有序行列表传进来，通过 `operations` 提供异步执行能力；组件负责渲染、键盘交互，并在操作成功后通知。
 
+> **当前是占位实现。** 它已按公开 props 渲染全部已定义的行类型，接入方可对着 API 开发，但样式、图标与交互细节都会调整，视图后续按本文契约重写。
+
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
