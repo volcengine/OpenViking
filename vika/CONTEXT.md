@@ -24,7 +24,7 @@ and OpenViking context preserve source instance, event kind/id, and subject.
 _Avoid_: daemon class, orchestrator, coordinator
 
 **OpenViking connection**:
-`OPENVIKING_*` environment plus the agent-side skill/MCP tools. The daemon does not recall or write memory.
+`OPENVIKING_*` environment plus the Core's `openviking_*` tools. The daemon does not automatically recall or write memory; the model calls those tools explicitly, and session sync/commit stays daemon-side.
 _Avoid_: OV client, memory service, daemon recall
 
 **Meeting plugin**:

@@ -12,6 +12,7 @@ import { meetingFolder, meetingNotesRoot, meetingReadTarget } from '../meeting/n
 import { meetingContextLines } from '../meeting/index.mjs';
 import { OVUnavailableError } from '../ov-connection.mjs';
 import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs';
+import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
 import { BOT_SENDERS, readMetadataTag } from '../runtime-input.mjs';
 import { TimerSchedule } from '../timers.mjs';
@@ -54,6 +55,12 @@ const HANDLERS = {
   list_timers: 'listTimers',
   cancel_timer: 'cancelTimer',
   complete_timer_occurrence: 'completeTimerOccurrence',
+  openviking_find: 'openvikingFind',
+  openviking_search: 'openvikingSearch',
+  openviking_read: 'openvikingRead',
+  openviking_list: 'openvikingList',
+  openviking_add_resource: 'openvikingAddResource',
+  openviking_remember: 'openvikingRemember',
 };
 
 // A refusal the model can act on; `code` is what logs and activities record.
@@ -63,10 +70,13 @@ function blocked(code, message) {
 
 // Tools whose success changes something (a delivery, a decision, a timer), as
 // against reads. Only these count as progress for the loop guard; marking a
-// timer occurrence done counts only when it was marked.
+// timer occurrence done counts only when it was marked. An OpenViking write
+// counts only when the server took it (a task_id came back): the rest are
+// reads, and a write that failed lands nothing.
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
   if (tool?.name === 'complete_timer_occurrence') return result?.data?.completed === true;
+  if (tool?.openviking || tool?.remember) return Boolean(result?.data?.task_id || result?.data?.root_uri);
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -123,6 +133,7 @@ export class ActionService {
     liveness = null,
     meetingEnabled = false,
     ovClient = null,
+    ovTools = null,
     timers = null,
     clock = () => Date.now(),
     onTimersChanged = () => {},
@@ -131,7 +142,7 @@ export class ActionService {
     logger,
   }) {
     Object.assign(this, {
-      config, store, connectors, roster, liveness, meetingEnabled, ovClient, timers, clock, onTimersChanged,
+      config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, timers, clock, onTimersChanged,
       onNoProgress, loopBreakAfter, logger,
     });
     // Loop guard: duplicate outcomes per input in the current turn, cleared
@@ -175,7 +186,12 @@ export class ActionService {
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);
     if (tool.meeting) return this.meetingEnabled;
     if (tool.meetingNotes) return Boolean(this.config.meetingNotes);
-    if (tool.openviking) return Boolean(this.ovClient || this.config.openVikingConfigPath);
+    // The remember branch comes first: the tool carries `remember` alone, and
+    // it must never be offered on the bare OpenViking connection.
+    if (tool.remember) {
+      return Boolean(this.config.ovRemember) && Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
+    }
+    if (tool.openviking) return Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
     return true;
@@ -1459,5 +1475,57 @@ export class ActionService {
       text: `Timer occurrence completed: occurrence_id=${input.occurrence_id}.`,
       data: { occurrence_id: input.occurrence_id, completed: true, status: check.status },
     };
+  }
+
+  // OpenViking long-term memory, the same six tools for every runtime. The
+  // client is built lazily from the instance's own OV settings, never at
+  // boot, so a daemon without a usable config still starts; tests inject
+  // their own. The tools are not deliveries: no decision, no outbox.
+  ovToolClient() {
+    this.ovTools ??= new OVToolClient({ timeoutMs: this.config.openVikingToolTimeoutMs ?? 20_000 });
+    return this.ovTools;
+  }
+
+  // Reads re-check authority after the remote answer, like the other remote
+  // reads: a runtime retired mid-call must not consume the result.
+  async openvikingFind(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().find(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingSearch(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().search(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingRead(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().read(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingList(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().list(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  // Writes check authority only before the request leaves, which call() did:
+  // a write the server took must not be reported failed because the runtime
+  // was retired while it landed. Neither is ever retried automatically.
+  async openvikingAddResource(input, caller) {
+    caller.trace.invoked = true;
+    return await this.ovToolClient().addResource({ ...input, workspace: this.config.workspace });
+  }
+
+  async openvikingRemember(input, caller) {
+    caller.trace.invoked = true;
+    return await this.ovToolClient().remember(input);
   }
 }

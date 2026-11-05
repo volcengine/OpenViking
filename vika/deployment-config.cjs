@@ -27,6 +27,7 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'VIKA_DRY_RUN',
   'VIKA_IGNORED_SENDER_IDS',
   'VIKA_SEND_TIMEOUT_MS',
+  'VIKA_OV_TOOL_TIMEOUT_MS',
   'VIKA_SHUTDOWN_TIMEOUT_MS',
   'VIKA_MAX_REPLY_CHARS',
   'VIKA_MAX_EVENT_BYTES',
@@ -84,6 +85,7 @@ const AGENT_FIELDS = Object.freeze([
   'workspace',
   'ovConfig',
   'ovAutoRecall',
+  'ovRemember',
   'explicitSilence',
   'stagedReplies',
   'role',
@@ -281,6 +283,9 @@ function parseAgent(value, index, ignored) {
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
+  if (value.ovRemember !== undefined && typeof value.ovRemember !== 'boolean') {
+    throw new Error(`${label}.ovRemember must be a boolean`);
+  }
   if (value.explicitSilence !== undefined && typeof value.explicitSilence !== 'boolean') {
     throw new Error(`${label}.explicitSilence must be a boolean`);
   }
@@ -308,6 +313,7 @@ function parseAgent(value, index, ignored) {
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
+    ovRemember: value.ovRemember ?? false,
     explicitSilence: value.explicitSilence ?? false,
     stagedReplies: value.stagedReplies ?? false,
     role: manifestRole(value.role, `${label}.role`),
@@ -510,6 +516,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   }
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
+  env.VIKA_OV_REMEMBER = agent.ovRemember ? 'true' : 'false';
   env.VIKA_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.VIKA_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.VIKA_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';

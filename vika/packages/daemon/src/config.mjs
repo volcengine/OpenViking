@@ -205,6 +205,9 @@ export function getConfig() {
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
+    // One OpenViking tool request, bounded for the model-facing tools (the
+    // faster read/list paths get half of it).
+    openVikingToolTimeoutMs: intEnv('VIKA_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
     agentName: process.env.VIKA_AGENT_NAME || process.env.VIKA_INSTANCE_ID || 'Agent',
     instanceId: process.env.VIKA_INSTANCE_ID || '',
     upgradeTarget: process.env.VIKA_UPGRADE_TARGET || process.env.VIKA_INSTANCE_ID || '',
@@ -292,6 +295,10 @@ export function getConfig() {
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
     meetingNotes: boolEnv('VIKA_MEETING_NOTES', false) && connectors.includes('lark'),
+    // Opt-in per instance (agents[].ovRemember): the openviking_remember tool,
+    // explicit memory extraction on an independent session. The default
+    // five OpenViking tools need no switch.
+    ovRemember: boolEnv('VIKA_OV_REMEMBER', false),
     historyLimit: intEnv('VIKA_HISTORY_LIMIT', 30, { min: 0, max: 200 }),
     // Replies to bot messages in one chat/thread with no person writing there
     // before the safety fuse holds further ones; 0 turns the fuse off.
