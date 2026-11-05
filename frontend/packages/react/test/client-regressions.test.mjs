@@ -148,3 +148,60 @@ test('a per-request baseURL overrides the client one', async () => {
     'an empty baseURL is same origin',
   );
 });
+
+test('a default identity callback runs once per request', async () => {
+  const fetch = fakeFetch(ok);
+  let calls = 0;
+  const client = createOvClient({
+    baseURL: 'https://ov.test',
+    apiKey: () => `token-${++calls}`,
+    fetch,
+  });
+
+  await client.request({ method: 'GET', path: '/api/v1/x' });
+
+  assert.equal(calls, 1, 'the callback must not be evaluated twice');
+  assert.equal(
+    fetch.calls[0].init.headers['x-api-key'],
+    'token-1',
+    'the value sent is the one the single evaluation produced',
+  );
+});
+
+test('a default identity callback runs once even when the request overrides another field', async () => {
+  const fetch = fakeFetch(ok);
+  let calls = 0;
+  const client = createOvClient({
+    baseURL: 'https://ov.test',
+    apiKey: () => `token-${++calls}`,
+    accountId: 'acc_1',
+    fetch,
+  });
+
+  await client.request({
+    method: 'GET',
+    path: '/api/v1/x',
+    options: { resourceId: 'lib_2' },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(fetch.calls[0].init.headers['x-api-key'], 'token-1');
+  assert.equal(fetch.calls[0].init.headers['v-resource-id'], 'lib_2');
+});
+
+test('each request evaluates the callback again', async () => {
+  const fetch = fakeFetch(ok);
+  let calls = 0;
+  const client = createOvClient({
+    baseURL: 'https://ov.test',
+    apiKey: () => `token-${++calls}`,
+    fetch,
+  });
+
+  await client.request({ method: 'GET', path: '/api/v1/x' });
+  await client.request({ method: 'GET', path: '/api/v1/x' });
+
+  assert.equal(calls, 2, 'one evaluation per request');
+  assert.equal(fetch.calls[0].init.headers['x-api-key'], 'token-1');
+  assert.equal(fetch.calls[1].init.headers['x-api-key'], 'token-2');
+});

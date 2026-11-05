@@ -78,9 +78,10 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
     },
 
     async request<TResult>(spec: OvRequestSpec): Promise<TResult> {
+      // 默认身份层每次请求只求值一次，父层配置与请求覆盖共用这一份结果。
       const baseLayer = await resolveIdentityLayer(defaults);
       const localLayer = await resolveIdentityLayer(spec.options);
-      const parent = await resolveClientOptions(defaults);
+      const parent = resolveClientOptions(defaults, baseLayer);
       const effective = resolveRequestOptions(
         spec.options,
         parent,

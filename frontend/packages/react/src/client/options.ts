@@ -72,16 +72,26 @@ export function toHeaders(layer: OvIdentityLayer): Record<string, string> {
 
 /**
  * 解析客户端级配置。`baseURL` 缺省为空字符串，表示浏览器同源请求。
+ *
+ * 身份层由调用方求值后传入：函数形式的身份字段每次请求只应求值一次，父层配置
+ * 与请求覆盖必须复用同一份结果，否则会重复刷新凭证并可能发出旧值。
+ *
  * Resolves client-level configuration. A missing `baseURL` is an empty string,
  * meaning a same-origin browser request.
+ *
+ * The caller passes an already-evaluated identity layer: a function-form
+ * identity field must be evaluated once per request, and both the parent
+ * configuration and the request override must reuse that one result. Evaluating
+ * twice would refresh a credential twice and could send the older value.
  */
-export async function resolveClientOptions(
+export function resolveClientOptions(
   options: OvClientOptions,
-): Promise<OvResolvedOptions> {
+  identity: OvIdentityLayer,
+): OvResolvedOptions {
   return {
     baseURL: options.baseURL ?? '',
     credentials: options.credentials ?? 'same-origin',
-    headers: toHeaders(await resolveIdentityLayer(options)),
+    headers: toHeaders(identity),
     signal: options.signal,
   };
 }
