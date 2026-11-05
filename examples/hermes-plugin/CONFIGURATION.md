@@ -430,3 +430,39 @@ hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
 
 Connection settings and server data are retained. Restart Hermes or the gateway
 after updating.
+
+## Recovery lock files
+
+On platforms with POSIX advisory locks, each initialized provider creates an
+empty `openviking/runs/<run_id>.lock` file under the active Hermes profile's
+`HERMES_HOME`. This includes providers initialized for cron contexts. The file
+is a coordination point, not a pending-session marker; its existence does not
+mean the provider is still running. The open descriptor's advisory lock records
+live ownership.
+
+Shutdown and recovery release the advisory lock and close the descriptor but
+retain the file. A recovery process may already have opened that inode, so
+deleting the pathname, even while holding its lock, can let a later process
+create and lock a different inode for the same owner. Failed acquisitions must
+also leave another holder's file intact.
+
+Online deletion is unsafe under the current locking protocol. It is not
+impossible in principle: safe online cleanup would need a coordination protocol
+that also covers processes opening or waiting for a lock, with concurrency tests
+for that protocol. Such a protocol change is outside this focused fix.
+
+There is deliberately no online garbage collector. Each new run leaves one
+empty file, so file count, inode use and directory metadata grow with the number
+of runs even though the files contain no conversation data. This trades ongoing
+filesystem metadata use for stable lock identity; frequent short-lived or cron
+runs make that cost more visible. The legacy recovery lock uses one shared file
+in the same directory.
+
+For offline housekeeping, stop every Hermes process using that profile,
+including gateways, cron jobs and recovery workers, and prevent new ones from
+starting before removing obsolete `.lock` files from `openviking/runs/`. Do not
+delete the directory or files under `openviking/pending_sessions/`: those markers
+are needed for recovery. Once all old descriptors are closed, a future recovery
+can safely recreate the lock files it needs. File age or an apparently unlocked
+file alone is not sufficient evidence that online deletion is safe under the
+current protocol.

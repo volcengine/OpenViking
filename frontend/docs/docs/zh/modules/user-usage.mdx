@@ -1,0 +1,28 @@
+# UserUsage 我的用量
+
+可直接导入的我的用量占位组件，当前展示模块名称与占位文案，供接入方提前完成容器布局。
+
+## 基础用法
+
+```tsx file="../../_demos/user-usage-placeholder.tsx" preview
+
+```
+
+## 目标能力
+
+当前 User 的上下文数量、Token、检索与提交统计。库或空间统计、成员对比和账单费用属于管理后台。
+
+业务 Hook 与请求尚未实现；当前组件无需 Provider 或鉴权配置。
+
+## 属性
+
+模块导出 `UserUsageProps` 和 `UserUsageLabels` 类型。
+
+| 属性                 | 类型            | 默认值                                             | 说明             |
+| -------------------- | --------------- | -------------------------------------------------- | ---------------- |
+| `className`          | `string`        | —                                                  | 容器附加类名。   |
+| `style`              | `CSSProperties` | —                                                  | 容器样式覆盖。   |
+| `labels.title`       | `string`        | `My usage`                                         | 可见的模块名称。 |
+| `labels.description` | `string`        | `Placeholder. Functionality is not available yet.` | 可见的占位文案。 |
+
+未提供的文案沿用英文默认值。文案为纯文本，宿主可将自身的翻译结果映射到这些属性。

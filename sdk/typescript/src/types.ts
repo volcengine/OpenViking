@@ -74,7 +74,71 @@ export interface RequestOptions {
 /** Options shared by asynchronous processing APIs. */
 export interface WaitOptions {
   wait?: boolean;
+  /** @deprecated Accepted for compatibility and ignored. */
+  timeout?: number;
   telemetry?: unknown;
+}
+/** Options for mounting an MCP tool as a live context node. */
+export interface MountMCPToolOptions {
+  description?: string;
+  timeoutSeconds?: number;
+  arguments?: JsonObject;
+  tags?: string[];
+  wait?: boolean;
+}
+/** One MCP-backed live context node in a batch mount request. */
+export interface MCPToolMount {
+  toolUri: string;
+  nodeUri: string;
+  title: string;
+  description?: string;
+  timeoutSeconds?: number;
+  arguments?: JsonObject;
+  tags?: string[];
+}
+/** A batch skips failed items, retaining completed changes and processing later nodes. */
+export interface MCPBatchResult {
+  total: number;
+  succeeded: string[];
+  failed: {
+    node_uri: string;
+    code: string;
+    message: string;
+    applied: boolean;
+  }[];
+  not_attempted: string[];
+}
+export interface MCPBatchMountResult extends MCPBatchResult {
+  mounts: JsonObject[];
+}
+export interface MCPBatchUnmountResult extends MCPBatchResult {
+  unmounts: JsonObject[];
+}
+/** One live context mount affected by an MCP catalog sync. */
+export interface MCPAffectedMount {
+  node_uri: string;
+  tool_uri: string;
+  tool: string;
+  status: "REVIEW" | "INVALID" | "REMOVED";
+  mounted_input_revision: string;
+  current_input_revision: string | null;
+  reason: string;
+}
+/** MCP tool-name changes reported by a catalog sync. */
+export interface MCPToolChanges {
+  added: string[];
+  changed: string[];
+  unchanged: string[];
+  removed: string[];
+}
+/** Result returned by syncMCP. */
+export interface MCPSyncResult {
+  name: string;
+  synced: boolean;
+  protocol_version: string;
+  tool_count: number;
+  changes: MCPToolChanges;
+  affected_mounts: MCPAffectedMount[];
 }
 /** Writable direct grants and inheritance mode. */
 export interface AclSpec {

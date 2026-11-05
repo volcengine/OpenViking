@@ -150,7 +150,7 @@ class ResponsesProtocol(ToolProtocol):
 
     def public_response(self, value):
         value = {**value, "id": self.identifier}
-        if "tools" in value:
+        if isinstance(value.get("tools"), list):
             value["tools"] = [t for t in value["tools"] if not t.get("name", "").startswith(PREFIX)]
         return value
 
@@ -228,8 +228,12 @@ class ResponsesProtocol(ToolProtocol):
         if not self.completed or self.finish not in {"completed", "incomplete"}:
             raise ToolLoopError("Incomplete Responses event stream")
         if self.body.get("stream"):
-            # The terminal object is authoritative, including opaque reasoning
-            # data that need not appear in deltas. Never reconstruct signatures.
+            # Prefer terminal output for opaque fields; done events are complete
+            # items when a sparse terminal omits the entire output.
+            if not self.output and self.items:
+                indexes = set(self.items)
+                if indexes == set(range(len(indexes))) and self.closed == indexes:
+                    self.output = [self.items[index] for index in range(len(indexes))]
             if set(self.items) != set(range(len(self.output))) or self.closed != set(self.items):
                 raise ToolLoopError("Responses output items are missing")
             for index, item in enumerate(self.output):

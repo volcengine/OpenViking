@@ -24,31 +24,29 @@ const overview = {
     confirm: '去确认',
 
     title: '快速开始',
-    description:
-      '完成下面四步，就能让第一段对话用上记忆。客户端发出第一个请求后，这张卡片会自动隐藏。',
     progress: '已完成 {{done}}/{{total}}',
     done: '已完成',
     view: '查看',
     upstream: {
       title: '添加上游',
-      description:
-        '网关把请求转发给哪个模型服务商，例如 Anthropic、OpenAI 或火山方舟。',
+      description: '网关转发请求的模型服务，例如 OpenAI 或火山方舟。',
       done_one: '已添加 {{count}} 个上游',
       done_other: '已添加 {{count}} 个上游',
       action: '添加上游',
+      manual: '手动添加',
     },
     profile: {
       title: '创建上下文配置',
-      description:
-        '决定网关如何为新消息补充记忆、如何保存对话。推荐设置适合大多数客户端。',
+      description: '决定如何给新消息补充记忆、如何保存对话。',
       done_one: '已有 {{count}} 个上下文配置',
       done_other: '已有 {{count}} 个上下文配置',
+      action: '使用推荐设置',
     },
     key: {
       title: '签发网关密钥',
-      description:
-        '客户端用这个密钥调用网关。每个密钥属于一个 OpenViking 用户，网关读写的就是这个用户的记忆。',
-      blocked: '请先添加上游并创建上下文配置。',
+      description: '客户端凭这个密钥调用网关。',
+      blocked: '完成前两步后即可签发。',
+      name: '我的密钥',
       waiting: '网关管理员添加上游和上下文配置后，才能签发密钥。',
       done_one: '已签发 {{count}} 个密钥',
       done_other: '已签发 {{count}} 个密钥',
@@ -56,8 +54,7 @@ const overview = {
     },
     connect: {
       title: '接入客户端',
-      description:
-        '把 Claude Code、Codex CLI 或聊天应用指向网关地址并填入密钥，然后发一条消息。',
+      description: '把客户端指向网关地址、填入密钥，发一条消息。',
       action: '查看接入指南',
     },
   },

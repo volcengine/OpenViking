@@ -17,6 +17,7 @@
 - [上下文提取](06-extraction.md)：原始资料如何经过解析、组织与语义处理。
 - [检索机制](07-retrieval.md)：如何查找相关上下文，`find` 与 `search` 有什么区别。
 - [会话管理](08-session.md)：消息、会话提交与记忆提取如何衔接。
+- [规则（Beta）](17-rule-scenarios.md)：如何编译持久强约束，并按任务召回供 Agent 核验。
 
 准备写应用时，回到[应用开发路径](../workflows/01-overview.md)选择操作流程；参数和响应查[参考文档](../reference/01-overview.md)。
 

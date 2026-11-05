@@ -100,6 +100,7 @@ const requests = {
     toolsSkipped: 'Not offered: {{reason}}',
     toolRounds:
       'Rounds: {{rounds}} · extra model calls: {{calls}} · tokens added: about {{tokens}}',
+    contextOverride: 'Sent in X-OpenViking-Context',
     whatHappened: 'What happened',
     whatToDo: 'What to do',
     httpError:

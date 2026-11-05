@@ -1,6 +1,12 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { needsStudioSetup } from '#/features/connection/lib/onboarding'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-// AppShell renders the connection wizard outside the connected workspace.
+// Compatibility for old bookmarks; configuration no longer lives here.
 export const Route = createFileRoute('/config')({
-  component: () => null,
+  beforeLoad: () => {
+    throw redirect({
+      to: needsStudioSetup() ? '/onboarding' : '/settings',
+      replace: true,
+    })
+  },
 })

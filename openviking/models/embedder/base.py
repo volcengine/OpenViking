@@ -392,16 +392,20 @@ class EmbedderBase(ABC):
         self,
         func: Callable[[], Awaitable[T]],
         *,
+        is_query: bool,
         logger=None,
         operation_name: str,
     ) -> T:
-        """Run one async provider request with concurrency and telemetry guards."""
-        semaphore = getattr(self, "_account_semaphore", None)
-        if semaphore is None:
-            semaphore = _get_async_embed_semaphore(self.max_concurrent)
-        wait_started = time.monotonic()
-        await semaphore.acquire()
-        wait_elapsed = time.monotonic() - wait_started
+        """Limit document embedding concurrency while letting retrieval queries through."""
+        semaphore = None
+        wait_elapsed = 0.0
+        if not is_query:
+            semaphore = getattr(self, "_account_semaphore", None)
+            if semaphore is None:
+                semaphore = _get_async_embed_semaphore(self.max_concurrent)
+            wait_started = time.monotonic()
+            await semaphore.acquire()
+            wait_elapsed = time.monotonic() - wait_started
         telemetry = get_current_telemetry()
         telemetry.set("embedding.async.max_concurrent", self.max_concurrent)
         telemetry.set("embedding.async.wait_ms", round(wait_elapsed * 1000, 3))
@@ -424,7 +428,8 @@ class EmbedderBase(ABC):
                     elapsed * 1000,
                 )
             self._active_call_started_at = previous_started_at
-            semaphore.release()
+            if semaphore is not None:
+                semaphore.release()
 
     @property
     def is_dense(self) -> bool:

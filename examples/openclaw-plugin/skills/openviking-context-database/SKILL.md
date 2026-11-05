@@ -242,7 +242,7 @@ Trace records exist only when `traceRecall=true`; persisted lookup requires `tra
 
 ### Externalized tool-result tools
 
-Use when a preview contains `viking://session/<session_id>/tool-results/<tool_result_id>`.
+Use when a preview contains `viking://user/{user_id}/sessions/<session_id>/tool-results/<tool_result_id>`.
 
 | Tool | Parameters |
 |---|---|

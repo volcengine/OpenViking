@@ -140,6 +140,13 @@ test("every harness gets a per-harness override, under either spelling", () => {
   assert.deepEqual(unknownPluginKeys(overrides), []);
 });
 
+test("doctor recognizes shared and Magpie-scoped sessionless capture settings", () => {
+  assert.deepEqual(unknownPluginKeys({
+    captureWithoutSession: true,
+    magpie: { captureWithoutSession: false, nativeAgents: ["pi"] },
+  }), []);
+});
+
 test("an empty or absent plugin section reports nothing", () => {
   for (const value of [undefined, null, {}, [], "text", 3]) {
     assert.deepEqual(unknownPluginKeys(value), [], `should be empty for ${JSON.stringify(value)}`);

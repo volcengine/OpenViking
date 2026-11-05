@@ -1,0 +1,28 @@
+# FileBrowser
+
+An importable placeholder for file browser. It currently renders the module name and a placeholder message, so applications can integrate the container before business functionality lands.
+
+## Basic usage
+
+```tsx file="../../_demos/file-browser-placeholder.tsx" preview
+
+```
+
+## Target capability
+
+Directory navigation, search, and preview belong to one module, including selection, locating resources, and refreshes. Import flows and product onboarding belong to the host.
+
+Business Hooks and requests are not implemented yet. The component requires no Provider or credentials.
+
+## Props
+
+The module exports `FileBrowserProps` and `FileBrowserLabels`.
+
+| Property             | Type            | Default                                            | Description                  |
+| -------------------- | --------------- | -------------------------------------------------- | ---------------------------- |
+| `className`          | `string`        | —                                                  | Additional container class.  |
+| `style`              | `CSSProperties` | —                                                  | Container style overrides.   |
+| `labels.title`       | `string`        | `File browser`                                     | Visible module name.         |
+| `labels.description` | `string`        | `Placeholder. Functionality is not available yet.` | Visible placeholder message. |
+
+An omitted label inherits its English default. Labels are plain text; the host maps its own translation system into these props.

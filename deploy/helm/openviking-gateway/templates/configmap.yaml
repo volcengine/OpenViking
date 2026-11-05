@@ -1,0 +1,19 @@
+{{- $config := deepCopy .Values.config -}}
+{{- $_ := set $config "host" "0.0.0.0" -}}
+{{- $_ := set $config "port" 1935 -}}
+{{- $_ := set $config "storage_path" "/app/.openviking/gateway" -}}
+{{- if include "openviking-gateway.rootKey" . -}}
+{{- $provider := $config.encryption.provider -}}
+{{- $settings := index $config.encryption $provider | default dict -}}
+{{- $_ := set $settings "key_file" "/etc/openviking-gateway/keys/root-key" -}}
+{{- $_ := set $config.encryption $provider $settings -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openviking-gateway.fullname" . }}-config
+  labels:
+    {{- include "openviking-gateway.labels" . | nindent 4 }}
+data:
+  gateway.conf: |
+    {{- $config | toPrettyJson | nindent 4 }}

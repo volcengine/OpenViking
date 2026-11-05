@@ -57,7 +57,7 @@
             "pool_size": 32,
             "connect_timeout_ms": 1000,
             "command_timeout_ms": 1000,
-            "default_ttl_seconds": 3600,
+            "default_ttl_seconds": 300,
         },
     },
     "storage": {
@@ -82,6 +82,7 @@
                 "_comment": "Rename this key to backups to enable V2 multi-write.",
                 "initial_partitions": 16,
                 "checkpoint_interval_secs": 86400,
+                "reconcile_existing_data": false,
                 "provider": "cache",
                 "items": [{
                     "name": "local-backup",
@@ -91,8 +92,6 @@
             },
             "cachefs": {
                 "backend": "local",
-                "max_file_size_bytes": 1048576,
-                "bypass_prefixes": ["/queue", "/tmp"],
             },
             "queuefs": {
                 "backend": "sqlite",
@@ -248,9 +247,18 @@
         "_comment": "For Jev through Vercel AI Gateway (TypeSafe-compatible endpoint):",
         "provider": "jev",
         "api_key": "{your-vercel-ai-gateway-api-key}",
-        "api_base": "https://ai-gateway.vercel.sh/typesafe",
+        "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
         "model": "typesafe-ai/jev",
         "threshold": 0.1,
+    },
+    "rules": {
+        "jev_rule_matcher": {
+            "provider": "typesafe",
+            "api_key": "{your-typesafe-api-key}",
+            "timeout": 30,
+            "log_payloads": false,
+        },
+        "scenario_irrelevance_threshold": 0.9,
     },
     "retrieval": {
         "recall_intent_timeout_s": 5.0,

@@ -6,8 +6,18 @@ use std::{
 };
 
 fn run(dir: &std::path::Path, selected: &str, args: &[&str]) -> Output {
+    let home = dir.join("home");
+    let settings_dir = home.join(".openviking");
+    fs::create_dir_all(&settings_dir).unwrap();
+    fs::write(
+        settings_dir.join("ovcli.settings.conf"),
+        json!({"language": "en"}).to_string(),
+    )
+    .unwrap();
     Command::new(env!("CARGO_BIN_EXE_ov"))
         .current_dir(dir)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("OPENVIKING_CLI_CONFIG_FILE", selected)
         .env("OPENVIKING_LANG", "en")
         .env("NO_COLOR", "1")

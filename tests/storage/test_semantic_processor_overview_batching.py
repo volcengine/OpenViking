@@ -159,3 +159,18 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
         "[second](viking://resources/业务%20docs/第二章%23file.md)"
     )
     assert "viking://input_sample_" not in overview
+
+
+@pytest.mark.asyncio
+async def test_overview_includes_more_than_32_children_under_budget(monkeypatch):
+    from openviking_cli.utils.config.parser_config import SemanticConfig
+
+    vlm = RecordingVLM()
+    config = SimpleNamespace(semantic=SemanticConfig(), output_language_override="en")
+    monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
+    files = [{"name": f"file-{i:03}.md", "summary": f"marker-{i:03}"} for i in range(40)]
+    await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
+        "viking://resources/wide", files, []
+    )
+    assert len(vlm.prompts) == 1
+    assert all(item["summary"] in vlm.prompts[0] for item in files)

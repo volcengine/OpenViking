@@ -257,7 +257,13 @@ store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
 store.put(("users", "ada"), "preferences", None)  # a None value deletes the item
+store.close()
 ```
+
+Use `close()` after synchronous work or `await store.aclose()` after async work. The Store
+also supports `with OpenVikingStore(...) as store` and `async with` for automatic cleanup.
+Cleanup releases only internally created clients; injected clients remain caller-owned.
+Closing an unused Store creates no client, and a closed Store cannot be reused.
 
 Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
 equivalent to `delete()`. Deleting a key that does not exist is a no-op.
@@ -287,6 +293,19 @@ middleware = OpenVikingContextMiddleware(
     capture_on_after_agent=True,
 )
 ```
+
+The middleware prepends recalled context to a copy of the current user message
+for the model request. System instructions and stored conversation messages
+remain unchanged. Recall is reused within tool loops and refreshed for each new
+user message.
+
+With a LangGraph checkpointer, the middleware saves exact recall blocks in
+internal graph state and replays them with their original messages after later
+turns or a restart. This preserves unchanged prompt prefixes for provider caching;
+actual cache hits depend on the provider. The ledger retains up to 500 entries
+per session/peer scope and follows the application's checkpoint retention policy.
+Pending structured context references are also checkpointed until their assistant
+message is captured, so resuming an interrupted tool loop preserves provenance.
 
 ### Session recorder
 

@@ -47,6 +47,16 @@ Because Claude Code may block installation scripts from unknown sources, automat
      ✅ Status: OpenViking server is healthy and running
    ```
 
+## Step 3: Start using
+
+Start a new Claude Code session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshoot
 
 | Problem | Fix |

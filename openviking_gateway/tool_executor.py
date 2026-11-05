@@ -32,6 +32,7 @@ DOWNLOAD_URL = re.compile(r'https?://[^\s<>"\x27`]+/api/v1/content/download\?tok
 AUTO_DETECTED_NOTE = re.compile(
     r"\n*Note for the user: this (?:upload|download) URL was auto-detected[^\n]*"
 )
+UNKNOWN_OUTCOME = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
 
 
 def error_result(text):
@@ -204,12 +205,16 @@ class ToolExecutor:
             Document(claim, 1) if won else await get_state(self.store.state, scope, receipt_key)
         )
         claim = receipt.value
+        if not claim:
+            return {**result, "content": UNKNOWN_OUTCOME, "failed": True}
         timeout = self.policy.get("tool_timeout_seconds", 30)
         try:
             async with async_timeout.timeout(timeout):
                 if claim["owner"] != owner:
                     while True:
                         saved = await get_state(self.store.state, scope, receipt_key)
+                        if not saved.value:
+                            raise asyncio.TimeoutError
                         if "content" in saved.value:
                             return {
                                 **result,
@@ -227,7 +232,7 @@ class ToolExecutor:
                 )
                 return {**result, "content": content, "failed": failed}
         except asyncio.TimeoutError:
-            content = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
+            content = UNKNOWN_OUTCOME
         except (ValueError, TypeError, binascii.Error, VikingError, KeyError):
             # Validation and server errors can contain arguments and secrets.
             content = "Invalid tool arguments or OpenViking operation failed"

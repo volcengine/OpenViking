@@ -19,6 +19,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 安装器会把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
 
+安装完成后，在 OpenCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
 ### 手动 npm 安装
 
 已发布的 npm 包是 `@openviking/opencode-plugin`。首次配置 OpenCode 时：

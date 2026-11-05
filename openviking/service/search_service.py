@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.namespace_policy import is_system_uri
 from openviking.core.retrieval_types import SearchType
+from openviking.models.rerank import RerankClient
+from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.image_search import (
@@ -86,6 +88,29 @@ class SearchService:
             return True
         return bool(self._viking_fs.retrieval_config.enable_intent)
 
+    def context_reranker(self) -> Optional[Reranker]:
+        """The reranker context assembly applies to its merged candidates, if any.
+
+        None unless ``retrieval.apply_rerank_to_context`` is on and ``rerank`` has
+        a usable provider config. Off by default, so context mode keeps vector
+        scores, as find() does.
+        """
+        if not self._viking_fs or self._viking_fs.retrieval_config is None:
+            return None
+        if not self._viking_fs.retrieval_config.apply_rerank_to_context:
+            return None
+        rerank_config = self._viking_fs.rerank_config
+        if not rerank_config or not rerank_config.is_available():
+            return None
+        client = RerankClient.from_config(rerank_config)
+        if client is None:
+            return None
+        return Reranker(
+            client=client,
+            threshold=rerank_config.threshold,
+            max_input_tokens=rerank_config.max_input_tokens,
+        )
+
     async def ensure_keywords_search_supported(self, ctx: RequestContext) -> None:
         """Validate keyword-search support at the top-level request boundary."""
         viking_fs = self._ensure_initialized()
@@ -93,7 +118,7 @@ class SearchService:
         if not vector_store or not await viking_fs._collection_has_fulltext(
             vector_store,
             ctx,
-            supported_modes=("volcengine", "vikingdb"),
+            supported_modes=("volcengine", "vikingdb", "opengauss"),
             raise_on_error=True,
         ):
             raise InvalidArgumentError(
@@ -255,11 +280,7 @@ class SearchService:
             raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
         if search_type == "semantic" and not embedder:
             raise RuntimeError("Embedder not configured.")
-        retriever = SkillPackageRetriever(
-            storage=storage,
-            embedder=embedder,
-            rerank_config=fs.rerank_config,
-        )
+        retriever = SkillPackageRetriever(storage=storage, embedder=embedder)
         result = await retriever.retrieve_skills(
             TypedQuery(query, ContextType.SKILL, "", target_directories=targets),
             ctx,

@@ -51,6 +51,46 @@ async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_add_resource_route_forwards_connector_auth_config(monkeypatch: pytest.MonkeyPatch):
+    add_resource = AsyncMock(
+        return_value={"status": "success", "root_uri": "viking://resources/docs"}
+    )
+    service = SimpleNamespace(resources=SimpleNamespace(add_resource=add_resource))
+    monkeypatch.setattr(resources_router, "get_service", lambda: service)
+    ctx = RequestContext(
+        user=UserIdentifier("test_account", "test_user"),
+        role=Role.USER,
+    )
+    reference = {
+        "openviking_credential_ref": {
+            "account_id": "test_account",
+            "resource_id": "ov-resource",
+            "user_id": "test_user",
+            "ov_user_id": "ov-user",
+            "type": "oauth",
+            "platform": "dingtalk",
+            "binding_version": 3,
+        }
+    }
+
+    # The managed credential channel is accepted despite extra="forbid" and is
+    # forwarded verbatim to the service layer.
+    await resources_router.add_resource(
+        SimpleNamespace(headers={}),
+        AddResourceRequest(
+            path="https://alidocs.dingtalk.com/i/nodes/NODE1",
+            add_type="dingtalk",
+            to="viking://resources/docs",
+            args={"binding_version": 3},
+            connector_auth_config=reference,
+        ),
+        ctx,
+    )
+
+    assert add_resource.await_args.kwargs["connector_auth_config"] == reference
+
+
+@pytest.mark.asyncio
 async def test_signed_temp_upload_forwards_token_bound_parse_mode(
     monkeypatch: pytest.MonkeyPatch,
 ):

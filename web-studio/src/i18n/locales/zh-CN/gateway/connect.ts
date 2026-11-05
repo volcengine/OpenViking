@@ -11,16 +11,16 @@ const connect = {
     loopback: {
       title: '只有网关所在的机器能使用这个地址',
       embedded:
-        '其他机器上的客户端连不上它。请在 `ov.conf` 中把 `gateway.public_url` 设为它们能访问的地址（不带 `/gateway`），然后重启服务。',
+        '其他机器上的客户端连不上它。请在 `ov.conf` 中把 `gateway.public_url` 设为它们能访问的地址（不带 `/admin/gateway`），然后重启服务。',
       standalone:
-        '其他机器上的客户端连不上它。请把 `gateway.conf` 中的 `public_url` 或环境变量 `OPENVIKING_GATEWAY_PUBLIC_URL` 设为它们能访问的地址（不带 `/gateway`），然后重启网关。',
+        '其他机器上的客户端连不上它。请把 `gateway.conf` 中的 `public_url` 或环境变量 `OPENVIKING_GATEWAY_PUBLIC_URL` 设为它们能访问的地址（不带 `/admin/gateway`），然后重启网关。',
     },
     notPublic: {
       title: '客户端可能连不上这个地址',
       embedded:
-        '这是浏览器打开 Studio 时使用的地址。请在 `ov.conf` 中把 `gateway.public_url` 设为客户端应该使用的地址（不带 `/gateway`），然后重启服务。',
+        '这是浏览器打开 Studio 时使用的地址。请在 `ov.conf` 中把 `gateway.public_url` 设为客户端应该使用的地址（不带 `/admin/gateway`），然后重启服务。',
       standalone:
-        '这是浏览器打开 Studio 时使用的地址。请把 `gateway.conf` 中的 `public_url` 或环境变量 `OPENVIKING_GATEWAY_PUBLIC_URL` 设为客户端应该使用的地址（不带 `/gateway`），然后重启网关。',
+        '这是浏览器打开 Studio 时使用的地址。请把 `gateway.conf` 中的 `public_url` 或环境变量 `OPENVIKING_GATEWAY_PUBLIC_URL` 设为客户端应该使用的地址（不带 `/admin/gateway`），然后重启网关。',
     },
     keys: '客户端用网关密钥（`ovgw_…`）认证，代替服务商的 API Key。',
     manageKeys: '管理密钥',
@@ -227,6 +227,15 @@ const connect = {
     note: '网关把这个密钥转交给服务商，不会记录它。',
     upstreams: '需要它的上游：{{names}}',
     none: '目前没有上游需要它。',
+  },
+  context: {
+    title: '覆盖上下文配置',
+    description:
+      '客户端可以在这个请求头里用 JSON 对象传入要修改的配置字段，为新对话覆盖密钥的上下文配置。',
+    tools:
+      '`{"disabled_tools":[]}` 表示提供全部 OpenViking 工具，包括会修改数据的工具。',
+    scope:
+      '对话开始时的设置会沿用到对话结束。关闭了“允许客户端覆盖设置”的配置会拒绝这个请求头。',
   },
   plugin: {
     title: '同时在用 OpenViking 插件？',

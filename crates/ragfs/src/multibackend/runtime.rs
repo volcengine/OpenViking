@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -12,17 +12,25 @@ use tracing::{debug, error};
 use crate::core::context::{FsContextInner, FS_CTX};
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
+use crate::lock::types::PathLockError;
 use crate::multibackend::catch_up::{CatchUpTarget, CatchUpWorker};
 use crate::multibackend::checkpoint::{CheckpointReader, CheckpointWorker};
 use crate::multibackend::codec::{decode_segment, sha256_hex};
 use crate::multibackend::constants::SYSTEM_DIR;
-use crate::multibackend::meta::{MetadataStore, MultiWriteWorker};
+use crate::multibackend::meta::{MetadataStore, MultiWriteMetricsSnapshot, MultiWriteWorker};
 use crate::multibackend::model::{
     DirectoryEvent, DirectoryOperation, MarkerPosition, PartitionContext, PartitionState,
     PartitionsManifest, PendingEvent, PendingEventKind, ScopeKey, SegmentEventType,
 };
 use crate::multibackend::provider::{bootstrap_account, MultiWriteProvider};
 use crate::multibackend::router::AccountRouter;
+
+const CATCH_UP_INTERVAL_SECS: u64 = 300;
+const CATCH_UP_FULL_SCAN_TICKS: usize = 6;
+const FLUSH_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(100);
+const FLUSH_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
+const FLUSH_RETRY_MAX_ELAPSED: Duration = Duration::from_secs(180);
+const FLUSH_RETRY_MAX_ATTEMPTS: u32 = 32;
 
 /// Read active account ids from the encrypted or plain primary registry.
 pub(crate) async fn read_active_accounts(primary: &dyn FileSystem) -> Result<HashSet<String>> {
@@ -62,7 +70,6 @@ pub struct MultiWriteRuntime {
     import_worker: StdMutex<Option<JoinHandle<Result<()>>>>,
     store: Arc<MetadataStore>,
     catch_up_cancelled: watch::Sender<bool>,
-    catch_up_wake: Arc<tokio::sync::Notify>,
     running: Arc<AtomicBool>,
     pending_events: Arc<AtomicUsize>,
 }
@@ -77,6 +84,7 @@ impl MultiWriteRuntime {
         primary: Option<Arc<dyn FileSystem>>,
         targets: Vec<CatchUpTarget>,
         checkpoint_interval: Duration,
+        metrics: Arc<MultiWriteMetricsSnapshot>,
     ) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
         let running = Arc::new(AtomicBool::new(true));
@@ -85,7 +93,6 @@ impl MultiWriteRuntime {
         let worker_pending_events = pending_events.clone();
         let (activation, _) = watch::channel(None);
         let (catch_up_cancelled, _) = watch::channel(false);
-        let catch_up_wake = Arc::new(tokio::sync::Notify::new());
         let flush_primary = primary.clone();
         let checkpoint_state = primary.as_ref().map(|primary| {
             Arc::new(CheckpointWorker::new(
@@ -108,26 +115,35 @@ impl MultiWriteRuntime {
             targets
                 .into_iter()
                 .map(|target| {
-                    Arc::new(
+                    let dirty_scopes = Arc::new(StdMutex::new(HashSet::<ScopeKey>::new()));
+                    let worker = Arc::new(
                         CatchUpWorker::new(
                             target.backend_id,
                             primary.clone(),
                             target.backend,
                             store.clone(),
                             provider.clone(),
+                            metrics.clone(),
                         )
                         .with_checkpoint_consumer(checkpoint_reader.clone())
                         .with_cancellation(catch_up_cancelled.subscribe()),
-                    )
+                    );
+                    (worker, dirty_scopes)
                 })
                 .collect::<Vec<_>>()
         });
+        let flush_dirty_scopes = catch_up_workers
+            .iter()
+            .map(|(_, dirty_scopes)| dirty_scopes.clone())
+            .collect();
         let worker = FlushWorker::new(
             store.clone(),
             provider,
             initial_partitions,
             backup_names,
             flush_primary,
+            flush_dirty_scopes,
+            metrics,
         );
         let mut activated = activation.subscribe();
         drop(tokio::spawn(async move {
@@ -139,26 +155,35 @@ impl MultiWriteRuntime {
             }
             worker_running.store(false, Ordering::SeqCst);
         }));
-        for worker in catch_up_workers {
+        for (worker, dirty_scopes) in catch_up_workers {
             let mut cancelled = catch_up_cancelled.subscribe();
-            let wake = catch_up_wake.clone();
             let mut activated = activation.subscribe();
             drop(tokio::spawn(async move {
                 if !wait_for_start(&mut activated).await {
                     return;
                 }
+                let mut tick = 0usize;
                 while !*cancelled.borrow() {
-                    if let Err(error) = worker.run_once().await {
-                        debug!(error = %error, "multi-write catch-up round failed");
-                    }
                     tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(300)) => {}
-                        _ = wake.notified() => {}
+                        _ = tokio::time::sleep(Duration::from_secs(CATCH_UP_INTERVAL_SECS)) => {}
                         changed = cancelled.changed() => {
                             if changed.is_err() || *cancelled.borrow() {
                                 break;
                             }
                         }
+                    }
+                    tick += 1;
+                    let full_scan = tick >= CATCH_UP_FULL_SCAN_TICKS;
+                    let scopes = take_dirty_scopes(&dirty_scopes);
+                    let result = if full_scan {
+                        tick = 0;
+                        worker.run_once().await
+                    } else {
+                        worker.run_scopes(scopes.clone()).await
+                    };
+                    if let Err(error) = result {
+                        restore_dirty_scopes(&dirty_scopes, scopes);
+                        debug!(error = %error, "multi-write catch-up round failed");
                     }
                 }
             }));
@@ -169,7 +194,6 @@ impl MultiWriteRuntime {
             import_worker: StdMutex::new(None),
             store,
             catch_up_cancelled,
-            catch_up_wake,
             running,
             pending_events,
         }
@@ -226,7 +250,6 @@ impl MultiWriteRuntime {
                 "multi-write event queue is closed"
             );
         }
-        self.catch_up_wake.notify_waiters();
     }
 
     /// Return events still waiting in the foreground channel.
@@ -257,8 +280,24 @@ impl Drop for MultiWriteRuntime {
             worker.abort();
         }
         self.catch_up_cancelled.send_replace(true);
-        self.catch_up_wake.notify_waiters();
     }
+}
+
+/// Drain scopes dirtied by successful metadata flushes.
+fn take_dirty_scopes(dirty_scopes: &StdMutex<HashSet<ScopeKey>>) -> Vec<ScopeKey> {
+    dirty_scopes
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .drain()
+        .collect()
+}
+
+/// Return scopes to the dirty set when a catch-up attempt fails.
+fn restore_dirty_scopes(dirty_scopes: &StdMutex<HashSet<ScopeKey>>, scopes: Vec<ScopeKey>) {
+    dirty_scopes
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .extend(scopes);
 }
 
 /// Wait until a prepared runtime gate is started or stopped.
@@ -280,16 +319,28 @@ pub struct FlushWorker {
     router: AccountRouter,
     initial_partitions: u32,
     backup_names: Vec<String>,
+    initialized_accounts: HashSet<String>,
+    dirty_scopes: Vec<Arc<StdMutex<HashSet<ScopeKey>>>>,
+    metrics: Arc<MultiWriteMetricsSnapshot>,
+}
+
+struct FlushRetryState {
+    events: Vec<PendingEvent>,
+    attempts: u32,
+    started_at: Instant,
+    retry_at: Instant,
 }
 
 impl FlushWorker {
     /// Create a worker using one metadata store and persistence provider.
-    pub fn new(
+    pub(crate) fn new(
         store: Arc<MetadataStore>,
         provider: Arc<dyn MultiWriteProvider>,
         initial_partitions: u32,
         backup_names: Vec<String>,
         primary: Option<Arc<dyn FileSystem>>,
+        dirty_scopes: Vec<Arc<StdMutex<HashSet<ScopeKey>>>>,
+        metrics: Arc<MultiWriteMetricsSnapshot>,
     ) -> Self {
         Self {
             router: AccountRouter::new(store.clone()),
@@ -298,6 +349,9 @@ impl FlushWorker {
             primary,
             initial_partitions,
             backup_names,
+            initialized_accounts: HashSet::new(),
+            dirty_scopes,
+            metrics,
         }
     }
 
@@ -307,23 +361,196 @@ impl FlushWorker {
         mut receiver: mpsc::UnboundedReceiver<PendingEvent>,
         pending_events: Arc<AtomicUsize>,
     ) {
-        while let Some(first) = receiver.recv().await {
-            let mut batch = vec![first];
-            while let Ok(event) = receiver.try_recv() {
-                batch.push(event);
+        let mut retries = HashMap::<String, FlushRetryState>::new();
+        let mut receiver_open = true;
+        loop {
+            if retries.is_empty() {
+                if !receiver_open {
+                    break;
+                }
+                let Some(first) = receiver.recv().await else {
+                    receiver_open = false;
+                    continue;
+                };
+                let mut batch = vec![first];
+                while let Ok(event) = receiver.try_recv() {
+                    batch.push(event);
+                }
+                self.flush_fresh_events(batch, &mut retries, &pending_events)
+                    .await;
+                continue;
             }
-            let attempted = batch.len();
-            self.flush_batch(batch).await;
-            pending_events.fetch_sub(attempted, Ordering::Relaxed);
+
+            let (account, retry_at) = retries
+                .iter()
+                .min_by_key(|(_, state)| state.retry_at)
+                .map(|(account, state)| (account.clone(), state.retry_at))
+                .expect("retry map is not empty");
+            if receiver_open {
+                tokio::select! {
+                    event = receiver.recv() => {
+                        match event {
+                            Some(first) => {
+                                let mut batch = vec![first];
+                                while let Ok(event) = receiver.try_recv() {
+                                    batch.push(event);
+                                }
+                                self.flush_fresh_events(batch, &mut retries, &pending_events)
+                                    .await;
+                            }
+                            None => receiver_open = false,
+                        }
+                    }
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(retry_at)) => {
+                        let state = retries.remove(&account).expect("retry account exists");
+                        self.flush_retry(&account, state, &mut retries, &pending_events)
+                            .await;
+                    }
+                }
+            } else {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(retry_at)).await;
+                let state = retries.remove(&account).expect("retry account exists");
+                self.flush_retry(&account, state, &mut retries, &pending_events)
+                    .await;
+            }
         }
     }
 
-    /// Flush one batch while recording and dropping failed events.
-    async fn flush_batch(&mut self, batch: Vec<PendingEvent>) {
+    async fn flush_fresh_events(
+        &mut self,
+        events: Vec<PendingEvent>,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let mut ready = Vec::new();
+        for event in events {
+            if let Some(state) = retries.get_mut(&event.account_id) {
+                state.events.push(event);
+            } else {
+                ready.push(event);
+            }
+        }
+        let attempted = ready.len();
+        let retry = self.flush_batch(ready).await;
+        pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
+
+        let mut retry_by_account = HashMap::<String, Vec<PendingEvent>>::new();
+        for event in retry {
+            retry_by_account
+                .entry(event.account_id.clone())
+                .or_default()
+                .push(event);
+        }
+        for (account, events) in retry_by_account {
+            self.schedule_retry(&account, events, 0, Instant::now(), retries, pending_events);
+        }
+    }
+
+    async fn flush_retry(
+        &mut self,
+        account: &str,
+        state: FlushRetryState,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let elapsed = state.started_at.elapsed();
+        if Self::retry_exhausted(state.attempts, elapsed) {
+            Self::drop_exhausted_retry(
+                &self.store,
+                account,
+                state.events.len(),
+                state.attempts,
+                elapsed,
+                pending_events,
+            );
+            return;
+        }
+        let attempted = state.events.len();
+        let retry = self.flush_batch(state.events).await;
+        pending_events.fetch_sub(attempted - retry.len(), Ordering::Relaxed);
+        if retry.is_empty() {
+            return;
+        }
+        self.schedule_retry(
+            account,
+            retry,
+            state.attempts,
+            state.started_at,
+            retries,
+            pending_events,
+        );
+    }
+
+    fn schedule_retry(
+        &self,
+        account: &str,
+        events: Vec<PendingEvent>,
+        attempts: u32,
+        started_at: Instant,
+        retries: &mut HashMap<String, FlushRetryState>,
+        pending_events: &AtomicUsize,
+    ) {
+        let elapsed = started_at.elapsed();
+        if Self::retry_exhausted(attempts, elapsed) {
+            Self::drop_exhausted_retry(
+                &self.store,
+                account,
+                events.len(),
+                attempts,
+                elapsed,
+                pending_events,
+            );
+            return;
+        }
+
+        let attempts = attempts + 1;
+        let delay = Self::retry_delay(attempts, elapsed);
+        debug!(
+            account,
+            retry_attempts = attempts,
+            delay_ms = delay.as_millis(),
+            event_count = events.len(),
+            "multi-write account initialization deferred by PathLock contention"
+        );
+        retries.insert(
+            account.to_string(),
+            FlushRetryState {
+                events,
+                attempts,
+                started_at,
+                retry_at: Instant::now() + delay,
+            },
+        );
+    }
+
+    fn drop_exhausted_retry(
+        store: &MetadataStore,
+        account: &str,
+        event_count: usize,
+        retry_attempts: u32,
+        elapsed: Duration,
+        pending_events: &AtomicUsize,
+    ) {
+        pending_events.fetch_sub(event_count, Ordering::Relaxed);
+        store.record_worker_error(MultiWriteWorker::Flush);
+        error!(
+            account,
+            retry_attempts,
+            elapsed_ms = elapsed.as_millis(),
+            event_count,
+            "multi-write account initialization retry limit exhausted"
+        );
+    }
+
+    /// Flush one batch while returning events blocked by transient PathLock contention.
+    async fn flush_batch(&mut self, batch: Vec<PendingEvent>) -> Vec<PendingEvent> {
         let mut failed = false;
+        let mut retry = Vec::new();
         let mut accounts = HashMap::<String, Vec<PendingEvent>>::new();
         for event in batch {
             if matches!(event.kind, PendingEventKind::DeleteAccount) {
+                self.initialized_accounts.remove(&event.account_id);
+                self.metrics.remove_account(&event.account_id);
                 accounts
                     .entry(SYSTEM_DIR.to_string())
                     .or_default()
@@ -347,34 +574,38 @@ impl FlushWorker {
                 }
                 Ok(true) => {}
             }
-            match self
-                .store
-                .initialize_account(&account, self.initial_partitions, &self.backup_names)
-                .await
-            {
-                Ok(partitions) => {
-                    if let Err(error) = bootstrap_account(
-                        self.provider.as_ref(),
-                        self.store.as_ref(),
-                        &account,
-                        &partitions,
-                    )
+            if !self.initialized_accounts.contains(&account) {
+                match self
+                    .store
+                    .initialize_account(&account, self.initial_partitions, &self.backup_names)
                     .await
-                    {
-                        failed = true;
-                        error!(account = %account, error = %error,
-                            "multi-write provider bootstrap failed");
+                {
+                    Ok(partitions) => {
+                        if let Err(error) = bootstrap_account(
+                            self.provider.as_ref(),
+                            self.store.as_ref(),
+                            &account,
+                            &partitions,
+                        )
+                        .await
+                        {
+                            failed = true;
+                            error!(account = %account, error = %error,
+                                "multi-write provider bootstrap failed");
+                            continue;
+                        }
+                        self.initialized_accounts.insert(account.clone());
+                    }
+                    Err(error) => {
+                        if Self::is_retryable_pathlock_error(&error) {
+                            retry.extend(events);
+                        } else {
+                            failed = true;
+                            error!(account = %account, error = %error,
+                                "multi-write account initialization failed");
+                        }
                         continue;
                     }
-                }
-                Err(error) => {
-                    failed = true;
-                    error!(
-                        account = %account,
-                        error = %error,
-                        "multi-write account initialization failed"
-                    );
-                    continue;
                 }
             }
 
@@ -407,8 +638,9 @@ impl FlushWorker {
                         SegmentEventType::RemoveTree
                         | SegmentEventType::MoveTree
                         | SegmentEventType::DeleteScope,
-                    ) => {
-                        if let Err(error) = self.flush_directory_event(&account, &event).await {
+                    ) => match self.flush_directory_event(&account, &event).await {
+                        Ok(scopes) => self.mark_dirty_scopes(scopes),
+                        Err(error) => {
                             failed = true;
                             error!(
                                 operation_id = %event.operation_id,
@@ -418,27 +650,62 @@ impl FlushWorker {
                                 "multi-write directory event persistence failed"
                             );
                         }
-                    }
+                    },
                     PendingEventKind::DeleteAccount => unreachable!(),
                 }
             }
 
             for (scope, (route, events)) in groups {
-                if let Err(error) = self.provider.flush(Some(&route), events).await {
-                    failed = true;
-                    error!(
-                        account = %account,
-                        partition = scope.partition_id,
-                        epoch = scope.epoch,
-                        error = %error,
-                        "multi-write metadata flush failed"
-                    );
+                match self.provider.flush(Some(&route), events).await {
+                    Ok(result) => {
+                        self.metrics.record_flush(
+                            &result.scope,
+                            &self.backup_names,
+                            result.first_seq,
+                            result.last_seq,
+                        );
+                        self.mark_dirty_scope(result.scope);
+                    }
+                    Err(error) => {
+                        failed = true;
+                        error!(
+                            account = %account,
+                            partition = scope.partition_id,
+                            epoch = scope.epoch,
+                            error = %error,
+                            "multi-write metadata flush failed"
+                        );
+                    }
                 }
             }
         }
         if failed {
             self.store.record_worker_error(MultiWriteWorker::Flush);
         }
+        retry
+    }
+
+    fn is_retryable_pathlock_error(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::PathLock(
+                PathLockError::Conflict { .. }
+                    | PathLockError::Timeout { .. }
+                    | PathLockError::Busy { .. }
+            )
+        )
+    }
+
+    fn retry_delay(retry_attempt: u32, elapsed: Duration) -> Duration {
+        let exponent = retry_attempt.saturating_sub(1).min(31);
+        FLUSH_RETRY_INITIAL_DELAY
+            .saturating_mul(1u32 << exponent)
+            .min(FLUSH_RETRY_MAX_DELAY)
+            .min(FLUSH_RETRY_MAX_ELAPSED.saturating_sub(elapsed))
+    }
+
+    fn retry_exhausted(retry_attempts: u32, elapsed: Duration) -> bool {
+        retry_attempts >= FLUSH_RETRY_MAX_ATTEMPTS || elapsed >= FLUSH_RETRY_MAX_ELAPSED
     }
 
     /// Convert one account-root deletion into a durable system-scope marker.
@@ -449,9 +716,29 @@ impl FlushWorker {
         event
     }
 
-    /// Check account membership through the user registry when the primary view is available.
+    /// Record a successfully updated scope for the next dirty catch-up scan.
+    fn mark_dirty_scope(&self, scope: ScopeKey) {
+        for dirty_scopes in &self.dirty_scopes {
+            dirty_scopes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(scope.clone());
+        }
+    }
+
+    /// Record successfully updated scopes for the next dirty catch-up scan.
+    fn mark_dirty_scopes(&self, scopes: Vec<ScopeKey>) {
+        for dirty_scopes in &self.dirty_scopes {
+            dirty_scopes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .extend(scopes.iter().cloned());
+        }
+    }
+
+    /// Check account membership through the in-memory initialized set or user registry.
     async fn account_exists(&self, account_id: &str) -> Result<bool> {
-        if account_id == SYSTEM_DIR {
+        if account_id == SYSTEM_DIR || self.initialized_accounts.contains(account_id) {
             return Ok(true);
         }
         let Some(primary) = &self.primary else {
@@ -463,8 +750,13 @@ impl FlushWorker {
     }
 
     /// Register and persist one directory marker to every captured stable partition.
-    async fn flush_directory_event(&self, account: &str, event: &PendingEvent) -> Result<()> {
+    async fn flush_directory_event(
+        &self,
+        account: &str,
+        event: &PendingEvent,
+    ) -> Result<Vec<ScopeKey>> {
         let scopes = self.register_directory_event(account, event).await?;
+        let dirty_scopes = scopes.clone();
         let mut failed = false;
         for scope in scopes {
             let result = match self.find_or_append_marker(&scope, event).await {
@@ -486,7 +778,7 @@ impl FlushWorker {
         if failed {
             Err(Error::internal("directory marker scopes remain incomplete"))
         } else {
-            Ok(())
+            Ok(dirty_scopes)
         }
     }
 
@@ -689,7 +981,12 @@ impl FlushWorker {
     ) -> Result<MarkerPosition> {
         match self.find_marker(scope, event).await? {
             Some(position) => Ok(position),
-            None => self.provider.append_marker(scope, event).await,
+            None => {
+                let position = self.provider.append_marker(scope, event).await?;
+                self.metrics
+                    .record_flush(scope, &self.backup_names, position.seq, position.seq);
+                Ok(position)
+            }
         }
     }
 

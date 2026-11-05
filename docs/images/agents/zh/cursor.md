@@ -18,6 +18,16 @@
 1. 点击「Customize → MCPs」，确认可以看到「openviking User」和「openviking Plugin」两项。
 2. 点击「Customize → Hooks」，确认可以看到「openviking-memory」条目。
 
+## 步骤3：开始使用
+
+在 Cursor 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
+
 ## 故障排查
 
 | 问题 | 处理 |
