@@ -7,12 +7,47 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 
 from openviking.observability.context import get_observability_context
-from openviking.observability.events import try_publish_event
+from openviking.observability.events import build_event, get_event_bus, try_publish_event
 
 _embedding_purpose = ContextVar("metric_embedding_purpose", default="unknown")
 _memory_type = ContextVar("metric_memory_type", default=None)
+_memory_task_id = ContextVar("metric_memory_task_id", default=None)
+_deferred_file_changes = ContextVar("metric_deferred_file_changes", default=None)
+
+
+@dataclass
+class DeferredFileChanges:
+    events: list = field(default_factory=list)
+    active: bool = True
+
+    def publish(self, task):
+        self.active = False
+        for event in self.events:
+            try:
+                payload = dict(event.payload, task_id=task.task_id,
+                               task_type=task.task_type,
+                               mode=(getattr(task, "meta", None) or {}).get("mode"))
+                get_event_bus().publish(replace(event, payload=payload))
+            except Exception:
+                # Reporting must not change an already committed write.
+                continue
+        self.events.clear()
+
+
+@contextmanager
+def defer_file_changes():
+    """Keep committed write facts until their existing root Task is created."""
+    pending = DeferredFileChanges()
+    token = _deferred_file_changes.set(pending)
+    try:
+        yield pending
+    finally:
+        pending.active = False
+        pending.events.clear()
+        _deferred_file_changes.reset(token)
 
 
 def begin_request_reporting():
@@ -21,11 +56,13 @@ def begin_request_reporting():
 
 
 @contextmanager
-def bind_memory_type(memory_type):
+def bind_memory_type(memory_type, *, task_id=None):
     token = _memory_type.set(memory_type)
+    task_token = _memory_task_id.set(task_id)
     try:
         yield
     finally:
+        _memory_task_id.reset(task_token)
         _memory_type.reset(token)
 
 
@@ -42,6 +79,12 @@ def event_context(name):
     """Use the existing Task context, including after queue delivery/restart."""
     if name not in {"http.request", "vlm.call", "embedding.call", "understanding_call", "file_mutation", "skill_mutation", "task_terminal"}:
         return {}
+    memory_task_id = _memory_task_id.get()
+    if name == "file_mutation" and memory_task_id:
+        # Shared memory batch workers outlive their first queue request. Use
+        # the committed operation's provenance without reattaching Task Work.
+        return {"task_id": memory_task_id, "request_id": memory_task_id,
+                "task_type": "session_commit"}
     from openviking.service.task_work_index import TaskExecutionContext, get_task_context
     context = get_task_context()
     if context is None:
@@ -127,8 +170,18 @@ def file_metadata(uri, ctx=None, *, is_dir=False):
     if ctx is not None:
         data.update(account_id=ctx.account_id, user_id=ctx.user.user_id)
     if classification.context_type == "memory":
-        # The real memory template is attached at MemoryUpdater, not guessed from a filename.
         data["memory_type"] = _memory_type.get()
+        if data["memory_type"] is None and not sidecar and not internal:
+            # Manual ContentWrite reuses the registered memory schema, including
+            # static single-file templates such as profile.md and identity.md.
+            from openviking.session.memory.memory_type_registry import get_default_registry
+            registry = get_default_registry()
+            if "memories" in parts:
+                index = parts.index("memories") + 1
+                candidate = parts[index] if len(parts) > index else None
+                schemas = registry.list_all()
+                data["memory_type"] = next((schema.memory_type for schema in schemas
+                    if candidate == schema.memory_type or candidate == schema.filename_template), None)
     if "peers" in parts:
         index = parts.index("peers") + 1
         data["peer_id"] = parts[index] if len(parts) > index else None
@@ -149,9 +202,18 @@ def emit_file_change(uri, ctx, change_type, *, old_uri=None, is_dir=False, opera
             return
         data.update(old_uri=old_uri, change_type=change_type, operation=operation,
                     is_new_file=change_type == "added" if change_type else None)
-        try_publish_event("file_mutation", data)
+        from openviking.service.task_work_index import get_task_context
+        pending = _deferred_file_changes.get()
+
+        def publish(name):
+            if pending is not None and pending.active and get_task_context() is None:
+                pending.events.append(build_event(name, data))
+            else:
+                try_publish_event(name, data)
+
+        publish("file_mutation")
         if data.get("skill_uri") and (uri.endswith("/SKILL.md") or (is_dir and uri.rstrip("/") == data["skill_uri"])):
-            try_publish_event("skill_mutation", data)
+            publish("skill_mutation")
     except Exception:
         # Observability must not change a committed storage operation's outcome.
         return

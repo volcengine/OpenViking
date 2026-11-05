@@ -17,6 +17,8 @@ from openviking.observability.reporting import runtime
 from openviking.observability.reporting.facts import (
     begin_request_reporting,
     bind_memory_type,
+    defer_file_changes,
+    emit_file_change,
     remember_request_task,
 )
 from openviking.observability.reporting.inventory import inventory_lines
@@ -25,6 +27,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.task_work_index import (
     bind_task_context,
     bind_task_context_from_message,
+    get_task_context,
     prepare_task_payload,
 )
 from openviking.storage.viking_fs._ops import _OpsMixin
@@ -105,6 +108,57 @@ def test_session_queue_retains_task_attribution_without_task_work_context(
             assert (event.account_id, event.user_id) == ("space_one", "user_one")
     finally:
         reset_root_observability_context(token)
+
+
+def test_memory_operation_provenance_replaces_stale_batch_queue_identity():
+    root = RootSpanAttributes(http_method="QUEUE", http_route="/queuefs/session_commit",
+                              request_id="first_commit")
+    root.account_id, root.user_id = "space_one", "user_one"
+    token = bind_root_observability_context(root)
+    try:
+        assert get_task_context() is None
+        with bind_memory_type("preferences", task_id="second_commit"):
+            event = build_event("file_mutation", {"account_id": "space_one",
+                                "user_id": "user_one", "change_type": "modified"})
+        assert event.payload["task_id"] == "second_commit"
+        assert event.request_id == "second_commit"
+        assert event.payload["task_type"] == "session_commit"
+        assert get_task_context() is None
+        restored = build_event("file_mutation", {})
+        assert restored.payload["task_id"] == "first_commit"
+    finally:
+        reset_root_observability_context(token)
+
+
+@pytest.mark.parametrize("memory_type,leaf", [("cases", "cases/sample.md"),
+    ("experiences", "experiences/sample.md"), ("profile", "profile.md"),
+    ("identity", "identity.md"), ("soul", "soul.md")])
+def test_committed_manual_memory_update_waits_for_root_task(monkeypatch, memory_type, leaf):
+    monkeypatch.setattr(runtime, "_reporter", object())
+    captured = []
+    register_event_subscriber("manual_write", captured.append)
+    ctx = RequestContext(user=UserIdentifier(account_id="space_one", user_id="user_one"), role=Role.USER)
+    with defer_file_changes() as pending:
+        emit_file_change("viking://user/user_one/memories/" + leaf, ctx, "modified")
+        assert not captured
+        written_at = pending.events[0].timestamp
+        pending.publish(SimpleNamespace(task_id="write_task", task_type="content_write", meta={"mode": "append"}))
+    assert len(captured) == 1
+    event = captured[0]
+    assert event.timestamp == written_at
+    assert event.payload["task_id"] == "write_task"
+    assert event.payload["memory_type"] == memory_type
+    assert event.payload["change_type"] == "modified"
+
+
+def test_aborted_manual_write_does_not_publish_deferred_facts(monkeypatch):
+    monkeypatch.setattr(runtime, "_reporter", object())
+    captured = []
+    register_event_subscriber("failed_write", captured.append)
+    with pytest.raises(RuntimeError), defer_file_changes():
+        emit_file_change("viking://resources/failed.md", None, "added")
+        raise RuntimeError("commit failed")
+    assert not captured
 
 
 def test_multiple_exporters_share_event_and_task_fanout_ids(monkeypatch):

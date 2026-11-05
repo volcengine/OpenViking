@@ -722,8 +722,10 @@ async def test_train_from_extracted_cases_skips_experience_updates_when_not_allo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("apply_error", [False, True, "links"])
-async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, apply_error):
+@pytest.mark.parametrize("detached_task_work", [False, True])
+async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, apply_error, detached_task_work):
     applied_operations = []
+    request_metadata = []
     trained_cases = []
     uri = _case_operation().uris[0]
     link = StoredLink(from_uri=uri, to_uri=uri + ".other.md", link_type="related_to")
@@ -748,6 +750,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
     class FakeStreamingUpdater:
         async def submit(self, request):
             applied_operations.append(request.operations)
+            request_metadata.append(request.metadata)
             result = MemoryUpdateResult()
             if apply_error:
                 result.add_error(uri, MemoryReadError(uri, TimeoutError("read timeout")))
@@ -791,14 +794,29 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
         strict_extract_errors=True,
     )
-    if apply_error:
-        with pytest.raises(MemoryUpdateError):
-            await extraction
-        assert trained_cases == []
-        return
-    contexts = await extraction
+    from contextlib import nullcontext
+    from openviking.observability.context import bind_root_observability_context, reset_root_observability_context
+    from openviking.service.task_work_index import bind_task_context
+    from openviking.telemetry.span_models import RootSpanAttributes
+
+    root = RootSpanAttributes(http_method="QUEUE", http_route="/queuefs/session_commit", request_id="current_commit")
+    root.account_id, root.user_id = "a", "u"
+    root_token = bind_root_observability_context(root)
+    try:
+        task_scope = nullcontext() if detached_task_work else bind_task_context("current_commit", "a", "u", task_type="session_commit")
+        with task_scope:
+            if apply_error:
+                with pytest.raises(MemoryUpdateError):
+                    await extraction
+                assert request_metadata[0]["task_id"] == "current_commit"
+                assert trained_cases == []
+                return
+            contexts = await extraction
+    finally:
+        reset_root_observability_context(root_token)
 
     assert len(applied_operations) == 1
+    assert request_metadata[0]["task_id"] == "current_commit"
     assert applied_operations[0].upsert_operations[0].memory_type == "cases"
     assert [case.name for case in trained_cases] == ["重复预订处理"]
     assert contexts[0].uri.endswith("重复预订处理.md")
