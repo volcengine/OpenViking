@@ -51,9 +51,16 @@ class _FakeFindResult:
 
 
 class _FakeVLMResolver:
+    vlm = object()
+    query_planner = object()
+
+    async def get_vlm(self, account_id):
+        del account_id
+        return self.vlm
+
     async def get_query_planner(self, account_id):
         del account_id
-        return object()
+        return self.query_planner
 
     async def has_dedicated_query_planner(self, account_id):
         del account_id
@@ -464,6 +471,7 @@ async def test_rewrite_receives_only_served_uris(monkeypatch):
 
     async def ok_rewrite(**kwargs):
         assert kwargs["valid_uris"] == [served_uri]
+        assert kwargs["planner"] is _DEFAULT_VLM_RESOLVER.vlm
         return f"OpenViking memory digest:\n- fact 来源：{served_uri}", "ok", None
 
     monkeypatch.setattr(pipeline_module, "rewrite_context", ok_rewrite)

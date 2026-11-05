@@ -198,13 +198,11 @@ async def assemble_context(
             rewrite_status = "failed"
     if plan.entries and rewrite_enabled:
         if resolver is None:
-            raise RuntimeError(
-                "Context assembly requires a VLM resolver for account-owned rewrite"
-            )
+            raise RuntimeError("Context assembly requires a VLM resolver for account-owned rewrite")
         try:
-            planner = await resolver.get_query_planner(ctx.account_id)
+            planner = await resolver.get_vlm(ctx.account_id)
         except Exception as exc:
-            logger.warning("Account rewrite planner unavailable: %s", exc)
+            logger.warning("Account rewrite VLM unavailable: %s", exc)
             rewrite_status = "failed"
         else:
             digest, rewrite_status, rewrite_usage = await rewrite_context(
