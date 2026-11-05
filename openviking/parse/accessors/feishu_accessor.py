@@ -2340,13 +2340,30 @@ class FeishuAccessor(DataAccessor):
                     doc_title = self._extract_text_from_elements(b.page.elements)
                 break
 
+        # Table cells render their own descendants; the flat API list contains them too.
+        table_descendants: set[str] = set()
+        pending = [
+            child_id
+            for block in blocks
+            if self._detect_block_attr(block) == "table"
+            for child_id in (block.children or [])
+        ]
+        while pending:
+            block_id = pending.pop()
+            if block_id in table_descendants:
+                continue
+            table_descendants.add(block_id)
+            child = block_map.get(block_id)
+            if child is not None:
+                pending.extend(child.children or [])
+
         # Convert blocks to markdown
         markdown_lines = []
         ordered_counter: Dict[str, int] = {}
 
         for block in blocks:
-            if block.page is not None:
-                continue  # Skip page container
+            if block.page is not None or block.block_id in table_descendants:
+                continue
 
             line = self._block_to_markdown(
                 block,
@@ -2727,13 +2744,6 @@ class FeishuAccessor(DataAccessor):
 
         return _FEISHU_IMAGE_RE.sub(_replace, markdown), downloaded_images
 
-    def _extract_block_text(self, block, attr_name: str) -> str:
-        """Extract text from a block's named attribute (e.g. block.text, block.heading2)."""
-        content_obj = getattr(block, attr_name, None)
-        if content_obj and hasattr(content_obj, "elements") and content_obj.elements:
-            return self._extract_text_from_elements(content_obj.elements)
-        return ""
-
     def _extract_text_from_elements(self, elements) -> str:
         """Convert Feishu TextElement SDK objects to formatted text."""
         if not elements:
@@ -2794,7 +2804,15 @@ class FeishuAccessor(DataAccessor):
             text = f"~~{text}~~"
         return text
 
-    def _table_block_to_markdown(self, block, block_map: Dict, **_) -> Optional[str]:
+    def _table_block_to_markdown(
+        self,
+        block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+        **_,
+    ) -> Optional[str]:
         """Convert table block to markdown table."""
         table = block.table
         children = block.children
@@ -2817,7 +2835,12 @@ class FeishuAccessor(DataAccessor):
                 if cell_idx < len(children):
                     cell_block_id = children[cell_idx]
                     cell_block = block_map.get(cell_block_id)
-                    cell_text = self._extract_cell_text(cell_block, block_map)
+                    cell_text = self._render_table_cell(
+                        cell_block,
+                        block_map,
+                        document_id=document_id,
+                        feishu_access_token=feishu_access_token,
+                    )
                     row.append(cell_text)
                 else:
                     row.append("")
@@ -2825,22 +2848,47 @@ class FeishuAccessor(DataAccessor):
 
         return format_table_to_markdown(rows, has_header=True) if rows else None
 
-    def _extract_cell_text(self, cell_block, block_map: Dict) -> str:
-        """Extract text from a table cell block by reading its children."""
+    def _render_table_cell(
+        self,
+        cell_block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        """Render cell blocks before the shared table formatter folds line breaks."""
         if not cell_block or not cell_block.children:
             return ""
-        texts = []
-        for child_id in cell_block.children:
+        parts = []
+        ordered_counter: Dict[str, int] = {}
+        pending = [(child_id, 0) for child_id in reversed(cell_block.children)]
+        seen = {cell_block.block_id}
+        while pending:
+            child_id, depth = pending.pop()
+            if child_id in seen:
+                continue
+            seen.add(child_id)
             child = block_map.get(child_id)
             if not child:
                 continue
-            # Use attribute-driven detection to find text in any block type
+            content = self._block_to_markdown(
+                child,
+                block_map,
+                ordered_counter,
+                document_id=document_id,
+                feishu_access_token=feishu_access_token,
+            )
+            if content is not None:
+                indent = "&nbsp;" * (4 * depth)
+                parts.append(indent + content.replace("\n", "\n" + indent))
+            # Nested tables already own their descendants through their cell renderer.
             attr = self._detect_block_attr(child)
-            if attr:
-                text = self._extract_block_text(child, attr)
-                if text:
-                    texts.append(text)
-        return " ".join(texts)
+            if attr != "table":
+                child_depth = depth + (attr in {"ordered", "bullet"})
+                pending.extend(
+                    (child_id, child_depth) for child_id in reversed(child.children or [])
+                )
+        return "\n".join(parts)
 
     def _embedded_sheet_to_markdown(
         self,
