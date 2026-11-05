@@ -10,6 +10,7 @@ import { recallDigest } from "./recall-ledger.mjs";
 
 export const captureDirectory = (cfg, ctx) => join(dataDirectory(cfg), "capture", connectionScope(cfg, ctx));
 const workers = new Map();
+let warnedMissingSession = false;
 export async function nativeOwner(cfg, ctx, body) {
   // Without a session, ownership is request-local: never share a marker
   // between unrelated conversations from the same client.
@@ -94,12 +95,21 @@ export async function queueCapture(cfg, ctx, messages, { launch = true } = {}) {
 }
 
 export async function prepareCapture(body, ctx, cfg, options) {
-  if (!cfg.enabled || bypassedSession(cfg, ctx) || !["local", "magpie-key"].includes(ctx.origin) || !ctx.session?.trim()) return;
+  if (!cfg.enabled || bypassedSession(cfg, ctx) || !["local", "magpie-key"].includes(ctx.origin)) return;
   if (isAuxiliaryRequest(body, ctx)) return;
   if (await nativeOwner(cfg, ctx, body)) { ctx.state && (ctx.state.nativeOwner = true); return; }
   if (!cfg.autoCapture) return;
   const conversation = describeConversation(body, ctx.protocol);
   if (!conversation) return;
+  if (!ctx.session?.trim()) {
+    if (conversation.fresh && !warnedMissingSession) {
+      warnedMissingSession = true;
+      // Magpie's report() accepts recall codes only; log separately so a
+      // successful recall cannot overwrite the capture diagnostic.
+      console.warn("OpenViking capture: no-session — automatic capture unavailable: the host did not provide a session ID. Configure the client to send a stable session header (for example x-session-id). Stateless recall remains available.");
+    }
+    return;
+  }
   // Never bind across an earlier assistant/tool exchange, even if only one
   // human user remains after client-side trimming or an identity switch.
   const before = captureMessages(conversation.messages.slice(0, conversation.users[0]), ctx.protocol, cfg);

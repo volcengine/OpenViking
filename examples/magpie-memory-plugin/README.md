@@ -50,7 +50,7 @@ environment; editing the file applies to the next operation without restarting.
       "enabled": true,
       "autoRecall": true,
       "autoCapture": true,
-      "recallContextTimeoutMs": 700,
+      "recallContextTimeoutMs": 2000,
       "recallMaxTokens": 1600,
       "recallPeerScope": "all",
       "mcpEnabled": false
@@ -115,6 +115,13 @@ controlled by `mcpEnabled`.
   gateway keys, forwarded traffic and unknown origins are skipped. Without a
   session ID, new user requests use stateless recall: no persisted ledger, profile
   replay or conversation capture. Repeated requests may retrieve different context.
+  With capture enabled, the first eligible sessionless user request logs
+  `OpenViking capture: no-session` once per plugin-host process, explaining that
+  capture is unavailable and a stable session header is needed. Check Magpie's
+  plugin-host logs; this warning contains no message text or credentials and does
+  not replace the recall status. Current Magpie hosts ignore custom `report()`
+  codes, so a separate capture status in the UI requires host support.
+  Native-owned, disabled, bypassed and auxiliary requests do not trigger the warning.
   The file's OV credentials remain the authority.
 - Only a new textual user message triggers retrieval. Tool continuations replay
   known context without retrieving. Magpie skips its own internal title/classifier
@@ -141,11 +148,30 @@ controlled by `mcpEnabled`.
   against every duplicate. Disabling `autoRecall` prevents new searches while
   replaying known history; disabling the plugin entirely disables both.
 - The shared context builder owns query settings, budgets and result relevance.
-  Default recall timeout is 700 ms inside Magpie's default 1000 ms hook budget.
-  Increasing it requires raising Magpie's `gatewayTimeoutMs` with I/O margin.
+  Default recall timeout is 2000 ms. Set `recallContextTimeoutMs` in Magpie's
+  Options or `plugin.magpie` to customize it; explicit existing values are preserved.
+  The actual HTTP timeout is also capped by the client `timeout` and 9000 ms.
   Cancellation reaches the HTTP request. Query filters use the shared parser.
 - Default peer scope is the configured user's cross-project context. Actor scope
   requires an explicit `actor_peer_id`; a missing peer skips enhancement.
+
+For hosted/remote services, save both budgets in Magpie's **Options** (merge these
+keys into existing options):
+
+```json
+{
+  "recallContextTimeoutMs": 2000,
+  "gatewayTimeoutMs": 3000
+}
+```
+
+The package's Options example includes these values, but upgrading does not rewrite
+saved options. Magpie defaults to a 1000 ms hook budget when `gatewayTimeoutMs` is
+omitted, so existing installations must set it explicitly. Keep it above the recall
+budget with room for configuration and state I/O (Magpie permits up to 10000 ms).
+If increasing recall beyond 2000 ms, increase both budgets and ensure the client
+`timeout` in `ovcli.conf` (seconds) is sufficient. Failed recall still lets the
+model request continue.
 
 ### Local replay state
 

@@ -597,13 +597,30 @@ test("bypass pauses existing snapshots until removed, without affecting other se
 });
 
 
-test("sessionless hooks never queue capture even when enabled", async (t) => {
+test("sessionless hooks warn once without masking recall or queuing capture", async (t) => {
   const f = await fixture(t);
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const ctx = { ...f.ctx, session: "", query: "Latest question", state: {} };
-  await onRequest({ model: "m", messages: [f.messages[0]] }, ctx);
+  const warning = t.mock.method(console, "warn", () => {});
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ status: "ok", result: { rendered: "Recalled preference" } }), { headers: { "content-type": "application/json" } }));
+  const reports = [];
+  const ctx = { ...f.ctx, session: "", query: "Latest question", state: {}, report: (...args) => reports.push(args) };
+  const body = { model: "m", messages: [f.messages[0]] };
+  for (const options of [{ autoCapture: false }, { nativeAgents: [ctx.agent] }]) {
+    await onRequest(body, { ...ctx, state: {}, options });
+  }
+  for (const patch of [{ origin: "remote" }, { kind: "auxiliary" }]) {
+    await onRequest(body, { ...ctx, ...patch, state: {} });
+  }
+  assert.equal(warning.mock.callCount(), 0);
+  assert.match(JSON.stringify(await onRequest(body, ctx)), /Recalled preference/);
+  assert.equal(reports.at(-1)[0], "ready");
+  await onRequest(body, { ...ctx, state: {} });
+  assert.equal(warning.mock.callCount(), 1);
+  const message = warning.mock.calls[0].arguments[0];
+  assert.match(message, /no-session.*host did not provide a session ID/);
+  assert.ok(!message.includes(f.file.api_key) && !message.includes(f.messages[0].content));
   assert.equal(ctx.state.capture, undefined);
   await onResponse({ choices: [{ message: { role: "assistant", content: "Reply" }, finish_reason: "stop" }] }, ctx);
   assert.equal(f.writes.length, 0);

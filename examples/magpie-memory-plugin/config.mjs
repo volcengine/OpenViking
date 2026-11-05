@@ -77,7 +77,7 @@ export async function loadConfig(env = process.env, options = {}) {
   const { settings, configured, sources } = resolveSettings("magpie", { env: {}, cliFile: settingsFile });
   if (!configured.has("mcpEnabled")) settings.mcpEnabled = false;
   if (!configured.has("autoCapture")) settings.autoCapture = true;
-  if (!configured.has("recallContextTimeoutMs")) settings.recallContextTimeoutMs = 700;
+  if (!configured.has("recallContextTimeoutMs")) settings.recallContextTimeoutMs = 2000;
   const connection = resolveConnection("magpie", { env: { OPENVIKING_CREDENTIAL_SOURCE: "cli" }, files });
   const peerId = resolvePluginPeerId({ settings, configured, sources, credentials: connection, env: {} });
   const authorization = clientAuthorization(file);

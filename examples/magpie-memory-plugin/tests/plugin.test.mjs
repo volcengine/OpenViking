@@ -51,7 +51,10 @@ test("Magpie applies its defaults without changing shared plugin defaults", asyn
   const f = await fixture(t);
   const cfg = await loadConfig(f.env);
   assert.equal(cfg.mcpEnabled, false);
-  assert.equal(cfg.recallContextTimeoutMs, 700);
+  assert.equal(cfg.recallContextTimeoutMs, 2000);
+  assert.equal((await loadConfig(f.env, { recallContextTimeoutMs: 4500 })).recallContextTimeoutMs, 4500);
+  await f.save({ plugin: { recallContextTimeoutMs: 700 } });
+  assert.equal((await loadConfig(f.env)).recallContextTimeoutMs, 700);
   await f.save({ plugin: { recallMaxTokens: 900, magpie: { recallMaxTokens: 1200, recallContextTimeoutMs: 350 } } });
   const custom = await loadConfig(f.env);
   assert.equal(custom.recallMaxTokens, 1200);
@@ -441,6 +444,13 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
     assert.deepEqual(run.body.tools, body().tools);
     await rpc("gatewayRequest", { operation: "close", id: run.id, token: run.token });
   }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const run = await rpc("gatewayRequest", { operation: "begin", body: body(),
+      context: { origin: "local", session: "", agent: "host-agent", protocol: "chat", query: "TypeScript?" } });
+    assert.match(JSON.stringify(run.body), /Use TypeScript/);
+    await rpc("gatewayRequest", { operation: "close", id: run.id, token: run.token });
+  }
+  assert.equal(stderr.split("OpenViking capture: no-session").length - 1, 1);
   const result = await rpc("tool", { spec, name: "find", args: { query: "TypeScript" }, ms: 5000 });
   assert.match(result.text, /Use TypeScript/);
   const states = await rpc("gatewayStates", {});

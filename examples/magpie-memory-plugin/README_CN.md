@@ -45,7 +45,7 @@ magpie plugin add ./examples/magpie-memory-plugin
     "enabled": true,
     "autoRecall": true,
     "autoCapture": true,
-    "recallContextTimeoutMs": 700,
+    "recallContextTimeoutMs": 2000,
     "recallMaxTokens": 1600,
     "recallPeerScope": "all",
     "mcpEnabled": false
@@ -84,6 +84,11 @@ Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`reca
   资料遵守 `profileTokenBudget`，且最多占 `recallMaxTokens` 的一半，使用共享的中日韩字符 token 估算器；
   资料与检索结果合计不超过 `recallMaxTokens`，与首轮决策一起持久化；重试和后续轮次回放原始快照。
 - 仅处理宿主确认为本机的 `local`、`magpie-key` 请求。没有会话 ID 时，新用户请求使用无状态召回：不读写持久化账本、不重放 Profile 快照、不采集对话；重复请求可能获得不同的召回结果。
+  开启采集后，首次符合条件但缺少会话 ID 的用户请求，会在 Magpie 插件宿主日志中输出
+  `OpenViking capture: no-session`，提示自动采集不可用、需要客户端传递稳定的会话 ID 请求头。
+  每个插件宿主进程只提示一次，不含对话正文或凭据，也不覆盖召回状态。
+  当前 Magpie 会忽略自定义 `report()` 状态码，独立的 UI 采集状态仍需宿主支持。
+  原生插件接管、关闭、bypass、辅助请求不会触发此提示。
   共享网关 Key、转发请求或身份缺失时跳过，始终使用文件中配置的 OV 身份。
 - 只有新的文本用户消息触发检索。工具续轮只回放已有记忆；重试复用首次决策，
   包括无结果和失败的决策。同样的问题出现在后续新轮次时仍可重新检索。
@@ -99,8 +104,23 @@ Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`reca
   Magpie 自身跳过内部标题/分类请求；插件也跳过明确标记的辅助、压缩、标题和子 Agent 请求。
 - `autoRecall: false` 关闭新检索，但仍回放已知历史；插件整体关闭则停止两者。
   查询过滤、召回参数、预算和结果相关性使用共享模块。
-- 默认 700ms 检索预算。提高超时时也应提高 Magpie 的 `gatewayTimeoutMs`，为状态读写留余量。
-  请求取消会中止检索。Actor 范围需要明确填写 `actor_peer_id`，缺失时跳过。
+- 默认 2000ms 检索预算，可在 Magpie“选项”或 `plugin.magpie` 中配置
+  `recallContextTimeoutMs`；已有显式配置继续生效。实际 HTTP 超时还受客户端 `timeout`
+  和 9000ms 上限限制。请求取消会中止检索。Actor 范围需要明确填写 `actor_peer_id`，缺失时跳过。
+
+连接托管或远程服务时，请在 Magpie 的“选项”中同时保存两个预算（合并到已有选项）：
+
+```json
+{
+  "recallContextTimeoutMs": 2000,
+  "gatewayTimeoutMs": 3000
+}
+```
+
+包内选项示例包含这组值，但升级不会重写已保存的选项。未设置 `gatewayTimeoutMs` 时，
+Magpie 仍默认使用 1000ms 的宿主预算，因此已有安装需要显式设置。宿主预算应高于检索预算，
+为配置和状态读写留余量（Magpie 允许的上限为 10000ms）。如需继续增加检索预算，
+请同步调整两个值，并确保 `ovcli.conf` 顶层的 `timeout`（秒）足够。召回失败仍会放行模型请求。
 
 ### 本机回放状态
 
