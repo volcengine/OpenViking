@@ -234,6 +234,8 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
 - 飞书/Lark Mindnote URL 支持 `/mindnote/{token}` 和 `/mindnotes/{token}`；Wiki URL 若解析为 `obj_type=mindnote` 也走同一读取流程。Mindnote 使用与其他飞书导入一致的认证选择：传入 `args.feishu_access_token` 时使用用户 token，否则回退到配置的 app/tenant token。本次使用的 token 需具备 `mindnote:node:read`。
 - Mindnote 节点图片通过飞书 Drive 素材接口下载，并沿用本次 Mindnote 导入的 token 类型。用户 token 导入会向媒体下载透传用户 token；app-token 导入使用配置的应用凭证。本次使用的 token 需具备 `docs:document.media:download`。媒体下载不可用时，正文仍会成功导入并保留原始图片引用。
+- 飞书/Lark Docx 原生导入保留内嵌画板文字、连线说明及已有 Mermaid/PlantUML 源码。画板读取沿用文档的用户或应用身份，需具备 `board:whiteboard:node:read`。`feishu.download_images=true` 时，预览图通过现有图片链路随 Markdown 保存；设为 `false` 时仍保留文字、图形源码及源文档链接，不下载预览图。缺权限、节点响应格式错误、超时、预览图不符合图片规则或处理超限，都会使该文档明确失败。
+- 每次原生导入最多处理 100 块不同画板、10,000 个节点、累计 8 MiB 节点 JSON 和 64 MiB 预览图；单张预览沿用现有图片校验规则，包括 10 MiB 文件和 3,600 万像素上限。同一画板在一次导入内复用读取结果，缓存不跨导入或账号共享。每块不同画板增加一次节点请求，开启图片下载时再增加一次预览请求。文字提取本身不调用 OCR 或 VLM，保留内容仍有正常的后续索引与摘要成本。Understanding 服务路径遵循该服务自身的解析行为。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
 - 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。还可同时传入 `feishu_app_id` 和 `feishu_app_secret`；OpenViking 会将其保存在 watch task 私有状态中，并用于刷新该 watch 的用户 token。
 - 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
