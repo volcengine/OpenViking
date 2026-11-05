@@ -440,7 +440,10 @@ def test_reused_managed_connection_checks_identity_without_sending_credentials(
         asyncio.run(exercise())
 
 
-def test_stdio_adapter_reuses_upstream_session(external_provider):
+@pytest.mark.parametrize(
+    "retry_setting", [3, 5, None], ids=["released-host", "host-override", "missing"]
+)
+def test_stdio_adapter_reuses_upstream_session(external_provider, retry_setting):
     import hermes_cli
     from mcp import ClientSession, StdioServerParameters, types
     from mcp.client.stdio import stdio_client
@@ -459,11 +462,37 @@ def test_stdio_adapter_reuses_upstream_session(external_provider):
         HERMES_ENABLE_PROJECT_PLUGINS="0",
         PYTHONPATH=str(Path(hermes_cli.__file__).resolve().parents[1]),
     )
+    receipt = home / "discovery-budget.json"
+    code = f"""
+import argparse
+import importlib.util
+import json
+from pathlib import Path
+from tools import mcp_tool
+
+retry_setting = {retry_setting!r}
+if retry_setting is None:
+    del mcp_tool._MAX_INITIAL_CONNECT_RETRIES
+else:
+    mcp_tool._MAX_INITIAL_CONNECT_RETRIES = retry_setting
+spec = importlib.util.spec_from_file_location("adapter_test", {adapter.__file__!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+original_discover = module.Connection.discover
+
+async def discover(self, params, **kwargs):
+    result = await original_discover(self, params, **kwargs)
+    Path({str(receipt)!r}).write_text(json.dumps(kwargs), encoding="utf-8")
+    return result
+
+module.Connection.discover = discover
+module.run(argparse.Namespace(profile_bound=True))
+"""
     with mcp_server() as (endpoint, requests, *_):
         configure_home(home, endpoint)
         params = StdioServerParameters(
             command=sys.executable,
-            args=[adapter.__file__, "--profile-bound"],
+            args=["-c", code],
             env=env,
         )
 
@@ -488,6 +517,8 @@ def test_stdio_adapter_reuses_upstream_session(external_provider):
         methods = [body["method"] for _, _, body in requests if body]
         assert methods.count("initialize") == 1
         assert methods.count("tools/call") == 2
+        expected_retries = 3 if retry_setting is None else retry_setting
+        assert json.loads(receipt.read_text(encoding="utf-8"))["attempts"] == 1 + expected_retries
 
 
 def test_connection_snapshot_survives_reload_and_next_call_uses_new_connection(external_provider):
@@ -1255,8 +1286,9 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
     output = capsys.readouterr()
     messages = notices if callback else output.err.splitlines()
     assert len(messages) == 1
-    # The notice quotes the path, escaping Windows separators.
-    assert repr(str(source)) in messages[0]
+    assert messages[0].startswith(
+        f"OpenViking MCP launch was migrated from {source} to launch-time profile binding. "
+    )
     assert "/reload-mcp" in messages[0] and "before using" in messages[0]
     assert output.out == ""
     if callback:

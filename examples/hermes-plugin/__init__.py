@@ -1722,7 +1722,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
             previous_home = repair_profile_home(self._hermes_home)
             if previous_home:
                 repair_message = (
-                    f"OpenViking MCP launch was migrated from {previous_home!r} to launch-time profile binding. "
+                    f"OpenViking MCP launch was migrated from {previous_home} to launch-time profile binding. "
                     "An MCP process started before this plugin update must be replaced. "
                     "Run /reload-mcp or restart Hermes before using OpenViking tools."
                 )

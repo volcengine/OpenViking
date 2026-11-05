@@ -587,9 +587,12 @@ async def serve(home: Path, provider_module=None, *, host_bound=False):
         try:
             attempts = 1
             if host_bound:
-                from tools.mcp_tool import _MAX_INITIAL_CONNECT_RETRIES
+                try:
+                    from tools.mcp_tool import _MAX_INITIAL_CONNECT_RETRIES as initial_retries
+                except ImportError:
+                    initial_retries = 3  # Hermes v0.22.7's initial retry count.
 
-                attempts += _MAX_INITIAL_CONNECT_RETRIES
+                attempts += initial_retries
             return await connection.discover(
                 params, startup_elapsed=_launch_age() if host_bound else 0, attempts=attempts
             )
