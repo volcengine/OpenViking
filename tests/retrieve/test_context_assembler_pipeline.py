@@ -51,9 +51,17 @@ class _FakeFindResult:
 
 
 class _FakeVLMResolver:
+    def __init__(self):
+        self.vlm = object()
+        self.query_planner = object()
+
+    async def get_vlm(self, account_id):
+        del account_id
+        return self.vlm
+
     async def get_query_planner(self, account_id):
         del account_id
-        return object()
+        return self.query_planner
 
     async def has_dedicated_query_planner(self, account_id):
         del account_id
@@ -473,6 +481,30 @@ async def test_rewrite_receives_only_served_uris(monkeypatch):
 
     assert result.digest.startswith("OpenViking memory digest:")
     assert result.stats["rewrite"] == "ok"
+
+
+async def test_rewrite_uses_the_general_vlm_not_the_dedicated_query_planner(monkeypatch):
+    """Issue #7070: rewrite borrowed the intent planner, so a dedicated planner broke the digest."""
+    served_uri = f"{USER_ROOT}/memories/events/a.md"
+    hits = [{"uri": served_uri, "score": 0.6, "abstract": "abs"}]
+    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda mode: True)
+    resolver = _FakeVLMResolver()
+    seen = {}
+
+    async def capturing_rewrite(**kwargs):
+        seen["planner"] = kwargs["planner"]
+        return f"OpenViking memory digest:\n- fact 来源：{served_uri}", "ok", None
+
+    monkeypatch.setattr(pipeline_module, "rewrite_context", capturing_rewrite)
+    result = await assemble_context(
+        service=_service(hits=hits, bodies={}, vlm_resolver=resolver),
+        ctx=_ctx(),
+        params=AssembleParams(query="rewrite me", rewrite="auto"),
+    )
+
+    assert result.stats["rewrite"] == "ok"
+    assert seen["planner"] is resolver.vlm
+    assert seen["planner"] is not resolver.query_planner
 
 
 async def test_only_candidates_that_can_deepen_are_read():

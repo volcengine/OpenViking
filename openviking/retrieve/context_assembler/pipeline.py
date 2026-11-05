@@ -192,7 +192,9 @@ async def assemble_context(
                 "Context assembly requires a VLM resolver for account-owned rewrite"
             )
         try:
-            planner = await resolver.get_query_planner(ctx.account_id)
+            # Rewrite is a summarisation role: it needs the general model, not
+            # the intent planner that produces the query plan (issue #7070).
+            planner = await resolver.get_vlm(ctx.account_id)
         except Exception as exc:
             logger.warning("Account rewrite planner unavailable: %s", exc)
             rewrite_status = "failed"
