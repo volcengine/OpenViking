@@ -104,7 +104,7 @@ async def ls(
     ),
     sort_order: Literal["asc", "desc"] = Query("asc", description="Sort direction"),
     extra_fields: Optional[list[str]] = Query(
-        None, description="Extra fields to include: locked, id, count"
+        None, description="Extra fields to include: locked, id, count, l2_count"
     ),
     tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
     include_tags: bool = Query(False, description="Include tags in each entry"),
@@ -163,7 +163,7 @@ async def tree(
     limit: Optional[int] = Query(None, ge=1, description="Alias for node_limit"),
     level_limit: int = Query(3, description="Maximum depth level to traverse"),
     extra_fields: Optional[list[str]] = Query(
-        None, description="Extra fields to include: locked, id, count"
+        None, description="Extra fields to include: locked, id, count, l2_count"
     ),
     tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
     include_tags: bool = Query(False, description="Include tags in each entry"),

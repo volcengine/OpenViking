@@ -93,6 +93,9 @@ class SorterOpBase : public OpBase {
   }
   virtual int get_topk() const = 0;
   virtual void set_topk(int topk) = 0;
+  virtual bool has_grouping() const {
+    return false;
+  }
 
   virtual RecallResultPtr calc_topk_result(
       FieldBitmapGroupSetPtr field_group_set_ptr, BitmapPtr valid_bitmap) = 0;

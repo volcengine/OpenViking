@@ -1,9 +1,15 @@
+import json
+
 import pytest
 import requests
 from volcengine.base.Request import Request
 
-from openviking.storage.errors import ConnectionError
+from openviking.storage.errors import ConnectionError, VikingDBException
 from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
+from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+    VolcengineApiKeyCollection,
+)
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
@@ -715,6 +721,94 @@ def test_volcengine_api_key_collection_uses_date_time_filter_operator(monkeypatc
             {"op": "range", "field": "level", "gte": 1},
         ],
     }
+
+
+def test_volcengine_aggregate_raises_on_http_error(monkeypatch):
+    class _Response:
+        status_code = 500
+        text = "backend unavailable"
+
+        @staticmethod
+        def json():
+            return {
+                "ResponseMetadata": {
+                    "Error": {"Code": "InternalError", "Message": "backend unavailable"}
+                }
+            }
+
+    collection = VolcengineCollection(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    monkeypatch.setattr(collection.data_client, "do_req", lambda *_args, **_kwargs: _Response())
+
+    with pytest.raises(ConnectionError, match="backend unavailable"):
+        collection.aggregate_data(index_name="default", field="level")
+
+
+def test_volcengine_aggregate_rejects_missing_result_envelope(monkeypatch):
+    class _Response:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json():
+            return {}
+
+    collection = VolcengineCollection(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    monkeypatch.setattr(collection.data_client, "do_req", lambda *_args, **_kwargs: _Response())
+
+    with pytest.raises(ConnectionError, match="missing result"):
+        collection.aggregate_data(index_name="default", field="level")
+
+
+def test_volcengine_api_key_aggregate_rejects_invalid_json(monkeypatch):
+    class _Response:
+        status_code = 200
+        text = "not-json"
+
+        @staticmethod
+        def json():
+            raise json.JSONDecodeError("invalid", "not-json", 0)
+
+    collection = VolcengineApiKeyCollection(
+        api_key="test-key",
+        host="https://example.com",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    monkeypatch.setattr(collection.data_client, "do_req", lambda *_args, **_kwargs: _Response())
+
+    with pytest.raises(ConnectionError, match="invalid JSON"):
+        collection.aggregate_data(index_name="default", field="level")
+
+
+def test_private_vikingdb_aggregate_distinguishes_empty_agg_from_missing_result(monkeypatch):
+    responses = iter([{"result": {"agg": {}}}, {}])
+
+    class _Response:
+        status_code = 200
+        text = "response"
+
+        @staticmethod
+        def json():
+            return next(responses)
+
+    collection = VikingDBCollection(
+        host="https://example.com",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    monkeypatch.setattr(collection.client, "do_req", lambda *_args, **_kwargs: _Response())
+
+    assert collection.aggregate_data(index_name="default", field="level").agg == {}
+    with pytest.raises(VikingDBException, match="missing result"):
+        collection.aggregate_data(index_name="default", field="level")
 
 
 def test_volcengine_api_key_collection_date_time_filter_is_idempotent(monkeypatch):

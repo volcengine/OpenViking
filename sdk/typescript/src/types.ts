@@ -299,7 +299,7 @@ export interface ListOptions {
   limit?: number;
   sortBy?: "name" | "mtime";
   sortOrder?: "asc" | "desc";
-  extraFields?: Array<"locked" | "id" | "count">;
+  extraFields?: Array<"locked" | "id" | "count" | "l2_count">;
   tags?: string[];
   includeTags?: boolean;
 }
@@ -316,7 +316,7 @@ export interface TreeOptions {
   levelLimit?: number;
   offset?: number;
   limit?: number;
-  extraFields?: Array<"locked" | "id" | "count">;
+  extraFields?: Array<"locked" | "id" | "count" | "l2_count">;
   tags?: string[];
   includeTags?: boolean;
 }

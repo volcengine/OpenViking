@@ -169,7 +169,7 @@ class VolcengineApiKeyCollection(ICollection):
             normalized["op"] = "time_range"
         return normalized
 
-    def _data_post(self, path: str, data: Dict[str, Any]):
+    def _data_post(self, path: str, data: Dict[str, Any], *, require_result: bool = False):
         safe_data = self._sanitize_payload(data)
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
@@ -178,8 +178,14 @@ class VolcengineApiKeyCollection(ICollection):
             raise self._build_response_error(response, path)
         try:
             result = response.json()
+            if require_result and (
+                not isinstance(result, dict) or not isinstance(result.get("result"), dict)
+            ):
+                raise ConnectionError(f"Request to {path} failed: missing result envelope")
             return result.get("result", {})
         except json.JSONDecodeError:
+            if require_result:
+                raise ConnectionError(f"Request to {path} failed: invalid JSON response")
             logger.warning("Invalid JSON response from %s", path)
             return {}
 
@@ -527,5 +533,7 @@ class VolcengineApiKeyCollection(ICollection):
         }
         if cond is not None:
             data["cond"] = cond
-        resp_data = self._data_post(path, data)
+        resp_data = self._data_post(path, data, require_result=True)
+        if "agg" not in resp_data or not isinstance(resp_data["agg"], dict):
+            raise ConnectionError(f"Request to {path} failed: missing aggregate result")
         return self._parse_aggregate_result(resp_data, op, field)

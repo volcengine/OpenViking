@@ -204,6 +204,9 @@ class CounterOp : public SorterOpBase {
   virtual int get_topk() const {
     return 0;
   }
+  virtual bool has_grouping() const override {
+    return !fields_.empty();
+  }
 
   virtual bool is_leaf_op() const override {
     return true;

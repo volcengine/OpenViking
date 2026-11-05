@@ -112,14 +112,32 @@ class VikingDBCollection(ICollection):
                 raise self._build_response_error(response, action)
             return {}
 
-    def _data_post(self, path: str, data: Dict[str, Any]):
+    def _data_post(self, path: str, data: Dict[str, Any], *, require_result: bool = False):
         response = self.client.do_req("POST", path, req_body=data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)
         try:
             result = response.json()
+            if require_result and (
+                not isinstance(result, dict) or not isinstance(result.get("result"), dict)
+            ):
+                raise VikingDBException(
+                    f"Request to {path} failed: missing result envelope",
+                    status_code=response.status_code,
+                    error_type="invalid_response",
+                    retryable=True,
+                    action=path,
+                )
             return result.get("result", {})
         except json.JSONDecodeError:
+            if require_result:
+                raise VikingDBException(
+                    f"Request to {path} failed: invalid JSON response",
+                    status_code=response.status_code,
+                    error_type="invalid_response",
+                    retryable=True,
+                    action=path,
+                )
             logger.warning("Invalid JSON response from %s", path)
             return {}
 
@@ -454,7 +472,15 @@ class VikingDBCollection(ICollection):
         }
         if cond is not None:
             data["cond"] = cond
-        resp_data = self._data_post(path, data)
+        resp_data = self._data_post(path, data, require_result=True)
+        if "agg" not in resp_data or not isinstance(resp_data["agg"], dict):
+            raise VikingDBException(
+                f"Request to {path} failed: missing aggregate result",
+                status_code=200,
+                error_type="invalid_response",
+                retryable=True,
+                action=path,
+            )
         return self._parse_aggregate_result(resp_data, op, field)
 
     def _parse_aggregate_result(

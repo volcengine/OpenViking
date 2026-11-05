@@ -1159,9 +1159,11 @@ class _OpsMixin:
                 vector collection so callers can cross-reference without an
                 extra lookup. Not present for directories (which may have
                 multiple records across L0/L1/L2 levels).
-            count (int): For directories, the number of nodes in the vector index
-                under this directory (including subdirectories). For files, this
-                field is not included.
+            count (int): For directories, the number of visible vector records
+                under this directory (including subdirectories and all levels).
+                For files, this field is not included.
+            l2_count (int): For directories, the subset of ``count`` whose vector
+                records have ``level=2``. For files, this field is not included.
 
         Args:
             uri: Viking URI, or a 32-char hex vector record id (resolves to URI via vector store)
@@ -1209,13 +1211,35 @@ class _OpsMixin:
                     if vector_store:
                         if not may_include_hidden_actor_peers(uri, real_ctx):
                             filter_expr = PathScope("uri", uri, depth=-1)
-                            result["count"] = await vector_store.count(
-                                filter=filter_expr,
-                                ctx=real_ctx,
+                            total, l2_count = await self._count_directory_vector_levels(
+                                vector_store,
+                                filter_expr,
+                                real_ctx,
+                                fallback_total=True,
                             )
+                            if total is not None:
+                                result["count"] = total
+                            if l2_count is not None:
+                                result["l2_count"] = l2_count
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result
+
+    async def _count_directory_vector_levels(
+        self,
+        vector_store: Any,
+        filter_expr: PathScope,
+        ctx: RequestContext,
+        *,
+        fallback_total: bool,
+    ) -> tuple[Optional[int], Optional[int]]:
+        try:
+            return await vector_store.count_by_level(filter=filter_expr, ctx=ctx)
+        except Exception as e:
+            logger.warning(f"[VikingFS] Failed to count directory vectors by level: {e}")
+            if not fallback_total:
+                return None, None
+            return await vector_store.count(filter=filter_expr, ctx=ctx), None
 
     async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
         """Check whether a URI is physically present in the caller's namespace.
@@ -1828,7 +1852,8 @@ class _OpsMixin:
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int | None = 1000 (maximum number of nodes to list, None means unlimited)
             level_limit: int | None = 3 (maximum depth level to traverse, None means unlimited)
-            extra_fields: optional list of extra fields to include: "locked", "id", "count"
+            extra_fields: optional list of extra fields to include:
+                "locked", "id", "count", "l2_count"
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
@@ -2302,7 +2327,8 @@ class _OpsMixin:
             node_limit: int = 1000 (maximum number of nodes to list)
             sort_by: Optional sort field, "name" or "mtime"
             sort_order: Sort direction, "asc" or "desc"
-            extra_fields: optional list of extra fields to include: "locked", "id", "count"
+            extra_fields: optional list of extra fields to include:
+                "locked", "id", "count", "l2_count"
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
@@ -2487,12 +2513,13 @@ class _OpsMixin:
         extra_fields: List[str],
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Augment entries in-place with extra fields (locked, id, count)."""
+        """Augment entries in-place with extra fields (locked, id, count, l2_count)."""
         real_ctx = self._ctx_or_default(ctx)
         need_locked = "locked" in extra_fields
         need_id = "id" in extra_fields
         need_count = "count" in extra_fields
-        vector_store = self._get_vector_store() if need_count else None
+        need_l2_count = "l2_count" in extra_fields
+        vector_store = self._get_vector_store() if need_count or need_l2_count else None
 
         lock_paths: List[tuple[int, str]] = []
         for i, entry in enumerate(entries):
@@ -2508,14 +2535,26 @@ class _OpsMixin:
                     lock_paths.append((i, path))
             if need_id and not is_dir:
                 entry["id"] = vector_record_id(real_ctx.account_id, entry_uri, level=2)
-            if need_count and is_dir and vector_store and entry_uri:
+            if (need_count or need_l2_count) and is_dir and vector_store and entry_uri:
                 try:
                     if not may_include_hidden_actor_peers(entry_uri, real_ctx):
                         filter_expr = PathScope("uri", entry_uri, depth=-1)
-                        entry["count"] = await vector_store.count(
-                            filter=filter_expr,
-                            ctx=real_ctx,
-                        )
+                        if need_l2_count:
+                            total, l2_count = await self._count_directory_vector_levels(
+                                vector_store,
+                                filter_expr,
+                                real_ctx,
+                                fallback_total=need_count,
+                            )
+                            if need_count and total is not None:
+                                entry["count"] = total
+                            if l2_count is not None:
+                                entry["l2_count"] = l2_count
+                        else:
+                            entry["count"] = await vector_store.count(
+                                filter=filter_expr,
+                                ctx=real_ctx,
+                            )
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for {entry_uri}: {e}")
 

@@ -682,6 +682,47 @@ class CollectionAdapter(ABC):
 
         raise RuntimeError("Vector backend returned an invalid count result")
 
+    def count_by_level(
+        self, filter: Optional[Dict[str, Any] | FilterExpr] = None
+    ) -> tuple[int, int]:
+        """Return total and level-2 record counts from one grouped aggregation."""
+        coll = self.get_collection()
+        result = coll.aggregate_data(
+            index_name=self._index_name,
+            op="count",
+            field="level",
+            filters=self._compile_filter(filter),
+        )
+
+        normalized: Dict[str, int] = {}
+        for key, value in result.agg.items():
+            parsed = self._coerce_int(value)
+            if parsed is None or parsed < 0:
+                raise RuntimeError("Vector backend returned an invalid grouped count result")
+            normalized_key = str(key)
+            if normalized_key in normalized:
+                raise RuntimeError("Vector backend returned duplicate grouped count keys")
+            normalized[normalized_key] = parsed
+
+        explicit_total = next(
+            (
+                normalized[key]
+                for key in ("level", "_total", "__TOTAL__", "__total_count__")
+                if key in normalized
+            ),
+            None,
+        )
+        buckets = {
+            key: value
+            for key, value in normalized.items()
+            if key not in {"level", "_total", "__TOTAL__", "__total_count__"}
+        }
+        total = explicit_total if explicit_total is not None else sum(buckets.values())
+        l2_count = buckets.get("2", 0)
+        if l2_count > total:
+            raise RuntimeError("Vector backend returned inconsistent grouped counts")
+        return total, l2_count
+
     def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         """Count records and reject responses without an explicit total."""
         coll = self.get_collection()

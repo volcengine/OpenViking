@@ -386,7 +386,7 @@ class FSService:
             node_limit: int = 1000 (maximum number of nodes to list)
             sort_by: Optional sort field for non-recursive listings
             sort_order: Sort direction, "asc" or "desc"
-            extra_fields: Optional extra fields to include (locked, id, count)
+            extra_fields: Optional extra fields to include (locked, id, count, l2_count)
         """
         viking_fs = self._ensure_initialized()
         extra_fields = extra_fields or []

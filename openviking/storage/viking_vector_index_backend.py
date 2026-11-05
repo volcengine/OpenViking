@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import re
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1093,6 +1093,25 @@ class _SingleAccountBackend:
             raise
 
     @_backend_operation
+    async def count_by_level(
+        self, filter: Optional[Dict[str, Any] | FilterExpr] = None
+    ) -> tuple[int, int]:
+        try:
+            if self._bound_account_id:
+                account_filter = Eq("account_id", self._bound_account_id)
+                if filter:
+                    if isinstance(filter, dict):
+                        filter = RawDSL(filter)
+                    filter = And([account_filter, filter])
+                else:
+                    filter = account_filter
+
+            return await self._async_adapter.call("count_by_level", filter=filter)
+        except Exception as e:
+            logger.error("Error counting records by level: %s", e)
+            raise
+
+    @_backend_operation
     async def clear(self) -> bool:
         try:
             if self._bound_account_id:
@@ -1899,6 +1918,23 @@ class VikingVectorIndexBackend:
         else:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)
+
+    async def count_by_level(
+        self,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        *,
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[int, int]:
+        if ctx:
+            backend = await self._get_backend_for_context(ctx)
+            acl_enabled = await self._acl_enabled(ctx)
+            filter = self._merge_filters(
+                filter,
+                self._tenant_filter(ctx, acl_enabled=acl_enabled),
+            )
+        else:
+            backend = self._get_default_backend()
+        return await backend.count_by_level(filter=filter)
 
     async def search_by_keywords(
         self,

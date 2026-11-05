@@ -44,6 +44,7 @@ static ALL_FIELDS: &[FieldDef] = &[
     FieldDef { name: "locked", header: "LOCKED", alignment: FieldAlignment::Left },
     FieldDef { name: "id", header: "ID", alignment: FieldAlignment::Left },
     FieldDef { name: "count", header: "COUNT", alignment: FieldAlignment::Right },
+    FieldDef { name: "l2_count", header: "L2_COUNT", alignment: FieldAlignment::Right },
     FieldDef { name: "tags", header: "TAGS", alignment: FieldAlignment::Left },
     FieldDef { name: "abstract", header: "ABSTRACT", alignment: FieldAlignment::Left },
     FieldDef { name: "overview", header: "OVERVIEW", alignment: FieldAlignment::Left },
@@ -131,8 +132,8 @@ fn field_value(entry: &Value, field: &FieldDef) -> String {
         "id" => entry_string(obj, "id")
             .map(str::to_string)
             .unwrap_or_else(|| "-".to_string()),
-        "count" => obj
-            .and_then(|o| o.get("count"))
+        "count" | "l2_count" => obj
+            .and_then(|o| o.get(field.name))
             .and_then(Value::as_u64)
             .map(|c| c.to_string())
             .unwrap_or_else(|| "-".to_string()),
@@ -276,6 +277,7 @@ fn extra_fields_from(fields: &Option<Vec<String>>) -> Vec<String> {
             "locked" => Some("locked"),
             "id" => Some("id"),
             "count" => Some("count"),
+            "l2_count" => Some("l2_count"),
             _ => None,
         };
         if let Some(k) = key {
@@ -1314,6 +1316,27 @@ mod tests {
             .expect("id field");
 
         assert_eq!(super::field_value(&entry, id_field), record_id);
+    }
+
+    #[test]
+    fn l2_count_field_is_selectable_and_rendered() {
+        let fields = vec!["l2_count".to_string()];
+        let defs = super::resolve_fields(&fields, false);
+        let names: Vec<&str> = defs.iter().map(|field| field.name).collect();
+        let entry = json!({"name": "docs", "isDir": true, "l2_count": 4});
+
+        assert_eq!(names, vec!["name", "l2_count"]);
+        assert_eq!(super::field_value(&entry, defs[1]), "4");
+    }
+
+    #[test]
+    fn l2_count_field_requests_api_extra_field() {
+        let fields = Some(vec!["count".to_string(), "l2_count".to_string()]);
+
+        assert_eq!(
+            super::extra_fields_from(&fields),
+            vec!["count".to_string(), "l2_count".to_string()]
+        );
     }
 
     #[test]

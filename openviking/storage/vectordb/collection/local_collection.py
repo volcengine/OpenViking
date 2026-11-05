@@ -1232,15 +1232,14 @@ class LocalCollection(ICollection):
             new_filters["filter"] = filters
         index = self.indexes.get(index_name)
         if not index:
-            logger.warning(f"Index '{index_name}' does not exist")
-            return AggregateResult(agg={}, op=op, field=field)
+            raise RuntimeError(f"Index '{index_name}' does not exist")
 
         # 2. Call index.aggregate to execute aggregation
         try:
             agg_data = index.aggregate(new_filters)
         except Exception as e:
             logger.error(f"Aggregation operation failed: {e}")
-            return AggregateResult(agg={}, op=op, field=field)
+            raise
 
         # 3. Convert format: CounterOp returns "__total_count__", documentation requires "_total"
         if not field:

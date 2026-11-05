@@ -1159,7 +1159,7 @@ class LocalIndex(IIndex):
         filters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not self.engine_proxy or not self.engine_proxy.index_engine:
-            return {}
+            raise RuntimeError("Aggregation requires an initialized index engine")
 
         extra_json = ""
         try:
@@ -1178,7 +1178,7 @@ class LocalIndex(IIndex):
             logger.debug(f"aggregate extra_json: {extra_json}")
         except Exception as e:
             logger.error(f"Aggregation operation failed: {e}")
-            return {}
+            raise RuntimeError("Aggregation operation failed") from e
 
         # Parse extra_json to get aggregation results
         agg_data = {}
@@ -1188,7 +1188,7 @@ class LocalIndex(IIndex):
                 logger.debug(f"aggregate parsed agg_data: {agg_data}")
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse aggregation results: {e}")
-                return {}
+                raise RuntimeError("Failed to parse aggregation results") from e
         else:
             logger.warning("Aggregation results not available: extra_json is empty")
             return {}
