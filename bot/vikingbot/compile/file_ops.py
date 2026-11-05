@@ -19,6 +19,7 @@ from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.renderer import (
     _split_frontmatter,
     validate_relative_file_path,
+    validate_wiki_link_destinations,
 )
 from vikingbot.compile.results import FileDraft, FileResponse, Group, InputReferenceError
 
@@ -186,6 +187,7 @@ def validate_files(runtime: Pipeline, response, group, records, old):
                 raise ValueError(
                     f'Wiki page "{draft.path}" requires a Markdown body after frontmatter'
                 )
+            validate_wiki_link_destinations(body)
         if draft.content_sha256 and content_hash(value) != draft.content_sha256:
             raise ValueError("Artifact content hash mismatch")
         if isinstance(value, bytes) and draft.path.lower().endswith((".md", ".json")):

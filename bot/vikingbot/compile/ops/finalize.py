@@ -9,7 +9,12 @@ from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure
-from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
+from vikingbot.compile.renderer import (
+    RenderedBundle,
+    _split_frontmatter,
+    validate_relative_file_path,
+    validate_wiki_link_destinations,
+)
 
 if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
@@ -51,6 +56,9 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
             payload.decode("utf-8")
         if path.endswith(".json"):
             json.loads(payload)
+        if path.lower().endswith(".md") and runtime.output_format == "wiki":
+            _, body = _split_frontmatter(payload.decode("utf-8"))
+            validate_wiki_link_destinations(body)
         files[path] = payload
         revisions[path] = artifact["base_hash"]
         outputs[path] = {"source_refs": artifact["source_refs"]}

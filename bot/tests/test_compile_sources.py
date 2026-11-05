@@ -29,6 +29,7 @@ from vikingbot.compile.models import (
     SanitizedCompileRequest,
 )
 from vikingbot.compile.ops import common
+from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.ops.common import job, pack, payload
 from vikingbot.compile.ops.reduce import reduce_group, resolve_files
 from vikingbot.compile.pipeline import Pipeline
@@ -749,8 +750,61 @@ def test_wiki_invalid_frontmatter_is_a_repairable_validation_error(runtime):
         file_ops.validate_files(pipeline, response, Group("direct", []), [], {})
 
 
+@pytest.mark.parametrize(
+    "link,valid",
+    [
+        ("[Project 01](entity/Project 01.md)", False),
+        ("[Project 01](entity/Project\t01.md)", False),
+        ("[Project 01](entity/Project%2001.md)", True),
+        ("[Project 01](<entity/Project 01.md>)", True),
+        ('[Project 01](entity/Project%2001.md "Project 01")', True),
+        ('[Project 01](<entity/Project 01.md> "Project 01")', True),
+        ("`[Project 01](entity/Project 01.md)`", True),
+        ("```markdown\n[Project 01](entity/Project 01.md)\n```", True),
+        ("<!-- [Project 01](entity/Project 01.md) -->", True),
+    ],
+)
+def test_compile_wiki_navigation_requires_valid_markdown_destinations(runtime, link, valid):
+    pipeline, _ = runtime
+    pipeline.direct_output_format = "wiki"
+    response = FileResponse(
+        files=[FileDraft(path="index.md", content=f"---\ntype: index\n---\n# Index\n\n{link}\n")]
+    )
+    if valid:
+        file_ops.validate_files(pipeline, response, Group("direct", []), [], {})
+    else:
+        with pytest.raises(ValueError, match="unescaped whitespace.*|Encode spaces"):
+            file_ops.validate_files(pipeline, response, Group("direct", []), [], {})
+    # Ordinary file output can preserve literal Markdown source unchanged.
+    pipeline.direct_output_format = "files"
+    file_ops.validate_files(pipeline, response, Group("direct", []), [], {})
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad_kind", ["missing", "foreign", "duplicate", "empty_files"])
+async def test_compile_finalize_rejects_invalid_stored_wiki_navigation(runtime):
+    pipeline, _ = runtime
+    pipeline.direct_output_format = "wiki"
+    body = "# Index\n\n[Project 01](entity/Project 01.md)\n"
+    await pipeline.files.put(
+        "accepted/index",
+        {
+            "path": "index.md",
+            "content": body,
+            "sha256": content_hash(body),
+            "owner": "direct",
+            "base_hash": None,
+            "source_refs": [],
+        },
+    )
+    with pytest.raises(ValueError, match="unescaped whitespace"):
+        await finalize_op.run(pipeline, ["accepted/index"])
+    assert "finalize" not in pipeline.files.values
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_kind", ["missing", "foreign", "duplicate", "empty_files", "link_space"]
+)
 async def test_compile_files_repair_invalid_provenance_and_revalidate_cache(runtime, bad_kind):
     pipeline, _ = runtime
     await seed(runtime)
@@ -764,7 +818,9 @@ async def test_compile_files_repair_invalid_provenance_and_revalidate_cache(runt
         "inputs": ids,
     }
     invalid = {key: value for key, value in valid.items() if key != "inputs"}
-    if bad_kind not in {"missing", "empty_files"}:
+    if bad_kind == "link_space":
+        invalid = {**valid, "content": "# Cedar\n\n[Cedar](entity/Cedar manual.md)\n"}
+    elif bad_kind not in {"missing", "empty_files"}:
         invalid["inputs"] = ["foreign"] if bad_kind == "foreign" else [ids[0], ids[0]]
 
     def response(file):

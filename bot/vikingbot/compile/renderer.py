@@ -288,6 +288,19 @@ def _body_markdown_links(body: str) -> list[MarkdownLink]:
     ]
 
 
+def validate_wiki_link_destinations(body: str) -> None:
+    """Reject bare whitespace destinations while retaining valid titles and code examples."""
+    for link in _body_markdown_links(body):
+        target = link.target
+        if target.startswith("<") and target.endswith(">"):
+            continue
+        if re.search(r"[ \t\r\n\f]", target):
+            raise ValueError(
+                f"Markdown link destination has unescaped whitespace: {target!r}. "
+                "Encode spaces as %20 or wrap the destination in <...>."
+            )
+
+
 def _link_uri(target: str, source_uri: str) -> str:
     """Resolve a Markdown destination to an absolute URI for deduplication and lookup."""
     target = LinkRenderer.normalize_markdown_target(target)
