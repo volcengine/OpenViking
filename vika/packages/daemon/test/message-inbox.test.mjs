@@ -87,13 +87,19 @@ it('does not notify messages already consumed during the notification window', (
   assert.equal(notices.length, 1);
 });
 
-it('wakes immediately when idle and wakes again if a turn leaves unread messages', (t) => {
+it('wakes immediately when idle and stays quiet while nothing new arrives', (t) => {
   const { inbox, notices, idle } = setup(t, { busy: false });
   inbox.route(item(1));
   assert.equal(notices.length, 1);
   assert.equal(notices[0].options.admission, 'claim-if-idle');
+  // A turn that ends without reading must not inject the same notice again:
+  // that turn ends unread, calls onAvailable, and the pair loops forever.
+  idle();
+  assert.equal(notices.length, 1);
+  inbox.route(item(2));
   idle();
   assert.equal(notices.length, 2);
+  assert.match(notices[1].items[0].text, /pending=2 scopes=1/);
   inbox.read();
   idle();
   assert.equal(notices.length, 2);

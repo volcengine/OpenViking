@@ -57,11 +57,14 @@ export class MessageInbox {
       scope.latest_event = item.eventId;
       scope.latest_from = item.senderName ?? item.senderId ?? null;
     }
-    if (!idle && entries.length === 0) return false;
+    // A notice is already in the conversation, so re-submitting it at every
+    // idle edge adds nothing but a fresh turn: the turn ends unread, calls
+    // onAvailable, and the pair repeats forever.
+    if (entries.length === 0) return false;
     const text = [
       `[Vika inbox notice] pending=${this.pending} scopes=${scopes.size}`,
       ...[...scopes.values()].map((scope) => JSON.stringify(scope)),
-      'Continue your current task. At a natural checkpoint, call message_check to read pending events.',
+      'These messages have not been read. Choose when to read them: message_check with scope_key reads one scope; message_check without scope_key reads all pending scopes, up to the requested limit.',
     ].join('\n');
     const accepted = this.submit([{ text, seq: null }], {
       admission: idle ? 'claim-if-idle' : 'enqueue',
