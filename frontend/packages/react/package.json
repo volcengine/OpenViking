@@ -77,6 +77,10 @@
     "./icons": {
       "types": "./dist/icons/index.d.ts",
       "import": "./dist/icons.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client.js"
     }
   },
   "scripts": {

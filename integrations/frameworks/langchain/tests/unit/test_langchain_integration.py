@@ -145,6 +145,24 @@ def test_retriever_passes_tags_to_retrieval():
     assert client.find_calls[-1]["tags"] == ["env=prod", "team=search"]
 
 
+def test_rule_search_forwards_options_and_preserves_complete_constraints():
+    class RuleClient:
+        def rule_search(self, task_context, options=None):
+            assert task_context == "deploy"
+            assert options == {"rule_probability_threshold": 0}
+            return {"rendered": "完整规则\n" * 17000 + "LAST RULE"}
+
+    for profile in ("retrieval", "agent", "admin"):
+        tools = create_openviking_tools(client=RuleClient(), profile=profile)
+        tool = next(tool for tool in tools if tool.name == "viking_rule_search")
+        assert (
+            tool.invoke({"task_context": "deploy", "rule_probability_threshold": 0})
+            == "完整规则\n" * 17000 + "LAST RULE"
+        )
+        with pytest.raises(ValueError):
+            tool.invoke({"task_context": "deploy", "rule_probability_threshold": 2})
+
+
 def test_create_openviking_tools_exposes_common_viking_primitives():
     client = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "The user likes LangGraph agents."}

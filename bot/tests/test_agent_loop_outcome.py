@@ -1,6 +1,9 @@
 import asyncio
 import base64
 import copy
+import random
+import struct
+import zlib
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -208,6 +211,173 @@ class _ImageRegistry:
             effective_params=params,
             preserve_complete_result=self.preserve_complete_result,
         )
+
+
+@pytest.fixture
+def large_png_url():
+    # A reproducible, valid PNG whose payload exceeds the default text budget.
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    pixels = random.Random(0).randbytes(300 * 300 * 3)
+    rows = b"".join(b"\0" + pixels[offset : offset + 900] for offset in range(0, len(pixels), 900))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 300, 300, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+    assert 240_000 < len(png)
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["user", "tool"])
+@pytest.mark.parametrize("budget", [None, 240_000])
+async def test_agent_loop_accepts_large_png_with_text_budget(
+    make_loop, large_png_url, source, budget
+):
+    image = {"type": "image_url", "image_url": {"url": large_png_url}}
+    user: dict = {"role": "user", "content": "Describe the image."}
+    if source == "user":
+        user["content"] = [{"type": "text", "text": "Describe the image."}, image]
+    provider = _MediaProvider([[_image_call("image")]] if source == "tool" else [])
+    loop = make_loop(provider=provider, max_iterations=2)
+    final, *_ = await loop._run_agent_loop(
+        messages=[user],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="large-png"),
+        publish_events=False,
+        tool_registry=_ImageRegistry([{"type": "text", "text": "Image source."}, image]),
+        context_compact_budget=budget,
+    )
+    assert final == "done"
+    assert len(provider.calls) == (2 if source == "tool" else 1)
+    sent = provider.calls[-1]
+    media_message = next(message for message in sent if message["role"] == source)
+    assert image in media_message["content"]
+    assert loop_module._inline_media_bytes(sent) == len(
+        base64.b64decode(large_png_url.split(",", 1)[1])
+    )
+    assert loop_module._compact_msg_chars(sent) < 240_000
+
+
+@pytest.mark.parametrize("image_type", ["image_url", "input_image"])
+def test_text_budget_counts_multimodal_text_but_not_base64(large_png_url, image_type):
+    image = {
+        "type": image_type,
+        "image_url": {"url": large_png_url} if image_type == "image_url" else large_png_url,
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "x" * 250_000}, image],
+        }
+    ]
+    original = copy.deepcopy(messages)
+    size = loop_module._compact_msg_chars(messages)
+    assert 250_000 <= size < 251_000
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_final_fallback_bounds_context_even_without_compaction_setting(make_loop):
+    provider = _MediaProvider([[_image_call("call-1", "source " * 1_000)]])
+    loop = make_loop(provider=provider, max_iterations=1)
+    task = {"role": "user", "content": "Original task " + "x" * 239_000}
+    final, *_ = await loop._run_agent_loop(
+        messages=[task],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="budget-fallback"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(),
+    )
+    assert final == "done"
+    assert len(provider.calls) == 2
+    assert all(loop_module._compact_msg_chars(messages) <= 240_000 for messages in provider.calls)
+    assert task in provider.calls[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "iterations"), [("user", 1), ("tool", 2), ("tool", 1), ("status", 1)]
+)
+async def test_caller_owned_context_preserves_large_evidence(make_loop, source, iterations):
+    evidence = "Assigned source checkpoint\n" * 12_000
+    provider = _MediaProvider([[_image_call("source")]] if source == "tool" else [])
+    loop = make_loop(provider=provider, max_iterations=iterations)
+    loop._compact_tool_loop = AsyncMock(side_effect=AssertionError("Unexpected compaction"))
+    content = [{"type": "text", "text": evidence}] if source == "tool" else evidence
+
+    async def status_note(_iteration):
+        return evidence if source == "status" else None
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": content if source == "user" else "Compile source."}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="large-evidence"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(content),
+        automatic_compaction=False,
+        status_note_provider=status_note,
+    )
+    assert final == "done"
+    assert len(provider.calls) == (2 if source == "tool" else 1)
+    assert any(message.get("content") == content for message in provider.calls[-1])
+    assert loop_module._compact_msg_chars(provider.calls[-1]) > 240_000
+    loop._compact_tool_loop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("automatic", "budget"), [(True, None), (False, 250_000)])
+async def test_default_chat_and_explicit_budgets_still_apply(make_loop, automatic, budget):
+    provider = _MediaProvider([])
+    loop = make_loop(provider=provider)
+    with pytest.raises(ValueError, match="Context exceeds output budget"):
+        await loop._run_agent_loop(
+            messages=[{"role": "user", "content": "Assigned source " * 20_000}],
+            session_key=SessionKey(type="cli", channel_id="default", chat_id="explicit-budget"),
+            publish_events=False,
+            context_compact_budget=budget,
+            automatic_compaction=automatic,
+        )
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_save_prompt_requires_explicit_budget(make_loop):
+    provider = _MediaProvider([[_image_call("image")]])
+    loop = make_loop(provider=provider, max_iterations=2)
+    loop._compact_tool_loop = AsyncMock(side_effect=AssertionError("Unexpected compaction"))
+    await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "Describe the image."}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="default-budget"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(),
+        pre_compact_prompt="Save progress now.",
+    )
+    assert len(provider.calls) == 2
+    assert all(message.get("content") != "Save progress now." for message in provider.calls[-1])
+    loop._compact_tool_loop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_structured_task_can_own_context_capacity(make_loop):
+    loop = make_loop()
+    loop._run_agent_loop = AsyncMock(return_value=(None, None, [], {}, 1))
+    bundle = object()
+    registry = SimpleNamespace(get=lambda _name: SimpleNamespace(bundle=bundle))
+    result, *_ = await loop.run_structured_task(
+        system_prompt="Compile evidence.",
+        user_prompt="Compile source.",
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="structured-capacity"),
+        tool_registry=registry,
+        openviking_tool_names=[],
+        stop_tool_names=["submit_wiki_bundle"],
+        openviking_connection=None,
+        automatic_compaction=False,
+    )
+    assert result is bundle
+    assert loop._run_agent_loop.await_args.kwargs["automatic_compaction"] is False
 
 
 class _SteerProvider(LLMProvider):

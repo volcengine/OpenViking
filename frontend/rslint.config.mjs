@@ -9,6 +9,8 @@ import {
   ts,
 } from '@rslint/core';
 
+import propsOrder from './rslint-plugins/props-order.mjs';
+
 export default defineConfig([
   globalIgnores([
     '**/dist/**',
@@ -41,6 +43,13 @@ export default defineConfig([
   {
     files: ['**/*.{js,mjs}'],
     languageOptions: { globals: globals.node },
+  },
+  {
+    // 公开 Props 按约定放在各目录的 types.ts；内部子组件的 Props 定义在
+    // 各自的 .tsx 里，不属于公开接口。
+    files: ['packages/react/src/**/types.ts'],
+    plugins: { 'ov-ui': propsOrder },
+    rules: { 'ov-ui/props-order': 'error' },
   },
   reactPlugin.configs.recommended,
   reactHooksPlugin.configs.recommended,
