@@ -366,7 +366,7 @@ def _has_initial_user_config(user_config: UserConfig | None) -> bool:
     )
 
 
-async def _validate_initial_user_config(
+def _validate_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
@@ -376,10 +376,9 @@ async def _validate_initial_user_config(
     if service.viking_fs is None:
         raise FailedPreconditionError("OpenViking service is not initialized.")
     if _has_add_targets(user_config):
-        await validate_add_targets(
+        validate_add_targets(
             user_config.add_targets,
             ctx=user_ctx,
-            viking_fs=service.viking_fs,
         )
     if user_config is not None:
         if user_config.ttl is not None:
@@ -471,11 +470,10 @@ async def _check_user_exists(request: Request, account_id: str, user_id: str, ma
         raise NotFoundError(user_id, "user")
 
 
-async def _user_settings_result(
+def _user_settings_result(
     ctx: RequestContext,
     user_config: UserConfig,
     server_config: ServerConfig,
-    viking_fs,
 ) -> dict:
     memory_policy_config = (
         user_config.memory_policy
@@ -488,8 +486,8 @@ async def _user_settings_result(
     memory_policy = policy.to_dict()
     if policy.memory_types is None:
         memory_policy["memory_types"] = sorted(known_memory_types)
-    add_targets = await validate_add_targets(
-        resolve_user_add_targets(user_config, server_config), ctx=ctx, viking_fs=viking_fs
+    add_targets = validate_add_targets(
+        resolve_user_add_targets(user_config, server_config), ctx=ctx
     )
     return {
         "account_id": ctx.account_id,
@@ -522,7 +520,7 @@ async def create_account(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
-    await _validate_initial_user_config(service, account_ctx, body.user_config)
+    _validate_initial_user_config(service, account_ctx, body.user_config)
     # Reject bad initial config before any storage is created, so a failed
     # create leaves nothing behind. This validates the active account runtime
     # field surface and inherited vector configuration without persisting.
@@ -1052,7 +1050,7 @@ async def register_user(
         user=UserIdentifier(account_id, body.user_id),
         role=resolved_role,
     )
-    await _validate_initial_user_config(service, user_ctx, body.user_config)
+    _validate_initial_user_config(service, user_ctx, body.user_config)
     manager = _get_api_key_manager(request)
     user_key = await manager.register_user(
         account_id,
@@ -1178,11 +1176,10 @@ async def get_user_settings(
     user_config = await read_user_config(service.viking_fs, user_ctx)
     return Response(
         status="ok",
-        result=await _user_settings_result(
+        result=_user_settings_result(
             user_ctx,
             user_config,
             request.app.state.config,
-            service.viking_fs,
         ),
     )
 
@@ -1217,11 +1214,10 @@ async def patch_user_settings(
     user_config = await patch_user_config(service.viking_fs, user_ctx, patch)
     return Response(
         status="ok",
-        result=await _user_settings_result(
+        result=_user_settings_result(
             user_ctx,
             user_config,
             request.app.state.config,
-            service.viking_fs,
         ),
     )
 

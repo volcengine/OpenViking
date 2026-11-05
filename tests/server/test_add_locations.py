@@ -70,6 +70,7 @@ async def _add_resource(client: httpx.AsyncClient, filename: str, **extra):
 
 async def test_add_locations_resource_server_default_and_precedence(
     app,
+    service,
     user_role_client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
@@ -112,6 +113,34 @@ async def test_add_locations_resource_server_default_and_precedence(
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/")
     assert "/project-a/" not in root_uri
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.acl import AclMode
+    from openviking_cli.session.user_id import UserIdentifier
+
+    restricted_uri = "viking://resources/one-off/sample"
+    await service.runtime_config_manager.patch_account("default", {"acl": {"enabled": True}})
+    await service.viking_fs.set_acl(
+        restricted_uri,
+        [{"principal": "user:editor", "level": "write"}],
+        acl_mode=AclMode.RESTRICTED,
+        ctx=RequestContext(user=UserIdentifier("default", "admin"), role=Role.ADMIN),
+    )
+    response = await client.patch(
+        "/api/v1/user-settings/add-locations", json={"resource_uri": restricted_uri}
+    )
+    assert response.status_code == 200, response.text
+    loaded = await client.get("/api/v1/user-settings/add-locations")
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["result"]["effective"]["resource_uri"] == restricted_uri
+    denied = await client.post(
+        "/api/v1/resources", json={"temp_file_id": sample_markdown_file.name, "wait": True}
+    )
+    assert denied.status_code == 403, denied.text
+    app.state.config.user_config_defaults.add_targets.resource_uri = restricted_uri
+    cleared = await client.delete("/api/v1/user-settings/add-locations")
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["result"]["effective"]["resource_uri"] == restricted_uri
 
 
 async def test_add_locations_skill_server_default(

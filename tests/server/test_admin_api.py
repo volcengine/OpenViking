@@ -2239,6 +2239,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
 
     from openviking.ttl import wiring
     from openviking.ttl.runtime import DirectoryTTL
+    from openviking_cli.exceptions import PermissionDeniedError
     from openviking_cli.utils.config.open_viking_config import set_openviking_config
 
     client = lightweight_admin_client
@@ -2264,10 +2265,19 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     url = f"/api/v1/admin/accounts/{acct}/users/bob/settings"
     service = lightweight_admin_app.state.fake_service
     fs = service.viking_fs
+
+    async def check_access(uri, ctx, *, action):
+        if uri.startswith("viking://resources/"):
+            raise PermissionDeniedError("Shared resource directory is not writable")
+
+    monkeypatch.setattr(fs, "_ensure_access", check_access)
     user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
     lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-        add_targets={"resource_uri": "viking://~/resources", "skill_uri": "viking://~/skills"}
+        add_targets={"resource_uri": "viking://resources/default", "skill_uri": "viking://~/skills"}
     )
+    loaded = await client.get(url, headers=user_headers)
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["result"]["add_targets"]["resource_uri"] == "viking://resources/default"
     other_acct = _uid()
     created = await client.post(
         "/api/v1/admin/accounts",
@@ -2309,7 +2319,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         patched = await client.patch(
             url,
             json={
-                "add_targets": {"resource_uri": "viking://~/resources/project-a"},
+                "add_targets": {"resource_uri": "viking://resources/project-a"},
                 "memory_policy": {"memory_types": ["experiences"]},
                 "ttl": {"sessions": 7, "peer_events": 3, "user_events": "disabled"},
             },
@@ -2322,7 +2332,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         admin_view = await client.get(url, headers=admin_headers)
         assert admin_view.status_code == 200 and admin_view.json()["result"] == settings
         assert settings["add_targets"] == {
-            "resource_uri": "viking://user/bob/resources/project-a",
+            "resource_uri": "viking://resources/project-a",
             "skill_uri": "viking://user/bob/skills",
         }
         assert settings["ttl"] == {"sessions": 7, "peer_events": 3, "user_events": "disabled"}
@@ -2382,7 +2392,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         assert cleared.status_code == 200, cleared.text
         assert cleared.json()["result"]["ttl"] is None
         assert cleared.json()["result"]["add_targets"] == {
-            "resource_uri": "viking://user/bob/resources",
+            "resource_uri": "viking://resources/default",
             "skill_uri": "viking://user/bob/skills",
         }
         assert (await read_user_config(fs, user_ctx)).add_targets.model_dump(
@@ -2392,7 +2402,8 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         assert (await engine.policy(acct, first_peer)).days == 14
 
         lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-            memory_policy={"memory_types": ["events"]}
+            add_targets={"resource_uri": "viking://resources/default"},
+            memory_policy={"memory_types": ["events"]},
         )
         reset = await client.patch(url, json={"memory_policy": None}, headers=root_headers())
         assert reset.status_code == 200, reset.text

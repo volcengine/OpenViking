@@ -39,10 +39,9 @@ def _viking_fs():
 async def _response(request: Request, ctx: RequestContext) -> dict[str, Any]:
     viking_fs = _viking_fs()
     user_config = await read_user_config(viking_fs, ctx)
-    effective = await validate_add_targets(
+    effective = validate_add_targets(
         resolve_user_add_targets(user_config, request.app.state.config),
         ctx=ctx,
-        viking_fs=viking_fs,
     )
     return {
         "override": user_config.add_targets.model_dump(),

@@ -1101,6 +1101,13 @@ the managed User. A field is `null` when neither layer sets it, leaving the add
 operation's own target defaults in control. Explicit `add_resource.to` / `parent`
 and `add_skill.target_uri` still take precedence.
 
+Configuring add targets validates URI syntax and personal-namespace ownership,
+without checking directory write permission. GET/PATCH responses also do not
+check directory write permission. Saving a target grants no resource access;
+`add_resource` and `add_skill` still check write permission when using it. An
+unwritable default directory does not prevent reading or updating memory policy
+or TTL settings.
+
 ```http
 PATCH /api/v1/admin/accounts/acme/users/alice/settings
 Content-Type: application/json
@@ -1163,7 +1170,7 @@ Create a new workspace with its first admin user.
 - `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
 - `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
 - Legacy spellings `viking://user/resources[/...]` and `viking://user/skills` are still accepted here and normalized to the `viking://~/...` form (the server logs an info message). Everywhere else, the uid-less spelling is rejected at the request boundary — write new configs with `viking://~/...`.
 
@@ -1562,7 +1569,7 @@ Register a new user in a workspace.
 - ADMIN can only register users in their own account
 - `"global"` is creation-only. Only ROOT can create, delete, rotate, or modify group membership for a GLOBAL identity. No identity, including ROOT, can change an existing role to or from GLOBAL; delete and recreate instead. ADMIN and USER can observe that a GLOBAL identity exists in user listings, but never receive its credentials or management controls.
 - The `"root"` role cannot be minted through user registration
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
 - `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
 - Legacy spellings `viking://user/resources[/...]` and `viking://user/skills` are still accepted here and normalized to the `viking://~/...` form (the server logs an info message). Everywhere else, the uid-less spelling is rejected at the request boundary — write new configs with `viking://~/...`.
 

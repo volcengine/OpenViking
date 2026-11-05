@@ -951,6 +951,10 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 展开。两处都未设置时，该字段为 `null`，由添加操作采用自身的默认目标规则。
 `add_resource` 的显式 `to` / `parent`、`add_skill` 的显式 `target_uri` 仍然优先。
 
+配置添加位置时校验 URI 格式和个人空间归属，不检查目标目录的写权限；GET/PATCH
+响应也不检查目录写权限。保存配置不会授予资源访问权限，实际调用 `add_resource`
+或 `add_skill` 时仍会校验目标写权限。默认目录不可写不会阻止读取或修改记忆策略、TTL。
+
 ```http
 PATCH /api/v1/admin/accounts/acme/users/alice/settings
 Content-Type: application/json
@@ -1011,7 +1015,7 @@ DELETE /api/v1/user-settings/add-locations
 - `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
-- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
 - `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
 - 旧写法兼容：`viking://user/resources[/...]` 和 `viking://user/skills` 在这里仍会被接受，并归一化为 `viking://~/...` 形式（服务端会打印一条 info 日志）。在其他位置，无 uid 的写法会在请求入口被拒绝——新配置请直接写 `viking://~/...`。
 
@@ -1408,7 +1412,7 @@ ov --sudo task status <task_id>
 - ADMIN 只能在自己所属的 account 中注册用户
 - `"global"` 仅用于创建。只有 ROOT 可以创建、销毁、轮换或修改 GLOBAL 身份的用户组；任何身份（包括 ROOT）都不能将现有角色与 GLOBAL 相互转换，需要销毁后重建。ADMIN 和 USER 可以在用户列表中感知 GLOBAL 身份的存在，但不会获得其凭据或管理入口。
 - 无法通过用户注册接口直接创建 `"root"` 角色
-- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
 - `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
 - 旧写法兼容：`viking://user/resources[/...]` 和 `viking://user/skills` 在这里仍会被接受，并归一化为 `viking://~/...` 形式（服务端会打印一条 info 日志）。在其他位置，无 uid 的写法会在请求入口被拒绝——新配置请直接写 `viking://~/...`。
 

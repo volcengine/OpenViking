@@ -115,19 +115,21 @@ async def validate_skill_add_target(
     return resolved
 
 
-async def validate_add_targets(
+def validate_add_targets(
     settings: AddTargetsConfig,
     *,
     ctx: RequestContext,
-    viking_fs: VikingFS,
 ) -> ResolvedAddTargets:
+    """Validate URI semantics and expand aliases for the settings owner."""
     resource_uri = (
-        await validate_resource_add_target(settings.resource_uri, ctx=ctx, viking_fs=viking_fs)
+        validate_content_target_uri(
+            settings.resource_uri, ctx, kind="resource", field_name="resource_uri"
+        )
         if settings.resource_uri
         else None
     )
     skill_uri = (
-        await validate_skill_add_target(settings.skill_uri, ctx=ctx, viking_fs=viking_fs)
+        validate_content_target_uri(settings.skill_uri, ctx, kind="skill", field_name="skill_uri")
         if settings.skill_uri
         else None
     )
@@ -167,7 +169,7 @@ async def update_user_config(
         current = await read_user_config(viking_fs, ctx)
         before = current.model_dump(by_alias=True)
         result = updater(current)
-        runtime = await validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
+        runtime = validate_add_targets(current.add_targets, ctx=ctx)
         current.add_targets.resource_uri = runtime.resource_uri
         current.add_targets.skill_uri = runtime.skill_uri
         validate_user_memory_policy(current.memory_policy)
@@ -250,7 +252,7 @@ async def write_user_config(
     *,
     lease_ref: object | None = None,
 ) -> ResolvedAddTargets:
-    runtime = await validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
+    runtime = validate_add_targets(user_config.add_targets, ctx=ctx)
     user_config.add_targets.resource_uri = runtime.resource_uri
     user_config.add_targets.skill_uri = runtime.skill_uri
     validate_user_memory_policy(user_config.memory_policy)
