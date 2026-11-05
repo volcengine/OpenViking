@@ -1838,3 +1838,65 @@ def test_access_keeps_raw_title_but_exposes_safe_original_filename(monkeypatch):
         assert resource.meta["original_filename"] == "API Docs_Overview"
     finally:
         resource.cleanup()
+
+
+def _text_block(block_id, parent_id, text):
+    elements = [SimpleNamespace(text_run=SimpleNamespace(content=text, text_element_style=None))]
+    return SimpleNamespace(
+        block_id=block_id,
+        block_type=2,
+        parent_id=parent_id,
+        children=[],
+        page=None,
+        text=SimpleNamespace(elements=elements),
+    )
+
+
+def test_parse_docx_renders_table_cell_content_only_inside_table(monkeypatch):
+    # The block list API returns every block, including the text blocks nested
+    # in table cells; those are already rendered by the table itself.
+    cells = [
+        SimpleNamespace(
+            block_id=f"cell-{index}",
+            block_type=32,
+            parent_id="table-1",
+            children=[f"cell-text-{index}"],
+            page=None,
+            table_cell=SimpleNamespace(),
+        )
+        for index in range(4)
+    ]
+    cell_texts = [
+        _text_block(f"cell-text-{index}", f"cell-{index}", text)
+        for index, text in enumerate(["Name", "Amount", "Alice", "42"])
+    ]
+    blocks = [
+        SimpleNamespace(
+            block_id="doc-1",
+            block_type=1,
+            parent_id="",
+            children=["intro", "table-1", "outro"],
+            page=SimpleNamespace(elements=[]),
+        ),
+        _text_block("intro", "doc-1", "Before the table"),
+        SimpleNamespace(
+            block_id="table-1",
+            block_type=31,
+            parent_id="doc-1",
+            children=[cell.block_id for cell in cells],
+            page=None,
+            table=SimpleNamespace(property=SimpleNamespace(row_size=2, column_size=2)),
+        ),
+        *[block for pair in zip(cells, cell_texts, strict=True) for block in pair],
+        _text_block("outro", "doc-1", "After the table"),
+    ]
+    accessor = FeishuAccessor()
+    monkeypatch.setattr(accessor, "_fetch_all_blocks", lambda *_args, **_kwargs: blocks)
+
+    markdown, _title = accessor._parse_docx("doc-1")
+
+    assert markdown == (
+        "Before the table\n\n"
+        "| Name  | Amount |\n| ----- | ------ |\n| Alice | 42     |\n\n"
+        "After the table"
+    )
