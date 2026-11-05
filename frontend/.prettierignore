@@ -1,0 +1,6 @@
+node_modules/
+dist/
+doc_build/
+.rspress/
+.rspress-cache/
+package-lock.json

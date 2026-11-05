@@ -15,6 +15,7 @@ from openviking.resource.watch_store import WatchMoveResult
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority
 from openviking.server.identity import RequestContext, Role
+from openviking.service import fs_service as fs_module
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
 from openviking.storage.abstract_overview import body_for_preview
@@ -2217,3 +2218,32 @@ async def test_rm_of_missing_path_does_not_create_it(request_context, local_fs_s
 
     await service.rm("viking://resources/gone", ctx=request_context, recursive=True)
     assert not await viking_fs.exists("viking://resources/gone", ctx=request_context)
+
+
+@pytest.mark.parametrize("error, visible, reads", [(0, True, 4), (0, False, 3), (1, False, 2)])
+async def test_directory_index_visibility(monkeypatch, request_context, error, visible, reads):
+    uri = "viking://resources/output"
+    fs = FSService()
+    vfs = AsyncMock(_uri_to_path=lambda uri, **_: uri)
+    vfs.stat.return_value = {"isDir": True}
+    vfs.read_file.side_effect = FileNotFoundError()
+    monkeypatch.setattr(fs, "_viking_fs", vfs)
+    records = AsyncMock(return_value=[])
+    monkeypatch.setattr(fs, "_directory_index_records", records)
+    monkeypatch.setattr(
+        fs, "_wait_for_refresh", AsyncMock(return_value={"Embedding": {"error_count": error}})
+    )
+    monkeypatch.setattr(fs_module, "vectorize_directory_meta", AsyncMock(return_value={0}))
+    monkeypatch.setattr(fs_module, "_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        fs_module, "_DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS", 60 if visible else 0
+    )
+    if visible:
+        records.side_effect = [[], [], [], [{"level": 0}]]
+        result = await fs.ensure_directory_index(uri, request_context, "Output")
+        assert result["indexed_levels"] == [0] and result["vector_status"] == "complete"
+    else:
+        message = "processing failed" if error else "is not readable"
+        with pytest.raises(fs_module.OpenVikingError, match=message):
+            await fs.ensure_directory_index(uri, request_context, "Output")
+    assert records.await_count == reads

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.service import fs_service as fs_module
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
@@ -17,7 +18,8 @@ def _ctx() -> RequestContext:
 
 
 @pytest.mark.asyncio
-async def test_content_write_processor_recovers_dispatch_result_from_checkpoint():
+@pytest.mark.parametrize("operation", ["content_write", "ensure_directory_index"])
+async def test_content_write_processor_recovers_checkpoint(monkeypatch, operation):
     tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
     set_task_tracker(tracker)
     ctx = _ctx()
@@ -25,7 +27,7 @@ async def test_content_write_processor_recovers_dispatch_result_from_checkpoint(
         "content_write",
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
-        resource_id="viking://user/default/memories/note.md",
+        resource_id="viking://resources/output",
     )
     await tracker.start(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
     await tracker.register_work(
@@ -38,15 +40,24 @@ async def test_content_write_processor_recovers_dispatch_result_from_checkpoint(
     msg = ContentWriteMsg(
         task_id=task.task_id,
         _task_work_id="root-work-1",
-        operation="content_write",
-        resource_id="viking://user/default/memories/note.md",
+        operation=operation,
+        resource_id="viking://resources/output",
         result={"overview_status": "queued", "vector_status": "queued"},
-        refresh={"kind": "memory"},
+        refresh={"kind": "none", "indexed_levels": [0]},
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
         role="user",
     )
-    processor = ContentWriteProcessor(SimpleNamespace(_async_agfs=SimpleNamespace()))
+    fs = fs_module.FSService()
+    records = AsyncMock(side_effect=[[], [{"level": 0}], [{"level": 0}]])
+    monkeypatch.setattr(fs, "_directory_index_records", records)
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service", lambda: SimpleNamespace(fs=fs)
+    )
+    monkeypatch.setattr(fs_module, "_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS", 0)
+    processor = ContentWriteProcessor(
+        SimpleNamespace(_async_agfs=SimpleNamespace(), stat=AsyncMock(return_value={"isDir": True}))
+    )
     processor._execute_refresh = AsyncMock(
         return_value={"overview_status": "complete", "vector_status": "skipped"}
     )
@@ -64,7 +75,9 @@ async def test_content_write_processor_recovers_dispatch_result_from_checkpoint(
         assert restored is not None
         assert restored.result is not None
         assert restored.result["overview_status"] == "complete"
-        assert restored.result["vector_status"] == "skipped"
+        assert restored.result["vector_status"] == (
+            "complete" if operation == "ensure_directory_index" else "skipped"
+        )
         assert processor._execute_refresh.await_count == 1
     finally:
         set_task_tracker(None)

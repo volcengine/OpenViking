@@ -104,6 +104,9 @@ pub struct OperationStats {
     pub success_count: u64,
     /// Number of failed operations.
     pub error_count: u64,
+    /// Failed operations grouped by the stable RAGFS error kind.
+    #[serde(default)]
+    pub error_counts: HashMap<String, u64>,
     /// Total time spent on this operation (nanoseconds).
     pub total_time_ns: u64,
     /// Minimum time spent (nanoseconds); u64::MAX when count is zero.
@@ -123,6 +126,7 @@ impl Default for OperationStats {
             count: 0,
             success_count: 0,
             error_count: 0,
+            error_counts: HashMap::new(),
             total_time_ns: 0,
             min_time_ns: u64::MAX,
             max_time_ns: 0,
@@ -176,6 +180,7 @@ impl FilesystemStats {
 /// Thread-safe statistics collector
 pub struct StatsCollector {
     durations: RwLock<DurationMetrics>,
+    error_counts: RwLock<HashMap<(FsOperation, &'static str), u64>>,
 }
 
 impl Default for StatsCollector {
@@ -189,11 +194,13 @@ impl StatsCollector {
     pub fn new() -> Self {
         Self {
             durations: RwLock::new(DurationMetrics::default()),
+            error_counts: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Record the supplied operation, duration, and success flag; return unit.
-    pub async fn record(&self, op: FsOperation, duration: Duration, success: bool) {
+    /// Record the supplied operation, duration, and optional stable error kind; return unit.
+    pub async fn record(&self, op: FsOperation, duration: Duration, error_kind: Option<&'static str>) {
+        let success = error_kind.is_none();
         self.durations.read().await.record(
             duration,
             &[
@@ -201,6 +208,10 @@ impl StatsCollector {
                 KeyValue::new("status", if success { "success" } else { "error" }),
             ],
         );
+        if let Some(error_kind) = error_kind {
+            let mut error_counts = self.error_counts.write().await;
+            *error_counts.entry((op, error_kind)).or_default() += 1;
+        }
     }
 
     /// Get a snapshot of current statistics
@@ -241,12 +252,21 @@ impl StatsCollector {
                 }
             }
         }
+        for ((operation, error_kind), count) in self.error_counts.read().await.iter() {
+            snapshot
+                .operations
+                .get_mut(operation)
+                .expect("filesystem stats contains every operation")
+                .error_counts
+                .insert((*error_kind).to_string(), *count);
+        }
         snapshot
     }
 
     /// Reset all statistics
     pub async fn reset(&self) {
         *self.durations.write().await = DurationMetrics::default();
+        self.error_counts.write().await.clear();
     }
 }
 
@@ -267,9 +287,9 @@ impl OperationTimer {
         }
     }
 
-    /// Consume this timer and record elapsed time with the supplied outcome; return unit.
-    pub async fn finish(self, success: bool) {
+    /// Consume this timer and record elapsed time with an optional stable error kind; return unit.
+    pub async fn finish(self, error_kind: Option<&'static str>) {
         let duration = self.start.elapsed();
-        self.collector.record(self.op, duration, success).await;
+        self.collector.record(self.op, duration, error_kind).await;
     }
 }

@@ -533,7 +533,7 @@ class ProxyRequest:
                 completed = True
             except (ToolLoopError, aiohttp.ClientError) as error:
                 self.metrics["degradation"] = "hidden_tool_loop_failed"
-                yield loop.error(str(error))
+                yield loop.error(error)
             finally:
                 await chunks.aclose()
                 if not finished:

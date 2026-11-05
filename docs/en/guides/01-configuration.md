@@ -102,11 +102,13 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Cluster | `agent_evolution` | Dynamic | ROOT can update it through the Admin API; it is used as the cluster default. |
 | Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
+| Account | `output_language_override`, `memory.extraction_enabled` | Dynamic | ROOT or the Account ADMIN can update them. Generation uses the owning Account's settings; absent values use business-level Cluster defaults. |
 | Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
+| Account | `parser_api.api_key` | Dynamic | ROOT-only. A configured section requires a nonblank key; external parser operations use the owning Account's credential. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 
-Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` is not on the current Account configuration API surface.
+Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` exposes only `extraction_enabled`.
 
 Account and Cluster configurations are independently stored and published.
 Any use of Cluster settings when Account settings are absent is a business
@@ -153,6 +155,39 @@ The request body wraps a PATCH document in `settings`:
 ```
 
 PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains settings from that scope, not a business-effective Account/Cluster composition. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
+
+## Account generation settings
+
+Supply defaults explicitly in Account creation `settings`, or update them through
+the Account configuration endpoint:
+
+```json
+{
+  "settings": {
+    "output_language_override": "en",
+    "memory": {"extraction_enabled": false}
+  }
+}
+```
+
+An absent or `null` language override uses the Cluster language. An explicit `""`
+enables automatic language detection even when Cluster specifies a language.
+Language identifiers follow the existing generation rules. Text resource summaries,
+directory overviews, Working Memory, extraction and memory consolidation use this
+setting. Image-summary prompts keep their existing language behavior. Audio/video
+summaries prefer the media's primary language and use the configured language only
+when the media has no identifiable language.
+
+An absent or `null` `memory` section uses the Cluster extraction switch. A present
+section uses its own `extraction_enabled` (default `true`); `{}` or deleting its
+last field leaves that program default. `false` disables SessionCommit long-term
+extraction; user/peer policies still apply when enabled. Working Memory and manual
+`compile --skill memory` remain available.
+
+Language generation and the extraction gate independently read their own Account
+setting when needed. Subsequent executions read updated settings; queued tasks
+store their owner identity rather than configuration values.
+Explicit Account values do not change with Cluster defaults.
 
 ## Account Embedding and VectorDB
 
@@ -1086,7 +1121,7 @@ The top-level `parser_api` section routes selected formats to the external Under
 | `enable` | `false` | Enable external parsing. |
 | `extensions` | `[]` | File extensions to route externally; normalized to lowercase without the leading dot. |
 | `host` | `""` | API host including scheme, such as `https://parser.example.com`; required when enabled. |
-| `api_key` | `""` | External API credential; required when enabled. |
+| `api_key` | `""` | Legacy standalone credential, used only when the Account has no `parser_api` section. A usable key must be available when an external parser operation starts. |
 | `enable_feishu_url` | `false` | Allow direct Feishu URL parsing when credentials are available. Feishu documents already normalized to Markdown by the accessor bypass external parsing; file attachments still use extension routing. |
 | `enable_resumable_upload` | `false` | Enable resumable uploads. |
 | `upload_simple_max_bytes` | `536870912` (512 MiB) | Simple-upload size threshold. |
@@ -1096,6 +1131,29 @@ The top-level `parser_api` section routes selected formats to the external Under
 | `poll_interval_ms` | `3000` | Response polling interval. |
 
 All size, timeout, and polling values must be greater than zero.
+
+Shared deployments should provision `settings.parser_api.api_key` for every Account
+through `POST /api/v1/admin/accounts`, or update it through
+`PATCH /api/v1/admin/accounts/{account_id}/configuration`. Only ROOT can read or
+write this section; ADMIN responses omit it, and ADMIN updates, including `null`,
+are rejected. Account settings contain only the credential; host, routing, upload
+and timeout settings remain Cluster-owned. A configured Account never falls back
+to the Cluster key after a remote authentication failure. Ordinary add-resource
+`args.api_key` and `args.parser_api` are rejected.
+
+Uploads, submission, polling, directory imports (including nested ZIP archives)
+and task recovery use the owning
+Account. Queue messages store the owner and remote file/response IDs, without the
+parser key. A running parser call keeps the key it acquired; a later call or
+recovery reads the current key. Rotation must preserve access to previously
+created remote IDs under the same remote identity. Permission failures propagate
+without resubmission or another credential attempt. Result ZIP URLs are fetched
+without attaching the parser Authorization header.
+
+The built-in file configuration source persists Account settings through AGFS.
+They use existing file encryption when `encryption.enabled=true`; encryption is
+off by default. This change does not encrypt the host's `ov.conf` file or alter
+encryption behavior for custom configuration sources.
 
 ### rerank
 
@@ -1556,9 +1614,6 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `backend` | str | `local` keeps the original filesystem path; `cache` enables the CacheFS wrapper | `local` |
-| `max_file_size_bytes` | int | Maximum full-file object size admitted to cache | `1048576` |
-| `traversal_mode` | str | `backend` or `cached_traversal` | `backend` |
-| `bypass_prefixes` | array[str] | Path prefixes that bypass cache | `[]` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
 
@@ -1861,9 +1916,9 @@ acl_direct_grants
 acl_inherited_grants
 ```
 
-Each element uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`.
+Each grant uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. Empty grants are stored as `["none"]`, which is also the default value of both fields. This marker does not change `acl_mode`.
 
-Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and empty lists.
+Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and no grants.
 
 For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
 

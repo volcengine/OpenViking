@@ -293,7 +293,7 @@ async def test_overdue_run_stays_occupied_until_its_task_stops(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("started", [False, True])
 @pytest.mark.parametrize("active", [False, True])
-async def test_overdue_connector_task_is_failed_and_watch_is_settled(
+async def test_overdue_connector_work_is_cancelled_and_watch_is_failed(
     make_runtime, watch_tracker, started, active
 ):
     runtime = await make_runtime()
@@ -301,28 +301,33 @@ async def test_overdue_connector_task_is_failed_and_watch_is_settled(
     await runtime.watch_manager.update_task(task.task_id, **OWNER, role="root", is_active=active)
     if started:
         await watch_tracker.start(record.task_id, **OWNER)
+        await watch_tracker.register_work(record.task_id, "external", "ExternalTask", **OWNER)
+        await watch_tracker.start_work(record.task_id, "external", **OWNER)
     await runtime.sweep()
     assert await runtime.watch_manager.has_running_overlap("default", [TARGET])
     assert (await watch_tracker.get(record.task_id, **OWNER)).error is None
 
     await shape_watch(runtime.watch_manager.store, task.task_id, run_started_at=1.0)
     await runtime.sweep()
-    failed = await watch_tracker.get(record.task_id, **OWNER)
-    assert failed.status.value == "failed"
-    assert failed.error == "Watch run Task timed out after 10800s"
+    cancelled = await watch_tracker.get(record.task_id, **OWNER)
+    assert cancelled.status.value == ("cancelling" if started else "cancelled")
+    assert cancelled.error is None
     state = await runtime.watch_manager.store.get_state(task.task_id)
     assert state.current_run_id is None and state.run_started_at is None
     assert state.task.last_task_id == record.task_id
-    assert state.task.last_status == "failed" and state.task.last_error == failed.error
+    assert state.task.last_status == "failed"
+    assert state.task.last_error == "Watch run Task timed out after 10800s"
     assert state.task.is_active is active
     assert (state.task.next_execution_time is not None) is active
     assert not await runtime.watch_manager.has_running_overlap("default", [TARGET])
     assert task.task_id not in runtime._active_runs
 
+    if started:
+        await watch_tracker.mark_work_done(record.task_id, "external", **OWNER)
     saved = state.task.to_dict()
     await runtime.sweep()
     await watch_tracker.complete(record.task_id, {"late": "result"}, **OWNER)
-    assert (await watch_tracker.get(record.task_id, **OWNER)).status.value == "failed"
+    assert (await watch_tracker.get(record.task_id, **OWNER)).status.value == "cancelled"
     assert (await runtime.watch_manager.get_task(task.task_id)).to_dict() == saved
 
 
@@ -333,13 +338,13 @@ async def test_timeout_failure_does_not_overwrite_concurrent_completion(
     runtime = await make_runtime()
     task, record = await running_watch(runtime, watch_tracker, task_type="connector_import")
     await shape_watch(runtime.watch_manager.store, task.task_id, run_started_at=1.0)
-    fail = watch_tracker.fail
+    cancel = watch_tracker.cancel
 
-    async def complete_before_fail(task_id, error, **owner):
+    async def complete_before_cancel(task_id, **owner):
         await watch_tracker.complete(task_id, {"completed": True}, **owner)
-        await fail(task_id, error, **owner)
+        return await cancel(task_id, **owner)
 
-    monkeypatch.setattr(watch_tracker, "fail", complete_before_fail)
+    monkeypatch.setattr(watch_tracker, "cancel", complete_before_cancel)
     await runtime.sweep()
     completed = await watch_tracker.get(record.task_id, **OWNER)
     assert completed.status.value == "completed" and completed.error is None
@@ -366,12 +371,12 @@ async def test_nonterminal_task_keeps_occupancy_after_timeout(make_runtime, watc
 
 
 @pytest.mark.asyncio
-async def test_delete_tasks_fails_a_run_task_that_cannot_be_cancelled(make_runtime, watch_tracker):
+async def test_delete_tasks_cancels_a_connector_run_task(make_runtime, watch_tracker):
     runtime = await make_runtime()
     task, record = await running_watch(runtime, watch_tracker, task_type="connector_import")
     await runtime.watch_manager.delete_tasks(**OWNER)
     assert await runtime.watch_manager.get_task(task.task_id) is None
-    assert (await watch_tracker.get(record.task_id, **OWNER)).status.value == "failed"
+    assert (await watch_tracker.get(record.task_id, **OWNER)).status.value == "cancelled"
     assert not await runtime.watch_manager.has_running_overlap("default", [TARGET])
 
 
