@@ -601,10 +601,13 @@ class PersistentTaskStore(TaskWorkStore):
             if cancelled:
                 task.status = TaskStatus.CANCELLING
                 self._cancel_pending_and_inline_work(work_set)
-            enqueue_markers = task.auth.get("enqueue_complete_work_ids")
-            task.auth = (
-                {"enqueue_complete_work_ids": deepcopy(enqueue_markers)} if enqueue_markers else {}
-            )
+            if task.status is not TaskStatus.CANCELLING:
+                enqueue_markers = task.auth.get("enqueue_complete_work_ids")
+                task.auth = (
+                    {"enqueue_complete_work_ids": deepcopy(enqueue_markers)}
+                    if enqueue_markers
+                    else {}
+                )
             finalize_task(task, work_set.works.values())
             return StoreOperationResult.applied()
 

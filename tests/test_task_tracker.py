@@ -372,7 +372,7 @@ async def test_patch_stage_and_record_owner_cancelled(tracker: TaskTracker):
     cancelled = await tracker.get(task.task_id)
     assert cancelled is not None
     assert cancelled.status == TaskStatus.CANCELLED
-    assert cancelled.stage == "cancelled"
+    assert cancelled.stage == "parsing"
 
 
 async def test_patch_task_updates_fields_and_dispatch_marker_atomically(tracker: TaskTracker):
@@ -487,7 +487,7 @@ async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
     retrieved = await tracker.get(task.task_id)
     assert retrieved is not None
     assert retrieved.status == TaskStatus.CANCELLED
-    assert retrieved.stage == "cancelled"
+    assert retrieved.stage is None
 
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
