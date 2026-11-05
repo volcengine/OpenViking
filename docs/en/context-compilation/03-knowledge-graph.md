@@ -16,7 +16,7 @@ Each edge is a compact JSON line, readable as the statement `<from> <relation> <
 
 `relation` is a stable, language-independent machine predicate (`member_of`, `leads`, `located_in`…), `label` is its localized display name, and `entity_type` drives node color, shape, and filtering in the visualization. The graph refreshes incrementally: existing nodes and edges are preserved, evidence is merged, and new knowledge is appended.
 
-Skill source: [openviking/system_assets/compile/example-skills/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/knowledge-graph) · Visualization script: [examples/compile/graph-show/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/knowledge-graph)
+Skill source: [examples/compile/ov-compile-skills/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-graph) · Visualization script: [examples/compile/graph-show/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/knowledge-graph)
 
 Check the [prerequisites](01-overview.md#prerequisites) and run these commands from the OpenViking repository root. Replace the source directory with your own material.
 
@@ -30,7 +30,7 @@ ov ls -r viking://resources/journal
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill openviking/system_assets/compile/example-skills/knowledge-graph -p viking://agent/skills --wait
+ov add-skill examples/compile/ov-compile-skills/knowledge-graph -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/knowledge-graph
 ```

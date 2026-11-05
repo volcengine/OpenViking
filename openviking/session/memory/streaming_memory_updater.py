@@ -17,6 +17,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Hashable
 
+from openviking.config.generation import get_output_language_override
 from openviking.config.vlm import VLMResolver
 from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message
@@ -131,6 +132,7 @@ class StreamingMemoryUpdater:
     vikingdb: Any = None
     config: StreamingMemoryUpdaterConfig = field(default_factory=StreamingMemoryUpdaterConfig)
     vlm_resolver: VLMResolver | None = None
+    runtime_config_manager: Any = None
     _group_batchers: dict[
         MemoryMergeGroupKey,
         StreamingBatcher[MemoryUpdateRequest, StreamingMemoryUpdateResult],
@@ -569,6 +571,14 @@ class StreamingMemoryUpdater:
                     )
                 )
 
+        output_language_override = (
+            await get_output_language_override(
+                self.runtime_config_manager, requests[0].ctx.account_id
+            )
+            if any(_requests_span_sessions(batch) for batch in requests_by_kind.values())
+            else None
+        )
+
         async def merge_kind(kind_requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
             operations = _combine_resolved_operations(
                 request.operations for request in kind_requests
@@ -588,6 +598,7 @@ class StreamingMemoryUpdater:
                 trace_console=self.config.trace_console,
                 force_merge=True,
                 vlm_resolver=self.vlm_resolver,
+                output_language_override=output_language_override,
             )
 
         kind_batches = [
@@ -758,6 +769,7 @@ async def merge_memory_operations(
     trace_console: bool = False,
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
+    output_language_override: str | None = None,
 ) -> ResolvedOperations:
     """Merge resolved memory operations by memory type/URI using patch context."""
 
@@ -822,6 +834,7 @@ async def merge_memory_operations(
                 trace_console=trace_console,
                 force_merge=force_merge,
                 vlm_resolver=vlm_resolver,
+                output_language_override=output_language_override,
             )
             for (peer_id, memory_type) in all_group_keys
         ],
@@ -915,6 +928,7 @@ async def merge_one_memory_type_operations(
     trace_console: bool = False,
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
+    output_language_override: str | None = None,
 ) -> ResolvedOperations:
     registry = registry or get_default_registry()
     schema = registry.get(memory_type)
@@ -1027,17 +1041,19 @@ async def merge_one_memory_type_operations(
     )
     if vlm_resolver is None:
         raise RuntimeError(
-            "merge_one_memory_type_operations requires a VLM resolver "
-            "for account-owned work"
+            "merge_one_memory_type_operations requires a VLM resolver for account-owned work"
         )
     vlm_config = await vlm_resolver.get_vlm(ctx.account_id)
     provider = PatchMergeContextProvider(
         memory_type=memory_type,
         required_file_uris=required_file_uris,
         patches=patches,
-        output_language=merge_output_language_from_messages(messages),
+        output_language=merge_output_language_from_messages(
+            messages, output_language_override=output_language_override
+        ),
         memory_registry=registry,
         vlm_config=vlm_config,
+        output_language_override=output_language_override,
     )
     provider._ctx = ctx
     provider._viking_fs = safe_get_viking_fs()
@@ -1099,14 +1115,18 @@ async def merge_one_memory_type_operations(
     return merged
 
 
-def merge_output_language_from_messages(messages: list[Message]) -> str | None:
+def merge_output_language_from_messages(
+    messages: list[Message], *, output_language_override: str | None = None
+) -> str | None:
     if not any(
         getattr(part, "text", None)
         for message in messages or []
         for part in getattr(message, "parts", [])
     ):
         return None
-    return SessionExtractContextProvider(messages=messages).get_output_language()
+    return SessionExtractContextProvider(
+        messages=messages, output_language_override=output_language_override
+    ).get_output_language()
 
 
 def clone_operation_for_uri(op: ResolvedOperation, uri: str) -> ResolvedOperation:
@@ -1610,8 +1630,14 @@ async def filter_valid_links(
         try:
             content = await viking_fs.read_file(uri, ctx=ctx)
             exists = bool(content)
-        except Exception:
+        except (NotFoundError, FileNotFoundError):
             exists = False
+        except Exception:
+            # A transient probe failure says nothing about the endpoint's
+            # existence. Keep the link so the rewrite below either lands it
+            # or surfaces the real storage error, instead of silently
+            # dropping the link forever.
+            exists = True
         endpoint_exists_cache[uri] = exists
         return exists
 
@@ -2287,6 +2313,7 @@ async def get_streaming_memory_updater(
     vikingdb: Any = None,
     config: StreamingMemoryUpdaterConfig | None = None,
     vlm_resolver: VLMResolver | None = None,
+    runtime_config_manager: Any = None,
 ) -> StreamingMemoryUpdater:
     """Get or create the process-global streaming updater for one user key."""
 
@@ -2301,12 +2328,15 @@ async def get_streaming_memory_updater(
                 existing.vikingdb = vikingdb
             if vlm_resolver is not None:
                 existing.vlm_resolver = vlm_resolver
+            if runtime_config_manager is not None:
+                existing.runtime_config_manager = runtime_config_manager
             return existing
         updater = StreamingMemoryUpdater(
             registry=registry,
             vikingdb=vikingdb,
             config=config or StreamingMemoryUpdaterConfig(),
             vlm_resolver=vlm_resolver,
+            runtime_config_manager=runtime_config_manager,
         )
         _streaming_memory_updater_registry[key] = updater
         return updater

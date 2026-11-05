@@ -41,6 +41,29 @@ Run from a repository checkout, the installer uses that checkout's plugins (`--s
 
 `--uninstall --harness <list>` removes the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations. Claude Code, Codex, OpenCode, pi and dsh are removed with their own commands, which the installer prints at the end of an install.
 
+The install ends with a "Not done" list, when something that was asked for did not happen (a selected harness whose CLI was not found, a server that could not be reached or rejected the key, a CLI that npm could not install), and then a line linking the agent onboarding guide, `https://docs.openviking.<host>/agents/<en|zh>/onboarding.md`, on the docs host the downloads came from and in the installer's language. Run from inside a dsh session (`DSH_SHELL=1`), the dsh plugin goes into that session's profile (`DSH_PROFILE`) unless `--dsh-profile` names another.
+
+## Importing earlier sessions
+
+`import-history.mjs` replays recent Claude Code or Codex sessions from this machine into OpenViking, so work done before the plugin was installed is remembered too. It is one file with no dependencies (Node.js 18+), published next to the installer:
+
+```bash
+curl -fsSLO https://docs.openviking.ai/dl/memory-plugin-shared/import-history.mjs   # or docs.openviking.net
+node import-history.mjs --harness claude            # report what would be imported
+node import-history.mjs --harness claude --yes      # import it
+```
+
+By default it takes the sessions of the current project (the repository the current directory belongs to) active in the last 14 days, at most 20, and skips sessions active in the last 2 hours. To import only some of them, `--list` prints the sessions in scope with their ids and the first and last request of each (up to 200 unless `--max-sessions` is given, with a line naming the option that widens the scope when it left sessions out), and `--session <id>[,<id>...]` imports just those, whatever their project or age. An exact id always wins over a prefix; an id that matches nothing importable, or more than one session, refuses the run. `--help` lists the options. It uses the plugins' connection (`~/.openviking/ovcli.conf`, or `OPENVIKING_URL` / `OPENVIKING_API_KEY`) and writes each session the way the plugins would see it:
+
+- session id `import__<claude_code|codex>__<native id>`, the id `openviking-server ingest` uses, so the two never import a session twice;
+- the peer the plugins derive for the session's working directory (see [Workspace Peers](#workspace-peers)), so imported and live sessions of one repository share their memories;
+- user and assistant text only, with the original timestamps; tool calls and their output are dropped, and API keys, tokens and `--api-key` arguments are redacted;
+- auto-commit off and one commit per session, so each session is extracted once.
+
+A session that was already imported, or that the plugin already captured, is skipped, so a second run imports nothing. A run that stopped half way picks up where it left off.
+
+Other agents (Cursor, TRAE, TRAE CN, TRAE CLI, ZCode, Kimi Code, CodeBuddy Code, OpenCode, pi, dsh, OpenClaw, Hermes) have no built-in reader. A small converter writes their sessions to a JSONL file, one session per line (`{"id", "cwd", "messages": [{"role", "text", "created_at"}], "updated_at", "subagent"}`, documented in `--help`), and `node import-history.mjs --harness opencode --input sessions.jsonl` imports it with everything above: the same filters, redaction and single commit, the ingest source name in the session id where `openviking-server ingest` has one, and the host plugin's own live session id and peer, so nothing is imported twice. A malformed line refuses the whole file, with its line number. OpenClaw and Hermes name their peers after the agent, so no peer is derived for them unless `--peer` gives one.
+
 ## Workspace Peers
 
 `lib/workspace-peer.mjs` decides which peer a workspace writes its memories under; `lib/workspace-identity.mjs` derives the values it substitutes.

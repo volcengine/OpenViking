@@ -112,9 +112,42 @@ class BatchWriteOptions(_ExtraOptions, total=False):
     defer_processing: bool
 
 
+class _RequiredMCPToolMount(TypedDict):
+    tool_uri: str
+    node_uri: str
+    title: str
+
+
+class MCPToolMount(_RequiredMCPToolMount, total=False):
+    description: str
+    timeout_seconds: int
+    arguments: Mapping[str, Any]
+    tags: List[str]
+
+
 class CompileOptions(_ExtraOptions, total=False):
     instruction: str
     args: Dict[str, Any]
+
+
+class RuleCompileSource(AddResourceOptions, total=False):
+    resource_uri: str
+    path: str
+    temp_file_id: str
+    to: str
+    parent: str
+    wait: bool
+    internal_task: bool
+    source_name: str
+    is_active: bool
+
+
+class RuleCompileOptions(_ExtraOptions, total=False):
+    sources: List[Union[str, RuleCompileSource]]
+
+
+class RuleSearchOptions(_ExtraOptions, total=False):
+    rule_probability_threshold: float
 
 
 class SetTagsOptions(_ExtraOptions, total=False):

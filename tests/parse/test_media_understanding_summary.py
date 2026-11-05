@@ -288,11 +288,14 @@ async def test_media_summary_stat_skips_directory_vector_count(monkeypatch):
 async def test_success_normalizes_markdown_and_filename_heading(
     monkeypatch,
 ):
+    from openviking.prompts import render_prompt
+
     raw = "```markdown\nA useful overview paragraph.\n\n## Facts\n\n- Revenue grew 20%.\n```"
     client = _lazy_client(return_value=raw)
     model_config = SimpleNamespace(get_client_instance=lambda: client)
     fs = _FS()
     monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(media_utils, "render_prompt", render_prompt)
     monkeypatch.setattr(
         media_utils,
         "get_openviking_config",
@@ -303,12 +306,16 @@ async def test_success_normalizes_markdown_and_filename_heading(
         "viking://resources/video/quarterly.mov",
         "quarterly.mov",
         vlm=client,
+        output_language_override="zh-CN",
     )
 
     assert result["summary"].startswith("# quarterly\n\nA useful overview paragraph.")
     assert "### quarterly.mov" in result["summary"]
     assert result["summary"].index("### quarterly.mov") < result["summary"].index("## Facts")
     client.get_media_completion_async.assert_awaited_once()
+    prompt = client.get_media_completion_async.call_args.kwargs["prompt"]
+    assert "primary language" in prompt
+    assert "use zh-CN." in prompt
 
 
 async def test_provider_failure_returns_empty_summary(monkeypatch):

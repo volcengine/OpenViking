@@ -46,13 +46,20 @@ class WriteContentRequest(BaseModel):
     content: str
     mode: str = "replace"
     wait: bool = False
+    timeout: float | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    )
     telemetry: TelemetryRequest = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
     # Who made the edit; versions of Compile outputs record it (console edit = manual).
-    edit_source: Literal["manual", "agent", "compile"] = "agent"
+    edit_source: Literal["manual", "agent", "compile"] = "manual"
+    # Mark this edit as conflict resolution.
+    resolve_conflicts: bool = False
 
 
 class BatchWriteOperation(BaseModel):
@@ -64,6 +71,8 @@ class BatchWriteOperation(BaseModel):
     mode: Literal["replace", "append", "create", "upsert"] = "replace"
     # Optional byte revision, checked under the existing file locks before any writes.
     expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    # Atomically create only when the target does not exist.
+    if_absent: bool = False
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
@@ -72,6 +81,10 @@ class BatchWriteOperation(BaseModel):
     def validate_content_shape(self) -> "BatchWriteOperation":
         if (self.content is None) == (self.content_base64 is None):
             raise ValueError("exactly one of content or content_base64 is required")
+        if self.if_absent and self.expected_sha256 is not None:
+            raise ValueError("if_absent cannot be combined with expected_sha256")
+        if self.if_absent and self.mode == "append":
+            raise ValueError("if_absent cannot be combined with append mode")
         return self
 
 
@@ -81,13 +94,18 @@ class BatchWriteRequest(BaseModel):
     root_uri: str
     operations: list[BatchWriteOperation]
     wait: bool = True
+    timeout: float | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    )
     telemetry: TelemetryRequest = False
     # Preserve conflicting target files and return their URI/reason while writing other files.
     skip_conflicts: bool = False
     # Save content without semantic or vector work; the caller schedules processing.
     defer_processing: bool = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
-    edit_source: Literal["manual", "agent", "compile"] = "agent"
+    edit_source: Literal["manual", "agent", "compile"] = "manual"
 
 
 class SetTagsRequest(BaseModel):
@@ -99,6 +117,19 @@ class SetTagsRequest(BaseModel):
     tags: list[str] | None = None
     mode: str = "replace"
     recursive: bool = False
+    telemetry: TelemetryRequest = False
+
+
+class EnsureDirectoryIndexRequest(BaseModel):
+    """Ensure one existing directory has semantic indexes, preserving stored summaries."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str = Field(min_length=1, description="URI of an existing directory")
+    fallback_abstract: str = Field(
+        min_length=1, description="L0 body used only when both L0 and L1 are absent"
+    )
+    wait: bool = Field(default=True, description="Wait until semantic indexes are readable")
     telemetry: TelemetryRequest = False
 
 
@@ -155,6 +186,10 @@ async def read(
             result = await service.fs.read(resolved, ctx=_ctx, offset=offset, limit=limit)
         else:
             result = await service.fs.read_visible(resolved, ctx=_ctx, offset=offset, limit=limit)
+            if offset == 0 and limit == -1:
+                live_result = await service.mcps.read_live_context(result, _ctx)
+                if live_result is not None:
+                    result = live_result
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -272,6 +307,7 @@ async def write(
             tag_mode=request.tag_mode,
             acl=request.acl,
             edit_source=request.edit_source,
+            resolve_conflicts=request.resolve_conflicts,
         ),
     )
     return Response(
@@ -332,6 +368,31 @@ async def set_tags(
             tags=tags,
             mode=request.mode,
             recursive=request.recursive,
+            ctx=_ctx,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/ensure_directory_index")
+async def ensure_directory_index(
+    request: EnsureDirectoryIndexRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Seed L0 only when both summaries are absent and ensure existing levels are indexed."""
+    service = get_service()
+    uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
+    execution = await run_operation(
+        operation="content.ensure_directory_index",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.ensure_directory_index(
+            uri=uri,
+            fallback_abstract=request.fallback_abstract,
+            wait=request.wait,
             ctx=_ctx,
         ),
     )

@@ -17,7 +17,7 @@ import pytest_asyncio
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
-from openviking.server.api_keys import is_new_format_key
+from openviking.server.api_keys import is_valid_format_key
 from openviking.server.store_assembly import build_api_key_manager
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
@@ -302,7 +302,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify account created successfully
         assert user_key is not None
-        assert is_new_format_key(user_key)
+        assert is_valid_format_key(user_key)
 
         # RAGFS /local/... paths map to test_data_dir/viking/viking/...
         # because OpenVikingService path is test_data_dir/viking,
@@ -348,7 +348,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify user registered successfully
         assert new_user_key is not None
-        assert is_new_format_key(new_user_key)
+        assert is_valid_format_key(new_user_key)
 
         # AGFS /local/... paths map to test_data_dir/viking/viking/...
         agfs_data_root = test_data_dir / "viking" / "viking"
@@ -548,7 +548,7 @@ This is a test skill for verifying encryption functionality.
 
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
         assert admin_user_key is not None
-        assert is_new_format_key(admin_user_key)
+        assert is_valid_format_key(admin_user_key)
 
         # 2. Verify list-accounts operation
         print("[2] Verify list-accounts operation")
@@ -565,7 +565,7 @@ This is a test skill for verifying encryption functionality.
         print(f"[3] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
         assert test_user_key is not None
-        assert is_new_format_key(test_user_key)
+        assert is_valid_format_key(test_user_key)
 
         # 4. Verify list-users operation
         print("[4] Verify list-users operation")
@@ -1175,12 +1175,12 @@ class TestAddResourceWithSemanticProcessing:
         print(f"[1] Create test account: {test_account_id}")
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
         assert admin_user_key is not None
-        assert is_new_format_key(admin_user_key)
+        assert is_valid_format_key(admin_user_key)
 
         print(f"[2] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
         assert test_user_key is not None
-        assert is_new_format_key(test_user_key)
+        assert is_valid_format_key(test_user_key)
 
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier

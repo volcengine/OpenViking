@@ -36,6 +36,7 @@ from openviking.service.task_domain import (
     finalize_task,
     processing_seconds,
     sanitize_error,
+    serialize_work_errors,
     summarize_works,
 )
 from openviking.service.task_events import append_task_event
@@ -113,6 +114,14 @@ class StoreOperationResult:
 
 
 @dataclass(frozen=True)
+class TaskCreationResult:
+    """The stored Task and whether this call inserted it."""
+
+    task: TaskRecord
+    created: bool
+
+
+@dataclass(frozen=True)
 class TaskDeletionBlocker:
     task_id: str
     account_id: str
@@ -150,7 +159,19 @@ class TaskWorkStore(Protocol):
     @property
     def work_recovery_mode(self) -> WorkRecoveryMode: ...
 
-    async def create(self, task: TaskRecord, *, reject_if_active: bool = False) -> TaskRecord: ...
+    async def create(
+        self, task: TaskRecord, *, reject_if_active: bool = False
+    ) -> TaskCreationResult: ...
+
+    async def withdraw_unaccepted(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> StoreOperationResult:
+        """Atomically delete an initial pending Task only while it has no Work.
+
+        Reject Tasks with execution progress or any retained Work, including
+        closed Work. Serialize this decision with Task and Work mutations.
+        """
+        ...
 
     async def get_task(
         self,
@@ -283,7 +304,7 @@ class TaskWorkStore(Protocol):
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -352,6 +373,17 @@ class TaskWorkStore(Protocol):
 TaskStore = TaskWorkStore
 
 
+def _can_withdraw_task(task: TaskRecord, *, has_work: bool) -> bool:
+    return (
+        task.status is TaskStatus.PENDING
+        and not has_work
+        and task.stage is None
+        and task.result is None
+        and task.error is None
+        and task.processing_seconds is None
+    )
+
+
 @dataclass
 class _WorkSet:
     works: Dict[str, WorkRecord]
@@ -392,7 +424,9 @@ class PersistentTaskStore(TaskWorkStore):
     def work_recovery_mode(self) -> WorkRecoveryMode:
         return WorkRecoveryMode.QUEUE_SNAPSHOT
 
-    async def create(self, task: TaskRecord, *, reject_if_active: bool = False) -> TaskRecord:
+    async def create(
+        self, task: TaskRecord, *, reject_if_active: bool = False
+    ) -> TaskCreationResult:
         if not task.account_id or not task.user_id:
             raise ValueError("PersistentTaskStore requires account_id and user_id")
         business_key = (task.account_id, task.user_id, task.task_type, task.resource_id)
@@ -410,14 +444,34 @@ class PersistentTaskStore(TaskWorkStore):
             async with self._record_locks.acquire(owner):
                 existing = await self._load_task(task.task_id, task.account_id, task.user_id)
                 if existing is not None:
-                    return self._copy_task(existing, self._work_sets.get(owner))
+                    return TaskCreationResult(
+                        self._copy_task(existing, self._work_sets.get(owner)), created=False
+                    )
                 stored = deepcopy(task)
                 append_task_events(stored, None)
                 await self._write_task(stored)
                 with self._lock:
                     self._task_cache[owner] = stored
                     self._work_sets[owner] = _WorkSet({})
-                return deepcopy(stored)
+                return TaskCreationResult(deepcopy(stored), created=True)
+
+    async def withdraw_unaccepted(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> StoreOperationResult:
+        if not account_id or not user_id:
+            raise ValueError("Task withdrawal requires account_id and user_id")
+        owner = (account_id, user_id, task_id)
+        async with self._record_locks.acquire(owner):
+            task = await self._load_task(task_id, account_id, user_id)
+            if task is None:
+                return StoreOperationResult.noop(StoreOperationCode.NOT_FOUND)
+            work_set = self._work_sets.get(owner)
+            if not _can_withdraw_task(task, has_work=bool(work_set and work_set.works)):
+                return StoreOperationResult.rejected(
+                    StoreOperationCode.INVALID_STATE, "Task has already been used"
+                )
+            await self._delete_task_unlocked(owner, task_exists=True)
+            return StoreOperationResult.applied()
 
     async def get_task(
         self,
@@ -729,7 +783,7 @@ class PersistentTaskStore(TaskWorkStore):
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -754,7 +808,7 @@ class PersistentTaskStore(TaskWorkStore):
             if error:
                 work.error = sanitize_error(error)
             if state == WorkState.FAILED:
-                details = [sanitize_error(str(value)) for value in errors or () if str(value)]
+                details = serialize_work_errors(errors)
                 work.errors = details or ([work.error] if work.error else [])
             if context_count_delta > 0:
                 work.context_count += context_count_delta

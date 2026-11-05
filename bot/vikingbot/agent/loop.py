@@ -33,6 +33,7 @@ from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
+from vikingbot.openviking_mount.session_budget import session_budget
 from vikingbot.openviking_mount.session_state import (
     get_openviking_session_id,
     get_openviking_state,
@@ -357,7 +358,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_iterations: int = 50,
         memory_window: int = 50,
         brave_api_key: str | None = None,
@@ -379,7 +380,7 @@ class AgentLoop:
             provider: LLMProvider instance for making LLM calls.
             workspace: Path to the workspace directory for file operations.
             model: Optional model identifier. If not provided, uses the provider's default.
-            temperature: Sampling temperature for LLM requests (default: 0.7).
+            temperature: Sampling temperature; None uses the provider default.
             max_iterations: Maximum number of tool execution iterations per message (default: 50).
             memory_window: Maximum number of messages to keep in session memory (default: 50).
             brave_api_key: Optional API key for Brave search integration.
@@ -1027,7 +1028,7 @@ class AgentLoop:
             return session.get_history(provider_name=provider_name)
 
         agents_config = getattr(self.config, "agents", None)
-        token_budget = int(getattr(agents_config, "session_context_token_budget", 12000) or 12000)
+        _, token_budget, _ = session_budget(agents_config)
         session_id = get_openviking_session_id(session)
         request_client = None
 
@@ -1061,10 +1062,20 @@ class AgentLoop:
                 provider_name=provider_name,
             )
             combined_history = ov_history + local_tail
-            trimmed_history = self._trim_history_to_token_budget(
-                combined_history,
-                token_budget,
+            summary_messages = (
+                ov_history[:1] if context_payload.get("latest_archive_overview") else []
             )
+            summary_tokens = sum(
+                self._history_message_tokens(message) for message in summary_messages
+            )
+            if summary_tokens >= token_budget:
+                summary_messages = []
+                summary_tokens = 0
+            trimmed_history = self._trim_history_to_token_budget(
+                combined_history[len(summary_messages) :],
+                token_budget - summary_tokens,
+            )
+            trimmed_history = summary_messages + trimmed_history
             if len(trimmed_history) != len(combined_history) or any(
                 before.get("content") != after.get("content")
                 for before, after in zip(
@@ -1170,14 +1181,13 @@ class AgentLoop:
 
         state = get_openviking_state(session)
         pending_tokens = int(state.get("last_pending_tokens", 0) or 0)
-        commit_token_threshold = int(getattr(agents_config, "commit_token_threshold", 6000) or 6000)
         incoming_tokens = cal_str_tokens(msg.content or "")
+        _, _, token_threshold = session_budget(agents_config)
         last_commit_local_index = parse_local_index(state.get("last_commit_local_index", -1))
         messages_since_commit = len(session.messages) - last_commit_local_index - 1
         incoming_messages_count = 1
         should_commit = bool(
-            pending_tokens >= commit_token_threshold
-            or pending_tokens + incoming_tokens >= commit_token_threshold
+            pending_tokens + incoming_tokens >= token_threshold
             or messages_since_commit + incoming_messages_count >= self.memory_window
         )
         if not should_commit:
@@ -1703,13 +1713,19 @@ class AgentLoop:
                 logger.warning("Tool-loop compaction summary attempt {}/3 failed: {}", attempt, exc)
         return ""
 
-    async def _preview_tool_result(self, result: Any, session_key: SessionKey) -> Any:
+    async def _preview_tool_result(
+        self,
+        result: Any,
+        session_key: SessionKey,
+        *,
+        preserve_complete: bool = False,
+    ) -> Any:
         """Save text exceeding 8,000 characters and return a bounded head/tail preview.
 
         Non-text results pass through. Saving failures are explicit in the preview;
         original tool outcomes still determine success and stop conditions.
         """
-        if not isinstance(result, str) or len(result) <= 8_000:
+        if preserve_complete or not isinstance(result, str) or len(result) <= 8_000:
             return result
         path = f"{TOOL_RESULT_DIRECTORY}/{uuid.uuid4().hex}.txt"
         try:
@@ -2130,7 +2146,11 @@ class AgentLoop:
                 for _idx, tool_call, outcome, tool_execute_duration in results:
                     result = outcome.result
                     result_text = str(result)
-                    model_result = await self._preview_tool_result(result, session_key)
+                    model_result = await self._preview_tool_result(
+                        result,
+                        session_key,
+                        preserve_complete=getattr(outcome, "preserve_complete_result", False),
+                    )
                     recorded_result = (
                         result_text if isinstance(result, MultimodalToolResult) else model_result
                     )
@@ -2162,10 +2182,10 @@ class AgentLoop:
                         )
                     if isinstance(result, MultimodalToolResult):
                         result_media_bytes = _inline_media_bytes([{"content": result.content}])
-                        if not self.provider.supports_tool_result_media(self.model):
+                        if not self.provider.should_inline_tool_result_media(self.model):
                             model_result = (
-                                f"{result_text}\n\nMedia content was omitted because the configured "
-                                "model provider does not support media in tool results."
+                                f"{result_text}\n\nMedia content was omitted by the configured "
+                                "tool-result media policy."
                             )
                         else:
                             overflow = (

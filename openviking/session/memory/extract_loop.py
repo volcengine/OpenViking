@@ -144,7 +144,7 @@ class ExtractLoop:
             vlm: VLM instance (from openviking.models.vlm.base)
             viking_fs: VikingFS instance for storage operations
             model: Model name to use
-            max_iterations: Maximum number of ReAct iterations (default: 5)
+            max_iterations: Maximum number of ReAct iterations (default: 3)
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Per-call thinking override for this extraction loop. True/False
@@ -211,6 +211,7 @@ class ExtractLoop:
         patch_repair_count = 0
         resolution_repair_count = 0
         pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
+        resolution_repair_ranges_only = True
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -336,6 +337,7 @@ class ExtractLoop:
                     operations = self._event_resolution_repair_subset(
                         operations,
                         pending_resolution_repair[0],
+                        ranges_only=resolution_repair_ranges_only,
                     )
                 candidate_operations, candidate_links = await self.resolve_operations(operations)
                 if pending_resolution_repair is not None:
@@ -345,31 +347,15 @@ class ExtractLoop:
                         candidate_operations,
                     )
                     raw_links = base_links
-                    pending_resolution_repair = None
+                    # Refetch and patch retries must keep using the validated base.
                 else:
                     final_operations = candidate_operations
                     raw_links = candidate_links
-                resolution_issues = self._retryable_resolution_issues(final_operations)
-                if resolution_issues and resolution_repair_count == 0:
-                    resolution_repair_count += 1
-                    pending_resolution_repair = (final_operations, raw_links)
-                    max_iterations += 1
-                    self._disable_tools_for_iteration = True
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": self._build_resolution_repair_instruction(resolution_issues),
-                        }
-                    )
-                    tracer.info(
-                        "Extended max_iterations to "
-                        f"{max_iterations} for retry memory target resolution",
-                        console=True,
-                    )
-                    continue
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
+                    # New file context may require changes beyond the Event's ranges.
+                    resolution_repair_ranges_only = False
                     tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
@@ -384,6 +370,7 @@ class ExtractLoop:
                     continue
                 patch_errors = await self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
+                    resolution_repair_ranges_only = False
                     patch_repair_count += 1
                     max_iterations += 1
                     self._disable_tools_for_iteration = True
@@ -397,6 +384,26 @@ class ExtractLoop:
                         f"Extended max_iterations to {max_iterations} for retry patch repair"
                     )
                     continue
+                # Only cache a fallback after reads and patch validation have completed.
+                resolution_issues = self._retryable_resolution_issues(final_operations)
+                if not patch_errors and resolution_issues and resolution_repair_count == 0:
+                    resolution_repair_count += 1
+                    pending_resolution_repair = (final_operations, raw_links)
+                    resolution_repair_ranges_only = True
+                    max_iterations += 1
+                    self._disable_tools_for_iteration = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._build_resolution_repair_instruction(resolution_issues),
+                        }
+                    )
+                    tracer.info(
+                        "Extended max_iterations to "
+                        f"{max_iterations} for retry memory target resolution",
+                        console=True,
+                    )
+                    continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
@@ -405,20 +412,25 @@ class ExtractLoop:
             # Add format error message if parse failed (max 1 retry). This may raise
             # max_iterations, granting one more attempt after this failure.
             if failure_kind == "budget_exhausted":
+                if pending_resolution_repair is not None:
+                    final_operations, raw_links = pending_resolution_repair
+                    pending_resolution_repair = None
+                    tracer.info(
+                        "Event resolution repair response was cut off by the output budget; "
+                        "keeping the validated first-pass operations",
+                        console=True,
+                    )
+                    break
                 # Truncation is not an ordinary format mistake: a same-cap format
                 # retry would only hit the budget again, and replaying the
                 # truncated output just grows the prompt. Fail fast with the
                 # dedicated error recorded by _call_llm().
-                raise RuntimeError(
-                    f"Memory extraction aborted: {parse_error or failure_kind}"
-                )
+                raise RuntimeError(f"Memory extraction aborted: {parse_error or failure_kind}")
 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -500,9 +512,7 @@ class ExtractLoop:
         """
         usage = getattr(response, "usage", None)
         completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
-        details = (
-            f"finish_reason='length', output cap={self._effective_max_output_tokens} tokens"
-        )
+        details = f"finish_reason='length', output cap={self._effective_max_output_tokens} tokens"
         if completion_tokens:
             details += f", completion_tokens={completion_tokens}"
         return (
@@ -555,13 +565,6 @@ class ExtractLoop:
     def _build_resolution_repair_instruction(self, issues: List[Dict[str, Any]]) -> str:
         return self._output_protocol.render_resolution_repair(issues)
 
-    @staticmethod
-    def _is_event_schema(schema: Any) -> bool:
-        return (
-            getattr(schema, "memory_type", None) == "events"
-            and getattr(schema, "operation_mode", None) == "add_only"
-        )
-
     def _uri_belongs_to_schema(self, uri: str, schema: Any) -> Optional[bool]:
         """Return a path-based ownership result without trusting file metadata."""
         render_directories = getattr(self._isolation_handler, "render_schema_directories", None)
@@ -608,8 +611,10 @@ class ExtractLoop:
         cls,
         operations: Any,
         original: ResolvedOperations,
+        *,
+        ranges_only: bool = True,
     ) -> _EventRepairOperations:
-        """Keep only one range repair for each failed Event and preserve its original fields."""
+        """Keep one response per failed Event; limit the initial repair to ranges."""
         failed_events = {
             operation.page_id: operation
             for operation in original.upsert_operations
@@ -643,10 +648,9 @@ class ExtractLoop:
                 )
                 continue
 
+            fields = failed_operation.memory_fields if ranges_only else candidate
             repaired_item = {
-                key: value
-                for key, value in failed_operation.memory_fields.items()
-                if key not in {"memory_type", "user_id"}
+                key: value for key, value in fields.items() if key not in {"memory_type", "user_id"}
             }
             repaired_item["ranges"] = candidate["ranges"]
             repaired_item["page_id"] = page_id
@@ -770,43 +774,40 @@ class ExtractLoop:
             if value is None:
                 continue
             items = value if isinstance(value, list) else [value]
-            is_event = self._is_event_schema(schema)
+            is_add_only = getattr(schema, "operation_mode", "upsert") == "add_only"
             for item_index, item in enumerate(items):
                 requested_page_id = dict(item).get("page_id")
-                entries.append((schema_index, item_index, requested_page_id, is_event))
+                entries.append((schema_index, item_index, requested_page_id, is_add_only))
 
         assigned_page_ids: Dict[Tuple[int, int], int] = {}
         page_id_assignments: Dict[int, List[int]] = {}
         page_id_allocator = None
 
-        # Preserve non-Event behavior where possible. Events are always new and therefore
-        # allocate after every other memory type has claimed its response-local ID.
-        for event_phase in (False, True):
-            for schema_index, item_index, requested_page_id, is_event in entries:
-                if is_event != event_phase:
-                    continue
-                existing_uri = None
-                if requested_page_id is not None and page_id_map is not None:
-                    existing_uri = page_id_map.resolve(requested_page_id)
-                if not is_event and existing_uri is not None:
-                    page_id = requested_page_id
-                else:
-                    if page_id_allocator is None:
-                        allocator_factory = getattr(
-                            page_id_map,
-                            "new_page_id_allocator",
-                            None,
-                        )
-                        page_id_allocator = (
-                            allocator_factory()
-                            if callable(allocator_factory)
-                            else ResponsePageIdAllocator()
-                        )
-                    page_id = page_id_allocator.allocate(requested_page_id)
+        # Keep upsert IDs stable before allocating IDs for add_only operations.
+        entries.sort(key=lambda entry: entry[3])
+        for schema_index, item_index, requested_page_id, is_add_only in entries:
+            existing_uri = None
+            if not is_add_only and requested_page_id is not None and page_id_map is not None:
+                existing_uri = page_id_map.resolve(requested_page_id)
+            if existing_uri is not None:
+                page_id = requested_page_id
+            else:
+                if page_id_allocator is None:
+                    allocator_factory = getattr(
+                        page_id_map,
+                        "new_page_id_allocator",
+                        None,
+                    )
+                    page_id_allocator = (
+                        allocator_factory()
+                        if callable(allocator_factory)
+                        else ResponsePageIdAllocator()
+                    )
+                page_id = page_id_allocator.allocate(requested_page_id)
 
-                assigned_page_ids[(schema_index, item_index)] = page_id
-                if requested_page_id is not None:
-                    page_id_assignments.setdefault(requested_page_id, []).append(page_id)
+            assigned_page_ids[(schema_index, item_index)] = page_id
+            if requested_page_id is not None:
+                page_id_assignments.setdefault(requested_page_id, []).append(page_id)
 
         return assigned_page_ids, page_id_assignments
 
@@ -828,6 +829,7 @@ class ExtractLoop:
 
         for schema_index, schema in enumerate(schemas):
             memory_type = schema.memory_type
+            is_add_only = getattr(schema, "operation_mode", "upsert") == "add_only"
             value = getattr(operations, memory_type, None)
             if value is None:
                 continue
@@ -870,7 +872,6 @@ class ExtractLoop:
 
                 requested_page_id = item_dict.pop("page_id", None)
                 page_id = assigned_page_ids[(schema_index, item_index)]
-                is_event = self._is_event_schema(schema)
                 resolved_op = ResolvedOperation(
                     old_memory_file_content=None,
                     memory_fields=item_dict,
@@ -880,16 +881,14 @@ class ExtractLoop:
                     resolution_skip=identity_resolution_skip,
                 )
 
-                if is_event:
-                    # Event page_ids are temporary link anchors. They must never select an
-                    # existing memory file; URI collision handling remains unchanged downstream.
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
-                    )
-                elif requested_page_id is not None and page_id_map is not None:
-                    resolved_uri = page_id_map.resolve(requested_page_id)
+                try:
+                    resolved_uri = None
+                    if (
+                        not is_add_only
+                        and requested_page_id is not None
+                        and page_id_map is not None
+                    ):
+                        resolved_uri = page_id_map.resolve(requested_page_id)
                     if resolved_uri:
                         old_content = self.context_provider.read_file_contents.get(resolved_uri)
                         belongs_to_schema = self._uri_belongs_to_schema(resolved_uri, schema)
@@ -940,11 +939,18 @@ class ExtractLoop:
                             operation=resolved_op,
                             extract_context=self._extract_context,
                         )
-                else:
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
+                except ValueError as exc:
+                    resolved_op.uris = []
+                    resolved_op.resolution_skip = MemoryOperationSkip(
+                        reason_code=MemoryOperationSkipCode.INVALID_URI_TEMPLATE_VARS,
+                        reason=str(exc),
+                    )
+                    logger.warning(
+                        "Skipping memory operation with unrenderable URI: "
+                        "memory_type=%s page_id=%s error=%s",
+                        memory_type,
+                        page_id,
+                        exc,
                     )
 
                 upsert_operations.append(resolved_op)

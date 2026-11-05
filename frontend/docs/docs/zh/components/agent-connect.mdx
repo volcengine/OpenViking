@@ -1,0 +1,85 @@
+# AgentConnect Agent 接入
+
+Agent 接入视图。页签、当前页签的条目与详情正文都由宿主传入；组件渲染列表与详情，并上报切换与复制意图。
+
+当前是占位组件：只渲染一个固定尺寸的空壳，不消费 props，宿主可先对着已发布的包开发，真实视图后续迁入。下方的 props 契约是已对齐的形态，占位实现会被替换。
+
+## 基础用法
+
+```tsx file="../../_demos/agent-connect-basic.tsx" preview
+
+```
+
+占位尺寸为 960 × 640，对齐整页视图。
+
+## 结构
+
+视图分三块：
+
+- **页签**：顶部，由 `tabs` 与 `activeTabId` 声明。
+- **列表**：左侧，当前页签的条目，来自 `items`。
+- **详情**：右侧，选中项的正文，来自 `detail`。
+
+组件不持有目录，也不持有正文内容。条目从哪来、正文怎么渲染、复制意味着什么，都由宿主决定。
+
+## 属性
+
+### AgentConnectProps
+
+| 属性          | 类型                             | 默认值 | 说明                                                                                   |
+| ------------- | -------------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| `tabs`        | `readonly AgentConnectTab[]`     | 必填   | 顶部页签。                                                                             |
+| `activeTabId` | `string`                         | 必填   | 当前页签 id，由宿主持有。                                                              |
+| `items`       | `readonly AgentConnectItem[]`    | 必填   | 当前页签下的条目。                                                                     |
+| `selectedId`  | `string`                         | —      | 当前选中条目 id，由宿主持有。                                                          |
+| `detail`      | `AgentConnectDetail`             | —      | 选中项的详情；不传时右侧不渲染正文。                                                   |
+| `labels`      | `AgentConnectLabels`             | 英文   | 可替换文案。                                                                           |
+| `onTabChange` | `(tabId: string) => void`        | —      | 切换页签时触发。                                                                       |
+| `onSelect`    | `(item) => void`                 | —      | 选中条目时触发。                                                                       |
+| `onCopy`      | `(text: string) => void`         | —      | 复制成功后触发，用于埋点或额外反馈；复制由组件完成。不传时仍渲染复制按钮，只是不通知。 |
+| 其余属性      | `HTMLAttributes<HTMLDivElement>` | —      | 标准 div 属性，`children` 已排除。                                                     |
+
+### AgentConnectTab
+
+| 属性    | 类型     | 说明           |
+| ------- | -------- | -------------- |
+| `id`    | `string` | 页签唯一标识。 |
+| `label` | `string` | 页签显示文本。 |
+
+### AgentConnectItem
+
+| 属性          | 类型        | 说明                         |
+| ------------- | ----------- | ---------------------------- |
+| `id`          | `string`    | 条目唯一标识。               |
+| `name`        | `string`    | 条目名称。                   |
+| `description` | `string`    | 列表中的一句话说明。         |
+| `icon`        | `ReactNode` | 条目图标，可以是图片或节点。 |
+
+### AgentConnectDetail
+
+| 属性          | 类型                | 说明                                           |
+| ------------- | ------------------- | ---------------------------------------------- |
+| `title`       | `string`            | 详情标题，通常与选中条目同名。                 |
+| `icon`        | `ReactNode`         | 标题旁的图标。                                 |
+| `description` | `string`            | 标题下方的说明文字。                           |
+| `tags`        | `readonly string[]` | 标题下方的标签，例如「SDK」「境外」。          |
+| `content`     | `ReactNode`         | 正文内容，可以是 Markdown 渲染后的节点。       |
+| `copyText`    | `string`            | 复制按钮写入剪贴板的纯文本；不传时不渲染按钮。 |
+
+### AgentConnectLabels
+
+| 属性           | 说明               |
+| -------------- | ------------------ |
+| `instructions` | 正文区域的标题。   |
+| `copy`         | 复制按钮文案。     |
+| `copied`       | 复制成功后的提示。 |
+| `empty`        | 没有条目时的提示。 |
+
+```tsx
+import { AgentConnect } from '@openviking/react/components/agent-connect';
+import '@openviking/react/components/agent-connect/style.css';
+```
+
+## 实现范围
+
+组件只渲染视图并上报意图。目录加载、Markdown 渲染、权限、埋点与任何网络连接都由宿主负责。

@@ -73,6 +73,41 @@ async def test_memory_semantic_worker_retry_bypasses_dedupe_window():
 
 
 @pytest.mark.asyncio
+async def test_worker_without_lock_does_not_dedupe_a_memory_retry(monkeypatch):
+    """The circuit-breaker requeue runs before a lease is acquired.
+
+    That is the branch `SemanticMessageWork` takes when it owns no lock, so the
+    worker itself - not just the queue API - has to bypass the memory window.
+    """
+    from openviking.storage.queuefs.semantic_work import SemanticMessageWork
+
+    processor = _processor()
+    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
+        named_enqueue.return_value = "queued-id"
+        queue = SemanticQueue(MagicMock(), "/queue", "semantic")
+        msg = SemanticMsg(
+            uri="viking://user/default/memories/entities",
+            context_type="memory",
+            account_id="acc",
+            user_id="u1",
+            peer_id="p1",
+        )
+        assert await queue.enqueue(msg) == "queued-id"
+
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.get_queue_manager",
+            lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: queue),
+        )
+
+        work = SemanticMessageWork(processor, msg, None)
+        await work.reenqueue()
+
+        # Without the flag the retry would be coalesced against the enqueue it
+        # is retrying, and the delivery would be ACKed with no replacement.
+        assert named_enqueue.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_memory_semantic_enqueue_different_uri_not_deduped():
     mock_agfs = MagicMock()
     with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:

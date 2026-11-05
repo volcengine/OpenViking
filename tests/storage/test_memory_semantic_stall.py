@@ -66,7 +66,7 @@ async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context
     entered, release = asyncio.Event(), asyncio.Event()
     written = []
 
-    async def enqueue(msg):
+    async def enqueue(msg, *, deduplicate_memory=True):
         entered.set()
         await release.wait()
         written.append(msg.id)

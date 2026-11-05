@@ -15,6 +15,7 @@ from openviking.pyagfs.exceptions import (
     AGFSNotADirectoryError,
     AGFSTimeoutError,
 )
+from openviking.storage.errors import InvalidPathLockRequestError
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
@@ -40,6 +41,7 @@ from openviking.utils.model_retry import (
         IsADirectoryError,
         NotADirectoryError,
         AGFSNotADirectoryError,
+        InvalidPathLockRequestError,
     ],
 )
 @pytest.mark.parametrize("message", ["/resources/notes.txt", "timeout at /arbitrary/input.md"])

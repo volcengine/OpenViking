@@ -10,8 +10,10 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    CliContext, ConfigAddCustomArgs, ConfigAddOvServiceArgs, ConfigAddTarget, ConfigDeleteArgs,
-    ConfigEditArgs,
+    CliContext,
+    cli::{
+        ConfigAddCustomArgs, ConfigAddOvServiceArgs, ConfigAddTarget, ConfigDeleteArgs, ConfigEditArgs,
+    },
     config::{Config, DEFAULT_CUSTOM_URL},
     config_wizard::{
         ApiKeyRole, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL, configs_equivalent,

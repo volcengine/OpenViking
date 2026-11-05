@@ -461,8 +461,10 @@ def _main(recovery):
             idle = getattr(getattr(ov_config, "memory", None), "session_auto_commit", None)
             compile_api = getattr(ov_config, "compile_api", None)
             expiry = getattr(ov_config, "expiry", None)
-            uses_redis = (idle is not None and idle.enabled and idle.idle_backend == "redis") or (
-                compile_api is not None and compile_api.scheduler_enabled
+            uses_redis = (
+                (idle is not None and idle.enabled and idle.idle_backend == "redis")
+                or (compile_api is not None and compile_api.scheduler_enabled)
+                or (config.ttl_adapter is not None and config.ttl_adapter.writer_enabled)
             )
             if uses_redis and expiry is not None and expiry.publisher_separate_process:
                 if resolved_config_path is None:

@@ -29,13 +29,25 @@ WARNINGS = {
 
 
 async def check_openviking(config: StandaloneGatewayConfig) -> dict:
-    """Probe OV once before serving; refuse trusted auth and unconfirmed public binds."""
+    """Wait for transient OV failures before serving a confirmed public bind."""
     async with aiohttp.ClientSession(trust_env=False) as http:
         viking = VikingClient(http, config.openviking_url, config.min_server_version)
-        try:
-            health = await viking.health(require_identity=False)
-        except VikingError as error:
-            health = {"status": "degraded", "reason": error.reason}
+        delay = 1
+        while True:
+            try:
+                health = await viking.health(require_identity=False)
+            except VikingError as error:
+                if config.host not in LOOPBACK_HOSTS and error.status >= 500:
+                    logger.warning(
+                        "Waiting for OpenViking before binding publicly: %s; retrying in %ss",
+                        error.reason,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 30)
+                    continue
+                health = {"status": "degraded", "reason": error.reason}
+            break
     if health.get("reason") == "trusted_mode_unsupported":
         raise ValueError("OpenViking Gateway does not support trusted authentication")
     if config.host not in LOOPBACK_HOSTS and health.get("auth_mode") != "api_key":
@@ -112,46 +124,48 @@ def create_standalone_app(config: StandaloneGatewayConfig, studio_dir=None):
             )
         return result
 
-    @app.get("/api/v1/admin/accounts")
-    @app.get("/api/v1/admin/accounts/{account_id}/users")
-    async def administration(request: Request, account_id: str | None = None):
-        credential = request_credential(request)
-        # Rejects trusted mode, where OV would authorize identity headers this route drops.
-        await state.viking.identify(credential)
-        path = "/api/v1/admin/accounts"
-        if account_id is not None:
-            path += "/" + quote(account_id, safe="") + "/users"
-        params = dict(request.query_params)
-        if account_id is not None:
-            params["include_credentials"] = "false"
-        if params:
-            path += "?" + urlencode(params)
-        result = await state.viking.request("GET", path, credential)
-        return {"status": "ok", "result": result}
+    if config.management_api:
 
-    directory = studio_dir or studio_directory()
-    root = Path(directory).resolve() if directory else None
+        @app.get("/api/v1/admin/accounts")
+        @app.get("/api/v1/admin/accounts/{account_id}/users")
+        async def administration(request: Request, account_id: str | None = None):
+            credential = request_credential(request)
+            # Rejects trusted mode, where OV would authorize identity headers this route drops.
+            await state.viking.identify(credential)
+            path = "/api/v1/admin/accounts"
+            if account_id is not None:
+                path += "/" + quote(account_id, safe="") + "/users"
+            params = dict(request.query_params)
+            if account_id is not None:
+                params["include_credentials"] = "false"
+            if params:
+                path += "?" + urlencode(params)
+            result = await state.viking.request("GET", path, credential)
+            return {"status": "ok", "result": result}
 
-    @app.get("/")
-    async def home():
-        return RedirectResponse("/studio/")
+        directory = studio_dir or studio_directory()
+        root = Path(directory).resolve() if directory else None
 
-    @app.get("/studio")
-    async def studio_redirect():
-        return RedirectResponse("/studio/")
+        @app.get("/")
+        async def home():
+            return RedirectResponse("/studio/")
 
-    @app.get("/studio/{path:path}")
-    async def studio(path: str):
-        if root is None or not (root / "index.html").is_file():
-            raise HTTPException(503, "OpenViking Studio bundle is unavailable")
-        candidate = (root / path).resolve()
-        if not candidate.is_relative_to(root):
-            raise HTTPException(404)
-        if candidate.is_file():
-            return FileResponse(candidate)
-        if path.startswith("assets/"):
-            raise HTTPException(404)
-        return FileResponse(root / "index.html")
+        @app.get("/studio")
+        async def studio_redirect():
+            return RedirectResponse("/studio/")
+
+        @app.get("/studio/{path:path}")
+        async def studio(path: str):
+            if root is None or not (root / "index.html").is_file():
+                raise HTTPException(503, "OpenViking Studio bundle is unavailable")
+            candidate = (root / path).resolve()
+            if not candidate.is_relative_to(root):
+                raise HTTPException(404)
+            if candidate.is_file():
+                return FileResponse(candidate)
+            if path.startswith("assets/"):
+                raise HTTPException(404)
+            return FileResponse(root / "index.html")
 
     app.mount(MOUNT_PATH, gateway)
     return app

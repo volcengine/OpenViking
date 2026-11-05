@@ -17,6 +17,7 @@ Trace the paths from source ingestion and recorded conversations:
 - [Context Extraction](06-extraction.md): how sources are parsed, organized and processed semantically.
 - [Retrieval Mechanism](07-retrieval.md): how relevant context is found and how `find` differs from `search`.
 - [Session Management](08-session.md): how messages, session commits and memory extraction connect.
+- [Rules (Beta)](17-rule-scenarios.md): how durable constraints are compiled and recalled for Agent checks.
 
 When you are ready to build, choose an [application workflow](../workflows/01-overview.md). Look up parameters and responses in the [reference](../reference/01-overview.md).
 

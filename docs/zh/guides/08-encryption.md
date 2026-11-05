@@ -101,7 +101,7 @@ test()
 **默认情况下，`encryption.api_key_hashing.enabled = false`**：
 - API key 以明文存储在 JSON 文件中
 - 如果 `encryption.enabled = true`，整个文件会被 AES-GCM 加密保护
-- `ov admin list-users` 可以显示完整的 API key
+- `ov admin list-users` 传入 `--reveal-api-keys` 后可以显示完整的 API key
 - 如果 `encryption.enabled = true` 且未启用 API key 哈希，服务端启动时会输出一条说明此情况的 INFO 日志
 
 ### 启用 Argon2id 哈希
@@ -122,7 +122,7 @@ test()
 **注意**：启用后：
 - API key 使用 Argon2id 单向哈希存储
 - 无法从哈希值还原出明文 key
-- `ov admin list-users` 只显示 `key_prefix` 而不是完整的 API key
+- `ov admin list-users` 只显示 `key_prefix` 而不是完整的 API key（调用方自身的行也无法显示明文，因为服务端未存储明文）
 - 只有在创建用户或重新生成 key 时才能看到明文 key
 
 ### 配置示例
@@ -146,7 +146,7 @@ test()
 
 | 提供程序 | 适用场景 | 优点 | 缺点 |
 |---------|---------|------|------|
-| **Local** | 开发环境、单节点部署 | 简单，无需外部服务 | 需要管理本地文件权限和独立密钥备份 |
+| **Local** | 开发环境、单节点部署 | 简单，无需外部服务 | 需要管理本地密钥权限和独立密钥备份 |
 | **Vault** | 生产环境、多云部署 | 企业级密钥管理，支持版本控制 | 需要部署和维护 Vault |
 | **Volcengine KMS** | 火山引擎云部署 | 云原生密钥管理服务 | 仅限火山引擎环境 |
 
@@ -190,6 +190,33 @@ ov system crypto init-key -f ~/.openviking/master.key
   }
 }
 ```
+
+### 在配置中直接提供根密钥
+
+对于简单、受控的部署，Local provider 可以直接从 `ov.conf` 读取同一个 32 字节根密钥，
+不再使用单独的密钥文件：
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "root_key": "<64 个十六进制字符的根密钥>"
+    }
+  }
+}
+```
+
+配置值是 32 字节密钥的十六进制表示，因此必须恰好包含 64 个十六进制字符。可以使用
+`openssl rand -hex 32` 生成，也可以在两种 Local 配置之间迁移时直接复用已有
+`master.key` 的内容。
+
+- 不要同时配置 `root_key` 和 `key_file`；如果两者都省略，Local provider 仍使用
+  `~/.openviking/master.key`。
+- 内联密钥不会自动生成；密钥丢失或改变后，已有加密数据将无法读取。
+- 此时必须把 `ov.conf` 当作密钥文件管理：只允许服务用户读取、安全备份，并且禁止提交到版本控制。
+- 生产环境需要集中式密钥管理时，仍建议使用 Vault 或 KMS。
 
 ---
 

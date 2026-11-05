@@ -11,12 +11,13 @@ import hmac
 import secrets
 import ssl as ssl_module
 from contextlib import asynccontextmanager
+from datetime import timezone
 from typing import AsyncGenerator
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import and_, case, delete, func, select, update
+from sqlalchemy import and_, case, delete, exists, func, insert, literal, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -30,6 +31,7 @@ from openviking.core.identifiers import MAX_IDENTIFIER_LENGTH
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
     AccountSummary,
+    AuthSnapshot,
     DeletionRecord,
     GroupSummary,
     UsersPage,
@@ -42,7 +44,11 @@ from openviking.server.account_stores.mysql_schema import (
     GroupMember,
     User,
 )
-from openviking.server.identity import Role
+from openviking.server.identity import (
+    ACCOUNT_USER_ASSIGNABLE_ROLES,
+    ACCOUNT_USER_CREATION_ROLES,
+    Role,
+)
 from openviking.storage.mysql_runtime import (
     MySQLRuntime,
     get_shared_mysql_runtime,
@@ -56,6 +62,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    UnauthenticatedError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -66,6 +73,7 @@ from openviking_cli.utils.config.config_utils import normalize_service_name
 
 _MYSQL_IDENTIFIER_MAX_LENGTH = MAX_IDENTIFIER_LENGTH
 _RETAINED_REVOKED_CREDENTIALS = 10
+_DEFAULT_ACCOUNT_ID = "default"
 
 
 def _validate_length(value: str, name: str) -> None:
@@ -84,8 +92,17 @@ def _validate(value: str, validator, name: str) -> None:
 def _validate_role(role: str) -> Role:
     if role == Role.ROOT:
         raise PermissionDeniedError("Account users cannot be assigned ROOT")
-    if role not in (Role.ADMIN, Role.USER):
+    if role not in ACCOUNT_USER_ASSIGNABLE_ROLES:
         raise InvalidArgumentError("Account user role must be user or admin.")
+    return Role(role)
+
+
+def _validate_creation_role(role: str) -> Role:
+    """Role accepted when creating an account user; GLOBAL is creation-only."""
+    if role == Role.ROOT:
+        raise PermissionDeniedError("Account users cannot be assigned ROOT")
+    if role not in ACCOUNT_USER_CREATION_ROLES:
+        raise InvalidArgumentError("Account user role must be user, admin, or global.")
     return Role(role)
 
 
@@ -127,6 +144,12 @@ def _deletion(record) -> DeletionRecord | None:
         owner_account_id=record.deletion_owner_account_id,
         owner_user_id=record.deletion_owner_user_id,
     )
+
+
+def _utc_isoformat(value) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 @mysql_runtime_store
@@ -326,6 +349,17 @@ class MySQLAccountStore(AccountStore):
             async with sessions() as session:
                 for model in (Account, User, Group, GroupMember, Credential):
                     await session.execute(select(*model.__table__.columns).limit(1))
+                await session.execute(
+                    insert(Account)
+                    .prefix_with("IGNORE", dialect="mysql")
+                    .from_select(
+                        ["service_name", "account_id"],
+                        select(literal(self._service_name), literal(_DEFAULT_ACCOUNT_ID)).where(
+                            ~exists().where(Account.service_name == self._service_name)
+                        ),
+                    )
+                )
+                await session.commit()
         except ImportError:
             await wait_mysql_cleanup(cleanup_failed_load())
             raise RuntimeError("MySQL account storage requires openviking[mysql]") from None
@@ -427,7 +461,7 @@ class MySQLAccountStore(AccountStore):
     def _account_summary(account, user_count: int) -> AccountSummary:
         return {
             "account_id": account.account_id,
-            "created_at": account.created_at.isoformat(),
+            "created_at": _utc_isoformat(account.created_at),
             "user_count": user_count,
             "status": "deleting" if account.deletion_task_id else "active",
             **({"task_id": account.deletion_task_id} if account.deletion_task_id else {}),
@@ -477,7 +511,10 @@ class MySQLAccountStore(AccountStore):
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         _validate(account_id, validate_account_id, "account_id")
         _validate(admin_user_id, validate_user_id, "admin_user_id")
         try:
@@ -502,7 +539,10 @@ class MySQLAccountStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         _validate(account_id, validate_account_id, "account_id")
         _validate(admin_user_id, validate_user_id, "admin_user_id")
         try:
@@ -532,7 +572,7 @@ class MySQLAccountStore(AccountStore):
 
     async def create_user(self, account_id: str, user_id: str, role: str) -> None:
         _validate(user_id, validate_user_id, "user_id")
-        role = _validate_role(role)
+        role = _validate_creation_role(role)
         try:
             async with self._transaction() as session:
                 account = await self._lock_account(session, account_id)
@@ -557,7 +597,7 @@ class MySQLAccountStore(AccountStore):
         api_key: str,
     ) -> None:
         _validate(user_id, validate_user_id, "user_id")
-        role = _validate_role(role)
+        role = _validate_creation_role(role)
         try:
             async with self._transaction() as session:
                 account = await self._lock_account(session, account_id)
@@ -718,6 +758,10 @@ class MySQLAccountStore(AccountStore):
             self._require_active(account)
             user = await self._lock_user(session, account, user_id)
             self._require_active(user)
+            if user.role == Role.GLOBAL:
+                raise InvalidArgumentError(
+                    "GLOBAL identities cannot change roles; delete and recreate instead."
+                )
             if role != Role.ADMIN:
                 await self._protect_last_admin(session, account, user)
             user.role = role
@@ -1056,7 +1100,8 @@ class MySQLAccountStore(AccountStore):
             ).all()
         return tuple(group_id for group_id in group_ids if group_id is not None)
 
-    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+    async def add_group_members(self, account_id: str, group_id: str, user_ids: list[str]) -> bool:
+        user_ids = list(dict.fromkeys(user_ids))
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
@@ -1071,30 +1116,55 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
-            user = await self._lock_user(session, account, user_id)
-            self._require_active(user)
-            if (
-                await session.scalar(
-                    select(GroupMember.group_pk).where(
-                        GroupMember.service_name == self._service_name,
-                        GroupMember.account_pk == account.account_pk,
-                        GroupMember.group_pk == group.group_pk,
-                        GroupMember.user_pk == user.user_pk,
+            users = {
+                user.user_id: user
+                for user in (
+                    await session.scalars(
+                        select(User)
+                        .where(
+                            User.service_name == self._service_name,
+                            User.account_pk == account.account_pk,
+                            User.user_id.in_(user_ids),
+                        )
+                        .with_for_update()
                     )
-                )
-                is None
-            ):
-                session.add(
+                ).all()
+            }
+            for user_id in user_ids:
+                user = users.get(user_id)
+                if user is None:
+                    raise NotFoundError(user_id, "user")
+                self._require_active(user)
+            existing = set(
+                (
+                    await session.scalars(
+                        select(GroupMember.user_pk).where(
+                            GroupMember.service_name == self._service_name,
+                            GroupMember.account_pk == account.account_pk,
+                            GroupMember.group_pk == group.group_pk,
+                            GroupMember.user_pk.in_([user.user_pk for user in users.values()]),
+                        )
+                    )
+                ).all()
+            )
+            session.add_all(
+                [
                     GroupMember(
                         service_name=self._service_name,
                         account_pk=account.account_pk,
                         group_pk=group.group_pk,
                         user_pk=user.user_pk,
                     )
-                )
+                    for user in users.values()
+                    if user.user_pk not in existing
+                ]
+            )
         return True
 
-    async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+    async def remove_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
+    ) -> bool:
+        user_ids = list(dict.fromkeys(user_ids))
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
@@ -1109,27 +1179,35 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
-            membership = await session.scalar(
-                select(GroupMember)
-                .join(
-                    User,
-                    and_(
-                        User.service_name == GroupMember.service_name,
-                        User.account_pk == GroupMember.account_pk,
-                        User.user_pk == GroupMember.user_pk,
-                    ),
+            user_pks = (
+                await session.scalars(
+                    select(GroupMember.user_pk)
+                    .join(
+                        User,
+                        and_(
+                            User.service_name == GroupMember.service_name,
+                            User.account_pk == GroupMember.account_pk,
+                            User.user_pk == GroupMember.user_pk,
+                        ),
+                    )
+                    .where(
+                        GroupMember.service_name == self._service_name,
+                        GroupMember.account_pk == account.account_pk,
+                        GroupMember.group_pk == group.group_pk,
+                        User.user_id.in_(user_ids),
+                    )
                 )
-                .where(
+            ).all()
+            if not user_pks:
+                return False
+            await session.execute(
+                delete(GroupMember).where(
                     GroupMember.service_name == self._service_name,
                     GroupMember.account_pk == account.account_pk,
                     GroupMember.group_pk == group.group_pk,
-                    User.account_pk == account.account_pk,
-                    User.user_id == user_id,
+                    GroupMember.user_pk.in_(user_pks),
                 )
             )
-            if membership is None:
-                return False
-            await session.delete(membership)
             return True
 
     async def delete_group(self, account_id: str, group_id: str) -> None:
@@ -1151,13 +1229,33 @@ class MySQLAccountStore(AccountStore):
             await session.delete(group)
 
     async def replace_active_user_api_key(
-        self, account_id: str, user_id: str, api_key: str
+        self,
+        account_id: str,
+        user_id: str,
+        api_key: str,
+        *,
+        expected_api_key: str | None = None,
     ) -> None:
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
             user = await self._lock_user(session, account, user_id)
             self._require_active(user)
+            if expected_api_key is not None:
+                # A locking read observes the current credential, even when a
+                # concurrent reset committed after request authentication.
+                current = await session.scalar(
+                    select(Credential.credential_id)
+                    .where(
+                        Credential.service_name == self._service_name,
+                        Credential.user_pk == user.user_pk,
+                        Credential.revoked.is_(False),
+                        Credential.lookup_digest == _credential_digest(expected_api_key),
+                    )
+                    .with_for_update()
+                )
+                if current is None:
+                    raise UnauthenticatedError("API key is no longer active")
             sequence = await session.scalar(
                 select(func.coalesce(func.max(Credential.sequence), 0)).where(
                     Credential.service_name == self._service_name,
@@ -1209,6 +1307,91 @@ class MySQLAccountStore(AccountStore):
                         Credential.credential_id.in_(old_credentials),
                     )
                 )
+
+    async def get_auth_snapshot(
+        self,
+        api_key: str,
+        *,
+        account_id_hint: str | None = None,
+        user_id_hint: str | None = None,
+    ) -> AuthSnapshot | None:
+        """Verify credentials and read current authorization in one unlocked SELECT."""
+        predicates = [
+            Credential.service_name == self._service_name,
+            Credential.lookup_digest == _credential_digest(api_key),
+            Credential.revoked.is_(False),
+            Account.deletion_task_id.is_(None),
+            User.deletion_task_id.is_(None),
+        ]
+        if account_id_hint is not None:
+            predicates.append(Account.account_id == account_id_hint)
+        if user_id_hint is not None:
+            predicates.append(User.user_id == user_id_hint)
+        statement = (
+            select(
+                Credential.credential_id,
+                Credential.material,
+                Account.account_id,
+                User.user_id,
+                User.role,
+                Group.group_id,
+            )
+            .select_from(Credential)
+            .join(
+                User,
+                and_(
+                    User.service_name == Credential.service_name,
+                    User.user_pk == Credential.user_pk,
+                ),
+            )
+            .join(
+                Account,
+                and_(
+                    Account.service_name == User.service_name,
+                    Account.account_pk == User.account_pk,
+                ),
+            )
+            .outerjoin(
+                GroupMember,
+                and_(
+                    GroupMember.service_name == User.service_name,
+                    GroupMember.account_pk == User.account_pk,
+                    GroupMember.user_pk == User.user_pk,
+                ),
+            )
+            .outerjoin(
+                Group,
+                and_(
+                    Group.service_name == GroupMember.service_name,
+                    Group.account_pk == GroupMember.account_pk,
+                    Group.group_pk == GroupMember.group_pk,
+                ),
+            )
+            .where(*predicates)
+        )
+        async with self._session_factory() as session:
+            candidates = (await session.execute(statement)).all()
+        verified: dict[str, bool] = {}
+        snapshot: AuthSnapshot | None = None
+        groups: set[str] = set()
+        for credential_id, material, account_id, user_id, role, group_id in candidates:
+            if credential_id not in verified:
+                verified[credential_id] = self._matches_credential(
+                    account_id, user_id, material, api_key
+                )
+            if not verified[credential_id]:
+                continue
+            if snapshot is None:
+                snapshot = AuthSnapshot(
+                    account_id=account_id, user_id=user_id, role=role, group_ids=()
+                )
+            if (account_id, user_id) != (snapshot["account_id"], snapshot["user_id"]):
+                continue
+            if group_id is not None:
+                groups.add(group_id)
+        if snapshot is not None:
+            snapshot["group_ids"] = tuple(sorted(groups))
+        return snapshot
 
     async def verify_api_key(
         self,

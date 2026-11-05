@@ -1,13 +1,19 @@
+import { registerServiceWorker } from '#/app/lib/service-worker'
+import { queryClient } from '#/app/providers/query-client'
+import {
+  initializeCredentialStorage,
+  credentialStorageMode,
+} from '#/features/connection/lib/credential-storage'
 import '#/i18n'
-import ReactDOM from 'react-dom/client'
+import i18n from '#/i18n/core'
+import { routeTree } from '#/routeTree.gen'
+import { getRouterBasePath } from '#/shared/lib/public-path'
+import { TooltipProvider } from '#/shared/ui/tooltip'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { ThemeProvider } from 'next-themes'
-import { routeTree } from './routeTree.gen'
-import { TooltipProvider } from './components/ui/tooltip'
-import { queryClient } from './lib/query-client'
-import { getRouterBasePath } from './lib/public-path'
-import { registerServiceWorker } from './lib/service-worker'
+import ReactDOM from 'react-dom/client'
+import { toast } from 'sonner'
 
 // PWA: register the service worker at the SPA's base path so the scope
 // matches the manifest's start_url / scope. Production builds only — the
@@ -34,15 +40,33 @@ declare module '@tanstack/react-router' {
 
 const rootElement = document.getElementById('app')!
 
-if (!rootElement.innerHTML) {
-  const root = ReactDOM.createRoot(rootElement)
-  root.render(
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <RouterProvider router={router} />
-        </TooltipProvider>
-      </QueryClientProvider>
-    </ThemeProvider>,
-  )
+async function start() {
+  try {
+    await initializeCredentialStorage()
+    if (credentialStorageMode() === 'session') {
+      window.sessionStorage.removeItem('ov_studio_workspace_selected')
+    }
+  } catch {
+    rootElement.textContent = i18n.t('studio:credentialStorage.startError')
+    return
+  }
+  window.addEventListener('ov-credential-storage-error', () => {
+    toast.error(i18n.t('studio:credentialStorage.saveError'), {
+      id: 'credential-storage',
+      duration: Infinity,
+    })
+  })
+  if (!rootElement.innerHTML) {
+    const root = ReactDOM.createRoot(rootElement)
+    root.render(
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <RouterProvider router={router} />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </ThemeProvider>,
+    )
+  }
 }
+void start()

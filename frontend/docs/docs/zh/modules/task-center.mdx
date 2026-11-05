@@ -1,0 +1,28 @@
+# TaskCenter 任务中心
+
+可直接导入的任务中心占位组件，当前展示模块名称与占位文案，供接入方提前完成容器布局。
+
+## 基础用法
+
+```tsx file="../../_demos/task-center-placeholder.tsx" preview
+
+```
+
+## 目标能力
+
+当前身份可见的任务、详情与执行记录。个人终端聚焦资源导入和知识整理任务。
+
+业务 Hook 与请求尚未实现；当前组件无需 Provider 或鉴权配置。
+
+## 属性
+
+模块导出 `TaskCenterProps` 和 `TaskCenterLabels` 类型。
+
+| 属性                 | 类型            | 默认值                                             | 说明             |
+| -------------------- | --------------- | -------------------------------------------------- | ---------------- |
+| `className`          | `string`        | —                                                  | 容器附加类名。   |
+| `style`              | `CSSProperties` | —                                                  | 容器样式覆盖。   |
+| `labels.title`       | `string`        | `Task center`                                      | 可见的模块名称。 |
+| `labels.description` | `string`        | `Placeholder. Functionality is not available yet.` | 可见的占位文案。 |
+
+未提供的文案沿用英文默认值。文案为纯文本，宿主可将自身的翻译结果映射到这些属性。
