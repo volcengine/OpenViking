@@ -85,7 +85,7 @@ to enabled; explicit `autoCapture: false` in host options or client settings is
 preserved. Host options override scoped settings, which override shared settings.
 
 Magpie's **Options** editor now accepts `autoRecall`, `autoCapture`, `mcpEnabled`,
-`recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
+`captureWithoutSession`, `recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
 options override the corresponding file settings for this plugin; connection
 credentials and identity always remain file-owned. `gatewayTimeoutMs` controls
 the host's hook budget. The package supplies an example, not saved defaults;
@@ -93,6 +93,32 @@ omitted keys retain the file/default behavior. Hooks and tools use the same
 options. Memory tools are disabled by default; set `mcpEnabled: true` to enable
 them. Automatic capture is enabled by default and needs no additional setting;
 set `autoCapture: false` to disable it.
+
+`captureWithoutSession` is a Magpie-only boolean, default `false`. If the client
+cannot send a stable session ID, opt in through Magpie's Options:
+
+```json
+{
+  "autoCapture": true,
+  "captureWithoutSession": true
+}
+```
+
+It can also be set in `ovcli.conf` under `plugin.magpie` (or shared `plugin`),
+with the same host → scoped → shared precedence. A real session ID always takes
+priority. Only capture uses the derived ID; recall remains stateless without a
+host session. The fallback hashes the agent, working directory, protocol and
+first user message after the existing capture shaping/filters. Model changes do
+not change this ID; existing connection/credential isolation still applies.
+
+This is approximate grouping: independent conversations with identical opening
+messages in the same client scope may merge. Rewriting/removing the opening
+message can split a conversation or cause capture to skip unknown history.
+Start a new conversation after enabling it; existing histories are not backfilled.
+`autoCapture: false` still disables all automatic capture. For file settings without
+a host override, turning this option off pauses queued derived-session snapshots;
+turning it back on lets them resume. Queued snapshots retain their enqueue-time
+host overrides, just as they do for `autoCapture`.
 
 File settings `plugin.magpie.bypassSession: true` or `bypassSessionPatterns`
 matching the Magpie session ID or working directory skip automatic recall and
@@ -113,11 +139,13 @@ controlled by `mcpEnabled`.
   turn. Retries and later turns replay the original snapshot.
 - Only host-classified `local` and `magpie-key` origins receive memory. Shared
   gateway keys, forwarded traffic and unknown origins are skipped. Without a
-  session ID, new user requests use stateless recall: no persisted ledger, profile
-  replay or conversation capture. Repeated requests may retrieve different context.
-  With capture enabled, the first eligible sessionless user request logs
+  session ID, new user requests use stateless recall: no persisted recall ledger or
+  profile replay. Capture is also skipped unless `captureWithoutSession: true`.
+  Repeated requests may retrieve different context.
+  With capture enabled and the fallback off, the first eligible sessionless user request logs
   `OpenViking capture: no-session` once per plugin-host process, explaining that
-  capture is unavailable and a stable session header is needed. Check Magpie's
+  capture is unavailable and suggesting a stable session header or explicit
+  `captureWithoutSession` opt-in with its grouping limitation. Check Magpie's
   plugin-host logs; this warning contains no message text or credentials and does
   not replace the recall status. Current Magpie hosts ignore custom `report()`
   codes, so a separate capture status in the UI requires host support.

@@ -597,6 +597,73 @@ test("bypass pauses existing snapshots until removed, without affecting other se
 });
 
 
+for (const protocol of ["chat", "anthropic", "responses", "gemini"]) {
+  test(`${protocol}: opt-in sessionless capture appends across model changes and leaves recall stateless`, async (t) => {
+    const f = await fixture(t);
+    const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
+    t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ status: "ok", result: { rendered: "Recalled preference" } }), { headers: { "content-type": "application/json" } }));
+    const wire = (messages, model = "a") => protocol === "gemini"
+      ? { model, contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : m.role, parts: [{ text: m.content }] })) }
+      : protocol === "responses" ? { model, store: false, input: messages } : { model, messages };
+    const reply = (content) => protocol === "gemini" ? { candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: content }] } }] }
+      : protocol === "responses" ? { status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: content }] }] }
+      : protocol === "anthropic" ? { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: content }] }
+      : { choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] };
+    const context = () => ({ ...f.ctx, protocol, session: "", success: true, query: "My preference?", state: {}, options: { captureWithoutSession: true } });
+    const first = context();
+    assert.match(JSON.stringify(await onRequest(wire([f.messages[0]]), first)), /Recalled preference/);
+    assert.equal(first.session, "");
+    const session = first.state.capture.session;
+    assert.match(session, /^derived-[a-f0-9]{64}$/);
+    await onResponse(reply(f.messages[1].content), first);
+    const second = context();
+    const history = [...f.messages, { role: "user", content: "Another preference" }];
+    await onRequest(wire(history, "b"), second);
+    assert.equal(second.state.capture.session, session);
+    await onResponse(reply("Second reply"), second);
+    await f.drain();
+    assert.equal(f.creates.length, 1);
+    assert.equal(f.writes.flat().length, 4);
+    assert.deepEqual((await readdir(f.cfg.dataDir)).sort(), ["capture", "capture-workers"]);
+    for (const patch of [{ cwd: "/other" }, { agent: "other" }]) {
+      const other = { ...context(), ...patch };
+      await onRequest(wire([f.messages[0]]), other);
+      assert.notEqual(other.state.capture.session, session);
+    }
+    const different = context();
+    await onRequest(wire([{ role: "user", content: "Different opening" }]), different);
+    assert.notEqual(different.state.capture.session, session);
+    const real = { ...context(), session: "real-session" };
+    await onRequest(wire([f.messages[0]]), real);
+    assert.equal(real.state.capture.session, undefined);
+    assert.equal(real.state.capture.scope, connectionScope(f.cfg, real));
+  });
+}
+
+test("disabling sessionless capture pauses queued snapshots and response capture", async (t) => {
+  const f = await fixture(t);
+  f.file.plugin.magpie.captureWithoutSession = true;
+  await writeFile(f.configPath, JSON.stringify(f.file));
+  const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath });
+  const ctx = { ...f.ctx, session: "", state: {}, success: true };
+  await prepareCapture({ messages: [f.messages[0]] }, ctx, cfg);
+  const reply = { choices: [{ finish_reason: "stop", message: f.messages[1] }] };
+  await finishCapture(reply, ctx, cfg);
+  f.file.plugin.magpie.captureWithoutSession = false;
+  await writeFile(f.configPath, JSON.stringify(f.file));
+  const disabled = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath });
+  await finishCapture(reply, ctx, disabled);
+  await f.drain();
+  assert.equal(f.creates.length, 0);
+  f.file.plugin.magpie.captureWithoutSession = true;
+  await writeFile(f.configPath, JSON.stringify(f.file));
+  await f.drain();
+  assert.equal(f.creates.length, 1);
+  assert.equal(f.writes.flat().length, 2);
+});
+
 test("sessionless hooks warn once without masking recall or queuing capture", async (t) => {
   const f = await fixture(t);
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
@@ -607,7 +674,7 @@ test("sessionless hooks warn once without masking recall or queuing capture", as
   const reports = [];
   const ctx = { ...f.ctx, session: "", query: "Latest question", state: {}, report: (...args) => reports.push(args) };
   const body = { model: "m", messages: [f.messages[0]] };
-  for (const options of [{ autoCapture: false }, { nativeAgents: [ctx.agent] }]) {
+  for (const options of [{ autoCapture: false, captureWithoutSession: true }, { nativeAgents: [ctx.agent], captureWithoutSession: true }]) {
     await onRequest(body, { ...ctx, state: {}, options });
   }
   for (const patch of [{ origin: "remote" }, { kind: "auxiliary" }]) {

@@ -65,9 +65,29 @@ Magpie 的文件读取策略排除环境变量和 workspace 层。
 工具仍需 `plugin.magpie.mcpEnabled: true` 显式开启。采集默认开启；宿主选项或客户端配置中显式设置的 `autoCapture: false` 仍然生效。优先级为宿主选项、Magpie 专属配置、共享配置。
 
 Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`recallMaxTokens`、
-`recallContextTimeoutMs`、`nativeAgents`，优先于本插件的文件行为配置；Hook 和工具使用同一套设置。
+`recallContextTimeoutMs`、`captureWithoutSession`、`nativeAgents`，优先于本插件的文件行为配置；Hook 和工具使用同一套设置。
 服务连接、凭据和身份仍只从文件读取。`gatewayTimeoutMs` 控制宿主 Hook 预算。
 包内示例不会自动保存；未填写的字段继续沿用文件设置或默认值。记忆工具默认关闭，设置 `mcpEnabled: true` 可开启。自动采集默认开启，无需额外配置；如需关闭，设置 `autoCapture: false`。
+
+`captureWithoutSession` 是 Magpie 专属的布尔配置，默认 `false`。客户端无法传递稳定会话 ID 时，
+可在 Magpie“选项”中显式开启：
+
+```json
+{
+  "autoCapture": true,
+  "captureWithoutSession": true
+}
+```
+
+也可在 `ovcli.conf` 的 `plugin.magpie` 或共享 `plugin` 中设置，优先级仍为宿主选项、专属配置、共享配置。
+有真实会话 ID 时优先使用真实 ID。派生 ID 仅用于采集，无宿主会话时召回仍然无状态。
+派生输入为 Agent、工作目录、协议和经过现有采集清洗/过滤的首条用户消息；切换模型不会改变 ID，
+OV 连接和凭据仍按现有规则隔离。
+
+这是近似的会话归组：同一客户端作用域内，相同开场的独立对话可能合并；改写或删除开场消息可能
+拆分会话或因历史无法识别而跳过采集。开启后请新建对话，不回填未知的已有历史。
+`autoCapture: false` 仍关闭所有自动采集。通过文件配置且无宿主覆盖时，关闭本开关会暂停派生会话的
+待同步队列，重新开启后可恢复。与 `autoCapture` 一样，已入队快照保留入队时的宿主选项覆盖。
 
 不会修改文件、合并环境变量中的凭据，或回退读取 `ov.conf`、Root Key、Gateway Token。
 配置缺失、损坏或服务不可用时，召回跳过，模型请求继续；不会沿用旧配置。
@@ -83,9 +103,9 @@ Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`reca
   资料读取与检索在召回超时预算内并行执行；任一路失败时仍可使用另一路结果。
   资料遵守 `profileTokenBudget`，且最多占 `recallMaxTokens` 的一半，使用共享的中日韩字符 token 估算器；
   资料与检索结果合计不超过 `recallMaxTokens`，与首轮决策一起持久化；重试和后续轮次回放原始快照。
-- 仅处理宿主确认为本机的 `local`、`magpie-key` 请求。没有会话 ID 时，新用户请求使用无状态召回：不读写持久化账本、不重放 Profile 快照、不采集对话；重复请求可能获得不同的召回结果。
-  开启采集后，首次符合条件但缺少会话 ID 的用户请求，会在 Magpie 插件宿主日志中输出
-  `OpenViking capture: no-session`，提示自动采集不可用、需要客户端传递稳定的会话 ID 请求头。
+- 仅处理宿主确认为本机的 `local`、`magpie-key` 请求。没有会话 ID 时，新用户请求使用无状态召回：不读写持久化召回账本、不重放 Profile 快照；除非显式设置 `captureWithoutSession: true`，否则不采集对话。重复请求可能获得不同的召回结果。
+  开启采集但未开启哈希兼容时，首次符合条件却缺少会话 ID 的用户请求，会在 Magpie 插件宿主日志中输出
+  `OpenViking capture: no-session`，建议客户端传递稳定的会话 ID 请求头，或了解会话误合并限制后显式开启 `captureWithoutSession`。
   每个插件宿主进程只提示一次，不含对话正文或凭据，也不覆盖召回状态。
   当前 Magpie 会忽略自定义 `report()` 状态码，独立的 UI 采集状态仍需宿主支持。
   原生插件接管、关闭、bypass、辅助请求不会触发此提示。

@@ -13,6 +13,7 @@
     "options": {
       "autoRecall": true,
       "autoCapture": true,
+      "captureWithoutSession": false,
       "mcpEnabled": false,
       "recallContextTimeoutMs": 2000,
       "gatewayTimeoutMs": 3000,
