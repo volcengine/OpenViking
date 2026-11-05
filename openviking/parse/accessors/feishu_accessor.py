@@ -2730,8 +2730,10 @@ class FeishuAccessor(DataAccessor):
     def _read_whiteboard(
         self, board_token: str, feishu_access_token: Optional[str]
     ) -> _WhiteboardContent:
-        import lark_oapi as lark
-        from lark_oapi.api.board.v1 import DownloadAsImageWhiteboardRequest
+        from lark_oapi.api.board.v1 import (
+            DownloadAsImageWhiteboardRequest,
+            ListWhiteboardNodeRequest,
+        )
 
         state = self._whiteboards
         if board_token in state.cache:
@@ -2740,16 +2742,7 @@ class FeishuAccessor(DataAccessor):
             raise InvalidArgumentError("Feishu whiteboard count limit exceeded")
 
         client = self._get_client(use_user_token=bool(feishu_access_token))
-        token_type = (
-            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
-        )
-        request = (
-            lark.BaseRequest.builder()
-            .http_method(lark.HttpMethod.GET)
-            .uri(f"/open-apis/board/v1/whiteboards/{quote(board_token, safe='')}/nodes")
-            .token_types({token_type})
-            .build()
-        )
+        request = ListWhiteboardNodeRequest.builder().whiteboard_id(board_token).build()
         # Typed WhiteboardNode in lark-oapi 1.5.3 discards fields such as `syntax`.
         # Read the bounded raw response so diagram source and new node types survive.
         response = self._call_api(client.request, request, feishu_access_token)
@@ -2847,23 +2840,18 @@ class FeishuAccessor(DataAccessor):
             return markdown, {}
 
         downloaded_images: Dict[str, bytes] = {}
-        board_paths: Dict[str, str] = {}
-        for match in _FEISHU_WHITEBOARD_RE.finditer(markdown):
+
+        def _replace_whiteboard(match: re.Match[str]) -> str:
             token = match.group(2)
             board = self._whiteboards.cache.get(token)
-            if board is not None and board.preview is not None:
-                image_bytes, ext = board.preview
-                rel_path = f"images/whiteboard_{self._image_filename(token, ext)}"
-                board_paths[token] = rel_path
-                downloaded_images[rel_path] = image_bytes
-        markdown = _FEISHU_WHITEBOARD_RE.sub(
-            lambda m: (
-                f"![{m.group(1)}]({board_paths[m.group(2)]})"
-                if m.group(2) in board_paths
-                else m.group(0)
-            ),
-            markdown,
-        )
+            if board is None or board.preview is None:
+                return match.group(0)
+            image_bytes, ext = board.preview
+            rel_path = f"images/whiteboard_{self._image_filename(token, ext)}"
+            downloaded_images[rel_path] = image_bytes
+            return f"![{match.group(1)}]({rel_path})"
+
+        markdown = _FEISHU_WHITEBOARD_RE.sub(_replace_whiteboard, markdown)
         matches = list(_FEISHU_IMAGE_RE.finditer(markdown))
         if not matches:
             return markdown, downloaded_images
