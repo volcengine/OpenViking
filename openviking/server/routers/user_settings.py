@@ -2,31 +2,29 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Per-user server settings."""
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from openviking.server.auth import get_request_context
+from openviking.server.config import AddTargetsConfig, UserSettingsPatch
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.user_config import (
     patch_user_config,
     read_user_config,
+    resolve_add_targets,
     resolve_user_add_targets,
-    validate_add_targets,
 )
 from openviking_cli.exceptions import NotInitializedError
 
 router = APIRouter(prefix="/api/v1/user-settings", tags=["user-settings"])
 
 
-class PatchAddLocationsRequest(BaseModel):
+class PatchAddLocationsRequest(AddTargetsConfig):
     model_config = ConfigDict(extra="forbid")
-
-    resource_uri: Optional[str] = None
-    skill_uri: Optional[str] = None
 
 
 def _viking_fs():
@@ -39,7 +37,7 @@ def _viking_fs():
 async def _response(request: Request, ctx: RequestContext) -> dict[str, Any]:
     viking_fs = _viking_fs()
     user_config = await read_user_config(viking_fs, ctx)
-    effective = validate_add_targets(
+    effective = resolve_add_targets(
         resolve_user_add_targets(user_config, request.app.state.config),
         ctx=ctx,
     )
@@ -69,7 +67,7 @@ async def patch_add_locations(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     await patch_user_config(
-        _viking_fs(), _ctx, {"add_targets": body.model_dump(exclude_unset=True)}
+        _viking_fs(), _ctx, UserSettingsPatch(add_targets=body)
     )
     return Response(status="ok", result=await _response(request, _ctx)).model_dump(
         exclude_none=True
@@ -81,7 +79,7 @@ async def delete_add_locations(
     request: Request,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    await patch_user_config(_viking_fs(), _ctx, {"add_targets": None})
+    await patch_user_config(_viking_fs(), _ctx, UserSettingsPatch(add_targets=None))
     return Response(status="ok", result=await _response(request, _ctx)).model_dump(
         exclude_none=True
     )

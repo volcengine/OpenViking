@@ -32,6 +32,7 @@ from openviking.server.store_assembly import build_api_key_manager
 from openviking.server.user_config import (
     read_user_config,
     user_config_backup_uri,
+    user_config_uri,
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.deletion import DeletionService, setup_deletion
@@ -2192,8 +2193,7 @@ async def test_create_user_paths_accept_initial_user_config(
         json={
             "account_id": acct,
             "admin_user_id": "alice",
-            # Legacy uid-less spelling, normalized to the viking://~ home alias.
-            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
+            "user_config": {"add_targets": {"resource_uri": "viking://~/resources/admin"}},
         },
         headers=root_headers(),
     )
@@ -2319,7 +2319,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         patched = await client.patch(
             url,
             json={
-                "add_targets": {"resource_uri": "viking://resources/project-a"},
+                "add_targets": {"resource_uri": "viking://~/peers/first/resources/project-a"},
                 "memory_policy": {"memory_types": ["experiences"]},
                 "ttl": {"sessions": 7, "peer_events": 3, "user_events": "disabled"},
             },
@@ -2332,7 +2332,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         admin_view = await client.get(url, headers=admin_headers)
         assert admin_view.status_code == 200 and admin_view.json()["result"] == settings
         assert settings["add_targets"] == {
-            "resource_uri": "viking://resources/project-a",
+            "resource_uri": "viking://user/bob/peers/first/resources/project-a",
             "skill_uri": "viking://user/bob/skills",
         }
         assert settings["ttl"] == {"sessions": 7, "peer_events": 3, "user_events": "disabled"}
@@ -2412,6 +2412,49 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         assert json.loads(fs.files[user_config_backup_uri(user_ctx)])["memory_policy"][
             "memory_types"
         ] == ["cases", "experiences", "trajectories"]
+
+        # Old settings remain readable and do not block unrelated sparse updates.
+        stored_uri = user_config_uri(user_ctx)
+        stored = json.loads(fs.files[stored_uri])
+        stored["add_targets"] = {"resource_uri": "viking://user/resources/legacy"}
+        stored["memory_policy"] = {"memory_types": ["retired_type"]}
+        fs.files[stored_uri] = json.dumps(stored)
+        loaded = await client.get(url, headers=user_headers)
+        assert loaded.status_code == 200, loaded.text
+        patched = await client.patch(
+            url, json={"add_targets": {"skill_uri": "viking://~/skills"}}, headers=user_headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["result"]["add_targets"]["resource_uri"] == stored["add_targets"][
+            "resource_uri"
+        ]
+        assert patched.json()["result"]["memory_policy"]["memory_types"] == ["retired_type"]
+        before_rejected = dict(fs.files)
+        rejected = await client.patch(
+            url, json={"memory_policy": stored["memory_policy"]}, headers=user_headers
+        )
+        assert rejected.status_code == 400 and fs.files == before_rejected
+        rejected = await client.patch(
+            url, json={"add_targets": stored["add_targets"]}, headers=user_headers
+        )
+        assert rejected.status_code == 422 and fs.files == before_rejected
+        rejected = await client.patch(
+            url,
+            json={
+                "add_targets": {"resource_uri": "viking://user/bob/resources"},
+                "memory_policy": {"memory_types": ["profile"]},
+            },
+            headers=user_headers,
+        )
+        assert rejected.status_code == 422 and fs.files == before_rejected
+        patched = await client.patch(
+            url, json={"memory_policy": {"memory_types": ["events"]}}, headers=user_headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["result"]["add_targets"]["resource_uri"] == stored["add_targets"][
+            "resource_uri"
+        ]
+        assert json.loads(fs.files[stored_uri])["memory_policy"]["memory_types"] == ["events"]
     finally:
         set_openviking_config(previous_config)
         await engine.aclose()

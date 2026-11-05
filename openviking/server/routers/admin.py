@@ -3,7 +3,6 @@
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
 import asyncio
-import json
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal, Optional
 
@@ -23,7 +22,12 @@ from openviking.server.auth import (
     require_auth_root_or_admin,
     should_expose_user_key,
 )
-from openviking.server.config import AddTargetsConfig, ServerConfig, UserConfig
+from openviking.server.config import (
+    ServerConfig,
+    UserConfig,
+    UserSettingsPatch,
+    validate_config_input,
+)
 from openviking.server.dependencies import get_service
 from openviking.server.identity import (
     ACCOUNT_USER_ASSIGNABLE_ROLES,
@@ -33,9 +37,8 @@ from openviking.server.identity import (
 from openviking.server.models import Response
 from openviking.server.user_config import (
     read_user_config,
+    resolve_add_targets,
     resolve_user_add_targets,
-    validate_add_targets,
-    validate_user_memory_policy,
     write_user_config,
 )
 from openviking.session.memory.account_templates import (
@@ -52,7 +55,6 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
-    UnimplementedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
@@ -61,9 +63,6 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
-
-_TTL_UNSUPPORTED_MESSAGE = "Redis-backed TTL is not enabled in this deployment."
-
 
 class CreateAccountRequest(BaseModel):
     account_id: str
@@ -146,28 +145,6 @@ class ConfigPatchRequest(BaseModel):
     content: str | None = None
 
 
-def _reject_unsupported_ttl_config(
-    settings: Mapping[str, object] | None = None,
-    content: str | None = None,
-) -> None:
-    """Reject explicit TTL settings unless the built-in Redis runtime is enabled."""
-
-    from openviking.ttl.wiring import ttl_config_supported
-
-    if ttl_config_supported():
-        return
-    if settings is not None and "ttl" in settings:
-        raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
-    if content is None:
-        return
-    try:
-        parsed = json.loads(content.lstrip("\ufeff"))
-    except (TypeError, ValueError):
-        return
-    if isinstance(parsed, dict) and "ttl" in parsed:
-        raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
-
-
 _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset(
     {"vlm", "query_planner", "embedding", "vectordb", "parser_api"}
 )
@@ -198,14 +175,6 @@ async def _account_configuration_settings(
         for key, value in settings.items()
         if key not in _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS
     }
-
-
-class UserSettingsPatch(BaseModel):
-    add_targets: Optional[AddTargetsConfig] = None
-    memory_policy: Optional[dict] = None
-    ttl: Optional[dict] = None
-
-    model_config = {"extra": "forbid"}
 
 
 def _agent_evolution_account_id(ctx: RequestContext) -> str:
@@ -353,37 +322,16 @@ async def _account_settings_result(
     }
 
 
-def _has_add_targets(user_config: UserConfig | None) -> bool:
-    return bool(
-        user_config and (user_config.add_targets.resource_uri or user_config.add_targets.skill_uri)
-    )
-
-
 def _has_initial_user_config(user_config: UserConfig | None) -> bool:
     return bool(
-        _has_add_targets(user_config)
-        or (user_config and (user_config.memory_policy or user_config.ttl is not None))
-    )
-
-
-def _validate_initial_user_config(
-    service,
-    user_ctx: RequestContext,
-    user_config: UserConfig | None,
-) -> None:
-    if not _has_initial_user_config(user_config):
-        return
-    if service.viking_fs is None:
-        raise FailedPreconditionError("OpenViking service is not initialized.")
-    if _has_add_targets(user_config):
-        validate_add_targets(
-            user_config.add_targets,
-            ctx=user_ctx,
+        user_config
+        and (
+            user_config.add_targets.resource_uri
+            or user_config.add_targets.skill_uri
+            or user_config.memory_policy
+            or user_config.ttl is not None
         )
-    if user_config is not None:
-        if user_config.ttl is not None:
-            _reject_unsupported_ttl_config({"ttl": {}})
-        validate_user_memory_policy(user_config.memory_policy)
+    )
 
 
 async def _write_initial_user_config(
@@ -480,13 +428,13 @@ def _user_settings_result(
         if user_config.memory_policy is not None
         else server_config.user_config_defaults.memory_policy
     )
-    policy = MemoryPolicy.from_dict(memory_policy_config)
-    known_memory_types = set(get_default_registry().list_names(include_disabled=False))
-    policy.validate_memory_types(known_memory_types)
-    memory_policy = policy.to_dict()
-    if policy.memory_types is None:
-        memory_policy["memory_types"] = sorted(known_memory_types)
-    add_targets = validate_add_targets(
+    memory_policy = MemoryPolicy.default().to_dict()
+    memory_policy.update(memory_policy_config or {})
+    if memory_policy.get("memory_types") is None:
+        memory_policy["memory_types"] = sorted(
+            get_default_registry().list_names(include_disabled=False)
+        )
+    add_targets = resolve_add_targets(
         resolve_user_add_targets(user_config, server_config), ctx=ctx
     )
     return {
@@ -514,13 +462,13 @@ async def create_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new account (workspace) with its first admin user."""
-    _reject_unsupported_ttl_config(body.settings)
+    validate_config_input(body.settings)
     service = get_service()
     account_ctx = RequestContext(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
-    _validate_initial_user_config(service, account_ctx, body.user_config)
+    validate_config_input(body.user_config)
     # Reject bad initial config before any storage is created, so a failed
     # create leaves nothing behind. This validates the active account runtime
     # field surface and inherited vector configuration without persisting.
@@ -849,7 +797,7 @@ async def patch_account_configuration(
     _check_account_access(ctx, account_id)
     await _check_account_exists(request, account_id)
     _authorize_account_config_patch(ctx, body.settings)
-    _reject_unsupported_ttl_config(body.settings)
+    validate_config_input(body.settings)
     try:
         if "ttl" in body.settings:
             from openviking.ttl.wiring import get_ttl_adapter
@@ -984,7 +932,7 @@ async def patch_cluster_configuration(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
-    _reject_unsupported_ttl_config(body.settings, body.content)
+    validate_config_input(body.settings, body.content)
     if dry_run and (source != "file" or body.content is None):
         raise InvalidArgumentError("dry_run requires source=file and full file content")
     if source == "file":
@@ -1050,7 +998,7 @@ async def register_user(
         user=UserIdentifier(account_id, body.user_id),
         role=resolved_role,
     )
-    _validate_initial_user_config(service, user_ctx, body.user_config)
+    validate_config_input(body.user_config)
     manager = _get_api_key_manager(request)
     user_key = await manager.register_user(
         account_id,
@@ -1209,9 +1157,8 @@ async def patch_user_settings(
     )
     from openviking.server.user_config import patch_user_config
 
-    patch = body.model_dump(exclude_unset=True)
-    _reject_unsupported_ttl_config(patch)
-    user_config = await patch_user_config(service.viking_fs, user_ctx, patch)
+    validate_config_input(body)
+    user_config = await patch_user_config(service.viking_fs, user_ctx, body)
     return Response(
         status="ok",
         result=_user_settings_result(

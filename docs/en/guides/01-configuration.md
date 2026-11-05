@@ -2303,9 +2303,8 @@ Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including o
 
 Supported add target URIs:
 
-- `resource_uri` is used as the default `add_resource` parent directory, equivalent to `parent=<uri>, create_parent=true`. It must be a writable resource directory URI for the request user. Supported forms are `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, and `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`. The `viking://~/...` home alias resolves per request user.
-- `skill_uri` is used as the default `add_skill` target root. In v1, only `viking://~/skills` and `viking://agent/skills` are accepted; explicit `viking://user/{user_id}/skills` is not accepted.
-- Legacy spellings: `viking://user/resources` and `viking://user/skills` written in earlier configs are auto-normalized to `viking://~/resources` and `viking://~/skills` when the config is loaded, and the server logs an info message. Prefer the `viking://~/...` form in new configs — outside `add_targets`, the uid-less spelling is rejected at the request boundary.
+- `resource_uri` is used as the default `add_resource` parent directory, equivalent to `parent=<uri>, create_parent=true`. It must be a writable resource directory URI for the request user. Supported forms are `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`. The `viking://~/...` home alias resolves per request user.
+- `skill_uri` is used as the default `add_skill` target root. Supported forms are `viking://~/skills` and `viking://agent/skills`.
 
 ### Runtime configuration source {#runtime-configuration-source}
 
