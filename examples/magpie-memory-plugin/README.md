@@ -178,8 +178,14 @@ controlled by `mcpEnabled`.
 - The shared context builder owns query settings, budgets and result relevance.
   Default recall timeout is 2000 ms. Set `recallContextTimeoutMs` in Magpie's
   Options or `plugin.magpie` to customize it; explicit existing values are preserved.
-  The actual HTTP timeout is also capped by the client `timeout` and 9000 ms.
-  Cancellation reaches the HTTP request. Query filters use the shared parser.
+  The actual HTTP timeout is also capped by the client `timeout`, 9000 ms, and
+  the host hook budget minus elapsed setup time and a 200 ms allowance for result
+  assembly, state I/O and serialization. Search and profile share this internal
+  deadline; a timed-out read does not discard the other read's completed result.
+  If less than 100 ms remains, no new HTTP requests start. Host cancellation still
+  discards the hook result. The host exposes no remaining chain deadline, so the
+  allowance cannot guarantee completion before an earlier external cancellation.
+  Query filters use the shared parser.
 - Default peer scope is the configured user's cross-project context. Actor scope
   requires an explicit `actor_peer_id`; a missing peer skips enhancement.
 
@@ -195,8 +201,9 @@ keys into existing options):
 
 The package's Options example includes these values, but upgrading does not rewrite
 saved options. Magpie defaults to a 1000 ms hook budget when `gatewayTimeoutMs` is
-omitted, so existing installations must set it explicitly. Keep it above the recall
-budget with room for configuration and state I/O (Magpie permits up to 10000 ms).
+omitted; the plugin then shortens its HTTP wait to fit that budget. Existing
+installations must set it explicitly to use the full 2000 ms recall budget. Keep
+it above the recall budget with room for configuration and state I/O (Magpie permits up to 10000 ms).
 If increasing recall beyond 2000 ms, increase both budgets and ensure the client
 `timeout` in `ovcli.conf` (seconds) is sufficient. Failed recall still lets the
 model request continue.

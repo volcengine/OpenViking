@@ -11,6 +11,7 @@ import OpenVikingMemory from "../index.mjs";
 import { injectContext, loadConfig, recallRequest, request } from "../runtime.mjs";
 import { estimateTokens } from "../shared/profile-inject.mjs";
 import { buildOvHeaders } from "../shared/ov-http.mjs";
+import { onRequest } from "../hooks.mjs";
 
 async function fixture(t, handler = () => ({ rendered: "viking://~/memories/preference.md\nUse TypeScript." }), profile = "") {
   const dir = await mkdtemp(join(tmpdir(), "ov-magpie-test-"));
@@ -360,6 +361,66 @@ test("slow recall respects its timeout; redirects do not forward credentials", a
   const redirect = await fixture(t, (_, res) => { res.writeHead(302, { Location: target.config.url }); res.end(); });
   await assert.rejects(request(await loadConfig(redirect.env), "/test"), /unavailable/);
   assert.equal(target.calls.length, 0);
+});
+
+for (const { hostBudget, profileDelay, minimumWait } of [
+  { hostBudget: 1000, profileDelay: 1500, minimumWait: 600 },
+  { hostBudget: 3000, profileDelay: 2500, minimumWait: 1900 },
+]) {
+  test(`a ${hostBudget} ms host budget preserves completed search when profile times out`, async (t) => {
+    let searchReturned = false;
+    const f = await fixture(t, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      searchReturned = true;
+      return { rendered: "Completed search memory" };
+    }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, profileDelay));
+      return "Late profile memory";
+    });
+    const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
+    t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+    const ctx = context({ session: "", signal: AbortSignal.timeout(hostBudget),
+      options: { autoCapture: false, gatewayTimeoutMs: hostBudget } });
+    const started = performance.now();
+    const output = await onRequest(body(), ctx);
+    const elapsed = performance.now() - started;
+    assert.ok(searchReturned);
+    assert.match(output.messages.at(-1).content, /Completed search memory/);
+    assert.doesNotMatch(output.messages.at(-1).content, /Late profile memory/);
+    assert.equal(ctx.signal.aborted, false);
+    assert.equal(ctx.reports.at(-1)[0], "ready");
+    assert.ok(elapsed >= minimumWait, `returned too early: ${elapsed} ms`);
+    assert.ok(elapsed < hostBudget, `exceeded host budget: ${elapsed} ms`);
+  });
+}
+
+test("host cancellation discards completed search while profile is still pending", async (t) => {
+  let searchReturned = false;
+  const f = await fixture(t, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    searchReturned = true;
+    return { rendered: "Completed search memory" };
+  }, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return "Late profile memory";
+  });
+  const ctx = context({ session: "", options: { gatewayTimeoutMs: 3000 }, signal: AbortSignal.timeout(500) });
+  assert.equal(await recallRequest(body(), ctx, f.env), undefined);
+  assert.ok(searchReturned);
+  assert.equal(ctx.signal.aborted, true);
+  assert.deepEqual(ctx.reports, [["unavailable", 0]]);
+});
+
+test("host budget validation and elapsed setup time prevent requests below the HTTP minimum", async (t) => {
+  const f = await fixture(t);
+  for (const gatewayTimeoutMs of [undefined, "3000", 99, 10001, 1000.5, 100]) {
+    const ctx = context({ session: "", options: { gatewayTimeoutMs } });
+    assert.equal(await recallRequest(body(), ctx, f.env, undefined, performance.now() - 750), undefined);
+    assert.deepEqual(ctx.reports, [["unavailable", 0]]);
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.profileCalls.length, 0);
 });
 
 test("concurrent identities cannot share recalled results or credentials", async (t) => {
