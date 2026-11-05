@@ -167,7 +167,9 @@ def _reject_unsupported_ttl_config(
         raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
 
 
-_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
+_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset(
+    {"vlm", "query_planner", "embedding", "vectordb", "parser_api"}
+)
 
 
 def _authorize_account_config_patch(
@@ -177,9 +179,7 @@ def _authorize_account_config_patch(
     restricted = _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS.intersection(settings)
     if restricted and ctx.role != Role.ROOT:
         fields = ", ".join(sorted(restricted))
-        raise PermissionDeniedError(
-            f"Only ROOT can modify account configuration fields: {fields}"
-        )
+        raise PermissionDeniedError(f"Only ROOT can modify account configuration fields: {fields}")
 
 
 def _visible_account_config(
@@ -331,9 +331,7 @@ async def _account_settings_result(
     """
     enabled = await get_service().sessions.get_agent_evolution_enabled(account_id)
     legacy_overrides = {
-        key: overrides[key]
-        for key in ("agent_evolution", "acl")
-        if key in overrides
+        key: overrides[key] for key in ("agent_evolution", "acl") if key in overrides
     }
     return {
         "account_id": account_id,
@@ -387,10 +385,17 @@ async def _write_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
+    *,
+    lease_ref: object | None = None,
 ) -> None:
     if not _has_initial_user_config(user_config):
         return
-    await write_user_config(service.viking_fs, user_ctx, user_config)
+    await write_user_config(
+        service.viking_fs,
+        user_ctx,
+        user_config,
+        lease_ref=lease_ref,
+    )
 
 
 async def _rollback_account_creation(
@@ -454,9 +459,7 @@ async def _rollback_account_creation(
         )
 
 
-async def _check_user_exists(
-    request: Request, account_id: str, user_id: str, manager=None
-) -> None:
+async def _check_user_exists(request: Request, account_id: str, user_id: str, manager=None) -> None:
     manager = manager or _get_api_key_manager(request)
     if await manager.get_user_for_management(account_id, user_id) is None:
         raise NotFoundError(user_id, "user")
@@ -516,30 +519,42 @@ async def create_account(
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
     manager = _get_api_key_manager(request)
-    user_key = await manager.create_account(
-        body.account_id,
-        body.admin_user_id,
-        seed=body.seed,
-    )
+    user_key = None
+    account_created = False
     try:
-        if body.settings and runtime_config is not None:
-            # Persist the pre-validated override.
-            await runtime_config.patch_account(
+        async with service.account_workspace_lock(account_ctx) as lease:
+            user_key = await manager.create_account(
                 body.account_id,
-                body.settings,
-                creating=True,
+                body.admin_user_id,
+                seed=body.seed,
+                lease_ref=lease,
             )
-        await service.initialize_account_workspace(account_ctx)
-        await _write_initial_user_config(service, account_ctx, body.user_config)
+            account_created = True
+            if body.settings and runtime_config is not None:
+                # Persist the pre-validated override.
+                await runtime_config.patch_account(
+                    body.account_id,
+                    body.settings,
+                    creating=True,
+                    lease_ref=lease,
+                )
+            await service.initialize_account_workspace(account_ctx, lease_ref=lease)
+            await _write_initial_user_config(
+                service,
+                account_ctx,
+                body.user_config,
+                lease_ref=lease,
+            )
     except BaseException:
-        await _rollback_account_creation(
-            service,
-            manager,
-            body.account_id,
-            runtime_config,
-            deletion_service=getattr(request.app.state, "deletion_service", None),
-            actor=ctx,
-        )
+        if account_created:
+            await _rollback_account_creation(
+                service,
+                manager,
+                body.account_id,
+                runtime_config,
+                deletion_service=getattr(request.app.state, "deletion_service", None),
+                actor=ctx,
+            )
         raise
     result = {
         "account_id": body.account_id,
@@ -1287,9 +1302,7 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(
-        account_id, body.group_id
-    )
+    result = await _get_api_key_manager(request).create_group(account_id, body.group_id)
     return Response(status="ok", result=result)
 
 
@@ -1330,9 +1343,7 @@ async def list_group_members(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    members = await _get_api_key_manager(request).get_group_members(
-        account_id, group_id
-    )
+    members = await _get_api_key_manager(request).get_group_members(account_id, group_id)
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 

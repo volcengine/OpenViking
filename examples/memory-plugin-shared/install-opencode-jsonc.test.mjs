@@ -294,7 +294,7 @@ if (["success", "broken-skill"].includes(process.env.NPM_TEST_RESULT)) {
         const { readFile } = await import("node:fs/promises");
         const { loadBundledV2Skills } = await import(${JSON.stringify(`file://${installedRoot}/lib/v2-skills.mjs`)});
         const skills = await loadBundledV2Skills(${JSON.stringify(installedRoot)});
-        if (skills.map(s => s.name).sort().join(",") !== "openviking-memory,openviking-skills,ov-experience-memory") throw Error("missing bundled skills");
+        if (skills.map(s => s.name).sort().join(",") !== "openviking-memory,openviking-rule-search,openviking-skills,ov-experience-memory") throw Error("missing bundled skills");
         for (const skill of skills) {
           if (!(await readFile(skill.path, "utf8")).endsWith(skill.content) || !skill.content.startsWith("# ")) throw Error("invalid skill body");
         }

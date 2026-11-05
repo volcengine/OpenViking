@@ -1,0 +1,95 @@
+# FileTree
+
+A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
+
+This is a placeholder implementation: it renders every documented row type and honours the public props, so consumers can integrate against the API before the full view lands. Styling, iconography and interaction details will change, and the view will be rewritten against this contract.
+
+## Basic usage
+
+Expand a directory to reveal its children. Rows come from `rows`; selection and expansion are controlled by the consumer.
+
+```tsx file="../../_demos/file-tree-basic.tsx" preview
+
+```
+
+## How rows work
+
+The tree never inspects parent/child relationships. The host flattens its own state into an ordered list:
+
+- `entry` — a directory or file.
+- `loading` — a children area that is still loading.
+- `load-more` — a children page the host can fetch next.
+- `error` — a children area that failed.
+- `empty` — an expanded directory with no children.
+
+Emit only the ones your data source needs. A host that returns all children at once never emits `load-more`.
+
+## Slots and host content
+
+- `slots.toolbar` — search, import sources, refresh. The component does not know what is inside.
+- `renderDashboard` — the row-end indicator, for example a dashboard entry.
+- `renderRowTooltip` — hover content; the component handles the delay and positioning.
+
+## One-off effects
+
+Highlighting is a page-level effect, not a tree prop. Three options are available and can be combined:
+
+1. `data-file-tree-row-id` on every row element, exported as `FILE_TREE_ROW_ATTRIBUTE`.
+2. `getRowAttributes(row)` for per-row classes and attributes.
+3. The `ref` handle: `getRowElement(id)` and `scrollToRow(id, options)`.
+
+```tsx
+const treeRef = useRef<FileTreeHandle>(null);
+treeRef.current?.scrollToRow('resources', { block: 'center' });
+```
+
+`operations` provides `select(row)`, `toggleExpand(row)`, `loadMore(row)`, `retry(row)` and `openRetentionSettings(uri)`. Each returns `Promise<void>`: resolution means success, rejection means failure. The existing `on…` callbacks are optional success notifications and no longer perform these operations. Repeated requests for the same pending operation are ignored.
+
+## Props
+
+| Property                  | Type                                      | Default  | Description                                                                    |
+| ------------------------- | ----------------------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `rows`                    | `readonly FileTreeRow[]`                  | Required | Visible rows in render order.                                                  |
+| `operations`              | `FileTreeOperations`                      | —        | Asynchronous operation capabilities; missing methods disable their operations. |
+| `selectedId`              | `string \| null`                          | —        | Selected row id, owned by the host.                                            |
+| `isReady`                 | `boolean`                                 | `true`   | Whether the first load finished.                                               |
+| `loadingFallback`         | `ReactNode`                               | —        | Shown instead of rows while the first load runs.                               |
+| `errorFallback`           | `ReactNode`                               | —        | Shown when a whole-tree error row is present.                                  |
+| `emptyFallback`           | `ReactNode`                               | —        | Shown when `rows` is empty.                                                    |
+| `slots`                   | `FileTreeSlots`                           | —        | `toolbar` slot above the rows.                                                 |
+| `labels`                  | `FileTreeLabels`                          | English  | Replaceable copy.                                                              |
+| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>` | —        | Extra attributes per row; `className` is merged.                               |
+| `renderDashboard`         | `(row) => ReactNode`                      | —        | Row-end indicator; `null` hides it.                                            |
+| `renderRowTooltip`        | `(row) => ReactNode`                      | —        | Hover content; `null` hides it.                                                |
+| `onSelect`                | `(row: FileTreeEntryRow) => void`         | —        | Called after selection succeeds; not called on failure.                        |
+| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`         | —        | Called after expansion or collapse succeeds; not called on failure.            |
+| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`      | —        | Called after loading more children succeeds; not called on failure.            |
+| `onRetry`                 | `(row: FileTreeErrorRow) => void`         | —        | Called after a retry succeeds; not called on failure.                          |
+| `onOpenRetentionSettings` | `(uri: string) => void`                   | —        | Called after retention settings open successfully; not called on failure.      |
+| Other props               | `HTMLAttributes<HTMLDivElement>`          | —        | Standard div attributes.                                                       |
+
+```tsx
+import { FileTree } from '@openviking/react/components/file-tree';
+import '@openviking/react/components/file-tree/style.css';
+```
+
+## Accessibility
+
+The tree uses `role="tree"` with `role="treeitem"` rows and reports `aria-level`, `aria-selected` and `aria-expanded`. Arrow keys move between rows, Right/Left expand and collapse, Enter and Space select. Status is carried by visible text, not colour alone.
+
+## Theme tokens
+
+| CSS variable           | Default                | Purpose                        |
+| ---------------------- | ---------------------- | ------------------------------ |
+| `--ov-ui-text`         | `#1f2329`              | Row text.                      |
+| `--ov-ui-text-muted`   | `#8f959e`              | Secondary text and icons.      |
+| `--ov-ui-row-hover`    | `rgb(0 0 0 / 4%)`      | Row hover background.          |
+| `--ov-ui-row-selected` | `rgb(37 99 197 / 10%)` | Selected row background.       |
+| `--ov-ui-focus-ring`   | `#2563c5`              | Keyboard focus ring.           |
+| `--ov-ui-chip`         | `rgb(0 0 0 / 6%)`      | Level badge background.        |
+| `--ov-ui-warning`      | `#b26a00`              | Expiry hint text.              |
+| `--ov-ui-radius`       | `6px`                  | Row and tooltip corner radius. |
+
+## Implementation scope
+
+The host supplies asynchronous execution capabilities through `operations`; the component calls the matching success notification only after the operation resolves. Rejection does not trigger a success notification. Omitting a method disables that operation; omitting a notification does not prevent execution. Directory loading, pagination, search, permissions and navigation remain host-owned.

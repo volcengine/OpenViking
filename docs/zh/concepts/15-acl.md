@@ -122,6 +122,8 @@ acl_inherited_grants
 
 `acl_direct_grants` 是当前节点直接 ACL，`acl_inherited_grants` 是父节点当前有效 ACL，`acl_mode` 决定 inherited 是否参与当前节点的有效权限。每个 principal 只保存最高 level，编码为 `{mask}:{principal}`：`1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。不维护独立 ACL collection。
 
+空 grants 列表存储为 `["none"]`，读取时解析为空权限。`"none"` 必须单独出现，不授予任何权限。该存储标记与 `acl_mode` 独立：清空直接授权时，模式和已有继承权限保持原有语义。
+
 ACL 随索引更新，允许同一 URI 的不同索引记录短暂保留不同版本。读取采用索引返回的一份 ACL 快照，不合并不同版本的授权，也不因副本暂时不一致阻断处理。权限变更按索引更新进度生效，不保证强一致。
 
 请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。检索在共享区内用 `acl_mode IN [inherit, restricted]` 判断受控资源，再匹配各 principal 的 `1`、`3`、`7` grant token：inherit 匹配 direct 或 inherited，restricted 只匹配 direct。未写入 ACL 字段（字段缺失、为 `null` 或 `none`）的共享记录按根目录默认全员授权参与检索。已保存的 inherit 节点必须匹配自己的直接或继承授权，不能因为模式是 inherit 就放行全员。个人资源始终按 URI owner 隔离。

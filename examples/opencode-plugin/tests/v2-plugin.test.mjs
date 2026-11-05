@@ -67,7 +67,7 @@ test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
   const { ctx, hooks, registered, skillSources } = contextFixture()
   const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
 
-  assert.deepEqual(skillSources.map((skill) => skill.name).sort(), ["openviking-memory", "openviking-skills", "ov-experience-memory"])
+  assert.deepEqual(skillSources.map((skill) => skill.name).sort(), ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory"])
   for (const skill of skillSources) {
     assert.equal(typeof skill.id, "string")
     assert.equal(typeof skill.description, "string")
@@ -123,12 +123,12 @@ for (const deferred of [false, true]) {
       }
       const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
       replay()
-      assert.equal(skills.size, disabled ? 0 : 3)
+      assert.equal(skills.size, disabled ? 0 : 4)
       const initial = [...skills.values()]
       replay()
       assert.deepEqual([...skills.values()], initial)
       replay(!disabled)
-      assert.equal(skills.size, disabled ? 3 : 0)
+      assert.equal(skills.size, disabled ? 4 : 0)
       replay()
       assert.deepEqual([...skills.values()], initial)
       await cleanup()
@@ -147,7 +147,7 @@ for (const late of [false, true]) {
       if (late) skills.set(existing.id, existing)
     }
     await (await startV2Plugin(ctx, runtime, { pluginRoot }))()
-    assert.equal(skills.size, 3)
+    assert.equal(skills.size, 4)
     assert.equal(skills.get(existing.id), existing)
     assert.equal([...skills.values()].filter((skill) => skill.name === existing.name).length, 1)
   })

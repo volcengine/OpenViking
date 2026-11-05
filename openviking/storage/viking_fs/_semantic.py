@@ -10,7 +10,7 @@ from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     body_for_preview,
@@ -41,6 +41,11 @@ class _SemanticMixin:
         self, uri: str, field: Literal["abstract", "overview"], ctx: Optional[RequestContext] = None
     ) -> str:
         """Read a fixed summary file from an already authorized, known directory."""
+        real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.role == Role.GLOBAL:
+            ctx = self.authorize_read(real_ctx, [uri])
+            if ctx.data_access is not None:
+                await self._ensure_access(f"{uri.rstrip('/')}/.{field}.md", ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
             raw = self._handle_agfs_read(await self._async_agfs.read(f"{path}/.{field}.md"))
@@ -67,6 +72,8 @@ class _SemanticMixin:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
+        real_ctx = self._ctx_or_default(ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
@@ -84,7 +91,7 @@ class _SemanticMixin:
                 uri,
                 parent_uri,
             )
-            return await self.abstract(parent_uri, ctx=ctx)
+            return await self.abstract(parent_uri, ctx=real_ctx)
         return await self._read_directory_summary(uri, "abstract", ctx=ctx)
 
     async def overview(
@@ -97,6 +104,8 @@ class _SemanticMixin:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
+        real_ctx = self._ctx_or_default(ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
@@ -114,7 +123,7 @@ class _SemanticMixin:
                 uri,
                 parent_uri,
             )
-            return await self.overview(parent_uri, ctx=ctx)
+            return await self.overview(parent_uri, ctx=real_ctx)
         return await self._read_directory_summary(uri, "overview", ctx=ctx)
 
     async def find(
@@ -181,6 +190,14 @@ class _SemanticMixin:
         real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
+        real_ctx = self.authorize_read(real_ctx, retrieval_targets.target_directories)
+        if real_ctx.data_access is not None:
+            from dataclasses import replace
+
+            retrieval_targets = replace(
+                retrieval_targets, target_directories=list(real_ctx.data_access.effective_targets)
+            )
+
         if filter_only:
             return await self._find_by_filter(
                 filter=filter,
@@ -239,7 +256,20 @@ class _SemanticMixin:
 
         # Convert QueryResult to FindResult
         memories, resources, skills = [], [], []
+        access = (
+            await self._can_access_many([hit.uri for hit in result.matched_contexts], real_ctx)
+            if real_ctx.data_access is not None
+            else None
+        )
         for ctx in result.matched_contexts:
+            if access is not None and not access.get(ctx.uri, False):
+                continue
+            if (
+                ctx.level == ContextLevel.OVERVIEW
+                and real_ctx.data_access is not None
+                and not real_ctx.data_access.allows_overview(ctx.uri)
+            ):
+                continue
             if ctx.context_type == ContextType.MEMORY:
                 memories.append(ctx)
             elif ctx.context_type == ContextType.RESOURCE:
@@ -299,9 +329,22 @@ class _SemanticMixin:
         # and L1 record and would otherwise be returned twice — inflating the
         # total and eating two of the caller's limit slots for one result.
         seen_uris: set = set()
+        access = (
+            await self._can_access_many([str(r.get("uri", "")) for r in records], ctx)
+            if ctx.data_access is not None
+            else None
+        )
         for record in records:
+            if access is not None and not access.get(str(record.get("uri", "")), False):
+                continue
             matched = build_matched_context_from_record(record)
             if matched is None or matched.uri in seen_uris:
+                continue
+            if (
+                matched.level == ContextLevel.OVERVIEW
+                and ctx.data_access is not None
+                and not ctx.data_access.allows_overview(matched.uri)
+            ):
                 continue
             seen_uris.add(matched.uri)
             if matched.context_type == ContextType.MEMORY:
@@ -480,6 +523,12 @@ class _SemanticMixin:
         memories, resources, skills = [], [], []
         for result in query_results:
             for ctx in result.matched_contexts:
+                if (
+                    ctx.level == ContextLevel.OVERVIEW
+                    and real_ctx.data_access is not None
+                    and not real_ctx.data_access.allows_overview(ctx.uri)
+                ):
+                    continue
                 if ctx.context_type == ContextType.MEMORY:
                     memories.append(ctx)
                 elif ctx.context_type == ContextType.RESOURCE:
