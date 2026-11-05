@@ -854,11 +854,16 @@ class TestResolutionRepair:
         self, resolution_skip_code, has_writable_target, expected_llm_calls
     ):
         schema = TestResolveOperations._event_schema()
+        schema.fields.append(
+            MemoryField(name="summary", field_type=FieldType.STRING, merge_op=MergeOp.PATCH)
+        )
         profile_schema = MemoryTypeSchema(
             memory_type="profile",
             directory="viking://user/{{ user_space }}/memories",
             filename_template="profile.md",
-            fields=[],
+            fields=[
+                MemoryField(name="summary", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE)
+            ],
         )
         event_uri = "viking://user/alice/memories/events/2026/08/27/demo.md"
         profile_uri = "viking://user/alice/memories/profile.md"
@@ -868,8 +873,24 @@ class TestResolutionRepair:
         context_provider.get_tools.return_value = []
         context_provider.get_extract_context.return_value = SimpleNamespace(page_id_map=PageIdMap())
         context_provider.prefetch = AsyncMock(return_value=[])
-        context_provider.read_file_contents = {}
+        context_provider.read_file_contents = {
+            profile_uri: MemoryFile(
+                uri=profile_uri, memory_type="profile", extra_fields={"summary": "keep me"}
+            )
+        }
         context_provider.instruction.return_value = "base instruction"
+        old_summary = "Budget is 500. Window seat."
+
+        async def read_existing_event(tool_call):
+            assert tool_call.arguments["uri"] == event_uri
+            fields = {"event_name": "demo", "ranges": "0", "summary": old_summary}
+            context_provider.read_file_contents[event_uri] = MemoryFile(
+                uri=event_uri, memory_type="events", extra_fields=fields
+            )
+            context_provider.get_extract_context().page_id_map.get_page_id(event_uri)
+            return fields
+
+        context_provider.execute_tool = AsyncMock(side_effect=read_existing_event)
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
@@ -896,58 +917,53 @@ class TestResolutionRepair:
             return [event_uri]
 
         isolation_handler.calculate_memory_uris.side_effect = calculate_memory_uris
-
+        vlm = Mock(model="test-model", max_tokens=32768)
+        responses = [
+            VLMResponse(
+                content=json.dumps(
+                    {
+                        "events": [
+                            {
+                                "event_name": "demo",
+                                "ranges": ranges,
+                                "page_id": 100,
+                                "summary": summary,
+                            }
+                        ],
+                        "profile": [{"page_id": 1, "summary": profile_summary}],
+                    }
+                )
+            )
+            for ranges, summary, profile_summary in (
+                ("99", "Budget is 600.", "keep me"),
+                ("0", "ignore this range-repair edit", "ignore this repair"),
+                (
+                    "0",
+                    {"blocks": [{"search": "Budget is 500.", "replace": "Budget is 600."}]},
+                    "ignore this repair",
+                ),
+            )
+        ]
+        vlm.get_completion_async = AsyncMock(side_effect=responses)
         loop = ExtractLoop(
-            vlm=Mock(model="test-model"),
+            vlm=vlm,
             viking_fs=Mock(),
             context_provider=context_provider,
             isolation_handler=isolation_handler,
             ctx=SimpleNamespace(user=SimpleNamespace(user_id="alice")),
         )
-        loop._call_llm = AsyncMock(
-            side_effect=[
-                (
-                    [],
-                    AttrDict(
-                        events=[{"event_name": "demo", "ranges": "99", "page_id": 5}],
-                        profile=[{"page_id": 101, "summary": "keep me"}],
-                    ),
-                ),
-                (
-                    [],
-                    AttrDict(events=[{"event_name": "demo", "ranges": "0", "page_id": 100}]),
-                ),
-                (
-                    [],
-                    AttrDict(events=[{"event_name": "demo", "ranges": "0", "page_id": 100}]),
-                ),
-            ]
+        config = SimpleNamespace(
+            memory=SimpleNamespace(link_enabled=False, extraction_output_format="json")
         )
-        loop._check_unread_existing_files = AsyncMock(
-            side_effect=[{}, {event_uri: {"content": "existing event"}}, {}]
-        )
-        loop._add_refetch_results_to_messages = AsyncMock()
-        loop._validate_patch_operations = AsyncMock(return_value=[])
-        loop.finalize_operations = AsyncMock()
-
         with (
-            patch("openviking.session.memory.extract_loop.get_openviking_config") as mock_config,
             patch(
-                "openviking.session.memory.extract_loop.SchemaModelGenerator.generate_all_models"
+                "openviking.session.memory.extract_loop.get_openviking_config", return_value=config
             ),
-            patch(
-                "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
-            ) as mock_create_model,
+            patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
         ):
-            mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
-            mock_create_model.return_value = SimpleNamespace(
-                model_fields={"events": None},
-                model_json_schema=lambda: {},
-            )
-
             final_operations, _ = await loop.run()
 
-        assert loop._call_llm.await_count == expected_llm_calls
+        assert vlm.get_completion_async.await_count == expected_llm_calls
         assert event_resolution_attempts == expected_llm_calls
         assert len(final_operations.upsert_operations) == 2
         assert final_operations.upsert_operations[0].uris == (
@@ -959,14 +975,22 @@ class TestResolutionRepair:
         assert final_operations.upsert_operations[1].memory_fields["summary"] == "keep me"
         repair_messages = [
             message["content"]
-            for message in loop._call_llm.await_args_list[-1].args[0]
+            for message in vlm.get_completion_async.await_args_list[-1].kwargs["messages"]
             if message["role"] == "user" and "Resolution issues:" in message["content"]
         ]
         if expected_llm_calls == 3:
+            context_provider.execute_tool.assert_awaited_once()
+            assert (
+                await PatchOp(FieldType.STRING).apply(
+                    old_summary, final_operations.upsert_operations[0].memory_fields["summary"]
+                )
+                == "Budget is 600. Window seat."
+            )
             assert len(repair_messages) == 1
             assert f'"reason_code": "{resolution_skip_code.value}"' in repair_messages[0]
             assert '"event_name": "demo"' in repair_messages[0]
         else:
+            context_provider.execute_tool.assert_not_awaited()
             assert repair_messages == []
 
     def test_merge_event_repair_ignores_unrequested_memory_types(self):

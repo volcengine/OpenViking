@@ -211,6 +211,7 @@ class ExtractLoop:
         patch_repair_count = 0
         resolution_repair_count = 0
         pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
+        resolution_repair_ranges_only = True
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -336,6 +337,7 @@ class ExtractLoop:
                     operations = self._event_resolution_repair_subset(
                         operations,
                         pending_resolution_repair[0],
+                        ranges_only=resolution_repair_ranges_only,
                     )
                 candidate_operations, candidate_links = await self.resolve_operations(operations)
                 if pending_resolution_repair is not None:
@@ -352,6 +354,8 @@ class ExtractLoop:
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
+                    # New file context may require changes beyond the Event's ranges.
+                    resolution_repair_ranges_only = False
                     tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
@@ -366,6 +370,7 @@ class ExtractLoop:
                     continue
                 patch_errors = await self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
+                    resolution_repair_ranges_only = False
                     patch_repair_count += 1
                     max_iterations += 1
                     self._disable_tools_for_iteration = True
@@ -384,6 +389,7 @@ class ExtractLoop:
                 if not patch_errors and resolution_issues and resolution_repair_count == 0:
                     resolution_repair_count += 1
                     pending_resolution_repair = (final_operations, raw_links)
+                    resolution_repair_ranges_only = True
                     max_iterations += 1
                     self._disable_tools_for_iteration = True
                     messages.append(
@@ -605,8 +611,10 @@ class ExtractLoop:
         cls,
         operations: Any,
         original: ResolvedOperations,
+        *,
+        ranges_only: bool = True,
     ) -> _EventRepairOperations:
-        """Keep only one range repair for each failed Event and preserve its original fields."""
+        """Keep one response per failed Event; limit the initial repair to ranges."""
         failed_events = {
             operation.page_id: operation
             for operation in original.upsert_operations
@@ -640,10 +648,9 @@ class ExtractLoop:
                 )
                 continue
 
+            fields = failed_operation.memory_fields if ranges_only else candidate
             repaired_item = {
-                key: value
-                for key, value in failed_operation.memory_fields.items()
-                if key not in {"memory_type", "user_id"}
+                key: value for key, value in fields.items() if key not in {"memory_type", "user_id"}
             }
             repaired_item["ranges"] = candidate["ranges"]
             repaired_item["page_id"] = page_id
