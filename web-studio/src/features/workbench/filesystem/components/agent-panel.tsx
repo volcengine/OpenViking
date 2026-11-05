@@ -4,7 +4,9 @@ import {
   CircleAlertIcon,
   HistoryIcon,
   Loader2Icon,
-  BotIcon,
+  BookOpenIcon,
+  LightbulbIcon,
+  PanelsTopLeftIcon,
   SquarePenIcon,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -406,6 +408,7 @@ export function AgentToolbar({
       <span
         className="min-w-0 max-w-48 truncate px-1 text-sm font-medium text-foreground"
         title={sessionTitle}
+        data-agent-session-title
       >
         {sessionTitle}
       </span>
@@ -499,10 +502,21 @@ export function AgentEmptyState({
   return (
     <div className="flex min-h-full flex-col gap-4">
       <div className="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
-        <div className="mb-1 flex size-12 items-center justify-center rounded-xl bg-muted text-foreground">
-          <BotIcon className="size-6" />
+        <div
+          aria-hidden="true"
+          className="relative mb-5 h-20 w-32 text-foreground"
+        >
+          <span className="absolute bottom-0 left-0 flex size-10 -rotate-12 items-center justify-center rounded-xl bg-muted/70">
+            <LightbulbIcon className="size-6" />
+          </span>
+          <span className="absolute top-0 left-12 flex size-10 items-center justify-center rounded-xl bg-muted/70">
+            <BookOpenIcon className="size-6" />
+          </span>
+          <span className="absolute right-0 bottom-0 flex size-10 rotate-12 items-center justify-center rounded-xl bg-muted/70">
+            <PanelsTopLeftIcon className="size-6" />
+          </span>
         </div>
-        <h2 className="text-lg font-semibold tracking-tight">
+        <h2 className="text-xl font-medium tracking-tight">
           {t('agent.empty.heading')}
         </h2>
         <p className="max-w-xs text-sm leading-6 text-muted-foreground">

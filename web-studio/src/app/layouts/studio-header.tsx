@@ -1,3 +1,4 @@
+import type { Ref } from 'react'
 import { StudioApiKeyMenu } from '#/features/connection/components/studio-api-key-menu'
 import { StudioModeSwitch } from '#/features/connection/components/studio-mode-switch'
 import { StudioScopeSwitcher } from '#/features/connection/components/studio-scope-switcher'
@@ -15,12 +16,14 @@ import { CircleHelpIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export function StudioHeader({
-  managementMode,
+  actionsRef,
   filesystemMode = false,
+  managementMode,
   canManage,
   isGatewayHost,
   settingsPath,
 }: {
+  actionsRef?: Ref<HTMLDivElement>
   managementMode: boolean
   filesystemMode?: boolean
   canManage: boolean
@@ -47,7 +50,7 @@ export function StudioHeader({
     >
       <div className="flex min-w-0 items-center gap-2 sm:gap-4">
         <SidebarTrigger
-          className={filesystemMode ? 'shrink-0' : 'shrink-0 md:hidden'}
+          className={managementMode ? 'shrink-0 md:hidden' : 'hidden'}
         />
         <Link
           to={managementMode ? '/admin' : '/'}
@@ -80,6 +83,13 @@ export function StudioHeader({
         />
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
+        {filesystemMode ? (
+          <div
+            ref={actionsRef}
+            data-slot="studio-header-actions"
+            className="flex items-center gap-2"
+          />
+        ) : null}
         {showManagementEntry ? (
           <StudioModeSwitch
             key={`${identityScopeKey}:${managementMode}`}

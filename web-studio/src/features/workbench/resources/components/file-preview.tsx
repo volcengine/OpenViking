@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import i18n from '#/i18n/core'
 import { formatDateTime } from '#/i18n/format'
 import { useQuery } from '@tanstack/react-query'
@@ -137,6 +138,11 @@ async function ensureLanguage(lang: string): Promise<void> {
 }
 
 interface FilePreviewProps {
+  ide?: boolean
+  toolbarContainer?: HTMLDivElement | null
+  previewContent?: ReactNode
+  onSaved?: (uri: string) => void
+  onDirtyChange?: (dirty: boolean) => void
   readOnly?: boolean
   defaultReadLimit?: number
   file: VikingFsEntry | null
@@ -146,6 +152,7 @@ interface FilePreviewProps {
   showCloseButton?: boolean
 }
 
+const MARKDOWN_MODES = ['preview', 'source'] as const
 const vikingPrefix = 'viking://'
 const markdownSanitizeSchema = {
   ...defaultSchema,
@@ -1390,6 +1397,11 @@ function JsonlPreview({ content }: { content: string }) {
 }
 
 export function FilePreview({
+  ide = false,
+  toolbarContainer,
+  previewContent,
+  onDirtyChange,
+  onSaved,
   readOnly = false,
   defaultReadLimit,
   file,
@@ -1463,6 +1475,7 @@ export function FilePreview({
   const [saving, setSaving] = useState(false)
   const [loadingEditor, setLoadingEditor] = useState(false)
   const [editorContent, setEditorContent] = useState('')
+  const [dirty, setDirty] = useState(false)
   const fileUriRef = useRef(file?.uri)
   fileUriRef.current = file?.uri
   const editorRef = useRef<CodeEditorHandle>(null)
@@ -1481,10 +1494,17 @@ export function FilePreview({
     setMarkdownMode('preview')
     setJsonMode('preview')
     setEditing(false)
+    setDirty(false)
     setLoadingEditor(false)
+    setSaving(false)
     setEditorContent('')
     setActiveDirectoryLevels(new Set(['abstract', 'overview']))
   }, [file?.uri])
+
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+    return () => onDirtyChange?.(false)
+  }, [dirty, onDirtyChange])
 
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [imageLoading, setImageLoading] = useState(false)
@@ -1631,17 +1651,34 @@ export function FilePreview({
 
   const handleSave = async () => {
     if (!file || !editorRef.current) return
+    const uri = file.uri
+    const content = editorRef.current.getContent()
     setSaving(true)
     try {
-      await saveFileContent(file.uri, editorRef.current.getContent())
-      invalidatePreview(file.uri)
+      await saveFileContent(uri, content)
+      invalidatePreview(uri)
+      onSaved?.(uri)
+      if (fileUriRef.current !== uri) return
       setEditing(false)
+      setDirty(false)
     } catch (err) {
       toast.error(t('filePreview.saveFailed'), { description: String(err) })
     } finally {
-      setSaving(false)
+      if (fileUriRef.current === uri) setSaving(false)
     }
   }
+
+  useEffect(() => {
+    if (!ide || !editing) return
+    const handleKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        if (!saving) void handleSave()
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  })
 
   if (!file) {
     return (
@@ -1677,69 +1714,110 @@ export function FilePreview({
     hasPreviewContent &&
     isJsonFile
 
+  const toolbar = (
+    <div
+      data-file-toolbar
+      className={
+        ide
+          ? 'flex min-w-0 items-center gap-2'
+          : 'flex min-h-14 shrink-0 items-center justify-between border-b px-4'
+      }
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <div className={ide ? 'hidden' : 'min-w-0'}>
+          <div className="truncate text-sm font-medium leading-5">
+            {file.name}
+          </div>
+        </div>
+        {ide && isMarkdown && !editing ? (
+          <div className="inline-flex rounded-md bg-muted/70 p-0.5">
+            {MARKDOWN_MODES.map((mode) => (
+              <button
+                type="button"
+                key={mode}
+                aria-pressed={markdownMode === mode}
+                className={`rounded px-3 py-1 text-xs ${markdownMode === mode ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground'}`}
+                onClick={() => setMarkdownMode(mode)}
+              >
+                {t(
+                  mode === 'preview'
+                    ? 'filePreview.markdownPreview'
+                    : 'filePreview.markdownSource',
+                )}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {editing ? (
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving}
+              onClick={() => {
+                if (!dirty || window.confirm(t('filesystem:ide.discard'))) {
+                  setEditing(false)
+                  setDirty(false)
+                }
+              }}
+            >
+              <XCircle className="mr-1 size-3.5" />
+              {t('filePreview.cancel')}
+            </Button>
+            <Button
+              size="sm"
+              className="active:scale-[0.96] transition-transform"
+              disabled={saving}
+              onClick={handleSave}
+            >
+              {saving ? (
+                <Loader2 className="mr-1 size-3.5 animate-spin" />
+              ) : (
+                <Save className="mr-1 size-3.5" />
+              )}
+              {t('filePreview.save')}
+            </Button>
+          </div>
+        ) : (
+          canEdit && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={loadingEditor}
+              onClick={() => void handleEdit()}
+            >
+              <Pencil className="mr-1 size-3.5" />
+              {t('filePreview.edit')}
+            </Button>
+          )
+        )}
+      </div>
+      {showCloseButton ? (
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-10"
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
+      ) : null}
+    </div>
+  )
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {showHeader ? (
-        <div className="flex min-h-14 shrink-0 items-center justify-between border-b px-4">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium leading-5">
-                {file.name}
-              </div>
-            </div>
-            {editing ? (
-              <div className="flex items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={saving}
-                  onClick={() => setEditing(false)}
-                >
-                  <XCircle className="mr-1 size-3.5" />
-                  {t('filePreview.cancel')}
-                </Button>
-                <Button
-                  size="sm"
-                  className="active:scale-[0.96] transition-transform"
-                  disabled={saving}
-                  onClick={handleSave}
-                >
-                  {saving ? (
-                    <Loader2 className="mr-1 size-3.5 animate-spin" />
-                  ) : (
-                    <Save className="mr-1 size-3.5" />
-                  )}
-                  {t('filePreview.save')}
-                </Button>
-              </div>
-            ) : (
-              canEdit && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={loadingEditor}
-                  onClick={() => void handleEdit()}
-                >
-                  <Pencil className="mr-1 size-3.5" />
-                  {t('filePreview.edit')}
-                </Button>
-              )
-            )}
-          </div>
-          {showCloseButton ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-10"
-              onClick={onClose}
-            >
-              <X className="size-4" />
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+      {showHeader
+        ? ide
+          ? toolbarContainer
+            ? createPortal(toolbar, toolbarContainer)
+            : null
+          : toolbar
+        : null}
 
-      {editing && preview?.content != null ? (
+      {!editing && markdownMode === 'preview' && previewContent ? (
+        <div className="min-h-0 flex-1 overflow-auto p-6">{previewContent}</div>
+      ) : editing && preview?.content != null ? (
         <div className="min-h-0 flex-1 p-2">
           <Suspense
             fallback={
@@ -1751,7 +1829,9 @@ export function FilePreview({
           >
             <LazyCodeEditor
               ref={editorRef}
+              readOnly={saving}
               initialContent={editorContent}
+              onChange={(content) => setDirty(content !== editorContent)}
               filename={file.name}
               isDark={isDark}
             />
@@ -1832,7 +1912,7 @@ export function FilePreview({
       ) : (
         <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto min-h-full w-full max-w-5xl p-4">
-            {isMarkdown && !editing ? (
+            {isMarkdown && !editing && !ide ? (
               <div className="mb-3 inline-flex overflow-hidden rounded-md border">
                 <button
                   type="button"

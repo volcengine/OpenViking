@@ -299,6 +299,15 @@
 .modelEditorBody input::placeholder {
   color: #787c91;
 }
+.modelEditorBody input:focus-visible,
+.modelEditorBody [data-slot='select-trigger']:focus-visible {
+  border-color: #5252ff;
+  outline: none;
+}
+.modelEditorBody input[aria-invalid='true']:focus-visible,
+.modelEditorBody [data-slot='select-trigger'][aria-invalid='true']:focus-visible {
+  border-color: var(--destructive);
+}
 .modelEditorBody [data-model-field='provider'] {
   width: min(216px, 100%);
 }

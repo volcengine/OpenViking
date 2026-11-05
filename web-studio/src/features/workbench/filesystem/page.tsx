@@ -1,6 +1,15 @@
+import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
+import { useQueryClient } from '@tanstack/react-query'
+import styles from './workbench.module.css'
+import { WorkbenchDirectory } from './components/workbench-directory'
+import { ExperienceDetail } from '#/features/workbench/agent-experience/$experienceUri'
+import { isExperienceFile } from './lib/document-kind'
 import { showErrorToast } from '#/shared/lib/error-toast'
-import { getRouteApi, useNavigate } from '@tanstack/react-router'
+import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
+  ClipboardListIcon,
+  FileTextIcon,
+  MoreHorizontalIcon,
   ArrowLeftIcon,
   BotIcon,
   ClipboardIcon,
@@ -103,6 +112,7 @@ function FilesystemWorkbench() {
   const canUseLocalTools = provider === 'opensource'
   const canUseCliPanel = canUseLocalTools || provider === 'volcengine'
   const { identityScopeKey } = useAppConnection()
+  const queryClient = useQueryClient()
   const search = routeApi.useSearch()
   const navigate = useNavigate({ from: '/filesystem' })
   const initialCurrentUri = useMemo(
@@ -135,6 +145,35 @@ function FilesystemWorkbench() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(
     () => search.upload ?? false,
   )
+  const [documentToolbar, setDocumentToolbar] = useState<HTMLDivElement | null>(
+    null,
+  )
+  const [documentDirty, setDocumentDirty] = useState(false)
+  const dirtyRef = useRef(false)
+  const handleDirtyChange = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty
+    setDocumentDirty(dirty)
+  }, [])
+  const confirmDocumentNavigation = useCallback(() => {
+    if (dirtyRef.current && !window.confirm(t('ide.discard'))) return false
+    dirtyRef.current = false
+    setDocumentDirty(false)
+    return true
+  }, [t])
+  useBlocker({
+    shouldBlockFn: ({ current, next }) => {
+      const previousDocument = current.search as { file?: string; uri?: string }
+      const nextDocument = next.search as { file?: string; uri?: string }
+      if (
+        current.pathname === next.pathname &&
+        previousDocument.file === nextDocument.file &&
+        previousDocument.uri === nextDocument.uri
+      )
+        return false
+      return !confirmDocumentNavigation()
+    },
+    enableBeforeUnload: () => dirtyRef.current,
+  })
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [dataManagementMode, setDataManagementMode] = useState<
@@ -199,6 +238,18 @@ function FilesystemWorkbench() {
     tasks,
   } = useResourceUpload()
   const { invalidateAll, invalidateList } = useInvalidateVikingFs()
+  const handleDocumentSaved = useCallback(
+    (uri: string) => {
+      void queryClient.invalidateQueries({
+        queryKey: ['agent-experience-content', identityScopeKey, uri],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['agent-experience-list', identityScopeKey],
+      })
+      void invalidateAll()
+    },
+    [identityScopeKey, queryClient, invalidateAll],
+  )
 
   const syncSearch = useCallback(
     (next: {
@@ -279,7 +330,7 @@ function FilesystemWorkbench() {
   const revealResource = useCallback(
     async (rawUri: string) => {
       const cleaned = cleanVikingUri(rawUri)
-      if (!cleaned) return
+      if (!cleaned || !confirmDocumentNavigation()) return
 
       setOpeningUri(cleaned)
       const targetUri = normalizeFilesystemResourceUri(cleaned)
@@ -330,11 +381,12 @@ function FilesystemWorkbench() {
         setOpeningUri(null)
       }
     },
-    [syncSearch, t],
+    [syncSearch, t, confirmDocumentNavigation],
   )
 
   const handleSelectDirectory = useCallback(
     (entry: VikingFsEntry) => {
+      if (!confirmDocumentNavigation()) return
       const normalized = normalizeDirUri(entry.uri)
       setCurrentUri(normalized)
       setSelectedFile({ ...entry, isDir: true, uri: normalized })
@@ -343,11 +395,12 @@ function FilesystemWorkbench() {
       )
       syncSearch({ file: undefined, uri: normalized })
     },
-    [syncSearch],
+    [syncSearch, confirmDocumentNavigation],
   )
 
   const handleSelectFile = useCallback(
     (entry: VikingFsEntry) => {
+      if (!confirmDocumentNavigation()) return
       const normalized = normalizeFileUri(entry.uri)
       if (isDirectoryLevelFile(normalized)) {
         const dirUri = normalizeDirUri(parentUri(normalized))
@@ -366,7 +419,7 @@ function FilesystemWorkbench() {
       )
       syncSearch({ file: normalized, uri: nextCurrentUri })
     },
-    [syncSearch],
+    [syncSearch, confirmDocumentNavigation],
   )
 
   const handlePanelChange = useCallback(
@@ -397,6 +450,7 @@ function FilesystemWorkbench() {
 
   const handleNavigateDirectory = useCallback(
     (rawUri: string) => {
+      if (!confirmDocumentNavigation()) return
       const normalized = normalizeDirUri(rawUri)
       setCurrentUri(normalized)
       setSelectedFile(createEntryFromUri(normalized, true))
@@ -405,7 +459,7 @@ function FilesystemWorkbench() {
       )
       syncSearch({ file: undefined, uri: normalized })
     },
-    [syncSearch],
+    [syncSearch, confirmDocumentNavigation],
   )
 
   const handleRefreshContextTree = useCallback(async () => {
@@ -460,7 +514,13 @@ function FilesystemWorkbench() {
   const canManageSelectedUri = selectedUri !== ROOT_URI
   const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
   const displayUri =
-    selectedUri === ROOT_URI ? selectedUri : selectedUri.replace(/\/$/, '')
+    selectedUri === ROOT_URI
+      ? ROOT_URI
+      : selectedUri
+          .replace(/^viking:\/\//, '')
+          .replace(/\/$/, '')
+          .split('/')
+          .join(' / ')
   const entries = visibleContextEntries(listQuery.data?.entries ?? [])
   const layoutStyle = useMemo(
     () =>
@@ -565,23 +625,40 @@ function FilesystemWorkbench() {
   }, [])
 
   return (
-    <div className="flex h-[calc(100svh-3.5rem)] min-h-0 flex-col p-1.5">
-      <div
-        ref={layoutRef}
-        className="flex min-h-0 flex-1 flex-col gap-1.5 lg:flex-row"
-        style={layoutStyle}
-      >
-        <aside className="flex min-h-[180px] min-w-0 shrink-0 basis-[36%] flex-col overflow-hidden rounded-xl border border-border/60 bg-background lg:min-h-0 lg:w-[var(--filesystem-left-width)] lg:min-w-[var(--filesystem-left-width)] lg:basis-auto">
+    <div className={styles.workbench}>
+      {canUseLocalTools ? (
+        <StudioHeaderActions>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="relative size-8 text-muted-foreground"
+            title={t('processingTasks.title', { ns: 'resources' })}
+            aria-label={t('processingTasks.title', { ns: 'resources' })}
+            onClick={handleOpenProcessingTasks}
+          >
+            <ClipboardListIcon
+              className={
+                hasActiveTasks || isRefreshingTasks
+                  ? 'size-4 text-primary'
+                  : 'size-4'
+              }
+            />
+            {activeTaskCount > 0 ? (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none text-primary-foreground">
+                {activeTaskCount}
+              </span>
+            ) : null}
+          </Button>
+        </StudioHeaderActions>
+      ) : null}
+      <div ref={layoutRef} className={styles.layout} style={layoutStyle}>
+        <aside className={styles.explorer}>
           <ContextExplorerHeader
-            activeTaskCount={activeTaskCount}
-            hasActiveTasks={hasActiveTasks}
-            hasTasks={canUseLocalTools && tasks.length > 0}
             isRefreshing={listQuery.isFetching}
-            isRefreshingTasks={isRefreshingTasks}
             onAddResource={
               canUseLocalTools ? () => setUploadDialogOpen(true) : undefined
             }
-            onOpenProcessingTasks={handleOpenProcessingTasks}
             onOpenSearch={handleOpenSearch}
             onRefresh={() => void handleRefreshContextTree()}
           />
@@ -604,8 +681,17 @@ function FilesystemWorkbench() {
           onPointerDown={(event) => handleResizeStart('context', event)}
         />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/60 bg-background">
-          <div className="flex min-h-12 items-center gap-2 border-b border-border/60 px-3">
+        <main className={styles.document}>
+          <div className={styles.documentTabs}>
+            <span className={styles.activeTab}>
+              <FileTextIcon className="size-3.5" />
+              {selectedUri === ROOT_URI
+                ? t('ide.workspace')
+                : selectedFile?.name || t('explorer.title')}
+              {documentDirty ? <span className={styles.dirtyDot} /> : null}
+            </span>
+          </div>
+          <div className={styles.documentToolbar}>
             <button
               type="button"
               className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
@@ -631,72 +717,80 @@ function FilesystemWorkbench() {
             >
               <ClipboardIcon className="size-4" />
             </Button>
-            {canUseLocalTools && selectedIsDirectory ? (
-              <Button
-                type="button"
-                size="sm"
-                aria-label={t('explorer.addResource')}
-                className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
-                onClick={() => setUploadDialogOpen(true)}
-              >
-                <UploadIcon className="size-4" />
-                <span className="hidden xl:inline">
-                  {t('explorer.addResource')}
-                </span>
-              </Button>
-            ) : null}
-            {canUseLocalTools &&
-              selectedIsDirectory &&
-              /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
-                selectedUri,
-              ) && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  aria-label={t('compile:compileThisFolder')}
-                  onClick={() =>
-                    void navigate({
-                      to: '/compile/new',
-                      search: { from: selectedUri },
-                    })
-                  }
-                >
-                  <WandSparkles className="size-4" />
-                  <span className="hidden sm:inline">
-                    {t('compile:compileThisFolder')}
-                  </span>
-                </Button>
-              )}
-            {canManageSelectedUri ? (
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                title={t('dataManagement:historyTitle')}
-                aria-label={t('dataManagement:historyTitle')}
-                onClick={() => setDataManagementMode('history')}
-              >
-                <HistoryIcon className="size-4" />
-              </Button>
-            ) : null}
-            {canTransferSelectedUri ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                title={t('dataManagement:transferTitle')}
-                aria-label={t('dataManagement:transferTitle')}
-                onClick={() => setDataManagementMode('transfer')}
-              >
-                <PackageIcon className="size-4" />
-                <span className="hidden sm:inline">
-                  {t('dataManagement:transferShortLabel')}
-                </span>
-              </Button>
-            ) : null}
+            <div ref={setDocumentToolbar} className={styles.editorActions} />
+            <details className={styles.moreMenu}>
+              <summary aria-label={t('ide.more')} title={t('ide.more')}>
+                <MoreHorizontalIcon className="size-4" />
+              </summary>
+              <div className={styles.moreMenuContent}>
+                {canUseLocalTools && selectedIsDirectory ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    aria-label={t('explorer.addResource')}
+                    className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
+                    onClick={() => setUploadDialogOpen(true)}
+                  >
+                    <UploadIcon className="size-4" />
+                    <span className="hidden xl:inline">
+                      {t('explorer.addResource')}
+                    </span>
+                  </Button>
+                ) : null}
+                {canUseLocalTools &&
+                  selectedIsDirectory &&
+                  /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
+                    selectedUri,
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('compile:compileThisFolder')}
+                      onClick={() =>
+                        void navigate({
+                          to: '/compile/new',
+                          search: { from: selectedUri },
+                        })
+                      }
+                    >
+                      <WandSparkles className="size-4" />
+                      <span className="hidden sm:inline">
+                        {t('compile:compileThisFolder')}
+                      </span>
+                    </Button>
+                  )}
+                {canManageSelectedUri ? (
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    title={t('dataManagement:historyTitle')}
+                    aria-label={t('dataManagement:historyTitle')}
+                    onClick={() => setDataManagementMode('history')}
+                  >
+                    <HistoryIcon className="size-4" />
+                  </Button>
+                ) : null}
+                {canTransferSelectedUri ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    title={t('dataManagement:transferTitle')}
+                    aria-label={t('dataManagement:transferTitle')}
+                    onClick={() => setDataManagementMode('transfer')}
+                  >
+                    <PackageIcon className="size-4" />
+                    <span className="hidden sm:inline">
+                      {t('dataManagement:transferShortLabel')}
+                    </span>
+                  </Button>
+                ) : null}
+              </div>
+            </details>
             {canUseCliPanel ? (
-              <div className="flex shrink-0 items-center gap-1 lg:hidden">
+              <div className="flex shrink-0 items-center gap-1 xl:hidden">
                 <Button
                   type="button"
                   size="icon-sm"
@@ -726,7 +820,7 @@ function FilesystemWorkbench() {
                 type="button"
                 size="icon-sm"
                 variant="ghost"
-                className="hidden shrink-0 lg:inline-flex"
+                className="hidden shrink-0 xl:inline-flex"
                 title={t('actionPanel.expand')}
                 aria-label={t('actionPanel.expand')}
                 onClick={toggleRightCollapsed}
@@ -736,14 +830,34 @@ function FilesystemWorkbench() {
             ) : null}
           </div>
           <div className="filesystem-preview min-h-0 flex-1">
-            <LazyFilePreview
-              defaultReadLimit={canUseLocalTools ? -1 : 10000}
-              file={selectedFile}
-              hideDirectoryHeader
-              onClose={() => setSelectedFile(null)}
-              onNavigate={(uri) => void revealResource(uri)}
-              showCloseButton={false}
-            />
+            {selectedIsDirectory ? (
+              <WorkbenchDirectory
+                key={selectedUri}
+                uri={selectedUri}
+                onNavigate={(uri) => void revealResource(uri)}
+              />
+            ) : (
+              <LazyFilePreview
+                ide
+                toolbarContainer={documentToolbar}
+                onDirtyChange={handleDirtyChange}
+                onSaved={handleDocumentSaved}
+                previewContent={
+                  selectedFile && isExperienceFile(selectedFile.uri) ? (
+                    <ExperienceDetail
+                      experienceUri={selectedFile.uri}
+                      embedded
+                    />
+                  ) : undefined
+                }
+                defaultReadLimit={canUseLocalTools ? -1 : 10000}
+                file={selectedFile}
+                hideDirectoryHeader
+                onClose={() => setSelectedFile(null)}
+                onNavigate={(uri) => void revealResource(uri)}
+                showCloseButton={false}
+              />
+            )}
           </div>
         </main>
         {canUseCliPanel && !rightCollapsed ? (
@@ -755,7 +869,7 @@ function FilesystemWorkbench() {
         ) : null}
 
         {!isCompactLayout && canUseCliPanel && !rightCollapsed ? (
-          <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-background lg:flex lg:w-[var(--filesystem-right-width)] lg:min-w-[var(--filesystem-right-width)]">
+          <aside className={styles.assistant}>
             <FilesystemActionPanel
               activePanel={activePanel}
               currentUri={currentUri}
@@ -841,6 +955,7 @@ function FilesystemWorkbench() {
         />
       ) : null}
       <FindPalette
+        ide
         open={findPaletteOpen}
         onClose={() => setFindPaletteOpen(false)}
         onNavigate={(uri) => void revealResource(uri)}
@@ -854,7 +969,7 @@ function FilesystemWorkbench() {
 function useIsCompactFilesystemLayout() {
   const [isCompact, setIsCompact] = useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(max-width: 1023px)').matches
+      ? window.matchMedia('(max-width: 1279px)').matches
       : false,
   )
 
@@ -862,7 +977,7 @@ function useIsCompactFilesystemLayout() {
     if (typeof window.matchMedia !== 'function') {
       return
     }
-    const mql = window.matchMedia('(max-width: 1023px)')
+    const mql = window.matchMedia('(max-width: 1279px)')
     const onChange = () => setIsCompact(mql.matches)
     onChange()
     mql.addEventListener('change', onChange)
@@ -973,7 +1088,7 @@ function FilesystemMobileActionScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background lg:hidden">
+    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background xl:hidden">
       <div className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
         <Button
           type="button"

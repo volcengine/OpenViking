@@ -47,6 +47,7 @@ import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import { useDebouncedValue } from '#/shared/hooks/use-debounced-value'
 
 interface FindPaletteProps {
+  ide?: boolean
   open: boolean
   onClose: () => void
   onNavigate: (uri: string) => void
@@ -84,6 +85,7 @@ function errorDescription(error: unknown): string {
 }
 
 export function FindPalette({
+  ide = false,
   open,
   onClose,
   onNavigate,
@@ -399,13 +401,14 @@ export function FindPalette({
   if (!open) return null
 
   // Directories preview too: FilePreview renders their L0/L1 pages.
-  const showPreview = mode.kind !== 'dirBrowse' && activeEntry !== null
+  const showPreview = !ide && mode.kind !== 'dirBrowse' && activeEntry !== null
   // Width tracks the palette mode, not the cursor: searching and directory
   // browsing are both wide, so an empty result set or a `/` command never
   // resizes the dialog out from under the user. Only the empty idle prompt,
   // which has nothing to show yet, stays narrow.
-  const paletteWidth =
-    mode.kind === 'idle' && !showPreview
+  const paletteWidth = ide
+    ? 'w-[min(92vw,900px)]'
+    : mode.kind === 'idle' && !showPreview
       ? 'w-[min(90vw,45rem)]'
       : 'w-[min(92vw,67rem)]'
   return (
@@ -416,14 +419,18 @@ export function FindPalette({
       aria-label={t('searchPalette.ariaLabel')}
     >
       <div
-        className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm"
+        className={
+          ide
+            ? 'absolute inset-0 bg-black/50'
+            : 'animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm'
+        }
         role="presentation"
         onClick={onClose}
       />
 
       <div
         className={cn(
-          'animate-palette-in relative flex h-[46rem] max-h-[calc(100svh-2rem)] max-w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[width] duration-300 sm:max-h-[84vh]',
+          'animate-palette-in relative flex h-[40rem] max-h-[calc(100svh-2rem)] max-w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[width] duration-300 sm:max-h-[84vh]',
           paletteWidth,
         )}
         onKeyDown={handleKeyDown}
@@ -480,30 +487,59 @@ export function FindPalette({
 
         {/* Search mode switcher */}
         {mode.kind !== 'dirBrowse' && (
-          <div className="flex items-center gap-1 border-b px-4 py-1.5">
-            {PALETTE_SEARCH_MODES.map((item) => (
-              <button
-                key={item}
-                type="button"
-                className={cn(
-                  'rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors',
-                  searchMode === item
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground/60 hover:text-foreground',
-                )}
-                onClick={() => setSearchMode(item)}
+          <div className="flex items-center gap-2 px-6 py-4 text-xs text-muted-foreground">
+            {ide ? (
+              <span>
+                {t('searchPalette.footer.resultMode.count', {
+                  count: visibleEntries.length,
+                })}
+              </span>
+            ) : null}
+            {ide ? (
+              <select
+                aria-label={t('searchPalette.modes.switchHint')}
+                className="rounded-md border bg-background px-2 py-1 text-foreground"
+                value={searchMode}
+                onChange={(event) =>
+                  setSearchMode(event.target.value as PaletteSearchMode)
+                }
               >
-                {item === 'name'
-                  ? t('searchPalette.modes.name')
-                  : t(`controls.modes.${item}`, { ns: 'retrieval' })}
-              </button>
-            ))}
-            <span className="ml-auto text-[11px] text-muted-foreground/50">
-              <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
-                {KEY_TAB_LABEL}
-              </kbd>{' '}
-              {t('searchPalette.modes.switchHint')}
-            </span>
+                {PALETTE_SEARCH_MODES.map((item) => (
+                  <option key={item} value={item}>
+                    {item === 'name'
+                      ? t('searchPalette.modes.name')
+                      : t(`controls.modes.${item}`, { ns: 'retrieval' })}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {!ide ? (
+              <>
+                {PALETTE_SEARCH_MODES.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    className={cn(
+                      'rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors',
+                      searchMode === item
+                        ? 'bg-muted text-foreground'
+                        : 'text-muted-foreground/60 hover:text-foreground',
+                    )}
+                    onClick={() => setSearchMode(item)}
+                  >
+                    {item === 'name'
+                      ? t('searchPalette.modes.name')
+                      : t(`controls.modes.${item}`, { ns: 'retrieval' })}
+                  </button>
+                ))}
+                <span className="ml-auto text-[11px] text-muted-foreground/50">
+                  <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                    {KEY_TAB_LABEL}
+                  </kbd>{' '}
+                  {t('searchPalette.modes.switchHint')}
+                </span>
+              </>
+            ) : null}
           </div>
         )}
 
