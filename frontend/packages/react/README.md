@@ -2,23 +2,23 @@
 
 English / [中文](README_CN.md)
 
-React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree and FilePreview provide reusable views, alongside five file-type icons. Four business module placeholders support early layout integration; business Hooks and interactions will follow.
+React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree and FilePreview provide placeholder views, alongside five file-type icons. Four business module placeholders support early layout integration; business Hooks and interactions will follow.
 
 This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
 ## Module map
 
-| Source directory                                                       | Public entry                                  | Responsibility                                                                   |
-| ---------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------- |
-| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | Directory tree rendering, expansion, selection and event callbacks               |
-| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | Read-only preview state and extension tabs                                       |
-| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Reviewed command record, result and input types; view is a placeholder           |
-| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | Scope breadcrumb level, option, panel and search contract; view is a placeholder |
-| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Agent connection tab, list and detail contract; view is a placeholder            |
-| [modules](./src/modules/README.md)                                     | `@openviking/react/modules/<module>`          | Placeholder components and types for four business modules                       |
-| [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                            |
+| Source directory                                                       | Public entry                                  | Responsibility                                                                            |
+| ---------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | Directory tree rendering, expansion, selection and event callbacks; view is a placeholder |
+| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | Read-only preview state and extension tabs; view is a placeholder                         |
+| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Reviewed command record, result and input types; view is a placeholder                    |
+| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | Scope breadcrumb level, option, panel and search contract; view is a placeholder          |
+| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Agent connection tab, list and detail contract; view is a placeholder                     |
+| [modules](./src/modules/README.md)                                     | `@openviking/react/modules/<module>`          | Placeholder components and types for four business modules                                |
+| [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                                     |
 
-FileTree implements the directory tree view and interaction; FilePreview implements tabs and the plain-text preview and editing foundation, with limits described in their own docs. Tui, ScopeSwitcher and AgentConnect publish reviewed public APIs while their views remain placeholders. The package also ships five file-type icons.
+All five components are placeholders to be rewritten against their reviewed contracts. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, header actions and the plain-text preview and editing foundation, with its body not yet wired to FileViewer. Tui, ScopeSwitcher and AgentConnect render a fixed-size shell only. Limits are described in each component's own docs. The package also ships five file-type icons.
 
 Components receive view data and state through props and express user intent through callbacks, following the [component directory conventions](./src/components/AGENTS.md). [modules](./src/modules/README.md) plan Hooks and views per business capability: Hooks load data, hold state and expose operations, and composite views wire them into components. Full pages and product-specific flows belong to the host; the admin console is out of scope for this phase. `file-browser`, `console`, `task-center` and `user-usage` currently ship placeholder components, base Props / Labels types and styles so hosts can integrate layout first; business Hooks, data loading and cross-component coordination are not implemented yet.
 

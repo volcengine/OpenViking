@@ -1,6 +1,6 @@
 # OpenViking Frontend
 
-React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree and FilePreview provide reusable views, alongside five file-type icons. Five business module placeholders let applications integrate their layout before business Hooks and interactions land.
+React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree and FilePreview provide placeholder views, alongside five file-type icons. Four business module placeholders let applications integrate their layout before business Hooks and interactions land.
 
 Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).
 
@@ -30,7 +30,7 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, CSS Modules, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect}`: reusable views with public props types. file-tree and file-preview are implemented; tui, scope-switcher and agent-connect publish their reviewed contracts with a placeholder view. See the [module map](./packages/react/README.md#module-map).
+- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect}`: reusable views with public props types. All five ship placeholder views and will be rewritten against their reviewed contracts; file-tree and file-preview have their shell and interaction in place, while tui, scope-switcher and agent-connect render a fixed-size shell only. See the [module map](./packages/react/README.md#module-map).
 - `packages/react/src/modules/{file-browser,console,task-center,user-usage}`: importable placeholder components, public Props / Labels types, and styles. Business Hooks and interactions are planned.
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
@@ -53,7 +53,7 @@ Library output is `packages/react/dist/`; documentation output is `docs/doc_buil
 
 ## Target layout
 
-The workspace currently contains React components, shared SVGs, five business module placeholders, and documentation. The target also includes framework-neutral libraries, service adapters, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
+The workspace currently contains React components, shared SVGs, four business module placeholders, and documentation. The target also includes framework-neutral libraries, service adapters, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
 
 ```text
 frontend/
