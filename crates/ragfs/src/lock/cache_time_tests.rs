@@ -59,10 +59,18 @@ fn token(owner: &str, time_ns: u128, kind: PathLockKind) -> LockToken {
         owner_id: owner.into(),
         time_ns,
         lock_type: kind,
+        holders: Vec::new(),
     }
 }
 
-async fn now(provider: &RedisPathLockProvider) -> u128 {
+pub(super) async fn now(provider: &RedisPathLockProvider) -> u128 {
+    provider
+        .runtime
+        .register_script(ScriptDefinition {
+            id: TIME_ID,
+            redis_lua: "return redis.call('TIME')",
+        })
+        .unwrap();
     let time = provider
         .execute_array(TIME_ID, provider.tokens_key_for_path("/").unwrap(), vec![])
         .await
@@ -78,7 +86,14 @@ async fn now(provider: &RedisPathLockProvider) -> u128 {
     seconds * 1_000_000_000 + micros * 1_000
 }
 
-async fn seed(provider: &RedisPathLockProvider, path: &str, token: &LockToken) {
+pub(super) async fn seed(provider: &RedisPathLockProvider, path: &str, token: &LockToken) {
+    provider
+        .runtime
+        .register_script(ScriptDefinition {
+            id: SEED_ID,
+            redis_lua: "return redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])",
+        })
+        .unwrap();
     provider
         .execute_integer(
             SEED_ID,
@@ -140,6 +155,108 @@ fn lease_rounding_and_lua_integer_bound_are_checked_before_access() {
             Err(PathLockError::InvalidRequest(_))
         ));
     }
+}
+
+#[tokio::test]
+async fn holder_acquire_refresh_and_release_ignore_client_clock() {
+    let Some((runtime, provider)) = fixture().await else {
+        return;
+    };
+    let path = "/local/account/held";
+    let requests = [request(path, PathLockKind::Tree)];
+    let before = now(&provider).await;
+    provider
+        .try_acquire_holders_atomic(&requests, "owner", "tree", u128::MAX, u128::MAX, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let tree = provider.read_token(path).await.unwrap().unwrap();
+    assert_server_time(&tree, before, now(&provider).await);
+    assert!(matches!(
+        provider
+            .try_acquire_holders_atomic(
+                &[request("/local/account/held/child", PathLockKind::Exact)],
+                "foreign",
+                "child",
+                u128::MAX,
+                u128::MAX,
+                None
+            )
+            .await,
+        Err(PathLockError::Conflict { .. })
+    ));
+    provider
+        .try_acquire_holders_atomic(
+            &[request(path, PathLockKind::Exact)],
+            "owner",
+            "exact",
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let before = now(&provider).await;
+    assert!(matches!(
+        provider
+            .refresh_holders(&[path.into()], "owner", "exact", 0, u128::MAX)
+            .await[0],
+        Ok(true)
+    ));
+    let refreshed = provider.read_token(path).await.unwrap().unwrap();
+    assert_eq!(refreshed.holders.len(), 2);
+    assert_server_time(&refreshed, before, now(&provider).await);
+    assert!(provider
+        .mutate_holder(path, "owner", "exact", 0, u128::MAX, true)
+        .await
+        .unwrap());
+    assert_eq!(provider.read_token(path).await.unwrap(), Some(tree.clone()));
+    let server_time = now(&provider).await;
+    let mut mixed = LockToken::held(
+        "owner",
+        "tree",
+        PathLockKind::Tree,
+        server_time - 31_000_000_000,
+    );
+    mixed.add_holder("exact", PathLockKind::Exact, server_time, 0, None);
+    seed(&provider, path, &mixed).await;
+    assert!(!provider
+        .mutate_holder(path, "owner", "tree", u128::MAX, 0, false)
+        .await
+        .unwrap());
+    assert!(matches!(
+        provider
+            .refresh_holders(&[path.into()], "owner", "exact", u128::MAX, u128::MAX)
+            .await[0],
+        Ok(true)
+    ));
+    assert_eq!(
+        provider.read_token(path).await.unwrap().unwrap().lock_type,
+        PathLockKind::Exact
+    );
+    let old = provider.read_token(path).await.unwrap().unwrap();
+    let mut replacement = old.clone();
+    replacement.owner_id = "new-owner".into();
+    for holder in &mut replacement.holders {
+        holder.time_ns = u128::MAX;
+    }
+    replacement.recompute();
+    let before = now(&provider).await;
+    assert!(provider
+        .compare_and_write_token(path, &old, &replacement)
+        .await
+        .unwrap());
+    let confirmed = provider.read_token(path).await.unwrap().unwrap();
+    let after = now(&provider).await;
+    assert_eq!(confirmed.owner_id, "new-owner");
+    assert_server_time(&confirmed, before, after);
+    assert!(confirmed
+        .holders
+        .iter()
+        .all(|holder| (before..=after).contains(&holder.time_ns)));
+    assert_fixed_ttl(&provider, path, before).await;
+    runtime.close().await.unwrap();
 }
 
 #[tokio::test]

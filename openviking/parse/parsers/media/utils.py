@@ -338,6 +338,7 @@ async def generate_audio_summary(
     ctx: Optional["RequestContext"] = None,
     *,
     vlm: "VLMHandle",
+    output_language_override: str | None = None,
 ) -> Dict[str, Any]:
     """Generate a normalized semantic summary for an audio file.
 
@@ -357,6 +358,7 @@ async def generate_audio_summary(
         llm_sem=llm_sem,
         ctx=ctx,
         vlm=vlm,
+        output_language_override=output_language_override,
     )
 
 
@@ -367,6 +369,7 @@ async def generate_video_summary(
     ctx: Optional["RequestContext"] = None,
     *,
     vlm: "VLMHandle",
+    output_language_override: str | None = None,
 ) -> Dict[str, Any]:
     """Generate a normalized semantic summary for a video file.
 
@@ -386,6 +389,7 @@ async def generate_video_summary(
         llm_sem=llm_sem,
         ctx=ctx,
         vlm=vlm,
+        output_language_override=output_language_override,
     )
 
 
@@ -427,6 +431,7 @@ async def _generate_media_summary(
     ctx: Optional["RequestContext"] = None,
     *,
     vlm: "VLMHandle",
+    output_language_override: str | None = None,
 ) -> Dict[str, Any]:
     if vlm is None:
         raise ValueError(f"{media_type.title()} summary requires an explicitly resolved VLM")
@@ -453,10 +458,15 @@ async def _generate_media_summary(
 
     from openviking.session.memory.utils.language import resolve_output_language
 
-    fallback_language = resolve_output_language("", config=config)
+    fallback_language = resolve_output_language(
+        "", config=config, output_language_override=output_language_override
+    )
     prompt = render_prompt(
         f"parsing.{media_type}_summary",
-        {"filename": original_filename, "fallback_language": fallback_language},
+        {
+            "filename": original_filename,
+            "fallback_language": fallback_language,
+        },
     )
 
     temporary_path: Optional[Path] = None

@@ -184,7 +184,9 @@ async fn manager_uses_batch_for_manual_and_background_refresh() {
     let observed = calls.clone();
     let (runtime, provider) = mock_provider(move |request| match request.script_id.as_str() {
         ACQUIRE_BATCH_ID => {
-            let owner = std::str::from_utf8(&request.args[0]).unwrap();
+            let identity = std::str::from_utf8(&request.args[0]).unwrap();
+            let mut identity = identity.strip_prefix("v2|").unwrap().split('|');
+            let (owner, holder) = (identity.next().unwrap(), identity.next().unwrap());
             let time = "100"; // Mock server confirmation time, independent of args.
             let mut results = vec![
                 ScriptValue::Bytes(b"ok".to_vec()),
@@ -196,7 +198,7 @@ async fn manager_uses_batch_for_manual_and_background_refresh() {
                     ScriptValue::Bytes(pair[0].to_vec()),
                     ScriptValue::Bytes(b"created".to_vec()),
                     ScriptValue::Bytes(Vec::new()),
-                    ScriptValue::Bytes(format!("{owner}:{time}:{kind}").into_bytes()),
+                    ScriptValue::Bytes(format!("v2|{owner}|{holder}:{kind}:{time}").into_bytes()),
                 ]);
             }
             Ok(ScriptValue::Array(results))
@@ -270,6 +272,7 @@ async fn redis_batch_preserves_kind_ownership_errors_and_hash_ttl() {
                     owner_id: owner.to_string(),
                     time_ns: 100,
                     lock_type: kind,
+                    holders: Vec::new(),
                 },
             )
             .await
@@ -356,5 +359,99 @@ async fn redis_batch_preserves_kind_ownership_errors_and_hash_ttl() {
             assert!(matches!(ttl, ScriptValue::Integer(value) if value > 2_000));
         }
     }
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn redis_holder_batch_preserves_ownership_kind_and_result_order() {
+    let Ok(endpoint) = std::env::var("REDIS_URL") else {
+        return;
+    };
+    let runtime = CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+        endpoints: vec![endpoint],
+        ..crate::cache_runtime::RedisProviderConfig::default()
+    })
+    .await
+    .unwrap();
+    let provider = RedisPathLockProvider::new(
+        runtime.clone(),
+        &format!("refresh-{}", uuid::Uuid::new_v4()),
+        30.0,
+    )
+    .unwrap();
+    let paths: Vec<_> = (0..300).map(|i| format!("/local/account/{i}")).collect();
+    for path in &paths {
+        provider
+            .try_create_token(
+                path,
+                &LockToken::held("owner", "holder", PathLockKind::Exact, 100),
+            )
+            .await
+            .unwrap();
+    }
+    let mut requests = paths.clone();
+    requests.extend(["/local/other/missing".into(), "/invalid".into()]);
+    let results = provider
+        .refresh_holders(&requests, "owner", "holder", 200, 0)
+        .await;
+    assert_eq!(results.len(), requests.len());
+    assert!(results[..300].iter().all(|r| matches!(r, Ok(true))));
+    assert!(matches!(results[300], Ok(false)));
+    assert!(matches!(
+        results[301],
+        Err(PathLockError::InvalidRequest(_))
+    ));
+    assert!(provider
+        .refresh_holders(&paths, "owner", "wrong-holder", 300, 0)
+        .await
+        .iter()
+        .all(|r| matches!(r, Ok(false))));
+    // A sibling's heartbeat cannot revive an expired Tree holder.
+    let path = "/local/account/mixed";
+    let mut token = LockToken::held("owner", "expired-tree", PathLockKind::Tree, 1);
+    let server_time = super::time_tests::now(&provider).await;
+    token.add_holder("live-exact", PathLockKind::Exact, server_time, 0, None);
+    super::time_tests::seed(&provider, path, &token).await;
+    assert!(matches!(
+        provider
+            .refresh_holders(&[path.into()], "owner", "expired-tree", 200, 50)
+            .await[0],
+        Ok(false)
+    ));
+    assert!(matches!(
+        provider
+            .refresh_holders(&[path.into()], "owner", "live-exact", 200, 50)
+            .await[0],
+        Ok(true)
+    ));
+    let current = provider.read_token(path).await.unwrap().unwrap();
+    assert_eq!(current.lock_type, PathLockKind::Exact);
+    assert!(!provider.refresh_token(path, "owner", 300).await.unwrap());
+    assert!(!provider.remove_token(path, "owner", true).await.unwrap());
+    // Prefix-related holder IDs must use the same canonical order as Rust CAS.
+    let prefix_path = "/local/account/prefix";
+    let mut prefix_token = LockToken::held("owner", "a", PathLockKind::Exact, 100);
+    prefix_token.add_holder("a-", PathLockKind::Exact, 100, 0, None);
+    provider
+        .try_create_token(prefix_path, &prefix_token)
+        .await
+        .unwrap();
+    assert!(matches!(
+        provider
+            .refresh_holders(&[prefix_path.into()], "owner", "a", 200, 0)
+            .await[0],
+        Ok(true)
+    ));
+    assert!(provider
+        .mutate_holder(prefix_path, "owner", "a", 200, 0, true)
+        .await
+        .unwrap());
+    assert!(provider
+        .mutate_holder(prefix_path, "owner", "a-", 200, 0, true)
+        .await
+        .unwrap());
+    assert!(provider.read_token(prefix_path).await.unwrap().is_none());
+    let keys = vec![provider.tokens_key_for_path(path).unwrap()];
+    runtime.del(&keys).await.unwrap();
     runtime.close().await.unwrap();
 }

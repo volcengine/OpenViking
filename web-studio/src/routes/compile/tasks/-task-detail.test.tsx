@@ -1,20 +1,21 @@
 // @vitest-environment jsdom
 
-import type { ComponentType, ReactNode } from 'react'
-import type * as TanStackRouter from '@tanstack/react-router'
-import type * as CompileApi from '../-lib/api'
+import type * as CompileApi from '#/features/workbench/compile/lib/api'
+import { Route } from '#/routes/compile/tasks/$taskId'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type * as TanStackRouter from '@tanstack/react-router'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import type { ComponentType, ReactNode } from 'react'
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
-import { Route } from './$taskId'
 
 const api = vi.hoisted(() => ({ fetchCompileTask: vi.fn() }))
-vi.mock('../-lib/api', async (importOriginal) => ({
+vi.mock('#/features/workbench/compile/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof CompileApi>()),
   fetchCompileTask: api.fetchCompileTask,
 }))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof TanStackRouter>()),
+  getRouteApi: () => ({ useParams: () => ({ taskId: 'cmp-1' }) }),
   useLocation: () => ({ state: {} }),
   useRouter: () => ({ history: { back: vi.fn() } }),
   Link: ({
@@ -27,7 +28,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
     children: ReactNode
   }) => <a href={`${to}?${new URLSearchParams(search)}`}>{children}</a>,
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     identityScopeKey: 'connection-a',
     connectionRole: 'user',
@@ -39,7 +40,7 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'en' },
   }),
 }))
-vi.mock('../-components/context-link', () => ({
+vi.mock('#/features/workbench/compile/components/context-link', () => ({
   ContextLink: ({ uri }: { uri: string }) => <span>{uri}</span>,
   useCompileSkillName: () => (uri: string) => uri,
 }))

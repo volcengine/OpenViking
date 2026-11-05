@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Incremental ingest (watch mode): a WatchScheduler-style asyncio poll loop.
+"""Incremental ingest (watch mode): a leader-polled asyncio poll loop.
 
-Mirrors ``openviking/resource/watch_scheduler.py`` (interval polling, graceful start/stop)
+Mirrors ``openviking/resource/watch_runtime.py`` (interval polling, graceful start/stop)
 rather than depending on filesystem events: a durable read-cursor makes polling correct
 and self-healing (a missed tick / sleep / restart just reads cursor->EOF next time).
 
@@ -90,7 +90,8 @@ class IngestPoller:
                 await self._poll_session(name, cfg, source, ref)
 
     async def _poll_session(self, name, cfg, source, ref) -> None:
-        await self.replayer.reconcile(name, ref)
+        if not await self.replayer.reconcile(name, ref):
+            return
         appended = False
         while True:
             cursor = self.store.get_cursor(name, ref.native_session_id, source.cursor_kind)

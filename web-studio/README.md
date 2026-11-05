@@ -95,7 +95,7 @@ The former `/playground` route redirects to `/filesystem`, preserving the select
 
 ## Connection and Auth
 
-Application code should use the adapter under `src/lib/ov-client` instead of importing from `src/gen/ov-client` directly. The adapter centralizes base URL handling, auth headers, telemetry defaults, and error normalization.
+Application code should use the adapter under `src/shared/api/ov-client` instead of importing from `src/gen/ov-client` directly. The adapter centralizes base URL handling, auth headers, telemetry defaults, and error normalization.
 
 Browser storage:
 
@@ -152,21 +152,21 @@ It formats the OpenAPI document, normalizes operation IDs, and runs `@hey-api/op
 ## Project Layout
 
 ```text
-src/routes/              TanStack Router routes
-src/routes/<page>/       Top-level page modules
-src/routes/<page>/*.ts   Explicit public feature entry points for cross-route reuse
-src/routes/<page>/-*     Page-private components, hooks, schemas, and helpers
-src/components/ui/       Shared base UI primitives
-src/components/          Shared app components
-src/hooks/               Shared React hooks
-src/lib/ov-client/       Runtime OpenViking client adapter
+src/app/                 Application bootstrap, layouts, navigation and router boundaries
+src/features/workbench/  User data pages and their components, hooks and models
+src/features/admin/      Account and service administration
+src/features/connection/ Connection profiles, credentials, identity and onboarding
+src/features/resource-acl/ Resource permission management shared by both modes
+src/features/oauth/      Authorization and cross-device verification
+src/routes/              Thin TanStack Router declarations; stable public URLs
+src/shared/              Base UI, transport, pure models and utilities
 src/gen/ov-client/       Generated OpenAPI client
-src/i18n/locales/        en and zh-CN translation resources
-src/styles.css           Global CSS and design tokens
+src/i18n/                Translation runtime and resources
+src/styles.css           Global styles and design tokens
 types/ov-server/         Supplemental typed server-result subsets
 ```
 
-Keep route-specific implementation colocated under the corresponding route directory. Cross-route consumers must import an explicit public feature entry point instead of reaching into a `-*` module. Follow the [Web Studio internationalization contribution guide](./CONTRIBUTING.md) whenever a feature adds or changes user-visible text.
+Implementation belongs to its feature; routes only assemble pages, validate search parameters and redirect. See [frontend architecture](./docs/frontend-structure.md) for ownership and dependency rules. Follow the [internationalization guide](./CONTRIBUTING.md) for user-visible text.
 
 ## Deployment
 

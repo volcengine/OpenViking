@@ -1,0 +1,6 @@
+case_id,task,input,expected_facts,expected_sources,actual_answer,actual_sources,stage,result,seconds,versions,notes
+R1,direct,,,,,,,,,,,
+R2,multi-source,,,,,,,,,,,
+R3,no-answer,,,,,,,,,,,
+M1,related-memory,,,,,,,,,,,
+M2,unrelated-memory,,,,,,,,,,,

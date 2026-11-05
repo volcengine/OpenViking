@@ -5,10 +5,13 @@ const activity = {
     },
     threadList: {
       title: 'Sessions',
+      backToList: 'Back to sessions',
       newSession: 'New Session',
       count: '{{count}} session',
       count_other: '{{count}} sessions',
       loading: 'Loading sessions...',
+      loadFailed: 'Could not load sessions',
+      retry: 'Retry',
       emptyTitle: 'No sessions yet',
       emptyDescription: 'Select the plus button to start a new conversation.',
       deleteSession: 'Delete “{{title}}”',
@@ -295,6 +298,20 @@ const activity = {
         'Usage: /add-skill <Git URL> [-p viking://agent/skills]. Upload local files on the Skills page.',
       addResourceUsage:
         'Usage: /add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <text>]. Use Add Resource above the file tree for visual import.',
+      mkdirUsage: 'Usage: /mkdir <viking://URI> [--description "text"]',
+      mvUsage: 'Usage: /mv <source viking://URI> <target viking://URI>',
+      cpUsage:
+        'Usage: /cp <source viking://URI> <target viking://URI> [-r|--recursive]',
+      mkdirCreated: 'Created directory: {{uri}}',
+      mvCompleted: 'Moved: {{from}} → {{to}}',
+      cpCompleted: 'Copied: {{from}} → {{to}}',
+      rmUsage:
+        'Usage: /rm <viking://URI> [-r|--recursive]. An explicit target is required.',
+      rmConfirm: 'Delete {{uri}}? This cannot be undone.',
+      rmConfirmRecursive:
+        'Delete {{uri}} and all files and subdirectories inside it? This cannot be undone.',
+      rmCancelled: 'Deletion cancelled',
+      rmDeleted: 'Deleted: {{uri}}',
       writeUsage:
         'Usage: /write <URI> --content "text" [--mode replace|append|create] [--wait]',
       waitUsage: 'Usage: /wait (the current open-source API takes no timeout)',
@@ -414,6 +431,25 @@ const activity = {
           name: '--mode <mode>',
           description:
             'Optional replace, append, or create; defaults to replace.',
+        },
+        sourceUri: {
+          name: '<source URI>',
+          description:
+            'Required explicit Viking URI of the source file or directory.',
+        },
+        targetUri: {
+          name: '<target URI>',
+          description: 'Required explicit destination Viking URI.',
+        },
+        directoryDescription: {
+          name: '--description <text>',
+          description:
+            'Optional initial directory description. Quote text containing spaces.',
+        },
+        recursive: {
+          name: '-r, --recursive',
+          description:
+            'Process a directory and all of its contents when copying or deleting.',
         },
         writeWait: {
           name: '--wait',
@@ -612,6 +648,39 @@ const activity = {
             description: 'Import the main branch of the OpenViking repository',
           },
         },
+        mkdir: {
+          default: {
+            code: '/mkdir viking://resources/new-docs --description "Project docs"',
+            description: 'Create a directory with a description',
+          },
+        },
+        mv: {
+          default: {
+            code: '/mv viking://resources/old.md viking://resources/new.md',
+            description: 'Move or rename a file or directory',
+          },
+        },
+        cp: {
+          file: {
+            code: '/cp viking://resources/notes.md viking://resources/notes-copy.md',
+            description: 'Copy one file',
+          },
+          directory: {
+            code: '/cp viking://resources/docs viking://resources/docs-copy --recursive',
+            description: 'Copy a directory recursively',
+          },
+        },
+        rm: {
+          file: {
+            code: '/rm viking://resources/notes.md',
+            description: 'Delete a file after confirmation',
+          },
+          directory: {
+            code: '/rm viking://resources/old-docs --recursive',
+            description:
+              'Delete a directory and its contents after confirmation',
+          },
+        },
         write: {
           default: {
             code: '/write viking://resources/notes.md --content "New content"',
@@ -804,6 +873,22 @@ const activity = {
           description: 'Add external resources',
           usage:
             '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        mkdir: {
+          description: 'Create a directory',
+          usage: '/mkdir <URI> [--description <text>]',
+        },
+        mv: {
+          description: 'Move or rename a file or directory',
+          usage: '/mv <source URI> <target URI>',
+        },
+        cp: {
+          description: 'Copy a file or directory',
+          usage: '/cp <source URI> <target URI> [-r|--recursive]',
+        },
+        rm: {
+          description: 'Delete a file or directory after confirmation',
+          usage: '/rm <URI> [-r|--recursive]',
         },
         write: {
           description: 'Write or append resource content',

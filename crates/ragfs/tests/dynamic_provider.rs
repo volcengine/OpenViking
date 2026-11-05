@@ -1,6 +1,10 @@
 use bytes::Bytes;
 use libloading::{Library, Symbol};
 use ragfs::cache_runtime::{CacheError, CacheRuntime, DynamicProviderConfig};
+use ragfs::core::{
+    build_configured_stack, CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig,
+    RagfsConfig,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -16,6 +20,105 @@ async fn dynamic_provider_loads_shared_library_and_dispatches_get() {
         Some(Bytes::from_static(b"fixture-value"))
     );
     runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn dynamic_provider_dispatches_hash_and_sorted_set_calls() {
+    let runtime = CacheRuntime::dynamic(config(fixture_library()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        runtime
+            .hset("bucket", "query", Bytes::from_static(b"payload"))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime.hget("bucket", "query").await.unwrap(),
+        Some(Bytes::from_static(b"fixture-hash-value"))
+    );
+    assert!(runtime
+        .expire("bucket", std::time::Duration::from_secs(300))
+        .await
+        .unwrap());
+    assert_eq!(runtime.zadd("idx", 42.0, "bucket").await.unwrap(), 1);
+    assert_eq!(
+        runtime.zscan_match("idx", "buck*", 10).await.unwrap(),
+        vec!["bucket".to_string()]
+    );
+    assert_eq!(
+        runtime.zrangebyscore("idx", 0.0, 100.0, 10).await.unwrap(),
+        vec!["bucket".to_string()]
+    );
+    assert_eq!(
+        runtime.zrem("idx", &["bucket".to_string()]).await.unwrap(),
+        1
+    );
+    assert_eq!(runtime.unlink(&["bucket".to_string()]).await.unwrap(), 1);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn dynamic_provider_does_not_fallback_to_del_for_unlink() {
+    let runtime = CacheRuntime::dynamic(config(no_unlink_fixture_library()))
+        .await
+        .unwrap();
+
+    let error = runtime.unlink(&["bucket".to_string()]).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        CacheError::UnsupportedOperation(operation) if operation == "unlink"
+    ));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cachefs_rejects_dynamic_provider_without_query_cache_operations() {
+    let result = build_configured_stack(
+        RagfsConfig::default(),
+        Some(CacheStackConfig {
+            provider: Some(CacheRuntimeProviderConfig::Dynamic(config(
+                no_unlink_fixture_library(),
+            ))),
+            cachefs: CacheFsConfig {
+                enabled: true,
+                service_name: "query-cache-test".to_string(),
+            },
+        }),
+    )
+    .await;
+
+    let error = match result {
+        Ok(_) => panic!("CacheFS unexpectedly started with a provider missing unlink"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("unlink"));
+}
+
+#[tokio::test]
+async fn cachefs_rejects_dynamic_provider_without_zrangebyscore() {
+    let result = build_configured_stack(
+        RagfsConfig::default(),
+        Some(CacheStackConfig {
+            provider: Some(CacheRuntimeProviderConfig::Dynamic(config(
+                no_zrangebyscore_fixture_library(),
+            ))),
+            cachefs: CacheFsConfig {
+                enabled: true,
+                service_name: "query-cache-test".to_string(),
+            },
+        }),
+    )
+    .await;
+
+    let error = match result {
+        Ok(_) => panic!("CacheFS unexpectedly started with a provider missing zrangebyscore"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("zrangebyscore"));
 }
 
 #[tokio::test]
@@ -79,6 +182,16 @@ fn bad_abi_fixture_library() -> &'static PathBuf {
 fn bad_length_fixture_library() -> &'static PathBuf {
     static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
     LIBRARY.get_or_init(|| compile_fixture("bad-length", &["OV_FIXTURE_BAD_LENGTH"]))
+}
+
+fn no_unlink_fixture_library() -> &'static PathBuf {
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY.get_or_init(|| compile_fixture("no-unlink", &["OV_FIXTURE_NO_UNLINK"]))
+}
+
+fn no_zrangebyscore_fixture_library() -> &'static PathBuf {
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY.get_or_init(|| compile_fixture("no-zrangebyscore", &["OV_FIXTURE_NO_ZRANGEBYSCORE"]))
 }
 
 fn compile_fixture(name: &str, defines: &[&str]) -> PathBuf {

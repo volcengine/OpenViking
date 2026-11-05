@@ -127,3 +127,17 @@ class AGFSSyncClientProtocol(Protocol):
         owner_lease_ref: Dict[str, Any] | None = None,
     ) -> Awaitable[Dict[str, Any]]:
         """Acquire a PathLock batch without blocking a Python worker thread."""
+
+    def leader_try_acquire_async(
+        self, key: str, holder_id: str, ttl_secs: float
+    ) -> Awaitable[str | None]:
+        """Try to acquire leadership and return an opaque lease reference."""
+
+    def leader_validate(self) -> None:
+        """Validate that distributed leadership is available."""
+
+    def leader_renew_async(self, lease_ref: str, ttl_secs: float) -> Awaitable[bool]:
+        """Renew leadership while its hidden ownership token still matches."""
+
+    def leader_release_async(self, lease_ref: str) -> Awaitable[None]:
+        """Release leadership while its hidden ownership token still matches."""

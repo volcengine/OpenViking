@@ -64,6 +64,7 @@ from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
+from .ttl_config import TTLConfig
 from .vlm_config import VLMConfig
 
 
@@ -165,8 +166,8 @@ class ParserApiConfig(BaseModel):
         if self.enable:
             if not self.host.strip():
                 raise ValueError("parser_api.host is required when parser_api.enable=true")
-            if not self.api_key.strip():
-                raise ValueError("parser_api.api_key is required when parser_api.enable=true")
+            # The credential may be supplied by Account runtime configuration.
+            # UnderstandingAPI validates it when an operation starts.
         if self.host and "://" not in self.host:
             raise ValueError("parser_api.host must include scheme (e.g., https://...)")
         if self.upload_simple_max_bytes <= 0:
@@ -378,9 +379,25 @@ class OpenVikingConfig(BaseModel):
     enable_watch_scheduler: bool = Field(
         default=True,
         description=(
-            "Whether to start the background WatchScheduler that periodically re-processes "
-            "watched resources. Disable on read-only replicas that share a writer's data "
-            "so only the writer runs the watch/refresh background loop."
+            "Whether this node may become the Watch scheduler leader that polls due "
+            "watches and settles their runs. Every node serves the Watch API either way; "
+            "disable on nodes that should never run the background watch/refresh loop."
+        ),
+    )
+    watch_leader_provider: Literal["auto", "local", "cache"] = Field(
+        default="auto",
+        description=(
+            "Watch scheduler leader provider. 'auto' keeps the storage-derived default "
+            "(local for file WatchStore, cache-backed distributed leader otherwise); "
+            "'local' and 'cache' explicitly select the leader mode."
+        ),
+    )
+
+    reconcile_system_assets_on_startup: bool = Field(
+        default=True,
+        description=(
+            "Whether to reconcile packaged system assets for active accounts during startup. "
+            "Disable on read-only replicas that share a writer's data."
         ),
     )
 
@@ -517,9 +534,26 @@ class OpenVikingConfig(BaseModel):
         description="Distributed expiry scheduling configuration",
     )
 
+    ttl: TTLConfig = RuntimeField(
+        default_factory=TTLConfig,
+        description=(
+            "Directory TTL recycling policy. Default-off; requires the enabled Redis TTL runtime."
+        ),
+    )
+
     @model_validator(mode="after")
     def _validate_expiry_backend(self) -> "OpenVikingConfig":
         self._check_expiry_backend()
+        return self
+
+    @model_validator(mode="after")
+    def _validate_watch_store(self) -> "OpenVikingConfig":
+        if self.storage.watch_store.provider == "mysql":
+            if not self.storage.watch_store.params.get("credential_encryption_key"):
+                raise ValueError(
+                    "storage.watch_store.provider='mysql' requires "
+                    "storage.watch_store.params.credential_encryption_key"
+                )
         return self
 
     def _check_expiry_backend(self) -> None:

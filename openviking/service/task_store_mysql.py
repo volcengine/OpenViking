@@ -40,17 +40,20 @@ from openviking.service.task_domain import (
     finalize_task,
     processing_seconds,
     sanitize_error,
+    serialize_work_errors,
     summarize_works,
 )
-from openviking.service.task_events import append_task_event
+from openviking.service.task_events import TaskEventHistory, append_task_event
 from openviking.service.task_store import (
     DeleteTasksResult,
     StoreOperationCode,
     StoreOperationResult,
     TaskAlreadyActive,
+    TaskCreationResult,
     TaskDeletionBlocker,
     TaskStatsSnapshot,
     TaskWorkStore,
+    _can_withdraw_task,
     _deep_merge,
 )
 from openviking.service.task_store_mysql_schema import (
@@ -299,7 +302,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
     def _task_from_row(
         row: Any,
         works: Iterable[WorkRecord] = (),
-        execution_events: Optional[dict] = None,
+        execution_events: Optional[TaskEventHistory] = None,
     ) -> TaskRecord:
         task = TaskRecord(
             task_id=row.task_id,
@@ -418,7 +421,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
         rows = (await session.scalars(statement)).all()
         return [self._work_from_row(row) for row in rows]
 
-    async def _event_history(self, session: AsyncSession, task_id: str) -> Optional[dict]:
+    async def _event_history(
+        self, session: AsyncSession, task_id: str
+    ) -> Optional[TaskEventHistory]:
         Event = self._models.Event
         rows = (
             await session.scalars(
@@ -445,36 +450,27 @@ class MySQLTaskWorkStore(TaskWorkStore):
             "started_mid_task": bool(latest.started_mid_task),
         }
 
-    async def _store_event_history(
+    async def _append_event_history(
         self,
         session: AsyncSession,
         task_id: str,
-        history: Optional[dict],
+        history: Optional[TaskEventHistory],
+        previous: Optional[TaskEventHistory] = None,
     ) -> None:
+        """Insert new events under the Task lock; retained rows remain immutable."""
         if history is None:
             return
         Event = self._models.Event
         items = history["items"]
         if not items:
             return
-        seqs = [int(item["seq"]) for item in items]
-        existing = set(
-            await session.scalars(
-                select(Event.seq).where(
-                    *self._event_query(Event, task_id),
-                    Event.seq.in_(seqs),
-                )
-            )
-        )
+        previous_seq = previous["items"][-1]["seq"] if previous and previous["items"] else 0
         metadata = {
             "dropped_count": int(history["dropped_count"]),
             "started_mid_task": bool(history["started_mid_task"]),
         }
-        await session.execute(
-            update(Event).where(*self._event_query(Event, task_id)).values(**metadata)
-        )
         for item in items:
-            if int(item["seq"]) in existing:
+            if item["seq"] <= previous_seq:
                 continue
             session.add(
                 Event(
@@ -490,9 +486,10 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     **metadata,
                 )
             )
-        await session.execute(
-            delete(Event).where(*self._event_query(Event, task_id), Event.seq < min(seqs))
-        )
+        if history["dropped_count"] > (previous["dropped_count"] if previous else 0):
+            await session.execute(
+                delete(Event).where(*self._event_query(Event, task_id), Event.seq < items[0]["seq"])
+            )
 
     async def _lock_work(self, session: AsyncSession, task_id: str, work_id: str) -> Any:
         Work = self._models.Work
@@ -508,7 +505,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
             async with session.begin():
                 yield session
 
-    async def create(self, task: TaskRecord, *, reject_if_active: bool = False) -> TaskRecord:
+    async def create(
+        self, task: TaskRecord, *, reject_if_active: bool = False
+    ) -> TaskCreationResult:
         account_id, user_id = self._require_owner(task.account_id, task.user_id)
         Task = self._models.Task
         now = time.time()
@@ -560,12 +559,15 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         raise ValueError(
                             f"Task id already belongs to another owner: {stored.task_id}"
                         )
-                    return self._task_from_row(
-                        existing,
-                        execution_events=await self._event_history(session, stored.task_id),
+                    return TaskCreationResult(
+                        self._task_from_row(
+                            existing,
+                            execution_events=await self._event_history(session, stored.task_id),
+                        ),
+                        created=False,
                     )
                 session.add(row)
-                await self._store_event_history(session, stored.task_id, stored.execution_events)
+                await self._append_event_history(session, stored.task_id, stored.execution_events)
         except IntegrityError as exc:
             if not self._is_duplicate_error(exc):
                 raise
@@ -581,14 +583,17 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         raise ValueError(
                             f"Task id already belongs to another owner: {stored.task_id}"
                         )
-                    return self._task_from_row(
-                        existing,
-                        execution_events=await self._event_history(session, stored.task_id),
+                    return TaskCreationResult(
+                        self._task_from_row(
+                            existing,
+                            execution_events=await self._event_history(session, stored.task_id),
+                        ),
+                        created=False,
                     )
                 if reject_if_active:
                     raise TaskAlreadyActive(stored.task_type, stored.resource_id) from exc
             raise
-        return stored
+        return TaskCreationResult(stored, created=True)
 
     @staticmethod
     def _is_duplicate_error(exc: IntegrityError) -> bool:
@@ -775,6 +780,34 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     model.task_id.in_(task_ids),
                 )
             )
+
+    async def withdraw_unaccepted(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> StoreOperationResult:
+        self._require_owner(account_id, user_id)
+        Work = self._models.Work
+        async with self._transaction() as session:
+            row = await self._load_task(
+                session, task_id, account_id=account_id, user_id=user_id, lock=True
+            )
+            if row is None:
+                return StoreOperationResult.noop(StoreOperationCode.NOT_FOUND)
+            has_work = bool(
+                await session.scalar(
+                    select(
+                        exists().where(
+                            Work.service_name == self._service_name,
+                            Work.task_id == task_id,
+                        )
+                    )
+                )
+            )
+            if not _can_withdraw_task(self._task_from_row(row), has_work=has_work):
+                return StoreOperationResult.rejected(
+                    StoreOperationCode.INVALID_STATE, "Task has already been used"
+                )
+            await self._delete_task_records(session, [task_id])
+            return StoreOperationResult.applied()
 
     async def delete_tasks(
         self,
@@ -969,7 +1002,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 active_business_key=None,
             )
         )
-        await self._store_event_history(session, task_id, task.execution_events)
+        await self._append_event_history(
+            session, task_id, task.execution_events, previous.execution_events
+        )
         return task
 
     async def start_task(
@@ -1014,7 +1049,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, task.execution_events)
+            await self._append_event_history(
+                session, task_id, task.execution_events, previous.execution_events
+            )
             return StoreOperationResult.applied()
 
     async def patch_task(
@@ -1070,7 +1107,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     task = deepcopy(previous)
                     task.stage = stage
                     append_task_events(task, previous)
-                    await self._store_event_history(session, task_id, task.execution_events)
+                    await self._append_event_history(
+                        session, task_id, task.execution_events, previous.execution_events
+                    )
             if "meta" in patch.clear_fields or patch.meta is not None:
                 meta = {}
                 if "meta" not in patch.clear_fields:
@@ -1126,8 +1165,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     StoreOperationCode.ALREADY_TERMINAL,
                     f"Task is already {row.status}",
                 )
+            previous = await self._event_history(session, task_id)
             events = append_task_event(
-                await self._event_history(session, task_id),
+                deepcopy(previous),
                 kind=kind,
                 status=row.status,
                 stage=sanitize_error(row.stage) if row.stage else None,
@@ -1140,7 +1180,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, events)
+            await self._append_event_history(session, task_id, events, previous)
             return StoreOperationResult.applied()
 
     async def record_outcome(
@@ -1204,6 +1244,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
 
             next_status = TaskStatus.CANCELLING if cancelled else TaskStatus(row.status)
             events = None
+            previous_events = None
             if cancelled or (error and row.error is None):
                 previous = TaskRecord(
                     task_id=task_id,
@@ -1213,6 +1254,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     error=row.error,
                     execution_events=await self._event_history(session, task_id),
                 )
+                previous_events = previous.execution_events
                 task = deepcopy(previous)
                 task.status = next_status
                 task.error = next_error
@@ -1236,7 +1278,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, events)
+            await self._append_event_history(session, task_id, events, previous_events)
             finalized = await self._finalize_if_closed(
                 session,
                 task_id,
@@ -1321,7 +1363,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, task.execution_events)
+            await self._append_event_history(
+                session, task_id, task.execution_events, previous.execution_events
+            )
             finalized = await self._finalize_if_closed(
                 session,
                 task_id,
@@ -1543,7 +1587,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -1580,7 +1624,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if error:
                 values["error"] = sanitize_error(error)
             if state == WorkState.FAILED:
-                details = [sanitize_error(str(value)) for value in errors or () if str(value)]
+                details = serialize_work_errors(errors)
                 values["errors"] = details or (
                     [values.get("error", work.error)] if values.get("error", work.error) else []
                 )

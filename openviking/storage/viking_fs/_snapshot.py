@@ -883,10 +883,7 @@ class _SnapshotMixin:
         if not tasks:
             return
 
-        executor = ReindexExecutor(
-            vlm_resolver=self._vlm_resolver,
-            vector_config_resolver=self._vector_config_resolver,
-        )
+        executor = ReindexExecutor()
         with detach_task_context():
             for op, uri, level in tasks:
                 loop.create_task(
@@ -931,10 +928,7 @@ class _SnapshotMixin:
                 user_id=ctx.user.user_id,
                 stage="reindexing",
             )
-            executor = ReindexExecutor(
-                vlm_resolver=self._vlm_resolver,
-                vector_config_resolver=self._vector_config_resolver,
-            )
+            executor = ReindexExecutor()
             reindex_ctx = self._restore_reindex_context(ctx)
             with bind_task_context(
                 task_id,

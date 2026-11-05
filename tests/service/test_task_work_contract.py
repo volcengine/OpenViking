@@ -6,17 +6,220 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock, create_autospec
 from uuid import uuid4
 
 import pytest
 
-from openviking.service.task_domain import TaskRetentionPolicy, TaskStatus, WorkState
+from openviking.service.task_domain import TaskPatch, TaskRetentionPolicy, TaskStatus, WorkState
 from openviking.service.task_store import PersistentTaskStore, WorkRegistration
 from openviking.service.task_tracker import TaskTracker
+from openviking_cli.exceptions import FailedPreconditionError
 from tests.test_task_tracker import _FakeAgfs
 
-OWNER = {"account_id": "account", "user_id": "user"}
+OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
+
+
+@pytest.fixture(params=["file", "mysql"])
+async def task_stores(request):
+    if request.param == "file":
+        store = PersistentTaskStore(_FakeAgfs())
+        yield store, store
+        return
+    raw = os.environ.get("OV_TEST_MYSQL")
+    if not raw:
+        pytest.skip("Set OV_TEST_MYSQL to exercise the shared Task/Work contract")
+    sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
+    pytest.importorskip("aiomysql")
+    from openviking.service import task_store_mysql
+
+    params = {**json.loads(raw), "table": f"ov_contract_{uuid4().hex[:12]}"}
+    first = task_store_mysql.MySQLTaskWorkStore(params=params)
+    second = task_store_mysql.MySQLTaskWorkStore(params=params)
+    admin = sqlalchemy.create_async_engine(first._url, **first._engine_options)
+    sql_dir = Path(task_store_mysql.__file__).parent / "sql"
+    schema_files = [
+        sql_dir / "task_store_init.sql",
+        sql_dir / "changes/0001_task_store_service_name.sql",
+    ]
+    try:
+        async with admin.begin() as connection:
+            for schema in schema_files:
+                for statement in schema.read_text().replace("ov_tasks", params["table"]).split(";"):
+                    if statement.strip():
+                        await connection.exec_driver_sql(statement)
+        await first.load()
+        await second.load()
+        yield first, second
+    finally:
+        await first.close()
+        await second.close()
+        async with admin.begin() as connection:
+            await connection.run_sync(first._models.Base.metadata.drop_all)
+        await admin.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_events_preserve_history_and_lifecycle(task_stores):
+    first, second = task_stores
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    await writer.create("content_write", task_id="task", **OWNER)
+    await writer.start("task", stage="parsing", **OWNER)
+    initial = await observer.get_with_events("task", **OWNER)
+    assert initial is not None and initial.execution_events is not None
+    before = initial.execution_events
+    await asyncio.gather(
+        *[
+            tracker.record_event(
+                "task", "waiting_for_descendants", operation=f"work-{index}", **OWNER
+            )
+            for index, tracker in enumerate([writer, observer] * 6)
+        ]
+    )
+    await writer.start("task", stage="parsing", **OWNER)
+    await observer.patch_task("task", TaskPatch(stage="embedding"), **OWNER)
+    await writer.fail("task", "provider rejected sk-testsecret123", **OWNER)
+    task = await observer.get_with_events("task", **OWNER)
+    assert task is not None and task.execution_events is not None
+    history = task.execution_events
+    items = history["items"]
+    assert items[: len(before["items"])] == before["items"]
+    assert [item["seq"] for item in items] == list(range(1, 19))
+    assert {item["operation"] for item in items[3:15]} == {f"work-{index}" for index in range(12)}
+    assert [item["kind"] for item in items[15:]] == [
+        "stage_changed",
+        "error_recorded",
+        "status_changed",
+    ]
+    assert items[-1]["stage"] == "embedding"
+    assert items[-1]["status"] == "failed"
+    assert "[REDACTED]" in items[-2]["error"]
+    assert "testsecret123" not in json.dumps(history)
+    assert history["dropped_count"] == 0
+    assert history["started_mid_task"] is False
+    assert task.updated_at > task.created_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage_prefix", ["stage", "阶段" * 64])
+async def test_shared_event_history_retains_latest_metadata_after_truncation(
+    task_stores, stage_prefix
+):
+    from openviking.service.task_events import MAX_TASK_EVENT_BYTES, MAX_TASK_EVENTS
+
+    first, second = task_stores
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    await writer.create("add_resource", task_id="task", **OWNER)
+    for index in range(80):
+        await writer.patch_task("task", TaskPatch(stage=f"{index}:{stage_prefix}"), **OWNER)
+    await writer.cancel("task", **OWNER)
+    task = await observer.get_with_events("task", **OWNER)
+    assert task is not None and task.execution_events is not None
+    history = task.execution_events
+    items = history["items"]
+    assert len(items) <= MAX_TASK_EVENTS
+    assert len(json.dumps(history).encode()) <= MAX_TASK_EVENT_BYTES
+    assert history["dropped_count"] + len(items) == 83
+    assert [item["seq"] for item in items] == list(range(history["dropped_count"] + 1, 84))
+    assert [item["status"] for item in items[-2:]] == ["cancelling", "cancelled"]
+    assert history["started_mid_task"] is False
+
+
+@pytest.mark.asyncio
+async def test_store_withdraws_only_tasks_without_registered_work(task_stores):
+    first, second = task_stores
+    tracker = TaskTracker(first)
+    await tracker.create("compile", task_id="unused", **OWNER)
+    assert (await second.withdraw_unaccepted("unused", **OWNER)).is_applied
+    assert await tracker.get("unused", **OWNER) is None
+
+    await tracker.create("compile", task_id="accepted", **OWNER)
+    assert (
+        await tracker.register_work("accepted", "work", "ExternalTask", **OWNER)
+        is WorkRegistration.CREATED
+    )
+    assert not (await second.withdraw_unaccepted("accepted", **OWNER)).accepted
+    assert await tracker.get("accepted", **OWNER) is not None
+    assert await tracker.get_work_state("accepted", "work", **OWNER) is WorkState.PENDING
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_is_atomic_with_work_registration(task_stores):
+    first, second = task_stores
+    tracker = TaskTracker(first)
+    await tracker.create("compile", task_id="task", **OWNER)
+
+    withdrawn, registered = await asyncio.gather(
+        second.withdraw_unaccepted("task", **OWNER),
+        tracker.register_work("task", "work", "ExternalTask", **OWNER),
+    )
+    if withdrawn.is_applied:
+        assert registered is WorkRegistration.REJECTED
+        assert await tracker.get("task", **OWNER) is None
+    else:
+        assert not withdrawn.accepted
+        assert registered is WorkRegistration.CREATED
+        assert await tracker.get_work_state("task", "work", **OWNER) is WorkState.PENDING
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("postcheck", ["query-error", "refused"])
+async def test_creator_postcheck_preserves_or_cancels_accepted_task(monkeypatch, postcheck):
+    store = PersistentTaskStore(_FakeAgfs())
+    creator, replay = TaskTracker(store), TaskTracker(store)
+    inserted, release = asyncio.Event(), asyncio.Event()
+    create = store.create
+    checks = 0
+    query_error = ConnectionError("Identity storage unavailable")
+
+    async def guard(account_id, user_id):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            if postcheck == "query-error":
+                raise query_error
+            return True
+        return False
+
+    async def delayed_create(task, **kwargs):
+        result = await create(task, **kwargs)
+        inserted.set()
+        await release.wait()
+        return result
+
+    creator.set_deletion_guard(guard)
+    monkeypatch.setattr(store, "create", delayed_create)
+    request = asyncio.create_task(creator.create("compile", task_id="task", **OWNER))
+    try:
+        await asyncio.wait_for(inserted.wait(), 1)
+        await replay.create("compile", task_id="task", **OWNER)
+        assert (
+            await replay.register_work("task", "work", "ExternalTask", **OWNER)
+            is WorkRegistration.CREATED
+        )
+        release.set()
+        with pytest.raises(
+            ConnectionError if postcheck == "query-error" else FailedPreconditionError
+        ) as raised:
+            await asyncio.wait_for(request, 1)
+        task = await replay.get("task", **OWNER)
+        assert task is not None
+        assert await replay.get_work_state("task", "work", **OWNER) is WorkState.PENDING
+
+        if postcheck == "query-error":
+            assert raised.value is query_error
+            assert task.status is TaskStatus.PENDING
+            await replay.cancel("task", **OWNER)
+        else:
+            assert task.status is TaskStatus.CANCELLING
+
+        await replay.mark_work_done("task", "work", **OWNER)
+        assert (await replay.wait("task", timeout=0, **OWNER)).status is TaskStatus.CANCELLED
+    finally:
+        release.set()
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
 
 
 @pytest.fixture
@@ -43,7 +246,7 @@ async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker
     await tracker.register_work("task", "root", "Inline", **OWNER)
     await tracker.reconcile_delivery("task", "semantic", "Semantic", **OWNER)
     waiting = asyncio.create_task(
-        tracker.wait_for_task_work("task", exclude_work_id="root", poll_interval=0.001, **OWNER)
+        tracker.wait_for_task_work("task", exclude_work_id="root", **OWNER)
     )
     try:
         await asyncio.sleep(0)
@@ -198,6 +401,15 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable(deletion):
         )
         assert isolated_task is not None
         await isolated.register_work(task_id, "semantic", "Semantic", **OWNER)
+
+        assert (await second.withdraw_unaccepted(task_id, **OWNER)).is_applied
+        assert await observer.get(task_id, **OWNER) is None
+        assert await isolated.get(task_id, **OWNER) is not None
+        assert await isolated.get_work_state(task_id, "semantic", **OWNER) is WorkState.PENDING
+        assert (
+            await writer.create_if_no_running("content_write", uri, task_id=task_id, **OWNER)
+            is not None
+        )
 
         await writer.start(task_id, **OWNER)
         await writer.register_work(task_id, "semantic", "Semantic", **OWNER)

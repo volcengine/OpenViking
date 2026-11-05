@@ -397,6 +397,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
 | POST | `/api/v1/content/batch-write` | Write multiple files and refresh their indexes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
+| POST | `/api/v1/content/ensure_directory_index` | Ensure indexes for one existing directory, seeding L0 only when both summaries are absent |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
 ### [Skills](04-skills.md)
@@ -410,6 +411,25 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/skills/{skill_name}` | Get a skill |
 | PUT | `/api/v1/skills/{skill_name}` | Update a skill |
 | DELETE | `/api/v1/skills/{skill_name}` | Delete a skill |
+
+### [MCP and Live Context](26-mcp-live-context.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/mcps/validate` | Validate an MCP server and discover tools without saving |
+| POST | `/api/v1/mcps` | Register an MCP server and publish its tool catalog |
+| GET | `/api/v1/mcps` | List registered MCP servers |
+| GET | `/api/v1/mcps/{name}` | Read an MCP server and its current tool definitions |
+| GET | `/api/v1/mcps/status` | Check whether an MCP server is reachable |
+| POST | `/api/v1/mcps/{name}/sync` | Synchronize tools and report affected live context mounts |
+| DELETE | `/api/v1/mcps/{name}` | Remove an MCP server and its tool catalog |
+| POST | `/api/v1/mcps/find` | Search MCP tools semantically |
+| POST | `/api/v1/mcps/invoke` | Invoke an MCP tool |
+| POST | `/api/v1/mcps/mount` | Create or replace one MCP-backed live context node |
+| POST | `/api/v1/mcps/batch-mount` | Create or replace live context nodes in a batch |
+| DELETE | `/api/v1/mcps/mount` | Remove one mount and its node |
+| POST | `/api/v1/mcps/batch-unmount` | Remove mounts and nodes in a batch |
+| GET | `/api/v1/mcps/mounts` | List mounts for an MCP server or tool |
 
 ### [Sessions](05-sessions.md), [Memory](16-memory.md), and [Agent Evolution](19-agent-evolution.md)
 
@@ -426,9 +446,12 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
+| POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | Retry a failed or ownerless session archive |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
+| POST | `/api/v1/rules/compile` | Compile user rules asynchronously |
+| POST | `/api/v1/rules/search` | Retrieve complete rules applicable to a task |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
 
@@ -514,7 +537,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove a memory template override and restore deployment defaults |
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
-| POST | `/api/v1/admin/migrate` | Migrate legacy identity data |
+| POST | `/api/v1/admin/migrate` | Reserved migration endpoint; ROOT-only, currently returns 400 INVALID_ARGUMENT |
 | GET | `/api/v1/admin/accounts/{account_id}` | Get credential-free metadata for one account |
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete an account |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
@@ -523,14 +546,14 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
 | PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user's role between USER and ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List group members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a group member |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a group member |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add group members |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove group members |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
 | GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in content |
@@ -592,6 +615,7 @@ When the gateway runs inside the server, use the server's port; when it runs sta
 | POST | `/api/v1/compile/config/update` | Update target settings |
 | GET | `/api/v1/compile/configs` | List visible targets |
 | GET | `/api/v1/compile/operations` | List target operations |
+| GET | `/api/v1/compile/operations/{operation_id}` | Read one operation |
 | GET | `/api/v1/compile/operations/{operation_id}/outputs` | List operation outputs and version references |
 | POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
@@ -619,4 +643,4 @@ Choose a reference page by operation type:
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration, ACL, and privacy configuration |
-| Protocols & Extensions | OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |
+| Protocols & Extensions | MCP and live context, OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |
