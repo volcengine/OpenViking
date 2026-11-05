@@ -20,6 +20,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
+from openviking.service.artifact_relations import ArtifactRelationsService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
 from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
@@ -124,6 +125,7 @@ class OpenVikingService:
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
         self._ttl_adapter: Optional["TTLAdapter"] = None
         self._compile_scheduler: Optional[CompileScheduler] = None
+        self._artifact_relations_service: Optional[ArtifactRelationsService] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._privacy_sanitizer: Optional[PrivacySanitizer] = None
@@ -480,6 +482,13 @@ class OpenVikingService:
         """Get the Compile task service."""
         return self._compile_service
 
+    @property
+    def artifact_relations(self) -> ArtifactRelationsService:
+        """Get the Compile artifact relation service."""
+        if self._artifact_relations_service is None:
+            raise RuntimeError("Artifact relations service is not initialized")
+        return self._artifact_relations_service
+
     async def initialize(
         self, *, before_background_start: Optional[Callable[[], Awaitable[None]]] = None
     ) -> None:
@@ -708,6 +717,12 @@ class OpenVikingService:
         compile_config = self._config.compile_api
         compile_store = CompileStateStore(self._agfs_client)
         self._compile_service.configure_lifecycle(CompileLifecycle(compile_store, self._viking_fs))
+        self._artifact_relations_service = ArtifactRelationsService(
+            compile_store,
+            self._viking_fs,
+            self._fs_service,
+        )
+        self._compile_service.lifecycle.artifact_relations = self._artifact_relations_service
         get_task_tracker().compile_history_cleanup = compile_store.delete_expired
         if compile_config.scheduler_enabled:
             self._compile_scheduler = CompileScheduler(

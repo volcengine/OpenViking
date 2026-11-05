@@ -126,6 +126,8 @@ def new_record(to: str) -> Dict[str, Any]:
         "scheduled_progress": {},  # Successful scheduled inputs and source progress, isolated from manual runs.
         # Snapshot the per-file version indexes were last synced to.
         "versions_head": None,
+        # Latest immutable snapshot containing the target's published Wiki files.
+        "wiki_head": None,
         "active_task_id": None,
         "active_operation_id": None,  # Set and cleared with active_task_id.
         "last_run": None,
@@ -249,6 +251,15 @@ class CompileStateStore:
 
     def _record_path(self, account_id: str, to: str) -> str:
         return f"{self._target_dir(account_id, to)}/state.json"
+
+    def artifact_relations_path(self, account_id: str, to: str) -> str:
+        return f"{self._target_dir(account_id, to)}/artifact_relations.json"
+
+    def relation_sources_path(self, account_id: str, to: str) -> str:
+        return f"{self._target_dir(account_id, to)}/relation_sources.json"
+
+    def artifact_relations_state_path(self, account_id: str, to: str) -> str:
+        return f"{self._target_dir(account_id, to)}/artifact_relations_state.json"
 
     def _operation_path(self, account_id: str, target_to: str, operation_id: str) -> str:
         return f"{self._target_dir(account_id, target_to)}/operations/{operation_id}.json"
@@ -883,6 +894,8 @@ class CompileLifecycle:
         self.save_credential = None
         # Server callback: async (account_id, user_id) -> current groups.
         self.resolve_groups = None
+        # Installed by Service initialization after ArtifactRelationsService is created.
+        self.artifact_relations = None
 
     async def move_target(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Migrate scheduled settings after content and Watch state have moved.
@@ -1390,8 +1403,11 @@ class CompileLifecycle:
                             ):
                                 raise asyncio.CancelledError()
 
+                            relation_changes: list[dict[str, str]] = []
+
                             async def publish() -> None:
                                 """Persist snapshot and versions under the output lease."""
+                                nonlocal relation_changes
                                 if not run_meta.get("snapshot_committed"):
                                     head = await self._commit(
                                         [request["to"]],
@@ -1418,6 +1434,7 @@ class CompileLifecycle:
                                     head=head,
                                     ctx=ctx,
                                 )
+                                relation_changes = changes
                                 run["result"] = dict.fromkeys(_RESULT_KEYS.values(), 0)
                                 for change in changes:
                                     if is_versioned(change["uri"]):
@@ -1436,6 +1453,38 @@ class CompileLifecycle:
                             current = self._task_is_current(record, task)
                             if current:
                                 await run_to_completion(publish)
+                                async with self._store.edit(account_id, target_to) as state:
+                                    state["wiki_head"] = run_meta["target_head"]
+                                if self.artifact_relations is not None:
+                                    try:
+                                        full = run_meta.get("execution", {}).get("mode") == "full"
+                                        changed_uris = (
+                                            None
+                                            if full
+                                            else [
+                                                change["uri"]
+                                                for change in relation_changes
+                                                if change["change_type"] != "deleted"
+                                            ]
+                                        )
+                                        extracted = (
+                                            await self.artifact_relations.extract_snapshot_sources(
+                                                account_id,
+                                                target_to,
+                                                run_meta["target_head"],
+                                                changed_uris,
+                                            )
+                                        )
+                                        await self.artifact_relations.build(
+                                            account_id,
+                                            target_to,
+                                            extracted=extracted,
+                                        )
+                                    except Exception as exc:
+                                        snapshot = ExternalTaskSnapshot(
+                                            status="failed",
+                                            error_message=f"Artifact relation build failed: {exc}",
+                                        )
                             else:
                                 snapshot = ExternalTaskSnapshot(
                                     status="cancelled", error_message="Compile target was deleted"
@@ -1904,6 +1953,38 @@ class CompileVersions:
             candidate = candidate.parent
         return None
 
+    async def advance_wiki_heads(
+        self,
+        uris: List[str],
+        ctx: RequestContext,
+        operation_type: str,
+        *,
+        recursive: bool = False,
+    ) -> None:
+        """Commit successful ordinary mutations and advance every affected target head."""
+        targets: dict[str, dict[str, Any]] = {}
+        for uri in dict.fromkeys(uris):
+            record = await self.owning_target(ctx.account_id, uri)
+            if record is not None:
+                targets[record["to"]] = record
+        if recursive:
+            for summary in await self._store.list_summaries(ctx.account_id):
+                if summary.get("status") == "active" and any(
+                    overlaps(uri, summary["to"]) for uri in uris
+                ):
+                    targets[summary["to"]] = summary
+        for target_to in sorted(targets):
+            head = await self._commit(
+                [target_to],
+                f"{operation_type} {target_to}",
+                ctx,
+            )
+            if not head:
+                continue
+            async with self._store.edit(ctx.account_id, target_to) as state:
+                if state.get("status") == "active":
+                    state["wiki_head"] = head
+
     async def record_operation(
         self,
         uris: List[str],
@@ -2018,6 +2099,24 @@ class CompileVersions:
 
             # shortcut: history uses the captured URI; coordinate finalization if moves overlap writes.
             async def finish():
+                heads: dict[str, str] = {}
+                if operation_error is None:
+                    for target, _ in entries:
+                        snapshots = {
+                            item["snapshot_id"]
+                            for item in context["outputs"][target["to"]].values()
+                            if item.get("snapshot_id")
+                        }
+                        if len(snapshots) == 1:
+                            heads[target["to"]] = snapshots.pop()
+                        elif not snapshots:
+                            head = await self._commit(
+                                [target["to"]],
+                                f"{operation_type} {operation_id}",
+                                ctx,
+                            )
+                            if head:
+                                heads[target["to"]] = head
                 for target, entry in entries:
                     entry["finished_at"] = time.time()
                     entry["result"] = {
@@ -2060,6 +2159,8 @@ class CompileVersions:
                         current = record["status"] == "active" and record[
                             "deleted_at"
                         ] == target.get("deleted_at")
+                        if current and target["to"] in heads:
+                            record["wiki_head"] = heads[target["to"]]
                         if current:
                             await self._store.merge_outputs(
                                 ctx.account_id,
@@ -2473,6 +2574,9 @@ class CompileVersions:
                     for uri in targets:
                         context["outputs"][target_to][uri]["snapshot_id"] = snapshot
         for target_to, targets in changed.items():
+            if snapshot:
+                async with self._store.edit(ctx.account_id, target_to) as state:
+                    state["wiki_head"] = snapshot
             record = await self._store.get(ctx.account_id, records[target_to]["to"])
             run_entry = await self._write_meta(ctx.account_id, record)
             for uri in targets:

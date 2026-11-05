@@ -34,6 +34,7 @@ from openviking.server.routers import (
     acl_router,
     admin_router,
     agent_evolution_router,
+    artifact_relations_router,
     bot_router,
     bot_studio_router,
     compile_router,
@@ -676,6 +677,7 @@ def create_app(
     app.include_router(acl_router)
     app.include_router(admin_router)
     app.include_router(agent_evolution_router)
+    app.include_router(artifact_relations_router)
     app.include_router(compile_router)
     app.include_router(resources_router)
     app.include_router(rules_router)

@@ -628,12 +628,20 @@ class FSService:
         wait: bool = False,
     ) -> Optional[Dict[str, Any]]:
         async def execute() -> Optional[Dict[str, Any]]:
-            return await self._rm(
+            result = await self._rm(
                 uri,
                 ctx,
                 recursive=recursive,
                 wait=wait,
             )
+            if self.compile_versions is not None:
+                await self.compile_versions.advance_wiki_heads(
+                    [uri],
+                    ctx,
+                    "rm",
+                    recursive=recursive,
+                )
+            return result
 
         result, _task_id = await run_tracked_operation(
             "fs_rm",
@@ -1027,6 +1035,13 @@ class FSService:
             transfer_result = await viking_fs.cp(
                 from_uri, to_uri, recursive=recursive, ctx=ctx, **options
             )
+        if self.compile_versions is not None:
+            await self.compile_versions.advance_wiki_heads(
+                [to_uri],
+                ctx,
+                "cp",
+                recursive=recursive,
+            )
 
         result = dict(transfer_result or {})
         result.setdefault("from", from_uri)
@@ -1208,6 +1223,13 @@ class FSService:
                         ) from exc
 
         await move()
+        if self.compile_versions is not None:
+            await self.compile_versions.advance_wiki_heads(
+                [from_uri, to_uri],
+                ctx,
+                "mv",
+                recursive=True,
+            )
         rebuild_target = not source_indexed and target_indexed
         if rebuild_target:
             await self._refresh_move_parents(
