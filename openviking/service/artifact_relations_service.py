@@ -47,9 +47,8 @@ class ArtifactRelationsService(DequeueHandlerBase):
         targets = {}
         for uri in dict.fromkeys(uris):
             if uri == "viking://":
-                for item in await self._targets.list_summaries(account_id):
-                    if item.get("status") == "active":
-                        targets[item["to"]] = None
+                # Root-wide recursive callers must pass their already discovered
+                # targets into admission; descendants cannot be hash-addressed.
                 continue
             for record in await self._targets.ancestor_targets(account_id, uri):
                 targets[record["to"]] = None

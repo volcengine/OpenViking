@@ -227,6 +227,16 @@ async def test_managed_write_discovers_nested_targets_without_summary_scan(envir
 
 
 @pytest.mark.asyncio
+async def test_root_lookup_never_falls_back_to_summary_scan(environment):
+    service, _, ctx = environment
+    service._targets.list_summaries = AsyncMock(
+        side_effect=AssertionError("Root lookup must reuse recursive discovery")
+    )
+
+    assert await service.containing_targets(ctx.account_id, ["viking://"]) == []
+
+
+@pytest.mark.asyncio
 async def test_repeated_change_registers_and_enqueues_once(environment):
     service, fs, ctx = environment
     await fs.write(ROOT + "/page.md", b"page", ctx)
