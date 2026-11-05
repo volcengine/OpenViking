@@ -4,9 +4,11 @@
 RAG Query Pipeline for OpenViking evaluation.
 """
 
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+from openviking.parse.parsers.upload_utils import is_text_file
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,8 +38,8 @@ class RAGQueryPipeline:
         """
         self.config_path = config_path
         self.server_url = server_url
-        self._client = None
-        self._llm = None
+        self._client: Any = None
+        self._llm: Any = None
 
     def _get_client(self):
         """Lazy initialization of OpenViking client."""
@@ -135,9 +137,13 @@ class RAGQueryPipeline:
             generate_answer: Whether to generate an answer using LLM
 
         Returns:
-            Dict with 'question', 'contexts', 'answer', and 'retrieved_uris'
+            'contexts' contains exactly the evidence used for generation (at most
+            three chunks), or all materialized evidence in retrieval-only mode.
+            'retrieved_contexts' retains all candidates with provenance; 'errors'
+            records unsupported media, read failures, and generation failures.
         """
         client = self._get_client()
+        start = time.perf_counter()
 
         # Retrieve contexts
         logger.debug(f"Searching for: {question}")
@@ -146,8 +152,9 @@ class RAGQueryPipeline:
             limit=top_k,
         )
 
-        contexts = []
+        retrieved_contexts = []
         retrieved_uris = []
+        errors = []
 
         items = (
             search_result.get("memories", [])
@@ -157,27 +164,61 @@ class RAGQueryPipeline:
         for item in items or []:
             if isinstance(item, dict):
                 uri = item.get("uri", "")
-                content = (
-                    item.get("content", "") or item.get("overview", "") or item.get("abstract", "")
-                )
             else:
                 uri = getattr(item, "uri", "")
-                content = getattr(item, "overview", None) or getattr(item, "abstract", "")
-            if content:
-                contexts.append(content)
-                retrieved_uris.append(uri)
+                item = vars(item)
+            retrieved_uris.append(uri)
+            level = item.get("level", 2)
+            source = {0: "abstract", 1: "overview"}.get(level, "body")
+            try:
+                if level in (0, 1):
+                    content = item.get(source) or getattr(client, source)(uri)
+                else:
+                    if not is_text_file(uri):
+                        errors.append({"uri": uri, "stage": "unsupported_media"})
+                        continue
+                    content = item.get("content")
+                    if content:
+                        source = "inline_content"
+                    else:
+                        content = client.read(uri)
+                if not isinstance(content, str) or not content.strip():
+                    errors.append({"uri": uri, "stage": "empty_context"})
+                    continue
+            except Exception as e:
+                errors.append({"uri": uri, "stage": "read", "message": str(e)})
+                continue
+            retrieved_contexts.append(
+                {
+                    "uri": uri,
+                    "content": content,
+                    "content_source": source,
+                    "score": item.get("score", 0.0),
+                }
+            )
+
+        retrieval_time = time.perf_counter() - start
+        if not retrieved_contexts and not errors:
+            errors.append({"stage": "empty_context"})
+        selected = retrieved_contexts[:3] if generate_answer else retrieved_contexts
+        contexts = [ctx["content"] for ctx in selected]
 
         result = {
             "question": question,
             "contexts": contexts,
+            "context_uris": [ctx["uri"] for ctx in selected],
+            "retrieved_contexts": retrieved_contexts,
             "retrieved_uris": retrieved_uris,
             "answer": None,
+            "errors": errors,
+            "retrieval_time": retrieval_time,
+            "generation_time": 0.0,
         }
 
         # Generate answer if requested
-        if generate_answer and contexts:
-            llm = self._get_llm()
-            context_text = "\n\n---\n\n".join(contexts[:3])
+        if generate_answer:
+            start = time.perf_counter()
+            context_text = "\n\n---\n\n".join(contexts)
 
             prompt = f"""Based on the following context, please answer the question.
 If the context does not contain enough information to answer the question, say "I cannot answer this question based on the provided context."
@@ -190,11 +231,15 @@ Question: {question}
 Answer:"""
 
             try:
+                llm = self._get_llm()
                 answer = llm.get_completion(prompt)
+                if not isinstance(answer, str) or not answer.strip():
+                    raise ValueError("Answer model returned an empty response")
                 result["answer"] = answer
             except Exception as e:
                 logger.error(f"Failed to generate answer: {e}")
-                result["answer"] = f"Error generating answer: {str(e)}"
+                errors.append({"stage": "generation", "message": str(e)})
+            result["generation_time"] = time.perf_counter() - start
 
         return result
 
