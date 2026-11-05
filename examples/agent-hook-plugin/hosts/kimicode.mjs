@@ -7,10 +7,11 @@ import {
 import { buildKimicodeTurns, cleanKimicodeText } from "./kimicode-turns.mjs";
 
 export function shouldCommitKimicodeCapture(event, cfg = {}, previous = 0, captured = 0) {
-  if (captured <= 0) return false;
+  const uncommitted = Number(previous || 0) + captured;
+  if (uncommitted <= 0) return false;
   if (event === "interrupt" || event === "session-end") return true;
   if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
-  return Number(previous || 0) + captured >= Number(cfg.commitTurnThreshold || Infinity);
+  return uncommitted >= Number(cfg.commitTurnThreshold || Infinity);
 }
 
 function promptParts(input) {
@@ -63,14 +64,21 @@ export const kimicode = {
       return null;
     }
     const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg);
-    if (plan.toSend.length === 0) return null;
-
-    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
-    const next = applyIncrementalCaptureResult(state, plan, result, cleanKimicodeText);
+    let next;
+    if (plan.toSend.length > 0) {
+      const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
+      next = applyIncrementalCaptureResult(state, plan, result, cleanKimicodeText);
+    } else if (shouldCommitKimicodeCapture(event, ctx.cfg, state.capturedSinceCommit, 0)) {
+      // Nothing new to send, but turns sent earlier are still uncommitted; a
+      // session end, interrupt or compaction may be their last chance.
+      next = { ...state, captured: 0 };
+    } else {
+      return null;
+    }
     let capturedSinceCommit = Number(state.capturedSinceCommit || 0) + next.captured;
     if (shouldCommitKimicodeCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {
       const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-      if (committed.ok) capturedSinceCommit = 0;
+      if (committed.ok || committed.pendingQueued) capturedSinceCommit = 0;
     }
     const { captured, ...persisted } = next;
     return { ...persisted, capturedSinceCommit };

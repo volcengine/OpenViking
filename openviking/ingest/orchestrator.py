@@ -85,7 +85,11 @@ class IngestOrchestrator:
                     if reset:
                         await self.replayer.reset_session(name, ref)
                     else:
-                        await self.replayer.reconcile(name, ref)
+                        if not await self.replayer.reconcile(name, ref):
+                            stats.errors.append(
+                                f"{name}/{ref.native_session_id}: pending batch reconciliation deferred"
+                            )
+                            continue
                 added = await self._backfill_one(name, source, ref, dry_run=dry_run)
                 stats.sessions += 1
                 stats.messages += added

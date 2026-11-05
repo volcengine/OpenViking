@@ -3,11 +3,13 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+import inspect
 import math
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -22,7 +24,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AccessDecision, RequestContext, Role
 from openviking.storage.abstract_overview import (
     ABSTRACT_OVERVIEW_FILENAMES,
     rewrite_abstract_overview_for_transfer,
@@ -147,6 +149,7 @@ class _OpsMixin:
         """Read file. Accepts a Viking URI or a 32-char hex vector record id."""
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
@@ -181,7 +184,33 @@ class _OpsMixin:
             data = data.encode("utf-8")
 
         # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
-        return await self._async_agfs.write(path, data)
+        result = await self._async_agfs.write(path, data)
+        await self._notify_post_write(uri, ctx)
+        return result
+
+    async def _notify_post_write(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext],
+        written_at_ms: Optional[int] = None,
+    ) -> None:
+        """Best-effort notification for optional product adapters.
+
+        The storage write is already committed when this runs, so observer
+        failures are logged and must not turn a successful write into an API
+        failure. A disabled hook returns before reading the clock or doing I/O.
+        """
+        hook = getattr(self, "_post_write_hook", None)
+        if hook is None:
+            return
+        if written_at_ms is None:
+            written_at_ms = time.time_ns() // 1_000_000
+        try:
+            result = hook(uri, ctx, written_at_ms)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("[VikingFS] Post-write hook failed for %s", uri)
 
     async def mkdir(
         self,
@@ -268,7 +297,11 @@ class _OpsMixin:
             uris_to_delete.append(target_uri)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            vector_store = self._get_vector_store()
+            if recursive and vector_store is not None:
+                await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
+            else:
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
             return {"estimated_deleted_count": estimated_count}
 
@@ -324,6 +357,7 @@ class _OpsMixin:
             check_descendant_acl = (
                 is_dir
                 and (not no_vector or is_acl_uri(target_uri))
+                and not self._ctx_or_default(ctx).bypass_acl
                 and await self._acl_enabled(ctx)
             )
             uris_to_delete = (
@@ -343,7 +377,11 @@ class _OpsMixin:
             if not no_vector:
                 real_ctx = self._ctx_or_default(ctx)
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
-                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                vector_store = self._get_vector_store()
+                if recursive and vector_store is not None:
+                    await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
+                else:
+                    await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             try:
                 result = await self._async_agfs.rm(
                     path,
@@ -418,7 +456,9 @@ class _OpsMixin:
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
         await self._ensure_copy_source_access(old_uri, recursive=recursive, ctx=ctx)
-        await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
+        await self._ensure_destination_access(new_uri, ctx)
+        copy_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        await self._ensure_access(new_uri, copy_ctx, action=AclAction.WRITE)
         old_scope = old_uri.rstrip("/")
         new_scope = new_uri.rstrip("/")
         if old_scope == new_scope:
@@ -465,6 +505,8 @@ class _OpsMixin:
         )
         operation_id = uuid.uuid4().hex
         try:
+            if is_dir:
+                await self._ensure_descendant_access(old_uri, ctx, action=AclAction.READ)
             source_uris = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
             )
@@ -474,7 +516,7 @@ class _OpsMixin:
                 old_uri=old_uri,
                 new_uri=new_uri,
                 is_dir=is_dir,
-                ctx=ctx,
+                ctx=copy_ctx,
                 lease_ref=lease,
                 copy_semantic_sidecars=copy_semantic_sidecars,
             )
@@ -485,13 +527,13 @@ class _OpsMixin:
                         old_uri,
                         new_uri,
                         recursive=is_dir,
-                        ctx=ctx,
+                        ctx=copy_ctx,
                         **({"source_uris": source_uris} if is_dir else {}),
                     )
                 except Exception:
                     try:
                         await self._cleanup_transfer_target(
-                            new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                            new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
                         )
                     except Exception:
                         logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
@@ -549,6 +591,8 @@ class _OpsMixin:
     ) -> List[str]:
         """Validate all affected entries under the lease before the first content write."""
         source_uris: List[str] = []
+        # Copy ACLs were checked under the lease; retain per-path namespace guards.
+        guard_ctx = ctx if move else replace(self._ctx_or_default(ctx), bypass_acl=True)
 
         async def visit(source: str, target: str, directory: bool) -> None:
             source_path = self._uri_to_path(source, ctx=ctx)
@@ -559,8 +603,8 @@ class _OpsMixin:
                 if directory or source != old_uri:
                     await self._ensure_access(source, ctx, action=AclAction.MANAGE)
             else:
-                await self._ensure_copy_source_access(source, recursive=directory, ctx=ctx)
-            await self._ensure_access(target, ctx, action=AclAction.WRITE)
+                await self._ensure_copy_source_access(source, recursive=directory, ctx=guard_ctx)
+            await self._ensure_access(target, guard_ctx, action=AclAction.WRITE)
             await self._ensure_transfer_target_type(
                 self._uri_to_path(target, ctx=ctx), target, is_dir=directory
             )
@@ -719,6 +763,7 @@ class _OpsMixin:
         *,
         vector_mode: Literal["transfer", "delete_source", "none"] = "transfer",
         copy_semantic_sidecars: bool = True,
+        restore_acl: Dict[str, Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         """Move file/directory while extending an optional outer pathlock lease.
 
@@ -728,8 +773,6 @@ class _OpsMixin:
 
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
-        acl_manager = self.acl_manager
-        acl_enabled = await self._acl_enabled(ctx)
         guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
@@ -743,7 +786,6 @@ class _OpsMixin:
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         self._validate_transfer_paths(old_path, new_path)
-        new_acl_scope = acl_enabled and is_acl_uri(new_uri)
 
         # Verify source exists and determine type before locking.
         try:
@@ -837,7 +879,6 @@ class _OpsMixin:
                 raise
 
             # Update or remove source VectorDB records before deleting the source.
-            vector_transfer_completed = False
             try:
                 vector_result = None
                 if vector_mode == "transfer":
@@ -847,34 +888,13 @@ class _OpsMixin:
                         recursive=is_dir,
                         ctx=ctx,
                         **({"source_uris": uris_to_move} if is_dir else {}),
+                        **({"restore_acl": restore_acl} if restore_acl is not None else {}),
                     )
-                    vector_transfer_completed = True
                 elif vector_mode == "delete_source":
                     await self._delete_from_vector_store(uris_to_move, ctx=ctx)
                 elif vector_mode != "none":
                     raise ValueError(f"unsupported move vector mode: {vector_mode}")
-                if vector_mode == "transfer" and acl_manager is not None and new_acl_scope:
-                    await acl_manager.refresh_context_subtree(
-                        new_uri,
-                        self._ctx_or_default(ctx),
-                    )
             except Exception:
-                if vector_transfer_completed:
-                    try:
-                        moved_uris = [
-                            new_scope + uri.rstrip("/")[len(old_scope) :] for uri in uris_to_move
-                        ]
-                        await self._update_vector_store_uris(
-                            new_uri,
-                            old_uri,
-                            recursive=is_dir,
-                            ctx=ctx,
-                            **({"source_uris": moved_uris} if is_dir else {}),
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to restore move vectors for %s", old_uri, exc_info=True
-                        )
                 try:
                     await self._cleanup_transfer_target(
                         new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
@@ -898,6 +918,7 @@ class _OpsMixin:
                 "files_deleted": files_created,
             }
             if vector_result is not None:
+                result["source_acl"] = vector_result.source_acl
                 result["vectors"] = {
                     "scanned": vector_result.scanned,
                     "written": vector_result.written,
@@ -1154,7 +1175,9 @@ class _OpsMixin:
         """
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
-        await self._ensure_access(uri, ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
+        real_ctx = ctx
+        await self._ensure_traversable(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
             result = await self._async_agfs.stat(path)
@@ -1162,6 +1185,14 @@ class _OpsMixin:
             if is_not_found_error(exc):
                 raise NotFoundError(uri, "file") from exc
             raise
+        if (
+            ctx.data_access is not None
+            and self._access_decision(uri, ctx) is AccessDecision.CONTAINER
+            and not result.get("isDir", False)
+        ):
+            raise PermissionDeniedError(
+                "GLOBAL_ACCESS_DENIED: only directories are traversable", resource=uri
+            )
         if isinstance(result, dict):
             result["uri"] = uri
             if include_lock_status:
@@ -1195,6 +1226,11 @@ class _OpsMixin:
         actor-peer, upload, and internal paths.
         """
         real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.role == Role.GLOBAL:
+            try:
+                real_ctx = self.authorize_read(real_ctx, [uri])
+            except PermissionDeniedError:
+                return False
         self._safe_uri_parts(uri)
         if not self._is_accessible(uri, real_ctx):
             return False
@@ -1218,7 +1254,8 @@ class _OpsMixin:
         (with name/uri/size/mode/mtime/isDir populated from stat) for CLI table rendering.
         """
         _ensure_non_empty_search_query(pattern)
-        await self._ensure_access(uri, ctx)
+        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
+        await self._ensure_traversable(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         return_entries = extra_fields is not None
         aug_fields = list(extra_fields) if extra_fields else []
@@ -1343,6 +1380,8 @@ class _OpsMixin:
 
         remote_limit = self._remote_glob_limit(node_limit)
         filter_expr = self._remote_glob_filter(uri, pattern)
+        if ctx.data_access is not None:
+            filter_expr = And([filter_expr, ctx.data_access.query_filter()])
         if tag_filter:
             filter_expr = And([filter_expr, RawDSL(tag_filter)])
         full_pattern = _uri_to_remote_path_pattern(uri, pattern)
@@ -1600,7 +1639,6 @@ class _OpsMixin:
             entries,
             field="abstract",
             limit=abs_limit,
-            reader=self._read_abstract_for_known_dir,
             fallback="[.abstract.md is not ready]",
             ctx=ctx,
         )
@@ -1616,7 +1654,6 @@ class _OpsMixin:
             entries,
             field="overview",
             limit=overview_limit,
-            reader=self.overview,
             fallback="[.overview.md is not ready]",
             ctx=ctx,
         )
@@ -1625,15 +1662,20 @@ class _OpsMixin:
         self,
         entries: List[Dict[str, Any]],
         *,
-        field: str,
+        field: Literal["abstract", "overview"],
         limit: int,
-        reader: Callable[..., Awaitable[str]],
         fallback: str,
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Load one summary field for directories with a fixed-size worker pool."""
         dir_jobs = []
         for index, entry in enumerate(entries):
+            if entry.get("access") in {"denied", "container"} or (
+                self._ctx_or_default(ctx).data_access is not None
+                and not self._is_accessible(entry["uri"], self._ctx_or_default(ctx))
+            ):
+                entry[field] = ""
+                continue
             if not entry.get("isDir", False):
                 entry[field] = ""
                 continue
@@ -1658,7 +1700,9 @@ class _OpsMixin:
                     cursor += 1
 
                 try:
-                    summary = await reader(entry["uri"], ctx=ctx)
+                    summary = await self._read_directory_summary(entry["uri"], field, ctx=ctx)
+                except PermissionDeniedError:
+                    summary = ""
                 except Exception:
                     summary = fallback
 
@@ -1743,7 +1787,9 @@ class _OpsMixin:
                 }
                 if recursive:
                     item["rel_path"] = entry.get("rel_path", "")
-            if "tags" in entry:
+            if entry.get("access") == "container":
+                item["access"] = "container"
+            if "tags" in entry and entry.get("access") != "container":
                 item["tags"] = entry["tags"]
             result.append(item)
 
@@ -1792,7 +1838,8 @@ class _OpsMixin:
         """
         if offset < 0:
             raise ValueError("offset must be non-negative")
-        await self._ensure_access(uri, ctx)
+        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
+        await self._ensure_traversable(uri, ctx)
         extra_fields = extra_fields or []
         if output not in {"original", "agent"}:
             raise ValueError(f"Invalid output format: {output}")
@@ -1868,6 +1915,8 @@ class _OpsMixin:
                     "uri": entry_uri,
                 }
             )
+            if entry.get("access") == "container":
+                new_entry["access"] = "container"
             result.append(new_entry)
         return result
 
@@ -1987,6 +2036,20 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
+        await self._write_file_content(
+            uri, content, ctx=ctx, lease_ref=lease_ref, auto_pathlock=auto_pathlock
+        )
+
+    async def _write_file_content(
+        self,
+        uri: str,
+        content: Union[str, bytes],
+        *,
+        ctx: Optional[RequestContext],
+        lease_ref: Dict[str, Any] | None = None,
+        auto_pathlock: bool = True,
+    ) -> None:
+        """Sanitize and persist an authorized file whose parent already exists."""
         if isinstance(content, str):
             sanitizer = getattr(self, "_privacy_sanitizer", None)
             if sanitizer is not None and ctx is not None:
@@ -2006,11 +2069,12 @@ class _OpsMixin:
             content = content.encode("utf-8")
 
         await self._async_agfs.write(
-            path,
+            self._uri_to_path(uri, ctx=ctx),
             content,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._notify_post_write(uri, ctx)
 
     async def read_file(
         self,
@@ -2031,6 +2095,7 @@ class _OpsMixin:
         """
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # Verify the file exists before reading, because AGFS read returns
@@ -2079,6 +2144,7 @@ class _OpsMixin:
             raise InvalidArgumentError("max_bytes must be non-negative")
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
@@ -2089,7 +2155,8 @@ class _OpsMixin:
             raise
         if isinstance(stat, dict) and stat.get("isDir", False):
             raise InvalidArgumentError(
-                f"Cannot read directory as file: {uri}",
+                f"Directory URI is not readable as a file: {uri}. "
+                "List it first, then read a file URI.",
                 details={"resource": uri, "expected": "file", "actual": "directory"},
             )
         if max_bytes is not None:
@@ -2147,6 +2214,7 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._notify_post_write(uri, ctx)
 
     async def append_file(
         self,
@@ -2160,6 +2228,7 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
 
         owned_lease = None
+        written_at_ms: Optional[int] = None
         try:
             await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             lease = lease_ref
@@ -2189,6 +2258,8 @@ class _OpsMixin:
                 final_content,
                 fs_ctx=fs_ctx,
             )
+            if getattr(self, "_post_write_hook", None) is not None:
+                written_at_ms = time.time_ns() // 1_000_000
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
@@ -2199,6 +2270,8 @@ class _OpsMixin:
         finally:
             if owned_lease is not None:
                 await self._async_agfs.pathlock_release(owned_lease)
+        if written_at_ms is not None:
+            await self._notify_post_write(uri, ctx, written_at_ms)
 
     async def ls(
         self,
@@ -2238,7 +2311,8 @@ class _OpsMixin:
         output="agent"
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11T08:52:16.256Z', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
-        await self._ensure_access(uri, ctx)
+        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
+        await self._ensure_traversable(uri, ctx)
         extra_fields = extra_fields or []
         if sort_by not in {None, "name", "mtime"}:
             raise ValueError("sort_by must be 'name' or 'mtime'")
@@ -2368,10 +2442,22 @@ class _OpsMixin:
                 or not str(item[0].get("name", "")).startswith(".")
                 or show_all_hidden
             ]
-            access = await self._can_access_many([entry_uri for _, entry_uri in entry_items], ctx)
+            decisions = await self._access_decision_many(
+                [entry_uri for _, entry_uri in entry_items], ctx
+            )
             for entry, entry_uri in entry_items:
-                if access.get(entry_uri, False):
+                if decisions[entry_uri] is AccessDecision.ALLOWED:
                     item = (entry, entry_uri)
+                elif entry.get("isDir") and decisions[entry_uri] is AccessDecision.CONTAINER:
+                    item = (
+                        {
+                            k: v
+                            for k, v in entry.items()
+                            if k in {"name", "size", "modTime", "mtime", "mode", "isDir"}
+                        }
+                        | {"access": "container"},
+                        entry_uri,
+                    )
                 elif expose_resource_names:
                     item = (
                         {
@@ -2413,7 +2499,7 @@ class _OpsMixin:
         for i, entry in enumerate(entries):
             # ACL directory enumeration may expose only a name/type placeholder.
             # Do not enrich denied entries with metadata from inaccessible paths.
-            if entry.get("access") == "denied":
+            if entry.get("access") in {"denied", "container"}:
                 continue
             entry_uri = entry.get("uri", "")
             is_dir = entry.get("isDir", False)

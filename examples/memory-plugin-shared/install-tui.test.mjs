@@ -461,6 +461,24 @@ printf '%s|%s|%s\\n' "$PROBE_RESULT" "$CRED_URL" "$CRED_KEY"
   assert.equal(result.stdout.trim().split("\n").pop(), `ok|${url}|fresh-key`);
 });
 
+test("the onboarding guide is linked on the docs host the downloads came from, in the UI language", () => {
+  const cases = [
+    ["https://docs.openviking.ai/dl", "en", "https://docs.openviking.ai/agents/en/onboarding.md"],
+    ["https://docs.openviking.net/dl", "en", "https://docs.openviking.net/agents/en/onboarding.md"],
+    ["https://docs.openviking.net/dl", "zh", "https://docs.openviking.net/agents/zh/onboarding.md"],
+    ["https://docs.openviking.ai/dl", "zh", "https://docs.openviking.ai/agents/zh/onboarding.md"],
+    // A mirror or a dev checkout names neither host: Chinese goes to the .net mirror.
+    ["https://mirror.example.com/dl", "en", "https://docs.openviking.ai/agents/en/onboarding.md"],
+    ["", "zh", "https://docs.openviking.net/agents/zh/onboarding.md"],
+    // A look-alike host is not the docs site.
+    ["https://docs.openviking.net.example.com/dl", "en", "https://docs.openviking.ai/agents/en/onboarding.md"],
+  ];
+  const body = cases.map(([base, lang]) => `DOWNLOAD_BASE=${JSON.stringify(base)}; UI_LANG=${lang}; onboarding_url`).join("\n");
+  const result = runInstallerPrelude(body);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split("\n"), cases.map(([, , url]) => url));
+});
+
 // A copy away from the checkout, so the run is not in dev mode and the
 // release installer is not fetched.
 function detachedInstaller(t, transform = (source) => source) {
@@ -476,7 +494,7 @@ function detachedInstaller(t, transform = (source) => source) {
   // Nothing here downloads, and a curl that cannot connect keeps the server
   // check away from whatever listens on the default port.
   writeFileSync(join(bin, "curl"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
-  const run = (args) => spawnSync("bash", [script, ...args], {
+  const run = (args, env = {}) => spawnSync("bash", [script, ...args], {
     cwd: home,
     encoding: "utf8",
     env: {
@@ -487,6 +505,7 @@ function detachedInstaller(t, transform = (source) => source) {
       OPENVIKING_DOWNLOAD_BASE: "https://tos.example.invalid",
       OPENVIKING_INSTALLER_REEXEC: "0",
       OPENVIKING_SKIP_VERSION_CHECK: "1",
+      ...env,
     },
     timeout: 30_000,
   });
@@ -570,13 +589,46 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
   assert.ok(result.stdout.indexOf("Review") < result.stdout.search(notice));
   assert.match(result.stdout, /curl -fsSL https:\/\/openviking\.ai\/install \| bash -s -- --yes --harness dsh --url <server-url> --api-key <api-key>/);
   assert.match(result.stdout, /\[4\/4\] Validation/);
-  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: .*\n {4}Updates: re-run this installer\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
+  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
   assert.equal(JSON.parse(readFileSync(join(home, ".openviking", "ovcli.conf"), "utf8")).url, "http://127.0.0.1:1933");
+  // The unreachable server is repeated at the end, then where the agent goes next.
+  assert.match(result.stdout, /!! {2}Not done:\n {6}- Cannot reach http:\/\/127\.0\.0\.1:1933\. If the server is not running yet, start it before using the plugin\.\n==> Onboarding guide \(for your agent\): https:\/\/docs\.openviking\.ai\/agents\/en\/onboarding\.md\n$/);
 
   // Once a server is configured, a re-run has nothing to warn about.
   const again = run(["--harness", "dsh", "--lang", "en", "--yes"]);
   assert.equal(again.status, 0, `${again.stdout}\n${again.stderr}`);
   assert.doesNotMatch(again.stdout, notice);
+});
+
+test("what was asked for but not installed is listed again just before the onboarding link", (t) => {
+  const { run } = detachedInstaller(t);
+
+  // pi is selected but not on PATH; dsh is.
+  const result = run(["--harness", "dsh,pi", "--lang", "en", "--yes"]);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const tail = result.stdout.slice(result.stdout.lastIndexOf("Not done:"));
+  assert.match(tail, /^Not done:\n {6}- Cannot reach [^\n]+\n {6}- pi CLI not found; skipping pi extension install\.\n==> Onboarding guide \(for your agent\): \S+\n$/);
+
+  const zh = run(["--harness", "dsh,pi", "--lang", "zh", "--yes"]);
+  assert.equal(zh.status, 0, `${zh.stdout}\n${zh.stderr}`);
+  assert.match(zh.stdout, /未完成：\n {6}- 无法连接[^\n]+\n {6}- 未找到 pi 命令，跳过 pi 扩展安装。\n==> 接入引导（给 Agent 看）： https:\/\/docs\.openviking\.net\/agents\/zh\/onboarding\.md\n$/);
+});
+
+test("run from inside a dsh session, the plugin goes into that session's profile", (t) => {
+  const { dshLog, run } = detachedInstaller(t);
+
+  const result = run(["--harness", "dsh", "--lang", "en", "--yes"], { DSH_SHELL: "1", DSH_PROFILE: "tui" });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(readFileSync(dshLog, "utf8"), /^plugin --profile tui add /m);
+  assert.match(result.stdout, /Next: start a new dsh session: dsh --profile tui\n/);
+
+  // --dsh-profile still wins, and DSH_PROFILE alone (outside a dsh shell) is not a session.
+  const chosen = run(["--harness", "dsh", "--lang", "en", "--yes", "--dsh-profile", "headless"], { DSH_SHELL: "1", DSH_PROFILE: "tui" });
+  assert.match(chosen.stdout, /Next: start a new dsh session: dsh --profile headless\n/);
+  const outside = run(["--harness", "dsh", "--lang", "en", "--yes"], { DSH_PROFILE: "tui" });
+  assert.match(outside.stdout, /Next: start a new dsh session: dsh --profile web\n/);
 });
 
 // DeepSeek Harness Desktop's launcher inside a fake app bundle. It behaves

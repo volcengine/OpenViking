@@ -53,6 +53,13 @@ The package also provides `OpenVikingSessionRecorder`,
 `OpenVikingContextMiddleware`, `OpenVikingStore`,
 `OpenVikingChatMessageHistory`, and `create_openviking_tools`.
 
+`create_openviking_tools` includes `viking_rule_search` in the retrieval, agent,
+and admin profiles. Pass `task_context` and optionally `rule_probability_threshold`
+(default `0.65`) to check compiled constraints before an action or response.
+It returns the full rendered Rules without truncation. Use an SDK client exposing
+`rule_search` and a server with `POST /api/v1/rules/search`; an error must not be
+treated as no applicable Rules.
+
 ## Client ownership
 
 - A client supplied through `client=` or `async_client=` remains caller-owned.

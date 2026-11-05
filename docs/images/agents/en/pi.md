@@ -19,6 +19,16 @@
 2. Run `/viking` and confirm it shows the current session mapping and the number of registered `openviking_*` tools.
 3. In a new session, ask about something you mentioned earlier to confirm recall.
 
+## Step 3: Start using
+
+Start a new pi session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshoot
 
 | Problem | Fix |

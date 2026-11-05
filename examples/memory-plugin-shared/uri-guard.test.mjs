@@ -49,7 +49,7 @@ test("evaluateUriGuard denies a guarded tool and passes everything else", () => 
   const denied = evaluateUriGuard("Read", { file_path: "viking://resources/a.md" })
   assert.equal(denied?.uri, "viking://resources/a.md")
   assert.match(denied?.reason ?? "", /Use OpenViking MCP read instead/)
-  assert.match(denied?.reason ?? "", /Example: read\(uris="viking:\/\/resources\/a\.md"\)/)
+  assert.match(denied?.reason ?? "", /Example: read\(uri="viking:\/\/resources\/a\.md"\)/)
 
   assert.equal(evaluateUriGuard("Read", { file_path: "/tmp/a.md" }), null)
   assert.equal(evaluateUriGuard("Task", { file_path: "viking://resources/a.md" }), null)

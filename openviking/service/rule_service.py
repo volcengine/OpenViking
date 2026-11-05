@@ -403,6 +403,14 @@ class StoredScenario(BaseModel):
     content: str
 
 
+class _RuleScores(list[float]):
+    """Probabilities with exception vetoes preserved through threshold selection."""
+
+    def __init__(self, probabilities: list[float], vetoed_indices: frozenset[int]):
+        super().__init__(probabilities)
+        self.vetoed_indices = vetoed_indices
+
+
 @dataclass(frozen=True)
 class _RelevantRules:
     scenarios: list[StoredScenario]
@@ -423,7 +431,10 @@ Application protocol:
    For a non-empty applies_when, topic similarity alone does not establish applicability.
 3. Do not infer facts that are absent.
 4. Before acting or answering, validate the planned action or answer against every
-   returned Rule. Returned Rules are mandatory when their applicability conditions hold."""
+   returned Rule. Returned Rules are mandatory when their applicability conditions hold.
+5. When quoting a Rule, copy an unchanged contiguous excerpt from the returned text.
+   Preserve its punctuation and qualifiers. Do not combine or rewrite Constraint and
+   Summary text into a quotation."""
 
 
 def _render_rule_block(rule: StoredRule) -> str:
@@ -1092,11 +1103,12 @@ class RuleService:
             rules,
             rule_probability_threshold=rule_probability_threshold,
         )
+        vetoed_indices = scores.vetoed_indices if isinstance(scores, _RuleScores) else frozenset()
         selected = sorted(
             (
                 (rule, score)
-                for rule, score in zip(rules, scores, strict=True)
-                if score >= rule_probability_threshold
+                for index, (rule, score) in enumerate(zip(rules, scores, strict=True))
+                if index not in vetoed_indices and score >= rule_probability_threshold
             ),
             key=lambda item: item[1],
             reverse=True,
@@ -2192,14 +2204,23 @@ existing_rules:
         ):
             raise ValueError("Rule Jev returned invalid probabilities")
 
-        return [
-            0.0
+        vetoed_indices = frozenset(
+            index
+            for index, (rule, score) in enumerate(zip(inputs, scores, strict=True))
             if rule.exception
+            # A zero probability is evidence that the exception does not apply,
+            # including when the caller selects a zero retrieval threshold.
+            and score.exception > 0.0
             and score.exception >= exception_veto_threshold
             and (not rule.applies_when or score.exception > score.applies_when)
-            else score.applies_when
-            for rule, score in zip(inputs, scores, strict=True)
-        ]
+        )
+        return _RuleScores(
+            [
+                0.0 if index in vetoed_indices else score.applies_when
+                for index, score in enumerate(scores)
+            ],
+            vetoed_indices,
+        )
 
     async def _score_rules(
         self,

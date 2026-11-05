@@ -22,3 +22,7 @@ todos.json
 !AGENTS.md
 
 script/gen-server-client/generate
+
+# Frontend feature libraries are source, not Python build artifacts.
+!src/**/lib/
+!src/**/lib/**

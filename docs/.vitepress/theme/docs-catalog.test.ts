@@ -41,27 +41,42 @@ for (const locale of ['en', 'zh'] as Locale[]) {
     assert.equal(conceptPages[0].href, `/${locale}/concepts/00-overview`)
   })
 
-  test(`${locale}: onboarding exits use article titles without duplicating ownership`, () => {
+  test(`${locale}: onboarding groups tutorials and references existing integration guides`, () => {
     const start = sections.find(section => section.id === 'getting-started')!
+    assert.equal(start.entry, 'getting-started/02-quickstart')
+    assert.deepEqual(start.groups[0].pages.map(page => page.path), [
+      'getting-started/02-quickstart', 'getting-started/01-introduction',
+      'getting-started/07-agent-onboarding',
+      'getting-started/05-cli-setup', 'getting-started/07-options'
+    ])
     const sidebar = documentationSidebars(locale)[`/${locale}/${start.entry}`]
     assert.ok(Array.isArray(sidebar))
     const links = sidebar.flatMap(group => group.items ?? [])
     const owned = data[locale].find(section => section.id === start.id)!.pages
-    for (const page of owned) {
-      assert.equal(links.find(item => item.link === page.href)?.text, page.title)
+    assert.deepEqual(start.groups.map(group => group.pages.length), [5, 1, 5, 4, 3, 6])
+    assert.equal(owned.length, 22)
+    assert.equal(links.length, owned.length + 2)
+    assert.deepEqual(start.groups.map(group => group.zh), ['开始', 'Studio', '功能', '集成', '数据管理', '团队管理'])
+    assert.deepEqual(start.groups[1].pages.map(page => page.path), ['getting-started/23-studio'])
+    assert.deepEqual(start.groups[3].pages.map(page => page.path), [
+      'agent-integrations/01-overview', 'workflows/01-overview',
+      'getting-started/11-vikingbot', 'getting-started/12-gateway'
+    ])
+    for (const [path, title, owner] of [
+      ['agent-integrations/01-overview', locale === 'zh' ? 'Agent 接入' : 'Agent integration', 'agent-integrations'],
+      ['workflows/01-overview', locale === 'zh' ? '应用开发' : 'Application development', 'build']
+    ]) {
+      const item = links.find(item => item.link === `/${locale}/${path}`)!
+      assert.ok(item.text?.startsWith(title))
+      assert.match(item.text!, /ov-sidebar-cross-link/)
+      assert.equal(sectionForPage(`${locale}/${path}.md`)?.id, owner)
     }
-    const exits = start.nextSteps!.flatMap(group => group.pages)
-    assert.ok(exits.length > 0)
-    for (const exit of exits) {
-      const href = `/${locale}/${exit.path}`
-      const article = data[locale].flatMap(section => section.pages).find(page => page.href === href)
-      assert.ok(article, `Exit has no owner: ${href}`)
-      assert.notEqual(sectionForPage(`${locale}/${exit.path}.md`)?.id, start.id)
-      assert.ok(!owned.some(page => page.href === href), `Exit duplicated in discovery: ${href}`)
-      const item = links.find(item => item.link === href)!
-      assert.equal(item.text?.split('<span')[0], article.title)
-      assert.match(item.text!, /class="ov-sidebar-cross-link"/)
-      assert.equal(item.target, undefined)
+    for (const page of owned) {
+      const item = links.find(item => item.link === page.href)!
+      assert.equal(item.text, page.title)
+      assert.ok(page.title.length <= (locale === 'zh' ? 12 : 24), page.title)
+      assert.equal(sectionForPage(`${page.href.slice(1)}.md`)?.id, start.id)
+      assert.doesNotMatch(item.text!, /ov-sidebar-cross-link/)
     }
   })
 

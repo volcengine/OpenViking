@@ -1,0 +1,44 @@
+# UserUsage 我的用量
+
+当前 User 的上下文数量、Token 用量、检索与提交统计。模块自己取数，宿主提供配置、时间范围、要展示的指标、插槽与文案。
+
+组件当前是占位实现：只展示模块名称与占位文案。下面的 props 已定型，接入方可以先完成容器与状态接入；组合视图与 `useUserUsage` 随后补充。
+
+## 基础用法
+
+```tsx file="../../_demos/user-usage-placeholder.tsx" preview
+
+```
+
+## 模块负责什么
+
+- 按给定范围与粒度查询当前 User 的统计。
+- 加载、空态与失败状态。
+
+## 宿主负责什么
+
+- 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
+- 登录、账号作用域与当前 User。
+- 时间范围选择器等控件，通过 `slots.controls` 注入；宿主把结果通过 `startDate`、`endDate` 与 `bucket` 传入。
+
+库 / 空间统计、成员对比与账单费用属于管理后台，不在本模块范围内。
+
+## 属性
+
+模块从子路径和根入口导出 `UserUsageProps`，`UserUsageMetric`、`UserUsageBucket`、`UserUsageLabels` 与 `UserUsageSlots` 只从子路径导出。
+
+| 属性             | 类型                         | 默认值 | 说明                                                                                   |
+| ---------------- | ---------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| `requestOptions` | `OvRequestOptions`           | —      | 请求配置覆盖，逐字段覆盖最近的 Provider。                                              |
+| `startDate`      | `string`                     | —      | 起始日期，格式 `YYYY-MM-DD`（宿主本地时区）。省略时取最近七天。                        |
+| `endDate`        | `string`                     | —      | 结束日期，格式 `YYYY-MM-DD`（宿主本地时区）。省略时取今天。                            |
+| `bucket`         | `'hour' \| 'day' \| 'week'`  | `day`  | 统计的时间粒度。                                                                       |
+| `metrics`        | `readonly UserUsageMetric[]` | —      | 要展示的指标：`contexts`、`tokens`、`retrievals`、`submissions`。省略时四项全展示。    |
+| `slots`          | `UserUsageSlots`             | —      | `controls`、`extra` 与 `emptyState`。                                                  |
+| `labels`         | `UserUsageLabels`            | —      | 可替换文案：`title`、四个指标名称、`empty`、`error`、`retry`。未提供时沿用英文默认值。 |
+| `className`      | `string`                     | —      | 容器附加类名。                                                                         |
+| `style`          | `CSSProperties`              | —      | 容器样式覆盖。                                                                         |
+
+文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
+
+占位组件当前只消费 `className`、`style` 与 `labels.title`。

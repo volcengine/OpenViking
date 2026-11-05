@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.session.retention import UserTurn, build_turns
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils import get_logger
 
@@ -220,11 +222,33 @@ def format_message_for_wm(m: Message) -> str:
     return f"[{m.role}]: {body}"
 
 
+def _message_created_at_date(message: Message) -> Optional[str]:
+    if not message.created_at:
+        return None
+    try:
+        return parse_iso_datetime(str(message.created_at)).date().isoformat()
+    except Exception:
+        return None
+
+
+def _turn_created_at_date(turn: UserTurn) -> Optional[str]:
+    if turn.anchor is not None:
+        anchor_date = _message_created_at_date(turn.anchor)
+        if anchor_date is not None:
+            return anchor_date
+
+    for message in turn.messages:
+        message_date = _message_created_at_date(message)
+        if message_date is not None:
+            return message_date
+    return None
+
+
 def format_messages_for_wm(
     messages: List[Message],
     checkpoint_requests: List["_CheckpointRequest"],
 ) -> str:
-    """Format WM input plus prior cumulative checkpoints using ordinal-only tags."""
+    """Format WM input plus prior cumulative checkpoints using turn timestamps."""
     source_indexes: Dict[str, int] = {}
     for index, request in enumerate(checkpoint_requests):
         for message_id in request.source_message_ids:
@@ -246,17 +270,27 @@ def format_messages_for_wm(
             ]
         )
     open_index: Optional[int] = None
-    for message in messages:
-        index = source_indexes.get(message.id)
-        if index != open_index:
-            if open_index is not None:
-                lines.append("</checkpoint_source>")
-            if index is not None:
-                lines.append(f'<checkpoint_source index="{index}">')
-            open_index = index
-        lines.append(format_message_for_wm(message))
-    if open_index is not None:
-        lines.append("</checkpoint_source>")
+    for turn in build_turns(messages):
+        turn_created_at = _turn_created_at_date(turn)
+        if turn_created_at is None:
+            lines.append("<turn>")
+        else:
+            lines.append(f'<turn created_at="{turn_created_at}">')
+
+        for message in turn.messages:
+            index = source_indexes.get(message.id)
+            if index != open_index:
+                if open_index is not None:
+                    lines.append("</checkpoint_source>")
+                if index is not None:
+                    lines.append(f'<checkpoint_source index="{index}">')
+                open_index = index
+            lines.append(format_message_for_wm(message))
+
+        if open_index is not None:
+            lines.append("</checkpoint_source>")
+            open_index = None
+        lines.append("</turn>")
     return "\n".join(lines)
 
 

@@ -64,6 +64,7 @@ class SemanticMsg:
     _task_work_id: str = ""
     target_uri: str = ""
     lock_handoff: Optional[Dict[str, Any]] = None
+    lock_handoff_retry: int = 0
     is_code_repo: bool = False
     ingest_options: IngestOptions = field(default_factory=IngestOptions)
     coalesce_key: str = ""
@@ -124,6 +125,7 @@ class SemanticMsg:
         plan: SemanticPlan | Dict[str, Any] | None = None,
         queue_enqueued_at: float = 0.0,
         failure_requeue_count: int = 0,
+        lock_handoff_retry: int = 0,
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
@@ -143,6 +145,10 @@ class SemanticMsg:
         self._task_work_id = _task_work_id
         self.target_uri = target_uri
         self.lock_handoff = lock_handoff
+        try:
+            self.lock_handoff_retry = max(0, int(lock_handoff_retry or 0))
+        except (TypeError, ValueError):
+            self.lock_handoff_retry = 0
         self.is_code_repo = is_code_repo
         self.ingest_options = IngestOptions.from_value(ingest_options)
         self.coalesce_key = coalesce_key
@@ -226,6 +232,7 @@ class SemanticMsg:
             _task_work_id=data.get("_task_work_id", ""),
             target_uri=data.get("target_uri", ""),
             lock_handoff=data.get("lock_handoff"),
+            lock_handoff_retry=data.get("lock_handoff_retry", 0),
             is_code_repo=data.get("is_code_repo", False),
             ingest_options=(
                 data.get("ingest_options")

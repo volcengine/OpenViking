@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import uuid4
 
+from openviking.config.generation import get_output_language_override
 from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
@@ -152,9 +153,7 @@ def _memory_type_by_uri(operations: ResolvedOperations) -> dict[str, str]:
     for file_content in getattr(operations, "delete_file_contents", []) or []:
         uri = str(getattr(file_content, "uri", "") or "")
         if uri:
-            types_by_uri[uri] = str(
-                getattr(file_content, "memory_type", "") or "unknown"
-            )
+            types_by_uri[uri] = str(getattr(file_content, "memory_type", "") or "unknown")
     return types_by_uri
 
 
@@ -262,10 +261,12 @@ class SessionCompressorV3:
         streaming_trainer_config: StreamingPolicyTrainerConfig | None = None,
         streaming_memory_updater_config: StreamingMemoryUpdaterConfig | None = None,
         vlm_resolver: VLMResolver | None = None,
+        runtime_config_manager: Any = None,
     ):
         self.vikingdb = vikingdb
         self.skill_processor = skill_processor
         self.vlm_resolver = vlm_resolver
+        self.runtime_config_manager = runtime_config_manager
         self.rollout_analyzer = rollout_analyzer or TrajectoryRolloutAnalyzer(
             viking_fs=get_viking_fs(),
             vikingdb=vikingdb,
@@ -285,11 +286,10 @@ class SessionCompressorV3:
         transaction_handle=None,
         context_provider: Optional[SessionExtractContextProvider] = None,
         vlm_config: VLMHandle | None = None,
+        output_language_override: str | None = None,
     ) -> ExtractLoop:
         if vlm_config is None:
-            raise RuntimeError(
-                "SessionCompressorV3 requires an explicitly resolved VLM config"
-            )
+            raise RuntimeError("SessionCompressorV3 requires an explicitly resolved VLM config")
         vlm = vlm_config
         viking_fs = get_viking_fs()
         if context_provider is None:
@@ -301,6 +301,7 @@ class SessionCompressorV3:
                 viking_fs=viking_fs,
                 transaction_handle=transaction_handle,
                 vlm_config=vlm_config,
+                output_language_override=output_language_override,
             )
         return ExtractLoop(
             vlm=vlm,
@@ -706,10 +707,11 @@ class SessionCompressorV3:
             )
 
         if self.vlm_resolver is None:
-            raise RuntimeError(
-                "SessionCompressorV3 requires a VLM resolver for account-owned work"
-            )
+            raise RuntimeError("SessionCompressorV3 requires a VLM resolver for account-owned work")
         vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
+        output_language_override = await get_output_language_override(
+            self.runtime_config_manager, ctx.account_id
+        )
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
@@ -719,6 +721,7 @@ class SessionCompressorV3:
             transaction_handle=None,
             memory_registry=registry,
             vlm_config=vlm_config,
+            output_language_override=output_language_override,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -760,6 +763,7 @@ class SessionCompressorV3:
             vikingdb=self.vikingdb,
             config=self.streaming_memory_updater_config,
             vlm_resolver=self.vlm_resolver,
+            runtime_config_manager=self.runtime_config_manager,
         )
         update_result = await updater.submit(
             MemoryUpdateRequest(
@@ -922,6 +926,7 @@ class SessionCompressorV3:
                 memory_type=SESSION_SKILL_MEMORY_TYPE,
                 memory_registry=load_skill_extract_registry(),
                 vlm_resolver=self.vlm_resolver,
+                runtime_config_manager=self.runtime_config_manager,
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
@@ -1011,6 +1016,7 @@ class SessionCompressorV3:
                     viking_fs=viking_fs,
                     memory_type="experiences",
                     vlm_resolver=self.vlm_resolver,
+                    runtime_config_manager=self.runtime_config_manager,
                 ),
                 policy_updater=MemoryFilePolicyUpdater(viking_fs=viking_fs, vikingdb=self.vikingdb),
                 context=PipelineContext(

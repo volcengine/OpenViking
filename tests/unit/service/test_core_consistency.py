@@ -9,18 +9,12 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import set_task_tracker
 from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
+from openviking_cli.utils.config.encryption_config import EncryptionConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
-
-
-class _NoopTaskTracker:
-    """Stand-in for the tracker installed during storage initialization."""
-
-    async def close(self) -> None:
-        return None
 
 
 def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
@@ -30,6 +24,8 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
         service_name="test-service",
         default_account="default",
         default_user="default",
+        agent_evolution=AgentEvolutionConfig(),
+        encryption=EncryptionConfig(),
         storage=object(),
         embedding=SimpleNamespace(
             max_concurrent=10,
@@ -39,13 +35,12 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
         vlm=SimpleNamespace(max_concurrent=32),
         parser_api=SimpleNamespace(),
         compile_api=SimpleNamespace(base_url=""),
-        agent_evolution=SimpleNamespace(model_copy=lambda **kwargs: SimpleNamespace()),
         queue_workers=SimpleNamespace(
             external_parse=SimpleNamespace(max_concurrent=9),
             add_resource=SimpleNamespace(max_concurrent=7),
+            reindex=SimpleNamespace(max_concurrent=4),
             session_commit=SimpleNamespace(max_concurrent=5),
             external_task=SimpleNamespace(max_concurrent=6),
-            reindex=SimpleNamespace(max_concurrent=4),
         ),
         git=object(),
     )
@@ -72,7 +67,6 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
     assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
     assert storage_calls[0][1]["max_concurrent_external_task"] == 6
-    assert storage_calls[0][1]["max_concurrent_reindex"] == 4
     assert storage_calls[0][1]["service_name"] == "test-service"
 
 
@@ -128,7 +122,18 @@ async def test_check_consistency_preserves_directory_behavior() -> None:
 
 @pytest.mark.asyncio
 async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> None:
+    from openviking.ttl import wiring
+
     events: list[str] = []
+
+    async def close_ttl():
+        events.append("ttl")
+
+    adapter = SimpleNamespace(aclose=close_ttl)
+    monkeypatch.setattr(wiring, "_adapter", adapter)
+    monkeypatch.setattr(
+        "openviking.service.core.get_task_tracker", lambda: SimpleNamespace(close=AsyncMock())
+    )
 
     class ResourceService:
         async def close_background_tasks(self) -> None:
@@ -136,6 +141,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
 
     class QueueManager:
         def stop(self) -> None:
+            assert wiring.get_ttl_adapter() is adapter
             events.append("queue_manager")
 
     class RagfsClient:
@@ -145,10 +151,17 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service = OpenVikingService.__new__(OpenVikingService)
     service._resource_service = ResourceService()
     service._config = SimpleNamespace(vlm=VLMConfig())
-    service._runtime_config_manager = None
-    service._watch_scheduler = None
-    service._session_auto_commit_scheduler = None
     service._compile_scheduler = None
+    service._ttl_adapter = adapter
+    service._expiry_runtime = SimpleNamespace(
+        stop_roles=AsyncMock(side_effect=lambda **_: events.append("expiry_roles")),
+        close=AsyncMock(side_effect=lambda: events.append("expiry_storage")),
+    )
+    service._session_service = SimpleNamespace(set_session_expiry_adapter=lambda _: None)
+    service._runtime_config_manager = None
+    service._watch_runtime = None
+    service._watch_manager = None
+    service._session_auto_commit_scheduler = None
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None
     service._agfs_client = RagfsClient()
@@ -165,11 +178,11 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
         lambda self: events.append("data_dir_lock"),
     )
 
-    set_task_tracker(_NoopTaskTracker())
-    try:
-        await service.close()
-    finally:
-        set_task_tracker(None)
+    await service.close()
 
     assert events.index("queue_manager") < events.index("ragfs_binding")
+    assert wiring.get_ttl_adapter() is None
+    assert events.index("expiry_roles") < events.index("queue_manager")
+    assert events.index("queue_manager") < events.index("ttl") < events.index("expiry_storage")
+    assert events.index("expiry_storage") < events.index("ragfs_binding")
     assert events[-1] == "data_dir_lock"

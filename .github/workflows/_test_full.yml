@@ -35,18 +35,6 @@ jobs:
         os: ${{ fromJson(inputs.os_json || '["ubuntu-24.04", "macos-14", "windows-latest"]') }}
         python-version: ${{ fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]') }}
 
-    services:
-      redis:
-        # Docker services are available on the Ubuntu runners in this matrix.
-        image: ${{ startsWith(matrix.os, 'ubuntu-') && 'redis:7.2.7' || '' }}
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-
     steps:
     - uses: actions/checkout@v6
       with:
@@ -82,17 +70,11 @@ jobs:
       if: runner.os == 'Windows'
       run: echo "C:\mingw64\bin" >> $env:GITHUB_PATH
 
-    - name: Install Python dependencies
-      run: uv sync --frozen --extra test --extra gemini
+    - name: Prepare native runtime
+      uses: ./.github/actions/native-runtime
 
-    - name: Install build dependencies
-      run: uv pip install setuptools setuptools_scm cmake wheel
-
-    - name: Check ragfs-python workspace build
-      run: cargo check --locked -p ragfs-python
-
-    - name: Build C++ extensions
-      run: uv run python setup.py build_ext --inplace
+    - name: Install optional Gemini test dependencies
+      run: uv sync --frozen --extra test --extra gemini --no-install-project --inexact
 
     - name: Create isolated test configuration
       # Exercise config-dependent defaults without user files or model credentials.
@@ -113,52 +95,49 @@ jobs:
             env_file.write(f"OPENVIKING_CONFIG_FILE={config_path}\n")
 
     - name: Run Python unit tests
-      run: uv run pytest -q -o addopts='' tests/unit
+      run: uv run --no-sync pytest -q -o addopts='' tests/unit
 
     - name: Run local filesystem binding regressions
-      if: runner.os == 'Linux'
+      # Broader regressions run on the first selected Python; unit tests cover every version.
+      if: runner.os == 'Linux' && matrix.python-version == fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]')[0]
       run: |
-        uv run pytest -q -o addopts='' \
+        uv run --no-sync pytest -q -o addopts='' \
           tests/agfs/test_fs_binding.py \
           tests/agfs/test_git_binding.py \
           tests/agfs/test_async_client.py \
           tests/pyagfs
 
     - name: Run local Python subsystem regressions
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.python-version == fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]')[0]
       # These suites use mocks or local stores. The HTTP snapshot fixture starts
       # a full service from the user's ov.conf, so it belongs to integration CI.
       run: |
-        uv run pytest -q -o addopts='' -m 'not integration and not cli_remote' \
+        uv run --no-sync pytest -q -o addopts='' -m 'not integration and not cli_remote' \
           tests/client tests/config tests/connector tests/ingest tests/models \
           tests/observability tests/parse tests/prompts tests/retrieve \
           tests/storage tests/telemetry tests/transaction tests/vectordb \
-          --ignore=tests/client/test_git_versioning_http.py
-
-    - name: Run gateway regressions with Redis
-      if: runner.os == 'Linux'
-      env:
-        OV_TEST_REDIS: redis://127.0.0.1:6379
-      # Gateway modules import their own conftest; run them in a separate process.
-      run: |
-        uv run python -c "import os, redis; assert redis.Redis.from_url(os.environ['OV_TEST_REDIS']).ping()"
-        uv run pytest -q -o addopts='' tests/gateway
+          --ignore=tests/client/test_git_versioning_http.py \
+          --ignore=tests/vectordb/test_cuvs_config.py \
+          --ignore=tests/vectordb/test_cuvs_index.py \
+          --ignore=tests/vectordb/test_cuvs_collection.py \
+          --ignore=tests/vectordb/test_str_to_uint64.py
+      # cuVS regressions run in api_test.yml; Gateway has gateway.yml.
 
     - name: Run metrics regressions
-      if: runner.os == 'Linux'
-      run: uv run pytest -q -o addopts='' tests/metrics
+      if: runner.os == 'Linux' && matrix.python-version == fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]')[0]
+      run: uv run --no-sync pytest -q -o addopts='' tests/metrics
 
     - name: Run Python binding Rust tests
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.python-version == fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]')[0]
       env:
         PYTHONPATH: .
       # Test executables link to Python; extension-module disables that linking.
       run: |
-        export PYO3_PYTHON="$(uv run python -c 'import sys; print(sys.executable)')"
-        uv run cargo test --locked -p ragfs-python --no-default-features
+        export PYO3_PYTHON="$(uv run --no-sync python -c 'import sys; print(sys.executable)')"
+        uv run --no-sync cargo test --locked -p ragfs-python --no-default-features
 
     - name: Run native C++ engine tests
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.python-version == fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]')[0]
       run: |
         cmake -S tests/engine -B tests/engine/build
         cmake --build tests/engine/build --parallel 2

@@ -15,17 +15,21 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | ROOT | 系统管理员，拥有全部权限 |
 | ADMIN | 工作区管理员，管理本 account 内的用户 |
 | USER | 普通用户 |
+| GLOBAL | Account 范围的专用数据面身份，通常由 agent 使用；只能由 ROOT 创建、销毁和修改，其他角色只能感知其存在 |
 
-| 操作 | ROOT | ADMIN | USER |
-|------|------|-------|------|
-| 创建/删除工作区 | Y | N | N |
-| 列出工作区 | Y | N | N |
-| 列出用户 | Y | Y（本 account） | Y（本 account） |
-| 注册/移除用户 | Y | Y（本 account） | N |
-| 管理用户组和成员 | Y | Y（本 account） | N |
-| 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
-| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） |
-| 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N |
+| 操作 | ROOT | ADMIN | USER | GLOBAL |
+|------|------|-------|------|--------|
+| 创建/删除工作区 | Y | N | N | N |
+| 列出工作区 | Y | N | N | N |
+| 列出用户 | Y | Y（本 account） | Y（本 account） | N |
+| 注册/移除用户 | Y | Y（本 account） | N | N |
+| 创建 GLOBAL 身份 | Y | N | N | N |
+| 查看 GLOBAL 身份存在 | Y | Y（本 account） | Y（本 account） | Y（自身） |
+| 销毁/轮换 GLOBAL、变更其用户组 | Y | N | N | N |
+| 将现有角色与 GLOBAL 相互转换 | N | N | N | N |
+| 管理用户组和成员 | Y | Y（本 account） | N | N |
+| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） | N |
+| 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N | N |
 
 ## CLI `--sudo` 选项
 
@@ -48,8 +52,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 - `ov --sudo admin` - 账户和用户管理
 - `ov --sudo system` - 系统工具命令
 - `ov --sudo reindex` - 重建索引
-- `ov --sudo admin migrate` - 旧 Session 迁移和清理
-- `ov --sudo task status/list` - 查询 root/system 后台任务，例如迁移任务
+- `ov --sudo task status/list` - 查询 root/system 后台任务，例如账号删除任务
 
 ### 使用限制
 
@@ -68,8 +71,8 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个已有用户）原子地添加成员；已是成员的用户会跳过，结果为 `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个用户 ID）原子地移除成员；至少移除一个成员关系时返回 `removed=true`，否则返回 `removed=false` |
 
 ```bash
 ov --sudo admin create-group acme engineering
@@ -78,6 +81,15 @@ ov acl grant viking://resources/project-a \
   --principal group:engineering --level read
 ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
+```
+
+通过 HTTP 移除成员时，在请求体中传入用户 ID：
+
+```bash
+curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineering/members \
+  -H "X-API-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids": ["alice", "bob"]}'
 ```
 
 要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering`。
@@ -443,12 +455,13 @@ Content-Type: application/json
 `null` 表示删除当前层配置，具体值表示更新。
 
 当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
-`feishu`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
+`output_language_override`、`memory`、`feishu`、`parser_api`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
 这些配置均可动态修改。Account 的
-`vlm`、`query_planner`、`embedding` 和 `vectordb` 仅 ROOT 可读写，ADMIN 的读取
+`vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 仅 ROOT 可读写，ADMIN 的读取
 响应过滤这些配置，写入请求在读取配置前拒绝。每段已配置的 `vlm` 或
 `query_planner` 都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选。
-`memory` 不在当前 API 范围内。
+Account `memory` 仅开放 `extraction_enabled`。
+Account `parser_api` 必须包含非空白 `api_key`；ADMIN 修改该段（包括 `null`）均被拒绝。
 `vectordb` 只能随 Account 创建时的 `settings` 提交，创建后包括 ROOT 在内均不可
 新增、修改或重置。Cluster 的 `embedding`、`vlm`、`query_planner`、
 `memory`、`feishu`、存储、解析器和检索配置没有声明为运行时字段，因此仍然只能
@@ -627,8 +640,8 @@ Account 配置通过创建接口的 `settings` 初始化，并通过 configurati
 | `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 该 Account 显式持久化的 `settings` |
 | `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 合并后的显式 `settings` |
 
-`vlm`、`query_planner`、`embedding` 和 `vectordb` 是敏感基础设施配置：只有 ROOT
-可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这四段；若
+`vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 是敏感基础设施配置：只有 ROOT
+可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这些段；若
 PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 也不能管理
 其他 Account。所有结构或业务校验错误返回 `400 INVALID_ARGUMENT`，不存在的 Account
 返回 `404 NOT_FOUND`。
@@ -638,14 +651,31 @@ PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 
 持久化任何部分更新。创建请求会在创建账号目录前校验 `settings`；后续 PATCH 则先合并
 当前 Account 显式值，再校验完整有效配置。
 
+**Account 解析凭证**
+
+`settings.parser_api` 可动态修改，仅包含必填且非空白的 `api_key`。
+只有 ROOT 可以读取、修改或重置：
+
+```json
+{"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
+```
+
+外部解析的上传、提交、轮询和恢复使用任务所属 Account 的 Key，运行参数仍由
+Cluster `parser_api` 维护。Account 未配置该段时保留旧 Cluster Key 兼容路径。
+队列保存 owner 和远端 ID，不保存凭证。一次执行保持已取得的 Key，下次执行或恢复
+读取最新 Key。轮换必须保持同一远端身份并可访问已有 ID；远端失败不触发凭证回退
+或重新提交。配置沿用现有配置源，开启 AGFS 文件加密时加密存储；这不加密 `ov.conf`。
+
 **其他 Account 配置段**
 
-除模型与向量配置外，以下 `settings` object 均为动态字段，ROOT 和目标 Account 的 ADMIN
+除模型、向量和解析配置外，以下 `settings` object 均为动态字段，ROOT 和目标 Account 的 ADMIN
 都可读写：
 
 | 路径 | 类型和约束 | 含义 |
 | --- | --- | --- |
 | `acl.enabled` | boolean，默认 `false` | 是否启用该 Account 的 ACL |
+| `output_language_override` | string，可选 | 生成内容的语言；缺省或 `null` 使用 Cluster，`""` 启用自动判断 |
+| `memory.extraction_enabled` | boolean，section 内默认 `true` | SessionCommit 长期记忆抽取开关；`memory` 整段缺省或 `null` 使用 Cluster，显式空 section 使用 `true` |
 | `agent_evolution.enabled` | boolean，默认 `false` | 是否启用 Agent Evolution；Account 未设置整个 section 时，为兼容旧行为使用完整 Cluster `agent_evolution` section |
 | `github.token` | string，默认空字符串 | GitHub 访问 token；空字符串表示该 Account 未提供 token |
 | `feishu.app_id` | string，可选 | Account Feishu App ID |
@@ -781,7 +811,7 @@ credential 合并；不能用 `extra_request_body` 设置 `stream`，因为 Open
 | 路径 | 生命周期 | 类型和约束 | 含义 |
 | --- | --- | --- | --- |
 | `embedding.dense` / `sparse` / `hybrid` | mode 存在性创建期 | object/null | 三种模型输出模式；创建后不能新增、删除或切换 |
-| `embedding.max_concurrent` | 动态 | integer，`>= 1` | 该 Account 的 provider 调用并发上限 |
+| `embedding.max_concurrent` | 动态 | integer，`>= 1` | 该 Account 的入库文档 Embedding 调用并发上限；检索查询的 Embedding 请求不受此限制 |
 | `embedding.max_retries` | 动态 | integer，`>= 0` | 瞬时 provider 错误重试次数 |
 | `embedding.circuit_breaker.failure_threshold` | 动态 | integer，`>= 1` | 熔断前的连续失败次数 |
 | `embedding.circuit_breaker.reset_timeout` | 动态 | number，`> 0` | 熔断恢复基础等待秒数 |
@@ -922,7 +952,7 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 
 **代码入口：**
 - `openviking/server/routers/admin.py:create_account` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.create_account` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.create_account` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_create_account` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1109,7 +1139,7 @@ ov --sudo admin create-account acme-private --admin alice \
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.get_accounts` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_accounts` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_accounts` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1320,7 +1350,7 @@ ov --sudo task status <task_id>
 
 **代码入口：**
 - `openviking/server/routers/admin.py:register_user` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.register_user` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.register_user` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_register_user` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1331,7 +1361,7 @@ ov --sudo task status <task_id>
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
-| role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`。ROOT 身份只来自 `server.root_api_key`。 |
+| role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`；只有 `ROOT` 可以注册 `"global"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 | user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
 
@@ -1339,6 +1369,7 @@ ov --sudo task status <task_id>
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
 - ADMIN 只能在自己所属的 account 中注册用户
+- `"global"` 仅用于创建。只有 ROOT 可以创建、销毁、轮换或修改 GLOBAL 身份的用户组；任何身份（包括 ROOT）都不能将现有角色与 GLOBAL 相互转换，需要销毁后重建。ADMIN 和 USER 可以在用户列表中感知 GLOBAL 身份的存在，但不会获得其凭据或管理入口。
 - 无法通过用户注册接口直接创建 `"root"` 角色
 - `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
 - `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
@@ -1454,7 +1485,7 @@ ov admin register-user acme bob-private --role user \
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_users` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.get_users` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_users` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_users` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1475,7 +1506,7 @@ ov admin register-user acme bob-private --role user \
 **说明：**
 - 结果按创建顺序返回
 - ADMIN 和 USER 只能列出自己所属 account 中的用户。
-- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。ADMIN 获取自身明文及他人的打码 `key_prefix`。使用个人 API Key 认证的 USER 仅获取自身已存储密钥，其他行不包含 `api_key` 或 `key_prefix`。OAuth 等其他认证方式不授予 USER 查看已存储凭据的权限。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份；不匹配的 key 对 ADMIN 打码，对 USER 隐藏。
+- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。ADMIN 获取自身明文及他人的打码 `key_prefix`；GLOBAL 身份的凭据只由 ROOT 可见，ADMIN 只能看到 `api_key_available`，不返回 `api_key` 或 `key_prefix`。使用个人 API Key 认证的 USER 仅获取自身已存储密钥，其他行不包含 `api_key` 或 `key_prefix`。OAuth 等其他认证方式不授予 USER 查看已存储凭据的权限。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份；不匹配的 key 对 ADMIN 打码，对 USER 隐藏。
 - ADMIN 打码保留密钥前两段和 secret 的最后 4 个字符，secret 中其余每个字符均替换为 `*`；secret 不超过 4 个字符或密钥格式无效时完全隐藏。仅存哈希的凭据无法恢复明文，其已有前缀仅 ROOT/ADMIN 及凭据所属 USER 可见。
 - 打码在服务端执行，同时覆盖 HTTP 和 MCP 的 `list_users(include_credentials=true)`，因此 CLI/SDK 的 JSON 输出也受保护。客户端只能将 `key_prefix` 用于展示，切换身份时需要另行提供可用密钥。
 - `ov admin list-users` 默认还会在 CLI 侧对明文 `api_key` 行使用相同格式打码，table 和 JSON 输出保持一致，并在 stderr 打印提示。传入 `--reveal-api-keys` 可输出明文：ROOT 会显示全部密钥，ADMIN/USER 仍只能看到自身密钥；其他行对 ADMIN 打码，对 USER 完全隐藏密钥和前缀。该 flag 只影响 CLI 渲染，不改变服务端响应。table 输出会把服务端的 `api_key`（明文或 CLI 打码值）与 `key_prefix` 合并为同一个 `api_key` 列；JSON 输出保留服务端的字段名。
@@ -1685,7 +1716,7 @@ ov --sudo admin remove-user acme bob
 
 **代码入口：**
 - `openviking/server/routers/admin.py:set_user_role` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.set_role` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.set_role` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_set_role` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1785,7 +1816,7 @@ ov --sudo admin set-role acme bob user
 
 **代码入口：**
 - `openviking/server/routers/admin.py:regenerate_key` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.regenerate_key` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.regenerate_key` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1896,113 +1927,22 @@ CLI 在请求轮换前检查能否准备替换文件。如果服务端已换钥�
 
 ---
 
-### migrate_legacy_data
+### 预留迁移入口
 
-#### 1. API 实现介绍
+`POST /api/v1/admin/migrate` 为后续迁移需求保留，仅 ROOT 可调用。当前返回
+`400 Bad Request`，错误码为 `INVALID_ARGUMENT`，错误消息为
+`Data migration is not currently supported.`（当前不支持数据迁移）。
 
-将旧 `viking://session/...` 数据迁移到 `viking://user/<user_id>/sessions/...`，或在确认迁移结果后清理旧 Session 目录。该接口仅 ROOT 可调用，并以后台 task 执行。`agent` 是账号内公共目录，不参与迁移或 cleanup。
-
-**处理流程：**
-1. 验证请求者具有 ROOT 权限
-2. `action=migrate` 时执行 preflight，检查 account registry、session owner 等前置条件
-3. 创建 root 级后台 task
-4. 迁移时复制 Session 文件；cleanup 时先删除旧 Session 向量记录，再删除旧 Session AGFS 目录
-
-迁移保留目标路径中已有的文件。cleanup 不删除 `agent` 公共目录或已迁移的用户数据。
-
-**代码入口：**
-- `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP 路由
-- `openviking/service/legacy_migration.py:LegacyDataMigration` - 迁移实现
-
-#### 2. 接口和参数说明
-
-**HTTP API**
-
-```
-POST /api/v1/admin/migrate
-```
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| action | str | 否 | migrate | `migrate` 执行迁移；`cleanup` 清理旧 namespace |
-
-**迁移结果字段**
-
-| 字段 | 说明 |
-|------|------|
-| migrated.files / migrated.directories | 复制的文件和目录数量 |
-| migrated.operations | Session 迁移操作数量（`sessions`） |
-| skipped / created_users | 跳过的文件、自动创建的用户 |
-
-**Cleanup 结果字段**
-
-| 字段 | 说明 |
-|------|------|
-| cleanup.directories | 删除的 legacy 目录数量 |
-| cleanup.vector_records | 删除的旧向量记录数量 |
-| cleanup.targets | 已清理的 legacy scope |
-| skipped / warnings | 跳过项和告警 |
-
-#### 3. 使用示例
-
-**HTTP API**
+当前没有支持的迁移参数。传入原来的 `{"action":"migrate"}` 或
+`{"action":"cleanup"}` 也返回上述错误，不创建任务，不读写迁移数据。
+未认证请求返回 `401`；已认证的 ADMIN 或 USER 请求返回 `403`。
 
 ```bash
-# 执行迁移
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "migrate"}'
-
-# 迁移任务完成并核对目标数据后，再清理旧 namespace
-curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "cleanup"}'
+  -H "X-API-Key: <root-key>"
 ```
 
-**Python SDK**
-
-```python
-print(client.admin_migrate(cleanup=False))
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.adminMigrate(false));
-```
-
-**Go SDK**
-
-```go
-result, err := client.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
-    Cleanup: false,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["task_id"])
-```
-
-**CLI**
-
-```bash
-ov --sudo admin migrate --output json
-# 先用 ov --sudo task status <task_id> 查询返回的任务，再核对迁移结果。
-ov --sudo admin migrate --cleanup --output json
-```
-
-**CLI 响应示例（默认 compact 输出）**
-
-```json
-{
-  "ok": true,
-  "result": {"task_id": "6de05fc3-0334-40d6-ba9b-dd317eb4d351"}
-}
-```
+旧 `ov admin migrate` 命令和对应 SDK 方法已移除。
 
 ---
 

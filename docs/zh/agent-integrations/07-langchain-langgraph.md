@@ -245,7 +245,13 @@ store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
 store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该条目
+store.close()
 ```
+
+同步使用后调用 `close()`，异步使用后调用 `await store.aclose()`；也可使用
+`with OpenVikingStore(...) as store` 或 `async with` 自动清理。
+清理仅释放 Store 内部创建的客户端，注入的客户端仍由调用方管理。
+关闭未使用的 Store 不会创建客户端，关闭后不可复用。
 
 按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
 删除不存在的键不会产生任何影响。
@@ -274,6 +280,15 @@ middleware = OpenVikingContextMiddleware(
     capture_on_after_agent=True,
 )
 ```
+
+中间件会将召回上下文添加到当前用户消息的副本中，再发送给模型；系统指令和已保存的
+对话消息保持不变。同一轮工具调用复用召回结果，新的用户消息会重新召回。
+
+使用 LangGraph checkpointer 时，中间件会在内部图状态中保存完整召回文本，供后续轮次或
+重启后随原消息重放，从而保留一致的提示词前缀，便于模型服务复用缓存。实际缓存命中取决于
+模型服务。每个 session/peer 范围最多保留 500 条记录，并遵循应用的 checkpoint 保留策略。
+尚未写入 OpenViking 的结构化上下文引用也会保存到 checkpoint，直到对应的助手消息被确认写入，
+因此工具调用中断后恢复时仍能保留召回来源。
 
 ### Session recorder
 

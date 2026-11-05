@@ -24,7 +24,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 
 ### Agent-callable tools
 
-"Server MCP tools" means whatever the server's `tools/list` returns: 21 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
+"Server MCP tools" means whatever the server's `tools/list` returns: 22 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
 
 | Integration | How it connects | Tools the agent can call |
 |---|---|---|
@@ -38,8 +38,8 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [OpenCode](#opencode) | npm plugin that adds an MCP entry | Server MCP tools, named `openviking_<tool>` |
 | [DSH](#dsh) | In-process Cordis plugin plus an MCP proxy | Server MCP tools, named `mcp__openviking__<tool>` |
 | [pi](#pi) | Native extension with a built-in MCP client | Server MCP tools, registered as `openviking_<tool>` after the MCP handshake succeeds |
-| [OpenClaw](#openclaw) | Context-engine plugin | 15 native tools, 14 enabled by default |
-| [Hermes](#hermes) | Hermes memory provider | 6 native `viking_*` tools |
+| [OpenClaw](#openclaw) | Context-engine plugin | 16 native tools, 15 enabled by default |
+| [Hermes](#hermes) | Hermes memory provider | 7 native `viking_*` tools in the updated external plugin; 6 in older bundled providers |
 | [MCP clients, Agent Plugins](#other-integrations) | MCP only | Server MCP tools |
 | [ov CLI](#ov-cli) | Command-line client | Every operation as an explicit command; no agent involved |
 
@@ -53,8 +53,8 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | Cursor | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | No | Commits, then the host summarizes |
 | TRAE, TRAE CN | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | ZCode | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
-| Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | Every 8 captured messages | Only when `SessionEnd` captures new messages | Commits newly captured messages |
-| CodeBuddy Code | Yes, session-aware, in the interactive TUI only | Profile, memory index, skills | Every 8 captured messages | Only when `SessionEnd` captures new messages, in the interactive TUI only | Commits newly captured messages |
+| Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | Every 8 captured messages | Yes | Commits uncommitted messages |
+| CodeBuddy Code | Yes, session-aware, in the interactive TUI only | Profile, memory index, skills | Every 8 captured messages | Yes, in the interactive TUI only | Commits uncommitted messages |
 | OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 20,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
 | DSH | Yes, session-aware | Profile, memory index, skills, once per session | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
 | pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 20,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
@@ -84,7 +84,7 @@ Every MCP-based integration exposes the same server-defined tools and keeps no c
 
 | Group | Tools |
 |---|---|
-| Search and browse | `find`, `search`, `read`, `download`, `list`, `tree`, `grep`, `glob` |
+| Search and browse | `find`, `search`, `rule_search`, `read`, `download`, `list`, `tree`, `grep`, `glob` |
 | Write | `remember`, `write`, `edit`, `add_resource`, `add_skill` |
 | Delete | `forget` |
 | Watched resources | `list_watches`, `cancel_watch` (not yet available on the commercial edition) |
@@ -108,6 +108,35 @@ Host differences:
 - **pi** registers the tools only when the session is not bypassed, the health check passes, the OpenViking session exists, and the `/mcp` handshake returns a tool list. If the handshake fails, that session has no OpenViking tools, but recall, sync, and takeover continue, and a later turn retries the handshake. `mcpEnabled: false` turns the bridge off. A root API key is refused on `/mcp` with 403, so a credential chain that ends at `ov.conf`'s `server.root_api_key` produces a session without tools.
 - **Codex** passes its MCP server only the environment variables listed in `.mcp.json` `env_vars`.
 
+### Rule search across agents
+
+Rule search is a read-only, model-callable check before an action or response subject to
+constraints. Pass `task_context` with the user goal, planned action, and relevant facts;
+`rule_probability_threshold` defaults to `0.65`. Results preserve complete Rule blocks.
+Evaluate each Rule's `applies_when`, `exception`, and `content` and comply with every
+applicable Rule. A failed or unavailable check is not an empty set of Rules.
+
+| Integration | Registered tool |
+|---|---|
+| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
+| DSH / Desktop | `mcp__openviking__rule_search` |
+| OpenCode, pi, VikingBot | `openviking_rule_search` |
+| VikingBot through MCP | `mcp_<server_name>_rule_search` |
+| Microsoft Agent Framework through MCP | Dynamically discovered `rule_search`, with an optional configured prefix |
+| OpenClaw, Open WebUI | `ov_rule_search` |
+| Hermes external plugin, LangChain / LangGraph | `viking_rule_search` |
+| Magpie | `magpie-plugin_rule_search` (source installs use their folder prefix) |
+
+Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients.
+Native REST adapters require the updated plugin. The shared `openviking-rule-search`
+skill ships with Claude Code, Codex/TraeCode CLI, Cursor, CodeBuddy, OpenCode, DSH,
+pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
+Keep existing MCP opt-in and tool allowlist settings enabled. This adds a query entrypoint;
+it does not install an automatic per-turn check or enforcement hook.
+
+Hermes catalog installations are pinned by the Hermes catalog and need its pin updated
+to receive the new plugin; older bundled providers keep their original tools.
+
 ### OpenClaw tools
 
 OpenClaw registers its own tools instead of passing MCP tools through.
@@ -115,6 +144,7 @@ OpenClaw registers its own tools instead of passing MCP tools through.
 | Group | Tools | Notes |
 |---|---|---|
 | Memory | `memory_recall`, `memory_store`, `memory_forget` | `memory_recall` searches memory; `memory_store` commits through a temporary session |
+| Rules | `ov_rule_search` | Complete applicable constraints; enabled by default, selectable with the `rules` group |
 | Resources and skills | `ov_search`, `ov_read`, `ov_multi_read`, `ov_list`, `add_skill`, `add_resource` | `ov_search` covers resources and the user's skills by default. `add_resource` is off by default and also needs `enableAddResourceTool` |
 | Session archives | `ov_archive_search`, `ov_archive_expand` | Search and expand archived history |
 | Large tool output | `openviking_tool_result_read`, `openviking_tool_result_search`, `openviking_tool_result_list` | Read tool output the server stored separately |
@@ -122,7 +152,7 @@ OpenClaw registers its own tools instead of passing MCP tools through.
 
 ### Hermes tools
 
-Hermes has six tools: `viking_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`. There is no skill tool. `viking_remember` submits a fact through its own session and returns before extraction finishes; extraction may add, merge, or skip the fact. See [Hermes](#hermes) for the differences between the bundled provider and the external plugin.
+The updated Hermes external plugin has seven tools: `viking_search`, `viking_rule_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`. There is no skill installation tool. `viking_remember` submits a fact through its own session and returns before extraction finishes; extraction may add, merge, or skip the fact. Older bundled providers have the original six tools. See [Hermes](#hermes) for distribution differences.
 
 <a id="_3-5-type-boundaries-for-writes-and-deletes"></a><a id="_3-5-1-write-boundary"></a><a id="_3-5-2-delete-boundary"></a>
 
@@ -200,7 +230,7 @@ The table shows the default path. Turning on [recall digests](#recall-digest) ch
 
 ### Session-start context
 
-Integrations that use the shared plugin code inject one `<openviking-context>` block at session start. It holds the user profile (`viking://user/<space>/memories/profile.md`), an index of the `preferences/` and `entities/` memories, and an `<available-skills>` catalog:
+Integrations that use the shared plugin code inject one `<openviking-context>` block at session start. It holds the user profile (`viking://user/<space>/memories/profile.md`), an index of the `preferences/` and `entities/` memories, and an `<available-skills>` catalog. When the session has an actor peer, the same files under `viking://user/<space>/peers/<peer>/memories/` are added: the profile, preferences, and entities have no message range, so extraction writes the user's own facts to the user root even in a peer session. The user root comes first; the peer profile is a second `<user-profile>` element without the lines it shares with the user profile, and both roots share one budget:
 
 ```text
 <openviking-context source="startup">
@@ -233,7 +263,7 @@ When each integration injects it:
 
 Budgets and limits:
 
-- `profileTokenBudget` (default 10,000 tokens) covers the profile and the memory index. The profile gets half. An oversized profile keeps its first 8 lines and its end; an oversized listing ends with `... +N more`. Token estimates count CJK characters as 1.5 tokens and other text as four characters per token.
+- `profileTokenBudget` (default 10,000 tokens) covers the profiles and the memory index. The profiles get half: the user profile first, the peer profile what is left, or a one-line pointer to its URI when less than 200 tokens remain. The two roots split the index budget. An oversized profile keeps its first 8 lines and its end; an oversized listing ends with `... +N more`. Token estimates count CJK characters as 1.5 tokens and other text as four characters per token.
 - `skillCatalogTokenBudget` (default 1,200 tokens, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`) is a separate budget for the skill catalog. `skillCatalog` (`OPENVIKING_SKILL_CATALOG`) or a budget of 0 turns the catalog off.
 - The catalog comes from one `GET /api/v1/skills` request. The user's own skills come first, and an account skill with the same name as a user skill is left out. Each description is cut to about 40 tokens. If descriptions do not fit, the catalog lists names only; if names do not fit, it ends with `... +N more`, or shrinks to a one-line count. Servers without that endpoint get no catalog.
 - `sessionStartMaxBytes` caps the whole block in UTF-8 bytes: 9,500 for Claude Code and Codex, whose hosts move hook output above about 10,000 characters into a file and show only a preview; 20,000 for ZCode, which drops output above 32 KB; no cap elsewhere. Above the cap, the memory index is dropped first, then the skill catalog.
@@ -322,8 +352,8 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` always commits |
 | TRAE, TRAE CN | Every `Stop` that captured content | None | No pre-compaction event |
 | ZCode | Every `Stop`; turns a missed `Stop` skipped are caught up from the rollout file at the next `Stop` | None | No pre-compaction event |
-| Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit when they capture new messages | `PreCompact` commits when it captures new messages |
-| CodeBuddy Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` (interactive TUI only) commits when it captures new messages; `SessionStart` replays queued writes | `PreCompact` commits when it captures new messages |
+| Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent | `PreCompact` commits everything not yet committed |
+| CodeBuddy Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` (interactive TUI only) commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
 | OpenCode | v1 `session.idle`, v2 end of execution: at 20,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
 | DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check |
 | pi, takeover on (default) | Locally estimated 30,000 tokens with more than 3 user turns | `/viking commit` | `session_before_compact` |
@@ -346,8 +376,8 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Cursor | No | No | No | No | No | Closing or switching a chat fires no event. `sessionEnd` fires only on window close, after the host has already stopped running hook commands. Messages below the 8-message threshold wait for later messages in the same session |
 | TRAE, TRAE CN | No | No | No | No | No | Every `Stop` already committed, so at most the turn in progress is lost |
 | ZCode | No | Conditional | No | No | No | Ctrl+C after that turn's `Stop` fired lets the detached worker finish. Every `Stop` commits, and missed turns are caught up at the next `Stop` |
-| Kimi Code | Conditional | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit only when they capture new messages; a tail already captured by `Stop` waits for the next commit |
-| CodeBuddy Code | Conditional | No | No | No | No | `SessionEnd` fires only in the interactive TUI and commits only when it captures new messages, so a headless run relies on the threshold or `/compact`. The capture runs in a detached worker that the hook's own timeout does not reach |
+| Kimi Code | Commits | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent. `Interrupt` shares a 2-second request budget between capture and commit, so a slow capture leaves the commit to the next commit of the same session |
+| CodeBuddy Code | Conditional | No | No | No | No | `SessionEnd` fires only in the interactive TUI, where it commits everything not yet committed, including messages `Stop` already sent; a headless run relies on the threshold or `/compact`. The capture runs in a detached worker that the hook's own timeout does not reach |
 | OpenCode | Conditional | Conditional | Conditional | Conditional | No | v1 1.15.11+ `dispose` and v2 cleanup commit every session, but host cleanup time is limited, so slow requests or many sessions can be cut off. v2 cleanup also runs after 60 minutes idle and on plugin hot reload |
 | DSH | Commits | Commits | Commits | No | No | Teardown gives each session one 3-second commit, queued behind any slow write, inside a 5-second process grace period. A second Ctrl+C force-quits without it. Closing a browser tab in the web form does not tear down |
 | pi, takeover on | No | No | No | No | No | `session_shutdown` saves takeover state but does not commit. The next run that reaches the threshold, or `/viking commit` |
@@ -401,9 +431,9 @@ When the host shortens its context, most integrations make sure the dropped mess
 | Claude Code | Host summarizes | `PreCompact` commits synchronously; this is the one write that never runs in the background, because the host rewrites the transcript right after | `SessionStart` with `source="compact"` injects the archive overview and up to 5 summaries |
 | Codex, TraeCode CLI 2.0 | Host summarizes | `PreCompact` catches up uncaptured turns, commits everything, and starts a new OpenViking session. If the catch-up is incomplete, it does not commit and retries later | The archive summary is injected on resume |
 | Cursor | Host summarizes | `preCompact` commits | Nothing |
-| CodeBuddy Code | Host summarizes | `PreCompact` commits newly captured messages | Nothing |
+| CodeBuddy Code | Host summarizes | `PreCompact` commits | Nothing |
 | TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
-| Kimi Code | Host summarizes | `PreCompact` commits newly captured messages | Nothing |
+| Kimi Code | Host summarizes | `PreCompact` commits | Nothing |
 | OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended` |
 | DSH | Host summarizes | `compaction/start` commits regardless of the token threshold. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | Nothing |
 | pi | Takeover, on by default | Commits and waits for the archive overview | The overview replaces pi's summary; on failure pi compacts as usual |
@@ -548,15 +578,15 @@ Settings that apply only to some integrations:
 
 | Integration | Status line | Commands | Skills shipped | Setup wizard |
 |---|---|---|---|---|
-| Claude Code | Yes | `/openviking-memory:ov` shows server status, identity, and where injected context came from | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `ov-memory-doctor` | Yes |
-| Codex, TraeCode CLI 2.0 | No | None | Same four as Claude Code | Yes |
-| Cursor | No | None | An always-on rule plus `openviking-memory`, `openviking-skills`, `ov-experience-memory` | Installer menu |
+| Claude Code | Yes | `/openviking-memory:ov` shows server status, identity, and where injected context came from | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor` | Yes |
+| Codex, TraeCode CLI 2.0 | No | None | Same five as Claude Code | Yes |
+| Cursor | No | None | An always-on rule plus `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search` | Installer menu |
 | TRAE, TRAE CN, ZCode | No | None | None | Installer menu |
-| OpenCode | No | None | The same three as Cursor, only when the plugin registers its MCP server | Yes |
-| DSH | No | None | The same three as Cursor | No |
-| CodeBuddy Code | No | None | The same three as Cursor | No |
-| pi | Yes | `/viking`, `/viking commit` | The same three as Cursor, unless `mcpEnabled` is `false` | Yes |
-| OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Three plugin skills | Yes; checks the key's role and version compatibility |
+| OpenCode | No | None | The same four as Cursor, only when the plugin registers its MCP server | Yes |
+| DSH | No | None | The same four as Cursor | No |
+| CodeBuddy Code | No | None | The same four as Cursor | No |
+| pi | Yes | `/viking`, `/viking commit` | The same four as Cursor, unless `mcpEnabled` is `false` | Yes |
+| OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Four plugin skills, including `openviking-rule-search` | Yes; checks the key's role and version compatibility |
 | Hermes (bundled) | No | None | None | Yes; `hermes memory status` lists environment overrides |
 | ov CLI | No | The CLI itself | None | `ov config` |
 

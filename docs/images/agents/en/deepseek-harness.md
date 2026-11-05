@@ -21,6 +21,16 @@ The installer asks for the harness and OpenViking credentials:
 2. Confirm that the model has `mcp__openviking__*` tools and can call them.
 3. For Desktop, open a new conversation in the app and check the same two points. `--dump-config` does not work for Desktop's `desktop` profile; check that `~/.dsh/profiles/desktop/package.json` lists the plugin under `dsh.profile.bundles` instead.
 
+## Step 3: Start using
+
+Start a new DeepSeek Harness session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshooting
 
 | Issue | What to check |

@@ -1,0 +1,43 @@
+# FileBrowser 文件浏览
+
+目录导航、搜索与内容预览作为一个模块。模块自己取数，宿主提供配置、受控的当前资源、插槽与文案。
+
+组件当前是占位实现：只展示模块名称与占位文案。下面的 props 已定型，接入方可以先完成容器与状态接入；组合视图与 `useFileBrowser` 随后补充。
+
+## 基础用法
+
+```tsx file="../../_demos/file-browser-placeholder.tsx" preview
+
+```
+
+## 模块负责什么
+
+- 目录、搜索、当前 URI 与预览加载在模块内协调：点击目录节点或搜索结果即移动选中并加载预览，切换资源时丢弃过期请求。
+- 保存、重命名或删除后刷新受影响的目录、搜索结果与预览。
+- 搜索、目录与预览区域的布局。
+
+## 宿主负责什么
+
+- 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
+- 登录、账号作用域、路由与权限。
+- 接入 Agent、导入资源等入口，通过 `slots.toolbar` 注入；模块不内置接入弹窗、导入流程或引导。
+- 有独立取数逻辑的视图，例如经验看板，通过 `slots.previewTabs` 注入。
+
+## 属性
+
+模块从子路径和根入口导出 `FileBrowserProps`，`FileBrowserLabels` 与 `FileBrowserSlots` 只从子路径导出。
+
+| 属性             | 类型                            | 默认值 | 说明                                                                                                         |
+| ---------------- | ------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------ |
+| `requestOptions` | `OvRequestOptions`              | —      | 请求配置覆盖，逐字段覆盖最近的 Provider。                                                                    |
+| `uri`            | `string`                        | —      | 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。                                           |
+| `defaultUri`     | `string`                        | —      | 非受控时的初始资源 URI。省略时不选中任何资源。                                                               |
+| `onUriChange`    | `(uri: string \| null) => void` | —      | 当前资源变化后触发；清除选中时传入 `null`。                                                                  |
+| `slots`          | `FileBrowserSlots`              | —      | `toolbar`、`previewTabs` 与 `quotaHint`，各自用途见上。                                                      |
+| `labels`         | `FileBrowserLabels`             | —      | 可替换文案：`title`、`searchPlaceholder`、`searchEmpty`、`empty`、`error`、`retry`。未提供时沿用英文默认值。 |
+| `className`      | `string`                        | —      | 容器附加类名。                                                                                               |
+| `style`          | `CSSProperties`                 | —      | 容器样式覆盖。                                                                                               |
+
+文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
+
+占位组件当前只消费 `className`、`style` 与 `labels.title`。

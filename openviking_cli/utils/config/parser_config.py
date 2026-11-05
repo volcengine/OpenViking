@@ -719,11 +719,10 @@ class SemanticConfig:
     """Maximum characters for generated overviews."""
 
     memory_chunk_chars: int = 2000
-    """Maximum characters per chunk when splitting long memories for vectorization.
-    Memories shorter than this are vectorized as a single record."""
+    """Legacy setting retained for configuration compatibility; memory vectors are not chunked."""
 
     memory_chunk_overlap: int = 200
-    """Character overlap between adjacent memory chunks for context continuity."""
+    """Legacy setting retained for configuration compatibility; unused by memory vectorization."""
 
     def __post_init__(self):
         if self.overview_sample_limit <= 0:

@@ -9,7 +9,7 @@ import uuid
 
 from openviking.core.namespace import relative_uri_path
 from openviking.utils.path_safety import safe_join_viking_uri
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import MultimodalToolResult, Tool
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import COMPILE_STAGING_ROOT
 from vikingbot.compile.renderer import validate_relative_file_path
@@ -127,7 +127,8 @@ class EvidenceReader(Tool):
     name = "read_evidence"
     description = (
         "Read assigned original evidence. Optional start_line/end_line are one-based, inclusive "
-        "lines within the source_range shard; omit both for the complete shard."
+        "lines within the source_range shard; omit both for the complete shard. "
+        "For image evidence omit line bounds to view the original image."
     )
     parameters = {
         "type": "object",
@@ -169,7 +170,7 @@ class EvidenceReader(Tool):
         for reference in full:
             self.spans.pop(reference, None)
 
-    async def read(self, source_range, spans=()):
+    async def read(self, source_range, spans=(), *, include_image=False):
         """Return exact original excerpts with shard metadata, or the full shard without bounds.
 
         Reject unauthorized IDs and invalid shard-local lines; merge overlapping/adjacent
@@ -180,6 +181,13 @@ class EvidenceReader(Tool):
         value = await self.files.get(f"sources/{source_range}")
         if value is None:
             raise ValueError("Assigned source range is missing")
+        if value.get("image"):
+            if spans:
+                raise ValueError("Image evidence has no text line ranges")
+            return {
+                **{key: item for key, item in value.items() if key != "image" or include_image},
+                "complete": False,
+            }
         lines = value["text"].splitlines(keepends=True)
         merged = []
         for start, end in sorted(spans):
@@ -210,4 +218,9 @@ class EvidenceReader(Tool):
         if (start_line is None) != (end_line is None):
             raise ValueError("Supply both start_line and end_line, or neither")
         spans = [] if start_line is None else [(start_line, end_line)]
-        return json.dumps(await self.read(source_range, spans), ensure_ascii=False)
+        value = await self.read(source_range, spans, include_image=True)
+        image = value.pop("image", None)
+        text = json.dumps(value, ensure_ascii=False)
+        if image:
+            return MultimodalToolResult(text, [{"type": "text", "text": text}, image])
+        return text
