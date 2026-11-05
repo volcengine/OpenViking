@@ -13,13 +13,14 @@ import {
 import {
   active,
   cancelCompile,
+  createCompile,
   fetchCompileTask,
 } from '#/features/workbench/compile/lib/api'
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
 import { TaskExecutionEvents } from '#/features/workbench/tasks/components/task-execution-events'
 import { Button } from '#/shared/ui/button'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getRouteApi, Link } from '@tanstack/react-router'
+import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
 import {
   Activity,
   Copy,
@@ -30,6 +31,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { createRandomUuid } from '#/shared/lib/browser-crypto'
 
 const routeApi = getRouteApi('/compile/tasks/$taskId')
 
@@ -37,6 +39,8 @@ const TABS = ['overview', 'events', 'result'] as const
 
 export function CompileDetail() {
   const skillName = useCompileSkillName()
+  const navigate = useNavigate()
+  const rerunKey = useRef<string | null>(null)
   const { taskId } = routeApi.useParams(),
     { t, i18n } = useTranslation('compile')
   const { identityScopeKey, connectionRole } = useAppConnection(),
@@ -60,6 +64,22 @@ export function CompileDetail() {
   })
   const task = query.data,
     request = task?.meta?.request
+  const rerun = useMutation({
+    mutationFn: () => {
+      rerunKey.current ??= `${Date.now()}:${createRandomUuid()}`
+      return createCompile(
+        { compile_id: request!.compile!.compile_id! },
+        rerunKey.current,
+      )
+    },
+    onSuccess: async (created) => {
+      rerunKey.current = null
+      await navigate({
+        to: '/compile/tasks/$taskId',
+        params: { taskId: created.task_id },
+      })
+    },
+  })
   const previousStatus = useRef<{ id: string; status?: string } | null>(null)
   const refreshedOutput = useRef('')
   useEffect(() => {
@@ -96,7 +116,12 @@ export function CompileDetail() {
     <CompileShell
       title={t('detailTitle')}
       actions={
-        request && (
+        request &&
+        (request.compile?.compile_id ? (
+          <Button disabled={rerun.isPending} onClick={() => rerun.mutate()}>
+            {t('runAgain')}
+          </Button>
+        ) : (
           <Link
             to="/compile/new"
             search={{ fromTask: taskId }}
@@ -104,9 +129,12 @@ export function CompileDetail() {
           >
             {t('rerun')}
           </Link>
-        )
+        ))
       }
     >
+      {rerun.isError && (
+        <CompileError error={rerun.error} retry={() => rerun.mutate()} />
+      )}
       {query.isLoading && <CompileLoading />}
       {query.isError && (
         <CompileError

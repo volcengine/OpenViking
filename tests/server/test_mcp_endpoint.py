@@ -2400,8 +2400,8 @@ async def test_write_creates_new_file_with_replace_default(service):
 
 async def test_write_replace_overwrites_existing(service):
     uri = "viking://resources/test_write_replace.md"
-    await write(uri=uri, content="v1")
-    result = await write(uri=uri, content="v2-content")
+    await write(uri=uri, content="v1", wait=True)
+    result = await write(uri=uri, content="v2-content", wait=True)
     assert "mode=replace" in result
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "v2-content"
@@ -2409,16 +2409,16 @@ async def test_write_replace_overwrites_existing(service):
 
 async def test_write_create_overwrites_existing_file(service):
     uri = "viking://resources/test_write_create_exists.md"
-    await write(uri=uri, content="v1")
-    result = await write(uri=uri, content="v2", mode="create")
+    await write(uri=uri, content="v1", wait=True)
+    result = await write(uri=uri, content="v2", mode="create", wait=True)
     assert "mode=create" in result
     assert await service.fs.read(uri, ctx=DEFAULT_CTX) == "v2"
 
 
 async def test_write_append_appends_to_existing(service):
     uri = "viking://resources/test_write_append.md"
-    await write(uri=uri, content="line1\n")
-    await write(uri=uri, content="line2\n", mode="append")
+    await write(uri=uri, content="line1\n", wait=True)
+    await write(uri=uri, content="line2\n", mode="append", wait=True)
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "line1\nline2\n"
 
@@ -2529,8 +2529,8 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
 
 async def test_edit_replaces_unique_occurrence(service):
     uri = "viking://resources/test_edit.md"
-    await write(uri=uri, content="alpha\nbeta\ngamma\n")
-    result = await edit(uri=uri, old_string="beta", new_string="BETA")
+    await write(uri=uri, content="alpha\nbeta\ngamma\n", wait=True)
+    result = await edit(uri=uri, old_string="beta", new_string="BETA", wait=True)
     assert "Edited" in result
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "alpha\nBETA\ngamma\n"
@@ -2538,9 +2538,9 @@ async def test_edit_replaces_unique_occurrence(service):
 
 async def test_edit_sequential_edits_compose(service):
     uri = "viking://resources/test_edit_order.md"
-    await write(uri=uri, content="foo bar baz\n")
-    await edit(uri=uri, old_string="bar", new_string="qux")
-    await edit(uri=uri, old_string="foo qux", new_string="hello")
+    await write(uri=uri, content="foo bar baz\n", wait=True)
+    await edit(uri=uri, old_string="bar", new_string="qux", wait=True)
+    await edit(uri=uri, old_string="foo qux", new_string="hello", wait=True)
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "hello baz\n"
 
@@ -2554,8 +2554,8 @@ async def test_edit_requires_unique_match(service):
 
 async def test_edit_replace_all(service):
     uri = "viking://resources/test_edit_all.md"
-    await write(uri=uri, content="dup\ndup\n")
-    await edit(uri=uri, old_string="dup", new_string="x", replace_all=True)
+    await write(uri=uri, content="dup\ndup\n", wait=True)
+    await edit(uri=uri, old_string="dup", new_string="x", replace_all=True, wait=True)
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "x\nx\n"
 
@@ -2673,9 +2673,9 @@ async def test_write_user_root_subdirectory_file(service):
 
 async def test_edit_user_root_file_via_canonical_uri(service):
     uri = "viking://user/test_user/project/editable.md"
-    await write(uri=uri, content="before\n")
+    await write(uri=uri, content="before\n", wait=True)
 
-    result = await edit(uri=uri, old_string="before", new_string="after")
+    result = await edit(uri=uri, old_string="before", new_string="after", wait=True)
 
     assert "viking://user/test_user/project/editable.md" in result
     assert "after" in await read(uris=uri)

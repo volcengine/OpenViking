@@ -675,6 +675,12 @@ class MySQLTaskWorkStore(TaskWorkStore):
             await self._populate_processing_seconds(session, [task])
             return task
 
+    async def list_durable(
+        self, account_id: str, *, task_type: Optional[str] = None
+    ) -> list[TaskRecord]:
+        """Read current SQL records, including private claims, for locked resource admission."""
+        return await self.list(account_id, task_type=task_type, limit=None)
+
     async def list(
         self,
         account_id: Optional[str] = None,

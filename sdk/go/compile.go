@@ -5,31 +5,27 @@ package openviking
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 )
 
-// Compile returns a queued task, or saved settings when Args explicitly configure scheduling.
-func (c *Client) Compile(
-	ctx context.Context,
-	fromURIs []string,
-	to string,
-	skill string,
-	opts *CompileOptions,
-) (map[string]any, error) {
-	if opts == nil {
-		opts = &CompileOptions{}
+// CreateCompileTask saves a persistent configuration without starting a run.
+// The returned map contains compile_id for subsequent Compile requests.
+func (c *Client) CreateCompileTask(ctx context.Context, input CompileInput) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/compile/create", nil, input, &result)
+	return result, err
+}
+
+// Compile queues an ID-only persistent execution or a full independent execution.
+// Exactly one of request.CompileID and request.Input must be provided.
+func (c *Client) Compile(ctx context.Context, request CompileRequest) (map[string]any, error) {
+	if (request.CompileID != "") == (request.Input != nil) {
+		return nil, fmt.Errorf("provide exactly one of CompileID and Input")
 	}
-	payload := map[string]any{
-		"from":  fromURIs,
-		"to":    to,
-		"skill": skill,
-	}
-	setString(payload, "instruction", opts.Instruction)
-	if len(opts.Args) > 0 {
-		payload["args"] = opts.Args
-	}
-	if err := mergeExtraProtected(payload, opts.Extra, "instruction", "args"); err != nil {
-		return nil, err
+	var payload any = request.Input
+	if request.CompileID != "" {
+		payload = map[string]string{"compile_id": request.CompileID}
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/compile", nil, payload, &result)

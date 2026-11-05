@@ -713,19 +713,11 @@ class OpenVikingService:
             self._compile_scheduler = CompileScheduler(
                 self._compile_service,
                 compile_store,
-                self._viking_fs,
             )
             self._compile_scheduler.credential_encryptor = (
                 self._external_task_service.credential_encryptor
             )
-            self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.save_credential = (
-                self._compile_scheduler.save_credential
-            )
-        self._fs_service.compile_versions = self._compile_service.lifecycle.versions
-        self._fs_service.compile_lifecycle = self._compile_service.lifecycle
-        self._resource_service.compile_versions = self._compile_service.lifecycle.versions
+            self._compile_service.configure_scheduler(self._compile_scheduler)
 
         if self._queue_manager:
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)

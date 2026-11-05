@@ -17,7 +17,8 @@ import type {
   BatchWriteOptions,
   ClientConfig,
   CommitSessionOptions,
-  CompileOptions,
+  CompileInput,
+  CompileRequest,
   CreateSessionOptions,
   ExperienceOutcomeOptions,
   ExperienceTrajectoryOptions,
@@ -1208,26 +1209,14 @@ export class OpenVikingClient {
     );
     return result.uri;
   }
-  /** Start an asynchronous Compile task. */
-  compile(
-    fromUris: string[],
-    to: string,
-    skill: string,
-    options: CompileOptions = {},
-  ): Promise<JsonObject> {
-    const body = compact({
-      from: fromUris,
-      to,
-      skill,
-      instruction: options.instruction,
-      args:
-        options.args && Object.keys(options.args).length
-          ? options.args
-          : undefined,
-    });
-    return this.request("POST", "/api/v1/compile", {
-      body: mergeExtra(body, options.extra, ["instruction", "args"]),
-    });
+  /** Save configuration without executing; the returned compile_id selects future runs. */
+  createCompileTask(input: CompileInput): Promise<{ compile_id: string }> {
+    return this.request("POST", "/api/v1/compile/create", { body: input });
+  }
+
+  /** Queue an ID-only persistent run or an independent full compilation. */
+  compile(input: CompileRequest): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/compile", { body: input });
   }
 
   /** Get a background task. */

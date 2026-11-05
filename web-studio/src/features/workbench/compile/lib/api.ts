@@ -13,39 +13,35 @@ export type CompileRequest = {
   from: string[]
   to: string
   skill: string
-  instruction?: string
+  instruction?: string | null
   args?: Record<string, unknown>
 }
 export type UpdateSchedule =
   | { frequency: 'daily'; hour: number; minute: number }
   | { frequency: 'weekly'; weekday: number; hour: number; minute: number }
-export type CompileConfigSummary = {
-  status: string
-  to: string
-  initialized: boolean
-  running: boolean
+/** Public persistent inputs and acceptance times; credentials stay on the server. */
+export type CompileConfig = CompileRequest & {
+  compile_id: string
   auto_update: boolean
   update_schedule: UpdateSchedule | null
-  next_run_at: string | null
+  /** Unix seconds of the first accepted execution; null until any run is accepted. */
+  task_first_create_time: number | null
+  /** Unix seconds of the latest newly accepted execution; retries do not refresh it. */
+  last_run_time: number | null
+  last_triggered_slot: string | null
+  next_triggered_slot: string | null
 }
-export type CompileConfig = Omit<CompileConfigSummary, 'running'> & {
-  from: string[]
-  skill: string
-  instruction: string | null
-  last_error: string | null
-  last_run: unknown
-}
-export type CompileConfigUpdate = {
-  to: string
-  from: string[]
-  skill: string
-  instruction?: string | null
+export type CompileConfigSummary = CompileConfig
+export type CompileConfigUpdate = CompileRequest & {
+  compile_id: string
   auto_update: boolean
   update_schedule: UpdateSchedule | null
 }
+export type CompileExecutionRequest = CompileRequest | { compile_id: string }
+export type CompileCreated = { compile_id: string }
 export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
   return getOvResult<{
-    targets: CompileConfigSummary[]
+    configs: CompileConfigSummary[]
     next_cursor: string | null
   }>(
     ovClient.client.get({
@@ -55,12 +51,12 @@ export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
     }),
   )
 }
-export function fetchCompileConfig(to: string, signal?: AbortSignal) {
+export function fetchCompileConfig(compileId: string, signal?: AbortSignal) {
   return getOvResult<CompileConfig>(
     ovClient.client.get({
       url: '/api/v1/compile/config',
       signal,
-      query: { to },
+      query: { compile_id: compileId },
     }),
   )
 }
@@ -74,11 +70,14 @@ export function updateCompileConfig(body: CompileConfigUpdate) {
 }
 export type CompileTask = TaskRecord & {
   task_id: string
-  meta?: { request?: CompileRequest }
+  meta?: { request?: CompileRequest & { compile?: { compile_id?: string } } }
 }
 type CompileTaskPayload = Omit<CompileTask, 'meta'> & {
   meta?: {
-    request?: Omit<CompileRequest, 'from'> & { from?: string[] | null }
+    request?: Omit<CompileRequest, 'from'> & {
+      from?: string[] | null
+      compile?: { compile_id?: string }
+    }
   }
 }
 export type TaskPage = {
@@ -144,18 +143,30 @@ export async function fetchCompileTask(id: string, signal?: AbortSignal) {
     ),
   )
 }
-export async function createCompile(
+/** Save reusable inputs without creating an execution or source snapshot. */
+export function createCompileTask(
   body: CompileRequest,
-  key: string,
-): Promise<CompileTask | CompileConfig> {
-  const result = await getOvResult<CompileTaskPayload | CompileConfig>(
+): Promise<CompileCreated> {
+  return getOvResult<CompileCreated>(
     ovClient.client.post({
-      url: '/api/v1/compile',
+      url: '/api/v1/compile/create',
       body,
-      headers: { 'Idempotency-Key': key },
     }),
   )
-  return 'task_id' in result ? normalizeCompileTask(result) : result
+}
+export async function createCompile(
+  body: CompileExecutionRequest,
+  key: string,
+): Promise<CompileTask> {
+  return normalizeCompileTask(
+    await getOvResult<CompileTaskPayload>(
+      ovClient.client.post({
+        url: '/api/v1/compile',
+        body,
+        headers: { 'Idempotency-Key': key },
+      }),
+    ),
+  )
 }
 export async function cancelCompile(id: string) {
   return normalizeCompileTask(

@@ -42,6 +42,8 @@ ov task status <cmp_task_id>
 
 编译完成后，目标目录中应包含导航页和项目正文。你可以参考 [Wiki 正文示例](/quickstart/wiki-output-zh-v1.txt)，了解内容组织和来源引用方式，再按下文核对生成结果。
 
+上面的命令执行一次性全量编译。需要维护增量基线时，使用相同输入调用 `ov compile create`，保存返回的 `cpt_...` 配置 ID，再用 `ov compile --compile-id <id>` 执行。定时计划和调用时间说明见[配置与执行接口](../api/23-agent-runtime.md)。
+
 ## 打开正文
 
 ```bash

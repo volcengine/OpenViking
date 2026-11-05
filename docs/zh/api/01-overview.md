@@ -480,7 +480,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/watches/{task_id}/trigger` | 按任务 ID 触发 watch |
 | POST | `/api/v1/snapshot/commit` | 创建快照 |
 | GET | `/api/v1/snapshot/log` | 查看快照历史 |
-| GET | `/api/v1/snapshot/versions` | 列出 Compile 产出文件的版本 |
+| GET | `/api/v1/snapshot/versions` | 列出文件原生快照历史 |
 | POST | `/api/v1/snapshot/restore` | 恢复历史快照 |
 | GET | `/api/v1/snapshot/show` | 查看快照或其中的文件 |
 | GET | `/api/v1/snapshot/diff` | 对比快照 |
@@ -497,6 +497,7 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/compile/create` | 创建持久配置并标记输出目录 |
 | POST | `/api/v1/compile` | 创建由 OV 托管的 Compile 任务 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
@@ -605,13 +606,14 @@ JSON 输出 - 错误：
 | DELETE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 删除文件或目录 |
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
+| POST | `/api/v1/compile/create` | 创建持久配置并标记输出目录 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
-| GET | `/api/v1/compile/config` | 读取目标配置 |
-| POST | `/api/v1/compile/config/update` | 更新目标配置 |
-| GET | `/api/v1/compile/configs` | 列出可见目标 |
-| GET | `/api/v1/compile/operations` | 列出目标操作记录 |
-| GET | `/api/v1/compile/operations/{operation_id}` | 读取单条操作详情 |
-| GET | `/api/v1/compile/operations/{operation_id}/outputs` | 列出操作产出及版本引用 |
+| GET | `/api/v1/compile/config` | 按 compile_id 读取配置 |
+| POST | `/api/v1/compile/config/update` | 按 compile_id 更新配置 |
+| GET | `/api/v1/compile/configs` | 列出可见配置 |
+| GET | `/api/v1/compile/runs` | 按 compile_id 列出运行记录 |
+| GET | `/api/v1/compile/runs/{task_id}` | 按 compile_id 和 task_id 读取 run |
+| GET | `/api/v1/compile/runs/{task_id}/outputs` | 由快照推导运行产出 |
 | POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |

@@ -49,7 +49,6 @@ pub async fn write(
     tags: Vec<String>,
     tag_mode: &str,
     acl: Option<serde_json::Value>,
-    edit_source: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -63,7 +62,6 @@ pub async fn write(
             tags,
             tag_mode,
             acl,
-            edit_source,
         )
         .await?;
     crate::output::output_success(result, output_format, compact);

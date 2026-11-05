@@ -15,6 +15,7 @@ from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclMode
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     InvalidURIError,
@@ -81,6 +82,44 @@ async def test_log_returns_recent_commits(client_with_resource):
     log = body["result"]
     assert isinstance(log, list) and len(log) >= 1
     assert "oid" in log[0] and "message" in log[0]
+
+
+async def test_native_file_versions_and_restore_without_compile_config(
+    client_with_resource_and_blob, service
+):
+    """Ordinary files use commit cursors and restore snapshots without a Compile registration."""
+    client, first_oid, uri, first_bytes = client_with_resource_and_blob
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    await service.viking_fs.write_file(uri, b"second version", ctx=ctx)
+    second = await service.viking_fs.commit(message="second file version", paths=[uri], ctx=ctx)
+    second_oid = second["commit_oid"]
+
+    response = await client.get("/api/v1/snapshot/versions", params={"uri": uri, "limit": 1})
+    assert response.status_code == 200, response.text
+    page = response.json()["result"]
+    assert set(page) == {"uri", "versions", "next_before_snapshot"}
+    assert page["versions"][0]["oid"] == second_oid
+    assert page["next_before_snapshot"] == second_oid
+    previous = await client.get(
+        "/api/v1/snapshot/versions",
+        params={"uri": uri, "limit": 1, "before_snapshot": second_oid},
+    )
+    assert previous.status_code == 200, previous.text
+    assert previous.json()["result"]["versions"][0]["oid"] == first_oid
+
+    payload = {"path": uri, "restore_commit_id": first_oid, "current_commit_id": second_oid}
+    dry_run = await client.post("/api/v1/snapshot/restore", json={**payload, "dry_run": True})
+    assert dry_run.status_code == 200, dry_run.text
+    assert dry_run.json()["result"]["result"] == "dry_run"
+    assert await service.viking_fs.read_file_bytes(uri, ctx=ctx) == b"second version"
+    restored = await client.post("/api/v1/snapshot/restore", json=payload)
+    assert restored.status_code == 200, restored.text
+    result = restored.json()["result"]
+    assert set(result) == {"uri", "snapshot_id", "result"}
+    assert result["result"] == "created"
+    assert await service.viking_fs.read_file_bytes(uri, ctx=ctx) == first_bytes
+    stale = await client.post("/api/v1/snapshot/restore", json=payload)
+    assert stale.status_code == 409, stale.text
 
 
 async def test_log_empty_repo_returns_404(client_with_no_repo):
@@ -211,16 +250,8 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
     extra_uri = f"{root}/remove.md"
 
     await service.fs.mkdir(root, ctx=admin)
-    assert await service.vikingdb_manager.upsert(
-        {
-            "id": "snapshot-acl-restore-root",
-            "uri": root,
-            "account_id": admin.account_id,
-            "context_type": "resource",
-            "level": 0,
-            "vector": [0.1] * service.vikingdb_manager.vector_dim,
-        },
-        ctx=admin,
+    await service.fs.ensure_directory_index(
+        root, admin, fallback_abstract="Snapshot ACL restore", wait=True
     )
     await service.fs.set_acl(
         root,
@@ -229,6 +260,7 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             {"principal": "user:snapshot_reader", "level": "read"},
         ],
         ctx=admin,
+        acl_mode=AclMode.RESTRICTED,
     )
     await service.fs.write(file_uri, content="v1", mode="create", wait=True, ctx=admin)
     v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=writer)

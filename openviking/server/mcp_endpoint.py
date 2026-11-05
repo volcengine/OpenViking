@@ -1529,7 +1529,6 @@ async def write(
         mode=mode,
         wait=wait,
         acl=acl,
-        edit_source="agent",
         resolve_conflicts=resolve_conflicts,
     )
     written = result.get("written_bytes", 0)
@@ -1594,7 +1593,6 @@ async def edit(
         ctx=ctx,
         mode="replace",
         wait=wait,
-        edit_source="agent",
     )
     written = result.get("written_bytes", 0)
     message = f"Edited {result.get('uri', uri)} ({written} bytes written)."

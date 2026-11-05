@@ -2684,7 +2684,6 @@ async def test_recall_reports_corrupt_scenario_instead_of_silently_omitting_it()
 @pytest.mark.asyncio
 async def test_scenario_layout_batch_write_and_directory_read_with_real_fs(service, monkeypatch):
     # Exercise actual file writes and reads without downstream semantic refresh.
-    service.fs.compile_versions = None
     async_agfs = service.viking_fs._async_agfs
 
     async def to_handoff(lease):

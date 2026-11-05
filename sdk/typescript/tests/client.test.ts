@@ -955,15 +955,13 @@ describe("OpenVikingClient", () => {
     });
 
     await expect(
-      client.compile(
-        ["viking://resources/source"],
-        "viking://resources/output",
-        "viking://agent/skills/wiki",
-        {
-          instruction: "Keep supporting evidence.",
-          args: { model_name: "endpoint-1" },
-        },
-      ),
+      client.compile({
+        from: ["viking://resources/source"],
+        to: "viking://resources/output",
+        skill: "viking://agent/skills/wiki",
+        instruction: "Keep supporting evidence.",
+        args: { model_name: "endpoint-1" },
+      }),
     ).resolves.toEqual({ task_id: "cmp_1" });
     await client.getSkill("demo");
     await expect(client.getTask("missing")).resolves.toBeNull();
@@ -981,6 +979,55 @@ describe("OpenVikingClient", () => {
     const skillUrl = new URL(String(fetcher.mock.calls[1]![0]));
     expect(skillUrl.searchParams.get("include_files")).toBe("true");
     expect(skillUrl.searchParams.get("include_source")).toBe("false");
+  });
+
+  it("separates persistent Compile creation from ID-only execution", async () => {
+    const compileId = "cpt_" + "a".repeat(32);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(ok({ compile_id: compileId }))
+      .mockResolvedValueOnce(ok({ task_id: "cmp_1" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const input = {
+      from: ["viking://resources/source"],
+      to: "viking://resources/output",
+      skill: "viking://agent/skills/wiki",
+      args: { auto_update: false },
+    };
+    expect(await client.createCompileTask(input)).toEqual({
+      compile_id: compileId,
+    });
+    await client.compile({ compile_id: compileId });
+    expect(String(fetcher.mock.calls[0]![0])).toBe(
+      "https://example.com/api/v1/compile/create",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual(input);
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      compile_id: compileId,
+    });
+  });
+
+  it("executes memory Compile without source directories", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ task_id: "cmp_memory" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    await expect(
+      client.compile({ to: "viking://~/memories", skill: "memory" }),
+    ).resolves.toEqual({ task_id: "cmp_memory" });
+    expect(String(fetcher.mock.calls[0]![0])).toBe(
+      "https://example.com/api/v1/compile",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      to: "viking://~/memories",
+      skill: "memory",
+    });
   });
 
   it("preserves empty content in write and message requests", async () => {

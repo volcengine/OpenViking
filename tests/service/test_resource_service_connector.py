@@ -64,6 +64,16 @@ class _FakeResourceProcessor:
         return None
 
 
+class _RoutingVFS(SimpleNamespace):
+    """Connector routing fixture with allowed access and no indexed directory tags."""
+
+    async def _ensure_access(self, *_args, **_kwargs):
+        return None
+
+    def _get_vector_store(self):
+        return None
+
+
 @pytest.fixture
 def connector_config(monkeypatch):
     import openviking_cli.utils.config.open_viking_config as config_module
@@ -118,7 +128,7 @@ def service():
     # pre-check tests build their own service with a missing parent.
     return ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(exists=AsyncMock(return_value=True)),
+        viking_fs=_RoutingVFS(exists=AsyncMock(return_value=True)),
         resource_processor=_FakeResourceProcessor(),
         skill_processor=object(),
     )
@@ -286,7 +296,7 @@ async def watch_service(watch_store, watch_vfs, watch_tracker):
     """Connector imports with real Watch and Task persistence."""
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(
+        viking_fs=_RoutingVFS(
             exists=AsyncMock(return_value=True),
             _encryptor=_FakeEncryptor(),
         ),
@@ -1582,7 +1592,7 @@ async def test_connector_requires_existing_parent_unless_create_parent(
     ctx,
     request_kwargs,
 ):
-    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=False))
+    viking_fs = _RoutingVFS(exists=AsyncMock(return_value=False))
     service = ResourceService(
         vikingdb=object(),
         viking_fs=viking_fs,
@@ -1607,7 +1617,7 @@ async def test_connector_create_parent_false_accepts_existing_parent(
     connector_config,
     ctx,
 ):
-    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=True))
+    viking_fs = _RoutingVFS(exists=AsyncMock(return_value=True))
     service = ResourceService(
         vikingdb=object(),
         viking_fs=viking_fs,

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BUILTIN_SKILLS_ROOT,
   createCompile,
+  createCompileTask,
   fetchCompileConfig,
   fetchCompileConfigs,
   fetchCompileSkills,
@@ -43,24 +44,36 @@ describe('Compile scheduling APIs', () => {
     const config = {
       to: 'viking://resources/wiki',
       auto_update: true,
-      next_run_at: '2026-11-03T09:00:00+08:00',
+      compile_id: 'cpt_' + 'a'.repeat(32),
     }
     clientMocks.post.mockResolvedValueOnce(config)
-    const result = await createCompile(
-      {
-        from: ['viking://resources/source'],
-        to: config.to,
-        skill: 'viking://agent/skills/wiki',
-        args: { auto_update: true },
-      },
-      'schedule-save-key',
-    )
+    const result = await createCompileTask({
+      from: ['viking://resources/source'],
+      to: config.to,
+      skill: 'viking://agent/skills/wiki',
+      args: { auto_update: true },
+    })
     expect(result).toEqual(config)
     expect(result).not.toHaveProperty('task_id')
+    expect(clientMocks.post.mock.calls[0][0].url).toBe('/api/v1/compile/create')
+  })
+
+  it('sends only the configuration ID for persistent executions', async () => {
+    const compileId = 'cpt_' + 'a'.repeat(32)
+    clientMocks.post.mockResolvedValueOnce({
+      task_id: 'cmp_1',
+      status: 'pending',
+    })
+    await createCompile({ compile_id: compileId }, 'run-key')
+    expect(clientMocks.post).toHaveBeenCalledWith({
+      url: '/api/v1/compile',
+      body: { compile_id: compileId },
+      headers: { 'Idempotency-Key': 'run-key' },
+    })
   })
 
   it('passes target cursors and URI query values without changing them', async () => {
-    const cursor = 'viking://resources/a folder?value=1'
+    const cursor = 'cpt_' + 'a'.repeat(32)
     await fetchCompileConfigs(cursor)
     expect(clientMocks.get).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/configs',
@@ -71,10 +84,11 @@ describe('Compile scheduling APIs', () => {
     expect(clientMocks.get).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/config',
       signal: undefined,
-      query: { to: cursor },
+      query: { compile_id: cursor },
     })
     const body = {
-      to: cursor,
+      compile_id: cursor,
+      to: 'viking://resources/output',
       from: ['viking://resources/source'],
       skill: 'viking://agent/skills/wiki',
       auto_update: false,

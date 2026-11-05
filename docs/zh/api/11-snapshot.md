@@ -584,17 +584,29 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o
 
 ### 单文件版本恢复（HTTP API）
 
-`POST /api/v1/snapshot/restore` 也支持恢复 Compile 产物文件的历史内容。该模式使用以下三个必填字段，不与 `project_dir`、`source_commit` 混用：
+`POST /api/v1/snapshot/restore` 可恢复任意有权限文件路径的历史内容，不要求 Compile 配置或产物归属。该模式接受以下字段，不与 `project_dir`、`source_commit` 混用：
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| path | str | Compile 产物文件的 `viking://` URI，也是历史快照中的读取路径 |
-| restore_commit_id | str | 提供恢复内容的完整 commit ID（40 位小写十六进制） |
-| current_commit_id | str | 调用方观察到的该文件在 `main` 上最后一次变更的完整 commit ID；不匹配时返回 `409 CONFLICT`，`error.details.resource` 为 `VERSION_CONFLICT` |
+| path | str | 文件 URI，同时用作历史快照中的读取路径 |
+| restore_commit_id | str | 来源 commit ID，40 位小写十六进制 |
+| current_commit_id | str | 调用方观察到的该文件在 `main` 上最后一次变更的 commit ID；不匹配时返回 `409 CONFLICT`，resource 为 `VERSION_CONFLICT` |
+| dry_run | bool | 可选；仅校验，不修改内容或创建快照 |
 
-`GET /api/v1/snapshot/versions?uri=<文件 URI>` 用于查询版本历史。每条版本记录包含 `version_id`（完整 UUID4 十六进制字符串）和正整数 `version_number`。客户端在分页时原样传递版本 ID，使用 `version_number` 展示 `v1`、`v2` 等编号。版本列表按从新到旧的顺序返回。编号在文件的一轮生命周期内递增，跨分页和历史清理保持不变。新版本索引从 1 开始编号；文件删除重建后版本 ID 不复用，旧版本 UUID 不会匹配重建文件。
+`GET /api/v1/snapshot/versions?uri=<文件 URI>&limit=20` 返回原生 Git 历史，从新到旧排列：
 
-响应中的 `to` 是文件所属的 Compile 目标目录，可与版本记录的 `meta.operation_id` 一起用于查询操作详情。`total` 表示当前保留的可查询版本总数，不受 `limit`、`before_version` 影响，不等于最新版本编号。将 `next_before_version` 原样作为 `before_version` 传入可继续加载更旧版本。该游标和 `current_version` 都使用 UUID ID；不要根据 ID 或页面内位置排序或推算展示编号。
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/wiki/entity/project.md",
+    "versions": [{"oid": "54c71fb7bf134b71a9b7ed604c21f5b412345678", "message": "content write"}],
+    "next_before_snapshot": null
+  }
+}
+```
+
+每项是包含 `oid` 的原生 commit 元信息，不维护额外版本索引、UUID 或版本编号。`limit` 为 1–100，默认 20；将 `next_before_snapshot` 作为 `before_snapshot` 原样传入，从该 commit 之后继续翻页，null 表示结束。历史与 Compile 配置及 run 无关。
 
 ```bash
 curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
@@ -607,9 +619,10 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
   }'
 ```
 
-例如，当前为第 2 版且第 1 版内容不同时，恢复第 1 版会生成第 3 版，并保留前两版的历史。响应包含新的 UUID `version_id`、`version_number: 3`，`meta.restored_from` 为来源 commit ID。内容相同时返回当前 ID 和编号，以及 `result: "noop"`、`meta.restored_from: null`，不新增版本，也不递增编号。
+响应包含 `uri`、`snapshot_id` 和 `result`（`created`、`noop` 或 `dry_run`）。内容变化会生成新的 forward snapshot，并执行正常索引维护；内容相同时可返回已有快照和 `noop`。dry run 不写内容、不创建快照。
 
-恢复先校验该文件最新变更的 commit，再读取历史 commit 中的同一路径，并在写入锁内再次校验。`current_commit_id` 过期时返回 `409 VERSION_CONFLICT`；当前 commit 匹配但历史 commit 或路径不存在时返回 `404`。不自动追踪重命名或移动前的路径。
+恢复前校验文件最新 commit，在内容写锁内再次校验。过期请求返回 `409`，缺失历史或路径返回 `404`。保留 ACL 和索引维护，按同一路径恢复，不自动追踪重命名。文件及目录回滚都不写 Compile state/run；目录回滚已经产生 forward commit，不额外重复提交。
+
 ---
 
 ## ignore 管理

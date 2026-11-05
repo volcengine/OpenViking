@@ -485,7 +485,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/watches/{task_id}/trigger` | Trigger a watch by task ID |
 | POST | `/api/v1/snapshot/commit` | Create a snapshot |
 | GET | `/api/v1/snapshot/log` | Read snapshot history |
-| GET | `/api/v1/snapshot/versions` | List versions of a Compile output file |
+| GET | `/api/v1/snapshot/versions` | List native snapshot history of a file |
 | POST | `/api/v1/snapshot/restore` | Restore a historical snapshot |
 | GET | `/api/v1/snapshot/show` | Inspect a snapshot or one of its files |
 | GET | `/api/v1/snapshot/diff` | Compare snapshots |
@@ -502,6 +502,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/api/v1/compile/create` | Create saved configuration and tag its output |
 | POST | `/api/v1/compile` | Create an OV-owned Compile task |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
 | GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
@@ -610,13 +611,14 @@ When the gateway runs inside the server, use the server's port; when it runs sta
 | DELETE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Delete a file or directory |
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
+| POST | `/api/v1/compile/create` | Create saved configuration and tag its output |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
-| GET | `/api/v1/compile/config` | Read target settings |
-| POST | `/api/v1/compile/config/update` | Update target settings |
-| GET | `/api/v1/compile/configs` | List visible targets |
-| GET | `/api/v1/compile/operations` | List target operations |
-| GET | `/api/v1/compile/operations/{operation_id}` | Read one operation |
-| GET | `/api/v1/compile/operations/{operation_id}/outputs` | List operation outputs and version references |
+| GET | `/api/v1/compile/config` | Read configuration by compile_id |
+| POST | `/api/v1/compile/config/update` | Update configuration by compile_id |
+| GET | `/api/v1/compile/configs` | List visible configurations |
+| GET | `/api/v1/compile/runs` | List runs by compile_id |
+| GET | `/api/v1/compile/runs/{task_id}` | Read a run by compile_id and task_id |
+| GET | `/api/v1/compile/runs/{task_id}/outputs` | Derive run outputs from snapshots |
 | POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
 | GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |

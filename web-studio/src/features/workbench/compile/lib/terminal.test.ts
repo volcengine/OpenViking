@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   createCompile: vi.fn(),
+  createCompileTask: vi.fn(),
   lookupSubmission: vi.fn(),
   fetchCompileTasks: vi.fn(),
   fetchCompileTask: vi.fn(),
@@ -22,13 +23,12 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('Compile terminal regressions', () => {
   it('handles a saved plan without a task ID or a persistent recovery key', async () => {
-    api.createCompile.mockResolvedValue({
-      to: 'viking://resources/b',
-      next_run_at: '2026-11-03T09:00:00+08:00',
+    api.createCompileTask.mockResolvedValue({
+      compile_id: 'cpt_' + 'a'.repeat(32),
     })
     const saveKey = vi.fn()
     const pending = { current: null }
-    const command = `compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s --args '{"auto_update":true,"update_schedule":{"frequency":"daily"}}'`
+    const command = `compile create --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s --args '{"auto_update":true,"update_schedule":{"frequency":"daily"}}'`
     const result = await runCompileSubmission(
       command,
       pending,
@@ -36,7 +36,7 @@ describe('Compile terminal regressions', () => {
       saveKey,
     )
     expect(result.taskId).toBeUndefined()
-    expect(result.body).toContain('2026-11-03T09:00:00+08:00')
+    expect(result.body).toBe('cpt_' + 'a'.repeat(32))
     expect(result.body).not.toContain('undefined')
     expect(pending.current).toBeNull()
     expect(saveKey).not.toHaveBeenCalled()

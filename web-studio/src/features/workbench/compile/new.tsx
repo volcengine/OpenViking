@@ -4,13 +4,13 @@ import { CompileForm } from '#/features/workbench/compile/components/compile-for
 
 export function NewCompile() {
   const { identityScopeKey } = useAppConnection()
-  const { fromTask, from, target } = getRouteApi('/compile/new').useSearch()
+  const { fromTask, from, compileId } = getRouteApi('/compile/new').useSearch()
   return (
     <CompileForm
-      key={`${identityScopeKey}:${target || ''}:${fromTask || ''}:${from || ''}`}
-      fromTask={target ? undefined : fromTask}
-      sourceUri={target ? undefined : from}
-      target={target}
+      key={`${identityScopeKey}:${compileId || ''}:${fromTask || ''}:${from || ''}`}
+      fromTask={compileId ? undefined : fromTask}
+      sourceUri={compileId ? undefined : from}
+      compileId={compileId}
     />
   )
 }

@@ -1,6 +1,11 @@
 export default {
+  saveConfiguration: 'Save configuration',
+  runAgain: 'Run again',
+  task_first_create_time: 'First execution accepted',
+  last_run_time: 'Latest execution accepted',
+  neverRun: 'Never run',
+
   schedule: {
-    lastRunFailed: 'The last Compile run failed. Review the technical details.',
     listDescription:
       'Turn automatic updates on or off, or adjust the schedule here. Schedules use Beijing time (Asia/Shanghai).',
     autoUpdate: 'Automatic updates',
@@ -12,24 +17,21 @@ export default {
     disableHint:
       'Turning off clears the schedule and keeps compiled content and execution history. Any running compilation continues.',
     filter: 'Automatic update status',
-    allTargets: 'All targets',
+    allTargets: 'All configurations',
     active: 'Enabled',
     disabled: 'Disabled',
-    empty: 'No compilation targets yet',
-    emptyFiltered: 'No matching targets',
+    empty: 'No compilation configurations yet',
+    emptyFiltered: 'No matching configurations',
     emptyLoaded:
-      'No matches on loaded pages. Load more to check the remaining targets.',
+      'No matches on loaded pages. Load more to check the remaining configurations.',
     timing: 'Schedule',
     dailyAt: 'Daily at {{time}}',
     weeklyAt: 'Every {{weekday}} at {{time}}',
     noSchedule: 'No schedule configured',
     nextRun: 'Next run',
     notScheduled: 'Not scheduled',
-    execution: 'Execution',
-    running: 'Running',
-    idle: 'Idle',
     tasksTab: 'Execution history',
-    plansTab: 'Scheduled plans',
+    plansTab: 'Configurations',
     enabled: 'Scheduled automatic updates',
     frequency: 'Frequency',
     daily: 'Every day',
@@ -54,7 +56,7 @@ export default {
     saveHint:
       'Save the plan to run at the next scheduled time. No compilation starts now.',
     manualHint:
-      'Automatic updates are off. A new compilation runs immediately; editing settings only saves the configuration.',
+      'Start runs a full compilation now. Save configuration stores reusable inputs without running.',
     reservedArgs:
       'Use the automatic update controls above to configure auto_update and update_schedule.',
     schedulerDisabled:
@@ -218,9 +220,9 @@ export default {
   detailTitle: 'Compile task details',
   copyTaskId: 'Copy task ID',
   stages: {
+    running: 'Compiling',
     queued: 'Queued',
     loading_skill: 'Loading Skill',
-    running: 'Compiling',
     completed: 'Completed',
     processing: 'Processing sources',
   },
@@ -341,8 +343,8 @@ export default {
   status: 'Status',
   invalidTask: 'Task not found or not a compilation.',
   statuses: {
-    pending: 'Queued',
     running: 'Running',
+    pending: 'Queued',
     cancelling: 'Stopping',
     completed: 'Completed',
     failed: 'Failed',

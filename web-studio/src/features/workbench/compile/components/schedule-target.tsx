@@ -9,6 +9,7 @@ import {
   CompileLoading,
 } from '#/features/workbench/compile/components/shared'
 import {
+  createCompile,
   fetchCompileConfig,
   updateCompileConfig,
 } from '#/features/workbench/compile/lib/api'
@@ -34,8 +35,10 @@ import { LoaderCircleIcon, PencilIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { createRandomUuid } from '#/shared/lib/browser-crypto'
 
 const SCHEDULE_TIME_ZONE = 'Asia/Shanghai'
+const ACCEPTANCE_TIMES = ['task_first_create_time', 'last_run_time'] as const
 type ConfigPage = Awaited<ReturnType<typeof fetchCompileConfigs>>
 
 export function CompileScheduleTarget({
@@ -47,6 +50,20 @@ export function CompileScheduleTarget({
   const { identityScopeKey } = useAppConnection()
   const client = useQueryClient()
   const navigate = useNavigate()
+  const runKey = useRef<string | null>(null)
+  const run = useMutation({
+    mutationFn: () => {
+      runKey.current ??= `${Date.now()}:${createRandomUuid()}`
+      return createCompile({ compile_id: target.compile_id }, runKey.current)
+    },
+    onSuccess: async (task) => {
+      runKey.current = null
+      await navigate({
+        to: '/compile/tasks/$taskId',
+        params: { taskId: task.task_id },
+      })
+    },
+  })
   const switchId = useId()
   const [editing, setEditing] = useState(false)
   const pendingRead = useRef<AbortController | null>(null)
@@ -56,11 +73,16 @@ export function CompileScheduleTarget({
       // Read fresh source/Skill settings so a list action cannot restore stale ones.
       const controller = new AbortController()
       pendingRead.current = controller
-      const config = await fetchCompileConfig(target.to, controller.signal)
+      const config = await fetchCompileConfig(
+        target.compile_id,
+        controller.signal,
+      )
       // The active connection may have changed while reading the configuration.
       controller.signal.throwIfAborted()
       return updateCompileConfig({
-        to: target.to,
+        compile_id: target.compile_id,
+        to: config.to,
+        args: config.args,
         from: config.from,
         skill: config.skill,
         instruction: config.instruction,
@@ -78,8 +100,10 @@ export function CompileScheduleTarget({
             ...data,
             pages: data.pages.map((page) => ({
               ...page,
-              targets: page.targets.map((item) =>
-                item.to === target.to ? { ...item, ...config } : item,
+              configs: page.configs.map((item) =>
+                item.compile_id === target.compile_id
+                  ? { ...item, ...config }
+                  : item,
               ),
             })),
           },
@@ -91,7 +115,7 @@ export function CompileScheduleTarget({
       await Promise.all([
         client.invalidateQueries({ queryKey: listKey }),
         client.invalidateQueries({
-          queryKey: ['compile-config', identityScopeKey, target.to],
+          queryKey: ['compile-config', identityScopeKey, target.compile_id],
           refetchType: 'none',
         }),
       ])
@@ -105,7 +129,9 @@ export function CompileScheduleTarget({
   const time = schedule
     ? `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`
     : ''
-  const nextRun = target.next_run_at ? new Date(target.next_run_at) : null
+  const nextRun = target.next_triggered_slot
+    ? new Date(target.next_triggered_slot)
+    : null
   const validNextRun = nextRun && !Number.isNaN(nextRun.getTime())
 
   return (
@@ -116,14 +142,23 @@ export function CompileScheduleTarget({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="min-w-0 flex-1 break-words text-sm font-medium [overflow-wrap:anywhere]">
           <ContextLink uri={target.to}>{target.to}</ContextLink>
+          <span className="mt-1 block text-xs font-normal text-muted-foreground">
+            {target.compile_id}
+          </span>
         </h2>
+        <Button disabled={run.isPending} onClick={() => run.mutate()}>
+          {t('start')}
+        </Button>
         <Button
           variant="ghost"
           size="sm"
           disabled={mutation.isPending}
           aria-label={`${t('schedule.edit')}: ${target.to}`}
           onClick={() =>
-            void navigate({ to: '/compile/new', search: { target: target.to } })
+            void navigate({
+              to: '/compile/new',
+              search: { compileId: target.compile_id },
+            })
           }
         >
           {t('schedule.edit')}
@@ -205,13 +240,20 @@ export function CompileScheduleTarget({
             )}
           </dd>
         </div>
-        <div className="space-y-1">
-          <dt className="text-xs text-muted-foreground">
-            {t('schedule.execution')}
-          </dt>
-          <dd>{t(target.running ? 'schedule.running' : 'schedule.idle')}</dd>
-        </div>
+        {ACCEPTANCE_TIMES.map((field) => (
+          <div className="space-y-1" key={field}>
+            <dt className="text-xs text-muted-foreground">{t(field)}</dt>
+            <dd>
+              {target[field] === null
+                ? t('neverRun')
+                : new Date(target[field] * 1000).toLocaleString(i18n.language)}
+            </dd>
+          </div>
+        ))}
       </dl>
+      {run.isError && (
+        <CompileError error={run.error} retry={() => run.mutate()} />
+      )}
       {!editing && mutation.isError && (
         <CompileError
           error={mutation.error}
@@ -254,8 +296,8 @@ function ScheduleDialog({
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
   const [filled, setFilled] = useState(false)
   const config = useQuery({
-    queryKey: ['compile-config', identityScopeKey, target.to],
-    queryFn: ({ signal }) => fetchCompileConfig(target.to, signal),
+    queryKey: ['compile-config', identityScopeKey, target.compile_id],
+    queryFn: ({ signal }) => fetchCompileConfig(target.compile_id, signal),
     staleTime: 0,
   })
   useEffect(() => {

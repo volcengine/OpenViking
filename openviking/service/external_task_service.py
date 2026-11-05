@@ -230,10 +230,15 @@ class ExternalTaskService:
         ctx: RequestContext,
         idempotency_key: str | None = None,
         submission_payload: Mapping[str, Any] | None = None,
+        submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
     ) -> TaskRecord:
-        """``submission_payload`` (default ``payload``) is what idempotent retries must match."""
+        """Match retries against submitted inputs, independently of resolved execution inputs.
+
+        An explicit empty ``submission_private_payload`` excludes configuration-owned secrets
+        from the submission identity while still encrypting them for execution.
+        """
 
         async def create_task():
             return await self._create(
@@ -245,6 +250,7 @@ class ExternalTaskService:
                 ctx=ctx,
                 idempotency_key=idempotency_key,
                 submission_payload=submission_payload,
+                submission_private_payload=submission_private_payload,
                 task_id=task_id,
                 on_task_created=on_task_created,
             )
@@ -270,6 +276,7 @@ class ExternalTaskService:
         ctx: RequestContext,
         idempotency_key: str | None = None,
         submission_payload: Mapping[str, Any] | None = None,
+        submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
     ) -> TaskRecord:
@@ -279,7 +286,8 @@ class ExternalTaskService:
         provider = self._provider(task_type)
         tracker = get_task_tracker()
         request_hash = submission_request_hash(
-            payload if submission_payload is None else submission_payload, private_payload
+            payload if submission_payload is None else submission_payload,
+            private_payload if submission_private_payload is None else submission_private_payload,
         )
         token = uuid4().hex
         task_id = task_id or (

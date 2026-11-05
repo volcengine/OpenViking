@@ -1,4 +1,7 @@
-import type { CompileRequest } from '#/features/workbench/compile/lib/api'
+import type {
+  CompileExecutionRequest,
+  CompileRequest,
+} from '#/features/workbench/compile/lib/api'
 
 export class CompileCommandError extends Error {
   constructor(
@@ -66,10 +69,15 @@ export function tokenize(input: string): string[] {
   if (result[0]?.startsWith('/')) result[0] = result[0].slice(1)
   return result
 }
-export function parseCompile(tokens: string[]): CompileRequest {
+export function parseCompile(tokens: string[]): CompileExecutionRequest {
+  if (tokens[1] === '--compile-id') {
+    if (tokens.length !== 3 || !/^cpt_[0-9a-f]{32}$/.test(tokens[2]))
+      throw new CompileCommandError('invalidArgument')
+    return { compile_id: tokens[2] }
+  }
   const result: CompileRequest = { from: [], to: '', skill: '' }
   const seen = new Set<string>()
-  for (let i = 1; i < tokens.length; i += 2) {
+  for (let i = tokens[1] === 'create' ? 2 : 1; i < tokens.length; i += 2) {
     const key = tokens[i],
       value = tokens[i + 1]
     if (
@@ -109,9 +117,14 @@ export function parseArgs(value: string): Record<string, unknown> | undefined {
   return parsed as Record<string, unknown>
 }
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
-export function compileCommand(request: CompileRequest): string {
+export function compileCommand(
+  request: CompileExecutionRequest,
+  create = false,
+): string {
+  if ('compile_id' in request)
+    return `ov compile --compile-id ${quote(request.compile_id)}`
   return [
-    'ov compile',
+    create ? 'ov compile create' : 'ov compile',
     ...request.from.map((uri) => `--from ${quote(uri)}`),
     `--to ${quote(request.to)}`,
     `--skill ${quote(request.skill)}`,
@@ -133,7 +146,7 @@ export function compileHistory(input: string): {
     if (tokens[0] === 'compile') {
       const request = parseCompile(tokens)
       return {
-        title: compileCommand(request),
+        title: compileCommand(request, tokens[1] === 'create'),
         remember: !tokens.includes('--args'),
       }
     }

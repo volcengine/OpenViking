@@ -599,13 +599,31 @@ pub(super) async fn dispatch(
         }
         Commands::Compile {
             command,
+            compile_id,
             from_uris,
             to,
             skill,
             instruction,
             args,
         } => {
-            let (from_uris, to, skill, instruction, args) = match command {
+            let client = ctx.get_client();
+            if let Some(compile_id) = compile_id {
+                return commands::compile::run_saved(
+                    &client,
+                    &compile_id,
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await;
+            }
+            let (from_uris, to, skill, instruction, args, create) = match command {
+                Some(CompileCommands::Create {
+                    from_uris,
+                    to,
+                    skill,
+                    instruction,
+                    args,
+                }) => (from_uris, Some(to), skill, instruction, args, true),
                 Some(CompileCommands::Memory {
                     to,
                     instruction,
@@ -616,16 +634,17 @@ pub(super) async fn dispatch(
                     "memory".to_string(),
                     instruction,
                     args,
+                    false,
                 ),
                 None => (
                     from_uris,
                     to,
-                    skill.expect("--skill is required without a Compile subcommand"),
+                    skill.expect("--skill is required without --compile-id"),
                     instruction,
                     args,
+                    false,
                 ),
             };
-            let client = ctx.get_client();
             commands::compile::run(
                 &client,
                 from_uris,
@@ -633,6 +652,7 @@ pub(super) async fn dispatch(
                 skill,
                 instruction,
                 args,
+                create,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -681,7 +701,6 @@ pub(super) async fn dispatch(
             tags,
             tag_mode,
             acl,
-            edit_source,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -700,7 +719,6 @@ pub(super) async fn dispatch(
                 tags,
                 tag_mode,
                 acl,
-                edit_source,
                 ctx,
             )
             .await

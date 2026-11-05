@@ -2,6 +2,8 @@
 
 Besides compiling source material into Wikis, knowledge graphs, daily reports, and other artifacts with a Skill, `ov compile` has a special mode: **memory consolidation**. Instead of producing a new knowledge shape, it cleans up the **existing memories** in OpenViking in place — deduplicating, merging, splitting, and compacting them — while strictly conforming to each memory type's original schema.
 
+Memory consolidation is a one-off execution; `compile create` rejects `skill="memory"`, so this mode has no saved Compile configuration or schedule.
+
 Unlike regular compile, memory consolidation **does not go through VikingBot**; it runs directly inside OpenViking on the memory framework.
 
 ## When to use it

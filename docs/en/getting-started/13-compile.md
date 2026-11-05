@@ -42,6 +42,8 @@ Check every 5 seconds for up to 5 minutes initially. Read outputs after `complet
 
 After compilation, the target directory should contain an index and a project page. See the [sample Wiki page](/quickstart/wiki-output-en-v1.txt) for content organization and source citations, then follow the checks below to review your output.
 
+The command above is a one-off full compile. To maintain incremental history, use `ov compile create` with the same inputs, retain its `cpt_...` configuration ID, and execute `ov compile --compile-id <id>`. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
+
 ## Open the body page
 
 ```bash

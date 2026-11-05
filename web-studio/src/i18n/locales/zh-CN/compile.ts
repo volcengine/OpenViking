@@ -1,6 +1,11 @@
 export default {
+  saveConfiguration: '保存编译配置',
+  runAgain: '再次运行',
+  task_first_create_time: '首次执行受理时间',
+  last_run_time: '最近执行受理时间',
+  neverRun: '尚未运行',
+
   schedule: {
-    lastRunFailed: '上次编译失败，请查看技术详情。',
     listDescription:
       '直接开启、关闭自动更新，或调整执行时间。计划统一使用北京时间（Asia/Shanghai）。',
     autoUpdate: '自动更新',
@@ -12,23 +17,20 @@ export default {
     disableHint:
       '关闭自动更新会清除计划时间，保留编译产物和执行记录；正在运行的编译会继续。',
     filter: '自动更新状态',
-    allTargets: '全部目标',
+    allTargets: '全部配置',
     active: '已开启',
     disabled: '已关闭',
-    empty: '暂无编译目标',
-    emptyFiltered: '没有符合条件的目标',
-    emptyLoaded: '已加载的页面中没有匹配项，请加载更多以查看其余目标。',
+    empty: '暂无编译配置',
+    emptyFiltered: '没有符合条件的配置',
+    emptyLoaded: '已加载的页面中没有匹配项，请加载更多以查看其余配置。',
     timing: '执行计划',
     dailyAt: '每天 {{time}}',
     weeklyAt: '每{{weekday}} {{time}}',
     noSchedule: '未配置定时计划',
     nextRun: '下次执行',
     notScheduled: '暂无计划',
-    execution: '执行状态',
-    running: '运行中',
-    idle: '空闲',
     tasksTab: '执行记录',
-    plansTab: '定时计划',
+    plansTab: '编译配置',
     enabled: '定时自动更新',
     frequency: '执行频率',
     daily: '每天',
@@ -52,7 +54,7 @@ export default {
     saved: '更新设置已保存',
     saveHint: '保存后将在下次计划时间执行，不会立即开始编译。',
     manualHint:
-      '自动更新已关闭。新建编译将立即执行；编辑已有目标时只保存配置。',
+      '开始编译会立即执行全量编译；保存编译配置只存储可复用的输入，不执行任务。',
     reservedArgs:
       '请通过上方的自动更新选项配置 auto_update 和 update_schedule。',
     schedulerDisabled:
@@ -189,9 +191,9 @@ export default {
   detailTitle: '编译任务详情',
   copyTaskId: '复制任务 ID',
   stages: {
+    running: '编译处理中',
     queued: '等待执行',
     loading_skill: '读取 Skill',
-    running: '编译处理中',
     completed: '执行完成',
     processing: '处理素材',
   },
@@ -304,8 +306,8 @@ export default {
   status: '状态',
   invalidTask: '任务不存在或不是编译任务。',
   statuses: {
-    pending: '排队中',
     running: '运行中',
+    pending: '排队中',
     cancelling: '取消中',
     completed: '已完成',
     failed: '失败',

@@ -59,9 +59,27 @@ pub(crate) enum AclCommands {
     },
 }
 
-/// Compile shortcuts select a fixed skill and reuse the Compile request pipeline.
+/// Compile subcommands save persistent configurations or consolidate memories.
 #[derive(Subcommand)]
 pub(crate) enum CompileCommands {
+    /// Save a persistent configuration without executing it; scheduling controls belong in --args
+    Create {
+        #[arg(
+            long = "from",
+            value_delimiter = ',',
+            value_name = "uri",
+            required = true
+        )]
+        from_uris: Vec<String>,
+        #[arg(long, value_name = "uri")]
+        to: String,
+        #[arg(long, value_name = "uri")]
+        skill: String,
+        #[arg(long, value_name = "text")]
+        instruction: Option<String>,
+        #[arg(long, value_name = "json")]
+        args: Option<String>,
+    },
     /// Consolidate existing memories in place without external sources
     Memory {
         /// Existing writable memory directory; ~ identifies the current request user

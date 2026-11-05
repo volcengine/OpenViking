@@ -644,14 +644,6 @@ pub(crate) enum Commands {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
-        /// Who made the edit, recorded in Compile output versions
-        #[arg(
-            long = "edit-source",
-            default_value = "manual",
-            value_parser = ["manual", "agent", "compile"],
-            help_heading = "Advanced options"
-        )]
-        edit_source: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -1109,6 +1101,9 @@ pub(crate) enum Commands {
     Compile {
         #[command(subcommand)]
         command: Option<CompileCommands>,
+        /// Execute this persistent configuration without overriding its inputs
+        #[arg(long, value_name = "id", conflicts_with_all = ["from_uris", "to", "skill", "instruction", "args"])]
+        compile_id: Option<String>,
         /// Source file or directory; repeat the flag or separate entries with commas.
         /// Omitted with `--skill memory`, which consolidates `--to` in place.
         #[arg(long = "from", value_delimiter = ',', value_name = "uri")]
@@ -1117,7 +1112,7 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "uri")]
         to: Option<String>,
         /// Skill directory or SKILL.md Viking URI; the literal `memory` runs memory consolidation
-        #[arg(long, value_name = "uri", required = true)]
+        #[arg(long, value_name = "uri", required_unless_present = "compile_id")]
         skill: Option<String>,
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]

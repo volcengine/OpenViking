@@ -203,6 +203,12 @@ class TaskWorkStore(Protocol):
         q: Optional[str] = None,
     ) -> List[TaskRecord]: ...
 
+    async def list_durable(
+        self, account_id: str, *, task_type: Optional[str] = None
+    ) -> List[TaskRecord]:
+        """Read shared task records without a process-local cache for resource admission."""
+        ...
+
     async def delete_tasks(
         self,
         task_id: Optional[str] = None,
@@ -1038,6 +1044,35 @@ class PersistentTaskStore(TaskWorkStore):
         ]
         tasks.sort(key=lambda task: (task.created_at, task.task_id), reverse=True)
         return tasks if limit is None else tasks[:limit]
+
+    async def list_durable(
+        self, account_id: str, *, task_type: Optional[str] = None
+    ) -> List[TaskRecord]:
+        """Read current shared records, including private state, without populating the cache.
+
+        Internal admission callers hold their resource lock while inspecting these
+        records. Storage and malformed-record errors propagate so missing evidence
+        cannot admit another writer after a process restart.
+        """
+        records = []
+        for user_id in await self._owner_users(account_id):
+            directory = self._task_dir(account_id, user_id)
+            try:
+                entries = await self._ls(directory)
+            except (AGFSNotFoundError, FileNotFoundError):
+                continue
+            for entry in entries:
+                name = str(entry.get("name") or "")
+                if not name.endswith(".json"):
+                    continue
+                try:
+                    payload = json.loads(_decode_bytes(await self._read(f"{directory}/{name}")))
+                except (AGFSNotFoundError, FileNotFoundError):
+                    continue
+                record = _task_from_payload(payload, account_id=account_id, user_id=user_id)
+                if task_type is None or record.task_type == task_type:
+                    records.append(record)
+        return records
 
     async def _list_owner_page(
         self,

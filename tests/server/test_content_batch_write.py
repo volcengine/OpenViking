@@ -324,19 +324,23 @@ def _last_content_write_refresh(queue_fixture):
 
 
 @pytest.mark.asyncio
-async def test_batch_coalesces_compile_target_updates(service, monkeypatch):
-    """A batch saves its managed target's content-update time once."""
+async def test_batch_snapshots_tagged_files_once(service, monkeypatch):
+    """Tagged writes share one snapshot without creating compile configuration."""
     ctx = RequestContext(user=service.user, role=Role.USER)
-    root = "viking://resources/batch-metadata"
-    store = service.compile.lifecycle.store
+    root = "viking://resources/batch-tagged"
     await service.viking_fs.write_file(f"{root}/seed.md", "seed", ctx=ctx)
-    async with store.edit(ctx.account_id, root, create=True):
-        pass
-    update_time = AsyncMock(wraps=store.mark_content_updated)
-    monkeypatch.setattr(store, "mark_content_updated", update_time)
+    monkeypatch.setattr(
+        service.fs,
+        "_directory_has_compile_tag",
+        AsyncMock(return_value=True),
+    )
+    commit = AsyncMock(return_value={"result": "created", "commit_oid": "a" * 40})
+    monkeypatch.setattr(service.viking_fs, "commit", commit)
     ops = [{"uri": f"{root}/{i}.md", "content": "changed"} for i in range(100)]
     await service.fs.batch_write(root_uri=root, operations=ops, ctx=ctx, defer_processing=True)
-    update_time.assert_awaited_once()
+    commit.assert_awaited_once()
+    assert commit.await_args.kwargs["paths"] == sorted(operation["uri"] for operation in ops)
+    assert commit.await_args.kwargs["lease_ref"] is not None
 
 
 @pytest.mark.asyncio

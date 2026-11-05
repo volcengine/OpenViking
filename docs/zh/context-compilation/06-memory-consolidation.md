@@ -2,6 +2,8 @@
 
 除了用 Skill 把来源材料编译成 Wiki、知识图谱、日报等产物，`ov compile` 还有一种特殊模式：**记忆整理**。它不生成新的知识形态，而是把 OpenViking 里**已有的记忆**就地整理干净——去重、合并、拆分、精简，同时严格遵守每种记忆类型原本的 schema。
 
+记忆整理仅支持一次性执行；`compile create` 拒绝 `skill="memory"`，该模式不保存 Compile 配置、不配置定时计划。
+
 与普通 compile 不同，记忆整理**不经过 VikingBot**，而是直接在 OpenViking 内部用记忆框架完成。
 
 ## 什么时候用

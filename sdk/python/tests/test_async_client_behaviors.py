@@ -1847,3 +1847,36 @@ async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
 
     with pytest.raises(ValueError, match="is not a file"):
         await client.import_ovpack(str(pack_dir), parent="viking://resources/")
+
+
+def test_compile_configuration_and_id_only_execution():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._request = AsyncMock(return_value=object())
+    client._async_client._handle_response = lambda _response: {"compile_id": "cpt_" + "a" * 32}
+    saved = client.create_compile_task(
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+        options={"args": {"auto_update": False}},
+    )
+    assert client._async_client._request.await_args.args == ("POST", "/api/v1/compile/create")
+    client.compile(compile_id=saved["compile_id"])
+    assert client._async_client._request.await_args.kwargs["json"] == {
+        "compile_id": saved["compile_id"]
+    }
+    with pytest.raises(ValueError, match="cannot be combined"):
+        client.compile(compile_id=saved["compile_id"], to="viking://resources/other")
+    with pytest.raises(ValueError, match="requires"):
+        client.compile()
+
+
+def test_compile_memory_omits_sources_without_losing_target():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._request = AsyncMock(return_value=object())
+    client._async_client._handle_response = lambda _response: {"task_id": "cmp_memory"}
+    client.compile(to="viking://~/memories", skill="memory")
+    assert client._async_client._request.await_args.kwargs["json"] == {
+        "from": [],
+        "to": "viking://~/memories",
+        "skill": "memory",
+    }

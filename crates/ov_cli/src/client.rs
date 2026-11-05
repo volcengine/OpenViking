@@ -117,24 +117,23 @@ pub enum SnapshotShowResult {
     },
 }
 
-/// A Compile submission returns either an immediate task or saved target scheduling settings.
+/// An accepted execution uses the generic task query and cancellation APIs.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompileAccepted {
-    /// Present only when this request submits an immediate Compile task.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
+    pub task_id: String,
     pub status: String,
-    /// The saved schedule's next ISO 8601 trigger time; null when scheduling is disabled.
-    #[serde(default)]
-    pub next_run_at: Option<String>,
-    #[serde(default)]
-    pub to: Option<String>,
     #[serde(default)]
     pub task_type: Option<String>,
     #[serde(default)]
     pub stage: Option<String>,
     #[serde(default)]
     pub resource_id: Option<String>,
+}
+
+/// Persistent configuration identity; saving configuration does not start a task.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompileCreated {
+    pub compile_id: String,
 }
 
 #[derive(serde::Serialize)]
@@ -349,6 +348,37 @@ impl HttpClient {
 
     // ============ Content Methods ============
 
+    /// Save full inputs and scheduling controls without starting execution.
+    pub async fn create_compile_task(
+        &self,
+        from_uris: &[String],
+        to: &str,
+        skill: &str,
+        instruction: Option<&str>,
+        args: Option<&serde_json::Map<String, Value>>,
+    ) -> Result<CompileCreated> {
+        self.post(
+            "/api/v1/compile/create",
+            &CompileCreateRequest {
+                from_uris,
+                to,
+                skill,
+                instruction,
+                args,
+            },
+        )
+        .await
+    }
+
+    /// Execute a saved configuration; no other public input overrides are accepted.
+    pub async fn run_compile(&self, compile_id: &str) -> Result<CompileAccepted> {
+        self.post(
+            "/api/v1/compile",
+            &serde_json::json!({"compile_id": compile_id}),
+        )
+        .await
+    }
+
     pub async fn create_compile(
         &self,
         from_uris: &[String],
@@ -413,16 +443,11 @@ impl HttpClient {
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
-        edit_source: &str,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
             body["acl"] = acl;
-        }
-        // Omit the default so the request stays valid for servers without edit_source.
-        if edit_source != "manual" {
-            body["edit_source"] = Value::from(edit_source);
         }
         self.post("/api/v1/content/write", &body).await
     }
@@ -3075,7 +3100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_create_deserializes_task_and_schedule_responses() {
+    async fn compile_execution_deserializes_task_response() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind");
@@ -3120,23 +3145,59 @@ mod tests {
             )
             .await
             .expect("202 response body should deserialize");
-        assert_eq!(accepted.task_id.as_deref(), Some("cmp_1"));
+        assert_eq!(accepted.task_id, "cmp_1");
+    }
 
-        let scheduled: super::CompileAccepted = serde_json::from_value(serde_json::json!({
-            "to": "viking://resources/wiki",
-            "status": "active",
-            "auto_update": true,
-            "next_run_at": "2026-10-26T00:00:00+08:00"
-        }))
-        .expect("saved Compile schedules should deserialize without a task");
-        assert!(scheduled.task_id.is_none());
-        assert_eq!(
-            scheduled.next_run_at.as_deref(),
-            Some("2026-10-26T00:00:00+08:00")
+    #[tokio::test]
+    async fn compile_configuration_creation_and_id_only_execution() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let compile_id = "cpt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let server = tokio::spawn(async move {
+            for create in [true, false] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buffer = vec![0; 4096];
+                let read = stream.read(&mut buffer).await.unwrap();
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let body = if create {
+                    assert!(request.starts_with("POST /api/v1/compile/create "));
+                    assert!(request.contains(r#""auto_update":false"#));
+                    format!(r#"{{"status":"ok","result":{{"compile_id":"{compile_id}"}}}}"#)
+                } else {
+                    assert!(request.starts_with("POST /api/v1/compile "));
+                    assert!(request.ends_with(&format!(r#"{{"compile_id":"{compile_id}"}}"#)));
+                    r#"{"status":"ok","result":{"task_id":"cmp_2","status":"pending"}}"#.to_string()
+                };
+                stream.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            }
+        });
+        let client = HttpClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            false,
+            None,
         );
-        let output = serde_json::to_value(scheduled).expect("schedule output should serialize");
-        assert!(output.get("task_id").is_none());
-        assert_eq!(output["next_run_at"], "2026-10-26T00:00:00+08:00");
+        let args = serde_json::json!({"auto_update": false});
+        let config = client
+            .create_compile_task(
+                &["viking://resources/a".into()],
+                "viking://resources/b",
+                "viking://agent/skills/wiki",
+                None,
+                args.as_object(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(config.compile_id, compile_id);
+        assert_eq!(
+            client.run_compile(compile_id).await.unwrap().task_id,
+            "cmp_2"
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

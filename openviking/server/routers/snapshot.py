@@ -110,7 +110,7 @@ async def log(
 
 
 class RestoreRequest(BaseModel):
-    """Restore a directory snapshot or one Compile output file; modes cannot be mixed."""
+    """Restore a directory snapshot or one file; modes cannot be mixed."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -143,16 +143,22 @@ class RestoreRequest(BaseModel):
 
 @router.get("/versions")
 async def versions(
-    uri: str = Query(..., description="Compile output file URI"),
+    uri: str = Query(..., description="File URI"),
     limit: int = Query(20, ge=1, le=100),
-    before_version: Optional[str] = Query(None),
+    before_snapshot: Optional[str] = Query(None, pattern=r"^[0-9a-f]{40}$"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List a Compile output file's versions, newest first."""
+    """List a file's native snapshot commits, newest first."""
     uri = validate_request_viking_uri(uri, _ctx, field_name="uri")
-    result = await get_service().compile.file_versions(
-        uri, _ctx, limit=limit, before=before_version
-    )
+    try:
+        result = await get_service().fs.file_versions(
+            uri, _ctx, limit=limit, before=before_snapshot
+        )
+    except (AGFSClientError, ValueError) as exc:
+        mapped = map_exception(exc)
+        if mapped is not None:
+            raise mapped from exc
+        raise
     return Response(status="ok", result=result)
 
 
@@ -163,21 +169,22 @@ async def restore(
 ):
     """Restore a directory or one file's historical content as a forward commit."""
     service = get_service()
-    if request.path is not None:
-        path = validate_request_viking_uri(request.path, _ctx, field_name="path")
-        result = await service.compile.restore_file_version(
-            uri=path,
-            restore_commit_id=request.restore_commit_id,
-            current_commit_id=request.current_commit_id,
-            ctx=_ctx,
-        )
-        return Response(status="ok", result=result)
     project_dir = (
         validate_request_viking_uri(request.project_dir, _ctx, field_name="project_dir")
         if request.project_dir
         else None
     )
     try:
+        if request.path is not None:
+            path = validate_request_viking_uri(request.path, _ctx, field_name="path")
+            result = await service.fs.restore_file_version(
+                uri=path,
+                restore_commit_id=request.restore_commit_id,
+                current_commit_id=request.current_commit_id,
+                ctx=_ctx,
+                dry_run=request.dry_run,
+            )
+            return Response(status="ok", result=result)
         result = await service.fs.restore(
             project_dir=project_dir,
             source_commit=request.source_commit,

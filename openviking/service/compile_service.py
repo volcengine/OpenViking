@@ -4,19 +4,28 @@
 
 from __future__ import annotations
 
-import asyncio
+import base64
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
+from uuid import uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
-from openviking.service.compile_targets import CompileLifecycle, UpdateSchedule, split_control_args
+from openviking.service.compile_targets import (
+    CompileLifecycle,
+    UpdateSchedule,
+    execution_signature,
+    is_versioned,
+    new_record,
+    split_control_args,
+)
 from openviking.service.external_task_service import (
     ExternalTaskCancellation,
     ExternalTaskError,
@@ -26,11 +35,11 @@ from openviking.service.external_task_service import (
 )
 from openviking.service.fs_service import FSService
 from openviking.service.memory_compile import MemoryCompileRunner
-from openviking.service.task_tracker import SENSITIVE_TASK_KEYS, TaskRecord
-from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
+from openviking.service.task_domain import sanitize_task_result
+from openviking.service.task_tracker import TaskRecord
 from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import (
-    ConflictError,
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -50,24 +59,9 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 MEMORY_COMPILE_SKILL = "memory"
 
 
-class CompileConfigUpdate(BaseModel):
-    """Whole update settings for one Compile target (POST /compile/config/update)."""
+class CompileCreateRequest(BaseModel):
+    """Complete compile inputs; scheduling controls are accepted only when saving a configuration."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    to: str = Field(min_length=1)
-    from_: list[str] = Field(alias="from", min_length=1)
-    skill: str = Field(min_length=1)
-    instruction: str | None = None
-    auto_update: bool
-    update_schedule: UpdateSchedule | None = None
-
-    @property
-    def instruction_sent(self) -> bool:
-        return "instruction" in self.model_fields_set
-
-
-class CompileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     from_: list[str] = Field(default_factory=list, alias="from")
@@ -75,32 +69,13 @@ class CompileRequest(BaseModel):
     skill: str = Field(min_length=1)
     instruction: str | None = None
     args: dict[str, Any] | None = None
-    # Explicit instruction/reason updates the saved instruction only when the
-    # request also configures scheduling; ordinary manual instructions are per-run.
-    _instruction_sent: bool = PrivateAttr(default=False)
 
     @property
     def is_memory_mode(self) -> bool:
         return self.skill == MEMORY_COMPILE_SKILL
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_reason(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "reason" in data:
-            data = dict(data)
-            data.setdefault("instruction", data.pop("reason"))
-        return data
-
-    @model_validator(mode="wrap")
-    @classmethod
-    def _track_instruction(cls, data: Any, handler: Any) -> "CompileRequest":
-        model = handler(data)
-        if isinstance(data, dict):
-            model._instruction_sent = "instruction" in data or "reason" in data
-        return model
-
     @model_validator(mode="after")
-    def _normalize(self) -> "CompileRequest":
+    def _normalize(self) -> "CompileCreateRequest":
         sources: list[str] = []
         for source in self.from_:
             normalized = source.strip().rstrip("/")
@@ -115,6 +90,11 @@ class CompileRequest(BaseModel):
             self.instruction.strip() if self.instruction and self.instruction.strip() else None
         )
         self.args = dict(self.args) if self.args else None
+        reserved = {"mode", "last_compile_time", "changes"}.intersection(self.args or {})
+        if reserved:
+            raise ValueError(
+                f"Compile execution controls are server-owned: {', '.join(sorted(reserved))}"
+            )
         if not self.to:
             raise ValueError("to must not be empty")
         if not self.skill:
@@ -126,6 +106,49 @@ class CompileRequest(BaseModel):
         if self.is_memory_mode and self.from_:
             raise ValueError("--skill memory consolidates --to in place and takes no --from")
         return self
+
+
+class CompileRequest(BaseModel):
+    """Execute one saved configuration or complete full inputs, never a mixture of both."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    compile_id: str | None = Field(default=None, pattern=r"^cpt_[0-9a-f]{32}$")
+    from_: list[str] = Field(default_factory=list, alias="from")
+    to: str | None = None
+    skill: str | None = None
+    instruction: str | None = None
+    args: dict[str, Any] | None = None
+
+    @property
+    def is_memory_mode(self) -> bool:
+        return self.skill == MEMORY_COMPILE_SKILL
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CompileRequest":
+        """Reject overrides and validate full inputs before any execution side effects."""
+        if self.compile_id is not None:
+            if self.model_fields_set != {"compile_id"}:
+                raise ValueError("compile_id cannot be combined with execution inputs")
+            return self
+        inputs = CompileCreateRequest.model_validate(
+            self.model_dump(by_alias=True, exclude={"compile_id"})
+        )
+        if {"auto_update", "update_schedule"}.intersection(inputs.args or {}):
+            raise ValueError(
+                "Scheduling controls require /compile/create or /compile/config/update"
+            )
+        for name in ("from_", "to", "skill", "instruction", "args"):
+            setattr(self, name, getattr(inputs, name))
+        return self
+
+
+class CompileConfigUpdate(CompileCreateRequest):
+    """Replace a configuration by ID; scheduling changes preserve execution timestamps."""
+
+    compile_id: str = Field(pattern=r"^cpt_[0-9a-f]{32}$")
+    auto_update: bool
+    update_schedule: UpdateSchedule | None = None
 
 
 class CompileErrorInfo(BaseModel):
@@ -327,11 +350,10 @@ class CompileService:
         self._local_endpoint: _CompileEndpoint | None = None
         self._memory_runner: MemoryCompileRunner | None = None
         self._lifecycle: CompileLifecycle | None = None
-        # Keep submission history tasks alive until their storage operations finish.
-        self._history_tasks: set[asyncio.Task[None]] = set()
+        self._scheduler: Any = None
 
     def configure_lifecycle(self, lifecycle: CompileLifecycle) -> None:
-        """Enable target registry, incremental planning and scheduled updates."""
+        """Install persistent configurations and recoverable full/incremental execution."""
         self._lifecycle = lifecycle
 
     @property
@@ -398,6 +420,102 @@ class CompileService:
             "reason_code": None if allowed else "API_KEY_REQUIRED",
         }
 
+    def configure_scheduler(self, scheduler: Any) -> None:
+        """Install scheduling for saved configurations; execution remains available without it."""
+        self._scheduler = scheduler
+
+    async def _encrypt_private_args(
+        self, account_id: str, private: dict[str, Any]
+    ) -> dict[str, str]:
+        """Encrypt private input subtrees; configuration state contains only their ciphertext."""
+        try:
+            encrypted = await self._tasks._credential_encryptor().encrypt(
+                account_id, json.dumps(private, ensure_ascii=False).encode()
+            )
+        except Exception as exc:
+            raise FailedPreconditionError("Cannot encrypt Compile configuration inputs") from exc
+        return {"ciphertext": base64.b64encode(encrypted).decode("ascii")}
+
+    async def _private_args(self, account_id: str, value: Mapping[str, Any]) -> dict[str, Any]:
+        """Decrypt saved private inputs only for authenticated execution, never for public views."""
+        if not value:
+            return {}
+        try:
+            ciphertext = base64.b64decode(value["ciphertext"], validate=True)
+            plaintext = await self._tasks._credential_encryptor().decrypt(account_id, ciphertext)
+            decoded = json.loads(plaintext)
+            if not isinstance(decoded, dict) or not isinstance(decoded.get("args"), dict):
+                raise ValueError("Invalid private Compile inputs")
+            return decoded
+        except Exception as exc:
+            raise FailedPreconditionError("Cannot decrypt Compile configuration inputs") from exc
+
+    async def _configure_schedule(
+        self, record: dict[str, Any], ctx: RequestContext, auto_update: bool, schedule: dict | None
+    ) -> None:
+        """Validate credentials and calculate the first future slot without submitting work."""
+        from datetime import datetime
+
+        from openviking.service.compile_scheduler import TZ, next_slot
+
+        changed = auto_update != record["auto_update"] or schedule != record["update_schedule"]
+        if auto_update:
+            if schedule is None:
+                raise InvalidArgumentError("update_schedule is required when auto_update is true")
+            if self._scheduler is None or self._scheduler._expiry is None:
+                raise FailedPreconditionError("Scheduled Compile requires a configured scheduler")
+            executor, credential = await self._scheduler.save_credential(ctx)
+            record["execution_context"].update(executor=executor, credential=credential)
+            if changed or record["next_triggered_slot"] is None:
+                record["next_triggered_slot"] = next_slot(schedule, datetime.now(TZ)).isoformat()
+                record["last_triggered_slot"] = None
+        else:
+            schedule = None
+            record["execution_context"]["credential"] = None
+            record["next_triggered_slot"] = None
+        record["auto_update"] = auto_update
+        record["update_schedule"] = schedule
+
+    async def _settings(self, request: CompileCreateRequest, ctx: RequestContext) -> dict[str, Any]:
+        """Build validated settings with encrypted private args before creating any output nodes."""
+        if request.is_memory_mode:
+            raise InvalidArgumentError("Persistent Compile does not support skill=memory")
+        normalized = await self._normalize_request(request, ctx)
+        CompileLifecycle.validate_layout(normalized.to, normalized.from_)
+        public, private = self._split_payload(normalized)
+        control, runtime_args = split_control_args(public.get("args"))
+        public["args"] = runtime_args
+        record = new_record(public)
+        if private:
+            record["execution_context"]["private_args"] = await self._encrypt_private_args(
+                ctx.account_id, private
+            )
+        schedule = control.get("update_schedule")
+        await self._configure_schedule(
+            record, ctx, control.get("auto_update", schedule is not None), schedule
+        )
+        return record
+
+    async def create_compile_task(
+        self, request: CompileCreateRequest, *, ctx: RequestContext
+    ) -> dict[str, str]:
+        """Save a tagged configuration without executing Compile or capturing source snapshots."""
+        lifecycle = self._require_lifecycle()
+        record = await self._settings(request, ctx)
+        await self._fs.ensure_compile_target(record["to"], ctx)
+        compile_id = "cpt_" + uuid4().hex
+
+        async def register_schedule() -> None:
+            if self._scheduler is not None:
+                await self._scheduler.reschedule(
+                    ctx.account_id, compile_id, record, raise_on_error=True
+                )
+
+        await lifecycle.store.create(
+            ctx.account_id, record, compile_id=compile_id, before_publish=register_schedule
+        )
+        return {"compile_id": compile_id}
+
     async def create(
         self,
         request: CompileRequest,
@@ -405,121 +523,82 @@ class CompileService:
         connection: Mapping[str, Any],
         ctx: RequestContext,
         idempotency_key: str | None = None,
-    ) -> TaskRecord | dict[str, Any]:
-        """Save explicit update settings synchronously, or queue one immediate Compile run."""
-        control, _ = split_control_args(request.args)
-        configures_schedule = "auto_update" in control or "update_schedule" in control
+        trigger: str = "manual",
+        locked_record: dict[str, Any] | None = None,
+        scheduled_slot: str | None = None,
+    ) -> TaskRecord:
+        """Execute frozen configuration inputs or a full request; scheduled callers share this path.
+
+        ``locked_record`` is supplied only by the scheduler while it owns the configuration lock.
+        Submission retries recover the original task and do not refresh its invocation timestamps.
+        """
+        if trigger not in {"manual", "scheduled"}:
+            raise InvalidArgumentError("Invalid Compile trigger")
         if request.is_memory_mode:
-            if configures_schedule:
-                raise InvalidArgumentError("Scheduled updates do not support --skill memory")
             if self._memory_runner is None:
                 raise UnavailableError(
                     "memory compile", "memory consolidation runner is not configured"
                 )
             return await self._memory_runner.create(
-                target=request.to,
-                instruction=request.instruction,
-                ctx=ctx,
+                target=request.to, instruction=request.instruction, ctx=ctx
             )
-        request = self._normalize_request_uris(request, ctx)
-        CompileLifecycle.validate_layout(request.to, request.from_)
-        if configures_schedule:
-            lifecycle = self._require_lifecycle()
-            normalized = await self._normalize_request(request, ctx)
-            submitted, _ = self._split_payload(normalized)
-            control, runtime_args = split_control_args(submitted.get("args"))
-            record = await lifecycle.save_submission(
-                submitted, control, runtime_args, request._instruction_sent, ctx
+        compile_id = request.compile_id
+        if compile_id and locked_record is None:
+            await self._configuration(compile_id, ctx, action=AclAction.WRITE)
+            async with self._require_lifecycle().store.edit(ctx.account_id, compile_id) as record:
+                return await self.create(
+                    request,
+                    connection=connection,
+                    ctx=ctx,
+                    idempotency_key=idempotency_key,
+                    trigger=trigger,
+                    locked_record=record,
+                    scheduled_slot=scheduled_slot,
+                )
+        if compile_id:
+            record = locked_record
+            inputs = CompileCreateRequest.model_validate(
+                {key: record[key] for key in ("from", "to", "skill", "instruction", "args")}
             )
-            return self._config_view(record)
+            submitted, submitted_private = {"compile_id": compile_id}, {}
+        else:
+            record = None
+            inputs = self._normalize_request_uris(request, ctx)
+            submitted, submitted_private = self._split_payload(inputs)
         if idempotency_key:
-            payload, private_payload = self._split_payload(request)
             existing = await self._tasks.recover_submission(
-                self.task_type, payload, private_payload, ctx, idempotency_key
+                self.task_type, submitted, submitted_private, ctx, idempotency_key
             )
             if existing is not None:
-                self._schedule_history(existing)
+                if compile_id:
+                    await self._require_lifecycle().record_queued(
+                        existing, locked_record=locked_record
+                    )
                 return existing
         endpoint = self._endpoint()
         if not endpoint.local and not str(connection.get("api_key") or "").strip():
             raise UnauthenticatedError("Compile requires a forwardable OpenViking API key")
-        normalized = await self._normalize_request(request, ctx)
-        submitted, private_payload = self._split_payload(normalized)
-        payload = submitted
-        preparation = None
-        if self._lifecycle is not None:
-            control, runtime_args = split_control_args(submitted.get("args"))
-            payload = {key: value for key, value in submitted.items() if key != "args"}
-            if runtime_args:
-                payload["args"] = runtime_args
-            payload["compile"] = {
-                "mode": control.get("mode", "incremental"),
-                "trigger": "manual",
-            }
-            preparation = asyncio.create_task(
-                self._lifecycle.prepare(submitted, ctx, instruction_set=request._instruction_sent)
+        normalized = await self._normalize_request(inputs, ctx)
+        CompileLifecycle.validate_layout(normalized.to, normalized.from_)
+        payload, private_payload = self._split_payload(normalized)
+        payload["compile"] = {"trigger": trigger}
+        if trigger == "scheduled":
+            payload["compile"]["scheduled_slot"] = scheduled_slot
+        if record is not None:
+            private_payload = await self._private_args(
+                ctx.account_id, record["execution_context"].get("private_args") or {}
             )
-        return await self._create_task(
-            payload,
-            submitted,
-            private_payload,
-            normalized,
-            connection,
-            ctx,
-            idempotency_key,
-            preparation=preparation,
-        )
+            payload["compile"].update(
+                compile_id=compile_id,
+                auto_update=record["auto_update"],
+                update_schedule=record["update_schedule"],
+                input_signature=execution_signature(record),
+            )
 
-    async def create_scheduled(
-        self,
-        record: dict[str, Any],
-        *,
-        ctx: RequestContext,
-        connection: Mapping[str, Any],
-        idempotency_key: str,
-    ) -> TaskRecord:
-        """Submit an incremental task from a locked target record (see CompileScheduler)."""
-        assert self._lifecycle is not None
-        request = CompileRequest.model_validate(
-            {
-                "from": record["from"],
-                "to": record["to"],
-                "skill": record["skill"],
-                "instruction": record["instruction"],
-                "args": {"mode": "incremental", **record["execution_context"]["args"]},
-            }
-        )
-        normalized = await self._normalize_request(self._normalize_request_uris(request, ctx), ctx)
-        submitted, private_payload = self._split_payload(normalized)
-        payload = await self._lifecycle.prepare(
-            submitted, ctx, instruction_set=False, scheduled_record=record
-        )
-        return await self._create_task(
-            payload,
-            submitted,
-            private_payload,
-            normalized,
-            connection,
-            ctx,
-            idempotency_key,
-            locked_record=record,
-        )
+        async def record_created(task: TaskRecord) -> None:
+            await self._require_lifecycle().record_queued(task, locked_record=locked_record)
 
-    async def _create_task(
-        self,
-        payload: dict[str, Any],
-        submitted: dict[str, Any],
-        private_payload: dict[str, Any],
-        normalized: CompileRequest,
-        connection: Mapping[str, Any],
-        ctx: RequestContext,
-        idempotency_key: str | None,
-        *,
-        locked_record: dict[str, Any] | None = None,
-        preparation: asyncio.Task[Any] | None = None,
-    ) -> TaskRecord:
-        """Enqueue work, recording scheduled history before releasing its caller-owned state lock."""
-        task = await self._tasks.create(
+        return await self._tasks.create(
             self.task_type,
             resource_id=", ".join(normalized.from_),
             payload=payload,
@@ -528,34 +607,9 @@ class CompileService:
             ctx=ctx,
             idempotency_key=idempotency_key,
             submission_payload=submitted if idempotency_key else None,
+            submission_private_payload={} if compile_id else None,
+            on_task_created=record_created if compile_id else None,
         )
-        if locked_record is not None:
-            await self._require_lifecycle().record_queued(task, locked_record=locked_record)
-        else:
-            self._schedule_history(task, preparation=preparation)
-        return task
-
-    def _schedule_history(
-        self, task: TaskRecord, *, preparation: asyncio.Task[Any] | None = None
-    ) -> None:
-        """Record history after optional preparation, logging background failures."""
-        lifecycle = self._lifecycle
-        if lifecycle is None:
-            return
-
-        async def record_history() -> None:
-            try:
-                if preparation is not None:
-                    await preparation
-                await lifecycle.record_queued(task)
-            except Exception:
-                logger.exception(
-                    "Failed to record Compile submission history task_id=%s", task.task_id
-                )
-
-        background = asyncio.create_task(record_history())
-        self._history_tasks.add(background)
-        background.add_done_callback(self._history_tasks.discard)
 
     async def on_start(self, task: TaskRecord) -> str | ExternalTaskSnapshot | None:
         if self._lifecycle is None:
@@ -587,7 +641,10 @@ class CompileService:
         args = self._merge_args(payload, private_payload)
         if self._lifecycle is not None:
             changes = await self._lifecycle.runtime_changes(
-                payload, str(connection.get("account_id") or ""), ov_task_id
+                payload,
+                str(connection.get("account_id") or ""),
+                ov_task_id,
+                user_id=str(connection.get("user_id") or ""),
             )
             if changes is not None:
                 args = {**(args or {}), "changes": changes}
@@ -683,255 +740,194 @@ class CompileService:
             terminal_snapshot=outcome if failure is not None else None,
         )
 
-    # ---------- update settings and run history ----------
+    # ---------- saved configurations and run history ----------
 
     def _require_lifecycle(self) -> CompileLifecycle:
         if self._lifecycle is None:
-            raise UnavailableError("compile settings", "Compile target registry is not configured")
+            raise UnavailableError("compile settings", "Compile lifecycle is not configured")
         return self._lifecycle
 
-    async def _target(
-        self,
-        to: str,
-        ctx: RequestContext,
-        *,
-        include_deleted: bool = False,
-        action: AclAction = AclAction.READ,
+    async def _configuration(
+        self, compile_id: str, ctx: RequestContext, *, action: AclAction = AclAction.READ
     ) -> dict[str, Any]:
-        """Resolve an account's registered target after checking the requested ACL action."""
+        """Resolve one account-scoped configuration and authorize its output directory."""
+        if not re.fullmatch(r"cpt_[0-9a-f]{32}", compile_id):
+            raise InvalidArgumentError("Invalid compile_id")
         lifecycle = self._require_lifecycle()
-        target = validate_request_viking_uri(resolve_path_variables(to), ctx, field_name="to")
-        await lifecycle._fs._ensure_access(target.rstrip("/"), ctx, action=action)
-        record = await lifecycle.store.get_by_to(
-            ctx.account_id, target.rstrip("/"), include_deleted=include_deleted
-        )
+        record = await lifecycle.store.get(ctx.account_id, compile_id)
         if record is None:
-            raise NotFoundError(to, "compile target")
+            raise NotFoundError(compile_id, "compile configuration")
+        await lifecycle._fs._ensure_access(record["to"], ctx, action=action)
         return record
 
     @staticmethod
-    def _config_view(record: Mapping[str, Any]) -> dict[str, Any]:
-        from openviking.service.compile_scheduler import next_run_at
-
-        return {
-            "status": record["status"],
-            "to": record["to"],
-            "initialized": record["initialized"],
-            "initial_actor": record.get("initial_actor"),
-            "from": record["from"],
-            "skill": record["skill"],
-            "instruction": record["instruction"],
-            "auto_update": record["auto_update"],
-            "update_schedule": record["update_schedule"],
-            "next_run_at": next_run_at(dict(record)),
-            "last_run": record["last_run"],
-            "last_error": record["last_error"],
-            "content_updated_at": record.get("content_updated_at"),
-            "first_compile_created_at": record.get("first_compile_created_at"),
-            "compile_type": record.get("compile_type", "compile"),
-            "conflicts_num": record.get("conflicts_num", 0),
-        }
-
-    async def get_config(self, to: str, ctx: RequestContext) -> dict[str, Any]:
-        return self._config_view(await self._target(to, ctx))
-
-    async def update_config(self, body: "CompileConfigUpdate", ctx: RequestContext) -> dict:
-        lifecycle = self._require_lifecycle()
-        record = await self._target(body.to, ctx, action=AclAction.WRITE)
-        identity = (record["to"], record["deleted_at"])
-        request = await self._normalize_request(
-            self._normalize_request_uris(
-                CompileRequest.model_validate(
-                    {"from": body.from_, "to": record["to"], "skill": body.skill}
-                ),
-                ctx,
-            ),
-            ctx,
+    def _config_view(compile_id: str, record: Mapping[str, Any]) -> dict[str, Any]:
+        """Expose configuration inputs and invocation/slot times without private execution context."""
+        fields = (
+            "from",
+            "to",
+            "skill",
+            "instruction",
+            "args",
+            "auto_update",
+            "update_schedule",
+            "task_first_create_time",
+            "last_run_time",
+            "last_triggered_slot",
+            "next_triggered_slot",
         )
-        lifecycle.validate_layout(record["to"], request.from_)
-        async with lifecycle.store.edit(ctx.account_id, record["to"]) as record:
-            if record["status"] != "active" or (record["to"], record["deleted_at"]) != identity:
-                raise ConflictError(
-                    "Compile target changed during configuration", resource="COMPILE_TARGET"
-                )
-            lifecycle.apply_sources(record, request.from_, request.skill)
-            if body.instruction_sent:
-                record["instruction"] = (body.instruction or "").strip() or None
-            await lifecycle.apply_schedule(
-                record,
-                ctx,
-                body.auto_update,
-                body.update_schedule.model_dump() if body.update_schedule is not None else None,
+        return {"compile_id": compile_id, **{key: record[key] for key in fields}}
+
+    async def get_config(self, compile_id: str, ctx: RequestContext) -> dict[str, Any]:
+        return self._config_view(compile_id, await self._configuration(compile_id, ctx))
+
+    async def update_config(self, body: CompileConfigUpdate, ctx: RequestContext) -> dict[str, Any]:
+        """Replace settings under the state lock, preserving times and invalidating changed inputs."""
+        from copy import deepcopy
+
+        await self._configuration(body.compile_id, ctx, action=AclAction.WRITE)
+        args = dict(body.args or {})
+        if {"auto_update", "update_schedule"}.intersection(args):
+            raise InvalidArgumentError(
+                "Use top-level scheduling fields when updating a configuration"
             )
-            if lifecycle.reschedule is not None:
-                await lifecycle.reschedule(ctx.account_id, record, raise_on_error=True)
-        return self._config_view(record)
+        args.update(
+            auto_update=body.auto_update,
+            update_schedule=body.update_schedule.model_dump() if body.update_schedule else None,
+        )
+        inputs = CompileCreateRequest.model_validate(
+            {
+                "from": body.from_,
+                "to": body.to,
+                "skill": body.skill,
+                "instruction": body.instruction,
+                "args": args,
+            }
+        )
+        replacement = await self._settings(inputs, ctx)
+        await self._fs.ensure_compile_target(replacement["to"], ctx)
+        lifecycle = self._require_lifecycle()
+        async with lifecycle.store.edit(ctx.account_id, body.compile_id) as record:
+            await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
+            previous_signature = execution_signature(record)
+            replacement = deepcopy(replacement)
+            old_private = await self._private_args(
+                ctx.account_id, record["execution_context"].get("private_args") or {}
+            )
+            new_private = await self._private_args(
+                ctx.account_id, replacement["execution_context"].get("private_args") or {}
+            )
+            retained = dict(new_private.get("args") or {})
+            for key, value in (old_private.get("args") or {}).items():
+                if key in retained:
+                    continue
+                if key in record["args"] and replacement["args"].get(key) != record["args"][key]:
+                    if key in replacement["args"]:
+                        raise InvalidArgumentError(
+                            f"Changing args.{key} requires resubmitting its private fields"
+                        )
+                    continue
+                retained[key] = value
+            merged_private = {"args": retained} if retained else {}
+            if merged_private == old_private:
+                replacement["execution_context"]["private_args"] = record["execution_context"].get(
+                    "private_args"
+                )
+            elif merged_private:
+                replacement["execution_context"]["private_args"] = await self._encrypt_private_args(
+                    ctx.account_id, merged_private
+                )
+            else:
+                replacement["execution_context"].pop("private_args", None)
+            for field in ("task_first_create_time", "last_run_time"):
+                replacement[field] = record[field]
+            if (record["auto_update"], record["update_schedule"]) == (
+                replacement["auto_update"],
+                replacement["update_schedule"],
+            ):
+                for field in ("last_triggered_slot", "next_triggered_slot"):
+                    replacement[field] = record[field]
+            if previous_signature == execution_signature(replacement):
+                replacement["progress"] = record["progress"]
+            if self._scheduler is not None:
+                await self._scheduler.reschedule(
+                    ctx.account_id, body.compile_id, replacement, raise_on_error=True
+                )
+            record.clear()
+            record.update(replacement)
+        return self._config_view(body.compile_id, record)
 
     async def list_configs(
         self, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        """Read active target states lazily in SHA256(to) order, with one readable lookahead."""
-        from openviking.service.compile_scheduler import next_run_at
-
+        """Page readable configurations in stable ID order, including shared output directories."""
         lifecycle = self._require_lifecycle()
         items = []
-        async for item in lifecycle.store.iter_summaries(ctx.account_id, cursor=cursor):
-            if item["status"] == "deleted":
-                continue
+        async for compile_id, record in lifecycle.store.iter_records(ctx.account_id, cursor=cursor):
             try:
-                await lifecycle._fs._ensure_access(item["to"], ctx)
+                await lifecycle._fs._ensure_access(record["to"], ctx)
             except PermissionDeniedError:
                 continue
-            items.append(
-                {
-                    "status": item["status"],
-                    "to": item["to"],
-                    "initialized": item["initialized"],
-                    "running": item["running"],
-                    "auto_update": item["auto_update"],
-                    "update_schedule": item["update_schedule"],
-                    "next_run_at": next_run_at(item),
-                    "content_updated_at": item.get("content_updated_at"),
-                    "first_compile_created_at": item.get("first_compile_created_at"),
-                    "compile_type": item.get("compile_type", "compile"),
-                    "conflicts_num": item.get("conflicts_num", 0),
-                }
-            )
+            items.append(self._config_view(compile_id, record))
             if len(items) > limit:
                 break
         page = items[:limit]
         return {
-            "targets": page,
-            "next_cursor": page[-1]["to"] if len(items) > limit else None,
+            "configs": page,
+            "next_cursor": page[-1]["compile_id"] if len(items) > limit else None,
         }
 
-    async def list_operations(
-        self, to: str, ctx: RequestContext, *, limit: int, cursor: str | None
+    async def list_runs(
+        self, compile_id: str, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        """Page authorized target operations with public Compile metadata only.
+        await self._configuration(compile_id, ctx)
+        lifecycle = self._require_lifecycle()
+        runs = []
+        for run in await lifecycle.store.list_runs(ctx.account_id, compile_id, cursor=cursor):
+            try:
+                await lifecycle._fs._ensure_access(run["params"]["to"], ctx)
+            except PermissionDeniedError:
+                continue
+            runs.append(run)
+            if len(runs) > limit:
+                break
+        page = runs[:limit]
+        return {"runs": page, "next_cursor": page[-1]["task_id"] if len(runs) > limit else None}
 
-        Common operation fields retain their stored structure. Compile checkpoints
-        remain private even when they share the persisted metadata dictionary.
-        """
-        record = await self._target(to, ctx, include_deleted=True)
-        operations = await self._require_lifecycle().store.list_operations(
-            ctx.account_id, record["to"], limit=limit + 1, cursor=cursor
+    async def get_run(self, compile_id: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
+        """Read a frozen run under the caller's current configuration read permission."""
+        await self._configuration(compile_id, ctx)
+        run = await self._require_lifecycle().store.get_run(ctx.account_id, compile_id, task_id)
+        if run is None:
+            raise NotFoundError(task_id, "compile run")
+        await self._require_lifecycle()._fs._ensure_access(run["params"]["to"], ctx)
+        return run
+
+    async def run_outputs(
+        self, compile_id: str, task_id: str, ctx: RequestContext, *, limit: int, cursor: str | None
+    ) -> dict[str, Any]:
+        """Derive changed output references from the run's frozen snapshots without an index file."""
+        run = await self.get_run(compile_id, task_id, ctx)
+        target = run["params"]["to"]
+        fs = self._require_lifecycle()._fs
+        await fs._ensure_access(target, ctx)
+        start, finish = run["meta"]["start_snapshot"], run["meta"]["finish_snapshot"]
+        changes = (
+            await fs.diff_paths(dirs=[target], base=start, head=finish, ctx=ctx)
+            if start and finish
+            else []
         )
-        page = operations[:limit]
-        public = [self._operation_view(operation) for operation in page]
-        next_cursor = page[-1]["operation_id"] if len(operations) > limit else None
-        return {"operations": public, "next_cursor": next_cursor}
-
-    @staticmethod
-    def _operation_view(operation: Mapping[str, Any]) -> dict[str, Any]:
-        """Expose operation fields and public metadata while excluding private checkpoints."""
-        return {
-            key: operation[key]
-            for key in (
-                "operation_id",
-                "operation_type",
-                "actor",
-                "created_at",
-                "status",
-                "started_at",
-                "finished_at",
-                "params",
-                "result",
-                "error",
-            )
-        } | {
-            "meta": {
-                key: operation["meta"][key]
-                for key in (
-                    "task_id",
-                    "trigger",
-                    "execution",
-                    "skill_snapshot",
-                    "base",
-                    "head",
-                    "changes",
-                )
-                if key in operation["meta"]
-            },
-        }
-
-    async def get_operation(
-        self,
-        to: str,
-        operation_id: str,
-        ctx: RequestContext,
-    ) -> dict[str, Any]:
-        """Read one authorized operation, including deleted targets and public metadata only."""
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}", operation_id):
-            raise InvalidArgumentError("Invalid operation_id")
-        record = await self._target(to, ctx, include_deleted=True)
-        operation = await self._require_lifecycle().store.get_operation(
-            ctx.account_id, record["to"], operation_id
-        )
-        if operation is None:
-            raise NotFoundError(operation_id, "operation")
-        return self._operation_view(operation)
-
-    async def operation_outputs(
-        self,
-        to: str,
-        operation_id: str,
-        ctx: RequestContext,
-        *,
-        limit: int,
-        cursor: str | None,
-    ) -> dict[str, Any]:
-        """Read one authorized operation's immutable-path version references, ordered by URI."""
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}", operation_id):
-            raise InvalidArgumentError("Invalid operation_id")
-        record = await self._target(to, ctx)
-        store = self._require_lifecycle().store
-        if await store.get_operation(ctx.account_id, record["to"], operation_id) is None:
-            raise NotFoundError(operation_id, "operation")
-        manifest = await store.get_outputs(ctx.account_id, record["to"], operation_id)
-        if manifest is None:
-            raise NotFoundError(operation_id, "operation outputs not recorded")
-        outputs = sorted(manifest["outputs"], key=lambda item: item["uri"])
-        if cursor:
-            outputs = [item for item in outputs if item["uri"] > cursor]
+        outputs = [
+            {"uri": item["uri"], "snapshot_id": finish, "change_type": item["change_type"]}
+            for item in sorted(changes, key=lambda item: item["uri"])
+            if item["change_type"] != "deleted"
+            and is_versioned(item["uri"])
+            and (not cursor or item["uri"] > cursor)
+        ]
+        allowed = await fs._can_access_many([item["uri"] for item in outputs], ctx)
+        outputs = [item for item in outputs if allowed.get(item["uri"], False)]
         page = outputs[:limit]
         return {"outputs": page, "next_cursor": page[-1]["uri"] if len(outputs) > limit else None}
-
-    async def file_versions(
-        self, uri: str, ctx: RequestContext, *, limit: int, before: str | None
-    ) -> dict[str, Any]:
-        return await self._require_lifecycle().versions.versions(
-            uri, ctx, limit=limit, before=before
-        )
-
-    async def restore_file_version(
-        self, uri: str, restore_commit_id: str, current_commit_id: str, ctx: RequestContext
-    ) -> dict[str, Any]:
-        """Return restored version metadata; stale file commits or active Compile raise ConflictError."""
-
-        async def write(content: bytes, commit_content: Any) -> None:
-            # Use normal refresh while recording a restore version.
-            try:
-                body: str | bytes = content.decode("utf-8")
-            except UnicodeDecodeError:
-                body = content
-            if isinstance(body, str) and classify_uri(uri).is_memory:
-                body = strip_memory_fields_trailer(body)
-            await self._fs.write(
-                uri,
-                body,
-                ctx,
-                edit_source="compile",
-                commit_content=commit_content,
-            )
-
-        return await self._require_lifecycle().versions.restore(
-            uri=uri,
-            restore_commit_id=restore_commit_id,
-            current_commit_id=current_commit_id,
-            ctx=ctx,
-            write=write,
-        )
 
     @staticmethod
     def _merge_args(
@@ -1037,14 +1033,23 @@ class CompileService:
 
     @staticmethod
     def _split_payload(request: CompileRequest) -> tuple[dict[str, Any], dict[str, Any]]:
-        payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
+        payload = request.model_dump(
+            mode="json", by_alias=True, exclude_none=True, exclude={"compile_id"}
+        )
         args = payload.get("args")
         if not isinstance(args, dict):
             return payload, {}
-        private_args = {key: args.pop(key) for key in SENSITIVE_TASK_KEYS if key in args}
+        public_args = sanitize_task_result(args)
+        private_args = {
+            key: value
+            for key, value in args.items()
+            if key not in public_args or value != public_args[key]
+        }
         if not private_args:
             return payload, {}
-        if not args:
+        if public_args:
+            payload["args"] = public_args
+        else:
             payload.pop("args", None)
         return payload, {"args": private_args}
 
@@ -1098,6 +1103,8 @@ class CompileService:
 
 __all__ = [
     "CompileAPIClient",
+    "CompileConfigUpdate",
+    "CompileCreateRequest",
     "CompileRequest",
     "CompileService",
     "CompileSessionAccepted",

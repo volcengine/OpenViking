@@ -191,12 +191,30 @@ export interface BatchWriteOptions extends WaitOptions {
   processingMode?: ProcessingMode;
   extra?: JsonObject;
 }
-/** Compile request options. */
-export interface CompileOptions {
+/** Full compilation inputs; creation accepts scheduling controls in args. */
+export interface CompileInput {
+  from: string[];
+  to: string;
+  skill: string;
   instruction?: string;
   args?: JsonObject;
-  extra?: JsonObject;
 }
+/** Select saved inputs or supply full inputs; in-place memory mode needs no sources. */
+export type CompileRequest =
+  | (CompileInput & { compile_id?: never })
+  | (Omit<CompileInput, "from" | "skill"> & {
+      skill: "memory";
+      from?: [];
+      compile_id?: never;
+    })
+  | {
+      compile_id: string;
+      from?: never;
+      to?: never;
+      skill?: never;
+      instruction?: never;
+      args?: never;
+    };
 /** Retrieval tag update options. */
 export interface SetTagsOptions {
   mode?: "replace" | "append" | "clear";

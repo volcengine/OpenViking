@@ -63,11 +63,21 @@ type AddSkillOptions struct {
 	TargetURI any
 }
 
-// CompileOptions controls Compile.
-type CompileOptions struct {
-	Instruction string
-	Args        map[string]any
-	Extra       map[string]any
+// CompileInput contains full compilation inputs. Args may contain scheduling
+// controls only when creating a persistent configuration.
+type CompileInput struct {
+	FromURIs    []string       `json:"from,omitempty"`
+	To          string         `json:"to,omitempty"`
+	Skill       string         `json:"skill"`
+	Instruction string         `json:"instruction,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+}
+
+// CompileRequest selects one saved configuration or supplies independent full inputs.
+// CompileID and Input are mutually exclusive.
+type CompileRequest struct {
+	CompileID string
+	Input     *CompileInput
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.

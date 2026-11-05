@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { compileListReturn } from '#/features/workbench/compile/lib/navigation'
 import {
   createMemoryHistory,

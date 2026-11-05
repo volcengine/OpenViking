@@ -6,6 +6,7 @@ import {
   tokenize,
 } from '#/features/workbench/compile/lib/commands'
 import { describe, expect, it } from 'vitest'
+import type { CompileRequest } from '#/features/workbench/compile/lib/api'
 
 import {
   clearCompileHandoff,
@@ -26,10 +27,12 @@ describe('Compile command grammar', () => {
   })
   it('accepts repeated sources and quoted JSON', () => {
     expect(
-      parseCompile(
-        tokenize(
-          `compile --from viking://resources/a --from viking://resources/b --to viking://resources/c --skill viking://agent/skills/wiki --args '{"model_name":"hello world"}'`,
-        ),
+      (
+        parseCompile(
+          tokenize(
+            `compile --from viking://resources/a --from viking://resources/b --to viking://resources/c --skill viking://agent/skills/wiki --args '{"model_name":"hello world"}'`,
+          ),
+        ) as CompileRequest
       ).args,
     ).toEqual({ model_name: 'hello world' })
   })
@@ -72,7 +75,7 @@ it.each(['--args', "'--args'", '"--args"', String.raw`--ar\gs`])(
   'omits private args from history for %s',
   (flag) => {
     const command = `compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s ${flag} '{"api_key":"synthetic-secret"}'`
-    expect(parseCompile(tokenize(command)).args).toEqual({
+    expect((parseCompile(tokenize(command)) as CompileRequest).args).toEqual({
       api_key: 'synthetic-secret',
     })
     const history = compileHistory(command)
@@ -84,4 +87,14 @@ it('does not persist malformed commands containing private args', () => {
   expect(
     compileHistory(`compile --args '{"api_key":"synthetic-secret"}`),
   ).toEqual({ title: 'compile / task', remember: false })
+})
+
+it('round trips ID-only runs and rejects overrides', () => {
+  const request = { compile_id: 'cpt_' + 'a'.repeat(32) }
+  expect(parseCompile(tokenize(compileCommand(request)))).toEqual(request)
+  expect(() =>
+    parseCompile(
+      tokenize(compileCommand(request) + ' --to viking://resources/other'),
+    ),
+  ).toThrow()
 })

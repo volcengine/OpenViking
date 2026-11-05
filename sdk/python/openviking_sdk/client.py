@@ -1951,19 +1951,49 @@ class AsyncHTTPClient:
             return None
         return self._handle_response(response)
 
-    async def compile(
+    async def create_compile_task(
         self,
         from_uris: List[str],
         to: str,
         skill: str,
         options: Optional[CompileOptions] = None,
     ) -> Dict[str, Any]:
-        """Return a queued task, or saved settings when args explicitly configure scheduling."""
+        """Save a persistent Compile configuration without starting an execution.
+
+        Scheduling controls belong in options.args; the result contains compile_id.
+        """
         payload = self._build_options_payload(
-            options,
-            CompileOptions,
-            fixed={"from": list(from_uris), "to": to, "skill": skill},
+            options, CompileOptions, fixed={"from": list(from_uris), "to": to, "skill": skill}
         )
+        response = await self._request("POST", "/api/v1/compile/create", json=payload)
+        return self._handle_response(response)
+
+    async def compile(
+        self,
+        from_uris: Optional[List[str]] = None,
+        to: Optional[str] = None,
+        skill: Optional[str] = None,
+        options: Optional[CompileOptions] = None,
+        *,
+        compile_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue an execution using only compile_id or complete full-compile inputs.
+
+        Persistent inputs cannot be overridden. The returned task_id identifies
+        this execution and supports the generic task query and cancellation APIs.
+        """
+        if compile_id is not None:
+            if from_uris is not None or to is not None or skill is not None or options is not None:
+                raise ValueError("compile_id cannot be combined with Compile inputs")
+            payload = {"compile_id": compile_id}
+        else:
+            if not skill or not to or (skill != "memory" and not from_uris):
+                raise ValueError("Full Compile requires to, skill and non-memory from_uris")
+            payload = self._build_options_payload(
+                options,
+                CompileOptions,
+                fixed={"from": list(from_uris or []), "skill": skill, **({"to": to} if to else {})},
+            )
         response = await self._request("POST", "/api/v1/compile", json=payload)
         return self._handle_response(response)
 
@@ -3508,14 +3538,29 @@ class SyncHTTPClient:
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return run_async(self._async_client.get_task(task_id))
 
-    def compile(
+    def create_compile_task(
         self,
         from_uris: List[str],
         to: str,
         skill: str,
         options: Optional[CompileOptions] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.compile(from_uris, to, skill, options))
+        """Save a Compile configuration and return its compile_id without executing it."""
+        return run_async(self._async_client.create_compile_task(from_uris, to, skill, options))
+
+    def compile(
+        self,
+        from_uris: Optional[List[str]] = None,
+        to: Optional[str] = None,
+        skill: Optional[str] = None,
+        options: Optional[CompileOptions] = None,
+        *,
+        compile_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue a persistent execution by ID or an independent full compilation."""
+        return run_async(
+            self._async_client.compile(from_uris, to, skill, options, compile_id=compile_id)
+        )
 
     def rule_compile(
         self,

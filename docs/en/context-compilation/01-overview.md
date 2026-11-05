@@ -6,7 +6,7 @@
 
 Compilation with an installed Skill needs:
 
-- `--from`: one or more source directories or files.
+- `--from`: one or more source directories.
 - `--to`: the output directory.
 - `--skill`: the URI of an installed Skill that defines the output's content and structure.
 
@@ -28,9 +28,21 @@ ov compile \
 
 The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. The full field reference, task lifecycle, and HTTP API are in the [Agent Runtime API](../api/23-agent-runtime.md).
 
+## Reuse a saved compilation
+
+The full-input command above performs a one-off full compile. To retain a source baseline for later incremental runs, create configuration first:
+
+```bash
+ov compile create --from viking://resources/research \
+  --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki
+ov compile --compile-id <cpt_configuration_id>
+```
+
+Creation returns `compile_id`, prepares and tags the output directory, and does not execute Compile. Each execution returns a new `cmp_...` task ID. The first run is full; later successful runs advance a shared manual/scheduled baseline. Use `/api/v1/compile/create` with scheduling controls in `args` for recurring execution. Saved configurations are independent even when they share an output directory. Existing target-based configurations and schedules must be recreated; ordinary file moves and deletes never update saved configuration.
+
 ## Use Web Studio
 
-Studio provides a Compile list at `/compile`, a form at `/compile/new`, and task details at `/compile/tasks/<task_id>`. Select and preview a Skill, browse source directories, submit multiple sources, inspect or cancel a task, and open its output directory. The Filesystem terminal also supports `compile` and `task`; it can hand parameters to the form.
+Studio separates saved configuration creation from one-off full execution. Saved configurations are keyed by `compile_id` and rerun with that ID. Studio provides a Compile list at `/compile`, a form at `/compile/new`, and task details at `/compile/tasks/<task_id>`. Select and preview a Skill, browse source directories, submit multiple sources, inspect or cancel a task, and open its output directory. The Filesystem terminal also supports `compile` and `task`; it can hand parameters to the form.
 
 Task-list cursors are signed with a process-local key and bound to the caller and filters. Restarting the service invalidates old cursors; refresh the list to start again. A cursor from one replica is not portable to another. Pagination scans stored task records rather than using an index, so read cost grows with retained history.
 

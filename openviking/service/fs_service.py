@@ -74,6 +74,7 @@ from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
+    ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
@@ -121,7 +122,6 @@ def _visible_grep_content(content: str, uri: str) -> str:
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
-    from openviking.service.compile_targets import CompileLifecycle
     from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
     from openviking.storage import VikingDBManager
 
@@ -146,10 +146,6 @@ class FSService:
         )
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_manager = watch_manager
-        # Installed by OpenVikingService; records Compile output versions after writes.
-        self.compile_versions: Optional[Any] = None
-        # Installed by OpenVikingService; transfers exact-target Compile settings on mv.
-        self.compile_lifecycle: Optional["CompileLifecycle"] = None
 
     def set_dependencies(
         self,
@@ -530,14 +526,7 @@ class FSService:
                 await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
                 return
 
-        versions = self.compile_versions
-        managed = versions is not None and await versions.owning_target(
-            ctx.account_id, directory_uri
-        )
-
         async def create():
-            if managed:
-                await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
             async with self._hold_watch_scope(
                 [await self._existing_tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
             ) as lease:
@@ -586,12 +575,7 @@ class FSService:
                 include_overview=False,
             )
 
-        if managed:
-            await run_to_completion(
-                lambda: versions.record_operation([directory_uri], ctx, "mkdir", {}, create)
-            )
-        else:
-            await create()
+        await create()
 
     async def _existing_tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
         """Tree-lock the deepest existing ancestor-or-self of *uri*.
@@ -1010,7 +994,7 @@ class FSService:
         recursive: bool,
         ctx: RequestContext,
     ) -> Dict[str, Any]:
-        """Copy and refresh as one cancellation-safe unit, leaving Compile metadata intact."""
+        """Copy and refresh as one cancellation-safe unit."""
         viking_fs = self._ensure_initialized()
         source_policy = namespace_policy_for_uri(from_uri)
         target_policy = namespace_policy_for_uri(to_uri)
@@ -1188,24 +1172,6 @@ class FSService:
                         )
                         raise rollback_error from move_error
                     raise
-
-                if self.compile_lifecycle is not None:
-                    try:
-                        await self.compile_lifecycle.move_target(from_uri, to_uri, ctx)
-                    except Exception as exc:
-                        if isinstance(exc, OpenVikingError) and exc.details.get("move_committed"):
-                            raise
-                        raise OpenVikingError(
-                            f"Content moved, but Compile configuration migration failed: {exc}",
-                            code=getattr(exc, "code", "INTERNAL"),
-                            details={
-                                **(exc.details if isinstance(exc, OpenVikingError) else {}),
-                                "from": from_uri,
-                                "to": to_uri,
-                                "move_committed": True,
-                                "phase": "compile_config",
-                            },
-                        ) from exc
 
         await move()
         rebuild_target = not source_indexed and target_indexed
@@ -1777,23 +1743,17 @@ class FSService:
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
-        edit_source: Literal["manual", "agent", "compile"] = "manual",
         commit_content: Optional[Callable[..., Awaitable[Any]]] = None,
         resolve_conflicts: bool = False,
     ) -> Dict[str, Any]:
-        """Write content and refresh it after persisting managed output versions.
+        """Write and refresh content, snapshotting files below tagged directories under the lease.
 
-        Internal restores supply ``commit_content`` to record their own version.
+        Internal restores supply ``commit_content`` to check and commit their own snapshot.
         resolve_conflicts enables manual conflict resolution.
         """
         viking_fs = self._ensure_initialized()
-        if commit_content is None and self.compile_versions is not None:
-            commit_content = partial(
-                self.compile_versions.record_write,
-                ctx=ctx,
-                edit_source=edit_source,
-                record_version=edit_source != "compile",
-            )
+        if commit_content is None:
+            commit_content = partial(self._snapshot_write, ctx=ctx)
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
@@ -1813,11 +1773,7 @@ class FSService:
             acl=acl,
             resolve_conflicts=resolve_conflicts,
         )
-        if self.compile_versions is None or edit_source == "compile":
-            return await write()
-        return await self.compile_versions.record_operation(
-            [uri], ctx, f"{edit_source}_revise", {"mode": mode}, write
-        )
+        return await write()
 
     async def batch_write(
         self,
@@ -1829,29 +1785,34 @@ class FSService:
         skip_conflicts: bool = False,
         defer_processing: bool = False,
         processing_mode: str = "semantic_and_vectors",
-        edit_source: Literal["manual", "agent", "compile"] = "manual",
     ) -> Dict[str, Any]:
         """Apply multiple file writes and aggregate downstream refresh."""
         viking_fs = self._ensure_initialized()
+        snapshot_paths: set[str] = set()
+
+        async def collect_snapshot(uris, *, lease_ref, write):
+            """Collect only successfully written tagged paths while the batch owns its lease."""
+            targets = await self._tagged_snapshot_paths(uris, ctx)
+            result = await write()
+            snapshot_paths.update(targets)
+            return result
+
+        async def commit_snapshot(*, lease_ref):
+            """Commit the batch's tagged paths once before releasing its content lease."""
+            if snapshot_paths:
+                await viking_fs.commit(
+                    message="content batch write",
+                    paths=sorted(snapshot_paths),
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                )
+
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
             privacy_sanitizer=self._privacy_sanitizer,
-            commit_batch=(
-                partial(self.compile_versions.finish_batch, ctx=ctx, edit_source=edit_source)
-                if self.compile_versions is not None and edit_source != "compile"
-                else None
-            ),
-            commit_content=(
-                partial(
-                    self.compile_versions.record_write,
-                    ctx=ctx,
-                    edit_source=edit_source,
-                    record_version=False,
-                )
-                if self.compile_versions is not None
-                else None
-            ),
+            commit_batch=commit_snapshot,
+            commit_content=collect_snapshot,
         )
         write = partial(
             coordinator.batch_write,
@@ -1863,15 +1824,62 @@ class FSService:
             defer_processing=defer_processing,
             processing_mode=processing_mode,
         )
-        if self.compile_versions is None or edit_source == "compile":
-            return await write()
-        return await self.compile_versions.record_operation(
-            [operation["uri"] for operation in operations],
-            ctx,
-            f"{edit_source}_revise",
-            {"batch": True},
-            write,
+        return await write()
+
+    async def _tagged_snapshot_paths(self, uris: List[str], ctx: RequestContext) -> List[str]:
+        """Select files with a tagged ancestor inside their content namespace; storage errors propagate."""
+        selected = []
+        tagged: Dict[str, bool] = {}
+        for uri in uris:
+            if not namespace_policy_for_uri(uri).supports_tags:
+                continue
+            namespace = classify_uri(uri)
+            boundary = (namespace.content_index or 0) + 1
+            parts = list(namespace.parts[:-1])
+            while len(parts) >= boundary:
+                parent = "viking://" + "/".join(parts)
+                if parent not in tagged:
+                    tagged[parent] = await self._directory_has_compile_tag(parent, ctx)
+                if tagged[parent]:
+                    selected.append(uri)
+                    break
+                parts.pop()
+        return selected
+
+    async def _directory_has_compile_tag(self, uri: str, ctx: RequestContext) -> bool:
+        """Test visible directory nodes for the output tag without requiring a unique index record."""
+        store = self._ensure_initialized()._get_vector_store()
+        if store is None:
+            raise NotInitializedError("Vector store")
+        records, _ = await store.scroll(
+            filter=And(
+                [Eq("uri", uri), In("level", [0, 1]), Eq("search_tags", "compile_target=true")]
+            ),
+            limit=1,
+            output_fields=["uri"],
+            ctx=ctx,
         )
+        return bool(records)
+
+    async def _snapshot_write(
+        self,
+        uris: List[str],
+        *,
+        ctx: RequestContext,
+        lease_ref: Any,
+        write: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Return the write callback's result after snapshotting tagged URIs under its lease.
+
+        Snapshot failures propagate even when the bytes have already been written.
+        """
+        paths = await self._tagged_snapshot_paths(uris, ctx)
+        result = await write()
+        if paths:
+            await self._ensure_initialized().commit(
+                message="content write", paths=paths, ctx=ctx, lease_ref=lease_ref
+            )
+        return result
 
     async def set_tags(
         self,
@@ -2139,6 +2147,30 @@ class FSService:
         )
         return result
 
+    async def ensure_compile_target(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Materialize a missing output directory and expose its tag without replacing existing summaries.
+
+        Existing files are rejected. Failures preserve user content and propagate before a
+        caller publishes its configuration; internal directory indexing may create a Task.
+        """
+        viking_fs = self._ensure_initialized()
+        uri = validate_safe_viking_uri_path(uri)
+        self._reject_storage_internal_target(uri)
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        async with self._hold_watch_scope(
+            [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
+        ) as lease:
+            try:
+                stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+            else:
+                if not stat.get("isDir"):
+                    raise InvalidArgumentError(f"Compile target must be a directory: {uri}")
+        return await self.finalize_compile_directories(uri, ctx)
+
     async def finalize_compile_directories(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Ensure L0 and tag only the target directory ``uri`` using ``ctx`` permissions.
 
@@ -2279,8 +2311,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Forward to VikingFS.restore. See viking_fs.restore for semantics."""
         viking_fs = self._ensure_initialized()
-        restore = partial(
-            viking_fs.restore,
+        return await viking_fs.restore(
             project_dir=project_dir,
             source_commit=source_commit,
             branch=branch,
@@ -2289,28 +2320,85 @@ class FSService:
             author_name=author_name,
             author_email=author_email,
             ctx=ctx,
-            record_restore=(
-                partial(self.compile_versions.record_restored, ctx=ctx)
-                if self.compile_versions is not None and not dry_run
-                else None
-            ),
         )
-        if self.compile_versions is None or dry_run:
-            return await restore()
-        return await self.compile_versions.record_operation(
-            [
-                viking_fs._tree_path_to_uri(
-                    viking_fs._uri_to_tree_path(project_dir, ctx=ctx)
-                ).rstrip("/")
-                if project_dir
-                else "viking://"
-            ],
-            ctx,
-            "restore",
-            {"source_commit": source_commit, "branch": branch},
-            restore,
-            recursive=True,
+
+    async def file_versions(
+        self, uri: str, ctx: RequestContext, *, limit: int, before: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Page native commits changing a file, excluding an optional snapshot cursor."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.READ)
+        history = await viking_fs.log(
+            branch=before or "main", paths=[uri], limit=limit + 1 + bool(before), ctx=ctx
         )
+        if before:
+            if not history or history[0]["oid"] != before:
+                raise InvalidArgumentError(
+                    "before_snapshot must identify a commit changing this file"
+                )
+            history = history[1:]
+        page = history[:limit]
+        return {
+            "uri": uri,
+            "versions": page,
+            "next_before_snapshot": page[-1]["oid"] if len(history) > limit else None,
+        }
+
+    async def restore_file_version(
+        self,
+        uri: str,
+        restore_commit_id: str,
+        current_commit_id: str,
+        ctx: RequestContext,
+        *,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Restore a file through normal indexing and a forward snapshot; stale commits fail under lock."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+
+        async def check_current_commit():
+            history = await viking_fs.log(paths=[uri], limit=1, ctx=ctx)
+            current = history[0]["oid"] if history else None
+            if current != current_commit_id:
+                raise ConflictError(
+                    f"Current file commit is {current}, not {current_commit_id}",
+                    resource="VERSION_CONFLICT",
+                )
+
+        await check_current_commit()
+        try:
+            content = await viking_fs.show(restore_commit_id, path=uri, ctx=ctx)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(f"{restore_commit_id}:{uri}", "snapshot file") from exc
+            raise
+        if dry_run:
+            return {"uri": uri, "snapshot_id": current_commit_id, "result": "dry_run"}
+        result = {}
+
+        async def commit_restore(uris, *, lease_ref, write):
+            await check_current_commit()
+            written = await write()
+            snapshot = await viking_fs.commit(
+                message=f"restore {uri} to {restore_commit_id}",
+                paths=uris,
+                ctx=ctx,
+                lease_ref=lease_ref,
+            )
+            result.update(uri=uri, snapshot_id=snapshot["commit_oid"], result=snapshot["result"])
+            return written
+
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        if isinstance(content, str) and classify_uri(uri).is_memory:
+            from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
+
+            content = strip_memory_fields_trailer(content)
+        await self.write(uri, content, ctx, mode="replace", commit_content=commit_restore)
+        return result
 
     async def show(
         self,

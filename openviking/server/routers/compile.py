@@ -6,7 +6,6 @@ import asyncio
 import math
 
 from fastapi import APIRouter, Depends, Header, Path, Query, status
-from fastapi import Response as HTTPResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -17,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.service.compile_service import (
     CompileConfigUpdate,
+    CompileCreateRequest,
     CompileRequest,
 )
 from openviking_cli.exceptions import InvalidArgumentError
@@ -24,21 +24,27 @@ from openviking_cli.exceptions import InvalidArgumentError
 router = APIRouter(prefix="/api/v1", tags=["compile"])
 
 
-@router.post(
-    "/compile",
-    status_code=status.HTTP_202_ACCEPTED,
-    responses={status.HTTP_200_OK: {"description": "Compile update settings saved"}},
-)
+@router.post("/compile/create")
+async def create_compile_task(
+    body: CompileCreateRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Create a tagged, account-scoped configuration without running Compile."""
+    return Response(
+        status="ok", result=await get_service().compile.create_compile_task(body, ctx=ctx)
+    )
+
+
+@router.post("/compile", status_code=status.HTTP_202_ACCEPTED)
 async def create_compile(
     body: CompileRequest,
-    response: HTTPResponse,
     ctx: RequestContext = Depends(get_request_context),
     idempotency_key: str | None = Header(
         None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9:._-]+$"
     ),
     x_request_id: str | None = Header(None),
 ):
-    """Save explicit update settings, or queue a task with the caller's forwarding identity."""
+    """Queue a saved configuration or a full request with the caller's forwarding identity."""
     connection = {"api_key": ctx.api_key} if ctx.api_key else {}
     connection.update(account_id=ctx.account_id, user_id=ctx.user.user_id)
     if ctx.actor_peer_id:
@@ -52,9 +58,6 @@ async def create_compile(
         ctx=ctx,
         **({"idempotency_key": idempotency_key} if idempotency_key else {}),
     )
-    if isinstance(result, dict):
-        response.status_code = status.HTTP_200_OK
-        return Response(status="ok", result=result)
     return Response(status="ok", result=result.to_dict())
 
 
@@ -63,10 +66,10 @@ __all__ = ["router"]
 
 @router.get("/compile/config")
 async def get_compile_config(
-    to: str = Query(..., min_length=1),
+    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    return Response(status="ok", result=await get_service().compile.get_config(to, ctx))
+    return Response(status="ok", result=await get_service().compile.get_config(compile_id, ctx))
 
 
 @router.post("/compile/config/update")
@@ -89,45 +92,41 @@ async def list_compile_configs(
     )
 
 
-@router.get("/compile/operations")
-async def list_compile_operations(
-    to: str = Query(..., min_length=1),
+@router.get("/compile/runs")
+async def list_compile_runs(
+    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    result = await get_service().compile.list_operations(to, ctx, limit=limit, cursor=cursor)
+    result = await get_service().compile.list_runs(compile_id, ctx, limit=limit, cursor=cursor)
     return Response(status="ok", result=result)
 
 
-@router.get("/compile/operations/{operation_id}")
-async def get_compile_operation(
-    operation_id: str = Path(
-        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9:._-]*$"
-    ),
-    to: str = Query(..., min_length=1),
+@router.get("/compile/runs/{task_id}")
+async def get_compile_run(
+    task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
+    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Read one operation using to for authorization and the history's public field set."""
-    result = await get_service().compile.get_operation(to, operation_id, ctx)
+    """Read a frozen run without exposing execution credentials or private checkpoints."""
+    result = await get_service().compile.get_run(compile_id, task_id, ctx)
     return Response(status="ok", result=result)
 
 
-@router.get("/compile/operations/{operation_id}/outputs")
-async def operation_outputs(
-    operation_id: str = Path(
-        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9:._-]*$"
-    ),
-    to: str = Query(..., min_length=1),
+@router.get("/compile/runs/{task_id}/outputs")
+async def run_outputs(
+    task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
+    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List one operation's output files and frozen version references."""
+    """Derive a run's changed output files from its frozen snapshots."""
     return Response(
         status="ok",
-        result=await get_service().compile.operation_outputs(
-            to, operation_id, ctx, limit=limit, cursor=cursor
+        result=await get_service().compile.run_outputs(
+            compile_id, task_id, ctx, limit=limit, cursor=cursor
         ),
     )
 

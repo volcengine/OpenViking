@@ -4,10 +4,10 @@ import { createFileRoute } from '@tanstack/react-router'
 export const Route = createFileRoute('/compile/new')({
   validateSearch: (
     s: Record<string, unknown>,
-  ): { fromTask?: string; from?: string; target?: string } => ({
-    target:
-      typeof s.target === 'string' && s.target.startsWith('viking://')
-        ? s.target
+  ): { fromTask?: string; from?: string; compileId?: string } => ({
+    compileId:
+      typeof s.compileId === 'string' && /^cpt_[0-9a-f]{32}$/.test(s.compileId)
+        ? s.compileId
         : undefined,
     fromTask: typeof s.fromTask === 'string' ? s.fromTask : undefined,
     from:
