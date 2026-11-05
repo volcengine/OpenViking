@@ -69,14 +69,20 @@
   border-radius: 50%;
   background: #5252ff;
 }
-.documentToolbar {
+.documentToolbar,
+.emptyToolbar {
   display: flex;
   align-items: center;
   gap: 4px;
   min-height: 44px;
   flex-shrink: 0;
   padding: 4px 8px;
+}
+.documentToolbar {
   border-bottom: 1px solid #edeef3;
+}
+.emptyToolbar {
+  justify-content: flex-end;
 }
 .documentToolbar > button:first-child {
   font-family: inherit;

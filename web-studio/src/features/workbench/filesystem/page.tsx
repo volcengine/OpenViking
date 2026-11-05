@@ -489,6 +489,7 @@ function FilesystemWorkbench() {
   }, [])
 
   const selectedUri = selectedFile?.uri ?? currentUri
+  const hasOpenDocument = selectedFile !== null && selectedUri !== ROOT_URI
   const selectedIsDirectory = selectedFile?.isDir ?? true
   const transferUri = selectedIsDirectory
     ? selectedUri
@@ -496,16 +497,12 @@ function FilesystemWorkbench() {
   useEffect(() => {
     setDataManagementMode(null)
   }, [selectedUri])
-  const canManageSelectedUri = selectedUri !== ROOT_URI
   const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
-  const displayUri =
-    selectedUri === ROOT_URI
-      ? ROOT_URI
-      : selectedUri
-          .replace(/^viking:\/\//, '')
-          .replace(/\/$/, '')
-          .split('/')
-          .join(' / ')
+  const displayUri = selectedUri
+    .replace(/^viking:\/\//, '')
+    .replace(/\/$/, '')
+    .split('/')
+    .join(' / ')
   const entries = visibleContextEntries(listQuery.data?.entries ?? [])
   const layoutStyle = useMemo(
     () =>
@@ -667,183 +664,198 @@ function FilesystemWorkbench() {
         />
 
         <main className={styles.document}>
-          <div className={styles.documentTabs}>
-            <span className={styles.activeTab}>
-              <FileTextIcon className="size-3.5" />
-              {selectedUri === ROOT_URI
-                ? t('ide.workspace')
-                : selectedFile?.name || t('explorer.title')}
-              {documentDirty ? <span className={styles.dirtyDot} /> : null}
-            </span>
-          </div>
-          <div className={styles.documentToolbar}>
-            <button
-              type="button"
-              className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
-              title={selectedUri}
-              onClick={() => void revealResource(selectedUri)}
+          {hasOpenDocument ? (
+            <div className={styles.documentTabs}>
+              <span className={styles.activeTab}>
+                <FileTextIcon className="size-3.5" />
+                {selectedFile.name}
+                {documentDirty ? <span className={styles.dirtyDot} /> : null}
+              </span>
+            </div>
+          ) : null}
+          {hasOpenDocument ||
+          (canUseCliPanel && (isCompactLayout || rightCollapsed)) ? (
+            <div
+              className={
+                hasOpenDocument ? styles.documentToolbar : styles.emptyToolbar
+              }
             >
-              {displayUri}
-            </button>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              title={t('copyUri')}
-              onClick={() => {
-                void copyTextToClipboard(selectedUri)
-                  .then(() => {
-                    toast.success(t('copied'))
-                  })
-                  .catch(() => {
-                    toast.error(t('copyFailed'))
-                  })
-              }}
-            >
-              <ClipboardIcon className="size-4" />
-            </Button>
-            <div ref={setDocumentToolbar} className={styles.editorActions} />
-            <details className={styles.moreMenu}>
-              <summary aria-label={t('ide.more')} title={t('ide.more')}>
-                <MoreHorizontalIcon className="size-4" />
-              </summary>
-              <div className={styles.moreMenuContent}>
-                {canUseLocalTools && selectedIsDirectory ? (
-                  <Button
+              {hasOpenDocument ? (
+                <>
+                  <button
                     type="button"
-                    size="sm"
-                    aria-label={t('explorer.addResource')}
-                    className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
-                    onClick={() => setUploadDialogOpen(true)}
+                    className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
+                    title={selectedUri}
+                    onClick={() => void revealResource(selectedUri)}
                   >
-                    <UploadIcon className="size-4" />
-                    <span className="hidden xl:inline">
-                      {t('explorer.addResource')}
-                    </span>
-                  </Button>
-                ) : null}
-                {canUseLocalTools &&
-                  selectedIsDirectory &&
-                  /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
-                    selectedUri,
-                  ) && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-label={t('compile:compileThisFolder')}
-                      onClick={() =>
-                        void navigate({
-                          to: '/compile/new',
-                          search: { from: selectedUri },
-                        })
-                      }
-                    >
-                      <WandSparkles className="size-4" />
-                      <span className="hidden sm:inline">
-                        {t('compile:compileThisFolder')}
-                      </span>
-                    </Button>
-                  )}
-                {canManageSelectedUri ? (
+                    {displayUri}
+                  </button>
                   <Button
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    title={t('dataManagement:historyTitle')}
-                    aria-label={t('dataManagement:historyTitle')}
-                    onClick={() => setDataManagementMode('history')}
+                    title={t('copyUri')}
+                    onClick={() => {
+                      void copyTextToClipboard(selectedUri)
+                        .then(() => {
+                          toast.success(t('copied'))
+                        })
+                        .catch(() => {
+                          toast.error(t('copyFailed'))
+                        })
+                    }}
                   >
-                    <HistoryIcon className="size-4" />
+                    <ClipboardIcon className="size-4" />
                   </Button>
-                ) : null}
-                {canTransferSelectedUri ? (
+                  <div
+                    ref={setDocumentToolbar}
+                    className={styles.editorActions}
+                  />
+                  <details className={styles.moreMenu}>
+                    <summary aria-label={t('ide.more')} title={t('ide.more')}>
+                      <MoreHorizontalIcon className="size-4" />
+                    </summary>
+                    <div className={styles.moreMenuContent}>
+                      {canUseLocalTools && selectedIsDirectory ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          aria-label={t('explorer.addResource')}
+                          className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
+                          onClick={() => setUploadDialogOpen(true)}
+                        >
+                          <UploadIcon className="size-4" />
+                          <span className="hidden xl:inline">
+                            {t('explorer.addResource')}
+                          </span>
+                        </Button>
+                      ) : null}
+                      {canUseLocalTools &&
+                        selectedIsDirectory &&
+                        /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
+                          selectedUri,
+                        ) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            aria-label={t('compile:compileThisFolder')}
+                            onClick={() =>
+                              void navigate({
+                                to: '/compile/new',
+                                search: { from: selectedUri },
+                              })
+                            }
+                          >
+                            <WandSparkles className="size-4" />
+                            <span className="hidden sm:inline">
+                              {t('compile:compileThisFolder')}
+                            </span>
+                          </Button>
+                        )}
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        title={t('dataManagement:historyTitle')}
+                        aria-label={t('dataManagement:historyTitle')}
+                        onClick={() => setDataManagementMode('history')}
+                      >
+                        <HistoryIcon className="size-4" />
+                      </Button>
+                      {canTransferSelectedUri ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          title={t('dataManagement:transferTitle')}
+                          aria-label={t('dataManagement:transferTitle')}
+                          onClick={() => setDataManagementMode('transfer')}
+                        >
+                          <PackageIcon className="size-4" />
+                          <span className="hidden sm:inline">
+                            {t('dataManagement:transferShortLabel')}
+                          </span>
+                        </Button>
+                      ) : null}
+                    </div>
+                  </details>
+                </>
+              ) : null}
+              {canUseCliPanel ? (
+                <div className="flex shrink-0 items-center gap-1 xl:hidden">
                   <Button
                     type="button"
-                    size="sm"
-                    variant="ghost"
-                    title={t('dataManagement:transferTitle')}
-                    aria-label={t('dataManagement:transferTitle')}
-                    onClick={() => setDataManagementMode('transfer')}
+                    size="icon-sm"
+                    variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
+                    title={t('tabs.terminal')}
+                    aria-label={t('tabs.terminal')}
+                    onClick={() => handleOpenActionPanel('terminal')}
                   >
-                    <PackageIcon className="size-4" />
-                    <span className="hidden sm:inline">
-                      {t('dataManagement:transferShortLabel')}
-                    </span>
+                    <TerminalIcon className="size-4" />
                   </Button>
-                ) : null}
-              </div>
-            </details>
-            {canUseCliPanel ? (
-              <div className="flex shrink-0 items-center gap-1 xl:hidden">
+                  {canUseLocalTools ? (
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
+                      title={t('tabs.agent')}
+                      aria-label={t('tabs.agent')}
+                      onClick={() => handleOpenActionPanel('agent')}
+                    >
+                      <BotIcon className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {canUseCliPanel && rightCollapsed ? (
                 <Button
                   type="button"
                   size="icon-sm"
-                  variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
-                  title={t('tabs.terminal')}
-                  aria-label={t('tabs.terminal')}
-                  onClick={() => handleOpenActionPanel('terminal')}
+                  variant="ghost"
+                  className="hidden shrink-0 xl:inline-flex"
+                  title={t('actionPanel.expand')}
+                  aria-label={t('actionPanel.expand')}
+                  onClick={toggleRightCollapsed}
                 >
-                  <TerminalIcon className="size-4" />
+                  <PanelRightOpenIcon className="size-4" />
                 </Button>
-                {canUseLocalTools ? (
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
-                    title={t('tabs.agent')}
-                    aria-label={t('tabs.agent')}
-                    onClick={() => handleOpenActionPanel('agent')}
-                  >
-                    <BotIcon className="size-4" />
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-            {canUseCliPanel && rightCollapsed ? (
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                className="hidden shrink-0 xl:inline-flex"
-                title={t('actionPanel.expand')}
-                aria-label={t('actionPanel.expand')}
-                onClick={toggleRightCollapsed}
-              >
-                <PanelRightOpenIcon className="size-4" />
-              </Button>
-            ) : null}
-          </div>
-          <div className="filesystem-preview min-h-0 flex-1">
-            {selectedIsDirectory && usesWorkbenchDirectoryView(selectedUri) ? (
-              <WorkbenchDirectory
-                key={selectedUri}
-                uri={selectedUri}
-                onNavigate={(uri) => void revealResource(uri)}
-              />
-            ) : (
-              <LazyFilePreview
-                ide
-                toolbarContainer={documentToolbar}
-                onDirtyChange={handleDirtyChange}
-                onSaved={handleDocumentSaved}
-                previewContent={
-                  selectedFile && isExperienceFile(selectedFile.uri) ? (
-                    <ExperienceDetail
-                      experienceUri={selectedFile.uri}
-                      embedded
-                    />
-                  ) : undefined
-                }
-                defaultReadLimit={canUseLocalTools ? -1 : 10000}
-                file={selectedFile}
-                hideDirectoryHeader
-                onClose={() => setSelectedFile(null)}
-                onNavigate={(uri) => void revealResource(uri)}
-                showCloseButton={false}
-              />
-            )}
-          </div>
+              ) : null}
+            </div>
+          ) : null}
+          {hasOpenDocument ? (
+            <div className="filesystem-preview min-h-0 flex-1">
+              {selectedIsDirectory &&
+              usesWorkbenchDirectoryView(selectedUri) ? (
+                <WorkbenchDirectory
+                  key={selectedUri}
+                  uri={selectedUri}
+                  onNavigate={(uri) => void revealResource(uri)}
+                />
+              ) : (
+                <LazyFilePreview
+                  ide
+                  toolbarContainer={documentToolbar}
+                  onDirtyChange={handleDirtyChange}
+                  onSaved={handleDocumentSaved}
+                  previewContent={
+                    isExperienceFile(selectedFile.uri) ? (
+                      <ExperienceDetail
+                        experienceUri={selectedFile.uri}
+                        embedded
+                      />
+                    ) : undefined
+                  }
+                  defaultReadLimit={canUseLocalTools ? -1 : 10000}
+                  file={selectedFile}
+                  hideDirectoryHeader
+                  onClose={() => setSelectedFile(null)}
+                  onNavigate={(uri) => void revealResource(uri)}
+                  showCloseButton={false}
+                />
+              )}
+            </div>
+          ) : null}
         </main>
         {canUseCliPanel && !rightCollapsed ? (
           <FilesystemResizeHandle
