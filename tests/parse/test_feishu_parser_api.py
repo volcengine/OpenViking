@@ -1121,6 +1121,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
             return_value={"status": "success", "root_uri": final_uri}
         ),
         _link_resource_reason_memory=AsyncMock(),
+        _initial_source_checkpoint=Mock(wraps=ResourceService._initial_source_checkpoint),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -1215,6 +1216,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         "user_id": "user-1",
         "resource_id": final_uri,
     }
+    service._initial_source_checkpoint.assert_called_once_with(None, instruction="")
     viking_fs.delete_temp.assert_awaited_once()
     cleanup_call = viking_fs.delete_temp.await_args
     assert cleanup_call.args == ("viking://temp/account-1/task-1",)
@@ -1268,6 +1270,7 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
         SimpleNamespace(
             execute_add_resource_job=AsyncMock(side_effect=execute_add_resource_job),
             _link_resource_reason_memory=AsyncMock(),
+            _initial_source_checkpoint=Mock(wraps=ResourceService._initial_source_checkpoint),
         ),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
@@ -1309,6 +1312,7 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
             return_value={"status": "success", "root_uri": "viking://resources/duplicated"}
         ),
         _link_resource_reason_memory=AsyncMock(),
+        _initial_source_checkpoint=Mock(wraps=ResourceService._initial_source_checkpoint),
     )
     task_tracker = SimpleNamespace(
         create=AsyncMock(
@@ -1358,6 +1362,7 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     service.execute_add_resource_job.assert_not_awaited()
     task_tracker.start.assert_not_awaited()
     task_tracker.complete.assert_awaited_once()
+    service._initial_source_checkpoint.assert_called_once_with(None, instruction="")
     completed_result = task_tracker.complete.await_args.args[1]
     assert completed_result["root_uri"] == final_uri
     assert completed_result["context_count"] == 4
