@@ -4,15 +4,14 @@
 
 ## 当前可接入的占位组件
 
-五个模块已提供可导入的占位组件、Props / Labels 类型和独立样式入口，接入方可以先完成页面布局。当前组件只展示模块名称与占位文案，接受 `className`、`style` 和 `labels`；业务 Hook、共享 Client、Provider 与下文的业务交互仍待实现。
+四个模块已提供可导入的占位组件、Props / Labels 类型和独立样式入口，接入方可以先完成页面布局。当前组件只展示模块名称与占位文案，接受 `className`、`style` 和 `labels`；业务 Hook、共享 Client、Provider 与下文的业务交互仍待实现。
 
-| 模块            | 组件           | 公开入口                                  |
-| --------------- | -------------- | ----------------------------------------- |
-| `file-browser`  | `FileBrowser`  | `@openviking/react/modules/file-browser`  |
-| `console`       | `Console`      | `@openviking/react/modules/console`       |
-| `agent-connect` | `AgentConnect` | `@openviking/react/modules/agent-connect` |
-| `task-center`   | `TaskCenter`   | `@openviking/react/modules/task-center`   |
-| `user-usage`    | `UserUsage`    | `@openviking/react/modules/user-usage`    |
+| 模块           | 组件          | 公开入口                                 |
+| -------------- | ------------- | ---------------------------------------- |
+| `file-browser` | `FileBrowser` | `@openviking/react/modules/file-browser` |
+| `console`      | `Console`     | `@openviking/react/modules/console`      |
+| `task-center`  | `TaskCenter`  | `@openviking/react/modules/task-center`  |
+| `user-usage`   | `UserUsage`   | `@openviking/react/modules/user-usage`   |
 
 ```tsx
 import { FileBrowser } from '@openviking/react/modules/file-browser';
@@ -23,7 +22,7 @@ import '@openviking/react/modules/file-browser/style.css';
 />;
 ```
 
-五个组件与对应类型也从 `@openviking/react` 根入口导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
+四个组件与对应类型也从 `@openviking/react` 根入口导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
 
 ## 职责
 
@@ -80,15 +79,14 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ## 业务模块划分
 
-五个模块目录及其占位组件已经建立，以下是各模块后续迁入的目标能力，尚未实现。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
+四个模块目录及其占位组件已经建立，以下是各模块后续迁入的目标能力，尚未实现。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
 
-| 模块            | Hook 与业务职责                                                                                         | 组合视图                                                                             |
-| --------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `file-browser`  | 统一管理目录、检索、当前 URI、预览加载与编辑保存；协调定位、刷新、历史与版本对比                        | 组合 `FileTree`、搜索交互与 `FilePreview`，提供目录和内容联动的文件浏览区域          |
-| `console`       | 统一管理 VikingBot / TUI 模式、公共上下文与工具栏；处理对话会话、消息流、附件、记忆提交及命令执行与记录 | 组合 `VikingBot`、`Tui` 与模式切换，提供完整的交互面板                               |
-| `agent-connect` | Agent 目录、接入说明、接入方式与连接状态；通过宿主提供的能力接入凭证或授权                              | 组合左侧 Agent 导航、右侧详情与接入步骤                                              |
-| `task-center`   | 当前身份可见任务的列表、筛选、详情、执行记录与允许的操作                                                | 任务列表和详情；个人终端本期聚焦资源导入与知识整理任务                               |
-| `user-usage`    | 当前 User 的统计查询、时间范围、加载与失败状态                                                          | 当前 User 的上下文数量、Token、检索与提交统计，不含库 / 空间统计、成员对比或账单费用 |
+| 模块           | Hook 与业务职责                                                                                         | 组合视图                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `file-browser` | 统一管理目录、检索、当前 URI、预览加载与编辑保存；协调定位、刷新、历史与版本对比                        | 组合 `FileTree`、搜索交互与 `FilePreview`，提供目录和内容联动的文件浏览区域          |
+| `console`      | 统一管理 VikingBot / TUI 模式、公共上下文与工具栏；处理对话会话、消息流、附件、记忆提交及命令执行与记录 | 组合 `VikingBot`、`Tui` 与模式切换，提供完整的交互面板                               |
+| `task-center`  | 当前身份可见任务的列表、筛选、详情、执行记录与允许的操作                                                | 任务列表和详情；个人终端本期聚焦资源导入与知识整理任务                               |
+| `user-usage`   | 当前 User 的统计查询、时间范围、加载与失败状态                                                          | 当前 User 的上下文数量、Token、检索与提交统计，不含库 / 空间统计、成员对比或账单费用 |
 
 历史列表与版本对比先作为 `file-browser` 的预览能力，编译确认作为 `console` 中的 Bot 动作流程；有独立消费需求后再拆公开模块，不为每个按钮或弹窗建模块。公共视图组件按真实复用需求补充，表中组合视图不要求提前新增组件占位。
 

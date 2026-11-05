@@ -16,11 +16,11 @@ export type {
 } from './modules/file-browser/file-browser.js';
 export { Console } from './modules/console/console.js';
 export type { ConsoleLabels, ConsoleProps } from './modules/console/console.js';
-export { AgentConnect } from './modules/agent-connect/agent-connect.js';
+export { AgentConnect } from './components/agent-connect/agent-connect.js';
 export type {
   AgentConnectLabels,
   AgentConnectProps,
-} from './modules/agent-connect/agent-connect.js';
+} from './components/agent-connect/agent-connect.js';
 export { TaskCenter } from './modules/task-center/task-center.js';
 export type {
   TaskCenterLabels,
