@@ -112,8 +112,9 @@ first user message after the existing capture shaping/filters. Model changes do
 not change this ID; existing connection/credential isolation still applies.
 
 This is approximate grouping: independent conversations with identical opening
-messages in the same client scope may merge. Rewriting/removing the opening
-message can split a conversation or cause capture to skip unknown history.
+messages in the same client scope may merge. If their histories diverge, capture
+skips snapshots that conflict with the history already written. Rewriting or
+removing the opening message can split a conversation or skip unknown history.
 Start a new conversation after enabling it; existing histories are not backfilled.
 `autoCapture: false` still disables all automatic capture. For file settings without
 a host override, turning this option off pauses queued derived-session snapshots;

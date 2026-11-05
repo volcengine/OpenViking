@@ -642,7 +642,7 @@ for (const protocol of ["chat", "anthropic", "responses", "gemini"]) {
   });
 }
 
-for (const takeover of ["system-envelope", "user-envelope", "nativeAgents"]) {
+for (const takeover of ["system-envelope", "user-envelope", "nativeAgents", "disabled-opt-in"]) {
   test(`sessionless ${takeover} takeover clears pending capture and persists ownership`, async (t) => {
     const f = await fixture(t);
     const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
@@ -664,7 +664,10 @@ for (const takeover of ["system-envelope", "user-envelope", "nativeAgents"]) {
     const envelope = "<openviking-context>\nNative memory\n</openviking-context>";
     if (takeover === "system-envelope") messages.unshift({ role: "system", content: envelope });
     else if (takeover === "user-envelope") messages[0] = { ...messages[0], content: `${messages[0].content}\n\n${envelope}` };
-    else native.options.nativeAgents = [native.agent];
+    else if (takeover === "disabled-opt-in") {
+      native.options.captureWithoutSession = false;
+      messages.unshift({ role: "system", content: envelope });
+    } else native.options.nativeAgents = [native.agent];
     assert.equal(await onRequest({ messages }, native), undefined);
     assert.equal(native.state.nativeOwner, true);
     assert.equal(native.session, "");
@@ -683,13 +686,14 @@ for (const takeover of ["system-envelope", "user-envelope", "nativeAgents"]) {
   });
 }
 
-test("disabling sessionless capture pauses queued snapshots and response capture", async (t) => {
+test("disabling file opt-in pauses queued snapshots even with a null host option", async (t) => {
   const f = await fixture(t);
   f.file.plugin.magpie.captureWithoutSession = true;
   await writeFile(f.configPath, JSON.stringify(f.file));
-  const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath });
-  const ctx = { ...f.ctx, session: "", state: {}, success: true };
-  await prepareCapture({ messages: [f.messages[0]] }, ctx, cfg);
+  const options = { captureWithoutSession: null };
+  const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath }, options);
+  const ctx = { ...f.ctx, session: "", state: {}, success: true, options };
+  await prepareCapture({ messages: [f.messages[0]] }, ctx, cfg, options);
   const reply = { choices: [{ finish_reason: "stop", message: f.messages[1] }] };
   await finishCapture(reply, ctx, cfg);
   f.file.plugin.magpie.captureWithoutSession = false;
@@ -703,6 +707,28 @@ test("disabling sessionless capture pauses queued snapshots and response capture
   await f.drain();
   assert.equal(f.creates.length, 1);
   assert.equal(f.writes.flat().length, 2);
+});
+
+test("a conflicting derived snapshot does not block the original conversation", async (t) => {
+  const f = await fixture(t);
+  const options = { captureWithoutSession: true };
+  const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath }, options);
+  const capture = async (messages, reply) => {
+    const ctx = { ...f.ctx, session: "", state: {}, success: true, options };
+    await prepareCapture({ messages }, ctx, cfg, options);
+    await finishCapture(finalChat(reply), ctx, cfg);
+    await f.drain();
+    return captureDirectory(cfg, { ...ctx, session: ctx.state.capture.session });
+  };
+
+  await capture([f.messages[0]], f.messages[1].content);
+  const conflict = { role: "assistant", content: "A different first reply" };
+  const directory = await capture([...f.messages.slice(0, 1), conflict, { role: "user", content: "Other conversation" }], "Other answer");
+  assert.deepEqual(await readdir(join(directory, "pending")), []);
+  assert.equal(f.writes.flat().length, 2);
+
+  await capture([...f.messages, { role: "user", content: "Original conversation continues" }], "Original answer");
+  assert.equal(f.writes.flat().length, 4);
 });
 
 test("sessionless hooks warn once without masking recall or queuing capture", async (t) => {

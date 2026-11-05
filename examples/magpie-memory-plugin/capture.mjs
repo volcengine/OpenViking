@@ -18,7 +18,13 @@ export async function nativeOwner(cfg, ctx, body) {
   const directory = captureDirectory(cfg, ctx);
   const marker = join(directory, "native-owner");
   if (cfg.nativeAgents.includes(ctx.agent) || hasNativeContext(body, ctx.protocol)) {
-    await mkdir(directory, { recursive: true, mode: 0o700 });
+    if (ctx.derivedSession && !cfg.captureWithoutSession) {
+      // Take over an existing scope without creating state while capture is off.
+      try { await access(directory); }
+      catch (error) { if (error.code === "ENOENT") return true; throw error; }
+    } else {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+    }
     await chmod(directory, 0o700);
     const file = await open(marker, "a", 0o600);
     await file.close();
@@ -68,10 +74,12 @@ export async function queueCapture(cfg, ctx, messages, { launch = true } = {}) {
   const user = payloads.findLast((m) => m.message_kind === "user_query");
   if (!user) return false;
   const turnKey = user.source_message_ids[0].slice(7);
+  const options = {};
+  if (Object.hasOwn(ctx.options || {}, "autoCapture")) options.autoCapture = cfg.autoCapture;
+  if (typeof ctx.options?.captureWithoutSession === "boolean") options.captureWithoutSession = cfg.captureWithoutSession;
   const snapshot = { version: 1, scope, configPath: cfg.path, context: { agent: ctx.agent, session: ctx.session, cwd: ctx.cwd, protocol: ctx.protocol,
     ...(ctx.derivedSession ? { derivedSession: true } : {}) },
-    options: Object.fromEntries(["autoCapture", "captureWithoutSession"].filter((key) => Object.hasOwn(ctx.options || {}, key)).map((key) => [key, cfg[key]])),
-    turnKey, messages: payloads, turnAnchors: selected.turnAnchors, turnRevisions: selected.turnRevisions };
+    options, turnKey, messages: payloads, turnAnchors: selected.turnAnchors, turnRevisions: selected.turnRevisions };
   const encoded = JSON.stringify(snapshot);
   if (Buffer.byteLength(encoded) > 3 * 1024 * 1024) return false;
   const path = join(pending, `${turnKey}.json`);
@@ -101,7 +109,8 @@ export async function prepareCapture(body, ctx, cfg, options) {
   if (isAuxiliaryRequest(body, ctx)) return;
   const conversation = describeConversation(body, ctx.protocol, { allowNativeContext: true });
   const first = conversation && captureMessages([conversation.messages[conversation.users[0]]], ctx.protocol, cfg)?.[0]?.source_message_ids[0];
-  if (!ctx.session?.trim() && cfg.captureWithoutSession && first) {
+  if (!ctx.session?.trim() && first && (cfg.captureWithoutSession
+    || cfg.nativeAgents.includes(ctx.agent) || hasNativeContext(body, ctx.protocol))) {
     // Keep the host context unchanged: fallback identity belongs only to capture.
     ctx = { ...ctx, derivedSession: true, session: `derived-${recallDigest(JSON.stringify([ctx.agent || "", ctx.cwd || "", ctx.protocol, first]))}` };
   }
