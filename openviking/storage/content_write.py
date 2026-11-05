@@ -57,6 +57,7 @@ from openviking.storage.abstract_overview import (
     is_abstract_overview_uri,
     plan_abstract_overview_refresh,
     prepare_abstract_overview_write,
+    sanitize_abstract_overview_body,
 )
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.context_update_execution import (
@@ -295,31 +296,11 @@ class ContentWriteCoordinator:
         uri: str,
         ctx: RequestContext,
     ) -> str:
-        """Sanitize an abstract/overview sidecar without touching its frontmatter.
-
-        The system-generated frontmatter (``directory``, ``generated_by``) embeds
-        canonical URIs that are not secrets, and a substituted
-        ``{{ov_privacy:...}}`` scalar breaks the YAML parse — silently stripping
-        the target's description (#6909). The generated body, however, is regular
-        prose and must go through the same privacy substitution as any other
-        content (#6911 review).
-        """
         if self._privacy_sanitizer is None:
             return content
-        lines = content.splitlines(keepends=True)
-        if len(lines) >= 2 and lines[0].rstrip("\r\n") == "---":
-            closing = None
-            for index in range(1, len(lines)):
-                if lines[index].rstrip("\r\n") == "---":
-                    closing = index
-                    break
-            if closing is not None:
-                frontmatter = "".join(lines[: closing + 1])
-                body = "".join(lines[closing + 1 :])
-                sanitized_body = await self._sanitize_text(body, uri=uri, ctx=ctx)
-                return frontmatter + sanitized_body
-        # Legacy sidecar without frontmatter: the whole text is body.
-        return await self._sanitize_text(content, uri=uri, ctx=ctx)
+        return await sanitize_abstract_overview_body(
+            content, partial(self._sanitize_text, uri=uri, ctx=ctx)
+        )
 
     async def _sanitize_batch_operations(
         self,
@@ -333,7 +314,12 @@ class ContentWriteCoordinator:
             content = operation.get("content")
             uri = operation.get("uri")
             if isinstance(content, str) and isinstance(uri, str):
-                operation["content"] = await self._sanitize_text(content, uri=uri, ctx=ctx)
+                sanitize = (
+                    self._sanitize_sidecar_text
+                    if is_abstract_overview_uri(uri)
+                    else self._sanitize_text
+                )
+                operation["content"] = await sanitize(content, uri=uri, ctx=ctx)
 
     async def write(
         self,

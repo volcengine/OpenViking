@@ -10,10 +10,11 @@ parse and silently strips the skill's description.
 """
 
 import json
+import secrets
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from openviking.privacy.skill_extractor import _is_resource_location, extract_skill_privacy_values
 
@@ -111,125 +112,79 @@ async def test_extraction_with_all_locations_returns_no_values():
 
 
 @pytest.mark.asyncio
-async def test_content_write_sidecar_frontmatter_exempt_body_sanitized(monkeypatch):
-    """System sidecar frontmatter skips privacy substitution; the body does not (#6911).
-
-    ``ContentWriteCoordinator._write`` splits a ``.abstract.md`` / ``.overview.md``
-    payload into frontmatter and body: the system-generated frontmatter keeps its
-    canonical URIs verbatim (a substituted ``{{ov_privacy:...}}`` scalar breaks the
-    YAML parse, #6909), while the generated body still goes through the sanitizer.
-    """
-    from types import SimpleNamespace as NS
-
+async def test_native_sidecar_writes_preserve_metadata_and_redact_body(tmp_path):
+    from openviking.core.context import ContextLevel
+    from openviking.privacy.reference import build_privacy_field_reference
+    from openviking.privacy.sanitizer import PrivacySanitizer
+    from openviking.privacy.service import UserPrivacyConfigService
     from openviking.server.identity import RequestContext, Role
-    from openviking.storage.content_write import ContentWriteCoordinator
-    from openviking_cli.session.user_id import UserIdentifier
-
-    class _SanitizeCompleted(Exception):
-        """Sentinel raised past the sanitize site before the deep write path."""
-
-    sanitizer = NS()
-    sanitizer.calls = []
-
-    async def fake_sanitize(self, content, *, uri, ctx):
-        sanitizer.calls.append((uri, content))
-        return "SANITIZED-BODY"
-
-    monkeypatch.setattr(ContentWriteCoordinator, "_sanitize_text", fake_sanitize)
-
-    fs = NS()
-    coordinator = ContentWriteCoordinator(viking_fs=fs, privacy_sanitizer=sanitizer)
-
-    async def noop_access(uri, ctx, action):
-        return None
-
-    fs._ensure_access = noop_access
-
-    deep_calls = []
-
-    async def fail_deep(*args, **kwargs):
-        deep_calls.append(kwargs.get("content") if "content" in kwargs else None)
-        raise _SanitizeCompleted("deep write path should not run in this test")
-
-    async def resolve_root(*args, **kwargs):
-        return "viking://agent/skills/deploy-helper"
-
-    # .abstract.md re-embeds in place via _write_abstract_overview_with_refresh.
-    coordinator._write_abstract_overview_with_refresh = fail_deep
-    coordinator._write_memory_with_refresh = fail_deep
-    coordinator._write_direct_with_refresh = fail_deep
-    coordinator._resolve_root_uri = resolve_root
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
-    sidecar_uri = "viking://agent/skills/deploy-helper/.abstract.md"
-    frontmatter = (
-        "---\ndirectory: viking://agent/skills/deploy-helper/\ngenerated_by: openviking\n---\n"
+    from openviking.storage.abstract_overview import (
+        parse_abstract_overview,
+        render_abstract_overview,
+        write_abstract_overview,
     )
-    body = "\nThe helper reads {{ov_privacy:deploy-helper#values/api_key}} at runtime.\n"
-    content = frontmatter + body
-
-    # The only exception allowed to surface is the deep-path sentinel: anything
-    # else (e.g. a sanitizer error) must fail the test instead of being swallowed.
-    with pytest.raises(_SanitizeCompleted):
-        await coordinator._write(uri=sidecar_uri, content=content, mode="replace", ctx=ctx)
-
-    # The body — and only the body — reached the sanitizer.
-    assert sanitizer.calls == [(sidecar_uri, body)], "sidecar body must be sanitized"
-
-    # The written payload keeps the frontmatter verbatim and carries the
-    # sanitized body; the frontmatter must still be real, parseable YAML.
-    assert deep_calls == [frontmatter + "SANITIZED-BODY"]
-    written = deep_calls[0]
-    assert written.startswith("---\n")
-    closing = written.index("\n---\n", 4)
-    metadata = yaml.safe_load(written[4:closing])
-    assert metadata["directory"] == "viking://agent/skills/deploy-helper/"
-    assert "SANITIZED-BODY" in written[closing + len("\n---\n") :]
-    assert "{{ov_privacy:" not in written[closing + len("\n---\n") :]
-
-
-@pytest.mark.asyncio
-async def test_content_write_sanitizes_user_content_normally(monkeypatch):
-    """User-authored SKILL.md content still goes through privacy substitution."""
-    from types import SimpleNamespace as NS
-
-    from openviking.server.identity import RequestContext, Role
     from openviking.storage.content_write import ContentWriteCoordinator
+    from openviking.storage.viking_fs import VikingFS
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
     from openviking_cli.session.user_id import UserIdentifier
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
 
-    class _SanitizeCompleted(Exception):
-        """Sentinel raised past the sanitize site before the deep write path."""
-
-    sanitizer = NS()
-    sanitizer.calls = []
-
-    async def fake_sanitize(self, content, *, uri, ctx):
-        sanitizer.calls.append(uri)
-        return "SANITIZED"
-
-    monkeypatch.setattr(ContentWriteCoordinator, "_sanitize_text", fake_sanitize)
-
-    fs = NS()
-    coordinator = ContentWriteCoordinator(viking_fs=fs, privacy_sanitizer=sanitizer)
-
-    async def noop_access(uri, ctx, action):
-        return None
-
-    fs._ensure_access = noop_access
-
-    async def fail_deep(*args, **kwargs):
-        raise _SanitizeCompleted("deep write path should not run in this test")
-
-    coordinator._write_memory_with_refresh = fail_deep
-    coordinator._write_direct_with_refresh = fail_deep
-    coordinator._resolve_root_uri = fail_deep
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
-    user_uri = "viking://agent/skills/deploy-helper/SKILL.md"
-
-    with pytest.raises(_SanitizeCompleted):
-        await coordinator._write(
-            uri=user_uri, content='api_key="sk-live-abc"', mode="replace", ctx=ctx
+    native = create_agfs_client(RagfsBindingConfig(AGFSConfig(path=str(tmp_path))))
+    try:
+        fs = VikingFS(native)
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        privacy = UserPrivacyConfigService(fs)
+        sanitizer = PrivacySanitizer(privacy)
+        fs.set_privacy_sanitizer(sanitizer)
+        coordinator = ContentWriteCoordinator(fs, privacy_sanitizer=sanitizer)
+        dir_uri = "viking://resources/privacy-native-validation"
+        secret = secrets.token_urlsafe(24)
+        await privacy.upsert(
+            ctx,
+            "credential",
+            "native-validation",
+            {"key": secret, "old_location": dir_uri},
+            updated_by=ctx.user.user_id,
         )
-
-    assert sanitizer.calls == [user_uri], "user content must reach the privacy sanitizer"
+        reference = build_privacy_field_reference(
+            ctx.user.user_id, "credential", "native-validation", "key"
+        )
+        body = (Path(__file__).parents[2] / "README.md").read_text(encoding="utf-8")
+        body += f"\n{secret}\n{dir_uri}\n"
+        metadata = {
+            "source": {"kind": "viking", "uri": dir_uri + "/README.md"},
+            "generated_by": {"component": "openviking", "trigger": "native-validation"},
+        }
+        for iteration in range(2):
+            await write_abstract_overview(
+                viking_fs=fs,
+                dir_uri=dir_uri,
+                overview=body,
+                abstract=body,
+                ctx=ctx,
+                is_stale=lambda: False,
+                metadata=metadata,
+            )
+            for name, level in (
+                (".abstract.md", ContextLevel.ABSTRACT),
+                (".overview.md", ContextLevel.OVERVIEW),
+            ):
+                uri = f"{dir_uri}/{name}"
+                raw = await fs.read_file(uri, ctx=ctx)
+                document = parse_abstract_overview(raw)
+                assert document.metadata == {"directory": dir_uri + "/", **metadata}
+                assert secret not in document.body
+                assert reference in document.body
+                assert dir_uri not in document.body
+                original = render_abstract_overview(level, dir_uri, body, metadata)
+                assert await coordinator._sanitize_sidecar_text(original, uri=uri, ctx=ctx) == raw
+                operations = [{"uri": uri, "content": original}]
+                await coordinator._sanitize_batch_operations(operations, ctx=ctx)
+                assert operations[0]["content"] == raw
+            body += f"\nRevision {iteration + 1}: {secret}\n"
+        for name in ("SKILL.md", ".abstract.md", ".overview.md"):
+            uri = f"{dir_uri}/legacy/{name}"
+            await fs.write_file(uri, secret, ctx=ctx)
+            assert await fs.read_file(uri, ctx=ctx) == reference
+    finally:
+        native.close()
