@@ -34,7 +34,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        features: ['', 'cache,test-utils']
+        include:
+          - cache-name: default
+            features: ''
+          - cache-name: cache
+            features: 'cache,test-utils'
     services:
       redis:
         image: ${{ matrix.features != '' && 'redis:7.2.7' || '' }}
@@ -58,9 +62,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-ragfs-${{ matrix.features }}-${{ hashFiles('Cargo.lock', 'crates/**/*.rs', 'crates/**/Cargo.toml') }}
+          key: ${{ runner.os }}-ragfs-${{ matrix.cache-name }}-${{ hashFiles('Cargo.lock', 'crates/**/*.rs', 'crates/**/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-ragfs-${{ matrix.features }}-
+            ${{ runner.os }}-ragfs-${{ matrix.cache-name }}-
       - name: Verify Redis is reachable
         if: matrix.features != ''
         run: |
