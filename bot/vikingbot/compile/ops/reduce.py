@@ -140,6 +140,18 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                 ),
             )
             retries = Counter()
+            source_handles = []
+            for record in records:
+                saved = await runtime.files.get(record.payload_ref) or {}
+                source_handles.append(
+                    {
+                        "id": record.record_id,
+                        "payload": {
+                            "source_ranges": record.source_refs,
+                            "evidence_spans": saved.get("evidence_spans", []),
+                        },
+                    }
+                )
             while True:
                 unavailable = sorted(p for p, owner in reserved.items() if owner != path)
                 try:
@@ -149,7 +161,9 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                         {
                             "candidates": [file_ops.file_view(a, ref) for ref, a in items],
                             "reserved_paths": unavailable,
-                            "inputs": [await common.payload(runtime, r) for r in records],
+                            # Candidate bodies already carry the contributions being merged.
+                            # Original evidence remains available through these scoped handles.
+                            "inputs": source_handles,
                         },
                         FileResponse,
                         validate,
@@ -324,11 +338,27 @@ async def reduce_group(
             common._COMBINE,
             CombineResponse,
         )
+
+        async def combine_chunk(chunk):
+            try:
+                return await common.transform(
+                    runtime, "combine", None, chunk, prompt=common._COMBINE
+                )
+            except OSError as exc:
+                # Preserve the model error chain for the owning job's retry policy.
+                return exc
+
+        combined = await bounded_jobs(
+            chunks,
+            combine_chunk,
+            concurrency=runtime.limits.merge_concurrency,
+            metrics=runtime.metrics,
+        )
         reduced = []
-        for chunk in chunks:
-            reduced.extend(
-                await common.transform(runtime, "combine", None, chunk, prompt=common._COMBINE)
-            )
+        for output in combined:
+            if isinstance(output, OSError):
+                raise output
+            reduced.extend(output)
         if not reduced:
             raise ValueError("Overflow aggregation cannot discard all required contributions")
         extra["candidates"] = [

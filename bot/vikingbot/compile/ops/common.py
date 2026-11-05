@@ -177,10 +177,12 @@ async def transform(
     def validate(response):
         validate_input_refs(records, [i for draft in response.records for i in draft.inputs])
         if isinstance(response, CombineResponse):
-            if {i for draft in response.records for i in draft.inputs} != {
-                r.record_id for r in records
-            }:
-                raise InputReferenceError("Combine must retain every supplied input")
+            included = {i for draft in response.records for i in draft.inputs}
+            missing = {r.record_id for r in records} - included
+            if missing:
+                raise InputReferenceError(
+                    f"Combine must retain every supplied input; missing={sorted(missing)}"
+                )
             if any(not draft.content.strip() for draft in response.records):
                 raise ValueError("Combined evidence must not be blank")
             return

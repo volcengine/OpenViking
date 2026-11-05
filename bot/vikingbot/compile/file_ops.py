@@ -20,7 +20,7 @@ from vikingbot.compile.renderer import (
     _split_frontmatter,
     validate_relative_file_path,
 )
-from vikingbot.compile.results import FileDraft, FileResponse, Group
+from vikingbot.compile.results import FileDraft, FileResponse, Group, InputReferenceError
 
 if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
@@ -151,7 +151,21 @@ def validate_files(runtime: Pipeline, response, group, records, old):
     paths = [f.path for f in response.files]
     if len(set(paths)) != len(paths):
         raise ValueError("A group cannot submit a path more than once")
+    allowed = {record.record_id for record in records}
+    # EntryResponse can request pipeline fallback or acknowledge an incremental no-op.
+    if allowed and type(response) is FileResponse and not response.files:
+        raise ValueError("A file-producing assignment with inputs must submit at least one file")
     for draft in response.files:
+        if allowed and not draft.inputs:
+            raise InputReferenceError(
+                f'File "{draft.path}": inputs must name supporting IDs from this assignment.'
+            )
+        unknown = set(draft.inputs) - allowed
+        if unknown or len(set(draft.inputs)) != len(draft.inputs):
+            raise InputReferenceError(
+                f'File "{draft.path}": inputs must be unique supplied IDs; '
+                f"unknown={sorted(unknown)}. Copy IDs from assignment.inputs."
+            )
         validate_relative_file_path(draft.path)
         current = old.get(draft.path)
         if draft.content_ref is not None:
@@ -159,6 +173,19 @@ def validate_files(runtime: Pipeline, response, group, records, old):
                 "File references require execution=agent and validated scratch resolution"
             )
         value = apply_file(draft, current)
+        output_format = runtime.direct_output_format or getattr(
+            getattr(runtime, "contract", None), "output_format", None
+        )
+        if output_format == "wiki" and draft.path.lower().endswith(".md"):
+            text = value.decode("utf-8") if isinstance(value, bytes) else value
+            try:
+                _, body = _split_frontmatter(text)
+            except yaml.YAMLError as exc:
+                raise ValueError(f'Wiki page "{draft.path}" has invalid YAML frontmatter') from exc
+            if not body.strip():
+                raise ValueError(
+                    f'Wiki page "{draft.path}" requires a Markdown body after frontmatter'
+                )
         if draft.content_sha256 and content_hash(value) != draft.content_sha256:
             raise ValueError("Artifact content hash mismatch")
         if isinstance(value, bytes) and draft.path.lower().endswith((".md", ".json")):

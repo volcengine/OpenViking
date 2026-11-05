@@ -17,13 +17,13 @@ import json_repair
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
-from openviking.models.model_error import ModelError
+from openviking.models.model_error import ModelError, model_error_kind
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking_cli.exceptions import NotFoundError
 from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.models import COMPILE_STAGING_ROOT, CompileFailure
-from vikingbot.compile.results import FileResponse, RouteBatchResponse
+from vikingbot.compile.results import FileResponse, InputReferenceError, RouteBatchResponse
 from vikingbot.compile.schemas import result_schema
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.utils.helpers import cal_str_tokens
@@ -32,7 +32,7 @@ T = TypeVar("T")
 R = TypeVar("R", bound=BaseModel)
 ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
 # Cache identity for the processing rules used by model calls.
-PROCESSING_VERSION = "compile-pipeline-37"
+PROCESSING_VERSION = "compile-pipeline-40"
 # Output-token fallback when the configured VLM provides no value.
 DEFAULT_MAX_TOKENS = 32_000
 # Total attempts per operator job or routing record, including the initial execution.
@@ -105,7 +105,11 @@ def retry_allowed(failures: Counter, error: str) -> bool:
 
 
 class ModelCallError(OSError):
-    """A failed model request or stalled read loop; output validation errors remain separate."""
+    """A failed model execution; individual output errors first use local repair."""
+
+
+class ModelOutputError(ModelCallError):
+    """The model exhausted output repair without a valid submission."""
 
 
 class ModelCallLimitError(ModelCallError):
@@ -342,6 +346,9 @@ class JsonModel:
             ) from exc
         except Exception as exc:
             report["error"] = type(exc).__name__
+            kind = model_error_kind(exc)
+            if kind is not None:
+                report["error_kind"] = kind.value
             raise ModelCallError(str(exc)) from exc
         except BaseException as exc:
             report["error"] = type(exc).__name__
@@ -590,6 +597,7 @@ class JsonModel:
                     )[:1600]
                 else:
                     error = str(exc)[:1600]
+                retry_key = "input_references" if isinstance(exc, InputReferenceError) else error
                 failures += 1
                 candidate = json.dumps(raw, ensure_ascii=False) if raw is not None else ""
                 await self.files.put(
@@ -614,9 +622,9 @@ class JsonModel:
                     if stage in {"review", "compile"}
                     else failures >= 3
                     if stage == "skill_repair"
-                    else not retry_allowed(retries, error)
+                    else not retry_allowed(retries, retry_key)
                 ):
-                    raise ValueError(f"{stage}: {category}: {error}") from exc
+                    raise ModelOutputError(f"{stage}: {category}: {error}") from exc
                 self.metrics["repairs"] += 1
                 messages.append(
                     {

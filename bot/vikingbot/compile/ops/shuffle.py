@@ -139,42 +139,16 @@ def top_candidates(
     return result
 
 
-def split_group(keys, vectors):
-    """Partition IDs into disjoint batches of at most 50, optionally using nonzero vectors.
-
-    Each seed takes its nearest cosine neighbours; absent vectors use input order.
-    Groups of at most 50 retain their membership and order without recomputation.
-    """
-    if len(keys) <= 50:
-        return [keys]
-    if vectors is None:
-        return [keys[start : start + 50] for start in range(0, len(keys), 50)]
-    norms = {key: math.sqrt(sum(x * x for x in vectors[key])) for key in keys}
-    remaining, groups = dict.fromkeys(keys), []
-    while remaining:
-        seed = next(iter(remaining))
-        del remaining[seed]
-        neighbours = heapq.nlargest(
-            49,
-            remaining,
-            key=lambda key: (
-                sum(a * b for a, b in zip(vectors[seed], vectors[key], strict=True)) / norms[key]
-            ),
-        )
-        groups.append([seed, *neighbours])
-        for key in neighbours:
-            del remaining[key]
-    return groups
-
-
 def group_related_records(keys, links):
-    """Partition IDs into groups whose members all have direct candidate links.
+    """Partition records with direct confirmation between every pair in a group.
 
-    Either link direction suffices. Unknown endpoints are rejected; input order
-    determines first-fit assignment, and records without links remain independent.
+    Relevance is not transitive: one erroneous bridge must not join whole clusters.
+    Either direction confirms a pair; preserve input order and independent records.
     """
     neighbours = {key: set() for key in keys}
     for left, right in links:
+        if left not in neighbours or right not in neighbours:
+            raise ValueError(f"Unknown related record: {left}, {right}")
         neighbours[left].add(right)
         neighbours[right].add(left)
     groups = []
@@ -402,8 +376,6 @@ class Shuffle:
                     r.warnings.append(warning)
         finally:
             stop.set()
-        if vectors is not None:
-            vectors = dict(zip((record.record_id for record in records), vectors, strict=True))
         r.metrics["similarity_records"] += len(records)
         r.metrics["similarity_pairs"] += len(records) * (len(records) - 1)
 
@@ -421,8 +393,10 @@ class Shuffle:
             + (rule.instructions if isinstance(rule, Routing) else rule)
             + "\nFor each record in `records`, use its `text` and `scope` and the routing rules "
             "to select candidates that need to be processed with it.\n"
-            "Select `related` IDs only from that record's `candidates`, and `history` URIs only "
-            "from its `history`. Return exactly one decision per record; use empty lists when "
+            "The per-record `candidates` are retrieval hints. Select `related` IDs only from "
+            "the records described in this request's `records` and `candidates`; select "
+            "`history` URIs only from that record's `history`. "
+            "Return exactly one decision per record; use empty lists when "
             "nothing should be selected.\n"
             "Being in the same request or discussing similar topics does not mean records "
             "belong together.\n"
@@ -490,6 +464,7 @@ class Shuffle:
             }
             entries = {}
             primary_ids = {item["record"] for item in data}
+            visible_ids = primary_ids | candidates.keys()
             for index in indices:
                 key = records[index].record_id
                 await r.files.put(
@@ -503,6 +478,10 @@ class Shuffle:
             if data:
                 try:
                     response = await r.model.ask("route", system, request, RouteBatchResponse)
+                    await r.files.put(
+                        f"route-responses/{node.name}-{data[0]['record']}-{attempt}",
+                        response.model_dump(),
+                    )
                     for raw in response.decisions:
                         key = raw.get("record") if isinstance(raw, dict) else None
                         if isinstance(key, str) and key in primary_ids:
@@ -531,9 +510,11 @@ class Shuffle:
                             if len(entries.get(key, [])) != 1:
                                 raise ValueError("Return exactly one decision for this primary")
                             decision = RouteDecision.model_validate(entries[key][0])
-                            if not set(decision.related) <= set(item["candidates"]):
+                            unknown = set(decision.related) - visible_ids
+                            if unknown:
                                 raise ValueError(
-                                    "Related IDs must belong to this primary's candidates"
+                                    f"Unknown related IDs: {sorted(unknown)}. Copy IDs from "
+                                    "the records and candidates described in this request."
                                 )
                             if not set(decision.history) <= {h["uri"] for h in item["history"]}:
                                 raise ValueError(
@@ -543,6 +524,9 @@ class Shuffle:
                             r.metrics["route_validation_failures"] += 1
                             errors[key] = str(exc)[:800]
                         else:
+                            decision.related = list(
+                                dict.fromkeys(other for other in decision.related if other != key)
+                            )
                             await r.files.put(f"routes/{node.name}-{key}", decision.model_dump())
                             accepted[key] = decision
                             errors.pop(key, None)
@@ -591,10 +575,8 @@ class Shuffle:
         by_id = {record.record_id: record for record in records if record.record_id in targets}
         r.metrics["route_blocked_records"] += len(records) - len(by_id)
         links = [(left, right) for left, right in links if left in by_id and right in by_id]
-        groups, components = [], []
+        groups = []
         for ids in group_related_records(by_id, links):
-            components.extend(await asyncio.to_thread(split_group, ids, vectors))
-        for ids in components:
             group = Group(
                 digest([node.name, sorted(ids)])[:24],
                 [by_id[key] for key in ids],

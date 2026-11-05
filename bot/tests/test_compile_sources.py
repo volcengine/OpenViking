@@ -20,14 +20,24 @@ from vikingbot.agent.tools.compile import CompileImageReadTool, CompileSpawnTool
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.queue import MessageBus
-from vikingbot.compile import entry
+from vikingbot.compile import entry, file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
-from vikingbot.compile.ops.common import pack, payload
+from vikingbot.compile.ops import common
+from vikingbot.compile.ops.common import job, pack, payload
+from vikingbot.compile.ops.reduce import reduce_group, resolve_files
 from vikingbot.compile.pipeline import Pipeline
-from vikingbot.compile.pipeline_agent import ChildProvider, complete_tool_result
-from vikingbot.compile.pipeline_io import ModelCallError
-from vikingbot.compile.results import CombineResponse, FileResponse, RecordResponse
+from vikingbot.compile.pipeline_agent import ChildProvider, agent_runner, complete_tool_result
+from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, ModelCallError
+from vikingbot.compile.plan import DEFAULT_PLAN, Contract, Node, PlanProposal, Transform, parse_plan
+from vikingbot.compile.results import (
+    CombineResponse,
+    FileDraft,
+    FileResponse,
+    Group,
+    Record,
+    RecordResponse,
+)
 from vikingbot.compile.service import BotCompileService, _CompileProvider
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.compile.sources import read_source, split_source
@@ -38,7 +48,7 @@ from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
-from openviking.models.model_error import ModelErrorKind
+from openviking.models.model_error import ModelError, ModelErrorKind
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -648,3 +658,415 @@ async def test_multi_read_and_request_budget_still_preserve_native_images(runtim
     with pytest.raises(CompileFailure, match="media budget"):
         await pipeline.model.call("compile", [{"content": result.content}], [], max_tokens=100)
     pipeline.model.provider.chat.assert_not_awaited()
+
+
+def test_wiki_requires_body_but_metadata_files_remain_valid(runtime):
+    pipeline, _ = runtime
+    response = FileResponse(files=[FileDraft(path="index.md", content="---\ntype: index\n---\n")])
+    group = Group("direct", [])
+    pipeline.direct_output_format = "wiki"
+    with pytest.raises(ValueError, match="requires a Markdown body"):
+        file_ops.validate_files(pipeline, response, group, [], {})
+    assert response.files[0].content is not None
+    response.files[0].content += "# Knowledge index\n\n[Project 01](entity/project-01.md)\n"
+    file_ops.validate_files(pipeline, response, group, [], {})
+    pipeline.direct_output_format = "files"
+    response.files[0].content = "---\nsetting: true\n---\n"
+    file_ops.validate_files(pipeline, response, group, [], {})
+
+
+def test_wiki_invalid_frontmatter_is_a_repairable_validation_error(runtime):
+    pipeline, _ = runtime
+    pipeline.direct_output_format = "wiki"
+    response = FileResponse(
+        files=[FileDraft(path="index.md", content="---\ntitle: [\n---\n# Knowledge index\n")]
+    )
+    with pytest.raises(ValueError, match="invalid YAML frontmatter"):
+        file_ops.validate_files(pipeline, response, Group("direct", []), [], {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_kind", ["missing", "foreign", "duplicate", "empty_files"])
+async def test_compile_files_repair_invalid_provenance_and_revalidate_cache(runtime, bad_kind):
+    pipeline, _ = runtime
+    await seed(runtime)
+    records = list(pipeline.records.values())
+    ids = [record.record_id for record in records]
+    group = Group("files", records)
+    pipeline.direct_output_format = "wiki"
+    valid: dict[str, Any] = {
+        "path": "entity/cedar.md",
+        "content": "# Cedar\n\nRetry limit: 7.\n",
+        "inputs": ids,
+    }
+    invalid = {key: value for key, value in valid.items() if key != "inputs"}
+    if bad_kind not in {"missing", "empty_files"}:
+        invalid["inputs"] = ["foreign"] if bad_kind == "foreign" else [ids[0], ids[0]]
+
+    def response(file):
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    "submit", "emit", {"files": [] if file is None else [file]}, tokens=0
+                )
+            ],
+        )
+
+    pipeline.model.provider.chat.side_effect = [
+        response(None if bad_kind == "empty_files" else invalid),
+        response(valid),
+        response(valid),
+    ]
+    data = {"inputs": [{"id": key, "payload": {"fact": "Retry limit: 7"}} for key in ids]}
+
+    def validate(result):
+        file_ops.validate_files(pipeline, result, group, records, {})
+
+    result = await pipeline.model.ask(
+        "reduce", "Write supported Wiki pages", data, FileResponse, validate
+    )
+    assert result.files[0].inputs == ids
+    assert pipeline.model.provider.chat.await_count == 2
+    definition = pipeline.model.provider.chat.call_args.kwargs["tools"][0]["function"][
+        "parameters"
+    ]["$defs"]["FileDraft"]
+    assert "inputs" in definition["required"]
+    assert definition["properties"]["inputs"]["minItems"] == 1
+    assert definition["properties"]["inputs"]["items"]["enum"] == ids
+    cached = next(value for key, value in pipeline.files.values.items() if key.startswith("cache/"))
+    cached["result"]["files"] = [] if bad_kind == "empty_files" else [invalid]
+    result = await pipeline.model.ask(
+        "reduce", "Write supported Wiki pages", data, FileResponse, validate
+    )
+    assert pipeline.model.provider.chat.await_count == 3
+    refs = await file_ops.save_files(pipeline, result, group, records, {})
+    assert set((await pipeline.files.get(refs[0]))["source_refs"]) == set(ids)
+
+
+@pytest.mark.asyncio
+async def test_compile_direct_output_exhaustion_falls_back_without_rejecting_entry_noop(runtime):
+    pipeline, _ = runtime
+    await seed(runtime)
+    records = list(pipeline.records.values())
+    pipeline.model.provider.chat.return_value = LLMResponse(content='{"files": []}')
+    assert await entry.run(pipeline, records, {}) is None
+    assert pipeline.model.provider.chat.await_count == 4
+    assert pipeline.direct_output_format is None
+    # The directory-plan entry owns its own no-op validation; ordinary file jobs cannot no-op.
+    file_ops.validate_files(
+        pipeline,
+        entry.EntryResponse(
+            files=[],
+            needs_pipeline=False,
+            output_format="files",
+            no_changes_reason="No source changes",
+        ),
+        Group("entry", records),
+        records,
+        {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_compile_file_merge_keeps_contributions_and_lazy_source_access(runtime, monkeypatch):
+    pipeline, _ = runtime
+    await seed(runtime)
+    source_ids = list(pipeline.evidence)
+    derived = []
+    references = []
+    repeated = "intermediate-only payload " * 5000
+    for index, source in enumerate(source_ids):
+        record = Record(
+            f"derived-{index}", f"payloads/derived-{index}", [source], "Cedar", {}, [source]
+        )
+        pipeline.register(record)
+        await pipeline.files.put(
+            record.payload_ref, {"fields": {"repeated": repeated}, "evidence_spans": []}
+        )
+        derived.append(record)
+        response = FileResponse(
+            files=[
+                FileDraft(
+                    path="entity/cedar.md",
+                    content=f"# Cedar\n\nContribution {index}.\n",
+                    inputs=[record.record_id],
+                )
+            ]
+        )
+        references.extend(
+            await file_ops.save_files(
+                pipeline, response, Group(f"part-{index}", [record]), [record], {}
+            )
+        )
+
+    async def respond(stage, system, data, schema, validate, **kwargs):
+        assert stage == "reduce_merge"
+        assert all(f"Contribution {i}." in data["candidates"][i]["content"] for i in range(2))
+        assert repeated not in json.dumps(data)
+        assert {item["id"] for item in data["inputs"]} == {record.record_id for record in derived}
+        assert EvidenceReader(pipeline.files, data).allowed == set(source_ids)
+        result = FileResponse(
+            files=[
+                FileDraft(
+                    path="entity/cedar.md",
+                    content="# Cedar\n\nContribution 0. Contribution 1.\n",
+                    inputs=[record.record_id for record in derived],
+                )
+            ]
+        )
+        validate(result)
+        return result
+
+    monkeypatch.setattr(pipeline.model, "ask", AsyncMock(side_effect=respond))
+    merged = await resolve_files(pipeline, references)
+    assert len(merged) == 1
+    assert set((await pipeline.files.get(merged[0]))["source_refs"]) == set(source_ids)
+    assert not pipeline.failures
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "recovers,bad_output",
+    [
+        (True, "no_emit"),
+        (True, "missing_inputs"),
+        (False, "missing_inputs"),
+        (False, "foreign_inputs"),
+    ],
+)
+async def test_compile_retries_exhausted_agent_output_without_accepting_invalid_records(
+    runtime, recovers, bad_output
+):
+    pipeline, _ = runtime
+    pipeline.files.sandbox = SimpleNamespace(write_file=AsyncMock())
+    attempts = 0
+    submissions = []
+
+    def validate(result):
+        if any(record.inputs != ["source"] for record in result.records):
+            raise ValueError("Unknown source ID")
+
+    async def run_child(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        submit = kwargs["tool_registry"].get("emit")
+        submissions.append(submit)
+        if recovers and attempts > 1:
+            assert (
+                await submit.execute(
+                    ToolContext(), records=[{"inputs": ["source"], "payload": {"fact": "verified"}}]
+                )
+                == "Result accepted."
+            )
+            return
+        if bad_output == "no_emit":
+            return
+        invalid = {"inputs": ["foreign"]} if bad_output == "foreign_inputs" else {}
+        for _ in range(4):
+            assert (await submit.execute(ToolContext(), records=[invalid])).startswith("Error:")
+        assert not submit.can_retry
+        assert submit.result is None
+
+    loop = SimpleNamespace(
+        config=Config(hooks=[]),
+        tools=SimpleNamespace(get=lambda name: None),
+        _run_agent_loop=run_child,
+    )
+    pipeline.model.agent_runner = agent_runner(
+        loop,
+        SessionKey(type="cli", channel_id="default", chat_id="compile-output-retry"),
+        None,
+        pipeline.limits,
+    )
+
+    async def work():
+        result = await pipeline.model.ask(
+            "map", "Extract assigned facts", {}, RecordResponse, validate, agent=True
+        )
+        return result.records
+
+    if recovers:
+        result = await job(pipeline, "map-output", [SimpleNamespace(record_id="source")], work)
+        assert result[0].inputs == ["source"]
+        assert attempts == 2
+        assert pipeline.files.values["jobs/map-output"]["status"] == "completed"
+    else:
+        with pytest.raises(ModelCallError, match="without validated output"):
+            await job(pipeline, "map-output", [SimpleNamespace(record_id="source")], work)
+        assert attempts == MAX_JOB_ATTEMPTS
+        assert pipeline.status["source"] == "failed"
+        assert pipeline.files.values["jobs/map-output"]["status"] == "failed"
+    assert pipeline.metrics["job_retries"] == attempts - 1
+    assert len({id(submit) for submit in submissions}) == attempts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_compile_retries_exhausted_combine_output_with_missing_input_feedback(
+    runtime, recovers
+):
+    pipeline, _ = runtime
+    await seed(runtime)
+    records = list(pipeline.records.values())
+    ids = [record.record_id for record in records]
+
+    def respond(**kwargs):
+        number = pipeline.model.provider.chat.await_count
+        if number % 4 != 1:
+            previous_missing = ids[1] if (number - 1) % 2 else ids[0]
+            assert previous_missing in kwargs["messages"][-1]["content"]
+            assert "missing=" in kwargs["messages"][-1]["content"]
+        else:
+            assert len(kwargs["messages"]) == 2
+        included = ids if recovers and number > 4 else (ids[:1] if number % 2 else ids[1:])
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    "submit",
+                    "emit",
+                    {"records": [{"inputs": included, "content": "Retry limit: 7"}]},
+                    tokens=0,
+                )
+            ],
+        )
+
+    pipeline.model.provider.chat.side_effect = respond
+
+    async def work():
+        return await common.transform(pipeline, "combine", None, records, prompt=common._COMBINE)
+
+    if recovers:
+        result = await job(pipeline, "combine-output", records, work)
+        assert set(result[0].source_refs) == set(ids)
+        assert pipeline.model.provider.chat.await_count == 5
+        assert pipeline.metrics["job_retries"] == 1
+    else:
+        with pytest.raises(ModelCallError, match="missing="):
+            await job(pipeline, "combine-output", records, work)
+        assert pipeline.model.provider.chat.await_count == 4 * MAX_JOB_ATTEMPTS
+        assert pipeline.metrics["job_retries"] == MAX_JOB_ATTEMPTS - 1
+        assert pipeline.files.values["jobs/combine-output"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_compile_planner_repairs_misplaced_contract_fields_with_exact_paths(runtime):
+    pipeline, _ = runtime
+    valid: dict[str, Any] = {
+        "contract": {
+            "extract": {"instructions": "Extract facts", "execution": "agent", "output": "records"},
+            "reduce": {"instructions": "Write Wiki pages", "execution": "agent", "output": "files"},
+            "routing": {"mode": "semantic", "instructions": "Group by project"},
+            "output_format": "wiki",
+        },
+        "plan": DEFAULT_PLAN,
+    }
+    misplaced = {"contract": {"extract": valid["contract"]["extract"]}, "plan": DEFAULT_PLAN}
+    misplaced.update(
+        {name: valid["contract"][name] for name in ("reduce", "routing", "output_format")}
+    )
+    pipeline.model.provider.chat.side_effect = [
+        LLMResponse(content=None, tool_calls=[ToolCallRequest("bad", "emit", misplaced, 0)]),
+        LLMResponse(content=None, tool_calls=[ToolCallRequest("fixed", "emit", valid, 0)]),
+    ]
+    proposal = await pipeline.model.ask(
+        "plan",
+        "Plan the compilation",
+        {},
+        PlanProposal,
+        lambda result: parse_plan(result.plan, result.contract),
+    )
+    assert proposal.contract.output_format == "wiki"
+    assert [node.op for node in parse_plan(proposal.plan, proposal.contract)] == [
+        "map",
+        "shuffle",
+        "reduce",
+        "finalize",
+    ]
+    feedback = pipeline.model.provider.chat.call_args_list[1].kwargs["messages"][-1]["content"]
+    for name in ("reduce", "routing", "output_format"):
+        assert f"{name} -> contract.{name}" in feedback
+    assert pipeline.metrics["validation_failures"] == 1
+    assert pipeline.metrics["repairs"] == 1
+    # Unrelated extensions retain the stored-plan parser's compatibility behavior.
+    assert (
+        PlanProposal.model_validate({**valid, "comment": "planner note"}).contract
+        == proposal.contract
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("combine_outcome", ["success", "failure", "cancelled"])
+async def test_compile_reduce_aggregates_provider_overflow_without_losing_source_lineage(
+    runtime, monkeypatch, combine_outcome
+):
+    pipeline, _ = runtime
+    await seed(runtime)
+    records = list(pipeline.records.values())
+    original_ids = {record.record_id for record in records}
+    pipeline.contract = Contract(
+        extract=Transform(instructions="Extract facts", execution="direct"),
+        reduce=Transform(instructions="Write Wiki pages", execution="agent", output="files"),
+        output_format="wiki",
+    )
+    overflowed = False
+    combined_inputs = []
+    both_started = asyncio.Event()
+
+    async def separate_chunks(*args):
+        return [[record] for record in records]
+
+    monkeypatch.setattr("vikingbot.compile.ops.common.pack", separate_chunks)
+
+    async def respond(stage, system, data, schema, validate=None, **kwargs):
+        nonlocal overflowed
+        if stage == "reduce" and not overflowed:
+            overflowed = True
+            try:
+                raise ModelError(ModelErrorKind.INPUT_TOO_LARGE, "Provider context exceeded")
+            except ModelError as exc:
+                raise ModelCallError(str(exc)) from exc
+        ids = [item["id"] for item in data["inputs"]]
+        result: CombineResponse | FileResponse
+        if stage == "combine":
+            combined_inputs.extend(ids)
+            if len(combined_inputs) == len(records):
+                both_started.set()
+            # Independent chunks must overlap; serial execution cannot satisfy this barrier.
+            await asyncio.wait_for(both_started.wait(), timeout=2)
+            if combine_outcome == "failure":
+                raise ModelCallError("Combine provider unavailable")
+            if combine_outcome == "cancelled":
+                raise asyncio.CancelledError("Combine cancelled")
+            result = CombineResponse.model_validate(
+                {"records": [{"inputs": ids, "content": f"Retry limit: 7. [{URI}]({URI})"}]}
+            )
+        else:
+            result = FileResponse(
+                files=[
+                    FileDraft(
+                        path="entity/cedar.md", inputs=ids, content="# Cedar\n\nRetry limit: 7.\n"
+                    )
+                ]
+            )
+        if validate:
+            validate(result)
+        return result
+
+    monkeypatch.setattr(pipeline.model, "ask", AsyncMock(side_effect=respond))
+    if combine_outcome != "success":
+        expected = ModelCallError if combine_outcome == "failure" else asyncio.CancelledError
+        with pytest.raises(expected, match="Combine provider unavailable|Combine cancelled"):
+            await reduce_group(
+                pipeline, Node("pages", "reduce", "grouped", "reduce"), Group("all", records)
+            )
+        assert not pipeline.artifacts
+        return
+    refs = await reduce_group(
+        pipeline, Node("pages", "reduce", "grouped", "reduce"), Group("all", records)
+    )
+    assert overflowed and set(combined_inputs) == original_ids
+    artifact = await pipeline.files.get(refs[0])
+    assert set(artifact["source_refs"]) == original_ids
+    assert "Retry limit: 7" in artifact["content"]

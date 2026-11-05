@@ -154,7 +154,7 @@ class CombineResponse(StrictModel):
 class RouteDecision(StrictModel):
     """Candidate links for joint processing, without asserting identity or output paths.
 
-    related names only this primary record's candidates for joint consideration.
+    related names only records described in the routing request for joint consideration.
     history names only this primary record's recalled URIs, not mandatory updates.
     Empty lists retain the record as an independent work set.
     """

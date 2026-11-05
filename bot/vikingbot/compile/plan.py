@@ -258,6 +258,17 @@ class PlanProposal(PlanModel):
         description="Assignments and operator calls as a string, connecting the chosen steps and ending with Finalize.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def check_contract_field_locations(cls, value):
+        """Report misplaced known settings before extra-field parsing silently loses them."""
+        if isinstance(value, dict):
+            misplaced = sorted(value.keys() & Contract.model_fields.keys())
+            if misplaced:
+                paths = ", ".join(f"{name} -> contract.{name}" for name in misplaced)
+                raise ValueError(f"Misplaced contract settings: {paths}. Put them inside contract.")
+        return value
+
 
 class ReviewDecision(PlanModel):
     """A future-plan proposal; acceptance never changes completed outputs or task failures."""
