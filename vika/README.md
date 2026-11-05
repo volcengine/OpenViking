@@ -271,7 +271,7 @@ manifest 里当前版本不认识的字段（顶层、agent、`env` 等任何一
 
 定时任务通过 `finish_timer_occurrence` 交付最终结果并结束本次执行：传入 `occurrence_id` 和 `delivery: { tool, input }`，复用 `send_message`、`reply_message` 或 `notify_owner`，确认发送成功后由 Core 标记完成。按任务条件无需发送时，不传 `delivery`，填写 `reason`，本次直接完成。需要询问主人或发送中间进度时仍用普通发送工具，不结束本次任务。发送失败、结果不确定或 dry-run 模拟发送不会标记完成；完成后停止本次检查提醒，不取消后续定时触发。完成结果及无需发送的原因保留在活动账本中。
 
-定时任务及执行检查默认存到当前实例的 OV：`viking://user/<用户>/resources/vika/<agents[].id>/timers-state.json`。复用实例的 `ovConfig` 和 id，启动时加载，仅在状态变化时写回。写入强制等待 OV 后台处理完成，再执行串行队列中的下一次修改；该行为不可配置。设置 `VIKA_TIMER_STORAGE=sqlite`（也可放在配置的 `env` 中）可使用原有本地 SQLite；其它数据仍保存在本地，不自动迁移两种存储之间的数据。OV 暂时不可用时机器人继续收发消息，定时器后台重试加载；恢复前定时器操作明确报暂时不可用，不会用空状态覆盖远端或静默切换到 SQLite。凭据被拒绝或状态文件损坏仍会导致启动失败。
+定时任务及执行检查默认存到当前实例的 OV：`viking://user/<用户>/resources/vika/<agents[].id>/timers-state.json`。复用实例的 `ovConfig` 和 id，启动时加载，仅在状态变化时写回。写入等待 OV 后台处理完成，再执行串行队列中的下一次修改。设置 `VIKA_TIMER_STORAGE=sqlite`（也可放在配置的 `env` 中）可使用原有本地 SQLite；其它数据仍保存在本地，不自动迁移两种存储之间的数据。OV 暂时不可用时机器人继续收发消息，定时器后台重试加载；恢复前定时器操作明确报暂时不可用，不会用空状态覆盖远端或静默切换到 SQLite。
 
 耗尽的执行检查从最后保存的检查时间起保留 7 天，超过期限自动清理（OV 和 SQLite 均适用）；即使没有活跃定时器也会执行清理。清理后该 occurrence 不再接受完成调用。OV 当前仍会为状态文件建立索引，`vectors_only` 不表示关闭索引。
 
