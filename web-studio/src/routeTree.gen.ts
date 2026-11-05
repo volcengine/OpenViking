@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsersRouteImport } from './routes/users'
+import { Route as UsageRouteImport } from './routes/usage'
 import { Route as PlaygroundRouteImport } from './routes/playground'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as MemoriesRouteImport } from './routes/memories'
@@ -80,6 +81,11 @@ import { Route as AdminGatewayProfilesProfileIdRouteImport } from './routes/admi
 const UsersRoute = UsersRouteImport.update({
   id: '/users',
   path: '/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UsageRoute = UsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PlaygroundRoute = PlaygroundRouteImport.update({
@@ -445,6 +451,7 @@ export interface FileRoutesByFullPath {
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/usage': typeof UsageRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/gateway': typeof AdminGatewayRouteRouteWithChildren
   '/admin/users': typeof AdminUsersRouteRouteWithChildren
@@ -510,6 +517,7 @@ export interface FileRoutesByTo {
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/usage': typeof UsageRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/monitoring': typeof AdminMonitoringRoute
@@ -577,6 +585,7 @@ export interface FileRoutesById {
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/usage': typeof UsageRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/gateway': typeof AdminGatewayRouteRouteWithChildren
   '/admin/users': typeof AdminUsersRouteRouteWithChildren
@@ -648,6 +657,7 @@ export interface FileRouteTypes {
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/usage'
     | '/users'
     | '/admin/gateway'
     | '/admin/users'
@@ -713,6 +723,7 @@ export interface FileRouteTypes {
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/usage'
     | '/users'
     | '/admin/dashboard'
     | '/admin/monitoring'
@@ -779,6 +790,7 @@ export interface FileRouteTypes {
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/usage'
     | '/users'
     | '/admin/gateway'
     | '/admin/users'
@@ -849,6 +861,7 @@ export interface RootRouteChildren {
   MemoriesRoute: typeof MemoriesRoute
   OnboardingRoute: typeof OnboardingRoute
   PlaygroundRoute: typeof PlaygroundRoute
+  UsageRoute: typeof UsageRoute
   UsersRoute: typeof UsersRouteWithChildren
   CompileNewRoute: typeof CompileNewRoute
   ConnectionsProfileIdRoute: typeof ConnectionsProfileIdRoute
@@ -867,6 +880,13 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/users'
       preLoaderRoute: typeof UsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/usage': {
+      id: '/usage'
+      path: '/usage'
+      fullPath: '/usage'
+      preLoaderRoute: typeof UsageRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/playground': {
@@ -1513,6 +1533,7 @@ const rootRouteChildren: RootRouteChildren = {
   MemoriesRoute: MemoriesRoute,
   OnboardingRoute: OnboardingRoute,
   PlaygroundRoute: PlaygroundRoute,
+  UsageRoute: UsageRoute,
   UsersRoute: UsersRouteWithChildren,
   CompileNewRoute: CompileNewRoute,
   ConnectionsProfileIdRoute: ConnectionsProfileIdRoute,

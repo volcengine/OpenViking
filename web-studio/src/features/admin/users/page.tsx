@@ -7,7 +7,6 @@ import {
   DropdownMenuItem,
 } from '#/shared/ui/dropdown-menu'
 import { adminUsersQuery } from './lib/admin-membership-queries'
-import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
 import { ErrorMessage } from '#/shared/components/error-message'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -88,7 +87,6 @@ import { getErrorMessage } from '#/shared/lib/error'
 
 export function UserManagementRoute() {
   const { t } = useTranslation(['appShell', 'settings'])
-  const { connection } = useAppConnection()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
@@ -96,40 +94,29 @@ export function UserManagementRoute() {
   if (current !== '/admin/users' && current !== '/admin/users/groups')
     return <Outlet />
 
-  if (current === '/admin/users')
-    return (
-      <section className="studio-users-page">
-        <header className="users-page-heading">
-          <h1>{t('adminNavigation.users')}</h1>
-          <Tooltip>
-            <TooltipTrigger
-              aria-label={t('userManagement.help')}
-              render={<button type="button" />}
-            >
-              <CircleHelpIcon />
-            </TooltipTrigger>
-            <TooltipContent>{t('userManagement.help')}</TooltipContent>
-          </Tooltip>
-        </header>
-        <div className="users-security-notice">
-          <ShieldAlertIcon aria-hidden="true" />
-          <div>
-            <p>{t('userManagement.keyNotice')}</p>
-            <p>{t('userManagement.agentNotice')}</p>
-          </div>
-        </div>
-        <Outlet />
-      </section>
-    )
-
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <h1 className="text-xl font-semibold tracking-tight">
-        {t('adminNavigation.users')}
-      </h1>
-      <AdminSpaceBanner accountId={connection.accountId} showScope />
+    <section className="studio-users-page">
+      <header className="users-page-heading">
+        <h1>{t('adminNavigation.users')}</h1>
+        <Tooltip>
+          <TooltipTrigger
+            aria-label={t('userManagement.help')}
+            render={<button type="button" />}
+          >
+            <CircleHelpIcon />
+          </TooltipTrigger>
+          <TooltipContent>{t('userManagement.help')}</TooltipContent>
+        </Tooltip>
+      </header>
+      <div className="users-security-notice">
+        <ShieldAlertIcon aria-hidden="true" />
+        <div>
+          <p>{t('userManagement.keyNotice')}</p>
+          <p>{t('userManagement.agentNotice')}</p>
+        </div>
+      </div>
       <Outlet />
-    </div>
+    </section>
   )
 }
 

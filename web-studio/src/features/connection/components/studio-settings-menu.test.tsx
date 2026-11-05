@@ -81,6 +81,13 @@ function openMenu(canManage = true, managementMode = false) {
     />,
   )
   fireEvent.click(screen.getByRole('button', { name: 'studioSettings.open' }))
+  expect(screen.getByText('studioSettings.apiKeySignIn')).toBeTruthy()
+  expect(
+    screen.queryByRole('group', { name: 'studioSettings.connections' }),
+  ).toBeNull()
+  fireEvent.click(
+    screen.getByRole('button', { name: 'studioSettings.switchAccount' }),
+  )
 }
 it('shows saved local connections and preferences without exposing credentials', () => {
   openMenu()
@@ -205,6 +212,9 @@ it('requires a data identity before choosing workbench as the default', () => {
 })
 it('does not offer administration preferences to a user connection', () => {
   openMenu(false)
+  expect(
+    screen.getByRole('link', { name: 'home:myUsage' }).getAttribute('href'),
+  ).toBe('/usage')
   expect(
     screen.queryByRole('group', { name: 'studioSettings.defaultEntry' }),
   ).toBeNull()

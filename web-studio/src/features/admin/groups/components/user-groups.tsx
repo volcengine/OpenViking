@@ -112,23 +112,17 @@ export function UserGroups({
       group.group_id.toLowerCase().includes(search.trim().toLowerCase()),
     ) ?? []
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      {groups.isSuccess ? (
-        <p className="text-sm">
-          {t('groups.total', { count: groups.data.length })}
-        </p>
-      ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {navigation}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-52">
+    <div className="users-member-panel">
+      <div className="users-toolbar">
+        <div className="users-toolbar-navigation">{navigation}</div>
+        <div className="users-toolbar-actions">
+          <div className="users-search">
             <SearchIcon
               aria-hidden="true"
               className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
             />
             <Input
               type="search"
-              className="h-8 pl-9"
               aria-label={t('groups.search')}
               placeholder={t('groups.search')}
               value={search}
@@ -137,7 +131,7 @@ export function UserGroups({
           </div>
           <Button
             size="sm"
-            className="bg-[var(--studio-accent)] px-4 text-white hover:bg-[var(--studio-accent-hover)]"
+            className="users-add-button"
             onClick={() => setCreating(true)}
           >
             <PlusIcon />
@@ -150,16 +144,12 @@ export function UserGroups({
       ) : groups.isError ? (
         <QueryError error={groups.error} retry={() => void groups.refetch()} />
       ) : (
-        <div className="overflow-hidden rounded-xl border">
+        <div className="users-member-table users-group-table overflow-hidden">
           <Table>
             <TableHeader>
-              <TableRow className="bg-muted/55">
-                <TableHead className="h-11 w-[38%] pl-4">
-                  {t('groups.id')}
-                </TableHead>
-                <TableHead className="w-[37%]">
-                  {t('groups.memberColumn')}
-                </TableHead>
+              <TableRow>
+                <TableHead>{t('groups.id')}</TableHead>
+                <TableHead>{t('groups.memberColumn')}</TableHead>
                 <TableHead>{t('groups.actions')}</TableHead>
               </TableRow>
             </TableHeader>
@@ -177,12 +167,12 @@ export function UserGroups({
               ) : (
                 filtered.map((group) => (
                   <TableRow key={group.group_id}>
-                    <TableCell className="pl-4 font-mono">
+                    <TableCell className="font-mono">
                       {group.group_id}
                     </TableCell>
                     <TableCell>{group.member_count}</TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex items-center justify-center gap-2">
                         <Button
                           variant="outline"
                           size="sm"
@@ -191,6 +181,7 @@ export function UserGroups({
                           {t('groups.manage')}
                         </Button>
                         <span
+                          className="inline-flex shrink-0"
                           title={
                             group.member_count
                               ? t('groups.deleteHint')

@@ -75,6 +75,8 @@ const workspace = {
       copied: 'Copied',
     },
     studioSettings: {
+      switchAccount: 'Switch account',
+      apiKeySignIn: 'Signed in with API Key',
       connections: 'Saved connections',
       addConnection: 'Add connection',
       manageConnections: 'Manage connections',
@@ -1680,6 +1682,9 @@ const workspace = {
     },
   },
   home: {
+    myUsage: 'My usage',
+    personalUsageAccessRequired:
+      'Connect with a User identity to view personal usage.',
     contextCommits: {
       description:
         'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',

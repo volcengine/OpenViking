@@ -73,6 +73,8 @@ const workspace = {
       copied: '已复制',
     },
     studioSettings: {
+      switchAccount: '切换账号',
+      apiKeySignIn: '通过 API Key 登录',
       connections: '已保存的连接',
       addConnection: '添加连接',
       manageConnections: '管理连接',
@@ -1605,6 +1607,8 @@ const workspace = {
     },
   },
   home: {
+    myUsage: '我的使用数据',
+    personalUsageAccessRequired: '请使用 User 身份连接后查看个人使用数据。',
     contextCommits: {
       description:
         '按 4 小时聚合资源、技能、会话消息和提交写入，鼠标悬停可查看明细。',

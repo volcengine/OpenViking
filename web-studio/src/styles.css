@@ -804,6 +804,12 @@
 .users-member-table td:last-child {
   text-align: center;
 }
+.users-group-table th:last-child {
+  width: 256px;
+}
+.users-group-table td {
+  height: 46px;
+}
 .users-user-identity {
   display: flex;
   align-items: center;

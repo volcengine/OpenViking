@@ -127,9 +127,9 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
                 data-model-page={
                   pathname.replace(/\/$/, '') === '/admin/configuration/server'
                 }
-                data-members-page={
-                  pathname.replace(/\/$/, '') === '/admin/users'
-                }
+                data-members-page={/^\/admin\/users(?:\/groups)?\/?$/.test(
+                  pathname,
+                )}
                 className={
                   filesystemMode
                     ? 'flex w-full flex-col'

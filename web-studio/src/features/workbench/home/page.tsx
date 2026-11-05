@@ -1,6 +1,7 @@
 import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { cn } from '#/shared/lib/utils'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import type {
@@ -57,8 +58,14 @@ export function HomePage({
     isLoading: isConnectionRoleLoading,
     unavailableKey,
   } = useAdminSpaceHeaders(management)
+  const hasPersonalIdentity =
+    connectionRole === 'user' &&
+    (serverMode !== 'api_key' || Boolean(connection.apiKey.trim()))
   const canQueryMetrics =
-    !isConnectionRoleLoading && connectionRole !== 'unknown' && headers !== null
+    !isConnectionRoleLoading &&
+    connectionRole !== 'unknown' &&
+    headers !== null &&
+    (management || hasPersonalIdentity)
   const metricsScopeKey = {
     scopeKey,
     identity: getMetricsScopeKey(connection, connectionRole, management),
@@ -104,7 +111,7 @@ export function HomePage({
   const unavailableMessage = identityUnavailable
     ? headers === null
       ? t(unavailableKey)
-      : t('usageAccessRequired')
+      : t(management ? 'usageAccessRequired' : 'personalUsageAccessRequired')
     : t('usageDisabled')
   const isMetricsLoading =
     isConnectionRoleLoading || (canQueryMetrics && dashboard.isPending)
@@ -114,7 +121,16 @@ export function HomePage({
     isConnectionRoleLoading || (canQueryMetrics && contextCommits.isPending)
 
   return (
-    <div className="flex flex-col gap-5 pb-8">
+    <div
+      className={cn(
+        'flex min-w-0 flex-col gap-5 pb-8',
+        !management &&
+          '[--home-token-input:#ed2887] [--home-token-output:#18b968] [--home-token-embedding:#3079ff] [&_[data-slot=usage-panel]]:rounded-[20px] [&_[data-slot=usage-panel]]:border-transparent [&_[data-slot=usage-panel]]:bg-[#f7f7f9] dark:[&_[data-slot=usage-panel]]:bg-[#262628]',
+      )}
+    >
+      {!management ? (
+        <h1 className="text-xl font-semibold">{t('myUsage')}</h1>
+      ) : null}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-4">
         <ContextDataPanel
           data={summary?.context_counts}
@@ -143,6 +159,7 @@ export function HomePage({
       </div>
 
       <TokenTrendPanel
+        showTotal={!management}
         data={tokenSeries.data}
         disabled={identityUnavailable}
         disabledMessage={unavailableMessage}
