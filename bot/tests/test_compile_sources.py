@@ -1015,7 +1015,8 @@ async def test_compile_retries_exhausted_combine_output_with_missing_input_feedb
 
 
 @pytest.mark.asyncio
-async def test_compile_planner_repairs_misplaced_contract_fields_with_exact_paths(runtime):
+@pytest.mark.parametrize("problem", ["misplaced_contract", "map_after_files"])
+async def test_compile_planner_repairs_invalid_plan_with_exact_paths(runtime, problem):
     pipeline, _ = runtime
     valid: dict[str, Any] = {
         "contract": {
@@ -1026,12 +1027,29 @@ async def test_compile_planner_repairs_misplaced_contract_fields_with_exact_path
         },
         "plan": DEFAULT_PLAN,
     }
-    misplaced = {"contract": {"extract": valid["contract"]["extract"]}, "plan": DEFAULT_PLAN}
-    misplaced.update(
-        {name: valid["contract"][name] for name in ("reduce", "routing", "output_format")}
-    )
+    if problem == "misplaced_contract":
+        invalid = {"contract": {"extract": valid["contract"]["extract"]}, "plan": DEFAULT_PLAN}
+        invalid.update(
+            {name: valid["contract"][name] for name in ("reduce", "routing", "output_format")}
+        )
+    else:
+        invalid = {
+            "contract": {
+                **valid["contract"],
+                "synthesize": {
+                    "instructions": "Create the Wiki index",
+                    "execution": "agent",
+                    "output": "files",
+                },
+            },
+            "plan": DEFAULT_PLAN.replace(
+                "p.finalize(changes, into=target)",
+                "index_pages = p.map(changes, task=contract.synthesize)\n"
+                "p.finalize(index_pages, into=target)",
+            ),
+        }
     pipeline.model.provider.chat.side_effect = [
-        LLMResponse(content=None, tool_calls=[ToolCallRequest("bad", "emit", misplaced, 0)]),
+        LLMResponse(content=None, tool_calls=[ToolCallRequest("bad", "emit", invalid, 0)]),
         LLMResponse(content=None, tool_calls=[ToolCallRequest("fixed", "emit", valid, 0)]),
     ]
     proposal = await pipeline.model.ask(
@@ -1049,8 +1067,12 @@ async def test_compile_planner_repairs_misplaced_contract_fields_with_exact_path
         "finalize",
     ]
     feedback = pipeline.model.provider.chat.call_args_list[1].kwargs["messages"][-1]["content"]
-    for name in ("reduce", "routing", "output_format"):
-        assert f"{name} -> contract.{name}" in feedback
+    if problem == "misplaced_contract":
+        for name in ("reduce", "routing", "output_format"):
+            assert f"{name} -> contract.{name}" in feedback
+    else:
+        assert "plan line 4, node index_pages: p.map cannot consume files from changes" in feedback
+        assert "p.finalize(changes, into=target)" in feedback
     assert pipeline.metrics["validation_failures"] == 1
     assert pipeline.metrics["repairs"] == 1
     # Unrelated extensions retain the stored-plan parser's compatibility behavior.

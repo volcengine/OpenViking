@@ -375,14 +375,21 @@ def parse_plan(
         if not isinstance(call, ast.Call):
             raise ValueError("Expected pipeline call")
         op = reference(call.func, "p", {"map", "shuffle", "reduce", "finalize"}, "operator")
-        if op in used_ops:
-            raise ValueError(f"Operator may appear at most once: {op}")
-        used_ops.add(op)
         if len(call.args) != 1 or not isinstance(call.args[0], ast.Name):
             raise ValueError("An operator takes one dataset handle")
         source = call.args[0].id
         if source not in handles or source in used:
             raise ValueError(f"Unbound or multiply consumed dataset: {source}")
+        if handles[source] == "files" and op != "finalize":
+            raise ValueError(
+                f"plan line {call.lineno}, node {name}: p.{op} cannot consume files "
+                f"from {source}. Files are final deliverables; pass {source} directly "
+                f"to p.finalize({source}, into=target). Include all required files, "
+                "such as an index, in the instructions of the step that produces them."
+            )
+        if op in used_ops:
+            raise ValueError(f"Operator may appear at most once: {op}")
+        used_ops.add(op)
         kwargs = {k.arg: k.value for k in call.keywords}
         if len(kwargs) != len(call.keywords) or None in kwargs:
             raise ValueError("Duplicate or expanded keywords forbidden")
