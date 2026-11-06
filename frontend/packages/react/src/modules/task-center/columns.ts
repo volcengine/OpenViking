@@ -1,6 +1,26 @@
 import type { ReactNode } from 'react';
 
 /**
+ * 编译目标的定时规则，与原生接口的 `update_schedule` 同形：每日或每周的固定
+ * 时刻（北京时间）。
+ * The schedule rule of a compile target, matching the native
+ * `update_schedule`: a daily or weekly clock time in Beijing time.
+ */
+export type TaskCenterCompileSchedule =
+  | {
+      frequency: 'daily';
+      hour: number;
+      minute: number;
+    }
+  | {
+      frequency: 'weekly';
+      /** 1 为周一，7 为周日。1 is Monday, 7 is Sunday. */
+      weekday: number;
+      hour: number;
+      minute: number;
+    };
+
+/**
  * 数据源导入任务的一行，来自 `/api/v1/watches`。
  * One data-source import task, from `/api/v1/watches`.
  */
@@ -19,6 +39,14 @@ export interface TaskCenterImportRow {
   scheduleLabel: string;
   /** 定时同步是否开启。Whether scheduled sync is on. */
   scheduleEnabled: boolean;
+  /**
+   * 当前的同步间隔，单位分钟。未开启时省略。对应原生 watch 的
+   * `watch_interval`。
+   *
+   * The current sync interval in minutes, omitted when scheduling is off. It
+   * matches the native watch's `watch_interval`.
+   */
+  scheduleIntervalMinutes?: number;
   /** 最近一次执行时间，毫秒时间戳。Last execution time in milliseconds. */
   lastExecutionTime?: number;
   /** 任务创建时间，毫秒时间戳。Creation time in milliseconds. */
@@ -46,6 +74,15 @@ export interface TaskCenterCompileRow {
   scheduleLabel: string;
   /** 定时更新是否开启。Whether scheduled updates are on. */
   scheduleEnabled: boolean;
+  /**
+   * 当前的定时规则。未开启时省略。与原生编译目标的 `update_schedule` 同形，
+   * 宿主改完直接回传即可。
+   *
+   * The current schedule rule, omitted when scheduling is off. It matches the
+   * native compile target's `update_schedule`, so a host can pass it straight
+   * back after an edit.
+   */
+  schedule?: TaskCenterCompileSchedule;
   /** 内容最近更新时间，毫秒时间戳。Last content update in milliseconds. */
   updatedAt?: number;
   /** 任务创建时间，毫秒时间戳。Creation time in milliseconds. */

@@ -30,7 +30,7 @@
 - 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
 - 登录、账号作用域与权限。
 - 任务详情：由模块内部以抽屉展示，宿主不参与打开任务。
-- 写入定时变更：`onScheduleChange` 只上报意图，宿主调用接口后把新值重新传入。
+- 写入定时变更。`onSaveScheduleInterval` 与 `onSaveCompileSchedule` 返回 Promise：写入成功后 resolve，模块重新取数；失败则 reject，模块保留编辑内容并展示 `labels.saveFailed`。两者分开是因为导入任务按间隔同步，编译目标按每日或每周的固定时刻更新。
 - 工具栏，通过 `slots.toolbar` 注入。行末操作内置：详情入口与定时编辑。
 
 ## 列
@@ -67,21 +67,22 @@
 
 模块从子路径和根入口导出 `TaskCenterProps`。`TaskCenterTab`、`TaskCenterScope`、`TaskCenterLabels`、`TaskCenterSlots`、行类型与列类型只从子路径导出。
 
-| 属性               | 类型                                     | 默认值   | 说明                                                                        |
-| ------------------ | ---------------------------------------- | -------- | --------------------------------------------------------------------------- |
-| `tab`              | `'import' \| 'compile'`                  | —        | 受控的当前页签。传入时由宿主决定，模块只上报切换意图。                      |
-| `defaultTab`       | `'import' \| 'compile'`                  | `import` | 非受控时的初始页签。                                                        |
-| `scope`            | `'mine' \| 'others'`                     | —        | 受控的可见范围。传入时由宿主决定。                                          |
-| `defaultScope`     | `'mine' \| 'others'`                     | `mine`   | 非受控时的初始范围。                                                        |
-| `columns`          | `TaskCenterColumns`                      | —        | 各页签的列配置。省略时使用各自的内置列与默认顺序。                          |
-| `onTabChange`      | `(tab: TaskCenterTab) => void`           | —        | 页签变化后触发。                                                            |
-| `onScopeChange`    | `(scope: TaskCenterScope) => void`       | —        | 可见范围变化后触发。                                                        |
-| `onOpenResource`   | `(uri: string) => void`                  | —        | 打开资源时触发，例如导入任务的目标路径。                                    |
-| `onScheduleChange` | `(row, intervalMinutes: number) => void` | —        | 定时周期变化后触发。模块不写入，宿主调用接口后把新值重新传入。              |
-| `slots`            | `TaskCenterSlots`                        | —        | `toolbar` 与 `emptyState`。                                                 |
-| `labels`           | `TaskCenterLabels`                       | —        | 可替换文案：页签与范围名称、`empty`、`error`、`retry`、定时列及其状态文案。 |
-| `className`        | `string`                                 | —        | 容器附加类名。                                                              |
-| `style`            | `CSSProperties`                          | —        | 容器样式覆盖。                                                              |
+| 属性                     | 类型                                              | 默认值   | 说明                                                                                                                                                                                        |
+| ------------------------ | ------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tab`                    | `'import' \| 'compile'`                           | —        | 受控的当前页签。传入时由宿主决定，模块只上报切换意图。                                                                                                                                      |
+| `defaultTab`             | `'import' \| 'compile'`                           | `import` | 非受控时的初始页签。                                                                                                                                                                        |
+| `scope`                  | `'mine' \| 'others'`                              | —        | 受控的可见范围。传入时由宿主决定。                                                                                                                                                          |
+| `defaultScope`           | `'mine' \| 'others'`                              | `mine`   | 非受控时的初始范围。                                                                                                                                                                        |
+| `columns`                | `TaskCenterColumns`                               | —        | 各页签的列配置。省略时使用各自的内置列与默认顺序。                                                                                                                                          |
+| `onTabChange`            | `(tab: TaskCenterTab) => void`                    | —        | 页签变化后触发。                                                                                                                                                                            |
+| `onScopeChange`          | `(scope: TaskCenterScope) => void`                | —        | 可见范围变化后触发。                                                                                                                                                                        |
+| `onSaveScheduleInterval` | `(row, intervalMinutes: number) => Promise<void>` | —        | 保存导入任务的同步间隔。写入成功后 resolve，模块重新取数；reject 时保留编辑内容并展示 `labels.saveFailed`。                                                                                 |
+| `onSaveCompileSchedule`  | `(row, schedule \| null) => Promise<void>`        | —        | 保存编译目标的定时规则。参数与原生 `update_schedule` 同形——`{ frequency: 'daily', hour, minute }` 或 `{ frequency: 'weekly', weekday, hour, minute }`——宿主可直接转发。传 `null` 关闭定时。 |
+| `onOpenResource`         | `(uri: string) => void`                           | —        | 打开资源时触发，例如导入任务的目标路径。                                                                                                                                                    |
+| `slots`                  | `TaskCenterSlots`                                 | —        | `toolbar` 与 `emptyState`。                                                                                                                                                                 |
+| `labels`                 | `TaskCenterLabels`                                | —        | 可替换文案：页签与范围名称、`empty`、`error`、`retry`、定时列及其状态文案。                                                                                                                 |
+| `className`              | `string`                                          | —        | 容器附加类名。                                                                                                                                                                              |
+| `style`                  | `CSSProperties`                                   | —        | 容器样式覆盖。                                                                                                                                                                              |
 
 文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载，任务状态归任务数据源，不在模块内复制维护。
 

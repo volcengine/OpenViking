@@ -1,7 +1,12 @@
 import type { OvRequestOptions } from '../../client/index.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 
-import type { TaskCenterColumns, TaskCenterRow } from './columns.js';
+import type {
+  TaskCenterColumns,
+  TaskCenterCompileRow,
+  TaskCenterCompileSchedule,
+  TaskCenterImportRow,
+} from './columns.js';
 
 /**
  * 任务管理的页签。数据源导入对应定时同步的 watch，知识编译对应编译目标。
@@ -61,6 +66,8 @@ export interface TaskCenterLabels {
   scheduleDisabled?: string;
   /** 编辑定时周期的按钮文案。Label of the control that edits a schedule. */
   editSchedule?: string;
+  /** 定时保存失败时的提示。Message shown when saving a schedule fails. */
+  saveFailed?: string;
 }
 
 /**
@@ -132,11 +139,29 @@ export interface TaskCenterProps extends Omit<
    */
   onOpenResource?: (uri: string) => void;
   /**
-   * 定时周期变化后触发。模块不写入，由宿主调用接口后把新值重新传入。
-   * Called after a schedule changes. The module never writes; the host calls the
-   * API and passes the new value back.
+   * 导入任务的同步间隔保存。返回的 Promise 成功即视为已写入，模块随后重新取数；
+   * 失败时保留编辑内容并展示错误，错误文案取 `labels.saveFailed`。
+   *
+   * Saving the sync interval of an import task. A resolved Promise means the
+   * write succeeded and the module reloads; a rejection keeps the edit and shows
+   * the error from `labels.saveFailed`.
    */
-  onScheduleChange?: (row: TaskCenterRow, intervalMinutes: number) => void;
+  onSaveScheduleInterval?: (
+    row: TaskCenterImportRow,
+    intervalMinutes: number,
+  ) => Promise<void>;
+  /**
+   * 编译目标的定时规则保存。参数与原生 `update_schedule` 同形，宿主可直接转发。
+   * 成功与失败的处理同 {@link onSaveScheduleInterval}。
+   *
+   * Saving the schedule of a compile target. The argument matches the native
+   * `update_schedule`, so a host can forward it as-is. Success and failure are
+   * handled the same way as {@link onSaveScheduleInterval}.
+   */
+  onSaveCompileSchedule?: (
+    row: TaskCenterCompileRow,
+    schedule: TaskCenterCompileSchedule | null,
+  ) => Promise<void>;
   /**
    * 插槽，见 {@link TaskCenterSlots}。
    * Slots, see {@link TaskCenterSlots}.
@@ -160,6 +185,7 @@ export type {
   TaskCenterColumns,
   TaskCenterCompileColumnKey,
   TaskCenterCompileRow,
+  TaskCenterCompileSchedule,
   TaskCenterImportColumnKey,
   TaskCenterImportRow,
   TaskCenterRow,

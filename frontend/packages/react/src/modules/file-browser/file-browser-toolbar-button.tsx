@@ -1,4 +1,3 @@
-import styles from './file-browser.module.css';
 import type { FileBrowserToolbarButtonProps } from './types.js';
 
 /**
@@ -22,13 +21,15 @@ export function FileBrowserToolbarButton({
       {...rest}
       type="button"
       disabled={disabled}
-      className={[styles.toolbarButton, className].filter(Boolean).join(' ')}
+      className={['ov-file-browser__toolbar-button', className]
+        .filter(Boolean)
+        .join(' ')}
       onClick={onClick}
     >
-      <span className={styles.toolbarButtonIcon} aria-hidden="true">
+      <span className="ov-file-browser__toolbar-button-icon" aria-hidden="true">
         {icon}
       </span>
-      <span className={styles.toolbarButtonLabel}>{children}</span>
+      <span className="ov-file-browser__toolbar-button-label">{children}</span>
     </button>
   );
 }
