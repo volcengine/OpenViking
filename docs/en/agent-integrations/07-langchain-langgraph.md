@@ -274,6 +274,10 @@ succeeds, resolve the reported error and retry the operation to finish cleanup.
 
 Record reads return `None` only for a missing record; permission, backend, and invalid-JSON
 errors propagate, and `put()` does not overwrite a record after a failed read.
+Index creation falls back to replacement only for an explicit already-existing target.
+Other index-write errors propagate. The JSON record is written before its projection,
+so a failed projection can leave the stored value updated; these writes are not transactional.
+
 `list_namespaces(prefix=("users", "*"))` matches one namespace label per `*`, including
 when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
 
@@ -281,6 +285,8 @@ when `root_uri` uses a peer home alias such as `viking://~/peers/support/memorie
 Filter keys `eq`, `ne`, `gt`, `gte`, `lt`, `lte` and `in` are reserved operator aliases at every nesting level.
 Use `index=["items[*].text"]` to index selected array fields while retaining the complete
 stored value. Existing index projections are updated when the item is written again.
+An empty field list (`index=[]`), including a constructor default, removes the projection
+like `index=False`; the value remains available to `get()` and nonsemantic search.
 
 ### LangGraph middleware
 

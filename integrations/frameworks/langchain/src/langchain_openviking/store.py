@@ -67,6 +67,9 @@ class OpenVikingStore(BaseStore):
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
     Removal ignores missing targets and propagates other backend errors.
+    Every key remains one URI path segment. Encoded slash and backslash
+    separators use adapter-level escape tokens because OpenViking rejects
+    ``%2F`` and ``%5C`` within a URI segment.
 
     Args:
         root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
@@ -230,7 +233,7 @@ class OpenVikingStore(BaseStore):
 
         effective_index = self.index if index is None else index
         index_uri = self._index_uri(namespace, key)
-        if effective_index is False:
+        if effective_index is False or effective_index == []:
             self._remove(index_uri)
             return
         self._write(index_uri, self._index_document(record, effective_index))
@@ -358,7 +361,9 @@ class OpenVikingStore(BaseStore):
         for pattern in ("*.json", "**/*.json"):
             try:
                 result = call_openviking(self._client(), "glob", pattern=pattern, uri=base_uri)
-            except Exception:
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
                 continue
             for uri in _extract_uris(result):
                 if uri not in seen:
@@ -408,12 +413,13 @@ class OpenVikingStore(BaseStore):
         try:
             self._write_create(uri, content)
             return
-        except Exception as create_exc:
-            try:
-                self._write_replace(uri, content)
-                return
-            except Exception:
-                raise create_exc
+        except Exception as exc:
+            if (
+                not isinstance(exc, FileExistsError)
+                and getattr(exc, "code", None) != "ALREADY_EXISTS"
+            ):
+                raise
+        self._write_replace(uri, content)
 
     def _write_create(self, uri: str, content: str) -> None:
         call_openviking(
@@ -444,10 +450,10 @@ class OpenVikingStore(BaseStore):
             logger.debug("OpenVikingStore remove ignored missing URI", exc_info=True)
 
     def _data_uri(self, namespace: tuple[str, ...], key: str) -> str:
-        return f"{self._data_prefix_uri(namespace)}/{_segment(key)}.json"
+        return _record_uri(self._data_prefix_uri(namespace), key, ".json")
 
     def _index_uri(self, namespace: tuple[str, ...], key: str) -> str:
-        return f"{self._index_prefix_uri(namespace)}/{_segment(key)}.md"
+        return _record_uri(self._index_prefix_uri(namespace), key, ".md")
 
     def _data_prefix_uri(self, namespace: tuple[str, ...]) -> str:
         return _join_uri(self.root_uri, "data", *namespace)
@@ -508,6 +514,20 @@ def _join_uri(root: str, *segments: str) -> str:
     return root.rstrip("/") if not suffix else f"{root.rstrip('/')}/{suffix}"
 
 
+def _record_uri(prefix: str, key: str, suffix: str) -> str:
+    return f"{prefix}/{_encode_key_segment(key)}{suffix}"
+
+
+def _encode_key_segment(key: str) -> str:
+    # quote(..., safe="") encodes a literal "!" as "%21", leaving bare "!"
+    # available as an unambiguous adapter escape marker.
+    return _segment(key).replace("%2F", "!s").replace("%5C", "!b")
+
+
+def _decode_key_segment(segment: str) -> str:
+    return unquote(segment.replace("!s", "%2F").replace("!b", "%5C"))
+
+
 def _parse_canonicalized_record_uri(
     *,
     root_uri: str,
@@ -559,7 +579,7 @@ def _parse_record_parts(parts: list[str]) -> tuple[tuple[str, ...], str] | None:
     if not parts or not parts[-1]:
         return None
     namespace = tuple(unquote(part) for part in parts[:-1])
-    key = unquote(parts[-1])
+    key = _decode_key_segment(parts[-1])
     return namespace, key
 
 

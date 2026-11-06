@@ -261,6 +261,9 @@ store.close()
 
 读取记录时，仅记录不存在才返回 `None`；权限、后端和 JSON 解析错误会向调用方抛出，
 `put()` 不会在读取失败后覆盖记录。
+索引创建仅在明确返回目标已存在时改用替换写入；其他索引写入错误向调用方传播。
+JSON 记录先于索引投影写入，因此投影失败时存储值可能已更新；两次写入不是事务操作。
+
 `list_namespaces(prefix=("users", "*"))` 中的每个 `*` 匹配一层命名空间，
 也适用于 `viking://~/peers/support/memories/langgraph_store` 这样的 peer 主目录别名。
 
@@ -268,6 +271,9 @@ store.close()
 筛选中的 `eq`、`ne`、`gt`、`gte`、`lt`、`lte` 和 `in` 在所有嵌套层级均为保留的运算符别名。
 使用 `index=["items[*].text"]` 可以只索引数组中的指定字段，同时保留完整的存储值。
 已有条目的索引会在再次写入该条目时更新。
+
+空字段列表（`index=[]`）与 `index=False` 一样移除索引投影，构造时的默认值也遵循此规则；
+完整值仍可通过 `get()` 和非语义搜索读取。
 
 ### LangGraph middleware
 

@@ -3,7 +3,6 @@
 
 import asyncio
 import json
-from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import openviking_sdk
@@ -16,31 +15,83 @@ from langgraph.store.base import (
     PutOp,
 )
 from langgraph.store.memory import InMemoryStore
-from openviking_sdk.errors import NotFoundError, PermissionDeniedError, UnavailableError
+from openviking_sdk.errors import (
+    AlreadyExistsError,
+    NotFoundError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 
 from langchain_openviking.store import OpenVikingStore
 from langchain_openviking.testing import InMemoryOpenVikingClient
 
 
-def test_write_record_preserves_created_at_when_create_is_an_upsert_alias():
-    store = object.__new__(OpenVikingStore)
-    created_at = "2026-01-01T00:00:00+00:00"
-    store._read_record = Mock(return_value={"created_at": created_at})
-    store._write_create = Mock()
-    store._write_replace = Mock()
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "create_error,replace_error",
+    [
+        (None, None),
+        (FileExistsError("index exists"), None),
+        (AlreadyExistsError("index"), None),
+        (UnavailableError("index writer"), None),
+        (PermissionDeniedError("index denied"), None),
+        (TimeoutError("index timed out"), None),
+        (FileExistsError("index exists"), PermissionDeniedError("replace denied")),
+        (AlreadyExistsError("index"), UnavailableError("replace writer")),
+    ],
+)
+def test_store_preserves_created_at_and_reports_index_write_errors(
+    create_error, replace_error, asynchronous
+):
+    class Client(InMemoryOpenVikingClient):
+        fail = False
 
-    record = store._write_record(
-        "viking://user/default/langgraph/data/ns/key.json",
-        ("ns",),
-        "key",
-        {"version": 2},
-        datetime(2026, 1, 2, tzinfo=timezone.utc),
+        def write(
+            self, uri: str, content: str, mode: str = "replace", wait: bool = False, **kwargs
+        ):
+            if self.fail and "/index/" in uri:
+                error = create_error if mode == "create" else replace_error
+                if error is not None:
+                    raise error
+            if mode == "create" and uri in self.records:
+                mode = "replace"  # Current server create behavior is an upsert.
+            return super().write(uri, content, mode=mode, wait=wait, **kwargs)
+
+    client = Client()
+    store = OpenVikingStore(client=client)
+    store.put(("memory",), "note", {"version": 1})
+    before = store.get(("memory",), "note")
+    old_index = {uri: text for uri, text in client.records.items() if "/index/" in uri}
+    client.fail = True
+    conflict = isinstance(create_error, FileExistsError) or isinstance(
+        create_error, AlreadyExistsError
     )
+    expected_error = replace_error if conflict else create_error
 
-    assert record["created_at"] == created_at
-    assert record["updated_at"] == "2026-01-02T00:00:00+00:00"
-    store._write_create.assert_not_called()
-    store._write_replace.assert_called_once()
+    def update():
+        if asynchronous:
+            asyncio.run(store.aput(("memory",), "note", {"version": 2}))
+        else:
+            store.put(("memory",), "note", {"version": 2})
+
+    if expected_error is None:
+        update()
+    else:
+        with pytest.raises(type(expected_error)) as caught:
+            update()
+        assert type(caught.value) is type(expected_error)
+        assert caught.value.args == expected_error.args
+        assert str(caught.value) == str(expected_error)
+        assert getattr(caught.value, "code", None) == getattr(expected_error, "code", None)
+        assert {uri: text for uri, text in client.records.items() if "/index/" in uri} == old_index
+    after = store.get(("memory",), "note")
+    assert after.value == {"version": 2}
+    assert after.created_at == before.created_at
+    if expected_error is None:
+        assert any(
+            '"version": 2' in text for uri, text in client.records.items() if "/index/" in uri
+        )
+        assert [item.key for item in store.search(("memory",), query='"version": 2')] == ["note"]
 
 
 async def _read_or_update(store, operation, asynchronous):
@@ -121,6 +172,52 @@ def test_store_retains_explicit_missing_record_behavior(
         assert result == []
     else:
         assert result is None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("operation", ["search", "list_namespaces"])
+@pytest.mark.parametrize("failed_pattern", ["*.json", "**/*.json"])
+@pytest.mark.parametrize(
+    "error",
+    [UnavailableError("test listing"), PermissionDeniedError("test listing"), TimeoutError()],
+)
+def test_store_propagates_listing_errors(
+    monkeypatch, operation, error, failed_pattern, asynchronous
+):
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    store.put(("memory",), "note", {"version": 1})
+    original_records = dict(client.records)
+    original_glob = client.glob
+
+    def glob(pattern, uri):
+        if pattern == failed_pattern:
+            raise error
+        return original_glob(pattern, uri)
+
+    monkeypatch.setattr(client, "glob", glob)
+    method = getattr(store, ("a" if asynchronous else "") + operation)
+    args = (("memory",),) if operation == "search" else ()
+    with pytest.raises(type(error)) as caught:
+        result = method(*args)
+        if asynchronous:
+            asyncio.run(result)
+    assert caught.value.args == error.args
+    assert client.records == original_records
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("operation", ["search", "list_namespaces"])
+@pytest.mark.parametrize(
+    "error", [FileNotFoundError("missing root"), NotFoundError("missing root")]
+)
+def test_store_returns_empty_for_missing_listing_root(monkeypatch, operation, error, asynchronous):
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    monkeypatch.setattr(client, "glob", Mock(side_effect=error))
+    method = getattr(store, ("a" if asynchronous else "") + operation)
+    result = method(("memory",)) if operation == "search" else method()
+    assert (asyncio.run(result) if asynchronous else result) == []
 
 
 NAMESPACES = (
@@ -214,13 +311,38 @@ def test_store_keeps_existing_nonpositive_namespace_depth_behavior(stores, max_d
     )
 
 
-def test_store_keeps_namespace_validation_and_persisted_values(stores):
+@pytest.mark.parametrize("operation", ["put", "aput", "batch", "abatch"])
+@pytest.mark.parametrize("use_default", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_store_keeps_namespace_validation_and_persisted_values(
+    stores, operation, use_default, existing
+):
     store, _ = stores
     with pytest.raises(InvalidNamespaceError, match="Namespace cannot be empty"):
         store.put((), "root", {"number": -1})
     assert store.list_namespaces() == sorted(NAMESPACES)
     for number, namespace in enumerate(NAMESPACES):
         assert store.get(namespace, "item").value == {"number": number}
+
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client, index=[] if use_default else None)
+    namespace, key = ("memory",), "excluded-note"
+    if existing:
+        store.put(namespace, key, {"text": "old"}, index=["text"])
+    value = {"text": "still stored"}
+    index: list[str] | None = None if use_default else []
+    if operation == "put":
+        store.put(namespace, key, value, index=index)
+    elif operation == "aput":
+        asyncio.run(store.aput(namespace, key, value, index=index))
+    else:
+        ops = [PutOp(namespace, key, value, index=index)]
+        asyncio.run(store.abatch(ops)) if operation == "abatch" else store.batch(ops)
+
+    assert store.get(namespace, key).value == value
+    assert [item.key for item in store.search(namespace)] == [key]
+    assert not any("/index/" in uri for uri in client.records)
+    assert store.search(namespace, query=key) == []
 
 
 @pytest.mark.asyncio
