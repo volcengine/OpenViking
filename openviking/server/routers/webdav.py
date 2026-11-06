@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import mimetypes
+import uuid
 import xml.etree.ElementTree as ET
 from datetime import timezone
 from email.utils import format_datetime
@@ -21,7 +22,10 @@ from openviking.server.identity import RequestContext
 from openviking.storage.internal_names import WEBDAV_RESERVED_FILENAMES, is_storage_internal_name
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/webdav/resources", tags=["webdav"])
 
@@ -434,11 +438,35 @@ async def move(
 
     overwrite = (request.headers.get("Overwrite", "T") or "T").strip().upper() != "F"
     dst_stat = await _safe_stat(service, dst_uri, _ctx)
+    backup_uri: Optional[str] = None
     if dst_stat is not None:
         if not overwrite:
             return _error(412, "Destination already exists")
-        await service.fs.rm(dst_uri, ctx=_ctx, recursive=bool(dst_stat.get("isDir", False)))
+        # mv is copy + vector update + source delete, and can fail after the
+        # destination has already been touched. Keep the previous destination
+        # under a sibling name until the move succeeds instead of deleting it
+        # up front.
+        backup_uri = f"{dst_uri}.webdav-move-backup-{uuid.uuid4().hex}"
+        await service.fs.mv(dst_uri, backup_uri, ctx=_ctx)
 
-    await service.fs.mv(src_uri, dst_uri, ctx=_ctx)
+    try:
+        await service.fs.mv(src_uri, dst_uri, ctx=_ctx)
+    except Exception:
+        if backup_uri is not None:
+            try:
+                await service.fs.mv(backup_uri, dst_uri, ctx=_ctx)
+            except Exception:
+                logger.exception(
+                    "WebDAV MOVE failed and the previous destination %s could not be restored",
+                    backup_uri,
+                )
+        raise
+
+    if backup_uri is not None:
+        try:
+            await service.fs.rm(backup_uri, ctx=_ctx, recursive=True)
+        except Exception:
+            logger.warning("Failed to remove WebDAV MOVE backup %s", backup_uri)
+
     status_code = 204 if dst_stat is not None else 201
     return FastAPIResponse(status_code=status_code, headers=_webdav_headers())
