@@ -115,6 +115,7 @@ _, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "alice", &openviking.
 ## 技能和 Watch 示例
 
 导入默认返回 `task_id`。通过 `client.GetTask(ctx, taskID)` 查询状态。
+`AddSkill` 和 `UpdateSkill` 也接受内联 Markdown 字符串，内容可以超过本地文件名长度限制。
 
 ```go
 skill, err := client.AddSkill(ctx, "./skills/search-web", nil)

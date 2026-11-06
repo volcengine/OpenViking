@@ -67,11 +67,6 @@
       "import": "./dist/modules/task-center.js"
     },
     "./modules/task-center/style.css": "./dist/modules/task-center/style.css",
-    "./modules/user-usage": {
-      "types": "./dist/modules/user-usage/index.d.ts",
-      "import": "./dist/modules/user-usage.js"
-    },
-    "./modules/user-usage/style.css": "./dist/modules/user-usage/style.css",
     "./modules/style.css": "./dist/modules/style.css",
     "./package.json": "./package.json",
     "./icons": {

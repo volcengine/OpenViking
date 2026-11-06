@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { FileTreeRowView, isWholeTreeError } from './file-tree-rows.js';
-import styles from './file-tree.module.css';
 import type { FileTreeErrorRow, FileTreeLabels, FileTreeRow } from './types.js';
 
 export interface FileTreeBodyProps {
@@ -27,9 +26,9 @@ export function FileTreeBody({
 }: FileTreeBodyProps) {
   if (!isReady) {
     return (
-      <div className={styles.state}>
+      <div className="ov-file-tree__state">
         {loadingFallback ?? (
-          <span className={styles.muted}>{text.loading}</span>
+          <span className="ov-file-tree__muted">{text.loading}</span>
         )}
       </div>
     );
@@ -38,22 +37,26 @@ export function FileTreeBody({
   if (isWholeTreeError(rows)) {
     const message = (rows[0] as FileTreeErrorRow).message ?? text.error;
     return (
-      <div className={styles.state}>
-        {errorFallback ?? <span className={styles.muted}>{message}</span>}
+      <div className="ov-file-tree__state">
+        {errorFallback ?? (
+          <span className="ov-file-tree__muted">{message}</span>
+        )}
       </div>
     );
   }
 
   if (rows.length === 0) {
     return (
-      <div className={styles.state}>
-        {emptyFallback ?? <span className={styles.muted}>{text.empty}</span>}
+      <div className="ov-file-tree__state">
+        {emptyFallback ?? (
+          <span className="ov-file-tree__muted">{text.empty}</span>
+        )}
       </div>
     );
   }
 
   return (
-    <div role="group" className={styles.rows}>
+    <div role="group" className="ov-file-tree__rows">
       {rows.map((row) => (
         <FileTreeRowView key={row.id} row={row} ctx={ctx} />
       ))}

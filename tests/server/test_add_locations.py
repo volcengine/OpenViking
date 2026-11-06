@@ -227,7 +227,6 @@ def test_add_targets_accepts_supported_skill_uris(uri):
 @pytest.mark.parametrize(
     "uri",
     [
-        "viking://user/resources/project-a",
         "viking://user/skills",
         "viking://user/memories",
         "viking://~/memories",
@@ -244,7 +243,6 @@ def test_add_targets_rejects_invalid_resource_uris(uri):
 @pytest.mark.parametrize(
     "uri",
     [
-        "viking://user/skills",
         "viking://user/skills/nested",
         "viking://user/resources",
         "viking://~/skills/nested",
@@ -257,22 +255,17 @@ def test_add_targets_rejects_invalid_skill_uris(uri):
         AddTargetsConfig(skill_uri=uri)
 
 
-@pytest.mark.parametrize(
-    ("field", "uri"),
-    [
-        ("resource_uri", "viking://user/skills"),
-        ("resource_uri", "viking://user/alice/resources"),
-        ("skill_uri", "viking://user/alice/skills"),
-    ],
-)
-def test_load_server_config_rejects_bad_add_locations(tmp_path, field, uri):
+def test_load_server_config_add_locations(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
         json.dumps(
             {
                 "server": {
                     "user_config_defaults": {
-                        "add_targets": {field: uri}
+                        "add_targets": {
+                            "resource_uri": "viking://user/resources",
+                            "skill_uri": "viking://user/skills",
+                        }
                     }
                 }
             }
@@ -280,5 +273,20 @@ def test_load_server_config_rejects_bad_add_locations(tmp_path, field, uri):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=field):
-        load_server_config(str(config_path))
+    config = load_server_config(str(config_path))
+    assert config.user_config_defaults.add_targets.model_dump() == {
+        "resource_uri": "viking://~/resources",
+        "skill_uri": "viking://~/skills",
+    }
+
+    for field, uri in [
+        ("resource_uri", "viking://user/skills"),
+        ("resource_uri", "viking://user/alice/resources"),
+        ("skill_uri", "viking://user/alice/skills"),
+    ]:
+        config_path.write_text(
+            json.dumps({"server": {"user_config_defaults": {"add_targets": {field: uri}}}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=field):
+            load_server_config(str(config_path))

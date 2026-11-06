@@ -8,7 +8,6 @@ import { DEFAULT_LABELS } from './file-tree-labels.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { useRowTooltip } from './file-tree-tooltip.js';
 import { useFileTreeActions } from './use-file-tree-actions.js';
-import styles from './file-tree.module.css';
 import type {
   FileTreeComponent,
   FileTreeEntryRow,
@@ -113,12 +112,16 @@ export const FileTree: FileTreeComponent = forwardRef<
     <div
       {...rest}
       ref={rootRef}
-      className={[styles.root, className].filter(Boolean).join(' ')}
+      className={['ov-file-tree', className].filter(Boolean).join(' ')}
     >
       {slots?.toolbar ? (
-        <div className={styles.toolbar}>{slots.toolbar}</div>
+        <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
       ) : null}
-      <div role="tree" aria-label={rest['aria-label']} className={styles.body}>
+      <div
+        role="tree"
+        aria-label={rest['aria-label']}
+        className="ov-file-tree__body"
+      >
         <FileTreeBody
           rows={rows}
           isReady={isReady}
