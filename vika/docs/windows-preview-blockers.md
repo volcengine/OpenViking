@@ -50,6 +50,9 @@ commit \`d417579cb4b2c19e0d2eb48f5388d3d8dcac876e\`.
   untouched; no \`npm ci\` on the user side and no Administrator rights.
 - Detect \`~/.openviking/ovcli.conf\` automatically, then run setup and keep the
   manual App ID / App Secret entry path working.
-- Make model bootstrap explicit: either add a documented Pi login step to setup
-  or accept API keys in a release-provided secrets file, so a clean Windows
-  machine can finish setup with Lark credentials plus one model credential.
+- Make model bootstrap explicit: document the user-local Pi login/model config
+  step (or a user-supplied secrets file) so a clean Windows machine can finish
+  setup with Lark credentials plus the user's own model credential.
+- Never embed provider credentials in the release artifact, repository, logs, or
+  diagnostics; setup must read them from the user's Pi config or a user-provided
+  secrets file.
