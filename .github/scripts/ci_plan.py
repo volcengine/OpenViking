@@ -8,8 +8,6 @@ import subprocess
 FULL_OS = [
     "ubuntu-24.04",
     "ubuntu-24.04-arm",
-    "macos-14",
-    "macos-15-intel",
     "windows-latest",
 ]
 CI = r"^\.github/(workflows/(pr|api_test|_build|_test_lite|_test_full)\.yml|actions/|scripts/(ci_plan|native_bundle|test_ci_helpers)\.py)"
