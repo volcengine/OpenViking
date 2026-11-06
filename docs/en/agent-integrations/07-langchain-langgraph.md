@@ -264,6 +264,11 @@ Use `close()` after synchronous work or `await store.aclose()` after async work.
 also supports `with OpenVikingStore(...) as store` and `async with` for automatic cleanup.
 Cleanup releases only internally created clients; injected clients remain caller-owned.
 Closing an unused Store creates no client, and a closed Store cannot be reused.
+Cleanup waits for active backend requests before releasing the owned client. Use `aclose()`
+in async code so this wait does not block the event loop.
+Calling `close()` or `aclose()` within a Store backend call raises `RuntimeError`.
+This also applies to callbacks or tasks that inherit that active call's context.
+A rejected attempt leaves the Store open; close it after the call finishes.
 
 Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
 equivalent to `delete()`. Deleting a key that does not exist is a no-op.
