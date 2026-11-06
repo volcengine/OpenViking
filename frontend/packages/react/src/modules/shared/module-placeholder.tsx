@@ -1,5 +1,4 @@
 import type { ModulePlaceholderProps } from './types.js';
-import styles from './module-placeholder.module.css';
 
 export function ModulePlaceholder({
   name,
@@ -9,11 +8,11 @@ export function ModulePlaceholder({
 }: ModulePlaceholderProps & { name: string }) {
   return (
     <div
-      className={[styles.root, className].filter(Boolean).join(' ')}
+      className={['ov-module-placeholder', className].filter(Boolean).join(' ')}
       style={style}
     >
-      <p className={styles.label}>{labels?.title ?? name}</p>
-      <p className={styles.description}>
+      <p className="ov-module-placeholder__label">{labels?.title ?? name}</p>
+      <p className="ov-module-placeholder__description">
         {labels?.description ??
           'Placeholder. Functionality is not available yet.'}
       </p>

@@ -1,10 +1,8 @@
-import styles from './file-preview.module.css';
-
 export function FileIcon() {
   return (
     <svg
       aria-hidden="true"
-      className={styles.icon}
+      className="ov-file-preview__icon"
       viewBox="0 0 16 16"
       width="14"
       height="14"
@@ -30,7 +28,7 @@ export function CopyIcon() {
   return (
     <svg
       aria-hidden="true"
-      className={styles.actionIcon}
+      className="ov-file-preview__action-icon"
       viewBox="0 0 16 16"
       width="12"
       height="12"
