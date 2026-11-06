@@ -22,7 +22,7 @@ function Get-RawUserPath {
 }
 $originalUserPath = Get-RawUserPath
 $originalProcessPath = $env:Path
-$names = @('USERPROFILE', 'HOME', 'PM2_HOME', 'APPDATA', 'LOCALAPPDATA', 'NPM_CONFIG_CACHE', 'VIKA_CONFIG')
+$names = @('USERPROFILE', 'HOME', 'PM2_HOME', 'APPDATA', 'LOCALAPPDATA', 'NPM_CONFIG_CACHE', 'NPM_CONFIG_IGNORE_SCRIPTS', 'VIKA_CONFIG')
 $saved = @{}
 foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 # Construct Unicode without depending on the .ps1 file's legacy ANSI decoding.
@@ -39,8 +39,9 @@ try {
     $env:VIKA_CONFIG = Join-Path $root '.vika\config.json'
     New-Item -ItemType Directory -Path $env:APPDATA, $env:LOCALAPPDATA | Out-Null
 
-    # Do not use --ignore-scripts: this must download/install the real Windows
-    # Lark binary and run the managed Pi version validation through the installer.
+    # Reproduce blocked dependency lifecycle scripts. The installer must
+    # explicitly bootstrap and validate Lark without npm postinstall assistance.
+    $env:NPM_CONFIG_IGNORE_SCRIPTS = 'true'
     & $installer -SkipSetup -SkipPathUpdate
     $current = Join-Path $root '.vika\current'
     $junction = Get-Item -LiteralPath $current -Force
@@ -57,7 +58,7 @@ try {
     & $node (Join-Path $current 'packages\daemon\scripts\check-pi.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'Installed managed Pi validation failed.' }
     $lark = Join-Path $current 'node_modules\@larksuite\cli\bin\lark-cli.exe'
-    if (-not (Test-Path -LiteralPath $lark -PathType Leaf)) { throw 'npm lifecycle did not install the Windows Lark binary.' }
+    if (-not (Test-Path -LiteralPath $lark -PathType Leaf)) { throw 'Explicit bootstrap did not install the Windows Lark binary.' }
     & $lark --version
     if ($LASTEXITCODE -ne 0) { throw 'Installed Windows Lark binary could not execute.' }
     if (Test-Path -LiteralPath $env:VIKA_CONFIG) { throw 'SkipSetup unexpectedly created a connector configuration.' }
@@ -72,7 +73,7 @@ try {
         $refused = $true
     }
     if (-not $refused) { throw 'Installer did not refuse an existing installation.' }
-    Write-Host 'Windows source install, junction, launchers, npm lifecycle and bundled CLIs passed.'
+    Write-Host 'Windows source install, junction, launchers, blocked npm lifecycle recovery and bundled CLIs passed.'
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
     $env:Path = $originalProcessPath
