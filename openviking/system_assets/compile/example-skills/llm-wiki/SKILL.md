@@ -217,6 +217,10 @@ the sources.
 
 ### Preserve provenance and uncertainty
 
+- Resolve Markdown page links relative to the page containing the link. For example,
+  from `concept/a.md`, link to `concept/b.md` as `b.md`, and to `entity/c.md` as
+  `../entity/c.md`. A path relative to the Wiki root is valid only in a root page.
+  Absolute supplied `viking://` targets are also valid. Preserve fragment anchors.
 - Place an exact source URI, repository-relative path, or supplied link near the claim
   it supports. Add supplied line or section anchors when available; never invent them.
 - Put standalone page-level sources under exactly one level-2 heading in the output
