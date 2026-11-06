@@ -165,6 +165,11 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 
 可选 `imap.mailbox` 指定要监听的一个 IMAP 文件夹，默认 `INBOX`，例如 `"imap": { "host": "imap.example.com", "port": 993, "mailbox": "Projects" }`。文件夹名保留大小写和空格（只有 INBOX 不区分大小写），支持非 ASCII 名称。首次监听某文件夹从之后的新邮件开始，不导入已有邮件；切换回曾监听的文件夹会从各自保存的位置继续。不同文件夹的邮件身份相互独立，原有 INBOX 邮件和归档仍可读取、回复。
 
+同时监听多个文件夹时，将 `imap.mailbox` 换成 `imap.mailboxes`，例如 `["INBOX", "Projects", "Projects/Alerts"]`，最多 100 个，二者不能同时设置。单文件夹仍使用服务器支持的 IDLE；多个文件夹在同一连接上逐个 EXAMINE，只读轮询，默认每轮结束后等待 60 秒，可用 `imap.pollIntervalSeconds` 设置 15–3600 秒。IDLE 只监视当前选中的文件夹，不能用一次 INBOX IDLE 代表所有目录。
+
+每个文件夹独立记录 UIDVALIDITY 和 UID。某个目录临时无权限或被删除不会阻塞其他目录，断线后退避重连并续接游标；目录重编号时只重置该目录，按首次监听规则从新邮件开始。每轮每目录最多处理最新 50 封待处理邮件，超出部分跳过（SEARCH 响应本身未限量）；附件处理也会延长轮询周期。跨文件夹移动/复制邮件可能再次提醒，因为它在目标目录获得新的 IMAP 身份，不按 Message-ID 全局去重。
+
+
 `password` 是邮箱给第三方客户端用的专用密码，按邮箱账号生成一次，IMAP 和 SMTP 共用：Gmail 叫应用密码（需先开两步验证，填写时去掉空格），QQ/163 叫授权码（需先在设置里开启 IMAP/SMTP）。SMTP 在 465 端口用直连 TLS，其他端口用 STARTTLS，可用 `smtp.secure` 覆盖；可选 `username`（默认同 `address`）和 `name`（回信的发件人名）。只用 OAuth 的邮箱（如 Outlook）暂不支持。方舟 Self-hosted Ark 用不了 Agent 工具，因此不支持邮箱。
 
 ## 文档附件与交互卡片

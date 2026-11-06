@@ -7,14 +7,13 @@ import { eventMessage } from '../connectors/protocol.mjs';
 import { safeError } from '../logger.mjs';
 import { MailArchive, parsesAttachment } from './archive.mjs';
 import { ImapConnection } from './imap.mjs';
-import { mailboxIdentity, mailboxName } from './mailbox.mjs';
+import { configuredMailboxes, mailboxIdentity, mailboxPollSeconds } from './mailbox.mjs';
 import { buildReply, decodeCharset, isOwnMessageId, parseMail, replyMessageId } from './mime.mjs';
 import { sendMail, verifySmtp } from './smtp.mjs';
 import { EmailState } from './state.mjs';
 
 // Servers may drop an IDLE after 29 minutes; renew it well before.
 const IDLE_MS = 9 * 60_000;
-const POLL_MS = 60_000;
 // After a long stop only the newest mails are reported; older ones are skipped.
 const MAX_CATCH_UP = 50;
 const FETCH_BATCH = 10;
@@ -56,7 +55,8 @@ export function loadAccount(file) {
     name: typeof value.name === 'string' ? value.name.trim() : '',
     user: typeof value.username === 'string' && value.username.trim() ? value.username.trim() : address,
     password: value.password,
-    imap: { ...server('imap'), mailbox: mailboxName(value.imap?.mailbox) },
+    imap: { ...server('imap'), mailbox: configuredMailboxes(value.imap)[0],
+      mailboxes: configuredMailboxes(value.imap), pollIntervalSeconds: mailboxPollSeconds(value.imap?.pollIntervalSeconds) },
     smtp: server('smtp'),
   });
 }
@@ -75,7 +75,15 @@ export async function verifyAccount(account, { connectTls } = {}) {
   try {
     await imap.connect();
     await imap.login(account.user, account.password);
-    await imap.examine(account.imap.mailbox);
+    let selected = false;
+    let selectionError;
+    for (const name of account.imap.mailboxes ?? [account.imap.mailbox]) {
+      try { await imap.examine(name); selected = true; } catch (error) {
+        if (imap.closed) throw error;
+        selectionError = error;
+      }
+    }
+    if (!selected) throw selectionError ?? new Error('No configured email mailbox is accessible');
     idle = imap.capabilities.has('IDLE');
     await imap.logout();
   } finally {
@@ -210,18 +218,20 @@ function sleep(ms, stopped) {
         clearInterval(timer);
         resolve();
       }
-    }, 1_000);
+    }, Math.min(ms, 100));
   });
 }
 
-// Watches one configured mailbox read-only over IMAP and reports each new mail as
+// Watches configured mailboxes read-only over IMAP and reports each new mail as
 // an event; replies to a reported mail over SMTP. Never marks, moves or
 // deletes mail.
 export class EmailClient {
-  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS } = {}) {
+  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS, pollMs, reconnectMs = 1_000 } = {}) {
     this.config = config;
     this.logger = logger;
     this.connectTls = connectTls;
+    this.pollMs = pollMs;
+    this.reconnectMs = reconnectMs;
     this.state = new EmailState(config.dataDir, config.instance ?? 'email');
     this.archive = archive;
     this.attachmentWaitMs = attachmentWaitMs;
@@ -243,6 +253,7 @@ export class EmailClient {
 
   async open() {
     const imap = this.imapConnection();
+    this.imap = imap;
     try {
       await imap.connect();
       await imap.login(this.account.user, this.account.password);
@@ -276,32 +287,60 @@ export class EmailClient {
   }
 
   async watch(onLine) {
-    const imap = await this.open();
-    this.imap = imap;
-    try {
-      const box = await imap.examine(this.account.imap.mailbox);
-      const key = `${this.tag}:${this.account.imap.mailbox}`;
-      let cursor = this.state.cursor(key);
-      if (!cursor || cursor.uidValidity !== box.uidValidity) {
-        // First start, or the server renumbered the mailbox: begin with what
-        // arrives next instead of reporting the whole inbox.
-        if (cursor) this.logger.warn('email_mailbox_renumbered');
-        cursor = { uidValidity: box.uidValidity, lastUid: box.uidNext - 1 };
-        this.state.saveCursor(key, cursor);
-      }
-      while (!this.stopping) {
-        await this.catchUp(imap, key, cursor, onLine);
+    const names = this.account.imap.mailboxes ?? [this.account.imap.mailbox];
+    const pollMs = this.pollMs ?? this.account.imap.pollIntervalSeconds * 1_000;
+    let next = 0;
+    let failures = 0;
+    while (!this.stopping) {
+      let imap;
+      try {
+        imap = await this.open();
         if (this.stopping) break;
-        if (imap.capabilities.has('IDLE')) {
-          await imap.idle(IDLE_MS, () => this.stopping);
-        } else {
-          await sleep(POLL_MS, () => this.stopping);
-          if (!this.stopping) await imap.command('NOOP');
+        while (!this.stopping) {
+          let idled = false;
+          // Advance before opening a folder. A broken folder or connection
+          // cannot indefinitely starve the folders after it.
+          for (let count = 0; count < names.length && !this.stopping; count += 1) {
+            const name = names[next];
+            next = (next + 1) % names.length;
+            try {
+              const box = await imap.examine(name);
+              const key = `${this.tag}:${name}`;
+              let cursor = this.state.cursor(key);
+              if (!cursor || cursor.uidValidity !== box.uidValidity) {
+                if (cursor) this.logger.warn('email_mailbox_renumbered', { mailbox: name });
+                cursor = { uidValidity: box.uidValidity, lastUid: box.uidNext - 1 };
+                this.state.saveCursor(key, cursor);
+              }
+              await this.catchUp(imap, key, cursor, onLine, name);
+            } catch (error) {
+              if (this.stopping || imap.closed) throw error;
+              // A tagged NO/BAD (e.g. a removed or inaccessible folder) is
+              // isolated. Never SEARCH after a failed EXAMINE.
+              this.logger.warn('email_mailbox_unavailable', { mailbox: name, error: safeError(error) });
+              continue;
+            }
+            if (names.length === 1 && imap.capabilities.has('IDLE') && !this.stopping) {
+              await imap.idle(IDLE_MS, () => this.stopping);
+              idled = true;
+            }
+          }
+          failures = 0;
+          if (this.stopping) break;
+          // A failed EXAMINE must also wait; no hot retry loop.
+          if (!idled) await sleep(pollMs, () => this.stopping);
         }
+      } catch (error) {
+        if (!this.stopping) {
+          this.logger.warn('email_reconnecting', { error: safeError(error) });
+          failures += 1;
+        }
+      } finally {
+        const connection = imap ?? this.imap;
+        this.imap = null;
+        connection?.close();
       }
-    } finally {
-      this.imap = null;
-      await imap.logout();
+      if (!this.stopping) await sleep(Math.min(60_000, this.reconnectMs * 2 ** Math.min(failures - 1, 6)), () => this.stopping);
     }
   }
 

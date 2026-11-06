@@ -36,7 +36,7 @@ function mail({ from = 'Alice <alice@example.com>', to = ME, subject = 'Thursday
 // A scripted IMAP server: the commands it was sent, the mailbox, and IDLE
 // sessions to wake with `deliver(raw)`.
 async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
-  const state = { folders: new Map(), mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [], idlers: new Set(), sockets: new Set() };
+  const state = { folders: new Map(), mails: mails.map((raw, index) => ({ uid: index + 1, raw })), unavailable: new Set(), disconnectOnExamine: new Set(), validities: new Map(), commands: [], idlers: new Set(), sockets: new Set() };
   state.folders.set('INBOX', state.mails);
   const server = net.createServer((socket) => {
     socket.mailbox = 'INBOX';
@@ -66,6 +66,11 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
         state.commands.push(command.startsWith('LOGIN ') ? 'LOGIN' : command);
         const ok = (text = 'done') => socket.write(`${tag} OK ${text}\r\n`);
         if (command.startsWith('EXAMINE ')) {
+          if (state.disconnectOnExamine.has(JSON.parse(command.slice(8)))) { socket.destroy(); return; }
+          if (state.unavailable.has(JSON.parse(command.slice(8)))) {
+            socket.write(`${tag} NO no such mailbox\r\n`);
+            continue;
+          }
           socket.mailbox = JSON.parse(command.slice(8));
           if (!state.folders.has(socket.mailbox)) state.folders.set(socket.mailbox, []);
         }
@@ -79,7 +84,7 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
           socket.write(`* CAPABILITY IMAP4rev1 IDLE${gmail ? ' X-GM-EXT-1' : ''}\r\n`);
           ok();
         } else if (command.startsWith('EXAMINE ')) {
-          socket.write(`* ${selected.length} EXISTS\r\n* OK [UIDVALIDITY ${uidValidity}] ok\r\n* OK [UIDNEXT ${uidNext}] ok\r\n`);
+          socket.write(`* ${selected.length} EXISTS\r\n* OK [UIDVALIDITY ${state.validities.get(socket.mailbox) ?? uidValidity}] ok\r\n* OK [UIDNEXT ${uidNext}] ok\r\n`);
           socket.known = selected.length;
           ok('[READ-ONLY] EXAMINE completed');
         } else if ((match = /^UID SEARCH UID (\d+):\*$/.exec(command))) {
@@ -199,7 +204,7 @@ function plainTls(options) {
   return socket;
 }
 
-async function setup(t, { mails = [], password = PASSWORD, gmail = true, instance = undefined, archive = null, attachmentWaitMs = undefined } = {}) {
+async function setup(t, { mails = [], password = PASSWORD, gmail = true, instance = undefined, archive = null, attachmentWaitMs = undefined, pollMs = undefined } = {}) {
   const imap = await fakeImap(t, { mails, gmail });
   const smtp = await fakeSmtp(t);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'email-'));
@@ -210,13 +215,15 @@ async function setup(t, { mails = [], password = PASSWORD, gmail = true, instanc
   const config = { emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000, ...(instance ? { instance } : {}) };
   const clients = [];
   const start = async () => {
-    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, archive, attachmentWaitMs });
+    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, archive, attachmentWaitMs, pollMs, reconnectMs: 10 });
     clients.push(client);
     await client.preflight();
     const events = [];
     const exits = [];
     client.startSubscription((line) => events.push(normalizeEvent(JSON.parse(line))), (exit) => exits.push(exit));
-    await until(() => imap.state.idlers.size === 1);
+    const names = client.account.imap.mailboxes;
+    await until(() => names.length === 1 ? imap.state.idlers.size === 1
+      : names.filter((name) => !imap.state.unavailable.has(name)).every((name) => client.state.cursor(`${TAG}:${name}`)));
     return { client, events, exits };
   };
   t.after(async () => { for (const client of clients) await client.stop().catch(() => {}); });
@@ -270,6 +277,88 @@ describe('email connector', () => {
     for (const folder of [oldFolder, newFolder]) {
       assert.deepEqual(readTarget(root, `${folder}/body.md`), { target: `${folder}/body.md` });
     }
+  });
+
+  it('polls folders independently, isolates missing folders, resumes and resets only the changed folder', async (t) => {
+    const { imap, config, start } = await setup(t, { pollMs: 20 });
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    account.imap.mailboxes = ['INBOX', 'Missing', 'Projects'];
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    imap.state.unavailable.add('Missing');
+    const first = await start();
+    imap.deliver(mail(), 'INBOX');
+    imap.deliver(mail(), 'Projects');
+    await until(() => first.events.length === 2);
+    assert.equal(new Set(first.events.map((event) => event.messageId)).size, 2);
+    assert.equal(imap.state.idlers.size, 0);
+    assert.equal(first.exits.length, 0);
+    for (let i = 0; i < imap.state.commands.length - 1; i += 1) {
+      if (imap.state.commands[i] === 'EXAMINE "Missing"') assert.doesNotMatch(imap.state.commands[i + 1], /^UID (SEARCH|FETCH)/);
+    }
+    await first.client.stopSubscription();
+    imap.deliver(mail({ id: 'after-stop@example.com' }), 'Projects');
+    const second = await start();
+    await until(() => second.events.length === 1);
+    assert.equal(second.events[0].data.mailbox, 'Projects');
+    imap.state.validities.set('Projects', 2);
+    await until(() => second.client.state.cursor(`${TAG}:Projects`)?.uidValidity === 2);
+    assert.deepEqual(second.client.state.cursor(`${TAG}:INBOX`), { uidValidity: 1, lastUid: 1 });
+    imap.deliver(mail({ id: 'after-reset@example.com' }), 'Projects');
+    imap.deliver(mail({ id: 'inbox-continues@example.com' }));
+    await until(() => second.events.length === 3);
+    await second.client.stopSubscription();
+    await until(() => imap.state.sockets.size === 0);
+  });
+
+  it('reconnects after a lost socket without losing per-folder cursors', async (t) => {
+    const { imap, config, start } = await setup(t, { pollMs: 20 });
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    account.imap.mailboxes = ['INBOX', 'Projects'];
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    const running = await start();
+    for (const socket of imap.state.sockets) socket.destroy();
+    imap.deliver(mail(), 'Projects');
+    await until(() => running.events.length === 1);
+    assert.equal(running.events[0].data.mailbox, 'Projects');
+    assert.equal(running.exits.length, 0);
+    await running.client.stopSubscription();
+    await until(() => imap.state.sockets.size === 0);
+  });
+
+  it('a folder that repeatedly disconnects cannot starve the following folder', async (t) => {
+    const { imap, config, start } = await setup(t, { pollMs: 20 });
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    account.imap.mailboxes = ['INBOX', 'Broken', 'Projects'];
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    const running = await start();
+    imap.state.disconnectOnExamine.add('Broken');
+    imap.deliver(mail(), 'Projects');
+    await until(() => running.events.length === 1);
+    imap.deliver(mail({ id: 'second@example.com' }), 'Projects');
+    await until(() => running.events.length === 2);
+    assert.ok(imap.state.commands.filter((command) => command === 'LOGIN').length >= 3);
+    assert.equal(running.exits.length, 0);
+  });
+
+  it('validates and deduplicates explicit mailbox sets and polling intervals', async (t) => {
+    const { config } = await setup(t);
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    account.imap.mailboxes = ['inbox', 'INBOX', 'Projects', 'projects'];
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    assert.deepEqual(loadAccount(config.emailConfigFile).imap.mailboxes, ['INBOX', 'Projects', 'projects']);
+    for (const names of [[], 'INBOX', [null], Array(101).fill('INBOX')]) {
+      account.imap.mailboxes = names;
+      fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+      assert.throws(() => loadAccount(config.emailConfigFile), /imap.mailbox/);
+    }
+    account.imap.mailboxes = ['INBOX'];
+    account.imap.mailbox = 'INBOX';
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    assert.throws(() => loadAccount(config.emailConfigFile), /either/);
+    delete account.imap.mailbox;
+    account.imap.pollIntervalSeconds = 0;
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    assert.throws(() => loadAccount(config.emailConfigFile), /pollIntervalSeconds/);
   });
 
   it('validates mailbox configuration and encodes rev1 mailbox names', async (t) => {
