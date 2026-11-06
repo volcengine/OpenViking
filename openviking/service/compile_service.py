@@ -109,7 +109,7 @@ class CompileInputs(BaseModel):
 
 
 class CompileCreateRequest(CompileInputs):
-    """Save complete inputs under a caller-supplied, account-unique configuration name."""
+    """Save complete inputs under a caller-supplied configuration name unique to its creator within the account."""
 
     compile_name: str = Field(
         pattern=COMPILE_NAME_PATTERN,
@@ -806,10 +806,10 @@ class CompileService:
     async def _configuration(
         self, compile_name: str, ctx: RequestContext, *, action: AclAction = AclAction.READ
     ) -> dict[str, Any]:
-        """Resolve an account-unique name and enforce the configuration's current output ACL."""
+        """Resolve the caller's configuration and enforce its current output ACL."""
         validate_compile_name(compile_name)
         lifecycle = self._require_lifecycle()
-        record = await lifecycle.store.find(ctx.account_id, compile_name)
+        record = await lifecycle.store.get(ctx.account_id, ctx.user.user_id, compile_name)
         if record is None:
             raise NotFoundError(compile_name, "compile configuration")
         await lifecycle._fs._ensure_access(record["to"], ctx, action=action)
@@ -923,11 +923,11 @@ class CompileService:
     async def list_configs(
         self, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        """Page readable configurations in stable name order, including shared output directories."""
+        """Page the caller's readable configurations in stable name order."""
         lifecycle = self._require_lifecycle()
         items = []
         async for compile_name, record in lifecycle.store.iter_records(
-            ctx.account_id, cursor=cursor
+            ctx.account_id, user_id=ctx.user.user_id, cursor=cursor
         ):
             try:
                 await lifecycle._fs._ensure_access(record["to"], ctx)

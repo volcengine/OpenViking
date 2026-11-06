@@ -42,7 +42,7 @@ Check every 5 seconds for up to 5 minutes initially. Read outputs after `complet
 
 After compilation, the target directory should contain an index and a project page. See the [sample Wiki page](/quickstart/wiki-output-en-v1.txt) for content organization and source citations, then follow the checks below to review your output.
 
-The command above is a one-off full compile. To maintain incremental history, use `ov compile create --compile-name research-summary` with the same inputs, then execute `ov compile --compile-name research-summary`. The name is required, case-sensitive, and unique within an account; it contains 1–64 ASCII letters, digits, underscores, or hyphens. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
+The command above is a one-off full compile. To maintain incremental history, use `ov compile create --compile-name research-summary` with the same inputs, then execute `ov compile --compile-name research-summary`. The name is required, case-sensitive, and unique for the current user within an account; it contains 1–64 ASCII letters, digits, underscores, or hyphens. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
 
 ## Open the body page
 

@@ -64,7 +64,7 @@ pub(crate) enum AclCommands {
 pub(crate) enum CompileCommands {
     /// Save a persistent configuration without executing it; scheduling controls belong in --args
     Create {
-        /// Account-unique configuration name used for subsequent runs
+        /// Configuration name unique to the current user within the account
         #[arg(long, value_name = "name", allow_hyphen_values = true)]
         compile_name: String,
         #[arg(

@@ -16,7 +16,7 @@ export type CompileRequest = {
   instruction?: string | null
   args?: Record<string, unknown>
 }
-/** A caller-selected, account-unique name identifies reusable Compile inputs. */
+/** A caller-selected name identifies reusable Compile inputs for the current account and user. */
 export type CompileCreateRequest = CompileRequest & { compile_name: string }
 export type UpdateSchedule =
   | { frequency: 'daily'; hour: number; minute: number }

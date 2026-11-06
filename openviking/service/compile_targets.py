@@ -18,7 +18,6 @@ import re
 import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from itertools import groupby
 from typing import (
     Annotated,
     Any,
@@ -190,7 +189,6 @@ class CompileStore(Protocol):
     async def get(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> Optional[dict]: ...
-    async def find(self, account_id: str, compile_name: str) -> Optional[dict]: ...
     async def list_users(self, account_id: str) -> list[str]: ...
     def edit(self, account_id: str, owner_user_id: str, compile_name: str) -> Any: ...
     async def get_run(
@@ -205,7 +203,7 @@ class CompileStore(Protocol):
 
 
 class CompileStateStore:
-    """Persist account-unique names and creator-owned run records under AGFS path locks."""
+    """Persist creator-scoped names and run records under AGFS path locks."""
 
     def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
@@ -227,15 +225,13 @@ class CompileStateStore:
     def _name_segment(compile_name: str) -> str:
         """Encode case-sensitive names as lowercase filesystem path segments."""
         validate_compile_name(compile_name)
-        return "name_" + compile_name.encode("ascii").hex()
+        return compile_name.encode("ascii").hex()
 
     @staticmethod
     def _segment_name(segment: str) -> Optional[str]:
         """Return the name of a canonical storage directory, or None for unrelated entries."""
-        if not segment.startswith("name_"):
-            return None
         try:
-            name = bytes.fromhex(segment[5:]).decode("ascii")
+            name = bytes.fromhex(segment).decode("ascii")
             return name if CompileStateStore._name_segment(name) == segment else None
         except (ValueError, InvalidArgumentError):
             return None
@@ -298,7 +294,7 @@ class CompileStateStore:
         compile_name: str,
         before_publish: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> str:
-        """Publish a caller-named configuration, rejecting account-wide name conflicts atomically.
+        """Publish a named configuration, atomically rejecting duplicates for the same creator.
 
         ``before_publish`` registers scheduling under the same state lock; its failure
         leaves the configuration unpublished. This method does not execute Compile.
@@ -308,9 +304,8 @@ class CompileStateStore:
             raise InvalidArgumentError("Compile state fields do not match the configuration schema")
         record = deepcopy(record)
         record["execution_context"]["owner_user_id"] = owner_user_id
-        name_lock = f"/local/{account_id}/_system/task_locks/compile_names/{self._name_segment(compile_name)}"
-        async with self.locked(name_lock), self.locked(path) as lease:
-            if await self.find(account_id, compile_name) is not None:
+        async with self.locked(path) as lease:
+            if await self.read_json(path) is not None:
                 raise ConflictError("Compile configuration already exists")
             if before_publish is not None:
                 await before_publish()
@@ -319,22 +314,6 @@ class CompileStateStore:
 
     async def get(self, account_id: str, owner_user_id: str, compile_name: str) -> Optional[dict]:
         return await self.read_json(self._record_path(account_id, owner_user_id, compile_name))
-
-    async def find(self, account_id: str, compile_name: str) -> Optional[dict]:
-        """Return the unique account configuration with its owner, or None when absent.
-
-        Duplicate names across creator directories raise ConflictError; lookup never
-        selects one creator arbitrarily. Access control belongs to the caller.
-        """
-        validate_compile_name(compile_name)
-        found = None
-        for owner_user_id in await self.list_users(account_id):
-            record = await self.get(account_id, owner_user_id, compile_name)
-            if record is not None:
-                if found is not None:
-                    raise ConflictError("Compile name is ambiguous")
-                found = record
-        return found
 
     @asynccontextmanager
     async def edit(
@@ -358,7 +337,7 @@ class CompileStateStore:
     async def iter_records(
         self, account_id: str, *, user_id: Optional[str] = None, cursor: Optional[str] = None
     ) -> AsyncIterator[tuple[str, dict]]:
-        """Page names lexically, rejecting ambiguous names in account-wide discovery."""
+        """List creator-scoped names lexically; account scans include every creator's records."""
         if cursor is not None:
             validate_compile_name(cursor)
         owners = [user_id] if user_id is not None else await self.list_users(account_id)
@@ -372,16 +351,10 @@ class CompileStateStore:
                 compile_name = self._segment_name(str(entry.get("name") or ""))
                 if compile_name is not None and (cursor is None or compile_name > cursor):
                     candidates.append((compile_name, owner_user_id))
-        for compile_name, owners in groupby(sorted(candidates), key=lambda item: item[0]):
-            found = None
-            for _, owner_user_id in owners:
-                record = await self.get(account_id, owner_user_id, compile_name)
-                if record is not None:
-                    if found is not None:
-                        raise ConflictError("Compile name is ambiguous")
-                    found = record
-            if found is not None:
-                yield compile_name, found
+        for compile_name, owner_user_id in sorted(candidates):
+            record = await self.get(account_id, owner_user_id, compile_name)
+            if record is not None:
+                yield compile_name, record
 
     async def list_users(self, account_id: str) -> list[str]:
         """List safe creator directories for account-wide discovery and scheduling."""

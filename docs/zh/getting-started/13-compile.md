@@ -42,7 +42,7 @@ ov task status <cmp_task_id>
 
 编译完成后，目标目录中应包含导航页和项目正文。你可以参考 [Wiki 正文示例](/quickstart/wiki-output-zh-v1.txt)，了解内容组织和来源引用方式，再按下文核对生成结果。
 
-上面的命令执行一次性全量编译。需要维护增量基线时，使用相同输入调用 `ov compile create --compile-name research-summary`，再用 `ov compile --compile-name research-summary` 执行。名称必填，由 1–64 位 ASCII 字母、数字、下划线或连字符组成，区分大小写，在同一 account 内唯一。定时计划和调用时间说明见[配置与执行接口](../api/23-agent-runtime.md)。
+上面的命令执行一次性全量编译。需要维护增量基线时，使用相同输入调用 `ov compile create --compile-name research-summary`，再用 `ov compile --compile-name research-summary` 执行。名称必填，由 1–64 位 ASCII 字母、数字、下划线或连字符组成，区分大小写，在同一 account 的同一用户内唯一；不同用户可以使用相同名称。定时计划和调用时间说明见[配置与执行接口](../api/23-agent-runtime.md)。
 
 ## 打开正文
 

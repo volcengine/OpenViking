@@ -1,6 +1,5 @@
 """Persistent configuration, full execution, and shared scheduling contracts."""
 
-import asyncio
 import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -21,7 +20,6 @@ from openviking.service.compile_service import (
 )
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import (
-    ConflictError,
     InvalidArgumentError,
     PermissionDeniedError,
     UnavailableError,
@@ -151,44 +149,57 @@ async def test_named_configuration_conflicts_and_lookup_permissions(
     assert response.status_code == 403, response.text
 
 
-async def test_concurrent_configuration_creation_has_one_winner(service, app, monkeypatch):
-    ctx, runtime = await prepare(service, app, monkeypatch)
-    other = RequestContext(user=UserIdentifier(ctx.account_id, "another-owner"), role=Role.USER)
-    results = await asyncio.gather(
-        *(
-            service.compile.create_compile_task(
-                CompileCreateRequest.model_validate(SAVED_INPUTS), ctx=actor
-            )
-            for actor in (ctx, other)
-        ),
-        return_exceptions=True,
-    )
-    assert sum(isinstance(result, dict) for result in results) == 1, results
-    assert sum(isinstance(result, ConflictError) for result in results) == 1, results
-    service.fs.ensure_compile_target.assert_awaited_once()
-    assert not runtime.calls
-
-
-async def test_case_distinct_names_have_independent_runs_and_paginate(
-    service, app, client, monkeypatch
-):
+async def test_same_name_configuration_and_runs_are_user_scoped(service, app, client, monkeypatch):
     ctx, _ = await prepare(service, app, monkeypatch)
-    names = ["Research-summary", "research-summary"]
+    other = RequestContext(user=UserIdentifier(ctx.account_id, "another-owner"), role=Role.USER)
+    name = SAVED_INPUTS["compile_name"]
     task_ids = []
+    app.dependency_overrides[get_request_context] = lambda: actor
+    for actor in (ctx, other):
+        missing = await client.get("/api/v1/compile/config", params={"compile_name": name})
+        assert missing.status_code == 404, missing.text
+        created = await client.post(
+            "/api/v1/compile/create", json={**SAVED_INPUTS, "instruction": actor.user.user_id}
+        )
+        assert created.status_code == 200, created.text
+        configs = (await client.get("/api/v1/compile/configs")).json()["result"]["configs"]
+        assert [(c["compile_name"], c["instruction"]) for c in configs] == [
+            (name, actor.user.user_id)
+        ]
+        accepted = await client.post(
+            "/api/v1/compile",
+            json={"compile_name": name},
+            headers={"Idempotency-Key": "same-user-scoped-key"},
+        )
+        assert accepted.status_code == 202, accepted.text
+        task_ids.append(accepted.json()["result"]["task_id"])
+        runs = (await client.get("/api/v1/compile/runs", params={"compile_name": name})).json()[
+            "result"
+        ]["runs"]
+        assert [r["task_id"] for r in runs] == [task_ids[-1]]
+        assert runs[0]["params"]["instruction"] == actor.user.user_id
+    assert task_ids[0] != task_ids[1]
+    foreign_run = await client.get(
+        f"/api/v1/compile/runs/{task_ids[0]}", params={"compile_name": name}
+    )
+    assert foreign_run.status_code == 404, foreign_run.text
+    changed = await client.post(
+        "/api/v1/compile/config/update",
+        json={**SAVED_INPUTS, "instruction": "updated", "auto_update": False},
+    )
+    assert changed.status_code == 200, changed.text
+    assert (await service.compile.get_config(name, ctx))["instruction"] == ctx.user.user_id
+    assert (await service.compile.get_config(name, other))["instruction"] == "updated"
+
+
+async def test_case_distinct_names_paginate(service, app, client, monkeypatch):
+    await prepare(service, app, monkeypatch)
+    names = ["Research-summary", "research-summary"]
     for name in names:
         created = await client.post(
             "/api/v1/compile/create", json={**INPUTS, "compile_name": name, "instruction": name}
         )
         assert created.status_code == 200, created.text
-        accepted = await client.post("/api/v1/compile", json={"compile_name": name})
-        assert accepted.status_code == 202, accepted.text
-        task_ids.append(accepted.json()["result"]["task_id"])
-        runs = await service.compile.lifecycle.store.list_runs(
-            ctx.account_id, ctx.user.user_id, name
-        )
-        assert [run["task_id"] for run in runs] == [task_ids[-1]]
-        assert runs[0]["params"]["instruction"] == name
-    assert task_ids[0] != task_ids[1]
     first = (await client.get("/api/v1/compile/configs", params={"limit": 1})).json()["result"]
     assert [config["compile_name"] for config in first["configs"]] == names[:1]
     assert first["next_cursor"] == names[0]
@@ -239,9 +250,6 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert runtime.calls == []
     service.fs.ensure_compile_target.assert_awaited_once_with(TARGET, ctx)
     assert state["conflict_num"] is None
-    actor = RequestContext(user=UserIdentifier(ctx.account_id, "executor"), role=Role.USER)
-    app.dependency_overrides[get_request_context] = lambda: actor
-    owner["user_id"] = actor.user.user_id
 
     async def execute(payload, key):
         response = await client.post(
@@ -258,10 +266,9 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert state["task_first_create_time"] == state["last_run_time"] == first.created_at
     run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
     assert run["meta"]["mode"] == "full"
-    assert run["actor"] == "executor"
+    assert run["actor"] == ctx.user.user_id
     assert state["execution_context"]["owner_user_id"] == ctx.user.user_id
     assert state["conflict_num"] == 0
-    assert await store.get(ctx.account_id, "executor", compile_name) is None
     assert state["progress"]["source_commit"] == run["meta"]["start_snapshot"]
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
     assert "compile" not in runtime.calls[-1]
@@ -328,8 +335,9 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
             {"ciphertext": "test"},
         )
     )
+    executor = RequestContext(user=UserIdentifier(ctx.account_id, "executor"), role=Role.USER)
     scheduler._executor = AsyncMock(
-        return_value=(ctx, {"account_id": ctx.account_id, "user_id": ctx.user.user_id})
+        return_value=(executor, {"account_id": ctx.account_id, "user_id": executor.user.user_id})
     )
     service.compile.configure_scheduler(scheduler)
     result = await service.compile.create_compile_task(
@@ -354,10 +362,26 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     assert after["next_triggered_slot"] == (due + timedelta(days=1)).isoformat()
     runs = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
     assert len(runs) == 1 and runs[0]["meta"]["trigger"] == "scheduled"
+    assert runs[0]["actor"] == executor.user.user_id
+    assert await store.get(ctx.account_id, executor.user.user_id, compile_name) is None
     assert (
         await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
         == "not_due"
     )
+    other = RequestContext(user=UserIdentifier(ctx.account_id, "another-owner"), role=Role.USER)
+    await service.compile.create_compile_task(
+        CompileCreateRequest.model_validate(
+            {**SAVED_INPUTS, "args": {"update_schedule": before["update_schedule"]}}
+        ),
+        ctx=other,
+    )
+    assert (
+        await scheduler.trigger_if_due(ctx.account_id, other.user.user_id, compile_name, due)
+        == "submitted"
+    )
+    other_runs = await store.list_runs(ctx.account_id, other.user.user_id, compile_name)
+    assert len(other_runs) == 1 and other_runs[0]["task_id"] != runs[0]["task_id"]
+    assert other_runs[0]["actor"] == executor.user.user_id
     with monkeypatch.context() as patch:
         patch.setattr(
             service.compile,

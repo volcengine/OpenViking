@@ -4,7 +4,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 
 ## Compile 配置与执行
 
-`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，区分大小写，在同一 account 内唯一；不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
+`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
 
 普通 Compile 在创建或更新配置、手动或定时提交新执行时，统一校验规范化后的目录 URI：
 
@@ -51,7 +51,7 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 {"status":"ok","result":{"compile_name":"research-summary"}}
 ```
 
-缺少 `compile_name` 或名称非法时直接报错，服务端不会生成备用名称。同一 account 内重名创建（包括不同 owner 并发创建）返回冲突，不覆盖配置或增量基线。配置名称不支持修改。
+缺少 `compile_name` 或名称非法时直接报错，服务端不会生成备用名称。同一 account 的同一用户重名创建（包括并发创建）返回冲突，不覆盖配置或增量基线；不同用户可以创建同名配置。配置名称不支持修改。
 
 创建接口校验输入和权限，必要时创建 `to`，确保根目录索引存在，并在目录节点追加 `compile_target=true`、确认 tag 可查询后发布配置。仅标记目标根目录，不递归标记子目录；已有内容、摘要和其他 tag 保持不变。`to` 是文件时拒绝请求；索引或 tag 准备失败时不发布配置。创建阶段可以产生必要的内部目录索引任务，但不执行 Compile、不创建 run、不拍来源快照。
 
@@ -81,7 +81,7 @@ POST /api/v1/compile
 }
 ```
 
-仅传名称时读取已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
+仅传名称时读取当前用户已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
 
 传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标快照、索引收尾、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
 
@@ -157,7 +157,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 ### 配置与运行历史
 
-所有查询按账户隔离。读取配置和 run 需要目标读取权限，修改或执行需要当前写权限。列表只返回可读配置，不合并指向相同输出目录的多个配置。
+配置查询、修改、执行及运行历史均按当前 account 和用户定位；名称仅存在于其他用户名下时返回不存在。读取配置和 run 还需要目标读取权限，修改或执行需要当前写权限。列表只返回当前用户的可读配置，不合并指向相同输出目录的多个配置。
 
 | HTTP API | 结果 |
 |----------|------|
@@ -201,9 +201,9 @@ Compile 业务文件仅有：
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` 为 `name_` 加名称 ASCII 字节的小写十六进制编码，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
+`configuration_directory` 为名称 ASCII 字节的小写十六进制编码（`compile_name.encode("ascii").hex()`），不添加前缀，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
 
-目录中的 `user_id` 是创建配置时认证上下文中的 OV 用户 ID；使用用户 API key 时，它是该 key 对应的用户。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含其创建的配置；共享目标目录仍按现有 ACL 授权，公开 API 只需传入 `compile_name`。
+目录中的 `user_id` 是创建配置时认证上下文中的 OV 用户 ID；使用用户 API key 时，它是该 key 对应的用户。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含其创建的配置；共享目标目录仍按现有 ACL 授权。公开 API 只需传入 `compile_name`，在当前认证用户目录内定位；拥有共享目标的权限不代表可以访问其他用户的配置。
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存固定的配置创建者 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
 

@@ -1962,7 +1962,7 @@ class AsyncHTTPClient:
     ) -> Dict[str, Any]:
         """Save a persistent Compile configuration without starting an execution.
 
-        compile_name is the caller's account-unique name and is returned unchanged.
+        compile_name is unique for the caller within the account and is returned unchanged.
         Scheduling controls belong in options.args; no execution is started.
         """
         if not compile_name:

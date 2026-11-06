@@ -4,7 +4,7 @@ OpenViking owns Compile configuration, task submission, snapshots and recovery. 
 
 ## Compile configuration and execution
 
-A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain 1–64 ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique within an account. Whitespace is rejected rather than trimmed. Different accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
+A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain 1–64 ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique for each user within an account. Whitespace is rejected rather than trimmed. Different users or accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
 
 Ordinary Compile validates normalized directory URIs when creating or updating configuration and when submitting a new manual or scheduled execution:
 
@@ -51,7 +51,7 @@ The response is `200 OK`:
 {"status":"ok","result":{"compile_name":"research-summary"}}
 ```
 
-Missing or invalid `compile_name` is rejected; the server never generates a fallback name. Duplicate names, including concurrent creation attempts by different owners within the same account, return a conflict without replacing configuration or its baseline. Configuration names cannot be changed.
+Missing or invalid `compile_name` is rejected; the server never generates a fallback name. Duplicate names, including concurrent creation attempts by the same user within one account, return a conflict without replacing configuration or its baseline. Different users can create configurations with the same name. Configuration names cannot be changed.
 
 Creation validates inputs and permissions, creates `to` if needed, ensures its root directory index, and appends `compile_target=true` to that directory node. The tag must be queryable before the configuration is published. Only the target root is tagged, without recursively tagging descendants; existing content, summaries and other tags are preserved. A file at `to` is rejected, and an index or tag preparation failure prevents configuration publication. Creation can run internal directory-indexing tasks; it does not execute Compile, create a run, or snapshot sources.
 
@@ -81,7 +81,7 @@ This endpoint accepts exactly one of these request shapes:
 }
 ```
 
-A name-only request loads its saved inputs. It cannot override `from`, `to`, `skill`, `instruction`, or `args`. Its first execution performs a full compile; later executions use the last successful source snapshot, including additions, modifications and deletions. Skill or instruction changes can require full recomputation. Manual and scheduled executions use the same entry point and baseline.
+A name-only request loads the current user's saved inputs. It cannot override `from`, `to`, `skill`, `instruction`, or `args`. Its first execution performs a full compile; later executions use the last successful source snapshot, including additions, modifications and deletions. Skill or instruction changes can require full recomputation. Manual and scheduled executions use the same entry point and baseline.
 
 A full-input request always performs a one-off full compile, including when the same output has saved configurations. It does not read or write saved configuration/run files and does not snapshot sources. Target snapshots, indexing, cancellation and recovery still apply. `skill="memory"` remains an independent in-place consolidation mode without `from`; it cannot be saved or scheduled through the creation endpoint.
 
@@ -157,7 +157,7 @@ The Python example uses `SyncHTTPClient`; use `await` with `AsyncHTTPClient`.
 
 ### Configuration and run history
 
-All lookups are account-scoped. Configuration and run reads require access to the output; editing or executing requires current write permission. Lists include only readable configurations. They do not merge configurations sharing one output directory.
+Configuration lookups, updates, executions and run queries use the current account and user. A name that exists only for another user returns not found. Configuration and run reads also require access to the output; editing or executing requires current write permission. Lists include only the current user's readable configurations. They do not merge configurations sharing one output directory.
 
 | HTTP API | Result |
 |----------|--------|
@@ -201,9 +201,9 @@ The only Compile business files are:
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` is `name_` followed by the lowercase hexadecimal encoding of the name's ASCII bytes. This preserves case-sensitive names even on case-insensitive storage. Public APIs receive and return the original `compile_name`, not its directory encoding.
+`configuration_directory` is the lowercase hexadecimal encoding of the name's ASCII bytes (`compile_name.encode("ascii").hex()`), with no prefix. This preserves case-sensitive names even on case-insensitive storage. Public APIs receive and return the original `compile_name`, not its directory encoding.
 
-The path's `user_id` is the authenticated OV user ID at configuration creation; with a user API key, it is the user identified by that key. Configuration ownership stays fixed when settings, manual actors or scheduled executors change. Each user directory directly contains that user's configurations. Shared output directories retain their ACL permissions, and public APIs require only `compile_name`.
+The path's `user_id` is the authenticated OV user ID at configuration creation; with a user API key, it is the user identified by that key. Configuration ownership stays fixed when settings, manual actors or scheduled executors change. Each user directory directly contains that user's configurations. Shared output directories retain their ACL permissions. Public APIs require only `compile_name` and resolve it within the authenticated user's directory; access to a shared output does not grant access to another user's configuration.
 
 State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, and `execution_context`. `progress` stores the successful incremental baseline; `execution_context` stores the fixed configuration creator as `owner_user_id`, necessary private execution identity, encrypted credentials and private arguments.
 

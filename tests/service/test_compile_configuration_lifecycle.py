@@ -235,7 +235,10 @@ async def test_invalid_names_are_rejected_without_storage_side_effects(setup, na
 @pytest.mark.parametrize("name", ["a", "A_B-9", "a" * 64])
 async def test_valid_name_boundaries_are_preserved(setup, name):
     assert await setup.store.create("acme", "alice", new_record(PARAMS), compile_name=name) == name
-    assert (await setup.store.find("acme", name))["execution_context"]["owner_user_id"] == "alice"
+    assert (
+        f"/local/acme/_system/compile/tasks/alice/{name.encode('ascii').hex()}/state.json"
+        in setup.files.files
+    )
 
 
 async def test_case_insensitive_storage_preserves_names_and_run_histories():
@@ -249,9 +252,9 @@ async def test_case_insensitive_storage_preserves_names_and_run_histories():
         await store.put_run("acme", "alice", name, run)
         assert await store.get_run("acme", "alice", name, run["task_id"]) == run
         assert await store.list_runs("acme", "alice", name) == [run]
-    assert await store.find("acme", "RESEARCH") is None
+    assert await store.get("acme", "alice", "RESEARCH") is None
     for name in names:
-        assert (await store.find("acme", name))["instruction"] == name
+        assert (await store.get("acme", "alice", name))["instruction"] == name
     assert [name async for name, _ in store.iter_records("acme")] == names
 
 
@@ -259,11 +262,12 @@ async def test_case_insensitive_storage_preserves_names_and_run_histories():
     "segment",
     [
         "Wiki",
-        "name_",
-        "name_ff",
-        "name_2e2e",
-        "name_2F",
-        "name_61 62",
+        "",
+        "ff",
+        "2e2e",
+        "2F",
+        "61 62",
+        "name_77696b69",
     ],
 )
 async def test_configuration_discovery_ignores_noncanonical_directories(setup, segment):
@@ -271,7 +275,7 @@ async def test_configuration_discovery_ignores_noncanonical_directories(setup, s
     assert [name async for name, _ in setup.store.iter_records("acme")] == []
 
 
-async def test_creation_locks_name_and_state_through_schedule_registration(setup):
+async def test_creation_locks_state_through_schedule_registration(setup):
     registered = asyncio.Event()
     publish = asyncio.Event()
 
@@ -294,7 +298,7 @@ async def test_creation_locks_name_and_state_through_schedule_registration(setup
     second = asyncio.create_task(
         make_store(setup.files).create(
             "acme",
-            "bob",
+            "alice",
             new_record(PARAMS),
             compile_name="wiki",
             before_publish=duplicate_registration,
@@ -308,25 +312,19 @@ async def test_creation_locks_name_and_state_through_schedule_registration(setup
     with pytest.raises(ConflictError, match="already exists"):
         await second
     duplicate_registration.assert_not_awaited()
-    assert await setup.store.get("acme", "bob", "wiki") is None
-    assert (await setup.store.find("acme", "wiki"))["execution_context"]["owner_user_id"] == "alice"
-    with pytest.raises(ConflictError, match="already exists"):
-        await setup.store.create("acme", "alice", new_record(PARAMS), compile_name="wiki")
 
 
-async def test_duplicate_persisted_names_are_ambiguous(setup):
-    name = "wiki"
-    for owner in ("alice", "bob"):
-        await setup.store.write_json(
-            setup.store._record_path("acme", owner, name),
-            new_record(PARAMS, {"owner_user_id": owner}),
+async def test_concurrent_creators_with_same_name_remain_discoverable(setup):
+    await asyncio.gather(
+        *(
+            setup.store.create("acme", owner, new_record(PARAMS), compile_name="wiki")
+            for owner in ("alice", "bob")
         )
-    with pytest.raises(ConflictError, match="ambiguous"):
-        await setup.store.find("acme", name)
-    with pytest.raises(ConflictError, match="ambiguous"):
-        await anext(setup.store.iter_records("acme"))
-    with pytest.raises(ConflictError, match="ambiguous"):
-        await setup.store.create("acme", "carol", new_record(PARAMS), compile_name=name)
+    )
+    assert [
+        (name, record["execution_context"]["owner_user_id"])
+        async for name, record in setup.store.iter_records("acme")
+    ] == [("wiki", "alice"), ("wiki", "bob")]
 
 
 async def test_acceptance_times_are_idempotent_and_never_move_backwards(setup, registered):
@@ -664,12 +662,12 @@ async def test_creator_and_account_isolation_with_paging(setup):
     for owner, compile_name in zip(("bob", "alice", "bob"), names, strict=True):
         await setup.store.create("acme", owner, new_record(PARAMS), compile_name=compile_name)
     assert await setup.store.get("acme", "bob", names[1]) is None
-    assert await setup.store.find("another-account", names[1]) is None
+    assert await setup.store.get("another-account", "bob", names[1]) is None
     await setup.store.create("another-account", "bob", new_record(PARAMS), compile_name=names[1])
-    assert (await setup.store.find("acme", names[1]))["execution_context"][
+    assert (await setup.store.get("acme", "alice", names[1]))["execution_context"][
         "owner_user_id"
     ] == "alice"
-    assert (await setup.store.find("another-account", names[1]))["execution_context"][
+    assert (await setup.store.get("another-account", "bob", names[1]))["execution_context"][
         "owner_user_id"
     ] == "bob"
     all_records = [record async for record in setup.store.iter_records("acme")]

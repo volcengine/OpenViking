@@ -232,7 +232,7 @@ export default {
   nameRequired: 'Enter a configuration name before saving.',
   nameInvalid: 'Use 1–64 ASCII letters, digits, underscores, or hyphens.',
   nameHint:
-    'Required when saving configuration; optional for one-off execution. Names are case-sensitive and unique within this account.',
+    'Required when saving configuration; optional for one-off execution. Names are case-sensitive and unique to the current user within this account.',
   nameFixed: 'This name identifies the configuration and cannot be changed.',
   formIntro:
     'Choose a Skill, add source directories, and choose where to save the result. * indicates a required field.',

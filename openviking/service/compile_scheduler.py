@@ -246,7 +246,7 @@ class CompileScheduler:
                     CompileRequest(compile_name=compile_name),
                     ctx=ctx,
                     connection=connection,
-                    idempotency_key=f"compile-schedule:{compile_name}:{slot_iso}",
+                    idempotency_key=f"compile-schedule:{owner_user_id}:{compile_name}:{slot_iso}",
                     trigger="scheduled",
                     locked_record=record,
                     scheduled_slot=slot_iso,
