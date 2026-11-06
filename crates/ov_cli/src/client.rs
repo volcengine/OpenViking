@@ -133,11 +133,14 @@ pub struct CompileAccepted {
 /// Persistent configuration identity; saving configuration does not start a task.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompileCreated {
-    pub compile_id: String,
+    pub compile_name: String,
 }
 
 #[derive(serde::Serialize)]
 struct CompileCreateRequest<'a> {
+    // Only saved configurations carry a name; independent executions omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compile_name: Option<&'a str>,
     #[serde(rename = "from")]
     from_uris: &'a [String],
     to: &'a str,
@@ -351,6 +354,7 @@ impl HttpClient {
     /// Save full inputs and scheduling controls without starting execution.
     pub async fn create_compile_task(
         &self,
+        compile_name: &str,
         from_uris: &[String],
         to: &str,
         skill: &str,
@@ -360,6 +364,7 @@ impl HttpClient {
         self.post(
             "/api/v1/compile/create",
             &CompileCreateRequest {
+                compile_name: Some(compile_name),
                 from_uris,
                 to,
                 skill,
@@ -371,10 +376,10 @@ impl HttpClient {
     }
 
     /// Execute a saved configuration; no other public input overrides are accepted.
-    pub async fn run_compile(&self, compile_id: &str) -> Result<CompileAccepted> {
+    pub async fn run_compile(&self, compile_name: &str) -> Result<CompileAccepted> {
         self.post(
             "/api/v1/compile",
-            &serde_json::json!({"compile_id": compile_id}),
+            &serde_json::json!({"compile_name": compile_name}),
         )
         .await
     }
@@ -388,6 +393,7 @@ impl HttpClient {
         args: Option<&serde_json::Map<String, Value>>,
     ) -> Result<CompileAccepted> {
         let body = CompileCreateRequest {
+            compile_name: None,
             from_uris,
             to,
             skill,
@@ -3151,10 +3157,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_configuration_creation_and_id_only_execution() {
+    async fn compile_configuration_creation_and_named_execution() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let compile_id = "cpt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let compile_name = "research-summary";
         let server = tokio::spawn(async move {
             for create in [true, false] {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -3164,10 +3170,11 @@ mod tests {
                 let body = if create {
                     assert!(request.starts_with("POST /api/v1/compile/create "));
                     assert!(request.contains(r#""auto_update":false"#));
-                    format!(r#"{{"status":"ok","result":{{"compile_id":"{compile_id}"}}}}"#)
+                    assert!(request.contains(r#""compile_name":"research-summary""#));
+                    format!(r#"{{"status":"ok","result":{{"compile_name":"{compile_name}"}}}}"#)
                 } else {
                     assert!(request.starts_with("POST /api/v1/compile "));
-                    assert!(request.ends_with(&format!(r#"{{"compile_id":"{compile_id}"}}"#)));
+                    assert!(request.ends_with(&format!(r#"{{"compile_name":"{compile_name}"}}"#)));
                     r#"{"status":"ok","result":{"task_id":"cmp_2","status":"pending"}}"#.to_string()
                 };
                 stream.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
@@ -3186,6 +3193,7 @@ mod tests {
         let args = serde_json::json!({"auto_update": false});
         let config = client
             .create_compile_task(
+                compile_name,
                 &["viking://resources/a".into()],
                 "viking://resources/b",
                 "viking://agent/skills/wiki",
@@ -3194,16 +3202,16 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(config.compile_id, compile_id);
+        assert_eq!(config.compile_name, compile_name);
         assert_eq!(
-            client.run_compile(compile_id).await.unwrap().task_id,
+            client.run_compile(compile_name).await.unwrap().task_id,
             "cmp_2"
         );
         server.await.unwrap();
     }
 
     #[tokio::test]
-    async fn task_methods_use_generic_task_endpoints_for_compile_ids() {
+    async fn task_methods_use_generic_task_endpoints_for_execution_ids() {
         let (base_url, status_request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
         client

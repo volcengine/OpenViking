@@ -68,7 +68,7 @@ export function CompileDetail() {
     mutationFn: () => {
       rerunKey.current ??= `${Date.now()}:${createRandomUuid()}`
       return createCompile(
-        { compile_id: request!.compile!.compile_id! },
+        { compile_name: request!.compile!.compile_name! },
         rerunKey.current,
       )
     },
@@ -117,7 +117,7 @@ export function CompileDetail() {
       title={t('detailTitle')}
       actions={
         request &&
-        (request.compile?.compile_id ? (
+        (request.compile?.compile_name ? (
           <Button disabled={rerun.isPending} onClick={() => rerun.mutate()}>
             {t('runAgain')}
           </Button>

@@ -82,7 +82,7 @@ const storageKey = 'compile-submission:recovery-test'
 const clients: QueryClient[] = []
 const task = { task_id: 'cmp-original', status: 'pending' }
 function mount(
-  props: { fromTask?: string; sourceUri?: string; compileId?: string } = {},
+  props: { fromTask?: string; sourceUri?: string; compileName?: string } = {},
   cachedConfig?: unknown,
   cachedAt = Date.now(),
 ) {
@@ -92,7 +92,7 @@ function mount(
   clients.push(client)
   if (cachedConfig)
     client.setQueryData(
-      ['compile-config', 'recovery-test', props.compileId],
+      ['compile-config', 'recovery-test', props.compileName],
       cachedConfig,
       { updatedAt: cachedAt },
     )
@@ -262,7 +262,7 @@ it('still recovers an accepted task when execution is no longer configured', asy
 })
 const configuredTarget = {
   ...savedDraft,
-  compile_id: 'cpt_' + 'a'.repeat(32),
+  compile_name: 'research-summary',
   args: {},
   from: savedDraft.sources.split('\n'),
   auto_update: true,
@@ -273,10 +273,10 @@ const configuredTarget = {
 it('saves a weekly plan without navigating to a task or leaving a submission recovery key', async () => {
   prepareCompileHandoff(
     'recovery-test',
-    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
+    'compile create --compile-name research-summary --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
   )
   api.createCompileTask.mockResolvedValueOnce({
-    compile_id: configuredTarget.compile_id,
+    compile_name: configuredTarget.compile_name,
   })
   const page = mount()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
@@ -307,11 +307,11 @@ it('saves a weekly plan without navigating to a task or leaving a submission rec
 it('keeps a failed plan save retryable without task submission recovery', async () => {
   prepareCompileHandoff(
     'recovery-test',
-    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
+    'compile create --compile-name research-summary --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
   )
   api.createCompileTask
     .mockRejectedValueOnce(new Error('response lost'))
-    .mockResolvedValueOnce({ compile_id: configuredTarget.compile_id })
+    .mockResolvedValueOnce({ compile_name: configuredTarget.compile_name })
   const page = mount()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
   page.submit()
@@ -334,7 +334,7 @@ it('loads a registered target and disables its schedule without requiring an exe
     configured: false,
     can_create: false,
   })
-  const page = mount({ compileId: configuredTarget.compile_id })
+  const page = mount({ compileName: configuredTarget.compile_name })
   await waitFor(() =>
     expect(
       (
@@ -352,7 +352,7 @@ it('loads a registered target and disables its schedule without requiring an exe
   page.submit()
   await waitFor(() =>
     expect(api.updateCompileConfig).toHaveBeenCalledWith({
-      compile_id: configuredTarget.compile_id,
+      compile_name: configuredTarget.compile_name,
       to: savedDraft.to,
       args: {},
       from: configuredTarget.from,
@@ -372,7 +372,7 @@ it('refetches a fresh cached configuration before enabling the editor', async ()
     update_schedule: null,
   })
   const page = mount(
-    { compileId: configuredTarget.compile_id },
+    { compileName: configuredTarget.compile_name },
     configuredTarget,
   )
   page.submit()
@@ -414,7 +414,7 @@ it('loads fresh configuration after a failed read instead of submitting cached s
     .mockResolvedValueOnce(freshConfig)
   api.updateCompileConfig.mockResolvedValueOnce(freshConfig)
   const page = mount(
-    { compileId: configuredTarget.compile_id },
+    { compileName: configuredTarget.compile_name },
     configuredTarget,
     Date.now() - 20_000,
   )
@@ -432,7 +432,7 @@ it('loads fresh configuration after a failed read instead of submitting cached s
   page.submit()
   await waitFor(() =>
     expect(api.updateCompileConfig).toHaveBeenCalledWith({
-      compile_id: configuredTarget.compile_id,
+      compile_name: configuredTarget.compile_name,
       to: savedDraft.to,
       args: {},
       from: freshConfig.from,
@@ -462,9 +462,12 @@ it('submits over HTTP origins without crypto.randomUUID', async () => {
   api.createCompile.mockResolvedValueOnce(task)
 
   const page = mount()
+  fireEvent.click(page.getByRole('button', { name: 'saveConfiguration' }))
+  await page.findByText('nameRequired')
   page.submit()
 
   await waitFor(() => expect(api.createCompile).toHaveBeenCalledOnce())
+  expect(api.createCompile.mock.calls[0][0]).not.toHaveProperty('compile_name')
   expect(api.createCompile.mock.calls[0][1]).toMatch(
     /^[0-9]+:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   )
@@ -545,7 +548,7 @@ it('does not resubmit or discard the recovery key when lookup is unavailable', a
   expect(sessionStorage.getItem(storageKey)).toBe(key)
 })
 
-it('saves reusable inputs without scheduling or starting a run', async () => {
+it('requires a valid name to save reusable inputs without starting a run', async () => {
   prepareCompileHandoff(
     'recovery-test',
     'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
@@ -555,7 +558,7 @@ it('saves reusable inputs without scheduling or starting a run', async () => {
     can_create: false,
   })
   api.createCompileTask.mockResolvedValueOnce({
-    compile_id: configuredTarget.compile_id,
+    compile_name: configuredTarget.compile_name,
   })
   const page = mount()
   await waitFor(() =>
@@ -565,8 +568,23 @@ it('saves reusable inputs without scheduling or starting a run', async () => {
         .hasAttribute('disabled'),
     ).toBe(false),
   )
-  fireEvent.click(page.getByRole('button', { name: 'saveConfiguration' }))
+  const save = page.getByRole('button', { name: 'saveConfiguration' })
+  fireEvent.click(save)
+  await page.findByText('nameRequired')
+  fireEvent.change(page.getByLabelText('compileName'), {
+    target: { value: '../state' },
+  })
+  fireEvent.click(save)
+  await page.findByText('nameInvalid')
+  expect(api.createCompileTask).not.toHaveBeenCalled()
+  fireEvent.change(page.getByLabelText('compileName'), {
+    target: { value: 'research-summary' },
+  })
+  fireEvent.click(save)
   await waitFor(() => expect(api.createCompileTask).toHaveBeenCalled())
   expect(api.createCompile).not.toHaveBeenCalled()
+  expect(api.createCompileTask.mock.calls[0][0].compile_name).toBe(
+    'research-summary',
+  )
   expect(sessionStorage.getItem(storageKey)).toBeNull()
 })

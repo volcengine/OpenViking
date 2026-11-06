@@ -2333,17 +2333,17 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 }
 
 func TestPersistentCompileRequests(t *testing.T) {
-	compileID := "cpt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	compileName := "research-summary"
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
 		switch r.URL.Path {
 		case "/api/v1/compile/create":
-			if body["skill"] != "viking://agent/skills/wiki" {
+			if body["skill"] != "viking://agent/skills/wiki" || body["compile_name"] != compileName {
 				t.Fatalf("body = %#v", body)
 			}
-			writeOK(t, w, map[string]any{"compile_id": compileID})
+			writeOK(t, w, map[string]any{"compile_name": compileName})
 		case "/api/v1/compile":
-			if !reflect.DeepEqual(body, map[string]any{"compile_id": compileID}) {
+			if !reflect.DeepEqual(body, map[string]any{"compile_name": compileName}) {
 				t.Fatalf("body = %#v", body)
 			}
 			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
@@ -2353,14 +2353,17 @@ func TestPersistentCompileRequests(t *testing.T) {
 	}))
 	defer closeServer()
 	input := CompileInput{FromURIs: []string{"viking://resources/source"}, To: "viking://resources/output", Skill: "viking://agent/skills/wiki"}
-	saved, err := client.CreateCompileTask(context.Background(), input)
-	if err != nil || saved["compile_id"] != compileID {
+	if _, err := client.CreateCompileTask(context.Background(), "", input); err == nil {
+		t.Fatal("expected required compile_name error")
+	}
+	saved, err := client.CreateCompileTask(context.Background(), compileName, input)
+	if err != nil || saved["compile_name"] != compileName {
 		t.Fatalf("saved = %#v, err = %v", saved, err)
 	}
-	if _, err := client.Compile(context.Background(), CompileRequest{CompileID: compileID}); err != nil {
+	if _, err := client.Compile(context.Background(), CompileRequest{CompileName: compileName}); err != nil {
 		t.Fatal(err)
 	}
-	for _, request := range []CompileRequest{{}, {CompileID: compileID, Input: &input}} {
+	for _, request := range []CompileRequest{{}, {CompileName: compileName, Input: &input}} {
 		if _, err := client.Compile(context.Background(), request); err == nil {
 			t.Fatal("expected invalid request error")
 		}

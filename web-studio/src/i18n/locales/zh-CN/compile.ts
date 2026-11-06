@@ -162,7 +162,8 @@ export default {
     unclosedQuote: '请补全引号或转义字符后再执行命令。',
     invalidArgument: '参数无效。请使用支持的参数名，并以空格分隔参数名和值。',
     duplicateArgument: '只有 --from 可以重复指定。',
-    required: '请填写必填参数：--from、--to、--skill。',
+    required:
+      '请填写必填参数：--from、--to、--skill；create 还必须提供 --compile-name。',
     argsObject: '--args 必须是合法的 JSON 对象。',
     unknownCommand: '未知命令，请使用 compile 或 task。',
     taskUsage: '请使用 task status <id>、task cancel <id> 或 task list。',
@@ -198,6 +199,12 @@ export default {
     processing: '处理素材',
   },
   sourcePlaceholder: 'viking://resources/…',
+  compileName: '配置名称',
+  nameRequired: '保存配置前请填写配置名称。',
+  nameInvalid: '请输入 1–64 位 ASCII 字母、数字、下划线或连字符。',
+  nameHint:
+    '保存配置时必填，一次性执行可留空。名称区分大小写，在当前 account 内唯一。',
+  nameFixed: '该名称用于引用配置，不能修改。',
   formIntro:
     '选择编译规则、添加素材，并设置结果的保存位置。标有 * 的为必填项。',
   optional: '可选',
@@ -280,7 +287,7 @@ export default {
   terminalHint: '使用 Skill 编译素材',
   openForm: '打开编译表单',
   terminalHelp:
-    'compile --from <素材目录> --to <输出目录> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
+    'compile create --compile-name <名称> --from <素材目录> --to <输出目录> --skill <Skill URI>\ncompile --compile-name <名称>\ncompile --from <素材目录> --to <输出目录> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
   argsOmitted: '高级参数不写入历史记录或复制的命令。',
   storageFailed: '草稿保存失败。',
   newTasks: '刷新查看新任务',

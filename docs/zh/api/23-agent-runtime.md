@@ -4,7 +4,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 
 ## Compile 配置与执行
 
-`compile_id` 标识持久配置及其成功增量基线，格式为 `cpt_` 加 32 位小写 UUID4 十六进制字符串。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
+`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，区分大小写，在同一 account 内唯一；不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
 
 普通 Compile 在创建或更新配置、手动或定时提交新执行时，统一校验规范化后的目录 URI：
 
@@ -22,6 +22,7 @@ POST /api/v1/compile/create
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `compile_name` | string | 是 | 调用者指定的配置名称，原样返回 |
 | `from` | string[] | 是 | 非空来源目录列表 |
 | `to` | string | 是 | 调用者可写、与来源不重叠的输出目录 |
 | `skill` | string | 是 | 可读的 Skill 目录或其 `SKILL.md` URI |
@@ -32,6 +33,7 @@ POST /api/v1/compile/create
 curl -X POST http://localhost:1933/api/v1/compile/create \
   -H 'Content-Type: application/json' -H 'X-API-Key: your-key' \
   -d '{
+    "compile_name": "research-summary",
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://agent/skills/llm-wiki",
@@ -46,8 +48,10 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 返回 `200 OK`：
 
 ```json
-{"status":"ok","result":{"compile_id":"cpt_0123456789abcdef0123456789abcdef"}}
+{"status":"ok","result":{"compile_name":"research-summary"}}
 ```
+
+缺少 `compile_name` 或名称非法时直接报错，服务端不会生成备用名称。同一 account 内重名创建（包括不同 owner 并发创建）返回冲突，不覆盖配置或增量基线。配置名称不支持修改。
 
 创建接口校验输入和权限，必要时创建 `to`，确保根目录索引存在，并在目录节点追加 `compile_target=true`、确认 tag 可查询后发布配置。仅标记目标根目录，不递归标记子目录；已有内容、摘要和其他 tag 保持不变。`to` 是文件时拒绝请求；索引或 tag 准备失败时不发布配置。创建阶段可以产生必要的内部目录索引任务，但不执行 Compile、不创建 run、不拍来源快照。
 
@@ -64,7 +68,7 @@ POST /api/v1/compile
 只接受以下两种互斥请求：
 
 ```json
-{"compile_id":"cpt_0123456789abcdef0123456789abcdef"}
+{"compile_name":"research-summary"}
 ```
 
 ```json
@@ -77,7 +81,7 @@ POST /api/v1/compile
 }
 ```
 
-仅传 ID 时读取已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
+仅传名称时读取已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
 
 传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标快照、索引收尾、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
 
@@ -105,15 +109,15 @@ POST /api/v1/compile
 ### CLI 与 SDK
 
 ```bash
-ov compile create --from viking://resources/research \
+ov compile create --compile-name research-summary --from viking://resources/research \
   --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki \
   --args '{"auto_update":true,"update_schedule":{"frequency":"daily","hour":10}}'
-ov compile --compile-id cpt_0123456789abcdef0123456789abcdef
+ov compile --compile-name research-summary
 ov compile --from viking://resources/research \
   --to viking://resources/one-off-wiki --skill viking://agent/skills/llm-wiki
 ```
 
-`--args` 是 JSON 对象。创建返回配置 ID；两种执行方式都返回任务 ID。
+`--args` 是 JSON 对象。创建必须传入 `--compile-name` 并返回该配置名称；两种执行方式都返回任务 ID。
 
 ::: code-group
 
@@ -122,27 +126,29 @@ created = client.create_compile_task(
     ["viking://resources/research"],
     "viking://resources/research-wiki",
     "viking://agent/skills/llm-wiki",
+    compile_name="research-summary",
 )
-task = client.compile(compile_id=created["compile_id"])
+task = client.compile(compile_name=created["compile_name"])
 ```
 
 ```ts [TypeScript]
 const created = await client.createCompileTask({
+  compile_name: "research-summary",
   from: ["viking://resources/research"],
   to: "viking://resources/research-wiki",
   skill: "viking://agent/skills/llm-wiki",
 });
-const task = await client.compile({ compile_id: created.compile_id });
+const task = await client.compile({ compile_name: created.compile_name });
 ```
 
 ```go [Go]
-created, err := client.CreateCompileTask(ctx, openviking.CompileInput{
+created, err := client.CreateCompileTask(ctx, "research-summary", openviking.CompileInput{
     FromURIs: []string{"viking://resources/research"},
     To: "viking://resources/research-wiki",
     Skill: "viking://agent/skills/llm-wiki",
 })
 if err != nil { return err }
-task, err := client.Compile(ctx, openviking.CompileRequest{CompileID: created.CompileID})
+task, err := client.Compile(ctx, openviking.CompileRequest{CompileName: created["compile_name"].(string)})
 ```
 
 :::
@@ -155,16 +161,16 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 | HTTP API | 结果 |
 |----------|------|
-| `GET /api/v1/compile/config?compile_id={compile_id}` | 公开配置输入、调度与调用时间 |
-| `POST /api/v1/compile/config/update` | 按请求体 `compile_id` 替换配置 |
-| `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`，按配置 ID 排序 |
-| `GET /api/v1/compile/runs?compile_id={compile_id}` | `runs` 和 `next_cursor`，按 `created_at`、`task_id` 从新到旧排序 |
-| `GET /api/v1/compile/runs/{task_id}?compile_id={compile_id}` | 本次执行冻结的 run |
-| `GET /api/v1/compile/runs/{task_id}/outputs?compile_id={compile_id}` | 由本次快照推导的变更产出，包含 `outputs` 和 `next_cursor` |
+| `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度与调用时间 |
+| `POST /api/v1/compile/config/update` | 按请求体 `compile_name` 替换配置 |
+| `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`，按配置名称的字典序排序 |
+| `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` 和 `next_cursor`，按 `created_at`、`task_id` 从新到旧排序 |
+| `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | 本次执行冻结的 run |
+| `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | 由本次快照推导的变更产出，包含 `outputs` 和 `next_cursor` |
 
 列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`change_type`；被删除的文件没有产出 blob。
 
-配置更新必填 `compile_id`、`from`、`to`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束，并确认目标 tag 可查询后发布配置。配置更新不执行编译、不重置调用时间。
+配置更新必填 `compile_name`、`from`、`to`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束，并确认目标 tag 可查询后发布配置。配置更新不执行编译、不重置调用时间。
 
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
@@ -191,11 +197,13 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 Compile 业务文件仅有：
 
 ```text
-/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/state.json
-/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/runs/{task_id}.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/state.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-目录中的 `user_id` 是创建配置时认证上下文中的 OV 用户 ID；使用用户 API key 时，它是该 key 对应的用户。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含其创建的配置；共享目标目录仍按现有 ACL 授权，公开 API 只需传入 `compile_id`。
+`configuration_directory` 为 `name_` 加名称 ASCII 字节的小写十六进制编码，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
+
+目录中的 `user_id` 是创建配置时认证上下文中的 OV 用户 ID；使用用户 API key 时，它是该 key 对应的用户。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含其创建的配置；共享目标目录仍按现有 ACL 授权，公开 API 只需传入 `compile_name`。
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存固定的配置创建者 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
 
@@ -330,7 +338,7 @@ Idempotency-Key: <OV task_id>
 }
 ```
 
-`task_type` 和 `payload` 均必填。当前只支持 `task_type="compile"`；`payload` 始终包含解析后的 `from`、`to`、`skill`，可选的 `instruction`、Runtime `args`，以及服务端生成的执行计划。Runtime 不解析 `compile_id`，也不接收调度控制；一次性全量计划不要求来源快照。不支持的类型或无效的 payload 返回 `4xx`，不创建执行任务。
+`task_type` 和 `payload` 均必填。当前只支持 `task_type="compile"`；`payload` 始终包含解析后的 `from`、`to`、`skill`，可选的 `instruction`、Runtime `args`，以及服务端生成的执行计划。Runtime 不解析 `compile_name`，也不接收调度控制；一次性全量计划不要求来源快照。不支持的类型或无效的 payload 返回 `4xx`，不创建执行任务。
 
 OV 通过 `X-API-Key` 传递当前用户的 OV API Key；配置 `compile_api.gateway_token` 时还会发送 `X-Gateway-Token`。这些凭证不能出现在公开任务结果中。
 

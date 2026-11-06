@@ -1,4 +1,5 @@
 import type {
+  CompileCreateRequest,
   CompileExecutionRequest,
   CompileRequest,
 } from '#/features/workbench/compile/lib/api'
@@ -69,32 +70,58 @@ export function tokenize(input: string): string[] {
   if (result[0]?.startsWith('/')) result[0] = result[0].slice(1)
   return result
 }
-export function parseCompile(tokens: string[]): CompileExecutionRequest {
-  if (tokens[1] === '--compile-id') {
-    if (tokens.length !== 3 || !/^cpt_[0-9a-f]{32}$/.test(tokens[2]))
+/** Return whether an unmodified name has 1–64 ASCII letters, digits, underscores, or hyphens. */
+export function isValidCompileName(value: string): boolean {
+  return (
+    value.length >= 1 && value.length <= 64 && !/[^A-Za-z0-9_-]/.test(value)
+  )
+}
+
+export function parseCompile(
+  tokens: string[],
+): CompileExecutionRequest | CompileCreateRequest {
+  if (tokens[1] === '--compile-name') {
+    if (tokens.length !== 3 || !isValidCompileName(tokens[2]))
       throw new CompileCommandError('invalidArgument')
-    return { compile_id: tokens[2] }
+    return { compile_name: tokens[2] }
   }
-  const result: CompileRequest = { from: [], to: '', skill: '' }
+  const create = tokens[1] === 'create'
+  const result: CompileRequest & { compile_name?: string } = {
+    from: [],
+    to: '',
+    skill: '',
+  }
   const seen = new Set<string>()
   for (let i = tokens[1] === 'create' ? 2 : 1; i < tokens.length; i += 2) {
     const key = tokens[i],
       value = tokens[i + 1]
     if (
-      !['--from', '--to', '--skill', '--instruction', '--args'].includes(key) ||
+      ![
+        '--from',
+        '--to',
+        '--skill',
+        '--instruction',
+        '--args',
+        ...(create ? ['--compile-name'] : []),
+      ].includes(key) ||
       i + 1 >= tokens.length
     )
       throw new CompileCommandError('invalidArgument')
     if (key !== '--from' && seen.has(key))
       throw new CompileCommandError('duplicateArgument')
     seen.add(key)
-    if (key === '--from') result.from.push(...value.split(','))
+    if (key === '--compile-name') {
+      if (!isValidCompileName(value))
+        throw new CompileCommandError('invalidArgument')
+      result.compile_name = value
+    } else if (key === '--from') result.from.push(...value.split(','))
     else if (key === '--args') result.args = parseArgs(value)
     else if (key === '--to') result.to = value
     else if (key === '--skill') result.skill = value
     else result.instruction = value
   }
   if (
+    (create && !result.compile_name) ||
     !result.from.length ||
     result.from.some((v) => !v.trim()) ||
     !result.to ||
@@ -118,13 +145,16 @@ export function parseArgs(value: string): Record<string, unknown> | undefined {
 }
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 export function compileCommand(
-  request: CompileExecutionRequest,
+  request: CompileExecutionRequest | CompileCreateRequest,
   create = false,
 ): string {
-  if ('compile_id' in request)
-    return `ov compile --compile-id ${quote(request.compile_id)}`
+  if (!('from' in request))
+    return `ov compile --compile-name ${quote(request.compile_name)}`
   return [
     create ? 'ov compile create' : 'ov compile',
+    ...(create && 'compile_name' in request
+      ? ['--compile-name', quote(request.compile_name)]
+      : []),
     ...request.from.map((uri) => `--from ${quote(uri)}`),
     `--to ${quote(request.to)}`,
     `--skill ${quote(request.skill)}`,

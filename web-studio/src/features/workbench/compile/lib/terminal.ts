@@ -25,10 +25,10 @@ export async function runCompileCommand(
   if (tokens[0] === 'compile') {
     const request = parseCompile(tokens)
     if (tokens[1] === 'create') {
-      if ('compile_id' in request)
+      if (!('compile_name' in request) || !('from' in request))
         throw new CompileCommandError('invalidArgument')
       const config = await createCompileTask(request)
-      return { body: config.compile_id }
+      return { body: config.compile_name }
     }
     const task = await createCompile(request, key)
     return {

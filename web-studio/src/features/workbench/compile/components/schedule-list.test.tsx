@@ -58,7 +58,7 @@ vi.mock('#/features/workbench/compile/components/shared', () => ({
 
 const daily = {
   to: 'viking://resources/daily',
-  compile_id: 'cpt_' + 'a'.repeat(32),
+  compile_name: 'research-summary',
   task_first_create_time: null,
   last_run_time: null,
   last_triggered_slot: null,
@@ -70,7 +70,7 @@ const daily = {
 const weekly = {
   ...daily,
   to: 'viking://resources/weekly',
-  compile_id: 'cpt_' + 'b'.repeat(32),
+  compile_name: 'weekly-summary',
   auto_update: false,
   update_schedule: { frequency: 'weekly', weekday: 3, hour: 14, minute: 30 },
   next_triggered_slot: null,
@@ -78,7 +78,7 @@ const weekly = {
 const unscheduled = {
   ...weekly,
   to: 'viking://resources/unscheduled',
-  compile_id: 'cpt_' + 'c'.repeat(32),
+  compile_name: 'unscheduled-summary',
   update_schedule: null,
 }
 async function choose(trigger: HTMLElement, name: string) {
@@ -97,7 +97,7 @@ function mount(cachedConfig?: unknown) {
   clients.push(client)
   if (cachedConfig)
     client.setQueryData(
-      ['compile-config', 'account-a', daily.compile_id],
+      ['compile-config', 'account-a', daily.compile_name],
       cachedConfig,
     )
   const content = () => (
@@ -147,7 +147,7 @@ it('shows all registered targets, schedule details, execution state, and editor 
   )
   expect(mocks.navigate).toHaveBeenCalledWith({
     to: '/compile/new',
-    search: { compileId: weekly.compile_id },
+    search: { compileName: weekly.compile_name },
   })
   expect(mocks.fetchCompileConfigs).toHaveBeenCalledWith(
     undefined,
@@ -258,7 +258,7 @@ it('turns off directly from the list, preserves fresh compilation settings, and 
   fireEvent.click(toggle)
   await waitFor(() =>
     expect(mocks.updateCompileConfig).toHaveBeenCalledWith({
-      compile_id: daily.compile_id,
+      compile_name: daily.compile_name,
       to: daily.to,
       args: {},
       from: freshConfig.from,
@@ -350,12 +350,12 @@ it('enables a weekly plan in place and refetches current source settings before 
     .mockResolvedValueOnce({
       ...freshConfig,
       to: unscheduled.to,
-      compile_id: unscheduled.compile_id,
+      compile_name: unscheduled.compile_name,
     })
   const enabled = {
     ...freshConfig,
     to: unscheduled.to,
-    compile_id: unscheduled.compile_id,
+    compile_name: unscheduled.compile_name,
     auto_update: true,
     update_schedule: { frequency: 'weekly', weekday: 7, hour: 0, minute: 5 },
   }
@@ -384,7 +384,7 @@ it('enables a weekly plan in place and refetches current source settings before 
   fireEvent.click(dialog.getByRole('button', { name: 'schedule.turnOn' }))
   await waitFor(() =>
     expect(mocks.updateCompileConfig).toHaveBeenCalledWith({
-      compile_id: unscheduled.compile_id,
+      compile_name: unscheduled.compile_name,
       to: unscheduled.to,
       args: {},
       from: freshConfig.from,
@@ -555,20 +555,20 @@ it('retains loaded rows and allows retry after a later page fails', async () => 
   expect(page.getByRole('link', { name: daily.to })).toBeTruthy()
 })
 
-it('keeps configurations sharing an output independent and runs by ID', async () => {
-  const sibling = { ...daily, compile_id: 'cpt_' + 'd'.repeat(32) }
+it('keeps configurations sharing an output independent and runs by name', async () => {
+  const sibling = { ...daily, compile_name: 'sibling-summary' }
   mocks.fetchCompileConfigs.mockResolvedValue({
     configs: [daily, sibling],
     next_cursor: null,
   })
   mocks.createCompile.mockResolvedValue({ task_id: 'cmp_new' })
   const page = mount()
-  await page.findByText(sibling.compile_id)
+  await page.findByText(sibling.compile_name)
   expect(page.getAllByRole('link', { name: daily.to })).toHaveLength(2)
   fireEvent.click(page.getAllByRole('button', { name: 'start' })[1])
   await waitFor(() =>
     expect(mocks.createCompile).toHaveBeenCalledWith(
-      { compile_id: sibling.compile_id },
+      { compile_name: sibling.compile_name },
       expect.any(String),
     ),
   )

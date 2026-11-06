@@ -4,7 +4,7 @@ OpenViking owns Compile configuration, task submission, snapshots and recovery. 
 
 ## Compile configuration and execution
 
-A `compile_id` identifies saved configuration and its successful incremental baseline. It has the form `cpt_` followed by 32 lowercase UUID4 hexadecimal characters. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
+A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain 1–64 ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique within an account. Whitespace is rejected rather than trimmed. Different accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
 
 Ordinary Compile validates normalized directory URIs when creating or updating configuration and when submitting a new manual or scheduled execution:
 
@@ -22,6 +22,7 @@ POST /api/v1/compile/create
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `compile_name` | string | Yes | Caller-selected configuration name; returned unchanged |
 | `from` | string[] | Yes | Non-empty source directory list |
 | `to` | string | Yes | Output directory, writable by the caller and disjoint from the sources |
 | `skill` | string | Yes | Readable Skill directory or its `SKILL.md` URI |
@@ -32,6 +33,7 @@ POST /api/v1/compile/create
 curl -X POST http://localhost:1933/api/v1/compile/create \
   -H 'Content-Type: application/json' -H 'X-API-Key: your-key' \
   -d '{
+    "compile_name": "research-summary",
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://agent/skills/llm-wiki",
@@ -46,8 +48,10 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 The response is `200 OK`:
 
 ```json
-{"status":"ok","result":{"compile_id":"cpt_0123456789abcdef0123456789abcdef"}}
+{"status":"ok","result":{"compile_name":"research-summary"}}
 ```
+
+Missing or invalid `compile_name` is rejected; the server never generates a fallback name. Duplicate names, including concurrent creation attempts by different owners within the same account, return a conflict without replacing configuration or its baseline. Configuration names cannot be changed.
 
 Creation validates inputs and permissions, creates `to` if needed, ensures its root directory index, and appends `compile_target=true` to that directory node. The tag must be queryable before the configuration is published. Only the target root is tagged, without recursively tagging descendants; existing content, summaries and other tags are preserved. A file at `to` is rejected, and an index or tag preparation failure prevents configuration publication. Creation can run internal directory-indexing tasks; it does not execute Compile, create a run, or snapshot sources.
 
@@ -64,7 +68,7 @@ POST /api/v1/compile
 This endpoint accepts exactly one of these request shapes:
 
 ```json
-{"compile_id":"cpt_0123456789abcdef0123456789abcdef"}
+{"compile_name":"research-summary"}
 ```
 
 ```json
@@ -77,7 +81,7 @@ This endpoint accepts exactly one of these request shapes:
 }
 ```
 
-An ID-only request loads its saved inputs. It cannot override `from`, `to`, `skill`, `instruction`, or `args`. Its first execution performs a full compile; later executions use the last successful source snapshot, including additions, modifications and deletions. Skill or instruction changes can require full recomputation. Manual and scheduled executions use the same entry point and baseline.
+A name-only request loads its saved inputs. It cannot override `from`, `to`, `skill`, `instruction`, or `args`. Its first execution performs a full compile; later executions use the last successful source snapshot, including additions, modifications and deletions. Skill or instruction changes can require full recomputation. Manual and scheduled executions use the same entry point and baseline.
 
 A full-input request always performs a one-off full compile, including when the same output has saved configurations. It does not read or write saved configuration/run files and does not snapshot sources. Target snapshots, indexing, cancellation and recovery still apply. `skill="memory"` remains an independent in-place consolidation mode without `from`; it cannot be saved or scheduled through the creation endpoint.
 
@@ -105,15 +109,15 @@ Use `Idempotency-Key` for execution retries and `/api/v1/tasks/{task_id}` for st
 ### CLI and SDKs
 
 ```bash
-ov compile create --from viking://resources/research \
+ov compile create --compile-name research-summary --from viking://resources/research \
   --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki \
   --args '{"auto_update":true,"update_schedule":{"frequency":"daily","hour":10}}'
-ov compile --compile-id cpt_0123456789abcdef0123456789abcdef
+ov compile --compile-name research-summary
 ov compile --from viking://resources/research \
   --to viking://resources/one-off-wiki --skill viking://agent/skills/llm-wiki
 ```
 
-`--args` is a JSON object. Creation returns a configuration ID; either execution form returns a task ID.
+`--args` is a JSON object. Creation requires `--compile-name` and returns that configuration name; either execution form returns a task ID.
 
 ::: code-group
 
@@ -122,27 +126,29 @@ created = client.create_compile_task(
     ["viking://resources/research"],
     "viking://resources/research-wiki",
     "viking://agent/skills/llm-wiki",
+    compile_name="research-summary",
 )
-task = client.compile(compile_id=created["compile_id"])
+task = client.compile(compile_name=created["compile_name"])
 ```
 
 ```ts [TypeScript]
 const created = await client.createCompileTask({
+  compile_name: "research-summary",
   from: ["viking://resources/research"],
   to: "viking://resources/research-wiki",
   skill: "viking://agent/skills/llm-wiki",
 });
-const task = await client.compile({ compile_id: created.compile_id });
+const task = await client.compile({ compile_name: created.compile_name });
 ```
 
 ```go [Go]
-created, err := client.CreateCompileTask(ctx, openviking.CompileInput{
+created, err := client.CreateCompileTask(ctx, "research-summary", openviking.CompileInput{
     FromURIs: []string{"viking://resources/research"},
     To: "viking://resources/research-wiki",
     Skill: "viking://agent/skills/llm-wiki",
 })
 if err != nil { return err }
-task, err := client.Compile(ctx, openviking.CompileRequest{CompileID: created.CompileID})
+task, err := client.Compile(ctx, openviking.CompileRequest{CompileName: created["compile_name"].(string)})
 ```
 
 :::
@@ -155,16 +161,16 @@ All lookups are account-scoped. Configuration and run reads require access to th
 
 | HTTP API | Result |
 |----------|--------|
-| `GET /api/v1/compile/config?compile_id={compile_id}` | Public saved inputs, scheduling and invocation times |
-| `POST /api/v1/compile/config/update` | Replace configuration identified by body `compile_id` |
-| `GET /api/v1/compile/configs` | `configs` and `next_cursor`, ordered by configuration ID |
-| `GET /api/v1/compile/runs?compile_id={compile_id}` | `runs` and `next_cursor`, newest first by `created_at` and `task_id` |
-| `GET /api/v1/compile/runs/{task_id}?compile_id={compile_id}` | One frozen run |
-| `GET /api/v1/compile/runs/{task_id}/outputs?compile_id={compile_id}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
+| `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling and invocation times |
+| `POST /api/v1/compile/config/update` | Replace configuration identified by body `compile_name` |
+| `GET /api/v1/compile/configs` | `configs` and `next_cursor`, ordered lexically by configuration name |
+| `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` and `next_cursor`, newest first by `created_at` and `task_id` |
+| `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | One frozen run |
+| `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
 
 List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id` and `change_type`; deleted files have no output blob.
 
-Configuration updates require `compile_id`, `from`, `to`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. Enabling updates requires top-level `update_schedule`; disabling clears the schedule. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. Updates apply the same directory constraints and confirm that the target tag is queryable before publishing configuration. Updating configuration does not run Compile or reset invocation times.
+Configuration updates require `compile_name`, `from`, `to`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. Enabling updates requires top-level `update_schedule`; disabling clears the schedule. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. Updates apply the same directory constraints and confirm that the target tag is queryable before publishing configuration. Updating configuration does not run Compile or reset invocation times.
 
 Private fields in nested `args` are redacted from public responses and encrypted for execution: unchanged public arguments preserve their private values, editing a nested subtree containing private fields requires resending those fields, and deleting the subtree removes its saved private values.
 
@@ -191,11 +197,13 @@ No-op runs may reuse the start snapshot. Failure and cancellation do not advance
 The only Compile business files are:
 
 ```text
-/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/state.json
-/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/runs/{task_id}.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/state.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-The path's `user_id` is the authenticated OV user ID at configuration creation; with a user API key, it is the user identified by that key. Configuration ownership stays fixed when settings, manual actors or scheduled executors change. Each user directory directly contains that user's configurations. Shared output directories retain their ACL permissions, and public APIs require only `compile_id`.
+`configuration_directory` is `name_` followed by the lowercase hexadecimal encoding of the name's ASCII bytes. This preserves case-sensitive names even on case-insensitive storage. Public APIs receive and return the original `compile_name`, not its directory encoding.
+
+The path's `user_id` is the authenticated OV user ID at configuration creation; with a user API key, it is the user identified by that key. Configuration ownership stays fixed when settings, manual actors or scheduled executors change. Each user directory directly contains that user's configurations. Shared output directories retain their ACL permissions, and public APIs require only `compile_name`.
 
 State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, and `execution_context`. `progress` stores the successful incremental baseline; `execution_context` stores the fixed configuration creator as `owner_user_id`, necessary private execution identity, encrypted credentials and private arguments.
 
@@ -330,7 +338,7 @@ Idempotency-Key: <OV task_id>
 }
 ```
 
-Both `task_type` and `payload` are required. Only `task_type="compile"` is supported. The `payload` always contains resolved `from`, `to`, `skill`, optional `instruction` and Runtime `args`, and the server-owned execution plan. Runtime does not resolve `compile_id` or receive schedule controls. A one-off full plan does not require a source snapshot. Unsupported types or invalid payloads return `4xx` without creating an execution task.
+Both `task_type` and `payload` are required. Only `task_type="compile"` is supported. The `payload` always contains resolved `from`, `to`, `skill`, optional `instruction` and Runtime `args`, and the server-owned execution plan. Runtime does not resolve `compile_name` or receive schedule controls. A one-off full plan does not require a source snapshot. Unsupported types or invalid payloads return `4xx` without creating an execution task.
 
 OV forwards the current user's OV API key in `X-API-Key`. It also sends `X-Gateway-Token` when `compile_api.gateway_token` is configured. These credentials must not appear in public task results.
 

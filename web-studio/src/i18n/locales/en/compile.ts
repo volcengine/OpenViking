@@ -186,7 +186,8 @@ export default {
     invalidArgument:
       'Invalid argument. Use a supported flag followed by its value, separated by a space.',
     duplicateArgument: 'Only --from may be specified more than once.',
-    required: 'Required arguments: --from, --to, --skill.',
+    required:
+      'Required arguments: --from, --to, --skill; create also requires --compile-name.',
     argsObject: '--args must contain a valid JSON object.',
     unknownCommand: 'Unknown command. Use compile or task.',
     taskUsage: 'Use task status <id>, task cancel <id>, or task list.',
@@ -227,6 +228,12 @@ export default {
     processing: 'Processing sources',
   },
   sourcePlaceholder: 'viking://resources/…',
+  compileName: 'Configuration name',
+  nameRequired: 'Enter a configuration name before saving.',
+  nameInvalid: 'Use 1–64 ASCII letters, digits, underscores, or hyphens.',
+  nameHint:
+    'Required when saving configuration; optional for one-off execution. Names are case-sensitive and unique within this account.',
+  nameFixed: 'This name identifies the configuration and cannot be changed.',
   formIntro:
     'Choose a Skill, add source directories, and choose where to save the result. * indicates a required field.',
   optional: 'Optional',
@@ -317,7 +324,7 @@ export default {
   terminalHint: 'Compile materials with a Skill',
   openForm: 'Open compilation form',
   terminalHelp:
-    'compile --from <directory> --to <directory> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
+    'compile create --compile-name <name> --from <directory> --to <directory> --skill <Skill URI>\ncompile --compile-name <name>\ncompile --from <directory> --to <directory> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
   argsOmitted: 'Advanced parameters omitted from history and copied commands.',
   storageFailed: 'Draft could not be saved.',
   newTasks: 'Refresh to see new tasks',

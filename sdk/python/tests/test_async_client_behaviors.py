@@ -1849,25 +1849,50 @@ async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
         await client.import_ovpack(str(pack_dir), parent="viking://resources/")
 
 
-def test_compile_configuration_and_id_only_execution():
+def test_compile_configuration_and_named_execution():
     client = SyncHTTPClient(url="http://localhost:1933")
     client._async_client._request = AsyncMock(return_value=object())
-    client._async_client._handle_response = lambda _response: {"compile_id": "cpt_" + "a" * 32}
+    client._async_client._handle_response = lambda _response: {"compile_name": "research-summary"}
     saved = client.create_compile_task(
         ["viking://resources/source"],
         "viking://resources/output",
         "viking://agent/skills/wiki",
         options={"args": {"auto_update": False}},
+        compile_name="research-summary",
     )
     assert client._async_client._request.await_args.args == ("POST", "/api/v1/compile/create")
-    client.compile(compile_id=saved["compile_id"])
     assert client._async_client._request.await_args.kwargs["json"] == {
-        "compile_id": saved["compile_id"]
+        "compile_name": "research-summary",
+        "from": ["viking://resources/source"],
+        "to": "viking://resources/output",
+        "skill": "viking://agent/skills/wiki",
+        "args": {"auto_update": False},
+    }
+    client.compile(compile_name=saved["compile_name"])
+    assert client._async_client._request.await_args.kwargs["json"] == {
+        "compile_name": saved["compile_name"]
     }
     with pytest.raises(ValueError, match="cannot be combined"):
-        client.compile(compile_id=saved["compile_id"], to="viking://resources/other")
+        client.compile(compile_name=saved["compile_name"], to="viking://resources/other")
     with pytest.raises(ValueError, match="requires"):
         client.compile()
+
+
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+async def test_compile_configuration_requires_a_name(client_type):
+    client = client_type(url="http://localhost:1933")
+    inputs = (
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+    )
+    with pytest.raises(TypeError, match="compile_name"):
+        client.create_compile_task(*inputs)
+    with pytest.raises(ValueError, match="compile_name is required"):
+        if client_type is AsyncHTTPClient:
+            await client.create_compile_task(*inputs, compile_name="")
+        else:
+            client.create_compile_task(*inputs, compile_name="")
 
 
 def test_compile_memory_omits_sources_without_losing_target():

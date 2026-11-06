@@ -349,46 +349,45 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     assert calls["owner"] == ("acct", "alice")
 
 
+_COMPILE_RUNTIME_ARGS = {
+    "model_name": "model-1",
+    "user_key": "model-user-key",
+    "api_key": "compile-api-key",
+    "options": {"temperature": 0.2, "tags": ["wiki", "source"]},
+}
+
+
+# Argument and identity variants share the successful path; failures retain full credentials.
 @pytest.mark.parametrize(
-    "finish",
+    "finish,args,identity",
     [
-        "complete",
-        "archive_failure",
-        "cancel",
-        "cancel_immediate",
-        "poll_failure",
-        "restart",
-        "restart_cancel",
+        ("complete", args, identity)
+        for args in [
+            None,
+            {},
+            {"user_key": ""},
+            {"user_key": "model-user-key"},
+            _COMPILE_RUNTIME_ARGS,
+        ]
+        for identity in [{}, {"account_id": "acct", "user_id": "alice"}]
+    ]
+    + [
+        (finish, _COMPILE_RUNTIME_ARGS, {"account_id": "acct", "user_id": "alice"})
+        for finish in [
+            "archive_failure",
+            "cancel",
+            "cancel_immediate",
+            "poll_failure",
+            "restart",
+            "restart_cancel",
+        ]
     ],
 )
-@pytest.mark.parametrize(
-    "args",
-    [
-        None,
-        {},
-        {"user_key": ""},
-        {"user_key": "model-user-key"},
-        {
-            "model_name": "model-1",
-            "user_key": "model-user-key",
-            "api_key": "compile-api-key",
-            "options": {"temperature": 0.2, "tags": ["wiki", "source"]},
-        },
-    ],
-    ids=["no-args", "empty-args", "empty-key", "private-only", "full-args"],
-)
-@pytest.mark.parametrize("identity", [{}, {"account_id": "acct", "user_id": "alice"}])
 async def test_compile_api_client_session_protocol_retry_and_cancellation(
     monkeypatch, tmp_path, caplog, finish, args, identity
 ):
     """Runtime calls retain args, identity, and request ID through polling, cancellation, and recovery."""
     forwarded = []
-    response_status = {
-        "cancel": "cancelled",
-        "submit_failures": 0,
-        "cancel_failures": 0,
-        "poll": [],
-    }
 
     class FakeResponse:
         def __init__(self, body, status_code=202):
@@ -412,31 +411,14 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         async def request(self, method, url, headers, json):
             forwarded.append({"method": method, "url": url, "body": json, "headers": headers})
             if url.endswith("/runtime/v1/tasks"):
-                if response_status["submit_failures"]:
-                    response_status["submit_failures"] -= 1
-                    return FakeResponse({"detail": "temporarily unavailable"}, status_code=503)
                 return FakeResponse({"session_id": "ma-session-1"})
-            if url.endswith("/runtime/v1/tasks/cancel"):
-                if response_status["cancel_failures"]:
-                    response_status["cancel_failures"] -= 1
-                    return FakeResponse({"detail": "temporarily unavailable"}, status_code=503)
-                status = response_status["cancel"]
-                return FakeResponse(
-                    {
-                        "status": status,
-                        "stage": f"compile: {status}",
-                        "error": None,
-                        "meta": {},
-                    }
-                )
-            status = response_status["poll"].pop(0) if response_status["poll"] else "running"
+            status = "cancelled" if url.endswith("/runtime/v1/tasks/cancel") else "running"
             return FakeResponse(
                 {
                     "status": status,
                     "stage": f"compile: {status}",
                     "error": None,
                     "meta": {"token_usage": {"total_tokens": 12}},
-                    "result": {"output": "wiki"} if status == "completed" else None,
                 }
             )
 

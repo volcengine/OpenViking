@@ -1,13 +1,14 @@
 import { NewCompile } from '#/features/workbench/compile/new'
+import { isValidCompileName } from '#/features/workbench/compile/lib/commands'
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/compile/new')({
   validateSearch: (
     s: Record<string, unknown>,
-  ): { fromTask?: string; from?: string; compileId?: string } => ({
-    compileId:
-      typeof s.compileId === 'string' && /^cpt_[0-9a-f]{32}$/.test(s.compileId)
-        ? s.compileId
+  ): { fromTask?: string; from?: string; compileName?: string } => ({
+    compileName:
+      typeof s.compileName === 'string' && isValidCompileName(s.compileName)
+        ? s.compileName
         : undefined,
     fromTask: typeof s.fromTask === 'string' ? s.fromTask : undefined,
     from:

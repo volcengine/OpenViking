@@ -781,32 +781,61 @@ fn append_time_filter_params_only_emits_after_and_before() {
 }
 
 #[test]
-fn compile_creation_and_id_execution_are_distinct() {
-    let id = "cpt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let parsed = Cli::try_parse_from(["ov", "compile", "--compile-id", id]).unwrap();
-    assert!(
-        matches!(parsed.command, Commands::Compile { compile_id: Some(value), .. } if value == id)
-    );
-    assert!(
-        Cli::try_parse_from(["ov", "compile", "--compile-id", id, "--skill", "memory"]).is_err()
-    );
-    let parsed = Cli::try_parse_from([
-        "ov",
-        "compile",
-        "create",
-        "--from",
-        "viking://resources/a",
-        "--to",
-        "viking://resources/b",
-        "--skill",
-        "viking://agent/skills/wiki",
-    ])
-    .unwrap();
-    assert!(matches!(
-        parsed.command,
-        Commands::Compile {
-            command: Some(CompileCommands::Create { .. }),
-            ..
-        }
-    ));
+fn compile_creation_and_named_execution_are_distinct() {
+    for name in ["research-summary", "-summary", "-"] {
+        let parsed = Cli::try_parse_from(["ov", "compile", "--compile-name", name]).unwrap();
+        assert!(
+            matches!(parsed.command, Commands::Compile { compile_name: Some(value), .. } if value == name)
+        );
+        assert!(
+            Cli::try_parse_from(["ov", "compile", "--compile-name", name, "--skill", "memory"])
+                .is_err()
+        );
+        let parsed = Cli::try_parse_from([
+            "ov",
+            "compile",
+            "create",
+            "--compile-name",
+            name,
+            "--from",
+            "viking://resources/a",
+            "--to",
+            "viking://resources/b",
+            "--skill",
+            "viking://agent/skills/wiki",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            Commands::Compile {
+                command: Some(CompileCommands::Create { compile_name, .. }),
+                ..
+            } if compile_name == name
+        ));
+    }
+}
+
+#[test]
+fn compile_creation_requires_a_name() {
+    for args in [
+        vec!["ov", "compile", "create"],
+        vec![
+            "ov",
+            "compile",
+            "create",
+            "--from",
+            "viking://resources/a",
+            "--to",
+            "viking://resources/b",
+            "--skill",
+            "viking://agent/skills/wiki",
+        ],
+    ] {
+        let error = Cli::try_parse_from(args).err().expect("name is required");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--compile-name"));
+    }
 }

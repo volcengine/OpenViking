@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from openviking.core.identifiers import validate_user_id
 from openviking.crypto.encryptor import build_credential_encryptor as build_credential_encryptor
 from openviking.server.identity import RequestContext, Role
-from openviking.service.compile_targets import CompileStore, validate_compile_id
+from openviking.service.compile_targets import CompileStore, validate_compile_name
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -165,21 +165,21 @@ class CompileScheduler:
     async def scan_once(self, now: Optional[datetime] = None) -> None:
         now = now or datetime.now(TZ)
         for account_id in await self._store.list_accounts():
-            async for compile_id, record in self._store.iter_records(account_id):
+            async for compile_name, record in self._store.iter_records(account_id):
                 try:
                     owner_user_id = record["execution_context"]["owner_user_id"]
                     if is_due(record, now):
-                        await self.trigger_if_due(account_id, owner_user_id, compile_id, now)
+                        await self.trigger_if_due(account_id, owner_user_id, compile_name, now)
                     elif record["auto_update"]:
-                        await self.reschedule(account_id, owner_user_id, compile_id, record)
+                        await self.reschedule(account_id, owner_user_id, compile_name, record)
                 except Exception:
-                    logger.exception("Compile schedule check failed for %s", compile_id)
+                    logger.exception("Compile schedule check failed for %s", compile_name)
 
     async def reschedule(
         self,
         account_id: str,
         owner_user_id: str,
-        compile_id: str,
+        compile_name: str,
         record: Dict[str, Any],
         *,
         raise_on_error: bool = False,
@@ -193,7 +193,7 @@ class CompileScheduler:
             return
         from openviking.scheduling.expiry import ExpiryMode, ExpiryRegistration, ItemIdentity
 
-        identity = ItemIdentity(COMPILE_TARGET_ITEM_TYPE, account_id, owner_user_id, compile_id)
+        identity = ItemIdentity(COMPILE_TARGET_ITEM_TYPE, account_id, owner_user_id, compile_name)
         try:
             if record["auto_update"] and record["next_triggered_slot"]:
                 due = datetime.fromisoformat(record["next_triggered_slot"])
@@ -208,7 +208,7 @@ class CompileScheduler:
             else:
                 await self._expiry.unregister(identity)
         except Exception as exc:
-            logger.warning("Compile reschedule failed for %s", compile_id, exc_info=True)
+            logger.warning("Compile reschedule failed for %s", compile_name, exc_info=True)
             if raise_on_error:
                 raise UnavailableError(
                     "compile scheduler", "Cannot register scheduled Compile"
@@ -218,7 +218,7 @@ class CompileScheduler:
         self,
         account_id: str,
         owner_user_id: str,
-        compile_id: str,
+        compile_name: str,
         now: Optional[datetime] = None,
     ) -> str:
         """Accept the latest due slot once through the same execution entry point as manual runs.
@@ -230,37 +230,37 @@ class CompileScheduler:
         from openviking.service.compile_service import CompileRequest
 
         now = now or datetime.now(TZ)
-        async with self._store.edit(account_id, owner_user_id, compile_id) as record:
+        async with self._store.edit(account_id, owner_user_id, compile_name) as record:
             if not is_due(record, now):
                 await self.reschedule(
-                    account_id, owner_user_id, compile_id, record, raise_on_error=True
+                    account_id, owner_user_id, compile_name, record, raise_on_error=True
                 )
                 return "not_due"
             slot = current_slot(record["update_schedule"], now)
             slot_iso = slot.isoformat()
             if not await self._recover_slot(
-                account_id, owner_user_id, compile_id, slot_iso, record
+                account_id, owner_user_id, compile_name, slot_iso, record
             ):
                 ctx, connection = await self._executor(record)
                 await self._compile.create(
-                    CompileRequest(compile_id=compile_id),
+                    CompileRequest(compile_name=compile_name),
                     ctx=ctx,
                     connection=connection,
-                    idempotency_key=f"compile-schedule:{compile_id}:{slot_iso}",
+                    idempotency_key=f"compile-schedule:{compile_name}:{slot_iso}",
                     trigger="scheduled",
                     locked_record=record,
                     scheduled_slot=slot_iso,
                 )
             record["last_triggered_slot"] = slot_iso
             record["next_triggered_slot"] = next_slot(record["update_schedule"], now).isoformat()
-        await self.reschedule(account_id, owner_user_id, compile_id, record, raise_on_error=True)
+        await self.reschedule(account_id, owner_user_id, compile_name, record, raise_on_error=True)
         return "submitted"
 
     async def _recover_slot(
         self,
         account_id: str,
         owner_user_id: str,
-        compile_id: str,
+        compile_name: str,
         slot: str,
         record: Dict[str, Any],
     ) -> bool:
@@ -276,7 +276,7 @@ class CompileScheduler:
         for task in tasks:
             control = task.meta.get("request", {}).get("compile") or {}
             if (
-                control.get("compile_id") != compile_id
+                control.get("compile_name") != compile_name
                 or control.get("owner_user_id") != owner_user_id
                 or control.get("scheduled_slot") != slot
                 or control.get("trigger") != "scheduled"
@@ -346,25 +346,27 @@ class _ExpiryHandler:
         self._scheduler = scheduler
 
     async def handle(self, request: Any) -> Any:
-        """Trigger one saved configuration; missing IDs complete and submission failures retry."""
+        """Trigger a saved name; missing configurations complete and submission failures retry."""
         from openviking.scheduling.expiry import CallbackResult, CallbackStatus
 
         identity = request.identity
-        compile_id = identity.local_id
+        compile_name = identity.local_id
         try:
-            validate_compile_id(compile_id)
+            validate_compile_name(compile_name)
             if error := validate_user_id(identity.user_id):
                 raise InvalidArgumentError(error)
         except InvalidArgumentError:
             return CallbackResult(CallbackStatus.COMPLETED, "not_found")
         try:
             if (
-                await self._scheduler._store.get(identity.account_id, identity.user_id, compile_id)
+                await self._scheduler._store.get(
+                    identity.account_id, identity.user_id, compile_name
+                )
                 is None
             ):
                 return CallbackResult(CallbackStatus.COMPLETED, "not_found")
             outcome = await self._scheduler.trigger_if_due(
-                identity.account_id, identity.user_id, compile_id
+                identity.account_id, identity.user_id, compile_name
             )
         except Exception:
             logger.warning("Compile schedule callback failed", exc_info=True)

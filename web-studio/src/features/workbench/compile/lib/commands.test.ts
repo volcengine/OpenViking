@@ -1,6 +1,7 @@
 import {
   compileCommand,
   compileHistory,
+  isValidCompileName,
   parseArgs,
   parseCompile,
   tokenize,
@@ -89,12 +90,37 @@ it('does not persist malformed commands containing private args', () => {
   ).toEqual({ title: 'compile / task', remember: false })
 })
 
-it('round trips ID-only runs and rejects overrides', () => {
-  const request = { compile_id: 'cpt_' + 'a'.repeat(32) }
+it('round trips name-only runs and rejects overrides', () => {
+  const request = { compile_name: 'research-summary' }
   expect(parseCompile(tokenize(compileCommand(request)))).toEqual(request)
+  expect(() =>
+    parseCompile(['compile', '--compile-name', '../state']),
+  ).toThrow()
   expect(() =>
     parseCompile(
       tokenize(compileCommand(request) + ' --to viking://resources/other'),
     ),
   ).toThrow()
 })
+
+it('round trips a named configuration and preserves its name in form handoff', () => {
+  const request = {
+    compile_name: 'Research-summary_1',
+    from: ['viking://resources/a'],
+    to: 'viking://resources/b',
+    skill: 'viking://agent/skills/wiki',
+  }
+  const command = compileCommand(request, true)
+  expect(parseCompile(tokenize(command))).toEqual(request)
+  expect(() =>
+    parseCompile(tokenize(command.replace(request.compile_name, '../state'))),
+  ).toThrow()
+  prepareCompileHandoff('alice', command)
+  expect(readCompileHandoff('alice')).toEqual(request)
+  clearCompileHandoff()
+})
+
+it.each(['', '../state', 'a'.repeat(65), 'name\n', 'name\r', 'name\u2028'])(
+  'rejects an invalid configuration name: %s',
+  (name) => expect(isValidCompileName(name)).toBe(false),
+)

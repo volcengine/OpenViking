@@ -25,7 +25,7 @@ export function CompileScheduleList() {
   const targets = [
     ...new Map(
       query.data?.pages.flatMap((page) =>
-        page.configs.map((target) => [target.compile_id, target] as const),
+        page.configs.map((target) => [target.compile_name, target] as const),
       ),
     ).values(),
   ].filter(
@@ -83,7 +83,7 @@ export function CompileScheduleList() {
         <ul className="overflow-hidden rounded-xl border">
           {targets.map((target) => (
             <CompileScheduleTarget
-              key={`${identityScopeKey}:${target.compile_id}`}
+              key={`${identityScopeKey}:${target.compile_name}`}
               target={target}
             />
           ))}

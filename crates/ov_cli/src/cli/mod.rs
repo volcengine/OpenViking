@@ -1102,8 +1102,8 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: Option<CompileCommands>,
         /// Execute this persistent configuration without overriding its inputs
-        #[arg(long, value_name = "id", conflicts_with_all = ["from_uris", "to", "skill", "instruction", "args"])]
-        compile_id: Option<String>,
+        #[arg(long, value_name = "name", allow_hyphen_values = true, conflicts_with_all = ["from_uris", "to", "skill", "instruction", "args"])]
+        compile_name: Option<String>,
         /// Source file or directory; repeat the flag or separate entries with commas.
         /// Omitted with `--skill memory`, which consolidates `--to` in place.
         #[arg(long = "from", value_delimiter = ',', value_name = "uri")]
@@ -1112,7 +1112,7 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "uri")]
         to: Option<String>,
         /// Skill directory or SKILL.md Viking URI; the literal `memory` runs memory consolidation
-        #[arg(long, value_name = "uri", required_unless_present = "compile_id")]
+        #[arg(long, value_name = "uri", required_unless_present = "compile_name")]
         skill: Option<String>,
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]

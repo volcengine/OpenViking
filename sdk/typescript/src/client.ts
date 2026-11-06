@@ -1209,12 +1209,15 @@ export class OpenVikingClient {
     );
     return result.uri;
   }
-  /** Save configuration without executing; the returned compile_id selects future runs. */
-  createCompileTask(input: CompileInput): Promise<{ compile_id: string }> {
+  /** Save named inputs without execution; compile_name is required and returned unchanged. */
+  createCompileTask(
+    input: CompileInput & { compile_name: string },
+  ): Promise<{ compile_name: string }> {
+    if (!input.compile_name) throw new TypeError("compile_name is required");
     return this.request("POST", "/api/v1/compile/create", { body: input });
   }
 
-  /** Queue an ID-only persistent run or an independent full compilation. */
+  /** Queue a named persistent run or an independent full compilation. */
   compile(input: CompileRequest): Promise<JsonObject> {
     return this.request("POST", "/api/v1/compile", { body: input });
   }

@@ -201,14 +201,14 @@ export interface CompileInput {
 }
 /** Select saved inputs or supply full inputs; in-place memory mode needs no sources. */
 export type CompileRequest =
-  | (CompileInput & { compile_id?: never })
+  | (CompileInput & { compile_name?: never })
   | (Omit<CompileInput, "from" | "skill"> & {
       skill: "memory";
       from?: [];
-      compile_id?: never;
+      compile_name?: never;
     })
   | {
-      compile_id: string;
+      compile_name: string;
       from?: never;
       to?: never;
       skill?: never;

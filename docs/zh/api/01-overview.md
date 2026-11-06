@@ -611,11 +611,11 @@ JSON 输出 - 错误：
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile/create` | 创建持久配置并标记输出目录 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
-| GET | `/api/v1/compile/config` | 按 compile_id 读取配置 |
-| POST | `/api/v1/compile/config/update` | 按 compile_id 更新配置 |
+| GET | `/api/v1/compile/config` | 按 compile_name 读取配置 |
+| POST | `/api/v1/compile/config/update` | 按 compile_name 更新配置 |
 | GET | `/api/v1/compile/configs` | 列出可见配置 |
-| GET | `/api/v1/compile/runs` | 按 compile_id 列出运行记录 |
-| GET | `/api/v1/compile/runs/{task_id}` | 按 compile_id 和 task_id 读取 run |
+| GET | `/api/v1/compile/runs` | 按 compile_name 列出运行记录 |
+| GET | `/api/v1/compile/runs/{task_id}` | 按 compile_name 和 task_id 读取 run |
 | GET | `/api/v1/compile/runs/{task_id}/outputs` | 由快照推导运行产出 |
 | POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |

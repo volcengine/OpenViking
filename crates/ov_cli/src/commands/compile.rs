@@ -14,7 +14,7 @@ pub async fn run(
     skill: String,
     instruction: Option<String>,
     args: Option<String>,
-    create: bool,
+    compile_name: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -27,19 +27,26 @@ pub async fn run(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    if create {
+    if let Some(compile_name) = compile_name {
         if memory_mode {
             return Err(Error::Client(
                 "memory compilation does not support persistent configurations".into(),
             ));
         }
         let created = client
-            .create_compile_task(&sources, to.trim(), &skill, instruction, args.as_ref())
+            .create_compile_task(
+                &compile_name,
+                &sources,
+                to.trim(),
+                &skill,
+                instruction,
+                args.as_ref(),
+            )
             .await?;
         if matches!(output_format, OutputFormat::Json) {
             output_success(&created, output_format, compact);
         } else {
-            println!("compile_id: {}", created.compile_id);
+            println!("compile_name: {}", created.compile_name);
         }
     } else {
         let accepted = client
@@ -53,11 +60,11 @@ pub async fn run(
 /// Queue one run of a saved configuration and print its execution identity.
 pub async fn run_saved(
     client: &HttpClient,
-    compile_id: &str,
+    compile_name: &str,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let accepted = client.run_compile(compile_id).await?;
+    let accepted = client.run_compile(compile_name).await?;
     render_accepted(&accepted, "", format, compact);
     Ok(())
 }

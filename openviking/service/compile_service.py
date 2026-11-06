@@ -6,10 +6,8 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 from dataclasses import dataclass
 from typing import Any, Mapping
-from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -19,12 +17,14 @@ from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.service.compile_targets import (
+    COMPILE_NAME_PATTERN,
     CompileLifecycle,
     UpdateSchedule,
     execution_signature,
     is_versioned,
     new_record,
     split_control_args,
+    validate_compile_name,
 )
 from openviking.service.external_task_service import (
     ExternalTaskCancellation,
@@ -59,7 +59,7 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 MEMORY_COMPILE_SKILL = "memory"
 
 
-class CompileCreateRequest(BaseModel):
+class CompileInputs(BaseModel):
     """Complete compile inputs; scheduling controls are accepted only when saving a configuration."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -75,7 +75,7 @@ class CompileCreateRequest(BaseModel):
         return self.skill == MEMORY_COMPILE_SKILL
 
     @model_validator(mode="after")
-    def _normalize(self) -> "CompileCreateRequest":
+    def _normalize(self) -> "CompileInputs":
         sources: list[str] = []
         for source in self.from_:
             normalized = source.strip().rstrip("/")
@@ -108,12 +108,25 @@ class CompileCreateRequest(BaseModel):
         return self
 
 
+class CompileCreateRequest(CompileInputs):
+    """Save complete inputs under a caller-supplied, account-unique configuration name."""
+
+    compile_name: str = Field(
+        pattern=COMPILE_NAME_PATTERN,
+        description="Case-sensitive configuration name: 1–64 ASCII letters, digits, underscores or hyphens.",
+    )
+
+
 class CompileRequest(BaseModel):
     """Execute one saved configuration or complete full inputs, never a mixture of both."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    compile_id: str | None = Field(default=None, pattern=r"^cpt_[0-9a-f]{32}$")
+    compile_name: str | None = Field(
+        default=None,
+        pattern=COMPILE_NAME_PATTERN,
+        description="Saved configuration name; omit for a one-off execution with complete inputs.",
+    )
     from_: list[str] = Field(default_factory=list, alias="from")
     to: str | None = None
     skill: str | None = None
@@ -127,12 +140,14 @@ class CompileRequest(BaseModel):
     @model_validator(mode="after")
     def _normalize(self) -> "CompileRequest":
         """Reject overrides and validate full inputs before any execution side effects."""
-        if self.compile_id is not None:
-            if self.model_fields_set != {"compile_id"}:
-                raise ValueError("compile_id cannot be combined with execution inputs")
+        if "compile_name" in self.model_fields_set:
+            if self.compile_name is None:
+                raise ValueError("compile_name must not be null")
+            if self.model_fields_set != {"compile_name"}:
+                raise ValueError("compile_name cannot be combined with execution inputs")
             return self
-        inputs = CompileCreateRequest.model_validate(
-            self.model_dump(by_alias=True, exclude={"compile_id"})
+        inputs = CompileInputs.model_validate(
+            self.model_dump(by_alias=True, exclude={"compile_name"})
         )
         if {"auto_update", "update_schedule"}.intersection(inputs.args or {}):
             raise ValueError(
@@ -144,9 +159,8 @@ class CompileRequest(BaseModel):
 
 
 class CompileConfigUpdate(CompileCreateRequest):
-    """Replace a configuration by ID; scheduling changes preserve execution timestamps."""
+    """Replace a named configuration; scheduling changes preserve execution timestamps."""
 
-    compile_id: str = Field(pattern=r"^cpt_[0-9a-f]{32}$")
     auto_update: bool
     update_schedule: UpdateSchedule | None = None
 
@@ -491,7 +505,7 @@ class CompileService:
         record["auto_update"] = auto_update
         record["update_schedule"] = schedule
 
-    async def _settings(self, request: CompileCreateRequest, ctx: RequestContext) -> dict[str, Any]:
+    async def _settings(self, request: CompileInputs, ctx: RequestContext) -> dict[str, Any]:
         """Build validated settings with encrypted private args before creating any output nodes."""
         if request.is_memory_mode:
             raise InvalidArgumentError("Persistent Compile does not support skill=memory")
@@ -517,24 +531,24 @@ class CompileService:
     ) -> dict[str, str]:
         """Save a tagged configuration without executing Compile or capturing source snapshots."""
         lifecycle = self._require_lifecycle()
+        compile_name = validate_compile_name(request.compile_name)
         record = await self._settings(request, ctx)
-        await self._fs.ensure_compile_target(record["to"], ctx)
-        compile_id = "cpt_" + uuid4().hex
 
-        async def register_schedule() -> None:
+        async def prepare_target_and_schedule() -> None:
+            await self._fs.ensure_compile_target(record["to"], ctx)
             if self._scheduler is not None:
                 await self._scheduler.reschedule(
-                    ctx.account_id, ctx.user.user_id, compile_id, record, raise_on_error=True
+                    ctx.account_id, ctx.user.user_id, compile_name, record, raise_on_error=True
                 )
 
         await lifecycle.store.create(
             ctx.account_id,
             ctx.user.user_id,
             record,
-            compile_id=compile_id,
-            before_publish=register_schedule,
+            compile_name=compile_name,
+            before_publish=prepare_target_and_schedule,
         )
-        return {"compile_id": compile_id}
+        return {"compile_name": compile_name}
 
     async def create(
         self,
@@ -563,11 +577,11 @@ class CompileService:
             return await self._memory_runner.create(
                 target=request.to, instruction=request.instruction, ctx=ctx
             )
-        compile_id = request.compile_id
-        if compile_id and locked_record is None:
-            configuration = await self._configuration(compile_id, ctx, action=AclAction.WRITE)
+        compile_name = request.compile_name
+        if compile_name and locked_record is None:
+            configuration = await self._configuration(compile_name, ctx, action=AclAction.WRITE)
             async with self._require_lifecycle().store.edit(
-                ctx.account_id, configuration["execution_context"]["owner_user_id"], compile_id
+                ctx.account_id, configuration["execution_context"]["owner_user_id"], compile_name
             ) as record:
                 return await self.create(
                     request,
@@ -578,12 +592,12 @@ class CompileService:
                     locked_record=record,
                     scheduled_slot=scheduled_slot,
                 )
-        if compile_id:
+        if compile_name:
             record = locked_record
-            inputs = CompileCreateRequest.model_validate(
+            inputs = CompileInputs.model_validate(
                 {key: record[key] for key in ("from", "to", "skill", "instruction", "args")}
             )
-            submitted, submitted_private = {"compile_id": compile_id}, {}
+            submitted, submitted_private = {"compile_name": compile_name}, {}
         else:
             record = None
             inputs = self._normalize_request_uris(request, ctx)
@@ -593,7 +607,7 @@ class CompileService:
                 self.task_type, submitted, submitted_private, ctx, idempotency_key
             )
             if existing is not None:
-                if compile_id:
+                if compile_name:
                     await self._require_lifecycle().record_queued(
                         existing, locked_record=locked_record
                     )
@@ -613,7 +627,7 @@ class CompileService:
                 ctx.account_id, record["execution_context"].get("private_args") or {}
             )
             payload["compile"].update(
-                compile_id=compile_id,
+                compile_name=compile_name,
                 owner_user_id=record["execution_context"]["owner_user_id"],
                 auto_update=record["auto_update"],
                 update_schedule=record["update_schedule"],
@@ -633,8 +647,8 @@ class CompileService:
             ctx=ctx,
             idempotency_key=idempotency_key,
             submission_payload=submitted if idempotency_key else None,
-            submission_private_payload={} if compile_id else None,
-            on_task_created=record_created if compile_id else None,
+            submission_private_payload={} if compile_name else None,
+            on_task_created=record_created if compile_name else None,
         )
 
     async def on_start(self, task: TaskRecord) -> str | ExternalTaskSnapshot | None:
@@ -790,27 +804,19 @@ class CompileService:
         return self._lifecycle
 
     async def _configuration(
-        self, compile_id: str, ctx: RequestContext, *, action: AclAction = AclAction.READ
+        self, compile_name: str, ctx: RequestContext, *, action: AclAction = AclAction.READ
     ) -> dict[str, Any]:
-        """Locate a creator-owned configuration by ID and enforce its current output ACL."""
-        if not re.fullmatch(r"cpt_[0-9a-f]{32}", compile_id):
-            raise InvalidArgumentError("Invalid compile_id")
+        """Resolve an account-unique name and enforce the configuration's current output ACL."""
+        validate_compile_name(compile_name)
         lifecycle = self._require_lifecycle()
-        record = await lifecycle.store.get(ctx.account_id, ctx.user.user_id, compile_id)
+        record = await lifecycle.store.find(ctx.account_id, compile_name)
         if record is None:
-            for owner_user_id in await lifecycle.store.list_users(ctx.account_id):
-                if owner_user_id == ctx.user.user_id:
-                    continue
-                record = await lifecycle.store.get(ctx.account_id, owner_user_id, compile_id)
-                if record is not None:
-                    break
-        if record is None:
-            raise NotFoundError(compile_id, "compile configuration")
+            raise NotFoundError(compile_name, "compile configuration")
         await lifecycle._fs._ensure_access(record["to"], ctx, action=action)
         return record
 
     @staticmethod
-    def _config_view(compile_id: str, record: Mapping[str, Any]) -> dict[str, Any]:
+    def _config_view(compile_name: str, record: Mapping[str, Any]) -> dict[str, Any]:
         """Expose configuration inputs and invocation/slot times without private execution context."""
         fields = (
             "from",
@@ -825,16 +831,16 @@ class CompileService:
             "last_triggered_slot",
             "next_triggered_slot",
         )
-        return {"compile_id": compile_id, **{key: record[key] for key in fields}}
+        return {"compile_name": compile_name, **{key: record[key] for key in fields}}
 
-    async def get_config(self, compile_id: str, ctx: RequestContext) -> dict[str, Any]:
-        return self._config_view(compile_id, await self._configuration(compile_id, ctx))
+    async def get_config(self, compile_name: str, ctx: RequestContext) -> dict[str, Any]:
+        return self._config_view(compile_name, await self._configuration(compile_name, ctx))
 
     async def update_config(self, body: CompileConfigUpdate, ctx: RequestContext) -> dict[str, Any]:
         """Replace settings under the state lock, preserving times and invalidating changed inputs."""
         from copy import deepcopy
 
-        configuration = await self._configuration(body.compile_id, ctx, action=AclAction.WRITE)
+        configuration = await self._configuration(body.compile_name, ctx, action=AclAction.WRITE)
         owner_user_id = configuration["execution_context"]["owner_user_id"]
         args = dict(body.args or {})
         if {"auto_update", "update_schedule"}.intersection(args):
@@ -845,7 +851,7 @@ class CompileService:
             auto_update=body.auto_update,
             update_schedule=body.update_schedule.model_dump() if body.update_schedule else None,
         )
-        inputs = CompileCreateRequest.model_validate(
+        inputs = CompileInputs.model_validate(
             {
                 "from": body.from_,
                 "to": body.to,
@@ -857,7 +863,7 @@ class CompileService:
         replacement = await self._settings(inputs, ctx)
         await self._fs.ensure_compile_target(replacement["to"], ctx)
         lifecycle = self._require_lifecycle()
-        async with lifecycle.store.edit(ctx.account_id, owner_user_id, body.compile_id) as record:
+        async with lifecycle.store.edit(ctx.account_id, owner_user_id, body.compile_name) as record:
             await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
             previous_signature = execution_signature(record)
             replacement = deepcopy(replacement)
@@ -904,40 +910,49 @@ class CompileService:
                 replacement["progress"] = record["progress"]
             if self._scheduler is not None:
                 await self._scheduler.reschedule(
-                    ctx.account_id, owner_user_id, body.compile_id, replacement, raise_on_error=True
+                    ctx.account_id,
+                    owner_user_id,
+                    body.compile_name,
+                    replacement,
+                    raise_on_error=True,
                 )
             record.clear()
             record.update(replacement)
-        return self._config_view(body.compile_id, record)
+        return self._config_view(body.compile_name, record)
 
     async def list_configs(
         self, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        """Page readable configurations in stable ID order, including shared output directories."""
+        """Page readable configurations in stable name order, including shared output directories."""
         lifecycle = self._require_lifecycle()
         items = []
-        async for compile_id, record in lifecycle.store.iter_records(ctx.account_id, cursor=cursor):
+        async for compile_name, record in lifecycle.store.iter_records(
+            ctx.account_id, cursor=cursor
+        ):
             try:
                 await lifecycle._fs._ensure_access(record["to"], ctx)
             except PermissionDeniedError:
                 continue
-            items.append(self._config_view(compile_id, record))
+            items.append(self._config_view(compile_name, record))
             if len(items) > limit:
                 break
         page = items[:limit]
         return {
             "configs": page,
-            "next_cursor": page[-1]["compile_id"] if len(items) > limit else None,
+            "next_cursor": page[-1]["compile_name"] if len(items) > limit else None,
         }
 
     async def list_runs(
-        self, compile_id: str, ctx: RequestContext, *, limit: int, cursor: str | None
+        self, compile_name: str, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        record = await self._configuration(compile_id, ctx)
+        record = await self._configuration(compile_name, ctx)
         lifecycle = self._require_lifecycle()
         runs = []
         for run in await lifecycle.store.list_runs(
-            ctx.account_id, record["execution_context"]["owner_user_id"], compile_id, cursor=cursor
+            ctx.account_id,
+            record["execution_context"]["owner_user_id"],
+            compile_name,
+            cursor=cursor,
         ):
             try:
                 await lifecycle._fs._ensure_access(run["params"]["to"], ctx)
@@ -949,11 +964,11 @@ class CompileService:
         page = runs[:limit]
         return {"runs": page, "next_cursor": page[-1]["task_id"] if len(runs) > limit else None}
 
-    async def get_run(self, compile_id: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
+    async def get_run(self, compile_name: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
         """Read a frozen run under the caller's current configuration read permission."""
-        record = await self._configuration(compile_id, ctx)
+        record = await self._configuration(compile_name, ctx)
         run = await self._require_lifecycle().store.get_run(
-            ctx.account_id, record["execution_context"]["owner_user_id"], compile_id, task_id
+            ctx.account_id, record["execution_context"]["owner_user_id"], compile_name, task_id
         )
         if run is None:
             raise NotFoundError(task_id, "compile run")
@@ -961,10 +976,16 @@ class CompileService:
         return run
 
     async def run_outputs(
-        self, compile_id: str, task_id: str, ctx: RequestContext, *, limit: int, cursor: str | None
+        self,
+        compile_name: str,
+        task_id: str,
+        ctx: RequestContext,
+        *,
+        limit: int,
+        cursor: str | None,
     ) -> dict[str, Any]:
         """Derive changed output references from the run's frozen snapshots without an index file."""
-        run = await self.get_run(compile_id, task_id, ctx)
+        run = await self.get_run(compile_name, task_id, ctx)
         target = run["params"]["to"]
         fs = self._require_lifecycle()._fs
         await fs._ensure_access(target, ctx)
@@ -1006,8 +1027,8 @@ class CompileService:
         }
 
     def _normalize_request_uris(
-        self, request: CompileRequest, ctx: RequestContext
-    ) -> CompileRequest:
+        self, request: CompileInputs | CompileRequest, ctx: RequestContext
+    ) -> CompileInputs | CompileRequest:
         """Normalize identity-bound names without requiring live resources."""
         sources = list(
             dict.fromkeys(
@@ -1033,8 +1054,8 @@ class CompileService:
         return request.model_copy(update={"from_": sources, "to": target, "skill": skill})
 
     async def _normalize_request(
-        self, request: CompileRequest, ctx: RequestContext
-    ) -> CompileRequest:
+        self, request: CompileInputs | CompileRequest, ctx: RequestContext
+    ) -> CompileInputs | CompileRequest:
         """Validate inputs for new admissions without revalidating recovered submissions."""
         request = self._normalize_request_uris(request, ctx)
         assert request.to is not None
@@ -1096,9 +1117,11 @@ class CompileService:
             raise InvalidArgumentError("Compile target must be inside a resource directory")
 
     @staticmethod
-    def _split_payload(request: CompileRequest) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _split_payload(
+        request: CompileInputs | CompileRequest,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         payload = request.model_dump(
-            mode="json", by_alias=True, exclude_none=True, exclude={"compile_id"}
+            mode="json", by_alias=True, exclude_none=True, exclude={"compile_name"}
         )
         args = payload.get("args")
         if not isinstance(args, dict):
@@ -1169,6 +1192,7 @@ __all__ = [
     "CompileAPIClient",
     "CompileConfigUpdate",
     "CompileCreateRequest",
+    "CompileInputs",
     "CompileRequest",
     "CompileService",
     "CompileSessionAccepted",

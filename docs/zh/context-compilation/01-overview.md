@@ -33,16 +33,16 @@ ov compile \
 上面的完整参数命令执行一次性全量编译。需要保存来源基线、后续增量执行时，先创建配置：
 
 ```bash
-ov compile create --from viking://resources/research \
+ov compile create --compile-name research-summary --from viking://resources/research \
   --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki
-ov compile --compile-id <cpt_configuration_id>
+ov compile --compile-name research-summary
 ```
 
-创建返回 `compile_id`，准备并标记输出目录，但不执行 Compile。每次执行返回新的 `cmp_...` 任务 ID；首次为完整编译，后续成功执行推进手动和定时共享的基线。定时计划通过 `/api/v1/compile/create` 的 `args` 配置。相同输出目录的多个配置独立存在。旧的目标目录配置及定时计划需要重新创建；普通文件移动或删除不修改持久配置。
+创建必须提供 `compile_name` 并原样返回，准备并标记输出目录，但不执行 Compile。每次执行返回新的 `cmp_...` 任务 ID；首次为完整编译，后续成功执行推进手动和定时共享的基线。定时计划通过 `/api/v1/compile/create` 的 `args` 配置。相同输出目录的多个配置独立存在。普通文件移动或删除不修改持久配置。
 
 ## 使用 Web Studio
 
-Studio 分开提供保存配置与一次性全量执行；配置按 `compile_id` 展示和重跑。Studio 提供 `/compile` 列表、`/compile/new` 新建表单和 `/compile/tasks/<task_id>` 任务详情页。可以选择并预览 Skill、浏览来源目录、提交多个来源、查看或取消任务，以及打开产物目录。文件系统终端也支持 `compile` 和 `task`，并可将参数带入表单。
+Studio 分开提供保存配置与一次性全量执行；配置按 `compile_name` 展示和重跑。Studio 提供 `/compile` 列表、`/compile/new` 新建表单和 `/compile/tasks/<task_id>` 任务详情页。可以选择并预览 Skill、浏览来源目录、提交多个来源、查看或取消任务，以及打开产物目录。文件系统终端也支持 `compile` 和 `task`，并可将参数带入表单。
 
 任务列表游标使用进程内密钥签名，并绑定调用者和筛选条件。服务重启后旧游标失效，刷新列表即可重新开始。一个副本签发的游标不能直接用于另一个副本。分页扫描已存储的任务记录，不依赖索引，读取成本仍随保留的历史数量增长。
 

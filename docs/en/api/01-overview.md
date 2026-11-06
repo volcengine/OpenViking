@@ -616,11 +616,11 @@ When the gateway runs inside the server, use the server's port; when it runs sta
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile/create` | Create saved configuration and tag its output |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
-| GET | `/api/v1/compile/config` | Read configuration by compile_id |
-| POST | `/api/v1/compile/config/update` | Update configuration by compile_id |
+| GET | `/api/v1/compile/config` | Read configuration by compile_name |
+| POST | `/api/v1/compile/config/update` | Update configuration by compile_name |
 | GET | `/api/v1/compile/configs` | List visible configurations |
-| GET | `/api/v1/compile/runs` | List runs by compile_id |
-| GET | `/api/v1/compile/runs/{task_id}` | Read a run by compile_id and task_id |
+| GET | `/api/v1/compile/runs` | List runs by compile_name |
+| GET | `/api/v1/compile/runs/{task_id}` | Read a run by compile_name and task_id |
 | GET | `/api/v1/compile/runs/{task_id}/outputs` | Derive run outputs from snapshots |
 | POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |

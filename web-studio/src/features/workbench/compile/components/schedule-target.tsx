@@ -54,7 +54,10 @@ export function CompileScheduleTarget({
   const run = useMutation({
     mutationFn: () => {
       runKey.current ??= `${Date.now()}:${createRandomUuid()}`
-      return createCompile({ compile_id: target.compile_id }, runKey.current)
+      return createCompile(
+        { compile_name: target.compile_name },
+        runKey.current,
+      )
     },
     onSuccess: async (task) => {
       runKey.current = null
@@ -74,13 +77,13 @@ export function CompileScheduleTarget({
       const controller = new AbortController()
       pendingRead.current = controller
       const config = await fetchCompileConfig(
-        target.compile_id,
+        target.compile_name,
         controller.signal,
       )
       // The active connection may have changed while reading the configuration.
       controller.signal.throwIfAborted()
       return updateCompileConfig({
-        compile_id: target.compile_id,
+        compile_name: target.compile_name,
         to: config.to,
         args: config.args,
         from: config.from,
@@ -101,7 +104,7 @@ export function CompileScheduleTarget({
             pages: data.pages.map((page) => ({
               ...page,
               configs: page.configs.map((item) =>
-                item.compile_id === target.compile_id
+                item.compile_name === target.compile_name
                   ? { ...item, ...config }
                   : item,
               ),
@@ -115,7 +118,7 @@ export function CompileScheduleTarget({
       await Promise.all([
         client.invalidateQueries({ queryKey: listKey }),
         client.invalidateQueries({
-          queryKey: ['compile-config', identityScopeKey, target.compile_id],
+          queryKey: ['compile-config', identityScopeKey, target.compile_name],
           refetchType: 'none',
         }),
       ])
@@ -143,7 +146,7 @@ export function CompileScheduleTarget({
         <h2 className="min-w-0 flex-1 break-words text-sm font-medium [overflow-wrap:anywhere]">
           <ContextLink uri={target.to}>{target.to}</ContextLink>
           <span className="mt-1 block text-xs font-normal text-muted-foreground">
-            {target.compile_id}
+            {target.compile_name}
           </span>
         </h2>
         <Button disabled={run.isPending} onClick={() => run.mutate()}>
@@ -157,7 +160,7 @@ export function CompileScheduleTarget({
           onClick={() =>
             void navigate({
               to: '/compile/new',
-              search: { compileId: target.compile_id },
+              search: { compileName: target.compile_name },
             })
           }
         >
@@ -296,8 +299,8 @@ function ScheduleDialog({
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
   const [filled, setFilled] = useState(false)
   const config = useQuery({
-    queryKey: ['compile-config', identityScopeKey, target.compile_id],
-    queryFn: ({ signal }) => fetchCompileConfig(target.compile_id, signal),
+    queryKey: ['compile-config', identityScopeKey, target.compile_name],
+    queryFn: ({ signal }) => fetchCompileConfig(target.compile_name, signal),
     staleTime: 0,
   })
   useEffect(() => {

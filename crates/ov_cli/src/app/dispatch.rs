@@ -599,7 +599,7 @@ pub(super) async fn dispatch(
         }
         Commands::Compile {
             command,
-            compile_id,
+            compile_name,
             from_uris,
             to,
             skill,
@@ -607,23 +607,31 @@ pub(super) async fn dispatch(
             args,
         } => {
             let client = ctx.get_client();
-            if let Some(compile_id) = compile_id {
+            if let Some(compile_name) = compile_name {
                 return commands::compile::run_saved(
                     &client,
-                    &compile_id,
+                    &compile_name,
                     ctx.output_format,
                     ctx.compact,
                 )
                 .await;
             }
-            let (from_uris, to, skill, instruction, args, create) = match command {
+            let (from_uris, to, skill, instruction, args, compile_name) = match command {
                 Some(CompileCommands::Create {
+                    compile_name,
                     from_uris,
                     to,
                     skill,
                     instruction,
                     args,
-                }) => (from_uris, Some(to), skill, instruction, args, true),
+                }) => (
+                    from_uris,
+                    Some(to),
+                    skill,
+                    instruction,
+                    args,
+                    Some(compile_name),
+                ),
                 Some(CompileCommands::Memory {
                     to,
                     instruction,
@@ -634,15 +642,15 @@ pub(super) async fn dispatch(
                     "memory".to_string(),
                     instruction,
                     args,
-                    false,
+                    None,
                 ),
                 None => (
                     from_uris,
                     to,
-                    skill.expect("--skill is required without --compile-id"),
+                    skill.expect("--skill is required without --compile-name"),
                     instruction,
                     args,
-                    false,
+                    None,
                 ),
             };
             commands::compile::run(
@@ -652,7 +660,7 @@ pub(super) async fn dispatch(
                 skill,
                 instruction,
                 args,
-                create,
+                compile_name,
                 ctx.output_format,
                 ctx.compact,
             )

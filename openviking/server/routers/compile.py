@@ -19,6 +19,7 @@ from openviking.service.compile_service import (
     CompileCreateRequest,
     CompileRequest,
 )
+from openviking.service.compile_targets import COMPILE_NAME_PATTERN
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["compile"])
@@ -66,10 +67,10 @@ __all__ = ["router"]
 
 @router.get("/compile/config")
 async def get_compile_config(
-    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
+    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    return Response(status="ok", result=await get_service().compile.get_config(compile_id, ctx))
+    return Response(status="ok", result=await get_service().compile.get_config(compile_name, ctx))
 
 
 @router.post("/compile/config/update")
@@ -94,30 +95,30 @@ async def list_compile_configs(
 
 @router.get("/compile/runs")
 async def list_compile_runs(
-    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
+    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    result = await get_service().compile.list_runs(compile_id, ctx, limit=limit, cursor=cursor)
+    result = await get_service().compile.list_runs(compile_name, ctx, limit=limit, cursor=cursor)
     return Response(status="ok", result=result)
 
 
 @router.get("/compile/runs/{task_id}")
 async def get_compile_run(
     task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
-    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
+    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Read a frozen run without exposing execution credentials or private checkpoints."""
-    result = await get_service().compile.get_run(compile_id, task_id, ctx)
+    result = await get_service().compile.get_run(compile_name, task_id, ctx)
     return Response(status="ok", result=result)
 
 
 @router.get("/compile/runs/{task_id}/outputs")
 async def run_outputs(
     task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
-    compile_id: str = Query(..., pattern=r"^cpt_[0-9a-f]{32}$"),
+    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
@@ -126,7 +127,7 @@ async def run_outputs(
     return Response(
         status="ok",
         result=await get_service().compile.run_outputs(
-            compile_id, task_id, ctx, limit=limit, cursor=cursor
+            compile_name, task_id, ctx, limit=limit, cursor=cursor
         ),
     )
 

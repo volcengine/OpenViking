@@ -171,17 +171,17 @@ it('refreshes output caches only once when a running task completes', async () =
     expect(client.getQueryState(key)?.isInvalidated).toBe(false)
 })
 
-it('reruns a persistent task using only its configuration ID', async () => {
-  const compileId = 'cpt_' + 'a'.repeat(32)
+it('reruns a persistent task using only its configuration name', async () => {
+  const compileName = 'research-summary'
   const saved = task('completed')
-  saved.meta!.request!.compile = { compile_id: compileId }
+  saved.meta!.request!.compile = { compile_name: compileName }
   api.fetchCompileTask.mockResolvedValue(saved)
   api.createCompile.mockResolvedValue({ task_id: 'cmp_next' })
   const { page } = mount()
   fireEvent.click(await page.findByRole('button', { name: 'runAgain' }))
   await waitFor(() =>
     expect(api.createCompile).toHaveBeenCalledWith(
-      { compile_id: compileId },
+      { compile_name: compileName },
       expect.any(String),
     ),
   )

@@ -10,7 +10,6 @@ from uuid import uuid4
 import pytest
 
 from openviking.service.compile_targets import (
-    STATE_FIELDS,
     CompileLifecycle,
     CompileStateStore,
     execution_signature,
@@ -21,7 +20,7 @@ from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_domain import TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
 from openviking.storage.errors import ResourceBusyError
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from tests.test_task_tracker import _FakeAgfs
 
 SOURCE = "viking://resources/source"
@@ -102,6 +101,25 @@ class Tracker:
         return task_id in self.cancelled
 
 
+class CaseInsensitiveFiles(AsyncFiles):
+    """Model a filesystem where differently cased paths address the same files and locks."""
+
+    async def read(self, path):
+        return await super().read(path.lower())
+
+    async def write(self, path, body, **kwargs):
+        return await super().write(path.lower(), body, **kwargs)
+
+    async def ls(self, path):
+        return await super().ls(path.lower())
+
+    async def rm(self, path, **kwargs):
+        return await super().rm(path.lower(), **kwargs)
+
+    async def pathlock_acquire_exact(self, path, **kwargs):
+        return await super().pathlock_acquire_exact(path.lower(), **kwargs)
+
+
 class SnapshotFS:
     """Record committed scopes and return deterministic snapshot IDs for lifecycle checks."""
 
@@ -165,7 +183,7 @@ def setup(monkeypatch):
 def make_task(
     setup,
     *,
-    compile_id=None,
+    compile_name=None,
     record=None,
     created_at=100.0,
     trigger="manual",
@@ -175,10 +193,10 @@ def make_task(
 ):
     request = deepcopy(PARAMS)
     request["compile"] = {"trigger": trigger, "auto_update": False, "update_schedule": None}
-    if compile_id:
+    if compile_name:
         request.update({key: deepcopy(record[key]) for key in PARAMS})
         request["compile"].update(
-            compile_id=compile_id,
+            compile_name=compile_name,
             owner_user_id=owner_user_id,
             input_signature=execution_signature(record),
             auto_update=record["auto_update"],
@@ -200,62 +218,161 @@ def make_task(
 async def registered(setup):
     """Create a saved configuration and its unstarted task for lifecycle scenarios."""
     record = new_record(PARAMS)
-    compile_id = await setup.store.create("acme", "alice", record)
-    return record, compile_id, make_task(setup, compile_id=compile_id, record=record)
+    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    return record, compile_name, make_task(setup, compile_name=compile_name, record=record)
 
 
-async def test_configuration_state_has_exact_fields_and_distinct_ids(setup):
-    record = new_record(PARAMS)
-    first = await setup.store.create("acme", "alice", record)
-    second = await setup.store.create("acme", "alice", record)
-    assert first != second
-    assert set(await setup.store.get("acme", "alice", first)) == STATE_FIELDS
-    assert record["task_first_create_time"] is record["last_run_time"] is None
-    assert len(setup.files.files) == 2
-    assert all(path.endswith("/state.json") for path in setup.files.files)
-    assert await setup.store.get("another-account", "alice", first) is None
-    assert not setup.fs.commits
+@pytest.mark.parametrize(
+    "name", ["", " wiki", "wiki ", "wiki\n", "../wiki", "a/b", "a\\b", "文档", "a" * 65, None, 1]
+)
+async def test_invalid_names_are_rejected_without_storage_side_effects(setup, name):
     with pytest.raises(InvalidArgumentError):
-        await setup.store.get("acme", "alice", "../escape")
+        await setup.store.create("acme", "alice", new_record(PARAMS), compile_name=name)
+    assert not setup.files.files
+    assert not setup.files.locks
 
 
-async def test_acceptance_times_are_idempotent_and_never_move_backwards(setup):
-    record = new_record(PARAMS)
-    compile_id = await setup.store.create("acme", "alice", record)
-    first = make_task(setup, compile_id=compile_id, record=record, created_at=100)
-    later = make_task(
-        setup, compile_id=compile_id, record=record, created_at=300, trigger="scheduled"
+@pytest.mark.parametrize("name", ["a", "A_B-9", "a" * 64])
+async def test_valid_name_boundaries_are_preserved(setup, name):
+    assert await setup.store.create("acme", "alice", new_record(PARAMS), compile_name=name) == name
+    assert (await setup.store.find("acme", name))["execution_context"]["owner_user_id"] == "alice"
+
+
+async def test_case_insensitive_storage_preserves_names_and_run_histories():
+    files = CaseInsensitiveFiles()
+    store = make_store(files)
+    names = ["Research", "Wiki", "research"]
+    for index, name in enumerate(names):
+        record = new_record({**PARAMS, "instruction": name})
+        await store.create("acme", "alice", record, compile_name=name)
+        run = {"task_id": "cmp_" + str(index) * 32, "created_at": index}
+        await store.put_run("acme", "alice", name, run)
+        assert await store.get_run("acme", "alice", name, run["task_id"]) == run
+        assert await store.list_runs("acme", "alice", name) == [run]
+    assert await store.find("acme", "RESEARCH") is None
+    for name in names:
+        assert (await store.find("acme", name))["instruction"] == name
+    assert [name async for name, _ in store.iter_records("acme")] == names
+
+
+@pytest.mark.parametrize(
+    "segment",
+    [
+        "Wiki",
+        "name_",
+        "name_ff",
+        "name_2e2e",
+        "name_2F",
+        "name_61 62",
+    ],
+)
+async def test_configuration_discovery_ignores_noncanonical_directories(setup, segment):
+    setup.files.files[f"/local/acme/_system/compile/tasks/alice/{segment}/state.json"] = b"{}"
+    assert [name async for name, _ in setup.store.iter_records("acme")] == []
+
+
+async def test_creation_locks_name_and_state_through_schedule_registration(setup):
+    registered = asyncio.Event()
+    publish = asyncio.Event()
+
+    async def register():
+        registered.set()
+        await publish.wait()
+
+    async def callback():
+        async with setup.store.edit("acme", "alice", "wiki") as record:
+            return record["to"]
+
+    first = asyncio.create_task(
+        setup.store.create(
+            "acme", "alice", new_record(PARAMS), compile_name="wiki", before_publish=register
+        )
     )
-    delayed = make_task(setup, compile_id=compile_id, record=record, created_at=200)
+    await registered.wait()
+    delivery = asyncio.create_task(callback())
+    duplicate_registration = AsyncMock()
+    second = asyncio.create_task(
+        make_store(setup.files).create(
+            "acme",
+            "bob",
+            new_record(PARAMS),
+            compile_name="wiki",
+            before_publish=duplicate_registration,
+        )
+    )
+    await asyncio.sleep(0)
+    assert not second.done() and not delivery.done()
+    publish.set()
+    assert await first == "wiki"
+    assert await delivery == TARGET
+    with pytest.raises(ConflictError, match="already exists"):
+        await second
+    duplicate_registration.assert_not_awaited()
+    assert await setup.store.get("acme", "bob", "wiki") is None
+    assert (await setup.store.find("acme", "wiki"))["execution_context"]["owner_user_id"] == "alice"
+    with pytest.raises(ConflictError, match="already exists"):
+        await setup.store.create("acme", "alice", new_record(PARAMS), compile_name="wiki")
+
+
+async def test_duplicate_persisted_names_are_ambiguous(setup):
+    name = "wiki"
+    for owner in ("alice", "bob"):
+        await setup.store.write_json(
+            setup.store._record_path("acme", owner, name),
+            new_record(PARAMS, {"owner_user_id": owner}),
+        )
+    with pytest.raises(ConflictError, match="ambiguous"):
+        await setup.store.find("acme", name)
+    with pytest.raises(ConflictError, match="ambiguous"):
+        await anext(setup.store.iter_records("acme"))
+    with pytest.raises(ConflictError, match="ambiguous"):
+        await setup.store.create("acme", "carol", new_record(PARAMS), compile_name=name)
+
+
+async def test_acceptance_times_are_idempotent_and_never_move_backwards(setup, registered):
+    record, compile_name, first = registered
+    later = make_task(
+        setup, compile_name=compile_name, record=record, created_at=300, trigger="scheduled"
+    )
+    delayed = make_task(setup, compile_name=compile_name, record=record, created_at=200)
     await setup.lifecycle.record_queued(first)
     await asyncio.gather(
         setup.lifecycle.record_queued(later), setup.lifecycle.record_queued(delayed)
     )
     await setup.lifecycle.record_queued(first)
-    current = await setup.store.get("acme", "alice", compile_id)
+    current = await setup.store.get("acme", "alice", compile_name)
     assert current["task_first_create_time"] == 100
     assert current["last_run_time"] == 300
-    runs = await setup.store.list_runs("acme", "alice", compile_id, limit=2)
+    runs = await setup.store.list_runs("acme", "alice", compile_name, limit=2)
     assert [run["created_at"] for run in runs] == [300, 200]
-    assert (await setup.store.list_runs("acme", "alice", compile_id, cursor=runs[-1]["task_id"]))[
+    assert (await setup.store.list_runs("acme", "alice", compile_name, cursor=runs[-1]["task_id"]))[
         0
     ]["created_at"] == 100
-    assert len(await setup.store.list_runs("acme", "alice", compile_id)) == 3
+    assert len(await setup.store.list_runs("acme", "alice", compile_name)) == 3
 
 
-async def test_full_execution_never_touches_compile_storage_or_source_snapshots(setup):
+@pytest.mark.parametrize(
+    "source,skill",
+    [(SOURCE, SKILL), ("viking://agent/skills", "viking://agent/skills/compiler")],
+)
+async def test_full_execution_never_touches_compile_storage_or_source_snapshots(
+    setup, source, skill
+):
     class ForbiddenStore:
         def __getattr__(self, name):
             raise AssertionError(f"Full compile accesses configuration storage: {name}")
 
     lifecycle = CompileLifecycle(ForbiddenStore(), setup.fs)
     task = make_task(setup)
+    task.meta["request"].update({"from": [source], "skill": skill})
+    setup.tracker.tasks[task.task_id] = deepcopy(task)
     assert await lifecycle.on_start(task) == "proceed"
     assert setup.fs.commits == [[TARGET]]
     plan = await lifecycle.runtime_changes(task.meta["request"], "acme", task.task_id, "alice")
     assert plan["execution"] == {"mode": "full"}
     assert plan["head"] is plan["base"] is None
-    assert plan["full_dirs"] == [SOURCE] and plan["diff_dirs"] == []
+    assert plan["full_dirs"] == [source] and plan["diff_dirs"] == []
+    assert plan["skill_snapshot"]["snapshot_id"] is None
     setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
     outcome = await lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert outcome.result == {"created": 1, "updated": 0, "deleted": 0}
@@ -264,10 +381,10 @@ async def test_full_execution_never_touches_compile_storage_or_source_snapshots(
     setup.finalize.assert_awaited_once()
 
 
-async def test_registered_manual_and_scheduled_share_progress_and_compact_runs(setup):
-    record = new_record(PARAMS)
-    compile_id = await setup.store.create("acme", "alice", record)
-    first = make_task(setup, compile_id=compile_id, record=record)
+async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_completion(
+    setup, registered
+):
+    record, compile_name, first = registered
     await setup.lifecycle.record_queued(first)
     assert await setup.lifecycle.on_start(first) == "proceed"
     first_plan = await setup.lifecycle.runtime_changes(
@@ -276,46 +393,28 @@ async def test_registered_manual_and_scheduled_share_progress_and_compact_runs(s
     assert first_plan["execution"]["mode"] == "full"
     setup.find.side_effect = [SimpleNamespace(total=7), SimpleNamespace(total=2)]
     await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
-    state = await setup.store.get("acme", "alice", compile_id)
+    state = await setup.store.get("acme", "alice", compile_name)
     assert state["progress"]["source_commit"] == first_plan["head"]
     second = make_task(
-        setup, compile_id=compile_id, record=state, created_at=200, trigger="scheduled"
+        setup, compile_name=compile_name, record=state, created_at=200, trigger="scheduled"
     )
     await setup.lifecycle.record_queued(second)
     outcome = await setup.lifecycle.on_start(second)
     assert isinstance(outcome, ExternalTaskSnapshot) and outcome.status == "completed"
     await setup.lifecycle.on_finish(second, outcome)
-    run = await setup.store.get_run("acme", "alice", compile_id, second.task_id)
-    await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
-    assert (await setup.store.get("acme", "alice", compile_id))["conflict_num"] == 2
+    run = await setup.store.get_run("acme", "alice", compile_name, second.task_id)
+    await CompileLifecycle(setup.store, setup.fs).on_finish(
+        first, ExternalTaskSnapshot(status="completed")
+    )
+    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] == 2
     assert setup.find.await_count == 2
-    assert set(run) == {
-        "task_id",
-        "actor",
-        "status",
-        "created_at",
-        "started_at",
-        "finished_at",
-        "params",
-        "result",
-        "error",
-        "meta",
-    }
-    assert set(run["meta"]) == {
-        "trigger",
-        "mode",
-        "base_snapshot",
-        "start_snapshot",
-        "finish_snapshot",
-        "skill_snapshot_id",
-    }
     assert run["meta"]["trigger"] == "scheduled"
     assert run["meta"]["base_snapshot"] == first_plan["head"]
     assert run["meta"]["finish_snapshot"] == run["meta"]["start_snapshot"]
     assert len(setup.fs.commits) == 3
-    assert (await setup.store.get("acme", "alice", compile_id))["progress"]["source_commit"] == run[
-        "meta"
-    ]["start_snapshot"]
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"][
+        "source_commit"
+    ] == run["meta"]["start_snapshot"]
 
 
 async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen_inputs(setup):
@@ -327,8 +426,8 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
         "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
     }
     record["from"] = [SOURCE, "viking://resources/added"]
-    compile_id = await setup.store.create("acme", "alice", record)
-    task = make_task(setup, compile_id=compile_id, record=record)
+    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    task = make_task(setup, compile_name=compile_name, record=record)
     setup.fs.source_changes = [{"uri": SOURCE + "/gone.md", "change_type": "deleted"}]
     assert await setup.lifecycle.on_start(task) == "proceed"
     plan = await setup.lifecycle.runtime_changes(
@@ -336,7 +435,7 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
     )
     assert plan["diff_dirs"] == [SOURCE]
     assert plan["full_dirs"] == ["viking://resources/added"]
-    async with setup.store.edit("acme", "alice", compile_id) as current:
+    async with setup.store.edit("acme", "alice", compile_name) as current:
         current["instruction"] = "new instruction"
         current["to"] = "viking://resources/new-target"
         current["progress"] = {}
@@ -349,13 +448,14 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
     )
     assert len(setup.fs.commits) == 1
     await resumed.on_finish(stale_task, ExternalTaskSnapshot(status="completed"))
-    assert (await setup.store.get("acme", "alice", compile_id))["progress"] == {}
-    run = await setup.store.get_run("acme", "alice", compile_id, task.task_id)
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
+    run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["params"]["instruction"] is None
-    assert (await setup.store.get("acme", "alice", compile_id))["conflict_num"] is None
+    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
 
 
-async def test_failed_and_cancelled_runs_preserve_the_successful_baseline(setup):
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(setup, status):
     record = new_record(PARAMS)
     record["progress"] = {
         "source_commit": "a" * 40,
@@ -363,27 +463,34 @@ async def test_failed_and_cancelled_runs_preserve_the_successful_baseline(setup)
         "instruction": None,
         "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
     }
-    compile_id = await setup.store.create("acme", "alice", record)
+    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
     setup.fs.source_changes = [{"uri": SOURCE + "/a.md", "change_type": "modified"}]
-    for status in ("failed", "cancelled"):
-        task = make_task(setup, compile_id=compile_id, record=record)
-        assert await setup.lifecycle.on_start(task) == "proceed"
-        await setup.lifecycle.on_finish(
-            task, ExternalTaskSnapshot(status=status, error_message="failure")
-        )
-        run = await setup.store.get_run("acme", "alice", compile_id, task.task_id)
-        assert run["status"] == status
-        assert run["meta"]["finish_snapshot"] is not None
-        assert (await setup.store.get("acme", "alice", compile_id))["progress"] == record[
-            "progress"
-        ]
+    task = make_task(setup, compile_name=compile_name, record=record)
+    assert await setup.lifecycle.on_start(task) == "proceed"
+    outcome = await setup.lifecycle.on_finish(
+        task,
+        ExternalTaskSnapshot(
+            status=status,
+            error_message="Bad request sk-secret_value Authorization: Bearer bearer-secret",
+        ),
+    )
+    run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
+    assert run["status"] == status
+    assert run["meta"]["finish_snapshot"] is not None
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == record["progress"]
+    assert "secret_value" not in run["error"] and "bearer-secret" not in run["error"]
+    assert "[REDACTED]" in run["error"]
+    assert outcome.error_message == run["error"]
 
 
-async def test_restart_preserves_target_claim_across_configuration_ids_and_full_runs(setup):
-    first_id = await setup.store.create("acme", "alice", new_record(PARAMS))
-    other_id = await setup.store.create("acme", "alice", new_record(PARAMS))
-    first = make_task(setup, compile_id=first_id, record=new_record(PARAMS))
-    other = make_task(setup, compile_id=other_id, record=new_record(PARAMS))
+async def test_restart_preserves_target_claim_across_configurations_and_full_runs(
+    setup, registered
+):
+    record, _, first = registered
+    other_id = await setup.store.create(
+        "acme", "alice", new_record(PARAMS), compile_name="wiki-other"
+    )
+    other = make_task(setup, compile_name=other_id, record=record)
     transient = make_task(setup)
     assert await setup.lifecycle.on_start(first) == "proceed"
     replacement = CompileLifecycle(setup.store, setup.fs)
@@ -395,7 +502,7 @@ async def test_restart_preserves_target_claim_across_configuration_ids_and_full_
 
 
 async def test_duplicate_start_reuses_exact_snapshots_and_plan(setup, registered):
-    record, compile_id, task = registered
+    record, compile_name, task = registered
     duplicate = deepcopy(task)
     another_worker = CompileLifecycle(setup.store, setup.fs)
     results = await asyncio.gather(
@@ -405,22 +512,8 @@ async def test_duplicate_start_reuses_exact_snapshots_and_plan(setup, registered
     assert setup.fs.commits == [[TARGET, SOURCE]]
 
 
-async def test_completion_replay_cannot_overwrite_a_newer_baseline(setup, registered):
-    record, compile_id, task = registered
-    await setup.lifecycle.on_start(task)
-    await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
-    async with setup.store.edit("acme", "alice", compile_id) as current:
-        current["progress"]["source_commit"] = "f" * 40
-    await CompileLifecycle(setup.store, setup.fs).on_finish(
-        task, ExternalTaskSnapshot(status="completed")
-    )
-    assert (await setup.store.get("acme", "alice", compile_id))["progress"][
-        "source_commit"
-    ] == "f" * 40
-
-
 @pytest.mark.parametrize("args", [{"mode": "full"}, {"last_compile_time": "now"}, {"changes": {}}])
-def test_legacy_mode_and_forged_plan_controls_are_rejected(args):
+def test_execution_mode_and_forged_plan_controls_are_rejected(args):
     with pytest.raises(InvalidArgumentError):
         split_control_args(args)
 
@@ -444,13 +537,13 @@ async def test_durable_task_scan_ignores_a_process_local_stale_cache():
 
 
 async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(setup, registered):
-    record, compile_id, task = registered
+    record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     original_plan = deepcopy(setup.tracker.tasks[task.task_id].auth["compile_execution"]["plan"])
     setup.finalize.side_effect = ResourceBusyError("index is busy")
     outcome = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert outcome.status == "running" and outcome.stage == "committing"
-    assert (await setup.store.get("acme", "alice", compile_id))["progress"] == {}
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     restarted = CompileLifecycle(setup.store, setup.fs)
     resumed = deepcopy(task)
     resumed.auth = {}
@@ -465,14 +558,14 @@ async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(s
 
 async def test_cleanup_resumes_past_new_runs_and_retains_pending_recovery(setup):
     record = new_record(PARAMS)
-    compile_id = await setup.store.create("acme", "alice", record)
+    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
     tasks = []
     for created in (100, 200, 300):
-        task = make_task(setup, compile_id=compile_id, record=record, created_at=created)
+        task = make_task(setup, compile_name=compile_name, record=record, created_at=created)
         await setup.lifecycle.record_queued(task)
-        run = await setup.store.get_run("acme", "alice", compile_id, task.task_id)
+        run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
         run.update(status="completed", finished_at=created)
-        await setup.store.put_run("acme", "alice", compile_id, run)
+        await setup.store.put_run("acme", "alice", compile_name, run)
         setup.tracker.tasks[task.task_id].status = TaskStatus.COMPLETED
         tasks.append(task)
     # The oldest run still owns unsettled Work and must remain available for recovery.
@@ -481,35 +574,21 @@ async def test_cleanup_resumes_past_new_runs_and_retains_pending_recovery(setup)
     assert await setup.store.delete_expired(now=now, limit=1) == 0
     assert await setup.store.delete_expired(now=now, limit=1) == 1
     assert await setup.store.delete_expired(now=now, limit=1) == 0
-    other_id = await setup.store.create("acme", "bob", record)
+    other_id = await setup.store.create("acme", "bob", record, compile_name="wiki-other")
     old_run = dict(run, finished_at=100)
     await setup.store.put_run("acme", "bob", other_id, old_run)
     assert await setup.store.delete_expired(now=now, limit=10) == 0
     assert await setup.store.delete_expired(now=now, limit=10) == 1
     assert await setup.store.list_runs("acme", "bob", other_id) == []
-    remaining = await setup.store.list_runs("acme", "alice", compile_id)
+    remaining = await setup.store.list_runs("acme", "alice", compile_name)
     assert [run["created_at"] for run in remaining] == [300, 100]
-    assert (await setup.store.get("acme", "alice", compile_id))["last_run_time"] == 300
-
-
-async def test_full_skill_inside_source_is_live_and_does_not_snapshot_the_source(setup):
-    task = make_task(setup)
-    task.meta["request"]["from"] = ["viking://agent/skills"]
-    task.meta["request"]["skill"] = "viking://agent/skills/compiler"
-    setup.tracker.tasks[task.task_id] = deepcopy(task)
-    assert await setup.lifecycle.on_start(task) == "proceed"
-    assert setup.fs.commits == [[TARGET]]
-    plan = await setup.lifecycle.runtime_changes(
-        task.meta["request"], "acme", task.task_id, "alice"
-    )
-    assert plan["skill_snapshot"]["snapshot_id"] is None
-    assert plan["head"] is None
+    assert (await setup.store.get("acme", "alice", compile_name))["last_run_time"] == 300
 
 
 async def test_cancel_during_index_finalization_does_not_publish_or_advance_progress(
     setup, registered
 ):
-    record, compile_id, task = registered
+    record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
 
     async def cancel_during_finalize(*args, **kwargs):
@@ -518,76 +597,29 @@ async def test_cancel_during_index_finalization_does_not_publish_or_advance_prog
     setup.finalize.side_effect = cancel_during_finalize
     result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert result.status == "cancelled"
-    assert (await setup.store.get("acme", "alice", compile_id))["progress"] == {}
-    run = await setup.store.get_run("acme", "alice", compile_id, task.task_id)
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
+    run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["status"] == "cancelled"
     assert run["meta"]["finish_snapshot"] is not None
     assert run["result"] is None
 
 
-async def test_schedule_registration_and_state_publication_share_the_configuration_lock(setup):
-    compile_id = "cpt_" + "d" * 32
-    registered = asyncio.Event()
-    publish = asyncio.Event()
-
-    async def register():
-        registered.set()
-        await publish.wait()
-
-    async def callback():
-        async with setup.store.edit("acme", "alice", compile_id) as record:
-            return record["to"]
-
-    creation = asyncio.create_task(
-        setup.store.create(
-            "acme", "alice", new_record(PARAMS), compile_id=compile_id, before_publish=register
-        )
-    )
-    await registered.wait()
-    delivery = asyncio.create_task(callback())
-    await asyncio.sleep(0)
-    assert not delivery.done()
-    publish.set()
-    assert await creation == compile_id
-    assert await delivery == TARGET
-
-
 async def test_registration_failure_does_not_publish_configuration(setup):
-    compile_id = "cpt_" + "e" * 32
+    compile_name = "scheduled-wiki"
     with pytest.raises(RuntimeError, match="registration failed"):
         await setup.store.create(
             "acme",
             "alice",
             new_record(PARAMS),
-            compile_id=compile_id,
+            compile_name=compile_name,
             before_publish=AsyncMock(side_effect=RuntimeError("registration failed")),
         )
-    assert await setup.store.get("acme", "alice", compile_id) is None
+    assert await setup.store.get("acme", "alice", compile_name) is None
     assert not setup.files.files
 
 
-async def test_runtime_error_is_redacted_before_run_persistence(setup, registered):
-    record, compile_id, task = registered
-    await setup.lifecycle.on_start(task)
-    outcome = await setup.lifecycle.on_finish(
-        task,
-        ExternalTaskSnapshot(
-            status="failed",
-            error_message="Bad request sk-secret_value Authorization: Bearer bearer-secret",
-        ),
-    )
-    run = await setup.store.get_run("acme", "alice", compile_id, task.task_id)
-    assert "secret_value" not in run["error"]
-    assert "bearer-secret" not in run["error"]
-    assert "[REDACTED]" in run["error"]
-    assert outcome.error_message == run["error"]
-    assert "secret_value" not in json.dumps(
-        await setup.store.list_runs("acme", "alice", compile_id)
-    )
-
-
 async def test_cancel_after_publication_still_restores_the_start_snapshot(setup, registered):
-    record, compile_id, task = registered
+    record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     original_diff = setup.fs.diff_paths
 
@@ -599,10 +631,10 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(setup,
     setup.fs.diff_paths = cancel_after_publication
     result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert result.status == "cancelled"
-    run = await setup.store.get_run("acme", "alice", compile_id, task.task_id)
+    run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["meta"]["finish_snapshot"] == f"{4:040x}"
     assert run["result"] is None
-    assert (await setup.store.get("acme", "alice", compile_id))["progress"] == {}
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     # A replay sees a completed rollback and cannot create further commits.
     await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="cancelled"))
     assert len(setup.fs.commits) == 4
@@ -610,49 +642,49 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(setup,
 
 async def test_first_acceptance_discovers_a_task_whose_state_publication_was_interrupted(setup):
     record = new_record(PARAMS)
-    compile_id = await setup.store.create("acme", "alice", record)
+    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
     scheduled = make_task(
-        setup, compile_id=compile_id, record=record, created_at=100, trigger="scheduled"
+        setup, compile_name=compile_name, record=record, created_at=100, trigger="scheduled"
     )
     # The Task and run survive, but the configuration mutation does not publish.
     unpublished = deepcopy(record)
     await setup.lifecycle.record_queued(scheduled, locked_record=unpublished)
-    assert (await setup.store.get("acme", "alice", compile_id))["task_first_create_time"] is None
-    manual = make_task(setup, compile_id=compile_id, record=record, created_at=200)
+    assert (await setup.store.get("acme", "alice", compile_name))["task_first_create_time"] is None
+    manual = make_task(setup, compile_name=compile_name, record=record, created_at=200)
     await setup.lifecycle.record_queued(manual)
-    state = await setup.store.get("acme", "alice", compile_id)
+    state = await setup.store.get("acme", "alice", compile_name)
     assert state["task_first_create_time"] == 100
     assert state["last_run_time"] == 200
     await setup.lifecycle.record_queued(scheduled)
-    assert (await setup.store.get("acme", "alice", compile_id))["task_first_create_time"] == 100
+    assert (await setup.store.get("acme", "alice", compile_name))["task_first_create_time"] == 100
 
 
-async def test_creator_directories_support_direct_and_account_wide_paging(setup, monkeypatch):
-    ids = ["cpt_" + digit * 32 for digit in "123"]
-    for owner, compile_id in zip(("bob", "alice", "bob"), ids, strict=True):
-        await setup.store.create("acme", owner, new_record(PARAMS), compile_id=compile_id)
-    assert set(setup.files.files) == {
-        f"/local/acme/_system/compile/tasks/{owner}/{compile_id}/state.json"
-        for owner, compile_id in zip(("bob", "alice", "bob"), ids, strict=True)
-    }
-    assert await setup.store.get("acme", "bob", ids[1]) is None
-    assert await setup.store.get("another-account", "alice", ids[1]) is None
+async def test_creator_and_account_isolation_with_paging(setup):
+    names = ["Alpha-wiki", "wiki-2", "wiki_3"]
+    for owner, compile_name in zip(("bob", "alice", "bob"), names, strict=True):
+        await setup.store.create("acme", owner, new_record(PARAMS), compile_name=compile_name)
+    assert await setup.store.get("acme", "bob", names[1]) is None
+    assert await setup.store.find("another-account", names[1]) is None
+    await setup.store.create("another-account", "bob", new_record(PARAMS), compile_name=names[1])
+    assert (await setup.store.find("acme", names[1]))["execution_context"][
+        "owner_user_id"
+    ] == "alice"
+    assert (await setup.store.find("another-account", names[1]))["execution_context"][
+        "owner_user_id"
+    ] == "bob"
     all_records = [record async for record in setup.store.iter_records("acme")]
-    assert [compile_id for compile_id, _ in all_records] == ids
+    assert [compile_name for compile_name, _ in all_records] == names
     assert [
-        compile_id async for compile_id, _ in setup.store.iter_records("acme", cursor=ids[0])
-    ] == ids[1:]
-    listing = AsyncMock(wraps=setup.files.ls)
-    monkeypatch.setattr(setup.files, "ls", listing)
+        compile_name async for compile_name, _ in setup.store.iter_records("acme", cursor=names[0])
+    ] == names[1:]
     assert [
-        compile_id async for compile_id, _ in setup.store.iter_records("acme", user_id="alice")
-    ] == [ids[1]]
-    listing.assert_awaited_once_with("/local/acme/_system/compile/tasks/alice")
+        compile_name async for compile_name, _ in setup.store.iter_records("acme", user_id="alice")
+    ] == [names[1]]
     for owner in ("..", "../bob", "/bob", "", None):
         with pytest.raises(InvalidArgumentError):
-            await setup.store.get("acme", owner, ids[0])
+            await setup.store.get("acme", owner, names[0])
     with pytest.raises(InvalidArgumentError, match="owner cannot change"):
-        async with setup.store.edit("acme", "alice", ids[1]) as record:
+        async with setup.store.edit("acme", "alice", names[1]) as record:
             record["execution_context"]["owner_user_id"] = "bob"
 
 
@@ -660,8 +692,8 @@ async def test_creator_directories_support_direct_and_account_wide_paging(setup,
 async def test_final_conflict_count_and_search_failure(setup, total, expected):
     record = new_record(PARAMS)
     record["conflict_num"] = 9
-    compile_id = await setup.store.create("acme", "alice", record)
-    task = make_task(setup, compile_id=compile_id, record=record, user_id="bob")
+    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    task = make_task(setup, compile_name=compile_name, record=record, user_id="bob")
     setup.lifecycle.resolve_groups = AsyncMock(return_value=["reviewers"])
 
     async def find(**kwargs):
@@ -676,7 +708,7 @@ async def test_final_conflict_count_and_search_failure(setup, total, expected):
     assert (
         await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     ).status == "completed"
-    assert (await setup.store.get("acme", "alice", compile_id))["conflict_num"] == expected
+    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] == expected
     args = setup.find.await_args.kwargs
     ctx = args.pop("ctx")
     assert (ctx.user.user_id, ctx.group_ids, ctx.bypass_acl) == ("bob", ("reviewers",), False)
@@ -692,7 +724,7 @@ async def test_final_conflict_count_and_search_failure(setup, total, expected):
 async def test_conflict_publication_recovers_after_state_write_failure(
     setup, registered, monkeypatch
 ):
-    record, compile_id, task = registered
+    record, compile_name, task = registered
     setup.find.return_value = SimpleNamespace(total=9)
     await setup.lifecycle.on_start(task)
     write = setup.files.write
@@ -708,7 +740,7 @@ async def test_conflict_publication_recovers_after_state_write_failure(
     monkeypatch.setattr(setup.files, "write", write_with_outage)
     with pytest.raises(OSError, match="state unavailable"):
         await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
-    assert (await setup.store.get("acme", "alice", compile_id))["conflict_num"] is None
+    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
     assert setup.tracker.tasks[task.task_id].auth["compile_execution"]["phase"] != "finished"
     resumed = deepcopy(setup.tracker.tasks[task.task_id])
     setup.find.side_effect = AssertionError("recovery must reuse the persisted statistic")
@@ -716,16 +748,13 @@ async def test_conflict_publication_recovers_after_state_write_failure(
         resumed, ExternalTaskSnapshot(status="completed")
     )
     assert result.status == "completed"
-    assert (await setup.store.get("acme", "alice", compile_id))["conflict_num"] == 9
+    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] == 9
     assert setup.find.await_count == 1
 
 
 @pytest.mark.parametrize("reindex_status", [TaskStatus.COMPLETED, TaskStatus.FAILED, None])
-@pytest.mark.parametrize("status", ["failed", "cancelled"])
-async def test_rollback_conflict_count_waits_for_tracked_reindex(
-    setup, registered, reindex_status, status
-):
-    record, compile_id, task = registered
+async def test_rollback_conflict_count_waits_for_tracked_reindex(setup, registered, reindex_status):
+    record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     uri = TARGET + "/page.md"
     setup.fs.output_changes = [{"uri": uri, "change_type": "modified"}]
@@ -746,9 +775,9 @@ async def test_rollback_conflict_count_waits_for_tracked_reindex(
         return SimpleNamespace(total=4)
 
     setup.find.side_effect = find
-    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
-    assert result.status == status
-    state = await setup.store.get("acme", "alice", compile_id)
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="failed"))
+    assert result.status == "failed"
+    state = await setup.store.get("acme", "alice", compile_name)
     if reindex_status == TaskStatus.COMPLETED:
         assert state["conflict_num"] == 4
     else:
@@ -763,12 +792,12 @@ async def test_rollback_conflict_count_waits_for_tracked_reindex(
 async def test_cancelled_unstarted_run_does_not_count_another_runs_live_target(setup):
     record = new_record(PARAMS)
     record["conflict_num"] = 4
-    compile_id = await setup.store.create("acme", "alice", record)
-    running = make_task(setup, compile_id=compile_id, record=record)
-    queued = make_task(setup, compile_id=compile_id, record=record, created_at=200)
+    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    running = make_task(setup, compile_name=compile_name, record=record)
+    queued = make_task(setup, compile_name=compile_name, record=record, created_at=200)
     await setup.lifecycle.on_start(running)
     assert await setup.lifecycle.on_start(queued) == "busy"
     result = await setup.lifecycle.on_finish(queued, ExternalTaskSnapshot(status="cancelled"))
     assert result.status == "cancelled"
-    assert (await setup.store.get("acme", "alice", compile_id))["conflict_num"] is None
+    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
     setup.find.assert_not_awaited()

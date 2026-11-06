@@ -16,12 +16,14 @@ export type CompileRequest = {
   instruction?: string | null
   args?: Record<string, unknown>
 }
+/** A caller-selected, account-unique name identifies reusable Compile inputs. */
+export type CompileCreateRequest = CompileRequest & { compile_name: string }
 export type UpdateSchedule =
   | { frequency: 'daily'; hour: number; minute: number }
   | { frequency: 'weekly'; weekday: number; hour: number; minute: number }
 /** Public persistent inputs and acceptance times; credentials stay on the server. */
 export type CompileConfig = CompileRequest & {
-  compile_id: string
+  compile_name: string
   auto_update: boolean
   update_schedule: UpdateSchedule | null
   /** Unix seconds of the first accepted execution; null until any run is accepted. */
@@ -33,12 +35,12 @@ export type CompileConfig = CompileRequest & {
 }
 export type CompileConfigSummary = CompileConfig
 export type CompileConfigUpdate = CompileRequest & {
-  compile_id: string
+  compile_name: string
   auto_update: boolean
   update_schedule: UpdateSchedule | null
 }
-export type CompileExecutionRequest = CompileRequest | { compile_id: string }
-export type CompileCreated = { compile_id: string }
+export type CompileExecutionRequest = CompileRequest | { compile_name: string }
+export type CompileCreated = { compile_name: string }
 export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
   return getOvResult<{
     configs: CompileConfigSummary[]
@@ -51,12 +53,12 @@ export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
     }),
   )
 }
-export function fetchCompileConfig(compileId: string, signal?: AbortSignal) {
+export function fetchCompileConfig(compileName: string, signal?: AbortSignal) {
   return getOvResult<CompileConfig>(
     ovClient.client.get({
       url: '/api/v1/compile/config',
       signal,
-      query: { compile_id: compileId },
+      query: { compile_name: compileName },
     }),
   )
 }
@@ -70,13 +72,13 @@ export function updateCompileConfig(body: CompileConfigUpdate) {
 }
 export type CompileTask = TaskRecord & {
   task_id: string
-  meta?: { request?: CompileRequest & { compile?: { compile_id?: string } } }
+  meta?: { request?: CompileRequest & { compile?: { compile_name?: string } } }
 }
 type CompileTaskPayload = Omit<CompileTask, 'meta'> & {
   meta?: {
     request?: Omit<CompileRequest, 'from'> & {
       from?: string[] | null
-      compile?: { compile_id?: string }
+      compile?: { compile_name?: string }
     }
   }
 }
@@ -145,7 +147,7 @@ export async function fetchCompileTask(id: string, signal?: AbortSignal) {
 }
 /** Save reusable inputs without creating an execution or source snapshot. */
 export function createCompileTask(
-  body: CompileRequest,
+  body: CompileCreateRequest,
 ): Promise<CompileCreated> {
   return getOvResult<CompileCreated>(
     ovClient.client.post({

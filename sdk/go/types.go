@@ -74,10 +74,10 @@ type CompileInput struct {
 }
 
 // CompileRequest selects one saved configuration or supplies independent full inputs.
-// CompileID and Input are mutually exclusive.
+// CompileName and Input are mutually exclusive.
 type CompileRequest struct {
-	CompileID string
-	Input     *CompileInput
+	CompileName string
+	Input       *CompileInput
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
