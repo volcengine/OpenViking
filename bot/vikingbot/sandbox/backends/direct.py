@@ -252,7 +252,7 @@ class DirectBackend(SandboxBackend):
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 return CommandResult(
-                    f"Error: Command timed out after {timeout} seconds", process.returncode
+                    f"Error: Command timed out after {timeout} seconds", process.returncode or 1
                 )
 
             output_parts = []

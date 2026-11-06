@@ -1,5 +1,6 @@
 """Command status is metadata, never inferred from text printed by a process."""
 
+import asyncio
 import copy
 import json
 import shlex
@@ -16,6 +17,26 @@ from vikingbot.sandbox.backends.aiosandbox import AioSandboxBackend
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.sandbox.backends.opensandbox import OpenSandboxBackend
 from vikingbot.sandbox.base import CommandResult, SandboxBackend
+
+
+@pytest.mark.asyncio
+async def test_timeout_remains_failed_when_process_exits_during_cleanup(tmp_path, monkeypatch):
+    config = Config(storage_workspace=str(tmp_path))
+    backend = DirectBackend(config.sandbox, "status", tmp_path)
+    await backend.start()
+    process = SimpleNamespace(
+        pid=12345,
+        returncode=0,
+        communicate=AsyncMock(side_effect=asyncio.TimeoutError),
+        wait=AsyncMock(return_value=0),
+        kill=Mock(side_effect=ProcessLookupError),
+    )
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", AsyncMock(return_value=process))
+    monkeypatch.setattr("os.killpg", Mock(side_effect=ProcessLookupError), raising=False)
+    result = await backend.execute("worker")
+    assert not _is_tool_result_success(result)
+    assert "timed out" in result
+    await backend.stop()
 
 
 @pytest.mark.asyncio
