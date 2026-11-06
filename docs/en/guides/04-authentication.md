@@ -206,8 +206,7 @@ Configure OIDC in `ov.conf`:
         "user_id": {
           "source": "claim",
           "claim": "sub",
-          "prefix": "user-",
-          "normalize": "lowercase"
+          "prefix": "user-"
         },
         "role": {
           "source": "claim",
@@ -275,11 +274,38 @@ Two modes are supported:
   "user_id": {
     "source": "claim",
     "claim": "sub",
-    "prefix": "user-",
-    "normalize": "lowercase"
+    "prefix": "user-"
   }
 }
 ```
+
+#### Identity validation and providers with special characters
+
+After applying the administrator's mapping, OpenViking validates `account_id` and `user_id` without changing them. IDs must be nonempty, contain only letters `a-z`/`A-Z`, digits, `_`, `.`, `@`, or `-`, and must not be `.` or `..`. Each ID may contain at most one `@`; an account ID must not start with `_`. Invalid results return HTTP 401 (`UNAUTHENTICATED`) with an identity-mapping error.
+
+For example, `sub=alice_prod` remains `user_id=alice_prod` with the default mapping; `sub=alice|prod` is rejected instead of being rewritten to `alice_prod`.
+
+Auth0 subjects such as `auth0|123` therefore require an explicit mapping. Have the identity provider include a stable, unique ID managed by the administrator in the signed token:
+
+```json
+{
+  "sub": "auth0|123",
+  "https://openviking.example/user_id": "u_1001"
+}
+```
+
+Set `server.oidc.identity.user_id` in `ov.conf` to:
+
+```json
+{
+  "source": "claim",
+  "claim": "https://openviking.example/user_id"
+}
+```
+
+The client sends the original token. It cannot change signed claims or select its identity through request headers. The selected user claim must not be editable by end users, and the administrator must ensure that it is stable and unique within each OpenViking account. OpenViking validates ID format; it does not check custom mappings for uniqueness. Lowercasing, regex extraction, and shared user fallbacks can merge different users. Account mappings may intentionally group users into one account, but must preserve the intended tenant boundaries.
+
+**Upgrading:** Automatic replacement of unsupported characters with `_` has been removed. Existing valid IDs retain their data paths. Users who relied on replacement must have their ownership verified by the administrator before a dedicated claim is mapped to an existing local ID. Changing the mapped ID changes the data namespace; OpenViking does not automatically rename or migrate existing data.
 
 #### Role Mapping
 
