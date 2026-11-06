@@ -91,7 +91,6 @@ def test_compile_rejects_system_source(source):
         service._normalize_request_uris(request, ctx)
 
 
-@pytest.mark.asyncio
 async def test_compile_api_rejects_system_target_without_creating_task(service, app, client):
     from openviking.server.auth import get_request_context
     from openviking.service.task_tracker import get_task_tracker
@@ -121,7 +120,6 @@ async def test_compile_api_rejects_system_target_without_creating_task(service, 
     assert after == before
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source",
     [
@@ -160,7 +158,26 @@ async def test_compile_api_rejects_system_source_without_creating_task(
     assert after == before
 
 
-@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["memory", "recovery"])
+async def test_compile_bypasses_admission_for_memory_and_submission_recovery(mode):
+    from openviking.service.compile_service import CompileRequest, CompileService
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+
+    result = object()
+    tasks = SimpleNamespace(recover_submission=AsyncMock(return_value=result), create=AsyncMock())
+    fs = SimpleNamespace(ensure_compile_target=AsyncMock())
+    service = CompileService(CompileApiConfig(), tasks, fs)
+    service._memory_runner = SimpleNamespace(create=AsyncMock(return_value=result))
+    request = CompileRequest(to="viking://~/memories/experiences", skill="memory")
+    if mode == "recovery":
+        request.skill = "viking://system/compile/example-skills/llm-wiki"
+        request.from_ = ["viking://resources/source"]
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    assert await service.create(request, connection={}, ctx=ctx, idempotency_key="retry") is result
+    tasks.create.assert_not_awaited()
+    fs.ensure_compile_target.assert_not_awaited()
+
+
 async def test_page_reads_past_200_and_isolates_owner():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -207,7 +224,6 @@ def test_cursor_is_bound_to_identity_and_filters():
         decode_cursor("broken", scope)
 
 
-@pytest.mark.asyncio
 async def test_concurrent_submission_retry_and_restart(monkeypatch):
     import ragfs_python
 
@@ -286,7 +302,6 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         transport.close()
 
 
-@pytest.mark.asyncio
 async def test_cursor_prunes_cold_expired_records_without_loading_cache():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -329,7 +344,6 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
     }
 
 
-@pytest.mark.asyncio
 async def test_cursor_cleanup_rechecks_task_updated_after_scan():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)

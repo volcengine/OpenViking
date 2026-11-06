@@ -58,7 +58,7 @@ from openviking.storage.abstract_overview import (
 from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.storage.expr import And, Eq, In, Or
+from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -2147,16 +2147,54 @@ class FSService:
         )
         return result
 
+    async def _validate_compile_target_nesting(self, uri: str, ctx: RequestContext) -> None:
+        """Reject tagged ancestors or descendants of canonical ``uri`` visible to ``ctx``.
+
+        The target itself is reusable. This read-only check propagates index errors.
+        """
+        # shortcut: concurrent submissions can admit nested targets; lock admission if required.
+        namespace = classify_uri(uri)
+        boundary = (namespace.content_index or 0) + 1
+        parts = list(namespace.parts[:-1])
+        while len(parts) >= boundary:
+            parent = "viking://" + "/".join(parts)
+            if await self._directory_has_compile_tag(parent, ctx):
+                raise InvalidArgumentError(
+                    f"Compile target must not be inside another compile target: {parent}"
+                )
+            parts.pop()
+        store = self._ensure_initialized()._get_vector_store()
+        if store is None:
+            raise NotInitializedError("Vector store")
+        records, _ = await store.scroll(
+            filter=And(
+                [
+                    PathScope("uri", uri, depth=-1),
+                    RawDSL({"op": "must_not", "field": "uri", "conds": [uri], "para": "-d=0"}),
+                    In("level", [0, 1]),
+                    Eq("search_tags", "compile_target=true"),
+                ]
+            ),
+            limit=1,
+            output_fields=["uri"],
+            ctx=ctx,
+        )
+        if records:
+            raise InvalidArgumentError(
+                f"Compile target must not contain another compile target: {records[0]['uri']}"
+            )
+
     async def ensure_compile_target(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Materialize a missing output directory and expose its tag without replacing existing summaries.
 
-        Existing files are rejected. Failures preserve user content and propagate before a
-        caller publishes its configuration; internal directory indexing may create a Task.
+        Files and nested targets are rejected. Failures preserve user content and propagate
+        before configuration or execution publication; directory indexing may create a Task.
         """
         viking_fs = self._ensure_initialized()
         uri = validate_safe_viking_uri_path(uri)
         self._reject_storage_internal_target(uri)
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        await self._validate_compile_target_nesting(uri, ctx)
         async with self._hold_watch_scope(
             [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
         ) as lease:

@@ -18,6 +18,7 @@ from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 COMPILE_ID = "cpt_" + "a" * 32
 ACCOUNT = "account"
+OWNER = "creator"
 PARAMS = {
     "from": ["viking://resources/source"],
     "to": "viking://resources/output",
@@ -27,7 +28,6 @@ PARAMS = {
 }
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("compile_id", "exists", "lookup_error", "submission_error", "expected"),
     [
@@ -56,7 +56,7 @@ async def test_callback_retries_submission_failures(
         trigger_if_due=AsyncMock(return_value="submitted", side_effect=submission_error),
     )
     result = await _ExpiryHandler(scheduler).handle(
-        CallbackRequest(ItemIdentity("compile_target", ACCOUNT, "_system", compile_id))
+        CallbackRequest(ItemIdentity("compile_target", ACCOUNT, OWNER, compile_id))
     )
     assert result.status == expected
     if compile_id != COMPILE_ID:
@@ -65,7 +65,9 @@ async def test_callback_retries_submission_failures(
     elif not exists or lookup_error:
         scheduler.trigger_if_due.assert_not_awaited()
     else:
-        scheduler.trigger_if_due.assert_awaited_once_with(ACCOUNT, COMPILE_ID)
+        scheduler.trigger_if_due.assert_awaited_once_with(ACCOUNT, OWNER, COMPILE_ID)
+    if compile_id == COMPILE_ID:
+        store.get.assert_awaited_once_with(ACCOUNT, OWNER, COMPILE_ID)
     assert result.reason == (
         "trigger_failed"
         if expected == CallbackStatus.RETRY
@@ -84,8 +86,8 @@ class LockedConfiguration:
         self.locked = False
 
     @asynccontextmanager
-    async def edit(self, account_id, compile_id):
-        assert (account_id, compile_id) == (ACCOUNT, COMPILE_ID)
+    async def edit(self, account_id, owner_user_id, compile_id):
+        assert (account_id, owner_user_id, compile_id) == (ACCOUNT, OWNER, COMPILE_ID)
         assert not self.locked
         self.locked = True
         draft = deepcopy(self.state)
@@ -95,22 +97,26 @@ class LockedConfiguration:
         finally:
             self.locked = False
 
-    async def get_run(self, account_id, compile_id, task_id):
+    async def get_run(self, account_id, owner_user_id, compile_id, task_id):
+        assert (account_id, owner_user_id, compile_id) == (ACCOUNT, OWNER, COMPILE_ID)
         assert self.locked
         return self.runs.get(task_id)
 
-    async def put_run(self, account_id, compile_id, run):
+    async def put_run(self, account_id, owner_user_id, compile_id, run):
+        assert (account_id, owner_user_id, compile_id) == (ACCOUNT, OWNER, COMPILE_ID)
         assert self.locked
         self.runs[run["task_id"]] = deepcopy(run)
 
 
-@pytest.mark.asyncio
 async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypatch):
     due = datetime(2026, 11, 5, 10, 0, tzinfo=TZ)
     schedule = {"frequency": "daily", "hour": 10, "minute": 0}
     record = new_record(
         {**PARAMS, "auto_update": True, "update_schedule": schedule},
-        {"executor": {"account_id": ACCOUNT, "user_id": "replacement-user"}},
+        {
+            "owner_user_id": OWNER,
+            "executor": {"account_id": ACCOUNT, "user_id": "replacement-user"},
+        },
     )
     record["next_triggered_slot"] = due.isoformat()
     store = LockedConfiguration(record)
@@ -125,6 +131,7 @@ async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypa
                 **PARAMS,
                 "compile": {
                     "compile_id": COMPILE_ID,
+                    "owner_user_id": OWNER,
                     "trigger": "scheduled",
                     "scheduled_slot": due.isoformat(),
                     "auto_update": True,
@@ -133,11 +140,14 @@ async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypa
             }
         },
     )
+    unrelated = deepcopy(accepted)
+    unrelated.task_id = "cmp_" + "d" * 32
+    unrelated.meta["request"]["compile"]["owner_user_id"] = "another-creator"
 
     async def durable_tasks(account_id, *, task_type):
         assert store.locked
         assert (account_id, task_type) == (ACCOUNT, "compile")
-        return [accepted]
+        return [unrelated, accepted]
 
     task_store = SimpleNamespace(list_durable=AsyncMock(side_effect=durable_tasks))
     monkeypatch.setattr(
@@ -158,11 +168,11 @@ async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypa
     scheduler._expiry = SimpleNamespace(report=AsyncMock(), unregister=AsyncMock())
 
     with pytest.raises(OSError, match="queue unavailable"):
-        await scheduler.trigger_if_due(ACCOUNT, COMPILE_ID, due)
+        await scheduler.trigger_if_due(ACCOUNT, OWNER, COMPILE_ID, due)
     assert store.state == record
     assert len(store.runs) == 1
 
-    assert await scheduler.trigger_if_due(ACCOUNT, COMPILE_ID, due) == "submitted"
+    assert await scheduler.trigger_if_due(ACCOUNT, OWNER, COMPILE_ID, due) == "submitted"
     assert store.state["task_first_create_time"] == accepted.created_at
     assert store.state["last_run_time"] == accepted.created_at
     assert store.state["last_triggered_slot"] == due.isoformat()
@@ -177,5 +187,13 @@ async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypa
         QueueManager.EXTERNAL_TASK,
         {"task_id": accepted.task_id, "account_id": ACCOUNT, "user_id": "accepted-user"},
     )
-    assert await scheduler.trigger_if_due(ACCOUNT, COMPILE_ID, due) == "not_due"
+    assert await scheduler.trigger_if_due(ACCOUNT, OWNER, COMPILE_ID, due) == "not_due"
     assert enqueue.await_count == 2
+    store.state["auto_update"] = False
+    await scheduler.reschedule(ACCOUNT, OWNER, COMPILE_ID, store.state)
+    scheduler._expiry.unregister.assert_awaited_once_with(
+        ItemIdentity("compile_target", ACCOUNT, OWNER, COMPILE_ID)
+    )
+    assert scheduler._expiry.report.call_args.args[0].identity == ItemIdentity(
+        "compile_target", ACCOUNT, OWNER, COMPILE_ID
+    )

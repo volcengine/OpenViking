@@ -157,5 +157,15 @@ def register_runtime_task_routes(
     ) -> dict[str, Any]:
         return await load_session(body, http_request, auth, cancel=True)
 
+    @router.post("/runtime/v1/tasks/archive")
+    async def archive_compile_session(
+        body: CompileSessionRequest,
+        http_request: Request,
+        auth: Any = Depends(verify_gateway_request),
+    ) -> dict[str, Any]:
+        """Validate access to the session and acknowledge archival without modifying it."""
+        await load_session(body, http_request, auth, cancel=False)
+        return {}
+
 
 __all__ = ["register_compile_routes", "register_runtime_task_routes"]

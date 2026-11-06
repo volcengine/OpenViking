@@ -196,12 +196,9 @@ class ExternalTaskService:
     async def restore_tasks(self, tasks: Iterable[TaskRecord]) -> None:
         """Reserve submitted work before any recovered queue delivery can run."""
         for task in tasks:
-            if (
-                task.task_type not in self._providers
-                or (
-                    task.status != TaskStatus.CANCELLED
-                    and (task.result is not None or task.error is not None)
-                )
+            if task.task_type not in self._providers or (
+                task.status != TaskStatus.CANCELLED
+                and (task.result is not None or task.error is not None)
             ):
                 continue
             if task.status not in {
@@ -576,6 +573,7 @@ class ExternalTaskService:
                 account_id=account_id,
                 user_id=user_id,
             )
+            auth["external_task_id"] = external_task_id
         snapshot = None
         while True:
             if snapshot is None or snapshot.status in _ACTIVE_STATUSES:
@@ -685,12 +683,9 @@ class ExternalTaskService:
         task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
         if task is None:
             return
-        if (
-            task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}
-            or (
-                task.status != TaskStatus.CANCELLED
-                and (task.result is not None or task.error is not None)
-            )
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED} or (
+            task.status != TaskStatus.CANCELLED
+            and (task.result is not None or task.error is not None)
         ):
             self._release(task)
             return

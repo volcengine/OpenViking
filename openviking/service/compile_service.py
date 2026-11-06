@@ -264,6 +264,21 @@ class CompileAPIClient:
         )
         return self._validate(CompileSessionStatus, body)
 
+    async def archive(
+        self,
+        session_id: str,
+        *,
+        connection: Mapping[str, Any],
+        args: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Acknowledge archival with the original session args; propagate Runtime errors."""
+        await self._request(
+            "POST",
+            "/runtime/v1/tasks/archive",
+            json={"session_id": session_id, **({"args": dict(args)} if args is not None else {})},
+            headers=self._headers(connection),
+        )
+
     async def _request(
         self,
         method: str,
@@ -485,7 +500,8 @@ class CompileService:
         public, private = self._split_payload(normalized)
         control, runtime_args = split_control_args(public.get("args"))
         public["args"] = runtime_args
-        record = new_record(public)
+        # Storage belongs to the creator; the scheduled execution identity can change.
+        record = new_record(public, {"owner_user_id": ctx.user.user_id})
         if private:
             record["execution_context"]["private_args"] = await self._encrypt_private_args(
                 ctx.account_id, private
@@ -508,11 +524,15 @@ class CompileService:
         async def register_schedule() -> None:
             if self._scheduler is not None:
                 await self._scheduler.reschedule(
-                    ctx.account_id, compile_id, record, raise_on_error=True
+                    ctx.account_id, ctx.user.user_id, compile_id, record, raise_on_error=True
                 )
 
         await lifecycle.store.create(
-            ctx.account_id, record, compile_id=compile_id, before_publish=register_schedule
+            ctx.account_id,
+            ctx.user.user_id,
+            record,
+            compile_id=compile_id,
+            before_publish=register_schedule,
         )
         return {"compile_id": compile_id}
 
@@ -531,6 +551,7 @@ class CompileService:
 
         ``locked_record`` is supplied only by the scheduler while it owns the configuration lock.
         Submission retries recover the original task and do not refresh its invocation timestamps.
+        New executions require a search-visible target tag before task creation and enqueueing.
         """
         if trigger not in {"manual", "scheduled"}:
             raise InvalidArgumentError("Invalid Compile trigger")
@@ -544,8 +565,10 @@ class CompileService:
             )
         compile_id = request.compile_id
         if compile_id and locked_record is None:
-            await self._configuration(compile_id, ctx, action=AclAction.WRITE)
-            async with self._require_lifecycle().store.edit(ctx.account_id, compile_id) as record:
+            configuration = await self._configuration(compile_id, ctx, action=AclAction.WRITE)
+            async with self._require_lifecycle().store.edit(
+                ctx.account_id, configuration["execution_context"]["owner_user_id"], compile_id
+            ) as record:
                 return await self.create(
                     request,
                     connection=connection,
@@ -579,6 +602,7 @@ class CompileService:
         if not endpoint.local and not str(connection.get("api_key") or "").strip():
             raise UnauthenticatedError("Compile requires a forwardable OpenViking API key")
         normalized = await self._normalize_request(inputs, ctx)
+        assert normalized.to is not None
         CompileLifecycle.validate_layout(normalized.to, normalized.from_)
         payload, private_payload = self._split_payload(normalized)
         payload["compile"] = {"trigger": trigger}
@@ -590,6 +614,7 @@ class CompileService:
             )
             payload["compile"].update(
                 compile_id=compile_id,
+                owner_user_id=record["execution_context"]["owner_user_id"],
                 auto_update=record["auto_update"],
                 update_schedule=record["update_schedule"],
                 input_signature=execution_signature(record),
@@ -598,6 +623,7 @@ class CompileService:
         async def record_created(task: TaskRecord) -> None:
             await self._require_lifecycle().record_queued(task, locked_record=locked_record)
 
+        await self._fs.ensure_compile_target(normalized.to, ctx)
         return await self._tasks.create(
             self.task_type,
             resource_id=", ".join(normalized.from_),
@@ -621,6 +647,22 @@ class CompileService:
         task: TaskRecord,
         snapshot: ExternalTaskSnapshot,
     ) -> ExternalTaskSnapshot:
+        """Return the finalized snapshot; Runtime archival errors only produce a warning."""
+        session_id = task.auth.get("external_task_id")
+        if session_id and snapshot.status in _TERMINAL_STATUSES:
+            try:
+                await self._client().archive(
+                    session_id,
+                    connection={
+                        **(task.auth.get("openviking_connection") or {}),
+                        "account_id": task.account_id,
+                    },
+                    args=self._merge_args(
+                        task.meta.get("request"), task.auth.get("external_request_private")
+                    ),
+                )
+            except ExternalTaskError as exc:
+                logger.warning("Failed to archive Compile session %s: %s", session_id, exc.code)
         if self._lifecycle is None:
             return snapshot
         return await self._lifecycle.on_finish(task, snapshot)
@@ -750,11 +792,18 @@ class CompileService:
     async def _configuration(
         self, compile_id: str, ctx: RequestContext, *, action: AclAction = AclAction.READ
     ) -> dict[str, Any]:
-        """Resolve one account-scoped configuration and authorize its output directory."""
+        """Locate a creator-owned configuration by ID and enforce its current output ACL."""
         if not re.fullmatch(r"cpt_[0-9a-f]{32}", compile_id):
             raise InvalidArgumentError("Invalid compile_id")
         lifecycle = self._require_lifecycle()
-        record = await lifecycle.store.get(ctx.account_id, compile_id)
+        record = await lifecycle.store.get(ctx.account_id, ctx.user.user_id, compile_id)
+        if record is None:
+            for owner_user_id in await lifecycle.store.list_users(ctx.account_id):
+                if owner_user_id == ctx.user.user_id:
+                    continue
+                record = await lifecycle.store.get(ctx.account_id, owner_user_id, compile_id)
+                if record is not None:
+                    break
         if record is None:
             raise NotFoundError(compile_id, "compile configuration")
         await lifecycle._fs._ensure_access(record["to"], ctx, action=action)
@@ -785,7 +834,8 @@ class CompileService:
         """Replace settings under the state lock, preserving times and invalidating changed inputs."""
         from copy import deepcopy
 
-        await self._configuration(body.compile_id, ctx, action=AclAction.WRITE)
+        configuration = await self._configuration(body.compile_id, ctx, action=AclAction.WRITE)
+        owner_user_id = configuration["execution_context"]["owner_user_id"]
         args = dict(body.args or {})
         if {"auto_update", "update_schedule"}.intersection(args):
             raise InvalidArgumentError(
@@ -807,10 +857,13 @@ class CompileService:
         replacement = await self._settings(inputs, ctx)
         await self._fs.ensure_compile_target(replacement["to"], ctx)
         lifecycle = self._require_lifecycle()
-        async with lifecycle.store.edit(ctx.account_id, body.compile_id) as record:
+        async with lifecycle.store.edit(ctx.account_id, owner_user_id, body.compile_id) as record:
             await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
             previous_signature = execution_signature(record)
             replacement = deepcopy(replacement)
+            replacement["execution_context"]["owner_user_id"] = owner_user_id
+            if replacement["to"] == record["to"]:
+                replacement["conflict_num"] = record["conflict_num"]
             old_private = await self._private_args(
                 ctx.account_id, record["execution_context"].get("private_args") or {}
             )
@@ -851,7 +904,7 @@ class CompileService:
                 replacement["progress"] = record["progress"]
             if self._scheduler is not None:
                 await self._scheduler.reschedule(
-                    ctx.account_id, body.compile_id, replacement, raise_on_error=True
+                    ctx.account_id, owner_user_id, body.compile_id, replacement, raise_on_error=True
                 )
             record.clear()
             record.update(replacement)
@@ -880,10 +933,12 @@ class CompileService:
     async def list_runs(
         self, compile_id: str, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        await self._configuration(compile_id, ctx)
+        record = await self._configuration(compile_id, ctx)
         lifecycle = self._require_lifecycle()
         runs = []
-        for run in await lifecycle.store.list_runs(ctx.account_id, compile_id, cursor=cursor):
+        for run in await lifecycle.store.list_runs(
+            ctx.account_id, record["execution_context"]["owner_user_id"], compile_id, cursor=cursor
+        ):
             try:
                 await lifecycle._fs._ensure_access(run["params"]["to"], ctx)
             except PermissionDeniedError:
@@ -896,8 +951,10 @@ class CompileService:
 
     async def get_run(self, compile_id: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
         """Read a frozen run under the caller's current configuration read permission."""
-        await self._configuration(compile_id, ctx)
-        run = await self._require_lifecycle().store.get_run(ctx.account_id, compile_id, task_id)
+        record = await self._configuration(compile_id, ctx)
+        run = await self._require_lifecycle().store.get_run(
+            ctx.account_id, record["execution_context"]["owner_user_id"], compile_id, task_id
+        )
         if run is None:
             raise NotFoundError(task_id, "compile run")
         await self._require_lifecycle()._fs._ensure_access(run["params"]["to"], ctx)
@@ -978,7 +1035,14 @@ class CompileService:
     async def _normalize_request(
         self, request: CompileRequest, ctx: RequestContext
     ) -> CompileRequest:
+        """Validate inputs for new admissions without revalidating recovered submissions."""
         request = self._normalize_request_uris(request, ctx)
+        assert request.to is not None
+        parts = uri_parts(request.to)
+        if parts[:1] == ["user"] and parts[2:4] == ["memories", "experiences"]:
+            raise InvalidArgumentError(
+                "Compile target must not be inside the user memories/experiences subtree"
+            )
         for uri in request.from_:
             stat = await self._fs.stat(uri, ctx, skip_count=True)
             if not stat.get("isDir"):

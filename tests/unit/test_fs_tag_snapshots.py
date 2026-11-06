@@ -8,13 +8,17 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking.storage.collection_schemas import CollectionSchemas
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 @pytest.fixture
 def snapshot_service():
+    store = SimpleNamespace(scroll=AsyncMock(return_value=([], None)))
     vfs = SimpleNamespace(
+        _get_vector_store=lambda: store,
         _ensure_access=AsyncMock(),
         commit=AsyncMock(return_value={"commit_oid": "b" * 40, "result": "created"}),
         log=AsyncMock(return_value=[{"oid": "a" * 40}]),
@@ -28,7 +32,6 @@ def snapshot_service():
     return service, vfs, ctx
 
 
-@pytest.mark.asyncio
 async def test_tagged_ancestor_snapshot_uses_content_lease(snapshot_service):
     service, vfs, ctx = snapshot_service
     root = "viking://user/user/resources/output"
@@ -50,7 +53,6 @@ async def test_tagged_ancestor_snapshot_uses_content_lease(snapshot_service):
     )
 
 
-@pytest.mark.asyncio
 async def test_untagged_write_stops_at_namespace_boundary(snapshot_service):
     service, vfs, ctx = snapshot_service
     uri = "viking://user/user/peers/peer/resources/output/file.md"
@@ -69,7 +71,6 @@ async def test_untagged_write_stops_at_namespace_boundary(snapshot_service):
     ]
 
 
-@pytest.mark.asyncio
 async def test_snapshot_failure_is_returned_after_write(snapshot_service):
     service, vfs, ctx = snapshot_service
     service._directory_has_compile_tag.return_value = True
@@ -83,7 +84,6 @@ async def test_snapshot_failure_is_returned_after_write(snapshot_service):
     write.assert_awaited_once()
 
 
-@pytest.mark.asyncio
 async def test_native_versions_page_without_global_metadata_access(snapshot_service):
     service, vfs, ctx = snapshot_service
     cursor = "a" * 40
@@ -96,7 +96,6 @@ async def test_native_versions_page_without_global_metadata_access(snapshot_serv
     vfs.show.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("stale", [False, True])
 async def test_file_restore_rechecks_commit_under_content_lock(snapshot_service, stale):
     service, vfs, ctx = snapshot_service
@@ -122,7 +121,6 @@ async def test_file_restore_rechecks_commit_under_content_lock(snapshot_service,
     service._directory_has_compile_tag.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_file_restore_dry_run_does_not_write(snapshot_service):
     service, vfs, ctx = snapshot_service
     service.write = AsyncMock()
@@ -134,7 +132,6 @@ async def test_file_restore_dry_run_does_not_write(snapshot_service):
     vfs.commit.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["missing", "directory", "file"])
 async def test_ensure_compile_target_preserves_existing_directory(snapshot_service, kind):
     service, vfs, ctx = snapshot_service
@@ -160,3 +157,66 @@ async def test_ensure_compile_target_preserves_existing_directory(snapshot_servi
         service.finalize_compile_directories.assert_awaited_once_with(uri, ctx)
     assert vfs.mkdir.await_count == (kind == "missing")
     vfs.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "relative,level,tag,rejected",
+    [
+        ("", 0, "compile_target=true", True),
+        ("/output/child", 1, "compile_target=true", True),
+        ("/output", 0, "compile_target=true", False),
+        ("/output-other/child", 0, "compile_target=true", False),
+        ("/output/file.md", 2, "compile_target=true", False),
+        ("/output/child", 0, "compile_target=false", False),
+    ],
+)
+async def test_compile_target_nesting_uses_directory_tags(
+    snapshot_service, vector_backend_factory, tmp_path, relative, level, tag, rejected
+):
+    service, vfs, ctx = snapshot_service
+    store = vector_backend_factory(
+        VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path / "vectors")
+        )
+    )
+    try:
+        await store.create_collection("context", CollectionSchemas.context_collection("context", 4))
+        vfs._get_vector_store = lambda: store
+        del service._directory_has_compile_tag
+        await store._upsert_many_raw(
+            [
+                {
+                    "id": "node",
+                    "uri": f"viking://resources/parent{relative}",
+                    "account_id": "account",
+                    "context_type": "resource",
+                    "level": level,
+                    "search_tags": [tag],
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                }
+            ],
+            ctx=ctx,
+        )
+        if rejected:
+            with pytest.raises(InvalidArgumentError):
+                await service.ensure_compile_target("viking://resources/parent/output", ctx)
+            vfs.mkdir.assert_not_awaited()
+        else:
+            await service._validate_compile_target_nesting("viking://resources/parent/output", ctx)
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize("successful_queries", [0, 1])
+async def test_compile_target_query_failure_prevents_writes(snapshot_service, successful_queries):
+    service, vfs, ctx = snapshot_service
+    del service._directory_has_compile_tag
+    store = vfs._get_vector_store()
+    store.scroll.side_effect = [([], None)] * successful_queries + [OSError("index unavailable")]
+
+    with pytest.raises(OSError, match="index unavailable"):
+        await service.ensure_compile_target("viking://resources/output", ctx)
+
+    assert all(call.kwargs["ctx"] is ctx for call in store.scroll.await_args_list)
+    vfs.mkdir.assert_not_awaited()

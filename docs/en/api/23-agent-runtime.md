@@ -6,6 +6,14 @@ OpenViking owns Compile configuration, task submission, snapshots and recovery. 
 
 A `compile_id` identifies saved configuration and its successful incremental baseline. It has the form `cpt_` followed by 32 lowercase UUID4 hexadecimal characters. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
 
+Ordinary Compile validates normalized directory URIs when creating or updating configuration and when submitting a new manual or scheduled execution:
+
+- Each `from` must differ from `to`; neither can be an ancestor or descendant of the other.
+- A directory tagged `compile_target=true` at any strict ancestor or descendant of `to` causes rejection. The tag on `to` itself permits reuse.
+- `to` cannot be `viking://user/{user_id}/memories/experiences` or any of its descendants. The `~/` alias and trailing slashes do not bypass this restriction; similar names such as `experiences2` are not rejected by this rule.
+
+Nesting checks respect the current request's tenant and permissions. They use no additional locks and do not guarantee atomic exclusion for simultaneous submissions of parent and child targets. The independent `skill="memory"` consolidation mode without `from` does not apply these directory constraints or target-tagging steps.
+
 ### Create configuration
 
 ```http
@@ -41,7 +49,7 @@ The response is `200 OK`:
 {"status":"ok","result":{"compile_id":"cpt_0123456789abcdef0123456789abcdef"}}
 ```
 
-Creation validates inputs and permissions, creates `to` if needed, ensures its root directory index, and appends `compile_target=true` to that directory node before publishing the configuration. Existing content, summaries and other tags are preserved. A file at `to` is rejected. Creation can run internal directory-indexing tasks; it does not execute Compile, create a run, or snapshot sources.
+Creation validates inputs and permissions, creates `to` if needed, ensures its root directory index, and appends `compile_target=true` to that directory node. The tag must be queryable before the configuration is published. Only the target root is tagged, without recursively tagging descendants; existing content, summaries and other tags are preserved. A file at `to` is rejected, and an index or tag preparation failure prevents configuration publication. Creation can run internal directory-indexing tasks; it does not execute Compile, create a run, or snapshot sources.
 
 Scheduling controls are stored separately from Runtime arguments. A non-null schedule enables updates unless `auto_update=false` is explicit. A schedule requires `frequency` (`daily` or `weekly`); `hour` (0–23) and `minute` (0–59) default to zero. Weekly schedules add `weekday` (1=Monday through 7=Sunday, default 1). Times use `Asia/Shanghai`.
 
@@ -72,6 +80,8 @@ This endpoint accepts exactly one of these request shapes:
 An ID-only request loads its saved inputs. It cannot override `from`, `to`, `skill`, `instruction`, or `args`. Its first execution performs a full compile; later executions use the last successful source snapshot, including additions, modifications and deletions. Skill or instruction changes can require full recomputation. Manual and scheduled executions use the same entry point and baseline.
 
 A full-input request always performs a one-off full compile, including when the same output has saved configurations. It does not read or write saved configuration/run files and does not snapshot sources. Target snapshots, indexing, cancellation and recovery still apply. `skill="memory"` remains an independent in-place consolidation mode without `from`; it cannot be saved or scheduled through the creation endpoint.
+
+Both ordinary execution forms prepare the target directory and index, append `compile_target=true`, and confirm that the tag is queryable before creating and queuing a new Compile execution task. Tagging does not depend on a worker starting or Compile completing successfully. An index or tag preparation failure prevents task creation and queuing. Once a request is accepted, later sequential submissions of parent or child targets can be rejected without waiting for the first task to finish. The tag is a persistent directory marker; completion, failure or cancellation does not automatically remove it.
 
 Scheduling controls are rejected by the execution endpoint. `args.mode`, `last_compile_time`, `changes`, and `operation_id` are not public execution controls. OpenViking owns the execution plan.
 
@@ -154,7 +164,7 @@ All lookups are account-scoped. Configuration and run reads require access to th
 
 List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id` and `change_type`; deleted files have no output blob.
 
-Configuration updates require `compile_id`, `from`, `to`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. Enabling updates requires top-level `update_schedule`; disabling clears the schedule. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. A new `to` is tagged before the configuration is published. Updating configuration does not run Compile or reset invocation times.
+Configuration updates require `compile_id`, `from`, `to`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. Enabling updates requires top-level `update_schedule`; disabling clears the schedule. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. Updates apply the same directory constraints and confirm that the target tag is queryable before publishing configuration. Updating configuration does not run Compile or reset invocation times.
 
 Private fields in nested `args` are redacted from public responses and encrypted for execution: unchanged public arguments preserve their private values, editing a nested subtree containing private fields requires resending those fields, and deleting the subtree removes its saved private values.
 
@@ -181,15 +191,17 @@ No-op runs may reuse the start snapshot. Failure and cancellation do not advance
 The only Compile business files are:
 
 ```text
-/local/{account_id}/_system/compile/tasks/{compile_id}/state.json
-/local/{account_id}/_system/compile/tasks/{compile_id}/runs/{task_id}.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/state.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/runs/{task_id}.json
 ```
 
-State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, and `execution_context`. `progress` stores the successful incremental baseline; `execution_context` stores necessary private execution identity, encrypted credentials and private arguments.
+The path's `user_id` is the authenticated OV user ID at configuration creation; with a user API key, it is the user identified by that key. Configuration ownership stays fixed when settings, manual actors or scheduled executors change. Each user directory directly contains that user's configurations. Shared output directories retain their ACL permissions, and public APIs require only `compile_id`.
+
+State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, and `execution_context`. `progress` stores the successful incremental baseline; `execution_context` stores the fixed configuration creator as `owner_user_id`, necessary private execution identity, encrypted credentials and private arguments.
+
+`conflict_num` counts files tagged `has_conflict=true` that the execution identity can retrieve under `to` at finalization, including descendants. It does not count individual conflicts inside those files. One `find` call uses an empty query, the tag filter, `level=2`, and `limit=100`, without pagination. Counts at or above 100 are stored as 100; more conflicting files may exist. Successful runs count after index finalization; failed or cancelled runs count after rollback completes. The field starts as null. Runs without a start snapshot skip retrieval and record null because another task may be modifying the target. Rollback index rebuilding is awaited for at most 30 seconds. Unavailable indexes or retrieval failures log a warning and record null without rolling back successfully generated output. Configuration updates preserve the count when `to` is unchanged and reset it to null when `to` changes.
 
 Ordinary `rm`, `mv`, `cp`, `mkdir`, writes, skill imports and restores do not update these files or follow configuration paths after a move. Writes below the nearest ancestor tagged `compile_target=true` take a snapshot under the content lock; batched writes share a snapshot. File history uses native snapshot history, independently of saved Compile configuration. Directory restore uses its existing forward commit.
-
-Existing configurations and schedules from the target-based model must be recreated with `/compile/create`. Their old files are not migrated or automatically deleted.
 
 ### Check Compile availability
 
@@ -356,6 +368,16 @@ Both return an execution status, for example:
 ```
 
 The `status` is one of `pending`, `running`, `cancelling`, `completed`, `failed`, or `cancelled`. Cancellation may return `cancelling` until execution has stopped and cleanup has finished, then return `cancelled`. Repeated cancellation of a terminal task returns its current terminal state. Both inspection and cancellation must enforce task ownership.
+
+### Archive an execution task
+
+```http
+POST /runtime/v1/tasks/archive
+```
+
+The request contains the required `session_id` and optional original task `args`, using the same authentication and task ownership checks as status requests. The endpoint is a no-op placeholder: it returns `200 OK` with `{}` without modifying or deleting the task, and can be called repeatedly.
+
+OV calls this endpoint when a Compile Runtime session reaches `completed`, `failed`, or `cancelled`. Tasks without a Runtime session do not trigger archival. Archival is best effort; a failed archive request does not change the task's terminal state.
 
 ## Related documentation
 

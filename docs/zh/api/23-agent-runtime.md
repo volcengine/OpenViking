@@ -6,6 +6,14 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 
 `compile_id` 标识持久配置及其成功增量基线，格式为 `cpt_` 加 32 位小写 UUID4 十六进制字符串。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
 
+普通 Compile 在创建或更新配置、手动或定时提交新执行时，统一校验规范化后的目录 URI：
+
+- 每个 `from` 都不能与 `to` 相同，也不能互为祖先或后代。
+- `to` 的任何严格祖先或后代目录带有 `compile_target=true` 时拒绝请求；`to` 自身已有该 tag 时允许复用。
+- `to` 不能是 `viking://user/{user_id}/memories/experiences` 或其任意层级子目录。`~/` 别名和末尾斜杠不能绕过限制；`experiences2` 等相似名称不被这条规则拒绝。
+
+嵌套检查遵循当前请求的租户和权限范围，采用无锁检查，不保证同时提交父子目标时的原子排他性。不传 `from` 的独立 `skill="memory"` 就地整理模式不应用这些目录约束或目标打标流程。
+
 ### 创建配置
 
 ```http
@@ -41,7 +49,7 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 {"status":"ok","result":{"compile_id":"cpt_0123456789abcdef0123456789abcdef"}}
 ```
 
-创建接口校验输入和权限，必要时创建 `to`，确保根目录索引存在，并在目录节点追加 `compile_target=true`、确认可读后发布配置。已有内容、摘要和其他 tag 保持不变；`to` 是文件时拒绝请求。创建阶段可以产生必要的内部目录索引任务，但不执行 Compile、不创建 run、不拍来源快照。
+创建接口校验输入和权限，必要时创建 `to`，确保根目录索引存在，并在目录节点追加 `compile_target=true`、确认 tag 可查询后发布配置。仅标记目标根目录，不递归标记子目录；已有内容、摘要和其他 tag 保持不变。`to` 是文件时拒绝请求；索引或 tag 准备失败时不发布配置。创建阶段可以产生必要的内部目录索引任务，但不执行 Compile、不创建 run、不拍来源快照。
 
 调度控制与 Runtime 参数分开保存。非空计划默认开启自动更新，除非显式指定 `auto_update=false`。计划必填 `frequency`（`daily` 或 `weekly`）；`hour`（0–23）、`minute`（0–59）默认均为 0。每周计划增加 `weekday`（1 为周一、7 为周日，默认 1）。使用 `Asia/Shanghai` 时区。
 
@@ -72,6 +80,8 @@ POST /api/v1/compile
 仅传 ID 时读取已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
 
 传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标快照、索引收尾、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
+
+两种普通执行形式都在创建并入队新 Compile 执行任务之前准备目标目录及索引、追加 `compile_target=true` 并确认 tag 可查询，不依赖 worker 开始执行或 Compile 成功完成。索引或 tag 准备失败时不创建并入队执行任务。请求受理成功后，后续顺序提交的父子目标即可被拒绝，无须等待前一任务完成。该 tag 是持久目录标记，任务完成、失败或取消不会自动移除它。
 
 执行接口拒绝调度控制。`args.mode`、`last_compile_time`、`changes` 和 `operation_id` 不是公开执行参数；执行计划由 OpenViking 生成。
 
@@ -154,7 +164,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`change_type`；被删除的文件没有产出 blob。
 
-配置更新必填 `compile_id`、`from`、`to`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。修改 `to` 时先确保新目标 tag。配置更新不执行编译、不重置调用时间。
+配置更新必填 `compile_id`、`from`、`to`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束，并确认目标 tag 可查询后发布配置。配置更新不执行编译、不重置调用时间。
 
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
@@ -181,15 +191,17 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 Compile 业务文件仅有：
 
 ```text
-/local/{account_id}/_system/compile/tasks/{compile_id}/state.json
-/local/{account_id}/_system/compile/tasks/{compile_id}/runs/{task_id}.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/state.json
+/local/{account_id}/_system/compile/tasks/{user_id}/{compile_id}/runs/{task_id}.json
 ```
 
-state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存必要的私有执行身份、加密凭据和私有参数。
+目录中的 `user_id` 是创建配置时认证上下文中的 OV 用户 ID；使用用户 API key 时，它是该 key 对应的用户。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含其创建的配置；共享目标目录仍按现有 ACL 授权，公开 API 只需传入 `compile_id`。
+
+state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存固定的配置创建者 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
+
+`conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在索引收尾后统计，失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
 
 普通 `rm`、`mv`、`cp`、`mkdir`、写入、Skill 导入和回滚不修改上述文件，不在移动后自动修改配置路径。写入只依据最近带 `compile_target=true` 的祖先目录，在内容锁内拍快照；批量写合并提交。文件版本查询使用原生快照历史，与持久配置无关；目录回滚复用已有的 forward commit。
-
-基于目标目录的旧配置和定时计划需要重新通过 `/compile/create` 创建。旧文件不迁移，也不会自动删除。
 
 ### 检查 Compile 可用性
 
@@ -356,6 +368,16 @@ POST /runtime/v1/tasks/cancel
 ```
 
 `status` 可为 `pending`、`running`、`cancelling`、`completed`、`failed` 或 `cancelled`。取消请求可以先返回 `cancelling`，实际执行停止并完成清理后再返回 `cancelled`；重复取消已结束任务返回其当前终态。查询和取消均须校验任务归属。
+
+### 归档执行任务
+
+```http
+POST /runtime/v1/tasks/archive
+```
+
+请求体包含必填的 `session_id` 和可选的原始任务 `args`，沿用状态查询的鉴权和任务归属校验。该接口为空操作占位：返回 `200 OK` 和 `{}`，不修改或删除任务，允许重复调用。
+
+Compile 的 Runtime session 进入 `completed`、`failed` 或 `cancelled` 时，OV 调用该接口；没有 Runtime session 的任务不触发归档。归档采用尽力通知方式，请求失败不影响任务终态。
 
 ## 相关文档
 

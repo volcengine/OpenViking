@@ -46,7 +46,6 @@ async def test_create_bot_proxy_client_disables_env_proxy():
         assert client._trust_env is False
 
 
-@pytest.mark.asyncio
 async def test_feedback_proxy_forwards_request(monkeypatch):
     forwarded = {}
 
@@ -103,7 +102,6 @@ async def test_feedback_proxy_forwards_request(monkeypatch):
     assert forwarded["timeout"] == 30.0
 
 
-@pytest.mark.asyncio
 async def test_interrupt_proxy_forwards_session_interrupt(monkeypatch):
     forwarded = {}
 
@@ -150,7 +148,6 @@ async def test_interrupt_proxy_forwards_session_interrupt(monkeypatch):
     assert forwarded["timeout"] == 30.0
 
 
-@pytest.mark.asyncio
 async def test_steer_proxy_forwards_message_body(monkeypatch):
     forwarded = {}
 
@@ -214,7 +211,6 @@ async def test_steer_proxy_forwards_message_body(monkeypatch):
     assert forwarded["timeout"] == 30.0
 
 
-@pytest.mark.asyncio
 async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypatch):
     forwarded = {}
 
@@ -280,7 +276,6 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
     assert forwarded["timeout"] == 300.0
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("request_id", [None, "compile-request-123"])
 async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkeypatch, request_id):
     calls = {}
@@ -354,9 +349,17 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     assert calls["owner"] == ("acct", "alice")
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "finish", ["complete", "cancel", "poll_failure", "restart", "restart_cancel"]
+    "finish",
+    [
+        "complete",
+        "archive_failure",
+        "cancel",
+        "cancel_immediate",
+        "poll_failure",
+        "restart",
+        "restart_cancel",
+    ],
 )
 @pytest.mark.parametrize(
     "args",
@@ -444,7 +447,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             base_url="https://compile.example.com",
         ),
         tasks,
-        SimpleNamespace(),
+        SimpleNamespace(ensure_compile_target=AsyncMock()),
     )
     tasks.register(service)
     request = compile_service_module.CompileRequest.model_validate(
@@ -612,6 +615,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     cancel_entered = asyncio.Event()
     release = asyncio.Event()
     submitted = []
+    archived = []
     polls = 0
     rejected_id = None
     rejected_submissions = []
@@ -632,11 +636,16 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             return FakeResponse({"session_id": task_id})
         task_id = json["session_id"]
         assert json == {"session_id": task_id, **({"args": args} if args else {})}
+        if url.endswith("/runtime/v1/tasks/archive"):
+            archived.append(task_id)
+            return FakeResponse({}, status_code=503 if finish == "archive_failure" else 200)
         if task_id != first.task_id:
             return FakeResponse({"status": "completed", "stage": "done", "result": {"ok": True}})
         if url.endswith("/cancel"):
             cancel_entered.set()
             await release.wait()
+            if finish == "cancel_immediate":
+                return FakeResponse({"status": "cancelled", "stage": "cancelled"})
             return FakeResponse({"status": "cancelling", "stage": "cancelling"})
         if cancel_entered.is_set():
             return FakeResponse({"status": "cancelled", "stage": "cancelled"})
@@ -672,6 +681,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     other_account = await create(account="other-account")
     worker = asyncio.create_task(queue.dequeue())
     await asyncio.wait_for(entered.wait(), timeout=5)
+    assert not archived
     queried = await tasks_router_module.get_task(
         first.task_id,
         include_events=False,
@@ -701,7 +711,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     await queue.dequeue()
     assert (await state(other_account)).status == TaskStatus.COMPLETED
 
-    if finish == "cancel":
+    if finish in {"cancel", "cancel_immediate"}:
         await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
         await asyncio.wait_for(cancel_entered.wait(), timeout=5)
         assert (await state(first)).status == TaskStatus.CANCELLING
@@ -731,10 +741,13 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         await asyncio.wait_for(worker, timeout=5)
     expected = {
         "cancel": TaskStatus.CANCELLED,
+        "cancel_immediate": TaskStatus.CANCELLED,
         "restart_cancel": TaskStatus.CANCELLED,
         "poll_failure": TaskStatus.FAILED,
     }.get(finish, TaskStatus.COMPLETED)
     assert (await state(first)).status == expected
+    assert first.task_id in archived
+    assert cancelled.task_id not in archived
     if expected == TaskStatus.CANCELLED:
         # Recovery may replay a cancellation whose final ACK was lost.
         await tasks.cancel_recovered(first.task_id, "acct", "alice")
@@ -763,7 +776,6 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             assert secret not in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_chat_proxy_strips_client_openviking_connection_in_dev_mode(monkeypatch):
     """Dev/no-API-key proxy must not forward a browser-supplied connection.
 
@@ -826,7 +838,6 @@ async def test_chat_proxy_strips_client_openviking_connection_in_dev_mode(monkey
     assert forwarded["json"].get("user_id") == "default"
 
 
-@pytest.mark.asyncio
 async def test_chat_stream_proxy_preserves_sse_event_boundaries(monkeypatch):
     payload = (
         'data: {"event":"reasoning_delta","data":"thinking"}\n\n'

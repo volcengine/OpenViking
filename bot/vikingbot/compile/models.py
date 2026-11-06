@@ -252,7 +252,7 @@ class CompileAccepted(BaseModel):
 
 
 class CompileSessionRequest(BaseModel):
-    """Status or cancellation request scoped by the authenticated caller and session ID."""
+    """Status, cancellation, or archive request scoped by authenticated caller and session ID."""
 
     model_config = ConfigDict(extra="forbid")
 
