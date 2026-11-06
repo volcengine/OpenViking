@@ -1,9 +1,12 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { normalizeEvent, deterministicFilter } from './event.mjs';
+import { normalizeEvent, deterministicFilter, eventIdentity } from './event.mjs';
 import { commandCandidate, parseCommand } from './commands.mjs';
 import { GroupBurstRouter } from './group-burst.mjs';
+import { MessageInbox } from './message-inbox.mjs';
+import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { lookupMemberName, sanitizeMemberName } from './roster.mjs';
 import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem } from './runtime-input.mjs';
 import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
@@ -54,6 +57,24 @@ export class Harness {
       isConnected: () => this.runtime.snapshot().session.connected,
       isTurnInProgress: () => this.runtime.snapshot().work.turnInProgress,
     });
+    this.inbox = config.scheduler === 'inbox' ? new MessageInbox({
+      submit: (items, options) => this.runtime.submit(items, options),
+      isTurnInProgress: () => this.runtime.snapshot().work.turnInProgress,
+      activeInput: () => getRuntimeDefinition(this.runtime.runtime)?.capabilities.activeInput,
+      onRead: (items) => this.store.transaction(() => {
+        for (const item of items) {
+          if (item.seq === null || item.seq === undefined) continue;
+          const event = item.event;
+          this.store.appendCognitionJournal({
+            kind: 'inbound', atMs: event.createTimeMs, inboundSeq: item.seq,
+            chatId: event.chatId, threadId: event.threadId, messageId: event.messageId,
+            actor: event.senderId || 'unknown', text: event.content,
+            dedupeKey: `event:${eventIdentity(event)}`,
+            metadata: { source: event.source, connectorInstance: event.connectorInstance, event: event.envelope },
+          });
+        }
+      }),
+    }) : null;
   }
 
   handleConnectorEvent(envelope) {
@@ -109,7 +130,7 @@ export class Harness {
     let result;
     try {
       result = this.store.ingest(event, command ? 'slash_command' : approval ? 'approval_reply' : filterReason,
-        Date.now(), { journal: !handler });
+        Date.now(), { journal: !handler && !this.inbox });
     } catch (error) {
       this.logger.error('event_persist_failed', { error: safeError(error) });
       this.recordActivity('system.persist_failed', {
@@ -180,7 +201,7 @@ export class Harness {
       // A document has no members to list: its Connector names the commenter.
       if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
       await this.runtime.prepareInputContext?.();
-      this.groupBurst.route(eventDeliveryItem(event, result.inbound.seq, {
+      this.routeInput(eventDeliveryItem(event, result.inbound.seq, {
         text: formatInboundLine(event, null, {
           ...(idleHint ?? {}),
           owner: this.isOwner(event),
@@ -190,7 +211,16 @@ export class Harness {
           ...(BOT_SENDERS.has(event.senderType)
             ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
         }),
-      }));
+      }), event);
+    });
+  }
+
+  routeInput(item, event) {
+    if (!this.inbox) return this.groupBurst.route(item);
+    return this.inbox.route({
+      ...item, event, source: event.source, chatId: event.chatId, eventId: event.eventId,
+      senderId: event.senderId, senderName: (event.source === 'lark'
+        ? lookupMemberName(event.chatId, event.senderId) : null) ?? sanitizeMemberName(event.senderName),
     });
   }
 
@@ -249,9 +279,11 @@ export class Harness {
   // The runtime became idle: give buffered group bursts a chance to claim it.
   onAvailable() {
     this.groupBurst.onAvailable();
+    this.inbox?.onAvailable();
   }
 
   stop() {
     this.groupBurst.stop();
+    this.inbox?.stop();
   }
 }

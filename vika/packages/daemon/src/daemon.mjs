@@ -307,6 +307,8 @@ export class PersonalAgentDaemon {
         mentionTarget: (event) => this.connectors.mentionTarget(event),
         isStopping: () => this.shuttingDown,
       });
+      this.actions.inbox = this.harness.inbox;
+      this.actions.onInboxRead = (items) => this.agentRuntime.consumeInbox(items);
       // Checks at each successful turn's end that every input it consumed got a
       // decision (a delivery or stay_silent), with one reminder if not: only on
       // an instance with explicitSilence on. Recovers what a loop-stopped turn

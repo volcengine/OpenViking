@@ -58,6 +58,7 @@ export class DecisionPolicy {
   }
 
   onTurnSucceeded({ inboundSeqs = [] } = {}) {
+    if (this.harness.inbox) return;
     if (this.isStopping() || !this.explicitSilence) return;
     const runtime = this.store.getCognitionState().runtime;
     if (getRuntimeDefinition(runtime)?.capabilities.agentTools !== 'core') return;
@@ -127,6 +128,7 @@ export class DecisionPolicy {
   // no evidence they were looked at. One a stopped turn holds a second time is
   // not shown again: its sender gets the failure notice instead.
   onTurnStopped({ inboundSeqs = [] } = {}) {
+    if (this.harness.inbox) return;
     if (this.isStopping()) return;
     try {
       this.recoverStopped(inboundSeqs, this.store.getCognitionState().runtime);

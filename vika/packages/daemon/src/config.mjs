@@ -209,6 +209,7 @@ export function getConfig() {
     instanceId: process.env.VIKA_INSTANCE_ID || '',
     upgradeTarget: process.env.VIKA_UPGRADE_TARGET || process.env.VIKA_INSTANCE_ID || '',
     channel,
+    scheduler: enumEnv('VIKA_SCHEDULER', 'legacy', ['legacy', 'inbox']),
     connectors: Object.freeze(connectors),
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
     actionSocketPath: path.join(dataDir, 'actions.sock'),

@@ -14,6 +14,39 @@ import { docComment, startMockEnv, textMessage } from './mock-env.mjs';
 import { OVUnavailableError } from '../src/ov-connection.mjs';
 
 describe('daemon event path (mock env)', { concurrency: false }, () => {
+  it('reads inbox events through Core and replies without ever steering their bodies', async () => {
+    const env = await startMockEnv({ config: { scheduler: 'inbox' }, codex: { behavior: 'inbox-reply' } });
+    try {
+      env.receive(textMessage({ messageId: 'om-inbox-e2e', text: 'private inbox body' }));
+      await env.waitForReply(/om-inbox-e2e/);
+      await env.daemon.agentRuntime.whenIdle();
+      const inputs = env.codexInput().filter((entry) => entry.method.startsWith('turn/'));
+      assert.equal(inputs.length, 1);
+      assert.match(inputs[0].text, /\[Vika inbox notice\] pending=1 scopes=1/);
+      assert.doesNotMatch(inputs[0].text, /private inbox body/);
+      assert.equal(env.daemon.harness.inbox.pending, 0);
+      assert.equal(env.daemon.store.stats().outbox.SENT, 1);
+    } finally { await env.stop(); }
+  });
+
+  it('steers only a batched notice during long work and then reads both pending scopes', async () => {
+    const env = await startMockEnv({ config: { scheduler: 'inbox' }, codex: { behavior: 'inbox-slow-reply' } });
+    try {
+      env.receive(textMessage({ messageId: 'om-inbox-old', chatId: 'oc-old', text: 'older pending body' }));
+      await env.waitForCodexInput(/\[Vika inbox notice\]/);
+      env.receive(textMessage({ messageId: 'om-inbox-new', chatId: 'oc-new', text: 'newer pending body' }));
+      await env.waitForCodexInput(/pending=2 scopes=1/);
+      const notice = env.codexInput().find((entry) => entry.method === 'turn/steer');
+      assert.ok(notice);
+      assert.match(notice.text, /oc-new/);
+      assert.doesNotMatch(notice.text, /oc-old|older pending body|newer pending body/);
+      await env.waitForReply(/om-inbox-new/);
+      await env.daemon.agentRuntime.whenIdle();
+      assert.equal(env.daemon.harness.inbox.pending, 0);
+      assert.equal(env.daemon.store.stats().outbox.SENT, 2);
+    } finally { await env.stop(); }
+  });
+
   it('starts without history when OV is not reachable yet, and says so in the activity', async () => {
     const env = await startMockEnv({ ovCheck: async () => { throw new OVUnavailableError('OpenViking request failed or timed out'); } });
     try {

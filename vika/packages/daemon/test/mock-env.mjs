@@ -233,6 +233,22 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         send({ method: 'turn/started', params: { turn: { id: turnId } } });
         if (BEHAVIOR === 'complete') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
+        } else if (BEHAVIOR === 'inbox-reply' || BEHAVIOR === 'inbox-slow-reply') {
+          const done = () => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
+          const checkpoint = BEHAVIOR === 'inbox-slow-reply'
+            ? new Promise((resolve) => setTimeout(resolve, 4000)) : Promise.resolve();
+          checkpoint.then(() => callTool(actionEndpoint('fake-codex'), 'message_check', {})).then(async (result) => {
+            for (const item of result.data.items) {
+              const decision = / event=(\\S+)/.exec(item.text)?.[1];
+              const target = / msg=(\\S+)/.exec(item.text)?.[1];
+              await callTool(actionEndpoint('fake-codex'), 'reply_message', {
+                decision_id: decision, message_id: target, markdown: 'mock inbox reply',
+              });
+            }
+          }).then(done, (error) => {
+            fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
+            done();
+          });
         } else if (BEHAVIOR === 'silent' || BEHAVIOR === 'reply') {
           const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
           const target = [...text.matchAll(/ msg=(\\S+)/g)].at(-1)?.[1];

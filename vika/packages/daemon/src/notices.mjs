@@ -76,6 +76,7 @@ export class FailurePolicy {
   // claude while it is still broken. Returns true when the fallback owns the
   // failure (no separate failure notice is sent).
   async tryModelFallback({ inboundSeqs, error }) {
+    if (this.config.scheduler === 'inbox') return false;
     if (this.isStopping() || this.store.getCognitionState().runtime !== 'claude') return false;
     if (this.fallbackInProgress) return false;
     const now = Date.now();

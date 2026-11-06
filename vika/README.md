@@ -299,6 +299,16 @@ Agent 工具只有一份定义与实现，在 Core 的 `ActionService`。Codex/T
 
 ## 可靠性边界
 
+### 可选 inbox 调度（一期）
+
+启动时用 `VIKA_SCHEDULER=legacy|inbox` 选择，默认 `legacy`，不做热切换。部署配置可在 `env` 中设置 `"VIKA_SCHEDULER": "inbox"`，重启 daemon 后生效；系统进程环境变量优先。`legacy` 保持原来的消息交付及 400ms 群聊 burst。
+
+`inbox` 模式仍先校验、去重并保存入站记录，再按 `scopeKey` 暂存到内存。主 session 空闲时立即提醒查看；忙时从本轮第一条新消息起等 3 秒合并通知，后来的消息不延长窗口。通知不带正文，`pending` 是所有未读取消息总数，`scopes` 和明细只统计本轮尚未通知的新消息。通知后有新消息就开启下一轮，不等读取；同一条消息不会重复出现在新消息明细中。回合结束仍有消息未取，则再次唤醒。
+
+Agent 做完一个步骤后调用 Core 工具 `message_check`，按入站顺序从老到新取出，默认最多 100 条，可用 `limit`（1–500）和精确的 `scope_key` 缩小范围。取出即移除，剩余数量由结果的 `pending` 返回；后续处理及稍后执行由 Agent 自己安排，不增加领取、完成或恢复状态，也不自动补投已取出的消息。回复继续走原来的工具、授权、新消息检查和 outbox：`event=` 表示回复依据，`msg=` 指定回复目标。发送请求不代表成功，不能绕过 outbox 直接重发。
+
+未读取正文不提前进入 OV 历史上下文；读取后才写入原有认知历史。Inbox 本身不新增持久化、重启恢复或跨模式迁移，停止时未消费消息不会重新入队。会议消息和本地命令保持原路径。新模式要求 runtime 能调用 Core 工具，因此 Volc 暂不支持（启动和切换都会拒绝）；OpenCode 等不能忙时接收通知的 runtime 等空闲再提醒。二期 subagent 增强不在本次实现范围内。
+
 - 消息先写 SQLite（状态直接 DONE），再喂给当前常驻 runtime。Codex/TraeX 用 `turn/start` / `turn/steer`，Claude 用 persistent stream-json input，Durable 的 host 先把输入写进 pi-durable 的 SQLite 再请求模型，火山方舟用 session events + SSE，并在断线后以 event history + event id 去重补洞。Ark 会持久化本轮 `user.message` fence；daemon 重启后从远端历史恢复已接受的 turn，不会重复 POST。若 POST 是否被接受无法证明，旧 session 会被持久化隔离，克隆新 session 并原子轮换 epoch/authority 后才恢复队列，避免迟到输出串到下一条消息。
 - 400ms 群聊窗口只做 transport batching，不创建 chat 专属的 Codex session、history 或 memory。进程在窗口内停止或崩溃，仍可能让已落库消息没来得及喂给 Codex；这版没有加入 durable replay 或 delivery ledger。
 - slash command 和后续消息经过同一条全局 ingress barrier，但命令本身不等待模型；只读命令并行回答，会话变更命令先中断旧 turn。会话变更先 prepare 新 session，再用一次 SQLite CAS 原子提交 epoch、session、authority 与 model 设置，最后做不可失败的本地 activation；prepare 或 CAS 失败时旧认知状态不变。跨 runtime switch 同样先 preflight 目标进程再交接，目标启动失败时仍留在旧 runtime。`/model` 和 `/effort` 只保存当前 runtime 的模型和推理档位，不中断当前 turn、不更换会话；下一轮开始时 Codex/TraeX 按轮传参、Pi 调用 `set_model` / `set_thinking_level` RPC、Claude 换进程后恢复同一个 session，应用成功后才投递输入。重复设置当前模型或档位不做变更。
