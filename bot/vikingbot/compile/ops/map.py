@@ -102,7 +102,7 @@ Processing task:
 
 Read every assigned input and submit its supported facts through emit.
 Keep facts relevant to this processing task and the downstream deliverables.
-For an input with no relevant facts (for example, a decorative asset), submit an
+For a fully read input with no relevant facts (for example, a decorative asset), submit an
 empty records list. Do not invent a topic or a "no page needed" deliverable.
 Only the assigned source ranges belong to this job; other ranges have their own jobs.
 Requested fields may span different source types: omit facts unavailable in these inputs.
