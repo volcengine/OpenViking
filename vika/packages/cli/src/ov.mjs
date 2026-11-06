@@ -91,6 +91,14 @@ export function instanceUserName(base, instanceId) {
   return `${owner}.${instanceId}`;
 }
 
+// The connection's user an instance's own was derived from: instanceUserName
+// undone. Null where the instance id alone was the user.
+export function connectionUserName(user, instanceId) {
+  const name = String(user ?? '').trim();
+  if (!instanceId || name !== instanceId && !name.endsWith(`.${instanceId}`)) return name || null;
+  return name.slice(0, -instanceId.length).replace(/\.$/, '') || null;
+}
+
 // The instance's own connection: the chosen one, with this instance's identity
 // and no peer. Where requests name the user it is derived here. Under an API
 // key the key decides; with an administrator's key the owner may instead have
