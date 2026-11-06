@@ -53,7 +53,9 @@ function resolveLarkCli(env) {
 }
 
 export function expandHome(value, homeDir = os.homedir()) {
-  return value === '~' ? homeDir : value.replace(/^~(?=\/)/, homeDir);
+  if (value === '~') return homeDir;
+  // Windows terminals hand back ~\\dir, POSIX ~/dir; both must expand.
+  return /^~[\\/]/.test(value) ? path.join(homeDir, value.slice(2)) : value;
 }
 
 function shortenHome(value, homeDir) {
