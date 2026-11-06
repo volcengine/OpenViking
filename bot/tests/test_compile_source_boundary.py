@@ -12,7 +12,6 @@ from vikingbot.bus.queue import MessageBus
 from vikingbot.compile.ops import common
 from vikingbot.compile.pipeline_agent import agent_runner
 from vikingbot.compile.results import Record, RecordResponse
-from vikingbot.compile.schemas import result_schema
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -150,8 +149,16 @@ async def test_child_policy_and_local_submission_recovery(
     )
     assert result.records[0].payload == {"fact": "A supported fact."}
     assert len(seen) == 2
-    names = {definition["function"]["name"] for definition in seen[0][1]}
-    assert ("exec" in names) == (kind != "source_records")
+    tools = {definition["function"]["name"]: definition["function"] for definition in seen[0][1]}
+    assert ("exec" in tools) == (kind != "source_records")
+    properties = tools["emit"]["parameters"]["$defs"]["RecordDraft"]["properties"]
+    publication_fields = {
+        name for name in properties if name.startswith("ready_") or name == "target_uri"
+    }
+    if kind == "source_records":
+        assert not publication_fields
+    else:
+        assert {"ready_path", "target_uri"} <= publication_fields
     assert shell.calls == exec_count
     assert reader.calls == 0  # Staging paths cannot bypass the bound file reader.
     if first_action == "plain_text":
@@ -171,15 +178,6 @@ async def test_evidence_schema_and_reader_use_assigned_ids_only():
     with pytest.raises(ValueError, match="outside this assignment"):
         await reader.execute(source_range="viking://resources/other.png")
     files.get.assert_not_awaited()
-
-
-def test_source_emit_schema_omits_publication_fields_without_changing_other_stages():
-    local = result_schema(RecordResponse, source_data("source_records"))["$defs"]["RecordDraft"][
-        "properties"
-    ]
-    general = result_schema(RecordResponse, source_data(None))["$defs"]["RecordDraft"]["properties"]
-    assert not any(name.startswith("ready_") or name == "target_uri" for name in local)
-    assert "ready_path" in general and "target_uri" in general
 
 
 @pytest.mark.asyncio

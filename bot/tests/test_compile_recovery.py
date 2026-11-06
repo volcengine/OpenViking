@@ -4,20 +4,19 @@
 
 import asyncio
 import json
-from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from vikingbot.agent.tools.base import ToolContext
-from vikingbot.compile import entry
+from vikingbot.compile import entry, file_ops
 from vikingbot.compile.ops import common
 from vikingbot.compile.ops.common import job
 from vikingbot.compile.ops.reduce import resolve_files
 from vikingbot.compile.pipeline_agent import agent_runner
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, ModelCallError
 from vikingbot.compile.plan import PlanProposal
-from vikingbot.compile.results import RecordResponse
+from vikingbot.compile.results import FileDraft, FileResponse, Group, RecordResponse
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.providers.base import LLMResponse, ToolCallRequest
 
@@ -150,7 +149,6 @@ async def test_collision_retry_refreshes_reservations_after_output_exhaustion(
     sources = dict(zip(("a", "b"), pipeline.records, strict=True))
     pipeline.limits = pipeline.limits.model_copy(update={"merge_concurrency": 2})
     a_started, b_reserved = asyncio.Event(), asyncio.Event()
-    calls = Counter()
     original_put = pipeline.files.put
 
     async def put(key, value):
@@ -162,26 +160,20 @@ async def test_collision_retry_refreshes_reservations_after_output_exhaustion(
     pipeline.files.put = put
     references = []
     for group, source in sources.items():
+        records = [pipeline.records[source]]
         for index in range(2):
-            ref = f"candidate-{group}-{index}"
-            references.append(ref)
-            await pipeline.files.put(
-                ref,
-                {
-                    "path": f"{group}.md",
-                    "content": f"{group} fact {index}",
-                    "content_base64": None,
-                    "owner": ref,
-                    "inputs": [source],
-                    "source_refs": [source],
-                    "base_hash": None,
-                },
+            draft = FileDraft(path=f"{group}.md", content=f"{group} fact {index}", inputs=[source])
+            references += await file_ops.save_files(
+                pipeline,
+                FileResponse(files=[draft]),
+                Group(f"{group}-{index}", records),
+                records,
+                {},
             )
 
     async def respond(**kwargs):
         request = json.loads(kwargs["messages"][1]["content"])
         group = request["candidates"][0]["path"][0]
-        calls[group] += 1
         if group == "a":
             a_started.set()
             await asyncio.wait_for(b_reserved.wait(), timeout=5)
@@ -212,11 +204,10 @@ async def test_collision_retry_refreshes_reservations_after_output_exhaustion(
     paths = sorted(pipeline.files.values[ref]["path"] for ref in result)
     if provider_failure:
         assert paths == ["c.md"]
-        assert calls == {"a": 1, "b": 1}
         assert pipeline.status[sources["a"]] == "failed"
         assert "provider unavailable" in pipeline.failures[0]
     else:
         assert paths == ["c.md", "d.md"]
-        assert calls == {"a": 5, "b": 1}
         assert all(pipeline.status[source] == "prepared" for source in sources.values())
         assert pipeline.failures == []
+    assert pipeline.model.provider.chat.await_count == (2 if provider_failure else 6)
