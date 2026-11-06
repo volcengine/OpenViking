@@ -155,12 +155,12 @@ impl MultiWriteWrappedFSBuilder {
         };
         let reset_for_backup_change = existing_metadata.membership_changed;
         if reset_for_backup_change {
-            metadata_store.mark_reset_import_pending().await?;
             for account in &existing_metadata.accounts {
                 for (scope, _) in &account.segments {
                     metadata_provider.reset_scope(scope).await?;
                 }
             }
+            metadata_store.mark_reset_import_pending().await?;
             metadata_store.reset_multiwrite_metadata().await?;
             tracing::info!(
                 scopes = existing_metadata.scope_count(),

@@ -396,8 +396,11 @@ impl MetadataStore {
     /// Remove V2 protocol and per-account partition metadata for full re-import.
     pub(crate) async fn reset_multiwrite_metadata(&self) -> Result<()> {
         self.remove_file(&self.paths.mount_protocol().0).await?;
-        for account in self.initialized_accounts().await? {
-            self.remove_all(&self.paths.account_partitions(&account)?.0)
+        for entry in self.primary.read_internal_dir("/").await? {
+            if !entry.is_dir {
+                continue;
+            }
+            self.remove_all(&self.paths.account_partitions(&entry.name)?.0)
                 .await?;
         }
         Ok(())
