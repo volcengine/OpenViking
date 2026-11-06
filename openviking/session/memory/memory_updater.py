@@ -1064,6 +1064,7 @@ class MemoryUpdater:
                 with bind_memory_type(
                     resolved_op.memory_type,
                     task_id=getattr(resolved_op.source, "task_id", None),
+                    source_task_ids=getattr(resolved_op.source, "task_ids", None),
                 ):
                     await self._apply_upsert(
                         resolved_op,

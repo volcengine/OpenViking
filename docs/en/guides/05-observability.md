@@ -598,6 +598,16 @@ deployment default cannot relabel it. Only legacy calls without credential metad
 use precise `telemetry.model_cost_bearers` rules and then the deployment default;
 conflicting rules stay `unknown`. Events exclude document content, prompts and API keys.
 
+Shared memory batches derive reporting ownership from the current input requests,
+not the long-lived timer's inherited request context. A model call shared by several
+commits is exported once with `source_task_ids` listing the known input Tasks;
+`task_id` and `request_id` are empty when there is no single confirmed owner. Do
+not fan out that call or charge its full token usage to every listed Task. File
+changes recover their trusted operation source when it is unambiguous; a write
+that actually combines multiple Tasks uses the same multi-source representation.
+Space/member identity still comes from the batch's request context. Incremental
+resource re-imports also emit a deletion event after each planned deletion succeeds.
+
 When ROOT provisions or rotates account model credentials through the configuration API,
 `cost_bearer` is persisted with each credential and reaches the selected VLM or embedding
 client. Model sections remain ROOT-only; account admins and members cannot set billing

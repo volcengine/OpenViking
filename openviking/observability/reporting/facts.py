@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from openviking.observability.context import get_observability_context
 from openviking.observability.events import build_event, get_event_bus, try_publish_event
@@ -15,6 +16,10 @@ from openviking.observability.events import build_event, get_event_bus, try_publ
 _embedding_purpose = ContextVar("metric_embedding_purpose", default="unknown")
 _memory_type = ContextVar("metric_memory_type", default=None)
 _memory_task_id = ContextVar("metric_memory_task_id", default=None)
+_memory_source_task_ids = ContextVar("metric_memory_source_task_ids", default=None)
+_memory_batch_context: ContextVar[dict[str, Any] | None] = ContextVar(
+    "metric_memory_batch_context", default=None
+)
 _deferred_file_changes: ContextVar[DeferredFileChanges | None] = ContextVar(
     "metric_deferred_file_changes", default=None
 )
@@ -61,14 +66,43 @@ def begin_request_reporting():
 
 
 @contextmanager
-def bind_memory_type(memory_type, *, task_id=None):
+def bind_memory_type(memory_type, *, task_id=None, source_task_ids=None):
     token = _memory_type.set(memory_type)
     task_token = _memory_task_id.set(task_id)
+    sources_token = _memory_source_task_ids.set(source_task_ids)
     try:
         yield
     finally:
+        _memory_source_task_ids.reset(sources_token)
         _memory_task_id.reset(task_token)
         _memory_type.reset(token)
+
+
+@contextmanager
+def bind_memory_batch(ctx, task_ids):
+    """Report a shared batch from its inputs, never its timer's inherited root.
+
+    A model call shared by several commits is one observation. Preserve those
+    sources without duplicating usage or choosing one submitter as its owner.
+    Empty request/task IDs deliberately suppress stale queue-root fallbacks.
+    """
+    task_ids = tuple(task_ids)
+    sources = sorted({task_id for task_id in task_ids if task_id})
+    task_id = sources[0] if len(sources) == 1 and all(task_ids) else ""
+    token = _memory_batch_context.set(
+        {
+            "account_id": ctx.account_id,
+            "user_id": ctx.user.user_id,
+            "task_id": task_id,
+            "request_id": task_id,
+            "task_type": "session_commit",
+            "source_task_ids": sources,
+        }
+    )
+    try:
+        yield
+    finally:
+        _memory_batch_context.reset(token)
 
 
 @contextmanager
@@ -95,6 +129,30 @@ def event_context(name):
     }:
         return {}
     memory_task_id = _memory_task_id.get()
+    memory_batch = _memory_batch_context.get()
+    if memory_batch is not None and name in {
+        "file_mutation",
+        "skill_mutation",
+        "vlm.call",
+        "embedding.call",
+    }:
+        batch_fields = dict(memory_batch)
+        sources = _memory_source_task_ids.get()
+        if memory_task_id:
+            batch_fields.update(
+                task_id=memory_task_id,
+                request_id=memory_task_id,
+                source_task_ids=[memory_task_id],
+            )
+        elif sources is not None:
+            # An explicitly ambiguous operation cannot inherit a single batch
+            # submitter, even when some source Task metadata is unavailable.
+            batch_fields.update(task_id="", request_id="", source_task_ids=sorted(set(sources)))
+        if name == "vlm.call":
+            batch_fields["usage_purpose"] = "memory_extract"
+        elif name == "embedding.call":
+            batch_fields["usage_purpose"] = _embedding_purpose.get()
+        return batch_fields
     if name == "file_mutation" and memory_task_id:
         # Shared memory batch workers outlive their first queue request. Use
         # the committed operation's provenance without reattaching Task Work.

@@ -166,6 +166,9 @@ class MemoryOperationSource(BaseModel):
     session_id: Optional[str] = None
     archive_uri: Optional[str] = None
     task_id: Optional[str] = None
+    # Runtime provenance for a write merged from several commits. Such a write
+    # has no single task_id; do not charge it to the first batch submitter.
+    task_ids: List[str] = Field(default_factory=list)
     trace_id: Optional[str] = None
     extracted_at: Optional[str] = None
 

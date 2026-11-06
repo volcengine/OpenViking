@@ -702,6 +702,15 @@ class TaskTracker:
         try:
             from openviking.observability.reporting.facts import emit_terminal
 
+            if account_id and user_id:
+                # Work completion is a hot path. MySQL get_task also reads all
+                # started Work intervals to compute processing_seconds, which
+                # telemetry does not need while the Task is still running.
+                status = await self._store.get_task_status(
+                    task_id, account_id=account_id, user_id=user_id
+                )
+                if status not in TERMINAL_TASK_STATUSES:
+                    return
             emit_terminal(await self.get(task_id, account_id=account_id, user_id=user_id))
         except Exception:
             logger.warning("Task terminal telemetry could not be projected")
