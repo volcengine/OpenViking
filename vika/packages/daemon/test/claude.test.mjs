@@ -459,6 +459,29 @@ describe('ClaudeAgent persistent stream-json runtime', () => {
     await agent.stop();
   });
 
+  it('skips an oversized tool result echo and still completes the turn', async () => {
+    const { agent, persistent, failures, store } = harness();
+    await agent.start();
+    const child = persistent[0];
+    agent.deliver('what is in this picture?', 7);
+    child.feed({ type: 'system', subtype: 'init', session_id: agent.sessionId });
+    child.feed({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'toolu_media', name: 'mcp__personal_agent__get_message_media', input: {} },
+    ] } });
+    const line = `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_media',
+      type: 'tool_result', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(5_000_001) } }] }] } })}\n`;
+    for (let index = 0; index < line.length; index += 65_536) child.stdout.emit('data', line.slice(index, index + 65_536));
+    child.feed({ type: 'result', subtype: 'success', result: 'a cat' });
+
+    assert.equal(agent.turnInProgress, false);
+    assert.equal(child.exitCode, null);
+    assert.deepEqual(failures, []);
+    const completed = store.activities.find((activity) => activity.kind === 'agent.tool_completed');
+    assert.equal(completed.metadata.toolId, 'toolu_media');
+    assert.equal(completed.metadata.toolName, 'mcp__personal_agent__get_message_media');
+    await agent.stop();
+  });
+
   it('demotes the stored session when stopped mid-turn, keeps it after a clean stop', async () => {
     const clean = harness();
     await clean.agent.start();

@@ -2,23 +2,16 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { actionEndpoint, callTool, listTools } from './client.mjs';
 import { parseUniqueJson } from '../unique-json.mjs';
+import { inlineImageBlocks } from '../inline-images.mjs';
 
 // Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi, OpenCode).
 // It relays tools/list and tools/call to the Core and renders results; nothing
 // else.
-const MAX_INLINE_IMAGE_BYTES = 10_000_000;
 const MAX_REQUEST_BYTES = 1_000_000;
-
-function imageBlocks(media = []) {
-  return media
-    .filter((item) => item.mime_type?.startsWith('image/') && item.size <= MAX_INLINE_IMAGE_BYTES)
-    .map((item) => ({ type: 'image', data: fs.readFileSync(item.path).toString('base64'), mimeType: item.mime_type }));
-}
 
 export function createMcpHandler(endpoint) {
   return async function handle(message, { signal } = {}) {
@@ -43,8 +36,10 @@ export function createMcpHandler(endpoint) {
       try {
         const result = await callTool(endpoint, message.params?.name, message.params?.arguments ?? {}, { signal });
         signal?.throwIfAborted();
+        const images = await inlineImageBlocks(result.media);
+        signal?.throwIfAborted();
         return { jsonrpc: '2.0', id, result: {
-          content: [{ type: 'text', text: result.text }, ...imageBlocks(result.media)],
+          content: [{ type: 'text', text: result.text }, ...images],
           structuredContent: result.data,
         } };
       } catch (error) {

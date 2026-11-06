@@ -517,8 +517,7 @@ describe('agent tools', () => {
     const ovClient = { async context() { return { overview: value }; } };
     const { store, call } = setup(t, { ovClient });
     const { epoch } = store.getCognitionState();
-    store.db.exec('CREATE TABLE IF NOT EXISTS ov_session_sync(epoch INTEGER PRIMARY KEY, session_id TEXT, uri TEXT)');
-    store.db.prepare('INSERT INTO ov_session_sync(epoch, session_id, uri) VALUES (?, ?, ?)').run(epoch, 'test-session', 'viking://session/test');
+    store.ovSessionFor = (requested) => (requested === epoch ? { session_id: 'test-session', uri: 'viking://session/test' } : null);
     const first = (await call('read_openviking_session_context', { epoch, max_chars: 4 })).data;
     const next = (await call('read_openviking_session_context', { epoch, offset: first.next_offset, expected_digest: first.expected_digest })).data;
     assert.equal(first.text + next.text, JSON.stringify({ overview: value }));
@@ -542,8 +541,7 @@ describe('agent tools', () => {
     };
     const { store, call } = setup(t, { ovClient });
     const { epoch } = store.getCognitionState();
-    store.db.exec('CREATE TABLE IF NOT EXISTS ov_session_sync(epoch INTEGER PRIMARY KEY, session_id TEXT, uri TEXT)');
-    store.db.prepare('INSERT INTO ov_session_sync(epoch, session_id, uri) VALUES (?, ?, ?)').run(epoch, 'test-session', 'viking://session/test');
+    store.ovSessionFor = (requested) => (requested === epoch ? { session_id: 'test-session', uri: 'viking://session/test' } : null);
     const result = (await call('read_openviking_session_context', { epoch, archive_id: 'archive_002' })).data;
     assert.deepEqual(seen, ['viking://session/test', 'archive_002']);
     assert.equal(result.text, JSON.stringify({ archive_id: 'archive_002', messages: [] }));

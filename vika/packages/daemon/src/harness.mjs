@@ -7,6 +7,17 @@ import { GroupBurstRouter } from './group-burst.mjs';
 import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem } from './runtime-input.mjs';
 import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
+import { peerForEvent } from './ov-peer.mjs';
+
+// Recall (ov-recall.mjs) runs a search on the ingress path, which every later
+// line waits behind, so only where the agent is likely to answer: direct
+// chats, lines that @mention it, document comments, and events outside chats
+// such as mail. Never for another bot's line or a card click.
+function wantsRecall(event, mention) {
+  if (BOT_SENDERS.has(event.senderType) || event.messageType === 'card_action') return false;
+  if (!event.chatId) return true;
+  return event.chatType === 'p2p' || event.chatType === 'doc_comment' || mention === 'me' || mention === 'mixed';
+}
 
 // The harness: canonical Connector EVENT -> persistence -> AgentRuntime.submit.
 // Owns validation, filtering, dedupe and ordered admission. Chat capabilities
@@ -21,6 +32,7 @@ export class Harness {
     runtime,
     roster = null,
     liveness = null,
+    recall = null,
     prepareEvent = (event) => event,
     eventHandler = () => null,
     onSlashCommand,
@@ -38,6 +50,7 @@ export class Harness {
     this.runtime = runtime;
     this.roster = roster;
     this.liveness = liveness;
+    this.recall = recall;
     this.prepareEvent = prepareEvent;
     this.eventHandler = eventHandler;
     this.onSlashCommand = onSlashCommand;
@@ -108,8 +121,9 @@ export class Harness {
     const handler = this.eventHandler(event);
     let result;
     try {
+      // The owner is the OV user itself; anyone else is a peer of it.
       result = this.store.ingest(event, command ? 'slash_command' : approval ? 'approval_reply' : filterReason,
-        Date.now(), { journal: !handler });
+        Date.now(), { journal: !handler, peer: this.isOwner(event) ? null : peerForEvent(event) });
     } catch (error) {
       this.logger.error('event_persist_failed', { error: safeError(error) });
       this.recordActivity('system.persist_failed', {
@@ -179,18 +193,21 @@ export class Harness {
       // slow or failing lark-cli only degrades the label back to the id stub.
       // A document has no members to list: its Connector names the commenter.
       if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
+      const owner = this.isOwner(event);
+      const mention = this.mentionTarget(event);
+      // Bounded like the warm-up above, and never rejects.
+      const recall = this.recall && wantsRecall(event, mention) ? await this.recall.forEvent(event, { owner }) : '';
       await this.runtime.prepareInputContext?.();
-      this.groupBurst.route(eventDeliveryItem(event, result.inbound.seq, {
-        text: formatInboundLine(event, null, {
-          ...(idleHint ?? {}),
-          owner: this.isOwner(event),
-          mention: this.mentionTarget(event),
-          replyTo: event.messageType === 'card_action' ? { kind: 'me' } : resolveReplyTarget(this.store, event),
-          // How long only bots have been talking here: the model's cue to stop.
-          ...(BOT_SENDERS.has(event.senderType)
-            ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
-        }),
-      }));
+      const line = formatInboundLine(event, null, {
+        ...(idleHint ?? {}),
+        owner,
+        mention,
+        replyTo: event.messageType === 'card_action' ? { kind: 'me' } : resolveReplyTarget(this.store, event),
+        // How long only bots have been talking here: the model's cue to stop.
+        ...(BOT_SENDERS.has(event.senderType)
+          ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
+      });
+      this.groupBurst.route(eventDeliveryItem(event, result.inbound.seq, { text: recall ? `${line}\n${recall}` : line }));
     });
   }
 

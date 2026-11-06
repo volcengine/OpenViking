@@ -25,6 +25,7 @@ import { resolveCardAction, settledChoiceCard } from './card-messages.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
 import { OVUnavailableError } from './ov-connection.mjs';
+import { OVRecall } from './ov-recall.mjs';
 import { TimerConnector, TimerRepository } from './timers.mjs';
 import { OVTimerRepository } from './ov-timers.mjs';
 import { updateRuntimePreference } from './runtime-preference.mjs';
@@ -113,6 +114,7 @@ export class PersonalAgentDaemon {
   async checkOpenViking(client) {
     try {
       await client.check();
+      await this.ovContext.bindIdentity();
     } catch (error) {
       const status = error.httpStatus;
       const rejected = !(error instanceof OVUnavailableError)
@@ -291,6 +293,10 @@ export class PersonalAgentDaemon {
         runtime: this.agentRuntime,
         roster: this.roster,
         liveness: this.liveness,
+        recall: this.config.ovAutoRecall && this.config.openVikingConfigPath
+          ? new OVRecall({ configPath: this.config.openVikingConfigPath, scope: this.config.ovRecallScope,
+            store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
+          : null,
         prepareEvent: (event) => event.source === 'lark' && event.kind === 'message.action'
           ? resolveCardAction(this.store.db, event, this.config.profile) : event,
         eventHandler: (event) => {

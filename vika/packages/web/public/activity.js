@@ -467,6 +467,9 @@ function turnStatus(turn) {
   if (!turn.endRow) {
     // 隐式回合没有结束行且后面已有别的回合：只是数据不全，不是还在跑
     if (turn.implicit && state.model?.turns.at(-1) !== turn) return { text: '记录不全', cls: 'ok' };
+    // 最后一个回合也可能是守护进程重启时留下的孤立步骤（没有 turn_started、
+    // 也没有 turn_completed）：只有运行时确实还在跑才显示进行中。
+    if (turn.implicit && state.service?.activeTurns === 0) return { text: '记录不全', cls: 'ok' };
     return { text: '进行中', cls: 'running' };
   }
   const status = turn.endRow.status || turn.meta.status;
@@ -489,7 +492,8 @@ function renderTurn(turn, index) {
   if (turn.implicit) head.append(h('span', 'aux', '未记录开始'));
   const dur = h('span', 'aux');
   if (turn.endRow) dur.textContent = fmtDur(meta.durationMs ?? (turn.endMs - turn.startMs));
-  else since(dur, turn.startMs);
+  // 只有确实还在跑的回合才走秒表；隐式且已不在运行的回合不该一直计时
+  else if (status.cls === 'running') since(dur, turn.startMs);
   head.append(dur);
   if (Number.isFinite(meta.inputTokens)) {
     const ctx = Number.isFinite(meta.contextWindow) ? ` / ${fmtTokens(meta.contextWindow)}` : '';
@@ -529,7 +533,11 @@ function renderTurn(turn, index) {
   if (turn.endRow && status.cls === 'failed' && turn.endRow.summary) {
     output.append(h('div', 'turn-error txt', turn.endRow.summary));
   } else if (!deliveries.length) {
-    output.append(h('div', 'io-empty', !turn.endRow ? '进行中…' : '没有发出消息（静默或仅模型文本）'));
+    // 输出占位文案跟回合状态走，避免标题写“记录不全”、框里还写“进行中…”
+    const empty = status.cls === 'running'
+      ? '进行中…'
+      : turn.endRow ? '没有发出消息（静默或仅模型文本）' : '没有记录到输出';
+    output.append(h('div', 'io-empty', empty));
   }
   el.append(output);
   return el;
@@ -733,7 +741,9 @@ function renderLive() {
     dom.liveText.textContent = '历史会话';
     return;
   }
-  if (lastTurn && !lastTurn.endRow) {
+  // 最后一个回合没有结束行时，只有运行时确实还在跑才显示忙碌；
+  // 守护进程重启留下的孤立步骤不应让状态栏一直停在“思考中”。
+  if (lastTurn && !lastTurn.endRow && service.activeTurns !== 0) {
     const step = lastTurn.steps.at(-1);
     const what = step?.type === 'tool' && step.running ? `工具 ${step.label}` : '思考中';
     dom.live.classList.add('busy');

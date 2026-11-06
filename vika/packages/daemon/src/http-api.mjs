@@ -127,6 +127,9 @@ export async function startHttpApi({ config, store, logger, serviceSnapshot }) {
             ready: service.ready,
             subscriber: service.body.subscriber,
             uptimeSeconds: service.body.uptimeSeconds,
+            // Lets the console tell a live turn from an implicit one left
+            // behind by a daemon restart that never wrote turn_completed.
+            activeTurns: service.body.activeTurns ?? 0,
           },
           overview: store.activityOverview(),
           sessions: store.listActivitySessions(),

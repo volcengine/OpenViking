@@ -16,6 +16,7 @@ import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { assertPiVersion, piCommand, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
 const START_TIMEOUT_MS = 15_000;
@@ -25,6 +26,14 @@ const RPC_TIMEOUT_MS = 8_000;
 
 const PI_RUNTIME = getRuntimeDefinition('pi');
 export const PI_EFFORTS = PI_RUNTIME.efforts;
+
+// Pi events the daemon can lose when one is too long for MAX_LINE_BYTES. They
+// echo a tool result or a run's messages, base64 images included; the model
+// already has them inside Pi, the daemon only logs them, and a run ends on
+// agent_settled. Losing one costs a log row, not the turn.
+const SKIPPABLE_OVERSIZED_EVENTS = new Set([
+  'message_start', 'message_end', 'tool_execution_update', 'tool_execution_end', 'turn_end', 'agent_end',
+]);
 
 const PREFLIGHT_FLAGS = [
   '--mode', '--append-system-prompt', '--thinking',
@@ -127,7 +136,16 @@ export class PiAgent {
     this.activeItems = [];
     this.activeOwner = null;
     this.queue = [];
-    this.stdoutBuffer = '';
+    this.stdoutLines = new BoundedLineReader({
+      maxLineBytes: MAX_LINE_BYTES,
+      label: 'pi stdout line',
+      onLine: (line) => {
+        try { this._handleLine(line); } catch (error) {
+          this.logger.warn('pi_line_error', { error: safe(error) });
+        }
+      },
+      onOversized: (prefix) => this._onOversizedLine(prefix),
+    });
     this.stderrBuffer = '';
     this.stopping = false;
     this.startedOk = false;
@@ -329,7 +347,7 @@ export class PiAgent {
       }
 
       this.child = child;
-      this.stdoutBuffer = '';
+      this.stdoutLines.reset();
       this.stderrBuffer = '';
       let ready = false;
       let settled = false;
@@ -569,20 +587,39 @@ export class PiAgent {
   }
 
   _onStdout(chunk, child) {
-    try { this.stdoutBuffer = appendBounded(this.stdoutBuffer, chunk, 'stdout line'); } catch (error) {
+    try { this.stdoutLines.push(chunk); } catch (error) {
       this.turnError = error;
       terminateProcessTree(child, 'SIGKILL');
-      return;
     }
-    let index;
-    while ((index = this.stdoutBuffer.indexOf('\n')) >= 0) {
-      const line = this.stdoutBuffer.slice(0, index);
-      this.stdoutBuffer = this.stdoutBuffer.slice(index + 1);
-      if (!line.trim()) continue;
-      try { this._handleLine(line); } catch (error) {
-        this.logger.warn('pi_line_error', { error: safe(error) });
-      }
+  }
+
+  // A skipped tool_execution_end still closes its tool in the activity log;
+  // its id and name come before the result on Pi's line.
+  _onOversizedLine(prefix) {
+    const type = lineTypeFromPrefix(prefix);
+    if (!SKIPPABLE_OVERSIZED_EVENTS.has(type)) return false;
+    this.logger.warn('pi_oversized_line_skipped', { type, limitBytes: MAX_LINE_BYTES });
+    if (type === 'tool_execution_end') {
+      const toolCallId = stringFieldFromPrefix(prefix, 'toolCallId');
+      const toolName = stringFieldFromPrefix(prefix, 'toolName');
+      const startedAtMs = this.toolStarts.get(toolCallId);
+      this.toolStarts.delete(toolCallId);
+      this._recordActivity('agent.tool_completed', {
+        inboundSeq: this._activeSeqs().at(-1) ?? null,
+        status: 'COMPLETED',
+        summary: toolName || 'Pi tool completed',
+        metadata: {
+          runtime: PI_RUNTIME.id,
+          toolId: toolCallId || undefined,
+          toolName: toolName || undefined,
+          ...(startedAtMs ? { durationMs: Date.now() - startedAtMs } : {}),
+          output: `[omitted: event over ${MAX_LINE_BYTES} bytes]`,
+        },
+      });
+      this.modelWorking = true;
+      this.modelStartedAtMs = Date.now();
     }
+    return true;
   }
 
   _onStderr(chunk) {

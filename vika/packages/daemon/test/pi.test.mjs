@@ -464,6 +464,43 @@ describe('PiAgent persistent rpc runtime', () => {
     await agent.stop();
   });
 
+  it('skips an oversized tool result echo and finishes the turn, but still fails on an oversized line it needs', async () => {
+    // A get_message_media result with a large image, echoed on one stdout line
+    // and delivered in pipe-sized chunks.
+    const emitLine = (child, value) => {
+      const line = `${JSON.stringify(value)}\n`;
+      for (let index = 0; index < line.length; index += 65_536) child.stdout.emit('data', line.slice(index, index + 65_536));
+    };
+    const image = { type: 'image', data: 'A'.repeat(5_000_001), mimeType: 'image/png' };
+
+    const { agent, persistent, failures, store } = harness();
+    await agent.start();
+    const child = persistent[0];
+    agent.deliver('what is in this picture?', 7);
+    child.feed({ type: 'tool_execution_start', toolCallId: 'call_media', toolName: 'get_message_media', args: {} });
+    emitLine(child, { type: 'tool_execution_end', toolCallId: 'call_media', toolName: 'get_message_media',
+      result: { content: [image] }, isError: false });
+    emitLine(child, { type: 'agent_end', messages: [{ role: 'toolResult', content: [image] }] });
+    child.feed({ type: 'agent_settled' });
+
+    assert.equal(agent.turnInProgress, false);
+    assert.equal(child.exitCode, null);
+    assert.deepEqual(failures, []);
+    const completed = store.activities.find((activity) => activity.kind === 'agent.tool_completed');
+    assert.equal(completed.metadata.toolId, 'call_media');
+    assert.equal(completed.metadata.toolName, 'get_message_media');
+    await agent.stop();
+
+    const needed = harness();
+    await needed.agent.start();
+    needed.agent.deliver('what is in this picture?', 7);
+    emitLine(needed.persistent[0], { type: 'response', command: 'get_state', success: true, data: image.data });
+    assert.equal(needed.persistent[0].exitCode, 137);
+    await waitFor(() => needed.failures.length === 1);
+    assert.match(needed.failures[0].error, /pi stdout line exceeded local limit/);
+    await needed.agent.stop();
+  });
+
   it('demotes the stored session when stopped mid-turn, keeps it after a clean stop', async () => {
     const clean = harness();
     await clean.agent.start();

@@ -15,6 +15,7 @@ import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition, isModelUnavailableError } from './runtime-catalog.mjs';
+import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
 const START_TIMEOUT_MS = 5_000;
@@ -23,6 +24,11 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_CAP_MS = 30_000;
 
 const CLAUDE_RUNTIME = getRuntimeDefinition('claude');
+
+// stream-json `user` lines echo tool results, base64 images included. The
+// model already has them inside Claude Code and the daemon only logs them, so
+// one too long for MAX_LINE_BYTES is skipped rather than failing the turn.
+const SKIPPABLE_OVERSIZED_EVENTS = new Set(['user']);
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -97,7 +103,16 @@ export class ClaudeAgent {
     this.activeItems = [];
     this.activeOwner = null;
     this.queue = [];
-    this.stdoutBuffer = '';
+    this.stdoutLines = new BoundedLineReader({
+      maxLineBytes: MAX_LINE_BYTES,
+      label: 'claude stdout line',
+      onLine: (line) => {
+        try { this._handleLine(line); } catch (error) {
+          this.logger.warn('claude_line_error', { error: safe(error) });
+        }
+      },
+      onOversized: (prefix) => this._onOversizedLine(prefix),
+    });
     this.stderrBuffer = '';
     this.stopping = false;
     this.startedOk = false;
@@ -323,7 +338,7 @@ export class ClaudeAgent {
       this.child = child;
       this.catalogRequest = null;
       this.actualModel = '';
-      this.stdoutBuffer = '';
+      this.stdoutLines.reset();
       this.stderrBuffer = '';
       let spawned = false;
       let ready = false;
@@ -512,20 +527,38 @@ export class ClaudeAgent {
   }
 
   _onStdout(chunk, child) {
-    try { this.stdoutBuffer = appendBounded(this.stdoutBuffer, chunk, 'stdout line'); } catch (error) {
+    try { this.stdoutLines.push(chunk); } catch (error) {
       this.turnError = error;
       terminateProcessTree(child, 'SIGKILL');
-      return;
     }
-    let index;
-    while ((index = this.stdoutBuffer.indexOf('\n')) >= 0) {
-      const line = this.stdoutBuffer.slice(0, index);
-      this.stdoutBuffer = this.stdoutBuffer.slice(index + 1);
-      if (!line.trim()) continue;
-      try { this._handleLine(line); } catch (error) {
-        this.logger.warn('claude_line_error', { error: safe(error) });
-      }
+  }
+
+  // A skipped tool result still closes its tool in the activity log when its
+  // id is near the start of the line, as stream-json writes it.
+  _onOversizedLine(prefix) {
+    const type = lineTypeFromPrefix(prefix);
+    if (!SKIPPABLE_OVERSIZED_EVENTS.has(type)) return false;
+    this.logger.warn('claude_oversized_line_skipped', { type, limitBytes: MAX_LINE_BYTES });
+    const toolUseId = stringFieldFromPrefix(prefix, 'tool_use_id');
+    const started = toolUseId ? this.toolStarts.get(toolUseId) : null;
+    if (started) {
+      this.toolStarts.delete(toolUseId);
+      this._recordActivity('agent.tool_completed', {
+        inboundSeq: this._activeSeqs().at(-1) ?? null,
+        status: 'COMPLETED',
+        summary: started.name,
+        metadata: {
+          runtime: CLAUDE_RUNTIME.id,
+          toolId: toolUseId,
+          toolName: started.name,
+          durationMs: Date.now() - started.atMs,
+          output: `[omitted: event over ${MAX_LINE_BYTES} bytes]`,
+        },
+      });
     }
+    this.modelWorking = true;
+    this.modelStartedAtMs = Date.now();
+    return true;
   }
 
   _onStderr(chunk) {

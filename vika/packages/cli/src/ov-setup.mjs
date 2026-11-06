@@ -7,7 +7,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { OVConnection, readOVConfig } from '../../daemon/src/ov-connection.mjs';
 import { availableInstanceOvConfig } from './manifest.mjs';
-import { HOSTED_OV_URL, LOCAL_OV_URL, detectOpenViking, savedOVConfigPath, writeInstanceOvConfig } from './ov.mjs';
+import {
+  HOSTED_OV_URL, LOCAL_OV_URL, PEER_FIELDS, detectOpenViking, instanceOvConfig, instanceUserName, requestNamesUser,
+  savedOVConfigPath, writeInstanceOvConfig,
+} from './ov.mjs';
 import { GoBack, PromptAborted } from './prompt.mjs';
 import { t } from './i18n.mjs';
 
@@ -28,13 +31,16 @@ const canonical = (value) => (Array.isArray(value) ? value.map(canonical)
     ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))
     : value);
 
-// Everything an instance copy takes from a config: all of it but the identity
-// the copy replaces. Null for a file that cannot be read.
+// A new instance is named after its connection is chosen, so until then its
+// OV user can only be shown with the name still to come.
+const UNNAMED = () => t('<实例名称>', '<instance name>');
+
+// Everything an instance copy takes from a config: all of it but the peer the
+// copy drops. Null for a file that cannot be read.
 function connectionKey(configPath) {
   let config;
   try { config = { ...readOVConfig(configPath) }; } catch { return null; }
-  delete config.actor_peer_id;
-  delete config.agent_id;
+  for (const field of PEER_FIELDS) delete config[field];
   config.url = String(config.url ?? '').replace(/\/+$/, '');
   return JSON.stringify(canonical(config));
 }
@@ -86,11 +92,25 @@ export async function discoverOpenViking({
   return candidates;
 }
 
-// Where it goes, who it logs in as, and whether it works or why not.
-function describe(candidate) {
+// Where it goes, who the instance would be there, and whether it works or why
+// not. Where requests name the user, choosing it makes the instance a user of
+// its own (instanceOvConfig), not the connection's user; the instance's own
+// config, kept as it is, stays what it says. Under an API key the key's user
+// is the instance, and anyone else logging in with it is named.
+function describe(candidate, { preferredConfigPath = null, instanceId = null, taken = [] } = {}) {
   const where = address(candidate.url || candidate.config?.url);
   if (!candidate.usable) return `${where} · ${candidate.reason ?? t('不可用', 'unavailable')}`;
-  return `${where}${candidate.user ? ` · user=${candidate.user}` : ''} · ${t('可用', 'ready')}`;
+  const config = sourceConfig(candidate);
+  const kept = Boolean(preferredConfigPath) && candidate.configPath === preferredConfigPath;
+  let user = candidate.user;
+  let holder = null;
+  if (!kept && requestNamesUser(candidate.authMode, config)) {
+    user = instanceUserName(candidate.user ?? config.user, instanceId || UNNAMED());
+  } else if (!kept) {
+    holder = holderOf(taken, { url: candidate.url || config.url, apiKey: config.api_key, user: candidate.user });
+  }
+  return `${where}${user ? ` · user=${user}` : ''}${holder ? ` · ${t(`${holder.label} 也在用`, `also used by ${holder.label}`)}` : ''}`
+    + ` · ${t('可用', 'ready')}`;
 }
 
 async function manualConfig(prompter, previous = {}) {
@@ -149,14 +169,70 @@ function keyIdentity(config, result) {
   return { ...rest, user: result.user };
 }
 
+// Who the other instances, and the owner's own OpenViking CLI (which their
+// Claude Code or Codex plugins use too), are in OV. Under an API key the key is
+// the identity, so one of theirs is not handed to another instance unasked.
+export function takenIdentities({ agents = [], exclude = null, homeDir = os.homedir() } = {}) {
+  const taken = [];
+  for (const agent of agents) {
+    if (agent.id === exclude || !agent.ovConfig) continue;
+    try {
+      const config = readOVConfig(agent.ovConfig);
+      taken.push({ label: t(`实例 ${agent.id}`, `instance ${agent.id}`), url: config.url, user: config.user ?? null, apiKey: config.api_key ?? null });
+    } catch {}
+  }
+  try {
+    const config = readOVConfig(path.join(homeDir, '.openviking', 'ovcli.conf'));
+    // Its user field does not say who its key logs in as; only the key does.
+    if (config.api_key) taken.push({ label: t('OpenViking 命令行', 'the OpenViking CLI'), url: config.url, user: null, apiKey: config.api_key });
+  } catch {}
+  return taken;
+}
+
+// Who of `taken` already logs in as this identity on that server, if anyone.
+function holderOf(taken, { url, apiKey, user }) {
+  return taken.find((other) => address(other.url) === address(url)
+    && (Boolean(apiKey && other.apiKey === apiKey) || Boolean(user && other.user === user))) ?? null;
+}
+
+// Who the instance is in OV. Where requests name the user, each instance gets
+// its own (instanceOvConfig). Under an API key the key decides, so a key that
+// another instance or the owner's CLI logs in with would share that memory,
+// which only the owner can choose; an administrator's key can instead create a
+// user of the instance's own, the administrator's key itself not kept. Null
+// goes back to the connection menu.
+async function chooseIdentity(prompter, { result, config, taken, instanceId }) {
+  if (requestNamesUser(result.authMode, config)) return { mode: 'instance' };
+  const holder = holderOf(taken, { url: result.url || config.url, apiKey: config.api_key, user: result.user });
+  const canRegister = result.role === 'admin' && Boolean(result.account) && Boolean(result.user);
+  if (!holder && !canRegister) return { mode: 'key' };
+  const user = result.user ?? t('这把 Key 的用户', 'the key’s user');
+  const created = instanceUserName(result.user, instanceId || UNNAMED());
+  const choice = await prompter.select(t('这个实例在 OpenViking 里的身份', 'This instance’s identity in OpenViking'), [
+    ...(canRegister ? [{
+      label: t('为这个实例新建用户', 'Create a user for this instance'),
+      hint: t(`用这把管理员 Key 创建 ${created}；管理员 Key 不保存`, `${created}, created with this administrator key, which is not kept`),
+      value: 'register',
+    }] : []),
+    holder
+      ? { label: t(`共用 ${user}（${holder.label} 也在用）`, `Share ${user} with ${holder.label}`),
+        hint: t('两边的记忆不隔离', 'their memories are not kept apart'), value: 'shared' }
+      : { label: t(`以 ${user} 运行`, `Run as ${user}`), hint: t('管理员身份', 'an administrator'), value: 'key' },
+    { label: t('换一个连接或 Key', 'Choose another connection or key'), value: 'back' },
+  ]);
+  return choice === 'back' ? null : { mode: choice };
+}
+
 // Always offer both manual entry and importing a file, even if discovery found
 // a healthy connection. Failures return to the menu; nothing is persisted here.
 // `canGoBack` lets ← leave the menu; `leaveTo` names where its last option goes
 // back to, instead of quitting setup. `previous` is what the menu returned
-// before, offered again when ← comes back to it.
+// before, offered again when ← comes back to it. `taken` (takenIdentities) and
+// `instanceId` decide who the instance is in OV (chooseIdentity).
 export async function configureOpenViking({
   prompter, env = process.env, homeDir = env.HOME || os.homedir(), fetchImpl = globalThis.fetch,
   preferredConfigPath, detect = detectOpenViking, title = 'OpenViking', canGoBack = false, leaveTo = null, previous = null,
+  taken = [], instanceId = null,
 } = {}) {
   if (title) prompter.section(title);
   const options = { env, homeDir, fetchImpl, preferredConfigPath, detect };
@@ -172,7 +248,8 @@ export async function configureOpenViking({
       ?? candidates.findIndex(({ label }) => label === previous?.via);
     const ready = candidates.findIndex(({ usable }) => usable);
     const choice = await prompter.select(t('选择 OpenViking 连接', 'Choose an OpenViking connection'), [
-      ...candidates.map((candidate) => ({ label: candidate.label, hint: describe(candidate), value: candidate })),
+      ...candidates.map((candidate) => ({ label: candidate.label,
+        hint: describe(candidate, { preferredConfigPath, instanceId, taken }), value: candidate })),
       { label: t('火山引擎 OpenViking 托管服务', 'OpenViking Service on Volcengine'),
         hint: t('只需填写 API Key', 'API key only'), value: 'hosted' },
       { label: t('手动填写／修改地址和凭据', 'Enter or edit the address and credentials'), value: 'manual' },
@@ -211,7 +288,9 @@ export async function configureOpenViking({
         continue;
       }
       prompter.success(t(`OpenViking 连接已验证：${address(result.url || config.url)}`, `OpenViking connection verified: ${address(result.url || config.url)}`));
-      return { ...result, configPath, config: keyIdentity(structuredClone(config), result), via };
+      const identity = await chooseIdentity(prompter, { result, config, taken, instanceId });
+      if (!identity) continue;
+      return { ...result, configPath, config: keyIdentity(structuredClone(config), result), via, identity };
     } catch (error) {
       if (error instanceof PromptAborted) throw error;
       if (!(error instanceof GoBack)) prompter.warn(t('无法读取 OV 配置，请检查文件路径和 JSON 格式后重试。',
@@ -221,14 +300,15 @@ export async function configureOpenViking({
 }
 
 // The connection offered to the next new instance. A file new instances find
-// anyway is not copied: the copy would go stale and still be found first.
+// anyway is not copied: the copy would go stale and still be found first. An
+// administrator's key that created the instance's user is not kept anywhere.
 export function saveOVConnection(detected, { env = process.env, homeDir = env.HOME || os.homedir() } = {}) {
   const target = savedOVConfigPath(homeDir);
   const found = [(env.OPENVIKING_CLI_CONFIG_FILE || '').trim(), target, path.join(homeDir, '.openviking', 'ovcli.conf')];
+  if (detected.identity?.mode === 'register') return null;
   if (detected.configPath && found.includes(detected.configPath)) return null;
   const config = { ...sourceConfig(detected) };
-  delete config.actor_peer_id;
-  delete config.agent_id;
+  for (const field of PEER_FIELDS) delete config[field];
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const temporary = `${target}.${randomUUID()}.tmp`;
   try {
@@ -241,13 +321,12 @@ export function saveOVConnection(detected, { env = process.env, homeDir = env.HO
 // A changed connection gets a new private file. Existing files are left intact
 // until the caller saves the manifest; cancelling only removes pending files.
 export async function prepareInstanceOpenViking({
-  agent, detected, pending, env, homeDir, fetchImpl, detect = detectOpenViking, reserved = new Set(),
+  agent, detected, pending, env, homeDir, fetchImpl, detect = detectOpenViking, reserved = new Set(), registrations,
 }) {
-  if (agent.ovConfig && detected.configPath === agent.ovConfig) return agent.ovConfig;
+  if (agent.ovConfig && detected.configPath === agent.ovConfig && detected.identity?.mode !== 'register') return agent.ovConfig;
   const target = availableInstanceOvConfig(env, agent.id, reserved);
-  let actor = agent.id;
-  try { actor = readOVConfig(agent.ovConfig).actor_peer_id || agent.id; } catch {}
-  writeInstanceOvConfig({ detected, instanceId: actor, target, exclusive: true });
+  const config = await instanceOvConfig({ detected, instanceId: agent.id, fetchImpl, registrations });
+  writeInstanceOvConfig({ config, target, exclusive: true });
   pending.add(target);
   const checked = await detect({ env, homeDir, fetchImpl, configPath: target });
   if (!checked?.usable) throw new Error(t(`OpenViking（${agent.id}）不可用：${checked?.reason ?? '检查失败'}`,
