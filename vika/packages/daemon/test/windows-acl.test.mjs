@@ -66,3 +66,45 @@ test('Windows junctions are refused without changing the target ACL', { skip: !w
   assert.throws(() => preparePrivateDirectory(link), /directory owned|symbolic link/);
   assert.doesNotThrow(() => assertPrivateDirectory(target));
 });
+
+test('Windows Lark media and image cache work through real private-directory callers', { skip: !windows }, async (t) => {
+  const { prepareLarkMediaDirectory, pruneLarkMedia } = await import('../src/lark-media.mjs');
+  const { LarkImageCache } = await import('../src/lark-image-cache.mjs');
+  const root = fixture(t);
+  const tempDir = path.join(root, '临时 文件');
+  const media = prepareLarkMediaDirectory(tempDir);
+  assert.equal(media, path.join(tempDir, 'media'));
+  const filename = path.join(media, `lark-${'a'.repeat(24)}.png`);
+  fs.writeFileSync(filename, Buffer.from('downloaded media'));
+  fs.utimesSync(filename, new Date(0), new Date(0));
+  assert.equal(pruneLarkMedia(tempDir, 1000), 1);
+  assert.equal(fs.existsSync(filename), false);
+  const dataDir = path.join(root, '账户 数据');
+  const digest = 'b'.repeat(64);
+  const key = 'img_v3_windows_acl_fixture';
+  let cache = new LarkImageCache(dataDir);
+  try {
+    cache.put('lark', 'test-profile', digest, key);
+    assert.equal(cache.get('lark', 'test-profile', digest), key);
+  } finally { cache.close(); }
+  cache = new LarkImageCache(dataDir);
+  try { assert.equal(cache.get('lark', 'test-profile', digest), key); }
+  finally { cache.close(); }
+});
+
+test('Windows outgoing file snapshots use private ACLs and retain bytes until cleanup', { skip: !windows }, async (t) => {
+  const { resolveContent } = await import('../src/actions/content.mjs');
+  const root = fixture(t);
+  const workspace = path.join(root, 'workspace');
+  const tempDir = path.join(root, 'temp');
+  fs.mkdirSync(workspace);
+  const bytes = Buffer.from('private attachment 中文');
+  fs.writeFileSync(path.join(workspace, 'report.txt'), bytes);
+  const resolved = resolveContent({ file_path: 'report.txt' }, { workspace, tempDir, maxTextChars: 1000 });
+  try {
+    assert.equal(resolved.type, 'file');
+    assert.deepEqual(fs.readFileSync(resolved.payload.path), bytes);
+    assert.doesNotThrow(() => assertPrivateDirectory(path.join(tempDir, 'outbox')));
+  } finally { resolved.cleanup(); }
+  assert.equal(fs.existsSync(resolved.payload.path), false);
+});
