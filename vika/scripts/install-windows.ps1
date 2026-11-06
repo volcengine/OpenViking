@@ -1,6 +1,6 @@
 # Native Windows source installation. Does not download or publish Vika releases.
 [CmdletBinding()]
-param([switch]$SkipSetup)
+param([switch]$SkipSetup, [switch]$SkipPathUpdate)
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Run this installer on Windows.' }
 $node = (Get-Command node.exe -ErrorAction Stop).Source
@@ -31,11 +31,13 @@ Copy-Item (Join-Path $release 'scripts\windows-launch.mjs') (Join-Path $bin 'vik
 # Launch through a Node bootstrap so HOME, PATH and PM2_HOME also exist at login.
 $launcher = '@echo off' + "`r`n" + '"' + $node + '" "%~dp0vika-launch.mjs" %*' + "`r`n"
 [IO.File]::WriteAllText((Join-Path $bin 'vika.cmd'), $launcher)
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if (($userPath -split ';') -notcontains $bin) {
-    [Environment]::SetEnvironmentVariable('Path', ($bin + ';' + $userPath), 'User')
+if (-not $SkipPathUpdate) {
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (($userPath -split ';') -notcontains $bin) {
+        [Environment]::SetEnvironmentVariable('Path', ($bin + ';' + $userPath), 'User')
+    }
+    $env:Path = $bin + ';' + $env:Path
 }
-$env:Path = $bin + ';' + $env:Path
 Write-Host 'Installed native Windows source preview. Open a new terminal to use vika.'
 Write-Host 'Auto-upgrade is disabled. Slack requires slack.exe on PATH or SLACK_CLI_BIN.'
 if (-not $SkipSetup) {

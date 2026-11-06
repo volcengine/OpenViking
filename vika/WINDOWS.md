@@ -29,7 +29,9 @@ The installer copies source into `%USERPROFILE%\.vika\releases`, installs npm
 dependencies there and creates a `current` directory junction. Existing
 installations are refused; the installer never removes data/configuration or
 replaces a running installation. `-SkipSetup` installs without the interactive
-wizard. No Administrator permission is needed. Login startup uses the user's
+wizard. `-SkipPathUpdate` also leaves both user and process PATH untouched
+(useful for isolated installations and CI). No Administrator permission is
+needed. Login startup uses the user's
 Startup folder (Windows Script Host must be enabled), not a system service;
 logging out may stop the processes.
 
@@ -63,6 +65,9 @@ node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-
 ```
 
 The Windows CI job tests pipe transport, platform invocation, and autostart file
-creation/removal. It does not log in to external services or claim to validate
-interactive installation or real connector deliveries. Linux unit tests alone
+creation/removal. It also runs the real PowerShell installer in a disposable
+Unicode home with npm lifecycle scripts enabled, checks the installed Pi and
+Lark executables, tests both generated launchers, and verifies that an existing
+installation is refused. It does not log in to external services or validate
+interactive setup or real connector deliveries. Linux unit tests alone
 are not proof that the full Windows workflow works.

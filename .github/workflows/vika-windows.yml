@@ -27,3 +27,7 @@ jobs:
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/install-windows.ps1'), [ref]$null, [ref]$errors) | Out-Null
           if ($errors.Count) { throw ($errors | Out-String) }
+      - name: Install source into an isolated Unicode Windows home
+        shell: powershell
+        timeout-minutes: 15
+        run: .\scripts\test-install-windows.ps1
