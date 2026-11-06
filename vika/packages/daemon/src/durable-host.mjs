@@ -34,9 +34,9 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { availableChatModels, loadDurableModels } from './durable-models.mjs';
 import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
 import { DURABLE_PROTOCOL } from './durable-runtime.mjs';
+import { inlineImageBlocks } from './inline-images.mjs';
 
 const context = BACKGROUND_CONTEXT;
-const MAX_INLINE_IMAGE_BYTES = 10_000_000;
 const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 function packageVersion() {
@@ -192,13 +192,7 @@ class Host {
           const output = [{ type: 'text', text: String(result?.text ?? '') }];
           // Images travel as content blocks, like the MCP adapter's inline
           // images, so get_message_media can hand one to a vision model.
-          for (const media of result?.media ?? []) {
-            if (!String(media.mime_type ?? '').startsWith('image/')) continue;
-            if (!Number.isFinite(media.size) || media.size > MAX_INLINE_IMAGE_BYTES) continue;
-            try {
-              output.push({ type: 'image', data: fs.readFileSync(media.path).toString('base64'), mimeType: media.mime_type });
-            } catch {}
-          }
+          output.push(...await inlineImageBlocks(result?.media));
           return { output };
         },
       }));
