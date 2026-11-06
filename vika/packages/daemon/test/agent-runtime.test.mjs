@@ -743,6 +743,7 @@ describe('global Codex/Claude hard switch', () => {
     // Latest OV with Working Memory off: archived messages leave /context and
     // no overview replaces them.
     const ov = new OVSessionContext(store, {
+      namespace: 'test-namespace',
       messages: [],
       async create(id) { return { session_id: id, uri: `viking://session/${id}` }; },
       async append(id, message) { this.messages.push({ ...message, parts: [{ type: 'text', text: message.content }] }); },

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { OVSessionClient, OVSessionContext } from '../src/ov-session-context.mjs';
 import { cognitionHistoryPrefix } from '../src/cognition.mjs';
 import { OVUnavailableError } from '../src/ov-connection.mjs';
+import { chatEvent, subjectEvent } from './event-fixture.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 function setup(t) {
@@ -18,6 +19,8 @@ function setup(t) {
   // Latest OV with Working Memory off: a completed archive leaves no overview
   // and drops out of /context.
   const client = {
+    // The namespace an authenticated connection writes to (OVSessionClient.check).
+    namespace: 'test-namespace',
     messages: [], archives: 0, failed: 0, writes: 0, commits: 0, pending: 0,
     async create(id) { return { session_id: id, uri: `viking://session/${id}` }; },
     async append(id, message) {
@@ -64,6 +67,22 @@ test('uncertain successful append reconciles source ID after restart', async (t)
   await restored.prepare(epoch);
   assert.equal(client.writes, 1);
   assert.equal(store.db.prepare('SELECT pending_seq FROM ov_session_sync').get().pending_seq, null);
+});
+
+test('each line reaches OV attributed to who said it: the owner as the user, others as their peers, the agent and daemon as assistant', async (t) => {
+  const { store, epoch, client, service } = setup(t);
+  const inbound = (actor, peer, text) => store.appendCognitionJournal({ kind: 'inbound', actor, chatId: 'oc-chat', messageId: text, text,
+    metadata: { event: chatEvent({ senderId: actor, messageId: text, content: text }).envelope, peer } });
+  inbound('ou_owner', null, 'owner line');
+  inbound('ou_zhiheng', 'lark-ou_zhiheng', 'peer line');
+  store.appendCognitionJournal({ kind: 'outbound', text: 'agent reply' });
+  store.appendCognitionJournal({ kind: 'control', actor: 'ou_owner', text: 'slash command /new' });
+  // A reminder the agent set: an event without a sender.
+  store.appendCognitionJournal({ kind: 'inbound', actor: 'unknown', text: 'reminder', metadata: { event: subjectEvent().envelope } });
+  await service.prepare(epoch);
+  assert.deepEqual(client.messages.map(({ role, peer_id: peer }) => [role, peer ?? null]), [
+    ['user', null], ['user', 'lark-ou_zhiheng'], ['assistant', null], ['assistant', null], ['assistant', null],
+  ]);
 });
 
 test('cancelled journal rows are skipped while syncing to OV', async (t) => {
@@ -175,6 +194,8 @@ test('OV HTTP client pins auth, disables auto commits, retains a token tail, and
   assert.deepEqual(JSON.parse(request.options.body), {
     retention_mode: 'turn_budget', keep_recent_turn_count: 10_000, retained_message_token_budget: 24_000,
   });
+  await client.commit('test', { final: true });
+  assert.deepEqual(JSON.parse(request.options.body), { keep_recent_count: 0 });
   await client.context('test');
   assert.equal(request.url, 'https://ov.invalid/api/v1/sessions/test/context?token_budget=48000');
   client.fetch = async () => new Response('secret-test-key remote private content', { status: 503 });

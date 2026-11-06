@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { configureOpenViking, discoverOpenViking, saveOVConnection } from '../src/ov-setup.mjs';
+import { configureOpenViking, discoverOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from '../src/ov-setup.mjs';
 import { detectOpenViking, HOSTED_OV_URL, LOCAL_OV_URL, savedOVConfigPath } from '../src/ov.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { setLanguage } from '../src/i18n.mjs';
@@ -126,7 +126,8 @@ test('a healthy discovery still offers manual entry and accepts a different conn
   const h = fixture(t, ['3', remote, '1', 'test-secret', '', '', '']);
   const result = await configureOpenViking({ ...h.options, fetchImpl: fetchOV({ local: true }) });
   assert.equal(result.url, remote);
-  assert.match(h.text(), /Use the local default address \(no credentials\)\s+http:\/\/127\.0\.0\.1:1933 · ready/);
+  // A dev server takes the user from the request: the instance would be a user of its own.
+  assert.match(h.text(), /Use the local default address \(no credentials\)\s+http:\/\/127\.0\.0\.1:1933 · user=<instance name> · ready/);
   assert.match(h.text(), /Enter or edit the address and credentials/);
 });
 
@@ -194,7 +195,8 @@ test('a configured local connection is checked with its identity without an anon
   } });
   assert.equal(result.usable, true);
   assert.equal(calls.length, 4, 'discovery and the selected config each check health and identity');
-  assert.match(h.text(), /Use the OpenViking CLI’s config\s+http:\/\/127\.0\.0\.1:1933 · user=owner · ready/);
+  // The menu shows who the instance would be, not the connection's own user.
+  assert.match(h.text(), /Use the OpenViking CLI’s config\s+http:\/\/127\.0\.0\.1:1933 · user=owner\.<instance name> · ready/);
   assert.doesNotMatch(h.text(), /local default address|HTTP 400/);
   assert.match(h.text(), /Enter or edit the address and credentials/);
 });
@@ -232,6 +234,112 @@ test('a configuration file can be imported after an invalid path; cancellation s
   const cancel = fixture(t, ['6']);
   await assert.rejects(configureOpenViking({ ...cancel.options, fetchImpl: fetchOV() }), { name: 'PromptAborted' });
   assert.deepEqual(fs.readdirSync(cancel.home), []);
+});
+
+// An API key server that knows who each key is.
+function fetchKeys(keys) {
+  return async (url, init) => {
+    if (url.startsWith(LOCAL_OV_URL)) throw new Error('offline');
+    const who = keys[init.headers['X-API-Key']];
+    if (!who) return Response.json({ status: 'error' }, { status: 401 });
+    if (url.endsWith('/health')) return Response.json({ status: 'ok', auth_mode: 'api_key', account_id: 'team', user_id: who.user, role: who.role });
+    return Response.json({ status: 'ok', result: { initialized: true, user: who.user } });
+  };
+}
+
+test('an API key another instance logs in with is shared only when the owner says so', async (t) => {
+  //                    manual URL     key  typed      acct user agent  back  manual URL keep acct user agent share
+  const h = fixture(t, ['3', remote, '1', 'amy-key', '', '', '', '2', '3', '', '1', '', '', '', '1']);
+  const other = path.join(h.home, 'asd.json');
+  fs.writeFileSync(other, JSON.stringify({ url: `${remote}/`, api_key: 'amy-key', user: 'amy' }));
+  const taken = takenIdentities({ agents: [{ id: 'asd', ovConfig: other }, { id: 'fresh', ovConfig: null }], exclude: 'fresh', homeDir: h.home });
+  const result = await configureOpenViking({ ...h.options, taken, instanceId: 'fresh',
+    fetchImpl: fetchKeys({ 'amy-key': { user: 'amy', role: 'user' } }) });
+  // The first answer went back to the menu; the second shared.
+  assert.equal(h.text().split('This instance’s identity in OpenViking').length, 3);
+  assert.match(h.text(), /Share amy with instance asd\s+their memories are not kept apart/);
+  assert.match(h.text(), /Choose another connection or key/);
+  assert.deepEqual(result.identity, { mode: 'shared' });
+  assert.equal(result.config.user, 'amy');
+  assert.doesNotMatch(h.text(), /Create a user/, 'only an administrator can create users');
+});
+
+test('a key no one else uses is the instance identity without a question; a Trusted server derives one', async (t) => {
+  const h = fixture(t, ['3', remote, '1', 'bob-key', '', '', '']);
+  const result = await configureOpenViking({ ...h.options, taken: [], instanceId: 'fresh',
+    fetchImpl: fetchKeys({ 'bob-key': { user: 'bob', role: 'user' } }) });
+  assert.deepEqual(result.identity, { mode: 'key' });
+  assert.doesNotMatch(h.text(), /identity in OpenViking/);
+
+  const trusted = fixture(t, ['3', '', '2', 'team', 'owner', '']);
+  const derived = await configureOpenViking({ ...trusted.options, taken: [{ label: 'instance asd', url: LOCAL_OV_URL, user: 'owner' }],
+    fetchImpl: async () => Response.json({ status: 'ok', auth_mode: 'trusted', result: [] }) });
+  assert.deepEqual(derived.identity, { mode: 'instance' });
+  assert.doesNotMatch(trusted.text(), /identity in OpenViking/);
+});
+
+test('an administrator key can create the instance a user of its own, and is then not saved for the next instance', async (t) => {
+  const h = fixture(t, ['3', remote, '1', 'admin-key', '', '', '', '1']);
+  const result = await configureOpenViking({ ...h.options, taken: [], instanceId: 'fresh',
+    fetchImpl: fetchKeys({ 'admin-key': { user: 'boss', role: 'admin' } }) });
+  assert.match(h.text(), /Create a user for this instance\s+boss\.fresh, created with this administrator key, which is not kept/);
+  assert.match(h.text(), /Run as boss\s+an administrator/);
+  assert.deepEqual(result.identity, { mode: 'register' });
+  assert.equal(result.account, 'team');
+  assert.equal(saveOVConnection(result, h.options), null);
+  assert.equal(fs.existsSync(savedOVConfigPath(h.home)), false);
+  assert.doesNotMatch(h.text(), /admin-key/);
+});
+
+test('choosing a new user on the current admin connection writes a new config and preserves the old file until save', async (t) => {
+  const h = fixture(t, ['1', '1']);
+  const current = path.join(h.home, 'current.json');
+  const original = JSON.stringify({ url: remote, api_key: 'admin-key', user: 'boss' });
+  fs.writeFileSync(current, original);
+  const registrations = [];
+  const keys = fetchKeys({ 'admin-key': { user: 'boss', role: 'admin' }, 'new-key': { user: 'boss.fresh', role: 'user' } });
+  const fetchImpl = async (url, init) => {
+    if (url.endsWith('/users')) {
+      registrations.push({ url, body: JSON.parse(init.body), key: init.headers['X-API-Key'] });
+      return Response.json({ status: 'ok', result: { user_key: 'new-key' } });
+    }
+    return keys(url, init);
+  };
+  const detected = await configureOpenViking({ ...h.options, preferredConfigPath: current, instanceId: 'fresh', fetchImpl });
+  assert.equal(detected.configPath, current);
+  assert.equal(detected.identity.mode, 'register');
+  const pending = new Set();
+  const prepared = await prepareInstanceOpenViking({ ...h.options, agent: { id: 'fresh', ovConfig: current }, detected, pending, fetchImpl });
+  assert.notEqual(prepared, current);
+  assert.deepEqual(registrations, [{ url: `${remote}/api/v1/admin/accounts/team/users`,
+    body: { user_id: 'boss.fresh', role: 'user' }, key: 'admin-key' }]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(prepared, 'utf8')), { url: remote, api_key: 'new-key', user: 'boss.fresh' });
+  assert.equal(fs.statSync(prepared).mode & 0o777, 0o600);
+  assert.deepEqual([...pending], [prepared]);
+  assert.equal(fs.readFileSync(current, 'utf8'), original);
+  // Keeping the existing key still reuses the connection without registration.
+  assert.equal(await prepareInstanceOpenViking({ ...h.options, agent: { id: 'fresh', ovConfig: current },
+    detected: { ...detected, identity: { mode: 'key' } }, pending, fetchImpl }), current);
+  assert.equal(registrations.length, 1);
+});
+
+test('the menu shows who a new instance would be: its own Trusted user, or a key and who else uses it', async (t) => {
+  //                   saved, CLI, hosted, manual, file, detect again, exit
+  const h = fixture(t, ['7']);
+  fs.mkdirSync(path.join(h.home, '.openviking'));
+  fs.writeFileSync(path.join(h.home, '.openviking', 'ovcli.conf'), JSON.stringify({ url: LOCAL_OV_URL, account: 'team', user: 'weihan.liu' }));
+  fs.mkdirSync(path.dirname(savedOVConfigPath(h.home)), { recursive: true });
+  fs.writeFileSync(savedOVConfigPath(h.home), JSON.stringify({ url: remote, api_key: 'nv-key', user: 'Vika-Nvidia' }));
+  const nvidia = path.join(h.home, 'vika-nvidia.json');
+  fs.writeFileSync(nvidia, JSON.stringify({ url: remote, api_key: 'nv-key', user: 'Vika-Nvidia' }));
+  const taken = takenIdentities({ agents: [{ id: 'vika-nvidia', ovConfig: nvidia }], homeDir: h.home });
+  const keys = fetchKeys({ 'nv-key': { user: 'Vika-Nvidia', role: 'user' } });
+  await assert.rejects(configureOpenViking({ ...h.options, taken, instanceId: 'agent3', fetchImpl: async (url, init) => (url.startsWith(LOCAL_OV_URL)
+    ? Response.json({ status: 'ok', auth_mode: 'trusted', result: { initialized: true } })
+    : keys(url, init)) }), { name: 'PromptAborted' });
+  assert.match(h.text(), /Use the connection entered in setup last time\s+https:\/\/ov\.example:9443 · user=Vika-Nvidia · also used by instance vika-nvidia · ready/);
+  assert.match(h.text(), /Use the OpenViking CLI’s config\s+http:\/\/127\.0\.0\.1:1933 · user=weihan\.liu\.agent3 · ready/);
+  assert.doesNotMatch(h.text(), /user=weihan\.liu ·/);
 });
 
 test('a typed connection is kept privately for the next instance; a file new instances find anyway is not copied', async (t) => {

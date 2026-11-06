@@ -44,6 +44,7 @@
       "workspace": "/Users/you/Documents/work/primary-workspace",
       "ovConfig": "/Users/you/.openviking/ovcli.conf.primary",
       "ovAutoRecall": false,
+      "ovRecallScope": "all",
       "explicitSilence": true,
       "stagedReplies": false,
       "role": "assistant",

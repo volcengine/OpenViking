@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { formatCognitionJournalLine } from './cognition.mjs';
 import { safeError } from './logger.mjs';
-import { OVConnection, readOVConfig } from './ov-connection.mjs';
+import { OVConnection, OVUnavailableError, readOVConfig } from './ov-connection.mjs';
 
 // A commit keeps the newest complete turns, up to RETAINED_TOKENS, live as raw
 // messages and runs once COMMIT_TOKENS more are pending, so the live session
@@ -12,6 +12,14 @@ import { OVConnection, readOVConfig } from './ov-connection.mjs';
 const RETAINED_TOKENS = 24_000;
 const COMMIT_TOKENS = 24_000;
 const CONTEXT_TOKENS = RETAINED_TOKENS + COMMIT_TOKENS;
+
+// The identity of a sync row from before rows were bound whose session this
+// connection did not find as its own (bindIdentity).
+const FOREIGN = 'foreign';
+
+// No response and no timeout: OV was not reached, so any other request fails
+// as well. One request that ran out of time says nothing about the others.
+const unreachable = (error) => error instanceof OVUnavailableError && error.httpStatus === undefined && !error.timedOut;
 
 // OV releases up to v0.4.23, the hosted service among them, still write
 // Working Memory at every commit, and the daemon leaves OV's settings alone.
@@ -23,12 +31,40 @@ export function withoutWorkingMemory({ latest_archive_overview: _overview, pre_a
   return { ...context, messages: context.messages?.filter(({ message_kind: kind }) => kind !== 'checkpoint') };
 }
 
+// Whom OV attributes a journal line to; memory extraction files what a user
+// line says under its speaker. Something someone sent is the owner's own (no
+// peer) or that sender's peer, as decided at ingest (ov-peer.mjs). The agent's
+// deliveries, the daemon's control lines and the agent's own reminders (an
+// event without a sender) are assistant lines: context, never the owner's
+// words. A line from before peers were recorded stays a plain user line.
+export function ovAttribution(item) {
+  if (item.kind !== 'inbound') return { role: 'assistant' };
+  const event = item.metadata?.event;
+  if (event && !event.actor) return { role: 'assistant' };
+  const peer = item.metadata?.peer;
+  return typeof peer === 'string' && peer ? { role: 'user', peer_id: peer } : { role: 'user' };
+}
+
 // OV owns archives and assembled context. SQLite retains only the transport
 // cursor/intent here; cognition_journal is the existing durable delivery ledger
 // and sync outbox, never a prompt source.
 export class OVSessionClient extends OVConnection {
   constructor(configPath, options) {
     super(readOVConfig(configPath), options);
+    this.namespace = null;
+  }
+
+  // Also settles which namespace this connection writes to: the server, and
+  // the account and user OV authenticated (an API key overrides configured
+  // headers, so rotating a key keeps the namespace). A server that does not
+  // report the account under a key is bound to the key itself.
+  async check() {
+    const health = await this.json('/health');
+    const user = await this.authenticate() ?? health.user_id ?? (this.user || null);
+    const account = health.account_id
+      ?? (health.auth_mode === 'api_key' ? this.headers['X-API-Key'] : this.headers['X-OpenViking-Account']) ?? null;
+    this.namespace = createHash('sha256').update(JSON.stringify([this.url, account, user])).digest('hex');
+    return health;
   }
 
   async request(route, body) {
@@ -45,8 +81,8 @@ export class OVSessionClient extends OVConnection {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${CONTEXT_TOKENS}`);
   }
   // The turn count is OV's maximum, so only the token budget binds.
-  commit(sessionId) {
-    return this.request(`/sessions/${encodeURIComponent(sessionId)}/commit`, {
+  commit(sessionId, { final = false } = {}) {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/commit`, final ? { keep_recent_count: 0 } : {
       retention_mode: 'turn_budget', keep_recent_turn_count: 10_000, retained_message_token_budget: RETAINED_TOKENS,
     });
   }
@@ -86,13 +122,32 @@ export class OVSessionContext {
     this.client = client;
     this.logger = logger;
     this.barrier = Promise.resolve();
+    // Retired epochs are finalized in a queue of their own (checkpoint).
+    this.retiredBarrier = Promise.resolve();
     this.contexts = new Map();
     this.stopped = false;
     this.checked = new Map();
+    // The namespace sync rows are bound to (bindIdentity), and the first epoch
+    // seen under it: older epochs without a row are not this connection's.
+    this.identity = null;
+    this.firstEpoch = store.getCognitionState().epoch;
     store.db.exec(`CREATE TABLE IF NOT EXISTS ov_session_sync (
       epoch INTEGER PRIMARY KEY, session_id TEXT NOT NULL, uri TEXT,
       synced_seq INTEGER NOT NULL DEFAULT 0, pending_seq INTEGER
     )`);
+    const columns = new Set(store.db.prepare('PRAGMA table_info(ov_session_sync)').all().map(({ name }) => name));
+    if (!columns.has('identity')) store.db.exec('ALTER TABLE ov_session_sync ADD COLUMN identity TEXT');
+    if (!columns.has('finalized_seq')) store.db.exec('ALTER TABLE ov_session_sync ADD COLUMN finalized_seq INTEGER NOT NULL DEFAULT -1');
+    // The epoch's session in the namespace this connection writes to, once
+    // it exists there; null before binding and for another connection's.
+    // Recall and the archive tool use nothing else, so neither reaches into
+    // another namespace nor creates a session there.
+    store.ovSessionFor = (epoch) => {
+      if (!this.identity) return null;
+      const state = store.db.prepare('SELECT session_id, uri FROM ov_session_sync WHERE epoch=? AND identity=?')
+        .get(epoch, this.identity);
+      return state?.uri ? state : null;
+    };
     store.prepareOVContext = async (epoch) => {
       try {
         return await this.prepare(epoch);
@@ -123,11 +178,23 @@ export class OVSessionContext {
     return work;
   }
 
+  // The epoch's sync row in this connection's namespace, created as needed.
+  // Another namespace's session stays where it is: the current epoch moves to
+  // a fresh session here (its journal is replayed), an older one is not ours.
   async session(epoch) {
+    await this.bindIdentity();
     let state = this.store.db.prepare('SELECT * FROM ov_session_sync WHERE epoch=?').get(epoch);
+    if (state && state.identity !== this.identity) {
+      if (epoch < this.store.getCognitionState().epoch) throw new Error('This epoch belongs to another OpenViking connection');
+      this.store.db.prepare('DELETE FROM ov_session_sync WHERE epoch=?').run(epoch);
+      state = null;
+      this.checked.delete(epoch);
+      this.contexts.delete(epoch);
+    }
+    if (!state && epoch < this.firstEpoch) throw new Error('This epoch belongs to another OpenViking connection');
     if (!state) {
-      this.store.db.prepare('INSERT INTO ov_session_sync(epoch,session_id) VALUES (?,?)')
-        .run(epoch, `lark-${randomUUID()}`);
+      this.store.db.prepare('INSERT INTO ov_session_sync(epoch,session_id,identity) VALUES (?,?,?)')
+        .run(epoch, `lark-${randomUUID()}`, this.identity);
       state = this.store.db.prepare('SELECT * FROM ov_session_sync WHERE epoch=?').get(epoch);
     }
     if (!state.uri) {
@@ -138,6 +205,38 @@ export class OVSessionContext {
       state.uri = remote.uri;
     }
     return state;
+  }
+
+  // Binds sync rows to the namespace this connection writes to, once per
+  // process. A row from before rows were bound is this namespace's only if
+  // its session is found here under the same URI; otherwise it is left to its
+  // own connection, said once here, and never retried.
+  async bindIdentity() {
+    if (this.identity) return;
+    if (!this.client.namespace) await this.client.check();
+    const identity = this.client.namespace;
+    const legacy = this.store.db.prepare('SELECT epoch, session_id, uri FROM ov_session_sync WHERE identity IS NULL').all();
+    const foreign = [];
+    for (const row of legacy) {
+      let ours = false;
+      if (row.uri) {
+        try {
+          ours = (await this.client.request(`/sessions/${encodeURIComponent(row.session_id)}`))?.uri === row.uri;
+        } catch (error) {
+          // Absent or out of reach here: another namespace's session.
+          if (error.httpStatus !== 404 && error.httpStatus !== 403) throw error;
+        }
+      }
+      this.store.db.prepare('UPDATE ov_session_sync SET identity=? WHERE epoch=?').run(ours ? identity : FOREIGN, row.epoch);
+      if (!ours) foreign.push(row.epoch);
+    }
+    if (foreign.length) this.logger.warn('ov_epochs_left_behind', { epochs: foreign });
+    const saved = this.store.db.prepare("SELECT value FROM meta WHERE key='ov_session_identity'").get();
+    const previous = saved ? JSON.parse(saved.value) : null;
+    if (previous?.identity === identity) this.firstEpoch = previous.firstEpoch;
+    this.store.db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES ('ov_session_identity',?)")
+      .run(JSON.stringify({ identity, firstEpoch: this.firstEpoch }));
+    this.identity = identity;
   }
 
   // A write timeout is ambiguous. Commits run only after a complete sync, so
@@ -182,7 +281,7 @@ export class OVSessionContext {
         this.store.db.prepare('UPDATE ov_session_sync SET pending_seq=? WHERE epoch=?').run(row.seq, epoch);
         state.pending_seq = row.seq;
         await this.client.append(state.session_id, {
-          role: item.kind === 'outbound' ? 'assistant' : 'user',
+          ...ovAttribution(item),
           content: formatCognitionJournalLine(item),
           created_at: new Date(item.atMs).toISOString(),
           source_message_ids: [sourceId],
@@ -216,13 +315,69 @@ export class OVSessionContext {
   // lands on a turn boundary.
   checkpoint(epoch) {
     const throughSeq = this.store.cognitionJournalHead(epoch);
-    return this.run(async () => {
+    const current = this.run(async () => {
+      await this.bindIdentity();
       if (this.checked.get(epoch) === throughSeq) return;
       const state = await this.session(epoch);
       if (!await this.sync(state, epoch, throughSeq)) return;
       await this.maybeCommit(state);
       this.checked.set(epoch, throughSeq);
     });
+    // Retired epochs are finalized in a queue of their own. A full commit is
+    // answered only once OV has archived the session, so in the shared queue
+    // the history a fresh session needs after /new would wait for all of
+    // them. They start once every job already in the shared queue is done
+    // (`current` is the last), so an epoch that just retired is never synced
+    // by both queues at once; only the current epoch is queued there later.
+    const retired = this.runRetired(async () => {
+      const failure = await current.then(() => null, (error) => error);
+      // Not bound to OV yet, or OV not reached at all: every session would
+      // fail alike, so the retired epochs wait for the next check.
+      if (this.stopped || !this.identity || unreachable(failure)) return;
+      await this.finalizeRetired();
+    });
+    // Settles once both are done; the current epoch's failure is reported.
+    return Promise.allSettled([current, retired]).then(([outcome]) => {
+      if (outcome.status === 'rejected') throw outcome.reason;
+    });
+  }
+
+  runRetired(fn) {
+    const work = this.retiredBarrier.then(fn);
+    this.retiredBarrier = work.catch(() => {});
+    return work;
+  }
+
+  // The epoch counter and journal survive /new and crashes, so a retired
+  // epoch of this namespace is a durable finalization job even if it was
+  // never synced. Retry even if the current head is unchanged, and don't let
+  // one failed old session stop another session from making progress.
+  async finalizeRetired() {
+    const retired = this.store.db.prepare(`SELECT j.epoch, MAX(j.seq) AS head
+      FROM cognition_journal j LEFT JOIN ov_session_sync s ON s.epoch=j.epoch
+      WHERE j.epoch<? AND j.status IN ('PENDING','COMMITTED','UNCERTAIN')
+        AND (s.identity=? OR (s.epoch IS NULL AND j.epoch>=?))
+      GROUP BY j.epoch HAVING MAX(j.seq)>COALESCE(s.finalized_seq,-1)
+      ORDER BY j.epoch`).all(this.store.getCognitionState().epoch, this.identity, this.firstEpoch);
+    for (const row of retired) {
+      if (this.stopped) throw new Error('OV sync stopped');
+      try {
+        const state = await this.session(row.epoch);
+        if (!await this.sync(state, row.epoch, row.head)) continue;
+        // No retained tail: this session will receive no more user turns.
+        // OV archives synchronously before returning, and retrying after
+        // an ambiguous response is safe (an empty session is a no-op).
+        await this.client.commit(state.session_id, { final: true });
+        if (this.stopped) throw new Error('OV sync stopped');
+        this.store.db.prepare('UPDATE ov_session_sync SET finalized_seq=? WHERE epoch=?').run(row.head, row.epoch);
+      } catch (error) {
+        if (this.stopped) throw error;
+        this.logger.warn('ov_epoch_finalize_failed', { epoch: row.epoch, error: safeError(error) });
+        // A refused connection fails the rest too. A slow or failing session
+        // does not: the next one still gets its turn.
+        if (unreachable(error)) return;
+      }
+    }
   }
 
   // Keeps no local commit state. A commit with an unknown outcome is safe to

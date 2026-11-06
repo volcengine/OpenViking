@@ -68,12 +68,14 @@ export class OVConnection {
       const data = JSON.parse(text);
       if (!response.ok || data.status !== 'ok') throw new Error();
       return data;
-    } catch {
-      // Never expose credentials, URLs, or response bodies.
-      throw new OVUnavailableError(
+    } catch (error) {
+      // Never expose credentials, URLs, or response bodies. A request that ran
+      // out of time says so: unlike a refused connection, it tells nothing
+      // about other requests.
+      throw Object.assign(new OVUnavailableError(
         `OpenViking request failed${response ? ` (HTTP ${response.status})` : ' or timed out'}`,
         response?.status,
-      );
+      ), { timedOut: error?.name === 'TimeoutError' });
     }
   }
 
