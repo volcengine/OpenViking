@@ -30,8 +30,11 @@ def load_configuration(settings) -> dict:
         if not server.endswith("/nacos"):
             server += "/nacos"
         opener = build_opener(_NoRedirect)
-        query = {"dataId": settings.nacos_data_id, "group": settings.nacos_group}
-        namespace = settings.nacos_namespace
+        query = {
+            "dataId": settings.nacos_data_id or os.getenv("NACOS_DATA_ID", "global_configs"),
+            "group": settings.nacos_group or os.getenv("NACOS_GROUP", "DEFAULT_GROUP"),
+        }
+        namespace = settings.nacos_namespace or os.getenv("NACOS_NAMESPACE", "public")
         if namespace and namespace != "public":
             query["tenant"] = namespace
         username = os.getenv("NACOS_USERNAME")

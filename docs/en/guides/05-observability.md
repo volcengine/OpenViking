@@ -583,9 +583,17 @@ Deployments may bind an outer account and instance with `OV_METRICS_ACCOUNT_ID`
 and `OV_RESOURCE_ID`; original space and member identities remain in
 `ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
 only when the deployment knows who owns its model credentials. Otherwise the
-owner stays `unknown`. Explicit event ownership and precise
-`telemetry.model_cost_bearers` rules take precedence; conflicting rules stay
-`unknown`. Events exclude document content, prompts and API keys.
+owner stays `unknown`. For mixed credentials, trusted provisioning should set
+`cost_bearer` (`ov`, `customer`, or `unknown`) on each VLM or embedding credential.
+The selected credential's metadata follows successful and failed calls, including
+failover candidates. An explicit `unknown` remains unknown; endpoint rules or a
+deployment default cannot relabel it. Only legacy calls without credential metadata
+use precise `telemetry.model_cost_bearers` rules and then the deployment default;
+conflicting rules stay `unknown`. Events exclude document content, prompts and API keys.
+
+The optional Nacos reporter uses explicitly configured `nacos_namespace`,
+`nacos_data_id` and `nacos_group` first, then `NACOS_NAMESPACE`, `NACOS_DATA_ID`
+and `NACOS_GROUP`, with defaults `public`, `global_configs` and `DEFAULT_GROUP`.
 
 ## Related Documentation
 

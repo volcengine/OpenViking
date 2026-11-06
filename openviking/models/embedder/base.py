@@ -506,6 +506,7 @@ class EmbedderBase(ABC):
                 account_id=getattr(self, "_account_id", None)
                 or (root_context.account_id if root_context is not None else None),
                 source_type=get_ingestion_source_type(),
+                cost_bearer=getattr(self, "cost_bearer", None),
             )
         except Exception as e:
             # Metrics must never break embedding execution.

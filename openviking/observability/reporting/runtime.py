@@ -66,13 +66,17 @@ def make_subscriber(reporter, config):
             specificity = lambda item: sum(bool(item.get(key)) for key in ("account_id", "resource_id", "ov_account_id"))
             rank = max((specificity(item) for item in matching), default=-1)
             bearers = {item["cost_bearer"] for item in matching if specificity(item) == rank}
-            if payload.get("cost_bearer") not in {"ov", "customer"}:
+            # Explicit per-credential provenance wins over library defaults and
+            # compatibility rules. An explicit unknown must not become customer.
+            if payload.get("cost_bearer") is None:
                 default_bearer = deployment.get("model_cost_bearer") or os.getenv("OV_MODEL_COST_BEARER")
                 payload["cost_bearer"] = (
                     next(iter(bearers)) if len(bearers) == 1 else
                     default_bearer if not matching and default_bearer in {"ov", "customer"} else
                     "unknown"
                 )
+            elif payload["cost_bearer"] not in {"ov", "customer", "unknown"}:
+                payload["cost_bearer"] = "unknown"
         tasks = source.get("metric_tasks") if name == "http_request" else None
         if tasks:
             for task in tasks:

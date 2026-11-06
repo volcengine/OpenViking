@@ -46,6 +46,7 @@ def _record_failed_embedding_call(
             prompt_tokens=0,
             completion_tokens=0,
             error_code=extract_metric_error_code(error),
+            cost_bearer=getattr(embedder, "cost_bearer", None),
             account_id=root_context.account_id if root_context is not None else None,
         )
     except Exception:

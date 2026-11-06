@@ -298,9 +298,9 @@ class EventReportingConfig(BaseModel):
     enabled: bool = False
     config_file: Optional[str] = None
     nacos_server: Optional[str] = None
-    nacos_namespace: str = "public"
-    nacos_data_id: str = "global_configs"
-    nacos_group: str = "DEFAULT_GROUP"
+    nacos_namespace: Optional[str] = None
+    nacos_data_id: Optional[str] = None
+    nacos_group: Optional[str] = None
 
 
 class ObservabilityConfig(BaseModel):

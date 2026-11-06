@@ -574,8 +574,15 @@ Kafka 的地址、认证和 topic 来自该配置的 `kafka`，不能写入业�
 部署可通过 `OV_METRICS_ACCOUNT_ID` 和 `OV_RESOURCE_ID` 绑定外层云账号与实例，
 原始数据空间和成员保留为 `ov_account_id`、`ov_user_id`。仅当部署能够确定模型凭据
 归属时，设置 `OV_MODEL_COST_BEARER=customer` 或 `ov`；未设置时保持 `unknown`。
-事件内明确的归属及 `telemetry.model_cost_bearers` 的精确规则优先，冲突规则保持
-`unknown`。上报不包含原文、提示词或 API Key。
+混用不同归属的凭据时，可信部署配置应在每个 VLM／Embedding 凭据上分别设置
+`cost_bearer`（`ov`、`customer` 或 `unknown`）。实际选中的凭据将此元数据带入成功及失败
+调用事件，候选凭据切换时分别归属。明确的 `unknown` 不会被端点规则或整库默认值改写；
+只有未携带凭据元数据的历史调用才依次使用 `telemetry.model_cost_bearers` 精确规则和
+部署默认值，冲突规则保持 `unknown`。上报不包含原文、提示词或 API Key。
+
+可选 Nacos 上报器优先使用明确配置的 `nacos_namespace`、`nacos_data_id`、`nacos_group`，
+其次读取 `NACOS_NAMESPACE`、`NACOS_DATA_ID`、`NACOS_GROUP`，默认分别为 `public`、
+`global_configs`、`DEFAULT_GROUP`。
 
 ## 相关文档
 
