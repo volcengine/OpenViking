@@ -8,7 +8,7 @@ No WSL, Git Bash, or Unix shell is required for the steps below.
 Prerequisites: Windows 10/11, PowerShell 5.1 or later, Git, Node.js 24 LTS
 (including npm). Install and log in to a supported agent runtime, or use the
 bundled Pi runtime with provider credentials. Prefer native `.exe` binaries;
-standard npm `.cmd` wrappers are resolved to their JavaScript entrypoints and
+Pi and Durable use their native PowerShell tools on Windows. Standard npm `.cmd` wrappers are resolved to their JavaScript entrypoints and
 run with Node, without passing prompts through a command shell.
 
 ```powershell
@@ -34,10 +34,10 @@ Startup folder (Windows Script Host must be enabled), not a system service;
 logging out may stop the processes.
 
 PM2 is invoked through its Node entrypoint and uses a dedicated `.vika\pm2`
-directory. Runtime termination uses `taskkill /T /F` on Windows, which forcefully
+directory and per-installation named pipes. Runtime termination uses `taskkill /T /F` on Windows, which forcefully
 stops the selected process tree. Action API connections use Windows named pipes
 and retain runtime authority checks; Unix socket permissions are not applied to
-pipes. Windows provides the pipe's default access control, so this preview is
+pipes. Media staging directories use a protected current-user-only Windows ACL; pre-existing shared directories are rejected without changing their permissions. Windows provides the pipe's default access control, so this preview is
 intended for a trusted single-user workstation.
 
 The Lark CLI comes from its npm package's Windows installation. Slack's CLI is

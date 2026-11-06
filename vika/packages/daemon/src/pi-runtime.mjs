@@ -31,3 +31,8 @@ export function assertPiVersion(output) {
     throw new Error(`Pi ${PI_VERSION} is required by this release; run npm ci and remove PI_BIN to use the managed version, or point PI_BIN at Pi ${PI_VERSION}`);
   }
 }
+
+// Preserve Pi's default and extension tool selection while replacing its shell.
+export function piPlatformTools(platform = process.platform) {
+  return platform === 'win32' ? ['--tools', '+powershell,-bash'] : [];
+}
