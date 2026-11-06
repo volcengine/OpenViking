@@ -213,7 +213,7 @@ class MarkdownParser(BaseParser):
         self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
-        self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+        self._heading_pattern = re.compile(r"^(#{1,6})[ \t]+(.+)$", re.MULTILINE)
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -656,6 +656,8 @@ class MarkdownParser(BaseParser):
 
             level = len(match.group(1))
             title = match.group(2).strip()
+            if not title:
+                continue
             headings.append((match.start(), match.end(), title, level))
 
         return headings

@@ -160,3 +160,67 @@ async def test_pdf_no_split_converts_to_one_complete_markdown(
         == content
     )
     assert not any(uri.endswith(".pdf") for uri in fake_fs.files)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+async def test_split_preserves_paragraph_after_empty_heading(newline: str) -> None:
+    paragraph = "A paragraph must stay ordinary body text."
+    content = newline.join(
+        [
+            "#",
+            "",
+            paragraph,
+            "",
+            "Normal article body with reproducible technical instructions. " * 52,
+            "",
+            "# Next section",
+            "",
+            "The next chapter contains independent ordinary prose. " * 45,
+        ]
+    )
+    parser = MarkdownParser(config=ParserConfig(max_section_chars=2000))
+
+    layout = await parser._compute_layout(
+        content, "viking://temp/empty-heading", resource_name="guide"
+    )
+
+    writes = [op for op in layout.ops if op.kind == "write"]
+    assert len(writes) > 1
+    planned_lines = [line for op in writes for line in (op.content or "").splitlines()]
+    assert paragraph in planned_lines
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("heading", ["#", "# \t"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+async def test_split_keeps_multiple_empty_headings_body(heading: str, newline: str) -> None:
+    first = "The first paragraph must remain ordinary body text."
+    second = "The second paragraph must remain ordinary body text."
+    content = newline.join(
+        [
+            heading,
+            "",
+            first,
+            "",
+            "Alpha ordinary article words. " * 35,
+            "",
+            heading,
+            "",
+            second,
+            "",
+            "Beta ordinary article words. " * 35,
+        ]
+    )
+    parser = MarkdownParser(config=ParserConfig(max_section_chars=2000))
+
+    layout = await parser._compute_layout(
+        content, "viking://temp/multiple-empty-headings", resource_name="guide"
+    )
+
+    writes = [op for op in layout.ops if op.kind == "write"]
+    assert len(writes) > 1
+    assert len({op.uri for op in writes}) == len(writes)
+    planned_lines = [line for op in writes for line in (op.content or "").splitlines()]
+    assert first in planned_lines
+    assert second in planned_lines
