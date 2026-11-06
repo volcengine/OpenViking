@@ -9,6 +9,7 @@ import json
 import logging
 import threading
 from collections.abc import Mapping
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Iterable
@@ -59,6 +60,10 @@ else:
         Item = SearchItem = object
 
 logger = logging.getLogger(__name__)
+
+_STORE_CALL_CONTEXT: ContextVar[tuple[tuple[int, threading.Event], ...]] = ContextVar(
+    "openviking_store_call_context", default=()
+)
 
 
 class OpenVikingStore(BaseStore):
@@ -122,8 +127,16 @@ class OpenVikingStore(BaseStore):
         self._closed = False
 
     def close(self) -> None:
-        """Close the Store and release its internally created client, if any."""
+        """Drain backend calls and release owned clients.
+
+        Closing from an active backend call raises instead of waiting on that call.
+        """
         with self._call_condition:
+            if any(
+                store_id == id(self) and active.is_set()
+                for store_id, active in _STORE_CALL_CONTEXT.get()
+            ):
+                raise RuntimeError("Cannot close OpenVikingStore from inside an active Store call")
             self._closed = True
             self._call_condition.wait_for(lambda: self._active_calls == 0)
             with self._client_lock:
@@ -390,15 +403,22 @@ class OpenVikingStore(BaseStore):
             return self._client_cache
 
     def _call(self, method_name: str, /, **kwargs: Any) -> Any:
-        with self._call_condition:
-            self._raise_if_closed()
-            self._active_calls += 1
+        active = threading.Event()
+        token = _STORE_CALL_CONTEXT.set((*_STORE_CALL_CONTEXT.get(), (id(self), active)))
         try:
-            return call_openviking(self._client(), method_name, **kwargs)
-        finally:
             with self._call_condition:
-                self._active_calls -= 1
-                self._call_condition.notify_all()
+                self._raise_if_closed()
+                self._active_calls += 1
+                active.set()
+            try:
+                return call_openviking(self._client(), method_name, **kwargs)
+            finally:
+                with self._call_condition:
+                    active.clear()
+                    self._active_calls -= 1
+                    self._call_condition.notify_all()
+        finally:
+            _STORE_CALL_CONTEXT.reset(token)
 
     def _raise_if_closed(self) -> None:
         if self._closed:
