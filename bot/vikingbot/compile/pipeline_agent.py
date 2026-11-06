@@ -262,6 +262,7 @@ def agent_runner(loop, session_key, connection, limits):
     """
 
     async def run(system, data, schema, validate, model, *, stage="agent"):
+        source_records = stage == "map_agent" and data.get("assignment_kind") == "source_records"
         child_id = uuid.uuid4().hex
         root = f"{COMPILE_DRAFT_ROOT}/{child_id}"
         evidence = EvidenceReader(model.files, data)
@@ -288,7 +289,7 @@ def agent_runner(loop, session_key, connection, limits):
             if tool is not None:
                 registry.register(CompileChildTool(tool, root, merge_only=True))
         tool = loop.tools.get("exec")
-        if (
+        if source_records or (
             loop.config.sandbox.backend == "direct"
             and not loop.config.sandbox.backends.direct.allow_compile_exec
         ):
@@ -320,6 +321,22 @@ def agent_runner(loop, session_key, connection, limits):
         )
         if stage == "map_agent":
             instructions = ""  # Map defines its own file access and submission rules.
+
+        async def require_submission(context):
+            from vikingbot.agent.loop import _PlainTextDelivered
+
+            messages = child.context.add_assistant_message(context.messages, context.text, [])
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "The result has not been submitted. Reuse the evidence and scratch files already read; "
+                        "call emit with the completed result (or result_ref). Do not restart collection."
+                    ),
+                }
+            )
+            return _PlainTextDelivered(messages=messages, tools_used=[])
+
         await child._run_agent_loop(
             messages=[
                 {
@@ -332,6 +349,7 @@ def agent_runner(loop, session_key, connection, limits):
             publish_events=False,
             tool_registry=registry,
             stop_tool_names=["emit"],
+            on_plain_text=require_submission,
             openviking_tool_names=set(registry.tool_names),
             openviking_connection=connection,
             allow_final_fallback=False,

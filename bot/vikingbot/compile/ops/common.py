@@ -185,6 +185,17 @@ async def transform(
                 raise ValueError("Combined evidence must not be blank")
             return
         for index, draft in enumerate(response.records):
+            if data.get("assignment_kind") == "source_records" and (
+                draft.ready_path is not None
+                or draft.ready_content is not None
+                or draft.ready_content_base64 is not None
+                or draft.ready_content_ref is not None
+                or draft.target_uri is not None
+            ):
+                raise ValueError(
+                    "Source extraction submits local facts in payload, not ready files or target pages; "
+                    "omit ready_* and target_uri. Later stages produce deliverables."
+                )
             allowed = {ref for r in records if r.record_id in draft.inputs for ref in r.source_refs}
             for span in draft.evidence_spans:
                 if span.source_range not in allowed:

@@ -6,6 +6,8 @@ import asyncio
 import json
 import posixpath
 import uuid
+from copy import deepcopy
+from typing import Any
 
 from openviking.core.namespace import relative_uri_path
 from openviking.utils.path_safety import safe_join_viking_uri
@@ -130,7 +132,7 @@ class EvidenceReader(Tool):
         "lines within the source_range shard; omit both for the complete shard. "
         "For image evidence omit line bounds to view the original image."
     )
-    parameters = {
+    _parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
             "source_range": {"type": "string"},
@@ -140,6 +142,15 @@ class EvidenceReader(Tool):
         "required": ["source_range"],
         "additionalProperties": False,
     }
+
+    @property
+    def parameters(self):
+        parameters = deepcopy(self._parameters)
+        parameters["properties"]["source_range"].update(
+            enum=sorted(self.allowed),
+            description="An exact assigned range ID from this enum, not a Viking URI.",
+        )
+        return parameters
 
     def __init__(self, files, data):
         self.files = files
