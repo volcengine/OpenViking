@@ -36,6 +36,8 @@ PROCESSING_VERSION = "compile-pipeline-38"
 DEFAULT_MAX_TOKENS = 32_000
 # Total attempts per operator job or routing record, including the initial execution.
 MAX_JOB_ATTEMPTS = 4
+# Total rejected submissions per direct assignment, even if diagnostics change.
+MAX_OUTPUT_ATTEMPTS = 4
 
 
 def parse_file_result(text: str) -> Any:
@@ -594,12 +596,16 @@ class JsonModel:
                 if stage == "compile" and category == "truncated":
                     raise ValueError(f"{stage}: {error}") from exc
                 # Routing owns retries per primary record, including malformed responses.
-                if schema is RouteBatchResponse or (
-                    failures > 3
-                    if stage in {"review", "compile"}
-                    else failures >= 3
-                    if stage == "skill_repair"
-                    else not retry_allowed(retries, error)
+                if (
+                    schema is RouteBatchResponse
+                    or failures >= MAX_OUTPUT_ATTEMPTS
+                    or (
+                        failures > 3
+                        if stage in {"review", "compile"}
+                        else failures >= 3
+                        if stage == "skill_repair"
+                        else not retry_allowed(retries, error)
+                    )
                 ):
                     raise ValueError(f"{stage}: {category}: {error}") from exc
                 self.metrics["repairs"] += 1

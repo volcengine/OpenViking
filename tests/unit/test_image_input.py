@@ -41,6 +41,13 @@ def test_animated_image_is_never_flattened(monkeypatch):
     assert compress_image_input(original, "image/gif") == (original, "image/gif")
 
 
+def test_large_high_bit_depth_image_preserves_original_intensities():
+    image = Image.frombytes("I;16", (800, 400), random.Random(16).randbytes(800 * 400 * 2))
+    original = encoded(image, format="PNG")
+    assert len(original) > 512 * 1024
+    assert compress_image_input(original, "image/png") == (original, "image/png")
+
+
 def test_small_original_is_kept_when_jpeg_would_be_larger(monkeypatch):
     monkeypatch.setattr("openviking.utils.image_input._COMPRESS_ABOVE_BYTES", 0)
     original = encoded(Image.new("RGB", (100, 100), "white"), format="PNG")

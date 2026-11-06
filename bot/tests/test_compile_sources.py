@@ -118,6 +118,39 @@ async def seed(runtime):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [False, True])
+async def test_output_repairs_stop_even_when_invalid_source_ids_change(runtime, recovers):
+    from vikingbot.compile.ops import common
+
+    pipeline, _ = runtime
+    await seed(runtime)
+    records = list(pipeline.records.values())
+    ids = [record.record_id for record in records]
+
+    def respond(**kwargs):
+        attempt = pipeline.model.provider.chat.await_count
+        assert attempt <= 4, "Changing diagnostics must not grant more output attempts"
+        inputs = ids if recovers and attempt == 4 else [f"unknown-source-{attempt}"]
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    "submit", "emit", {"records": [{"inputs": inputs, "content": "Fact"}]}, 0
+                )
+            ],
+        )
+
+    pipeline.model.provider.chat.side_effect = respond
+    if recovers:
+        result = await common.transform(pipeline, "combine", None, records, prompt="Keep facts.")
+        assert set(result[0].source_refs) == set(ids)
+    else:
+        with pytest.raises((ValueError, ModelCallError), match="unknown-source-4"):
+            await common.transform(pipeline, "combine", None, records, prompt="Keep facts.")
+    assert pipeline.model.provider.chat.await_count == 4
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("result_mode", ["files", "pipeline", "noop"])
 async def test_preloaded_image_fact_reaches_output_with_source_identity(runtime, result_mode):
     pipeline, png = runtime

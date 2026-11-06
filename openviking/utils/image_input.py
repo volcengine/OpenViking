@@ -25,6 +25,9 @@ def compress_image_input(data: bytes, mime_type: str) -> tuple[bytes, str]:
     with Image.open(io.BytesIO(data)) as original:
         if getattr(original, "is_animated", False):
             return data, mime_type
+        # RGB conversion clips high-bit-depth intensities instead of scaling them.
+        if original.mode in {"I", "F"} or original.mode.startswith("I;16"):
+            return data, mime_type
         image = ImageOps.exif_transpose(original)
         image.thumbnail(
             (DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION, DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION),
