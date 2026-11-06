@@ -288,6 +288,60 @@ def _body_markdown_links(body: str) -> list[MarkdownLink]:
     ]
 
 
+def _local_wiki_links(content: str, path: str):
+    directory = posixpath.dirname(path) or "."
+    for link in _body_markdown_links(content):
+        target = link.target
+        angle = target.startswith("<") and target.endswith(">")
+        bare = target[1:-1] if angle else target
+        if not bare or bare.startswith(("/", "#", "?")) or re.match(r"^[A-Za-z][\w+.-]*:", bare):
+            continue
+        separator = re.search(r"[?#]", bare)
+        raw_path = bare[: separator.start()] if separator else bare
+        suffix = bare[separator.start() :] if separator else ""
+        destination = LinkRenderer.normalize_markdown_target(raw_path)
+        relative = posixpath.normpath(posixpath.join(directory, destination))
+        if destination in {".", ".."} or destination.startswith("../"):
+            continue
+        yield link, angle, suffix, destination, relative
+
+
+def wiki_page_link_targets(content: str, path: str) -> set[tuple[str, str]]:
+    """Return root/page-relative candidates to check against the actual target namespace."""
+    return {
+        (destination, relative)
+        for _, _, _, destination, relative in _local_wiki_links(content, path)
+        if destination != relative
+    }
+
+
+def normalize_wiki_page_links(content: str, *, path: str, known_paths: set[str]) -> tuple[str, int]:
+    """Repair verified root-relative links while preserving valid page-relative meaning.
+
+    Callers resolve candidate paths against existing targets as well as new files;
+    absence from a partial catalog does not prove a destination is missing.
+    Unknown destinations and external evidence stay as-is.
+    """
+    edits = []
+    directory = posixpath.dirname(path) or "."
+    for link, angle, suffix, destination, relative in _local_wiki_links(content, path):
+        if relative in known_paths or destination not in known_paths:
+            continue
+        replacement = (
+            LinkRenderer.encode_markdown_target(posixpath.relpath(destination, directory)) + suffix
+        )
+        target = link.target
+        if angle:
+            replacement = "<" + replacement + ">"
+        # Change only the destination, retaining label, optional title and whitespace.
+        start = content.find(target, link.start + len(link.text) + 3, link.end)
+        if start >= 0:
+            edits.append((start, start + len(target), replacement))
+    for start, end, replacement in reversed(edits):
+        content = content[:start] + replacement + content[end:]
+    return content, len(edits)
+
+
 def _link_uri(target: str, source_uri: str) -> str:
     """Resolve a Markdown destination to an absolute URI for deduplication and lookup."""
     target = LinkRenderer.normalize_markdown_target(target)
