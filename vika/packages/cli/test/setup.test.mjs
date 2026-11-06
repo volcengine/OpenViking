@@ -102,7 +102,8 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     ovAutoRecall: false,
     stagedReplies: false,
     naturalWriting: true,
-    explicitSilence: false,
+    // On by default for every runtime but Ark.
+    explicitSilence: true,
     // The first AI colleague on Feishu stores the owner's meeting notes.
     meetingNotes: true,
     role: 'colleague',
@@ -623,7 +624,7 @@ test('其他设置 switches each setting where it is, says what changes, and sav
   for (const key of ['stagedReplies', 'naturalWriting', 'explicitSilence']) delete old[key];
   fs.writeFileSync(path.join(recall.home, '.vika', 'config.json'), JSON.stringify({ version: 1, defaultInstance: old.id, env: {}, agents: [old] }));
   assert.equal(await setupCommand(recall.options), 0);
-  assert.deepEqual(recall.manifest().agents, [{ ...old, stagedReplies: false, naturalWriting: true, explicitSilence: false, ovAutoRecall: true }]);
+  assert.deepEqual(recall.manifest().agents, [{ ...old, stagedReplies: false, naturalWriting: true, explicitSilence: true, ovAutoRecall: true }]);
   assert.match(recall.written(), /将修改 ASD（asd）：\n  OpenViking 自动召回：关 → 开\n/);
 });
 
@@ -634,7 +635,7 @@ test('a new instance takes a shipped role by what it is for', async (t) => {
   assert.equal(h.manifest().agents[0].role, 'assistant');
   assert.match(h.written(), /1\) AI 同事  你的 AI 分身[^\n]*\n  2\) 个人助理  只为你工作[^\n]*\n  3\) 答疑助手  [^\n]*\n  4\) 自己写 prompt/);
   assert.match(h.written(), /角色\s+个人助理\n/);
-  assert.match(h.written(), /其他设置\s+开着：自然写作（以后在修改实例里调）\n/);
+  assert.match(h.written(), /其他设置\s+开着：自然写作、显式不回复（以后在修改实例里调）\n/);
 });
 
 test('an instance can use its own role file, begun from a shipped role, written only when saved', async (t) => {
@@ -1509,7 +1510,7 @@ test('meeting notes: on for the first assistant or colleague on Feishu, off for 
   const h = harness(t, ['', '',  '',       '3',    '1', '',    'y']);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(h.manifest().agents[0].meetingNotes, true);
-  assert.match(h.written(), /其他设置\s+开着：自然写作、会议纪要入库（以后在修改实例里调）/);
+  assert.match(h.written(), /其他设置\s+开着：自然写作、显式不回复、会议纪要入库（以后在修改实例里调）/);
 
   const second = harness(t, ['1', '', 'Second', '', '', '3', '1', '', 'y']);
   fs.mkdirSync(path.join(second.home, '.vika'), { recursive: true });
