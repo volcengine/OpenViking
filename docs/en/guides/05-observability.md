@@ -591,6 +591,11 @@ deployment default cannot relabel it. Only legacy calls without credential metad
 use precise `telemetry.model_cost_bearers` rules and then the deployment default;
 conflicting rules stay `unknown`. Events exclude document content, prompts and API keys.
 
+When ROOT provisions or rotates account model credentials through the configuration API,
+`cost_bearer` is persisted with each credential and reaches the selected VLM or embedding
+client. Model sections remain ROOT-only; account admins and members cannot set billing
+ownership through the configuration API.
+
 The optional Nacos reporter uses explicitly configured `nacos_namespace`,
 `nacos_data_id` and `nacos_group` first, then `NACOS_NAMESPACE`, `NACOS_DATA_ID`
 and `NACOS_GROUP`, with defaults `public`, `global_configs` and `DEFAULT_GROUP`.

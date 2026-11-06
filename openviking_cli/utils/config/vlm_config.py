@@ -62,7 +62,7 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
 
-    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = Field(
+    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = RuntimeField(
         default=None, description="Billing owner supplied by the credential provisioner"
     )
 

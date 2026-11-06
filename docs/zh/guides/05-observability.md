@@ -580,6 +580,10 @@ Kafka 的地址、认证和 topic 来自该配置的 `kafka`，不能写入业�
 只有未携带凭据元数据的历史调用才依次使用 `telemetry.model_cost_bearers` 精确规则和
 部署默认值，冲突规则保持 `unknown`。上报不包含原文、提示词或 API Key。
 
+空间级模型凭据通过 ROOT 的配置接口下发或轮换时，`cost_bearer` 与该凭据一同保存，
+并传递到实际 VLM／Embedding 客户端。模型配置章节仍只允许 ROOT 修改，空间管理员
+和普通成员不能通过配置接口指定费用归属。
+
 可选 Nacos 上报器优先使用明确配置的 `nacos_namespace`、`nacos_data_id`、`nacos_group`，
 其次读取 `NACOS_NAMESPACE`、`NACOS_DATA_ID`、`NACOS_GROUP`，默认分别为 `public`、
 `global_configs`、`DEFAULT_GROUP`。

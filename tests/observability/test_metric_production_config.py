@@ -127,3 +127,20 @@ def test_reporting_uses_environment_location_with_explicit_config_precedence(mon
     prefix = "explicit" if explicit else "environment"
     assert params == {"tenant":[prefix], "dataId":[prefix+"_config"], "group":[prefix+"_group"]}
     assert set(config) == {"kafka", "telemetry"}
+
+
+@pytest.mark.parametrize("section", ["vlm", "embedding"])
+def test_credential_owner_provisioning_remains_root_only(section):
+    from openviking.server.identity import RequestContext, Role, UserIdentifier
+    from openviking.server.routers.admin import _authorize_account_config_patch
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    binding = {"credentials": [{"provider": "openai", "api_key": "key", "cost_bearer": "ov"}]}
+    settings = {section: binding if section == "vlm" else {"dense": binding}}
+    for role in (Role.ADMIN, Role.USER):
+        ctx = RequestContext(user=UserIdentifier("account", "member"), role=role)
+        with pytest.raises(PermissionDeniedError, match="Only ROOT"):
+            _authorize_account_config_patch(ctx, settings)
+    _authorize_account_config_patch(
+        RequestContext(user=UserIdentifier("account", "provisioner"), role=Role.ROOT), settings
+    )

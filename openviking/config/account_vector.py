@@ -14,6 +14,8 @@ from openviking_cli.utils.config.runtime_field import RuntimeField
 class AccountEmbeddingCredential(BaseModel):
     """One Account-owned provider binding; credential arrays replace as a unit."""
 
+    # Model sections are ROOT-only in the admin API, including billing ownership.
+    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = RuntimeField(default=None)
     id: Optional[str] = RuntimeField(default=None)
     provider: str = RuntimeField(min_length=1)
     model: Optional[str] = RuntimeField(default=None, min_length=1)
