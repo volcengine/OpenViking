@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "skills": {
+    "doc-coauthoring": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/doc-coauthoring/SKILL.md",
+      "computedHash": "b964e4c3ffe13f66f76dd7919073e60c7aec622cd8a8363bb36323188100cf8e"
+    },
+    "mermaid-diagrams": {
+      "source": "softaworks/agent-toolkit",
+      "sourceType": "github",
+      "skillPath": "skills/mermaid-diagrams/SKILL.md",
+      "computedHash": "6d36e69adad781f106a2fb4b19ebc22bf0c211babdc0d1ae5822fa65abb48bd8"
+    },
+    "ov-experience-memory": {
+      "source": "volcengine/OpenViking",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "examples/skills/ov-experience-memory/SKILL.md",
+      "computedHash": "9f6acb70bdfe200f6053511ed1ef4dc3e6587ee2e0478a75075b73195ff797a1"
+    }
+  }
+}
