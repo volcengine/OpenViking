@@ -1,4 +1,4 @@
-.root {
+.ov-file-tree {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -10,23 +10,23 @@
   line-height: 20px;
 }
 
-.toolbar {
+.ov-file-tree__toolbar {
   flex: none;
   padding: 4px 0 8px;
 }
 
-.body {
+.ov-file-tree__body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
 }
 
-.rows {
+.ov-file-tree__rows {
   display: flex;
   flex-direction: column;
 }
 
-.row {
+.ov-file-tree__row {
   position: relative;
   display: flex;
   align-items: center;
@@ -41,23 +41,23 @@
   user-select: none;
 }
 
-.row:hover {
+.ov-file-tree__row:hover {
   background: var(
     --ov-ui-row-hover,
     color-mix(in srgb, currentColor 6%, transparent)
   );
 }
 
-.row:focus-visible {
+.ov-file-tree__row:focus-visible {
   outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
   outline-offset: -2px;
 }
 
-.row[data-selected] {
+.ov-file-tree__row[data-selected] {
   background: var(--ov-ui-row-selected, rgb(37 99 197 / 10%));
 }
 
-.row[data-disabled] {
+.ov-file-tree__row[data-disabled] {
   color: var(
     --ov-ui-text-muted,
     color-mix(in srgb, currentColor 62%, transparent)
@@ -65,8 +65,8 @@
   cursor: not-allowed;
 }
 
-.toggle,
-.toggleSpacer {
+.ov-file-tree__toggle,
+.ov-file-tree__toggle-spacer {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -75,7 +75,7 @@
   height: 16px;
 }
 
-.toggle {
+.ov-file-tree__toggle {
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -87,30 +87,30 @@
   cursor: pointer;
 }
 
-.toggle:hover {
+.ov-file-tree__toggle:hover {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 
-.chevron {
+.ov-file-tree__chevron {
   transition: transform 120ms ease;
 }
 
-.chevron[data-expanded] {
+.ov-file-tree__chevron[data-expanded] {
   transform: rotate(90deg);
 }
 
-.iconSlot {
+.ov-file-tree__icon-slot {
   display: inline-flex;
   flex: none;
   align-items: center;
   color: var(--ov-ui-icon, color-mix(in srgb, currentColor 62%, transparent));
 }
 
-.icon {
+.ov-file-tree__icon {
   display: block;
 }
 
-.labelGroup {
+.ov-file-tree__label-group {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
@@ -118,13 +118,13 @@
   gap: 6px;
 }
 
-.label {
+.ov-file-tree__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.description {
+.ov-file-tree__description {
   overflow: hidden;
   color: var(
     --ov-ui-text-muted,
@@ -135,7 +135,7 @@
   white-space: nowrap;
 }
 
-.level {
+.ov-file-tree__level {
   flex: none;
   padding: 0 4px;
   border-radius: 3px;
@@ -151,13 +151,13 @@
   line-height: 16px;
 }
 
-.expiry {
+.ov-file-tree__expiry {
   flex: none;
   color: var(--ov-ui-warning, #b26a00);
   font-size: 12px;
 }
 
-.expiryAction {
+.ov-file-tree__expiry-action {
   padding: 0;
   border: 0;
   background: none;
@@ -167,13 +167,13 @@
   cursor: pointer;
 }
 
-.dashboard {
+.ov-file-tree__dashboard {
   display: inline-flex;
   flex: none;
   align-items: center;
 }
 
-.tooltip {
+.ov-file-tree__tooltip {
   position: absolute;
   z-index: 1;
   top: calc(100% + 4px);
@@ -188,7 +188,7 @@
   pointer-events: none;
 }
 
-.childRow {
+.ov-file-tree__child-row {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -201,11 +201,11 @@
   );
 }
 
-.childRow[data-tone='error'] {
+.ov-file-tree__child-row[data-tone='error'] {
   color: var(--ov-ui-status-error, #c43838);
 }
 
-.childAction {
+.ov-file-tree__child-action {
   padding: 0;
   border: 0;
   background: none;
@@ -215,12 +215,12 @@
   cursor: pointer;
 }
 
-.childAction:disabled {
+.ov-file-tree__child-action:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.state {
+.ov-file-tree__state {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -229,11 +229,11 @@
   padding: 24px;
 }
 
-.muted {
+.ov-file-tree__muted {
   color: inherit;
 }
 
-.spinner {
+.ov-file-tree__spinner {
   display: inline-block;
   flex: none;
   box-sizing: border-box;
@@ -242,21 +242,21 @@
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: file-tree-spin 720ms linear infinite;
+  animation: ov-file-tree-spin 720ms linear infinite;
 }
 
-@keyframes file-tree-spin {
+@keyframes ov-file-tree-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chevron {
+  .ov-file-tree__chevron {
     transition: none;
   }
 
-  .spinner {
+  .ov-file-tree__spinner {
     animation-duration: 2s;
   }
 }

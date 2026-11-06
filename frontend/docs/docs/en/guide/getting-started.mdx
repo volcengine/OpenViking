@@ -50,7 +50,7 @@ Request configuration is provided through `OpenVikingProvider` from `@openviking
 
 ## Styling
 
-Styles use CSS Modules and the `--ov-ui-` variable prefix. They do not apply a global reset. JavaScript imports do not load CSS automatically; choose the full, category, or individual stylesheet as needed:
+Styles use stable class names prefixed with `ov-` and the `--ov-ui-` variable prefix. They do not apply a global reset. JavaScript imports do not load CSS automatically; choose the full, category, or individual stylesheet as needed:
 
 ```ts
 import '@openviking/react/style.css';
@@ -60,6 +60,19 @@ import '@openviking/react/style.css';
 ```
 
 Rslib emits ESM JavaScript, TypeScript declarations, and CSS into `packages/react/dist/`. Each public stylesheet works independently. Module styles currently cover their placeholders; as composed views land, they must include their component dependencies. Future Hook-only use needs no CSS.
+
+Theme colors can be adjusted on a containing element, or a specific class can be targeted directly:
+
+```css
+.my-workbench {
+  --ov-ui-radius: 4px;
+  --ov-ui-row-hover: rgb(0 0 0 / 6%);
+}
+
+.my-workbench .ov-file-tree__row {
+  height: 32px;
+}
+```
 
 ## Build and check
 

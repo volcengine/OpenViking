@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 
 import { FileTreeEntryRowView } from './file-tree-entry-row.js';
-import styles from './file-tree.module.css';
 import { Spinner } from './file-tree-icons.js';
 import { rowIndent, type FileTreeRowContext } from './file-tree-row-context.js';
 import { FILE_TREE_ROW_ATTRIBUTE, type FileTreeRow } from './types.js';
@@ -44,7 +43,9 @@ function StateRow({ row, ctx, attributes, tone, children }: StateRowProps) {
       {...attributes}
       {...extraAttributes}
       {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
-      className={[styles.childRow, extraClassName].filter(Boolean).join(' ')}
+      className={['ov-file-tree__child-row', extraClassName]
+        .filter(Boolean)
+        .join(' ')}
       data-tone={tone}
       style={{ ...rowIndent(row), ...extraStyle }}
     >
@@ -61,9 +62,9 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
     case 'loading':
       return (
         <StateRow row={row} ctx={ctx} attributes={{ 'aria-busy': true }}>
-          <span className={styles.toggleSpacer} />
+          <span className="ov-file-tree__toggle-spacer" />
           <Spinner />
-          <span className={styles.muted}>{text.loading}</span>
+          <span className="ov-file-tree__muted">{text.loading}</span>
         </StateRow>
       );
     case 'load-more':
@@ -71,7 +72,7 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
         <StateRow row={row} ctx={ctx}>
           <button
             type="button"
-            className={styles.childAction}
+            className="ov-file-tree__child-action"
             disabled={row.loading || !onLoadMore}
             onClick={() => onLoadMore?.(row)}
           >
@@ -83,10 +84,12 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
     case 'error':
       return (
         <StateRow row={row} ctx={ctx} tone="error">
-          <span className={styles.muted}>{row.message ?? text.error}</span>
+          <span className="ov-file-tree__muted">
+            {row.message ?? text.error}
+          </span>
           <button
             type="button"
-            className={styles.childAction}
+            className="ov-file-tree__child-action"
             disabled={!onRetry}
             onClick={() => onRetry?.(row)}
           >
@@ -97,7 +100,7 @@ function ChildRow({ row, ctx }: { row: FileTreeRow; ctx: FileTreeRowContext }) {
     case 'empty':
       return (
         <StateRow row={row} ctx={ctx}>
-          <span className={styles.muted}>{text.empty}</span>
+          <span className="ov-file-tree__muted">{text.empty}</span>
         </StateRow>
       );
     default:

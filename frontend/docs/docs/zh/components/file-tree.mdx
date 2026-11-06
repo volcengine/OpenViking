@@ -77,6 +77,34 @@ import '@openviking/react/components/file-tree/style.css';
 
 使用 `role="tree"` 与 `role="treeitem"`，并输出 `aria-level`、`aria-selected`、`aria-expanded`。方向键在行间移动，左右键展开与折叠，回车与空格选中。状态通过可见文本表达，不只依赖颜色。
 
+## 类名
+
+类名带 `ov-` 前缀。块名为 `ov-file-tree`，元素使用 `ov-file-tree__<元素>`。
+
+| 类名                        | 元素       | 用途                           |
+| --------------------------- | ---------- | ------------------------------ |
+| `ov-file-tree`              | 根节点     | 纵向布局与基础排版。           |
+| `ov-file-tree__toolbar`     | 工具栏插槽 | 行区域上方的宿主工具栏。       |
+| `ov-file-tree__body`        | 滚动区域   | 承载行的滚动容器。             |
+| `ov-file-tree__rows`        | 行容器     | 行的纵向排列。                 |
+| `ov-file-tree__row`         | 行         | 单行条目，带 `data-selected`。 |
+| `ov-file-tree__row:hover`   | 行         | 悬停背景。                     |
+| `ov-file-tree__toggle`      | 展开按钮   | 展开与折叠控件。               |
+| `ov-file-tree__chevron`     | 折叠箭头   | 有 `data-expanded` 时旋转。    |
+| `ov-file-tree__label`       | 名称       | 行主文本。                     |
+| `ov-file-tree__description` | 描述       | 名称旁的次要文本。             |
+| `ov-file-tree__level`       | 层级标签   | 上下文层级徽标。               |
+| `ov-file-tree__expiry`      | 过期提示   | 过期文案及其操作按钮。         |
+| `ov-file-tree__tooltip`     | 提示浮层   | 行的悬浮提示。                 |
+| `ov-file-tree__child-row`   | 子行       | 加载、空态与错误行。           |
+| `ov-file-tree__state`       | 状态面板   | 整高的加载、空态与错误视图。   |
+
+```css
+.my-workbench .ov-file-tree__row {
+  height: 32px;
+}
+```
+
 ## 主题变量
 
 | CSS 变量               | 默认值                 | 用途             |

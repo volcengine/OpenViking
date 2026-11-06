@@ -1,10 +1,8 @@
-import styles from './file-tree.module.css';
-
 export function Chevron({ expanded }: { expanded: boolean }) {
   return (
     <svg
       aria-hidden="true"
-      className={styles.chevron}
+      className="ov-file-tree__chevron"
       data-expanded={expanded || undefined}
       viewBox="0 0 16 16"
       width="12"
@@ -26,7 +24,7 @@ export function FolderIcon({ open }: { open: boolean }) {
   return (
     <svg
       aria-hidden="true"
-      className={styles.icon}
+      className="ov-file-tree__icon"
       viewBox="0 0 16 16"
       width="14"
       height="14"
@@ -50,7 +48,7 @@ export function FileIcon() {
   return (
     <svg
       aria-hidden="true"
-      className={styles.icon}
+      className="ov-file-tree__icon"
       viewBox="0 0 16 16"
       width="14"
       height="14"
@@ -73,5 +71,5 @@ export function FileIcon() {
 }
 
 export function Spinner() {
-  return <span aria-hidden="true" className={styles.spinner} />;
+  return <span aria-hidden="true" className="ov-file-tree__spinner" />;
 }
