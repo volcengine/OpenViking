@@ -1231,9 +1231,8 @@ impl CacheProvider {
 
 #[async_trait]
 impl MultiWriteProvider for CacheProvider {
-    /// Deletes cache keys owned by one partition scope before metadata reset.
+    /// Deletes cache keys owned by one partition scope before or during metadata reset.
     async fn reset_scope(&self, scope: &ScopeKey) -> Result<()> {
-        self.validate_scope(scope).await?;
         let keys = self.keys_for_scope(scope)?;
         self.runtime
             .del(&[keys.state, keys.head, keys.flush_gate])

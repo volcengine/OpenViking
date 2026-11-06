@@ -18,6 +18,7 @@ use super::types::{
 use crate::core::internal_names::{is_hidden_runtime_lock_name, is_multiwrite_internal_path};
 use crate::metrics::{RagfsMetric, RagfsMetricValue};
 use crate::multibackend::catch_up::CatchUpTarget;
+use crate::multibackend::constants::SYSTEM_DIR;
 use crate::multibackend::meta::{
     current_required_ctx, DefaultFsContextResolver, FsContextResolver, MetadataStore,
     MultiWriteMetricsSnapshot, MultiWriteWorker,
@@ -28,7 +29,7 @@ use crate::multibackend::model::{
     SegmentManifest,
 };
 use crate::multibackend::provider::{bootstrap_account, MultiWriteProvider};
-use crate::multibackend::runtime::MultiWriteRuntime;
+use crate::multibackend::runtime::{read_active_accounts, MultiWriteRuntime};
 
 const COPY_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -167,8 +168,17 @@ impl MultiWriteWrappedFSBuilder {
                 "multi-write backup membership changed; reset V2 metadata"
             );
         } else if reset_import_pending {
+            let scopes = reset_provider_scopes_for_current_accounts(
+                metadata_provider.as_ref(),
+                self.primary_backend.as_ref(),
+                self.initial_partitions,
+            )
+            .await?;
             metadata_store.reset_multiwrite_metadata().await?;
-            tracing::info!("multi-write backup reset import pending; reset V2 metadata");
+            tracing::info!(
+                scopes,
+                "multi-write backup reset import pending; reset V2 metadata"
+            );
         }
         let metrics = Arc::new(MultiWriteMetricsSnapshot::default());
         let catch_up_targets = self
@@ -291,6 +301,30 @@ impl ExistingMetadataScan {
             .map(|account| account.segments.len())
             .sum()
     }
+}
+
+/// Clear provider runtime state for scopes that a reset full import can recreate.
+async fn reset_provider_scopes_for_current_accounts(
+    provider: &dyn MultiWriteProvider,
+    primary: &dyn FileSystem,
+    initial_partitions: u32,
+) -> Result<usize> {
+    let mut accounts = read_active_accounts(primary).await?;
+    accounts.insert(SYSTEM_DIR.to_string());
+    let mut scopes = 0;
+    for account_id in accounts {
+        for partition_id in 0..initial_partitions {
+            provider
+                .reset_scope(&ScopeKey {
+                    account_id: account_id.clone(),
+                    partition_id,
+                    epoch: 1,
+                })
+                .await?;
+            scopes += 1;
+        }
+    }
+    Ok(scopes)
 }
 
 /// Read existing metadata once and detect whether persisted backup names differ from config.
