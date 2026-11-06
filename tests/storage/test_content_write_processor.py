@@ -7,8 +7,10 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service import fs_service as fs_module
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
+from openviking.storage.queuefs import compile_target_tag_processor as tag_module
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
@@ -81,3 +83,27 @@ async def test_content_write_processor_recovers_checkpoint(monkeypatch, operatio
         assert processor._execute_refresh.await_count == 1
     finally:
         set_task_tracker(None)
+
+
+@pytest.mark.parametrize("pending", [False, OSError("index unavailable")])
+async def test_compile_tag_retry_preserves_work_and_progress(monkeypatch, pending):
+    """A restarted processor completes the same Work after lag or a transient failure."""
+    fs = SimpleNamespace(finalize_compile_directories=AsyncMock(side_effect=[pending, True]))
+    manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(tag_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr(tag_module, "sleep", AsyncMock())
+    payload = {
+        "uri": "viking://resources/output",
+        "account_id": "account",
+        "user_id": "user",
+        "task_id": "tag-task",
+        "_task_work_id": "tag-work",
+        "last_index_enqueue": 42,
+    }
+    result = await tag_module.CompileTargetTagProcessor(fs).on_dequeue(payload)
+    assert result.outcome is ProcessOutcome.REQUEUED
+    retry = manager.enqueue.await_args.args[1]
+    assert retry == {**payload, "retry_count": 1}
+    result = await tag_module.CompileTargetTagProcessor(fs).on_dequeue(retry)
+    assert result.outcome is ProcessOutcome.SUCCESS
+    manager.enqueue.assert_awaited_once()

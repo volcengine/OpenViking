@@ -7,6 +7,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 """
 
 import asyncio
+import time
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -34,7 +35,7 @@ from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_sk
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
-from openviking.service.task_tracker import TaskStatus, get_task_tracker, run_tracked_operation
+from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -59,13 +60,14 @@ from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.index_action import FieldPatch
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-from openviking.storage.vector_ids import is_vector_record_id
+from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
@@ -91,9 +93,6 @@ logger = get_logger(__name__)
 _DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS = 60.0
 _DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS = 3.0
 
-# Compile waits for directory search visibility without rerunning generation.
-_COMPILE_DIRECTORY_TAG_TIMEOUT_SECONDS = 60.0
-_COMPILE_DIRECTORY_TAG_POLL_SECONDS = 3.0
 WATCH_BUSY_WAIT_SECONDS = 10.0
 WATCH_BUSY_POLL_SECONDS = 0.5
 
@@ -2185,111 +2184,159 @@ class FSService:
             )
 
     async def ensure_compile_target(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
-        """Materialize a missing output directory and expose its tag without replacing existing summaries.
+        """Validate/materialize the target and durably enqueue independent tagging.
 
-        Files and nested targets are rejected. Failures preserve user content and propagate
-        before configuration or execution publication; directory indexing may create a Task.
+        Existing files and indexed nested targets are rejected. Only directory and
+        queue writes precede the response; index visibility belongs to the worker.
         """
         viking_fs = self._ensure_initialized()
         uri = validate_safe_viking_uri_path(uri)
         self._reject_storage_internal_target(uri)
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
         await self._validate_compile_target_nesting(uri, ctx)
-        async with self._hold_watch_scope(
-            [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
-        ) as lease:
-            try:
-                stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
-            except Exception as exc:
-                if not is_not_found_error(exc):
-                    raise
-                await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
-            else:
-                if not stat.get("isDir"):
-                    raise InvalidArgumentError(f"Compile target must be a directory: {uri}")
-        return await self.finalize_compile_directories(uri, ctx)
+        try:
+            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+            async with self._hold_watch_scope(
+                [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
+            ) as lease:
+                try:
+                    stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+                except Exception as exc:
+                    if not is_not_found_error(exc):
+                        raise
+                    await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+                    stat = {"isDir": True}
+        if not stat.get("isDir"):
+            raise InvalidArgumentError(f"Compile target must be a directory: {uri}")
+        return await self._enqueue_compile_target_tag(uri, ctx)
 
-    async def finalize_compile_directories(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
-        """Ensure L0 and tag only the target directory ``uri`` using ``ctx`` permissions.
+    async def _enqueue_compile_target_tag(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Persist a separate internal Task/Work; failed admission fails the request."""
 
-        Return directory_count=1 after required indexes and tags are search-visible.
-        Denied access, store errors, or visibility exceeding the directory deadline raise.
+        async def enqueue() -> Dict[str, Any]:
+            manager = get_queue_manager()
+            await manager.enqueue(
+                manager.COMPILE_TARGET_TAG,
+                {
+                    "uri": uri,
+                    "account_id": ctx.account_id,
+                    "user_id": ctx.user.user_id,
+                    "role": str(ctx.role),
+                    "group_ids": list(ctx.group_ids),
+                    "actor_peer_id": ctx.actor_peer_id,
+                    "bypass_acl": ctx.bypass_acl,
+                },
+            )
+            return {"directory_count": 1}
+
+        with detach_task_context():
+            result, _ = await run_tracked_operation(
+                "compile_target_tag",
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                operation=enqueue,
+                resource_id=uri,
+                meta={"internal": True},
+                wait=False,
+            )
+        return result
+
+    async def finalize_compile_directories(
+        self, uri: str, ctx: RequestContext, *, progress: Dict[str, Any]
+    ) -> bool:
+        """Attempt tagging once; return True when visible or the target is gone.
+
+        QueueFS persists the last embedding enqueue time (Unix seconds) in progress.
+        Missing summaries use a short lease; embedding and index checks retain no lease.
+        Storage/permission errors propagate for retry, without touching Compile state.
         """
         viking_fs = self._ensure_initialized()
         uri = validate_safe_viking_uri_path(uri)
+        self._reject_storage_internal_target(uri)
+        try:
+            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return True
+            raise
+        if not stat.get("isDir"):
+            return True
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
-        # The directory job retains its lease; Compile's wait stays cancellable.
-        with detach_task_context():
-            ensured = await run_to_completion(
-                lambda: self._ensure_directory_index(
-                    uri,
-                    ctx,
-                    fallback_abstract="This is the compile generated folder",
-                    wait=False,
-                    require_abstract=True,
+        agfs = viking_fs._async_agfs
+        lease = await agfs.pathlock_acquire_tree(
+            viking_fs._uri_to_path(uri, ctx=ctx), timeout_secs=1
+        )
+        summaries = {}
+        try:
+            try:
+                stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    return True
+                raise
+            if not stat.get("isDir"):
+                return True
+            for level, name in enumerate((".abstract.md", ".overview.md")):
+                try:
+                    raw = await viking_fs.read_file(f"{uri}/{name}", ctx=ctx)
+                except Exception as exc:
+                    if not is_not_found_error(exc):
+                        raise
+                    if level == 1:
+                        continue
+                    raw = render_abstract_overview(
+                        ContextLevel.ABSTRACT, uri, "This is the compile generated folder"
+                    )
+                    await viking_fs.write_file(f"{uri}/{name}", raw, ctx=ctx, lease_ref=lease)
+                if not body_for_preview(raw).strip():
+                    raise InvalidArgumentError(f"Directory summary is empty: {uri}/{name}")
+                summaries[level] = raw
+        finally:
+            await run_to_completion(lambda: agfs.pathlock_release(lease))
+
+        records = await self._directory_index_records(uri, ctx)
+        store = viking_fs._get_vector_store()
+        ids = {vector_record_id(ctx.account_id, uri, level) for level in summaries}
+        ids.update(record["id"] for record in records)
+        existing = await store.get_strict(list(ids), ctx=ctx)
+        indexed = {record["level"] for record in existing}
+        expected = set(summaries) | indexed
+        missing = set(summaries) - indexed
+        if missing and time.time() - progress.get("last_index_enqueue", 0) >= 300:
+            # Failed embeddings must not fail this retryable Task or its Compile caller.
+            with detach_task_context():
+                queued = await vectorize_directory_meta(
+                    uri=uri,
+                    abstract=summaries[0],
+                    overview=summaries.get(1, ""),
+                    context_type=context_type_for_uri(uri),
+                    ctx=content_owner_context_for_uri(uri, ctx),
+                    include_abstract=0 in missing,
+                    include_overview=1 in missing,
+                    field_patches={
+                        level: FieldPatch(
+                            {"search_tags": ["compile_target=true"]}, {"search_tags": "append"}
+                        )
+                        for level in missing
+                    },
                 )
-            )
-        if ensured["vector_status"] == "queued":
-            terminal = await get_task_tracker().wait(
-                ensured["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id
-            )
-            if terminal.status != TaskStatus.COMPLETED:
+            if queued != missing:
                 raise OpenVikingError(
-                    terminal.error or f"Directory index processing failed: {uri}",
-                    code="PROCESSING_ERROR",
+                    "Failed to enqueue Compile target index", code="PROCESSING_ERROR"
                 )
-            ensured = terminal.result or {}
-            ContentWriteCoordinator._raise_refresh_errors(ensured.get("queue_status", {}))
-        expected_levels = set(ensured["indexed_levels"])
-        applied_levels: set[int] = set()
-        set_tags_result = None
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + _COMPILE_DIRECTORY_TAG_TIMEOUT_SECONDS
-        while True:
-            records = await self._directory_index_records(uri, ctx)
-            actual_levels = {record["level"] for record in records}
-            # A temporarily invisible summary remains required once observed.
-            expected_levels.update(actual_levels)
-            untagged_levels = {
-                record["level"]
-                for record in records
-                if "compile_target=true" not in (record.get("search_tags") or [])
-            }
-            if untagged_levels - applied_levels:
-                set_tags_result = await self.set_tags(
-                    uri, ["compile_target=true"], mode="append", recursive=False, ctx=ctx
-                )
-                # Only both updates identify the written levels across different read paths.
-                if set_tags_result.get("success_count", 0) >= 2:
-                    applied_levels.update({0, 1})
-                records = await self._directory_index_records(uri, ctx)
-                actual_levels = {record["level"] for record in records}
-                expected_levels.update(actual_levels)
-            tagged_levels = {
-                record["level"]
-                for record in records
-                if "compile_target=true" in (record.get("search_tags") or [])
-            }
-            if expected_levels and not expected_levels - tagged_levels:
-                break
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                details = {
-                    "directory": uri,
-                    "expected_levels": sorted(expected_levels),
-                    "actual_levels": sorted(actual_levels),
-                    "tagged_levels": sorted(tagged_levels),
-                    "records": records,
-                    "set_tags_result": set_tags_result,
-                }
-                logger.error("Compile directory tag validation timed out: %s", details)
-                raise OpenVikingError(
-                    f"Compile directory tags are incomplete: {uri}",
-                    code="PROCESSING_ERROR",
-                    details=details,
-                )
-            await asyncio.sleep(min(_COMPILE_DIRECTORY_TAG_POLL_SECONDS, remaining))
-        return {"directory_count": 1}
+            progress["last_index_enqueue"] = time.time()
+        if any(
+            "compile_target=true" not in (record.get("search_tags") or []) for record in records
+        ):
+            await self.set_tags(
+                uri, ["compile_target=true"], mode="append", recursive=False, ctx=ctx
+            )
+            return False
+        tagged = {record["level"] for record in records}
+        return not missing and expected <= tagged
 
     async def get_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         return await self._ensure_initialized().get_acl(uri, ctx=ctx)

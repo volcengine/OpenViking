@@ -529,7 +529,7 @@ class CompileService:
     async def create_compile_task(
         self, request: CompileCreateRequest, *, ctx: RequestContext
     ) -> dict[str, str]:
-        """Save a tagged configuration without executing Compile or capturing source snapshots."""
+        """Save configuration and enqueue target tagging without executing Compile or snapshots."""
         lifecycle = self._require_lifecycle()
         compile_name = validate_compile_name(request.compile_name)
         record = await self._settings(request, ctx)

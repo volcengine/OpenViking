@@ -159,7 +159,7 @@ def setup(monkeypatch):
     tracker = Tracker()
     fs = SnapshotFS(files)
     store = make_store(files)
-    finalize = AsyncMock(return_value={"directory_count": 1})
+    finalize = AsyncMock(side_effect=AssertionError("Compile must not wait for target tagging"))
     find = AsyncMock(return_value=SimpleNamespace(total=0))
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     monkeypatch.setattr(
@@ -376,7 +376,7 @@ async def test_full_execution_never_touches_compile_storage_or_source_snapshots(
     assert outcome.result == {"created": 1, "updated": 0, "deleted": 0}
     assert setup.fs.commits == [[TARGET], [TARGET]]
     assert not setup.files.files
-    setup.finalize.assert_awaited_once()
+    setup.finalize.assert_not_awaited()
 
 
 async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_completion(
@@ -538,7 +538,8 @@ async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(s
     record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     original_plan = deepcopy(setup.tracker.tasks[task.task_id].auth["compile_execution"]["plan"])
-    setup.finalize.side_effect = ResourceBusyError("index is busy")
+    commit = setup.fs.commit
+    setup.fs.commit = AsyncMock(side_effect=ResourceBusyError("snapshot is busy"))
     outcome = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert outcome.status == "running" and outcome.stage == "committing"
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
@@ -548,7 +549,7 @@ async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(s
     terminal = await restarted.on_start(resumed)
     assert isinstance(terminal, ExternalTaskSnapshot) and terminal.status == "completed"
     assert len(setup.fs.commits) == 1
-    setup.finalize.side_effect = None
+    setup.fs.commit = commit
     assert (await restarted.on_finish(resumed, terminal)).status == "completed"
     assert setup.tracker.tasks[task.task_id].auth["compile_execution"]["plan"] == original_plan
     assert len(setup.fs.commits) == 2
@@ -583,16 +584,20 @@ async def test_cleanup_resumes_past_new_runs_and_retains_pending_recovery(setup)
     assert (await setup.store.get("acme", "alice", compile_name))["last_run_time"] == 300
 
 
-async def test_cancel_during_index_finalization_does_not_publish_or_advance_progress(
+async def test_cancel_before_output_snapshot_rolls_back_without_advancing_progress(
     setup, registered
 ):
     record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
 
-    async def cancel_during_finalize(*args, **kwargs):
-        setup.tracker.cancelled.add(task.task_id)
+    acquire = setup.files.pathlock_acquire_tree
 
-    setup.finalize.side_effect = cancel_during_finalize
+    async def cancel_before_snapshot(*args, **kwargs):
+        lease = await acquire(*args, **kwargs)
+        setup.tracker.cancelled.add(task.task_id)
+        return lease
+
+    setup.files.pathlock_acquire_tree = cancel_before_snapshot
     result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert result.status == "cancelled"
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
@@ -695,7 +700,7 @@ async def test_final_conflict_count_and_search_failure(setup, total, expected):
     setup.lifecycle.resolve_groups = AsyncMock(return_value=["reviewers"])
 
     async def find(**kwargs):
-        setup.finalize.assert_awaited_once()
+        setup.finalize.assert_not_awaited()
         assert len(setup.fs.commits) == 2
         if total is None:
             raise OSError("search unavailable")

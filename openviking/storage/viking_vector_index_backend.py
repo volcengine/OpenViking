@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import re
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1673,8 +1673,14 @@ class VikingVectorIndexBackend:
                     exc,
                 )
                 return []
-            if await self.upsert(updated_record, ctx=ctx):
-                updated_records.append(updated_record)
+            # Tags do not replace summaries or vectors produced concurrently.
+            result = await self.update(
+                {"id": updated_record["id"], "search_tags": updated_record["search_tags"]},
+                ctx=ctx,
+            )
+            if not result.ok:
+                raise RuntimeError("Failed to update directory search tags")
+            updated_records.append(updated_record)
         return updated_records
 
     async def query(

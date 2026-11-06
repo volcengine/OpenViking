@@ -141,7 +141,8 @@ async def test_ensure_compile_target_preserves_existing_directory(snapshot_servi
     else:
         vfs.stat.return_value = {"isDir": kind == "directory"}
     service._existing_tree_lock_request = AsyncMock(return_value={"path": "parent"})
-    service.finalize_compile_directories = AsyncMock(return_value={"directory_count": 1})
+    service._enqueue_compile_target_tag = AsyncMock(return_value={"directory_count": 1})
+    service.finalize_compile_directories = AsyncMock(side_effect=AssertionError("inline tagging"))
 
     @asynccontextmanager
     async def hold_scope(*args):
@@ -151,10 +152,11 @@ async def test_ensure_compile_target_preserves_existing_directory(snapshot_servi
     if kind == "file":
         with pytest.raises(InvalidArgumentError):
             await service.ensure_compile_target(uri, ctx)
-        service.finalize_compile_directories.assert_not_awaited()
+        service._enqueue_compile_target_tag.assert_not_awaited()
     else:
         await service.ensure_compile_target(uri, ctx)
-        service.finalize_compile_directories.assert_awaited_once_with(uri, ctx)
+        service._enqueue_compile_target_tag.assert_awaited_once_with(uri, ctx)
+    service.finalize_compile_directories.assert_not_awaited()
     assert vfs.mkdir.await_count == (kind == "missing")
     vfs.commit.assert_not_awaited()
 

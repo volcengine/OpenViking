@@ -895,7 +895,6 @@ class CompileLifecycle:
             )
 
     async def _finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
-        from openviking.server.dependencies import get_service
         from openviking.service.task_tracker import get_task_tracker
 
         run = await self._read_run(task)
@@ -918,7 +917,6 @@ class CompileLifecycle:
                 await self._save_checkpoint(task, {"phase": "committing"})
                 run["status"] = "committing"
                 await self._save_run(task, run)
-                await get_service().fs.finalize_compile_directories(target, ctx)
                 if meta["finish_snapshot"] is None:
                     async with self._locked_output(target, ctx) as lease:
                         if await get_task_tracker().is_cancellation_requested(

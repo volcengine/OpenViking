@@ -18,6 +18,7 @@ from openviking.server.routers.content import (
     batch_write,
     reindex,
 )
+from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import ConflictError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -367,7 +368,10 @@ async def test_directory_index_preserves_summaries_and_tags(client, service):
     await service.resources.wait_processed()
     original = await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx)
     await service.fs.set_tags(uri, ["team=search"], mode="append", recursive=False, ctx=ctx)
-    await service.fs.ensure_compile_target(uri, ctx)
+    tagging = await service.fs.ensure_compile_target(uri, ctx)
+    await get_task_tracker().wait(
+        tagging["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id, timeout=30
+    )
     repeated = await client.post(
         "/api/v1/content/ensure_directory_index",
         json={"uri": uri, "fallback_abstract": "Do not replace stored summaries"},
@@ -397,7 +401,10 @@ async def test_tagged_output_snapshots_writes_and_blocks_resource_replacement(cl
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     parent = "viking://resources/tagged-output-parent"
     output = f"{parent}/output"
-    await service.fs.ensure_compile_target(output, ctx)
+    tagging = await service.fs.ensure_compile_target(output, ctx)
+    await get_task_tracker().wait(
+        tagging["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id, timeout=30
+    )
     uri = f"{output}/child/note.md"
 
     await service.fs.write(uri, "tagged output", ctx, wait=True)

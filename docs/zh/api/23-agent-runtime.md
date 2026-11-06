@@ -12,7 +12,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 - `to` 的任何严格祖先或后代目录带有 `compile_target=true` 时拒绝请求；`to` 自身已有该 tag 时允许复用。
 - `to` 不能是 `viking://user/{user_id}/memories/experiences` 或其任意层级子目录。`~/` 别名和末尾斜杠不能绕过限制；`experiences2` 等相似名称不被这条规则拒绝。
 
-嵌套检查遵循当前请求的租户和权限范围，采用无锁检查，不保证同时提交父子目标时的原子排他性。不传 `from` 的独立 `skill="memory"` 就地整理模式不应用这些目录约束或目标打标流程。
+嵌套检查遵循当前请求的租户和权限范围，采用基于索引标签的无锁检查。后台补标完成并在索引可查询前存在空窗，快速连续或并发提交的父子目标可能被同时接受；该检查不提供原子排他性。不传 `from` 的独立 `skill="memory"` 就地整理模式不应用这些目录约束或目标打标流程。
 
 ### 创建配置
 
@@ -53,7 +53,7 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 
 缺少 `compile_name` 或名称非法时直接报错，服务端不会生成备用名称。同一 account 的同一用户重名创建（包括并发创建）返回冲突，不覆盖配置或增量基线；不同用户可以创建同名配置。配置名称不支持修改。
 
-创建接口校验输入和权限，必要时创建 `to`，确保根目录索引存在，并在目录节点追加 `compile_target=true`、确认 tag 可查询后发布配置。仅标记目标根目录，不递归标记子目录；已有内容、摘要和其他 tag 保持不变。`to` 是文件时拒绝请求；索引或 tag 准备失败时不发布配置。创建阶段可以产生必要的内部目录索引任务，但不执行 Compile、不创建 run、不拍来源快照。
+创建接口同步校验输入、权限及可见的目录标签，必要时创建 `to`，并持久入队独立的内部补标 Task；不等待目录索引、embedding 或 tag 可见性。`to` 是文件或内部任务未能持久入队时返回错误。QueueFS 消费者负责根目录索引和 `compile_target=true` 补齐，失败后重试，不递归标记子目录，并保留已有内容、摘要和其他 tag。目标路径不存在时停止该路径的补标，不重建目录。创建配置本身不执行 Compile、不创建 run、不拍来源快照。
 
 调度控制与 Runtime 参数分开保存。非空计划默认开启自动更新，除非显式指定 `auto_update=false`。计划必填 `frequency`（`daily` 或 `weekly`）；`hour`（0–23）、`minute`（0–59）默认均为 0。每周计划增加 `weekday`（1 为周一、7 为周日，默认 1）。使用 `Asia/Shanghai` 时区。
 
@@ -83,9 +83,9 @@ POST /api/v1/compile
 
 仅传名称时读取当前用户已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
 
-传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标快照、索引收尾、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
+传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标开始/结束快照、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
 
-两种普通执行形式都在创建并入队新 Compile 执行任务之前准备目标目录及索引、追加 `compile_target=true` 并确认 tag 可查询，不依赖 worker 开始执行或 Compile 成功完成。索引或 tag 准备失败时不创建并入队执行任务。请求受理成功后，后续顺序提交的父子目标即可被拒绝，无须等待前一任务完成。该 tag 是持久目录标记，任务完成、失败或取消不会自动移除它。
+两种普通执行形式都先完成目标校验、必要的目录创建及独立补标任务持久入队，再提交 Compile 执行任务。后台索引或 tag 延迟不阻塞 Compile 提交、产物写入或收尾，也不使 Compile 因补标失败而失败。受理成功不代表 tag 已可查询，父子目录检查仍有上述空窗。Compile 的显式开始/结束快照、产物 `snapshot_id`、Outputs 和回滚流程保持原有语义。该 tag 是目录检索标记，任务完成、失败或取消不会自动移除它。
 
 执行接口拒绝调度控制。`args.mode`、`last_compile_time`、`changes` 和 `operation_id` 不是公开执行参数；执行计划由 OpenViking 生成。
 
@@ -170,7 +170,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`latest_snapshot_id`、`change_type`。`snapshot_id` 固定为本次 run 的产出快照；`latest_snapshot_id` 为查询时该文件最近变更的 commit，无历史时为 null。最近变更可能是后续删除，此时读取该版本正文返回 404。仅查询本页产出的文件历史，查询失败直接报错。
 
-配置更新必填 `compile_name`、`from`、`to`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束，并确认目标 tag 可查询后发布配置。配置更新不执行编译、不重置调用时间。
+配置更新必填 `compile_name`、`from`、`to`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
 
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
@@ -207,9 +207,9 @@ Compile 业务文件仅有：
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存固定的配置创建者 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
 
-`conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在索引收尾后统计，失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
+`conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在产物快照收尾后统计，不等待目标补标；失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
 
-普通 `rm`、`mv`、`cp`、`mkdir`、写入、Skill 导入和回滚不修改上述文件，不在移动后自动修改配置路径。写入只依据最近带 `compile_target=true` 的祖先目录，在内容锁内拍快照；批量写合并提交。文件版本查询使用原生快照历史，与持久配置无关；目录回滚复用已有的 forward commit。
+普通 `rm`、`mv`、`cp`、`mkdir`、写入、Skill 导入和回滚不修改上述文件，不在移动后自动修改配置路径。普通写入依据索引中最近带 `compile_target=true` 的祖先目录，在内容锁内拍快照；批量写合并提交。后台 tag 尚不可查询时，这种自动快照也存在空窗，不能保证每次普通写入都有该机制触发的版本；Compile 自身显式的开始/结束快照及产物版本仍然保留。文件版本查询使用原生快照历史，与持久配置无关；目录回滚复用已有的 forward commit。
 
 ### 检查 Compile 可用性
 

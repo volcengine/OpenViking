@@ -44,6 +44,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.compile_target_tag_processor import CompileTargetTagProcessor
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -746,6 +747,11 @@ class OpenVikingService:
             self._queue_manager.get_queue(
                 self._queue_manager.CONTENT_WRITE,
                 dequeue_handler=ContentWriteProcessor(self._viking_fs, self._vikingdb_manager),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.COMPILE_TARGET_TAG,
+                dequeue_handler=CompileTargetTagProcessor(self._fs_service),
                 allow_create=True,
             )
             self._queue_manager.get_queue(
