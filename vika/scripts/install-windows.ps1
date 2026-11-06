@@ -20,6 +20,10 @@ Push-Location $release
 try {
     & $npm ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed. Check Node version and native dependency installation.' }
+    # npm 12 can block dependency postinstall scripts. Ensure the pinned
+    # Windows executable exists and runs before publishing current/launchers.
+    & $node scripts/ensure-windows-lark-cli.mjs
+    if ($LASTEXITCODE -ne 0) { throw 'Bundled Windows Lark CLI installation or validation failed.' }
     & $node packages/daemon/scripts/check-pi.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Bundled Pi validation failed.' }
 } finally { Pop-Location }

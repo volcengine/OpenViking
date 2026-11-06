@@ -42,7 +42,12 @@ and retain runtime authority checks; Unix socket permissions are not applied to
 pipes. Media staging directories use a protected current-user-only Windows ACL; pre-existing shared directories are rejected without changing their permissions. Windows provides the pipe's default access control, so this preview is
 intended for a trusted single-user workstation.
 
-The Lark CLI comes from its npm package's Windows installation. Slack's CLI is
+The installer explicitly ensures the Lark CLI from the pinned npm package is
+present even when npm 12 blocks dependency postinstall scripts. It invokes that
+package's checksum-verifying installer only if the `.exe` is missing, then
+runs the actual `.exe --version` and verifies its version before creating the
+`current` junction. Download, execution, or version errors stop installation;
+it does not approve unrelated npm scripts. Slack's CLI is
 not bundled for Windows: install the official `slack.exe` on PATH or configure
 `SLACK_CLI_BIN`. Email accounts still require POSIX mode-0600 checks and are not supported in this
 Windows preview; do not add the email connector. Other connector integrations
@@ -80,14 +85,15 @@ Then install dependencies and run the native test files:
 ```powershell
 cd vika
 npm ci --ignore-scripts
-node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
+node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-lark-install.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
 ```
 
 The Windows CI job tests pipe transport, platform invocation, and autostart file
 creation/removal. It also runs the real PowerShell installer in a disposable
-Unicode home with npm lifecycle scripts enabled, checks the installed Pi and
-Lark executables, tests both generated launchers, and verifies that an existing
-installation is refused. It does not log in to external services or validate
+Unicode home with npm lifecycle scripts deliberately disabled, checks the
+installed Pi and Lark executables, tests both generated launchers, and verifies
+that an existing installation is refused. The matrix covers both the bundled
+npm and npm 12. It does not log in to external services or validate
 interactive setup or real connector deliveries. Linux unit tests alone
 are not proof that the full Windows workflow works.
 
