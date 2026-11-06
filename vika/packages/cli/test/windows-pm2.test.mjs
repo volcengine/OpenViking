@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 import { execFile } from '../../daemon/src/platform.mjs';
 import { pm2Defaults } from '../src/control.mjs';
-import { cleanPm2ControlEnv, startApp, pm2Processes } from '../../updater/src/pm2.mjs';
+import { cleanPm2ControlEnv, startApp, pm2Processes, verifyPm2App } from '../../updater/src/pm2.mjs';
 const { pipePaths } = createRequire(import.meta.url)('../../../scripts/pm2-windows.cjs');
 
 test('PM2 Windows pipes are scoped to home and control environment preserves OS essentials', () => {
@@ -63,4 +63,24 @@ process.on('message', message => { if(message === 'shutdown') { fs.writeFileSync
     await new Promise(resolve => setTimeout(resolve, 300));
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
+});
+
+test('release verification canonicalizes a junction and still refuses external scripts', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-release-alias-'));
+  try {
+    const release = path.join(root, 'release');
+    const alias = path.join(root, 'current');
+    const script = path.join(release, 'main.cjs');
+    const outside = path.join(root, 'outside.cjs');
+    fs.mkdirSync(release);
+    fs.writeFileSync(script, '');
+    fs.writeFileSync(outside, '');
+    fs.symlinkSync(release, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const verify = pm_exec_path => verifyPm2App({
+      app: 'fixture', release: alias, pm2Bin: 'unused',
+      execFileImpl: async () => ({ stdout: JSON.stringify([{ name: 'fixture', pm2_env: { status: 'online', pm_exec_path } }]) }),
+    });
+    assert.equal((await verify(script)).name, 'fixture');
+    await assert.rejects(verify(outside), /outside the current release/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

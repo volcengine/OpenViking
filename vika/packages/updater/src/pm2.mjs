@@ -150,7 +150,10 @@ export async function verifyPm2App({
     throw new Error(message);
   }
   const execPath = await realpath(processInfo.pm2_env?.pm_exec_path || '');
-  if (!isInside(release, execPath)) {
+  // Windows may spell TEMP with an 8.3 alias; compare canonical paths on both
+  // sides, also handling a caller that supplied the current junction.
+  const canonicalRelease = await realpath(release);
+  if (!isInside(canonicalRelease, execPath)) {
     throw new Error(`${app} is running outside the current release`);
   }
   return processInfo;
