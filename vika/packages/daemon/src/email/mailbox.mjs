@@ -27,3 +27,22 @@ export function mailboxWireName(name, utf8 = false) {
     return `&${bytes.toString('base64').replace(/\//g, ',').replace(/=+$/, '')}-`;
   });
 }
+
+// A bounded explicit set, with the legacy singular spelling retained.
+export function configuredMailboxes(imap = {}) {
+  if (imap.mailboxes !== undefined && imap.mailbox !== undefined) {
+    throw new Error('email config uses either imap.mailbox or imap.mailboxes');
+  }
+  if (imap.mailboxes === undefined) return [mailboxName(imap.mailbox)];
+  if (!Array.isArray(imap.mailboxes) || !imap.mailboxes.length || imap.mailboxes.length > 100) {
+    throw new Error('email config imap.mailboxes must contain 1 to 100 mailbox names');
+  }
+  return [...new Set(imap.mailboxes.map(mailboxName))];
+}
+
+export function mailboxPollSeconds(value = 60) {
+  if (!Number.isInteger(value) || value < 15 || value > 3600) {
+    throw new Error('email config imap.pollIntervalSeconds must be an integer from 15 to 3600');
+  }
+  return value;
+}
