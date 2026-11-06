@@ -257,6 +257,11 @@ class DirectoryParser(BaseParser):
 
             file_jobs: List[Dict[str, Any]] = []
             understanding_jobs: List[Dict[str, Any]] = []
+            account_options = (
+                {"parser_api_config": kwargs["parser_api_config"]}
+                if kwargs.get("parser_api_config") is not None
+                else {}
+            )
             for index, cf in enumerate(processable_files):
                 entry = entry_map.get(cf.path)
                 remote = entry is not None and entry.kind == "url"
@@ -307,7 +312,10 @@ class DirectoryParser(BaseParser):
                     ),
                 }
                 if use_understanding:
-                    parse_options = {"parser_backend": ParserBackend.UNDERSTANDING}
+                    parse_options = {
+                        "parser_backend": ParserBackend.UNDERSTANDING,
+                        **account_options,
+                    }
                     if remote:
                         parse_options.update(
                             _source=entry.url,
@@ -472,6 +480,8 @@ class DirectoryParser(BaseParser):
                         preserve_structure=preserve_structure,
                         import_root=str(source_path),
                         split_content=split_content,
+                        # Nested archives parse their members through a new DirectoryParser.
+                        parse_options=account_options,
                     )
 
                 file_entry = self._file_status_entry(cf, parser_name, detail)
@@ -955,6 +965,7 @@ class DirectoryParser(BaseParser):
         preserve_structure: bool = True,
         import_root: Optional[str] = None,
         split_content: bool = True,
+        parse_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Process one file into the VikingFS directory temp.
 
@@ -982,6 +993,7 @@ class DirectoryParser(BaseParser):
                     preserve_structure=preserve_structure,
                     import_root=import_root,
                     split_content=split_content,
+                    parse_options=parse_options,
                     output_store=output_store,
                 )
                 await DirectoryParser._merge_parser_result(

@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, _serialize_datetime
 from openviking.telemetry import tracer
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
@@ -109,7 +109,9 @@ def add_tool_call_pair_to_messages(
         {
             "role": "user",
             "content": json.dumps(
-                {"tool_call_name": tool_name, "args": params, "result": result}, ensure_ascii=False
+                {"tool_call_name": tool_name, "args": params, "result": result},
+                ensure_ascii=False,
+                default=_serialize_datetime,
             ),
         }
     )

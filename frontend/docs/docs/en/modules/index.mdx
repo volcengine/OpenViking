@@ -1,0 +1,32 @@
+# Modules
+
+Four placeholder components are available for integrating the personal-terminal layout. Their props are settled — request options, controlled state, callbacks, slots and copy — though each component still renders only a module name and a replaceable placeholder message. Business Hooks, API requests, and module interactions will be added as the implementations land.
+
+No prop carries data. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
+
+| Module                           | Component     | Target capability |
+| -------------------------------- | ------------- | ----------------- |
+| [`file-browser`](./file-browser) | `FileBrowser` | File browser.     |
+| [`console`](./console)           | `Console`     | Console.          |
+| [`task-center`](./task-center)   | `TaskCenter`  | Task center.      |
+| [`user-usage`](./user-usage)     | `UserUsage`   | My usage.         |
+
+## Preview
+
+This example uses the public module entries and the aggregate module stylesheet. The grid belongs to this documentation example; applications choose their own layout.
+
+```tsx file="../../_demos/modules-basic.tsx" preview
+
+```
+
+## Import and styles
+
+Import a component and its Props / Labels / Slots types from `@openviking/react/modules/<module>`. The four component bodies and their main Props types are also exported from `@openviking/react`; Labels, Slots and the enum types come from the subpath only.
+
+JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.css` for one module, `@openviking/react/modules/style.css` for all modules, or `@openviking/react/style.css` for the full library. Each stylesheet works independently. There is no aggregate `@openviking/react/modules` JavaScript entry.
+
+The current placeholders accept `className`, `style`, and `labels`. They do not require a Provider. Business Hooks, the shared Client, and `OpenVikingProvider` are planned and are not exported yet.
+
+## Host responsibilities
+
+Hosts own page layout, authentication, account scope, routing, and permissions. Product onboarding, resource and Skill import flows, and synchronization settings remain in the host. Administration is outside these module boundaries.

@@ -1,6 +1,10 @@
-# Connect your agent with one prompt
+<a id="connect-your-agent-with-one-prompt"></a>
 
-Paste one prompt into the coding agent you already use. The agent installs the OpenViking memory plugin into the agents it finds on your machine, checks the connection, offers to bring in your recent work, and tells you how to restart. After the restart, your first question shows OpenViking at work.
+<a id="one-click-agent-setup"></a>
+
+# One-click setup
+
+Connect OpenViking to your coding agent with a single prompt. The agent installs the OpenViking memory plugin into the agents it finds on your machine, checks the connection, offers to bring in your recent work, and tells you how to restart. After the restart, your first question shows OpenViking at work.
 
 The agent follows a short guide published as plain Markdown, so any agent can fetch it:
 
@@ -16,7 +20,7 @@ Copy the prompt and replace `<API_KEY>` with your key from the [OpenViking conso
 <AgentPrompt>
 
 ```text
-Install the OpenViking memory plugin and help me start using it. OpenViking is the open-source context database for AI agents from Volcengine (https://github.com/volcengine/OpenViking, AGPL-3.0); the command and link below are from its official docs.
+Install the OpenViking memory plugin and help me start using it. OpenViking is a context database for AI agents (https://github.com/volcengine/OpenViking); the command and link below are from its official docs.
 
 1. Run the official installer. It needs network access and writes to my home directory; if your sandbox blocks that, ask me for approval:
    curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang en --url https://api.vikingdb.cn-beijing.volces.com/openviking --api-key <API_KEY>

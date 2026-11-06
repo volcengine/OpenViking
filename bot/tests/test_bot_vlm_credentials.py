@@ -124,13 +124,17 @@ def test_status_shows_selected_model_config_without_exposing_secrets(
         assert hidden not in result.output
 
 
-def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path, monkeypatch):
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
+def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(
+    tmp_path, monkeypatch, temperature
+):
     config = _write_config(
         tmp_path,
         monkeypatch,
         {
             "vlm": {
                 "model": "root-primary",
+                **({"temperature": temperature} if temperature != "omitted" else {}),
                 "credentials": _credential_chain("root"),
             }
         },
@@ -146,6 +150,13 @@ def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path
     assert [vlm.model for vlm in provider._vlm._vlm_instances] == [
         "root-primary",
         "root-backup",
+    ]
+
+    expected_temperature = None if temperature == "omitted" else temperature
+    assert config.agents.temperature == expected_temperature
+    assert [vlm.temperature for vlm in provider._vlm._vlm_instances] == [
+        expected_temperature,
+        expected_temperature,
     ]
 
 
@@ -171,6 +182,8 @@ def test_agent_generation_settings_reach_provider(tmp_path, monkeypatch, bot_ove
     provider = _make_provider(config)
     assert config.agents.inherits_root_vlm() is (not bot_override)
     assert provider._vlm.max_tokens == 8192
+    assert config.agents.temperature is None
+    assert provider._vlm.temperature is None
     assert provider._vlm.thinking is bot_override
 
 

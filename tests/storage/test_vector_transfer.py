@@ -1417,7 +1417,7 @@ async def test_copy_preserves_target_acl_even_when_enforcement_is_disabled():
     assert {record["uri"] for record in targets} == {target}
     assert "source-chunk" in backend.records
     assert all(record["acl_direct_grants"] == ["7:user:bob"] for record in targets)
-    assert all(record["acl_inherited_grants"] == [] for record in targets)
+    assert all(record["acl_inherited_grants"] == ["none"] for record in targets)
 
 
 @pytest.mark.asyncio
@@ -1450,7 +1450,7 @@ async def test_copy_target_without_direct_acl_keeps_parent_inheritance():
 
     copied = _records_under(backend, target, recursive=False)
     assert len(copied) == 1
-    assert copied[0]["acl_direct_grants"] == []
+    assert copied[0]["acl_direct_grants"] == ["none"]
     assert copied[0]["acl_inherited_grants"] == inherited
 
 
@@ -1490,8 +1490,8 @@ async def test_unindexed_source_preserves_target_records_and_acl(
     effective = await backend.acl_manager.resolve(target, _ctx())
     assert effective.context_fields() == {
         "acl_mode": "restricted" if private else "inherit",
-        "acl_direct_grants": ["7:user:bob"] if private else [],
-        "acl_inherited_grants": [] if private else ["7:user:*"],
+        "acl_direct_grants": ["7:user:bob"] if private else ["none"],
+        "acl_inherited_grants": ["none"] if private else ["7:user:*"],
     }
 
 
@@ -1573,9 +1573,9 @@ async def test_copy_directory_preserves_root_acl_and_inherits_it_to_new_entries(
 
     by_uri = {record["uri"]: record for record in _records_under(backend, target)}
     assert by_uri[target]["acl_direct_grants"] == root_acl
-    assert by_uri[target]["acl_inherited_grants"] == []
+    assert by_uri[target]["acl_inherited_grants"] == ["none"]
     for uri in (target_child, target_file):
-        assert by_uri[uri]["acl_direct_grants"] == []
+        assert by_uri[uri]["acl_direct_grants"] == ["none"]
         assert by_uri[uri]["acl_inherited_grants"] == root_acl
     assert by_uri[unique_target]["acl_direct_grants"] == ["3:user:carol"]
     assert by_uri[unique_target]["acl_inherited_grants"] == root_acl
@@ -1731,7 +1731,7 @@ async def test_update_uri_mapping_preserves_target_acl_and_inherits_new_entries(
 
     moved = sorted(_records_under(backend, target), key=lambda record: record["uri"])
     assert [record["acl_mode"] for record in moved] == ["inherit", "inherit"]
-    assert [record["acl_direct_grants"] for record in moved] == [["7:user:bob"], []]
+    assert [record["acl_direct_grants"] for record in moved] == [["7:user:bob"], ["none"]]
     assert moved[1]["acl_inherited_grants"] == ["7:user:*", "7:user:bob"]
     assert _records_under(backend, source) == []
 

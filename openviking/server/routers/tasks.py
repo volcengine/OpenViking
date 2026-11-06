@@ -95,7 +95,9 @@ async def list_tasks(
         description="Filter by status (pending/running/cancelling/completed/failed/cancelled)",
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
-    include_internal: bool = Query(False, description="Include internal Connector child tasks"),
+    include_internal: bool = Query(
+        False, description="Include internal Connector and Compile directory indexing tasks"
+    ),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     pagination: Optional[str] = Query(None, pattern="^cursor$"),
     cursor: Optional[str] = Query(None, max_length=2048),

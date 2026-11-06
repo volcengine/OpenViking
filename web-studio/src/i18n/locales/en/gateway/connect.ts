@@ -11,16 +11,16 @@ const connect = {
     loopback: {
       title: "Only the gateway's own machine can use this address",
       embedded:
-        "Clients on other machines can't reach it. Set `gateway.public_url` in `ov.conf` to an address they can reach (without `/gateway`), then restart the server.",
+        "Clients on other machines can't reach it. Set `gateway.public_url` in `ov.conf` to an address they can reach (without `/admin/gateway`), then restart the server.",
       standalone:
-        "Clients on other machines can't reach it. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to an address they can reach (without `/gateway`), then restart the gateway.",
+        "Clients on other machines can't reach it. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to an address they can reach (without `/admin/gateway`), then restart the gateway.",
     },
     notPublic: {
       title: 'Clients may not be able to reach this address',
       embedded:
-        'This is the address your browser used to open Studio. Set `gateway.public_url` in `ov.conf` to the address clients should use (without `/gateway`), then restart the server.',
+        'This is the address your browser used to open Studio. Set `gateway.public_url` in `ov.conf` to the address clients should use (without `/admin/gateway`), then restart the server.',
       standalone:
-        'This is the address your browser used to open Studio. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to the address clients should use (without `/gateway`), then restart the gateway.',
+        'This is the address your browser used to open Studio. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to the address clients should use (without `/admin/gateway`), then restart the gateway.',
     },
     keys: 'Clients authenticate with a gateway key (`ovgw_…`) in place of a provider API key.',
     manageKeys: 'Manage keys',

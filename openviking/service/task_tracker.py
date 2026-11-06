@@ -44,6 +44,7 @@ from openviking.service.task_domain import (
     WorkRecoveryMode,
     WorkState,
     WorkSummary,
+    project_work_error,
     sanitize_error,
     sanitize_task_result,
 )
@@ -85,6 +86,7 @@ _CANCELLABLE_TASK_TYPES = {
     "add_resource",
     "add_skill",
     "compile",
+    "connector_import",
     "rule_compile",
     "session_commit",
     "admin_reindex",
@@ -178,12 +180,14 @@ async def run_tracked_operation(
     wait: bool,
     timeout: Optional[float] = None,
     resource_id: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
     existing_task: Optional[TaskRecord] = None,
     accept_failed_result: Callable[[_OperationResult], bool] | None = None,
     return_terminal_result: bool = False,
 ) -> tuple[_OperationResult, str]:
     """Run a top-level operation under a Task, reusing an existing Task context.
 
+    ``meta`` applies only to a newly created Task; reused Tasks keep their metadata.
     ``accept_failed_result`` is reserved for operations whose result explicitly
     reports record-level failures while the Task retains its failed status.
     ``return_terminal_result`` returns the Task's final projected result after
@@ -205,6 +209,7 @@ async def run_tracked_operation(
             resource_id=resource_id,
             account_id=account_id,
             user_id=user_id,
+            meta=meta,
         )
 
     try:
@@ -1109,7 +1114,7 @@ class TaskTracker:
         work_id: str,
         error: Optional[str] = None,
         *,
-        errors: Optional[Collection[str]] = None,
+        errors: Optional[Collection[Any]] = None,
         account_id: str,
         user_id: str,
     ) -> None:
@@ -1148,7 +1153,7 @@ class TaskTracker:
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -1318,7 +1323,7 @@ class TaskTracker:
                 "requeue_count": queue.requeue_count,
                 "error_count": queue.error_count,
                 "errors": [
-                    {"message": sanitize_error(str(error))}
+                    project_work_error(error)
                     for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
                 ],
             }

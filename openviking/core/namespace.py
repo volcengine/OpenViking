@@ -186,7 +186,7 @@ def visible_roots(ctx: RequestContext) -> list[str]:
     return [
         "viking://resources",
         "viking://agent",
-        canonical_user_root(ctx),
+        *(ctx.data_access.effective_targets if ctx.data_access else [canonical_user_root(ctx)]),
     ]
 
 
@@ -348,6 +348,7 @@ def is_content_root_uri(
         and classification.content_index is not None
         and len(parts) == classification.content_index + 1
     )
+
 
 def _validate_peer_id_segments(parts: list[str]) -> None:
     if len(parts) >= 4 and parts[0] == "user" and parts[2] == "peers":
