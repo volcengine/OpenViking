@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections import Counter
 from types import SimpleNamespace
@@ -5,9 +6,11 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import vikingbot.compile.pipeline_io as pipeline_io
 import vikingbot.providers.vlm_adapter as vlm_adapter
+from async_timeout import timeout
 from vikingbot.compile.models import CompileLimits
-from vikingbot.compile.pipeline_io import JsonModel, ModelCallError
+from vikingbot.compile.pipeline_io import JsonModel, ModelCallError, ModelCallLimitError
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 from volcenginesdkarkruntime._exceptions import (
     ArkAPITimeoutError,
@@ -119,7 +122,8 @@ async def test_chat_preserves_model_retry_budget(monkeypatch, max_retries, expec
 
 
 @pytest.mark.asyncio
-async def test_chat_preserves_input_error_for_compile_without_retry():
+async def test_chat_preserves_input_error_for_compile_without_retry(monkeypatch):
+    monkeypatch.delattr(asyncio, "timeout", raising=False)
     fake_vlm = _FakeVLM([ModelError(ModelErrorKind.INPUT_TOO_LARGE, "Input rejected")])
     adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
     files = SimpleNamespace(put=AsyncMock())
@@ -130,6 +134,30 @@ async def test_chat_preserves_input_error_for_compile_without_retry():
 
     assert model_error_kind(raised.value) is ModelErrorKind.INPUT_TOO_LARGE
     assert fake_vlm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_compile_model_timeout_cancels_call_and_preserves_limit_error(monkeypatch):
+    monkeypatch.delattr(asyncio, "timeout", raising=False)
+    monkeypatch.setattr(pipeline_io, "timeout", lambda _seconds: timeout(0))
+    cancelled = asyncio.Event()
+
+    async def chat(**_kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    files = SimpleNamespace(put=AsyncMock())
+    model = JsonModel(
+        SimpleNamespace(chat=chat), "test-model", 0.0, files, CompileLimits(), {}, Counter()
+    )
+
+    with pytest.raises(ModelCallLimitError, match="wall-clock budget exhausted"):
+        await model.call("reduce", [{"role": "user", "content": "hello"}], [], max_tokens=128)
+
+    assert cancelled.is_set()
+    assert files.put.await_args.args[1]["error"] == "TimeoutError"
 
 
 @pytest.mark.asyncio

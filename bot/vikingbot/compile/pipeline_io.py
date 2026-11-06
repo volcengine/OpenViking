@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, TypeVar
 
 import json_repair
+from async_timeout import timeout
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
@@ -306,7 +307,7 @@ class JsonModel:
             json.dumps([messages, tools], ensure_ascii=False), text_type="mixed"
         )
         try:
-            async with asyncio.timeout(seconds):
+            async with timeout(seconds):
                 response = await self.provider.chat(
                     messages=messages,
                     tools=tools,
@@ -335,7 +336,7 @@ class JsonModel:
                     response.content or "Model transport failure; see provider diagnostics"
                 )
             return response
-        except TimeoutError as exc:
+        except (TimeoutError, asyncio.TimeoutError) as exc:
             report["error"] = "TimeoutError"
             raise ModelCallLimitError(
                 f"{stage}: model call wall-clock budget exhausted ({seconds:g}s)"
@@ -365,11 +366,11 @@ class JsonModel:
         """Bound each assignment to twice the model timeout, with a 1200-second minimum."""
         seconds = max(1200, 2 * self.timeout)
         try:
-            async with asyncio.timeout(seconds):
+            async with timeout(seconds):
                 return await self._ask(
                     stage, system, data, schema, validate, agent=agent, readers=readers
                 )
-        except TimeoutError as exc:
+        except (TimeoutError, asyncio.TimeoutError) as exc:
             raise ModelCallLimitError(
                 f"{stage}: assignment wall-clock budget exhausted ({seconds:g}s)"
             ) from exc
