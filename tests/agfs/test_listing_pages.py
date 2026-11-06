@@ -31,11 +31,14 @@ def listing_client(tmp_path):
 
 @pytest.mark.parametrize("sort_by,sort_order", [(None, "asc"), ("name", "desc"), ("mtime", "asc")])
 @pytest.mark.parametrize("page_size", [1, 256, None])
-def test_ls_batches_equal_unpaged_result(listing_client, sort_by, sort_order, page_size):
+@pytest.mark.parametrize("offset", [0, 256, 1000])
+def test_ls_batches_equal_unpaged_result(listing_client, sort_by, sort_order, page_size, offset):
     client, _ = listing_client
     kwargs = {"ctx": {"account_id": "acct"}, "sort_by": sort_by, "sort_order": sort_order}
-    expected = client.ls("/local/acct/resources", **kwargs)
-    pages = list(client.ls_pages("/local/acct/resources", page_size=page_size, **kwargs))
+    expected = client.ls("/local/acct/resources", offset=offset, **kwargs)
+    pages = list(
+        client.ls_pages("/local/acct/resources", page_size=page_size, offset=offset, **kwargs)
+    )
     assert [entry for page in pages for entry in page] == expected
     assert all(0 < len(page) <= (page_size or len(expected)) for page in pages)
     assert ".path.ovlock" not in {entry["name"] for entry in expected}
@@ -50,11 +53,14 @@ def test_ls_batches_equal_unpaged_result(listing_client, sort_by, sort_order, pa
         {"directories_only": True, "show_hidden": True},
     ],
 )
-def test_tree_batches_equal_unpaged_result(listing_client, options):
+@pytest.mark.parametrize("offset", [0, 256, 1000])
+def test_tree_batches_equal_unpaged_result(listing_client, options, offset):
     client, _ = listing_client
     kwargs = {"ctx": {"account_id": "acct"}, **options}
-    expected = client.tree_directory("/local/acct/resources", **kwargs)
-    pages = list(client.tree_directory_pages("/local/acct/resources", page_size=2, **kwargs))
+    expected = client.tree_directory("/local/acct/resources", offset=offset, **kwargs)
+    pages = list(
+        client.tree_directory_pages("/local/acct/resources", page_size=2, offset=offset, **kwargs)
+    )
     assert [entry for page in pages for entry in page] == expected
     assert all(0 < len(page) <= 2 for page in pages)
 

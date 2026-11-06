@@ -2426,16 +2426,20 @@ class _OpsMixin:
         expose_resource_names = acl_enabled and is_acl_uri(uri)
 
         path = self._uri_to_path(uri, ctx=ctx)
-        try:
-            pages = await self._async_agfs.ls_pages(
-                path, page_size=raw_limit, sort_by=sort_by, sort_order=sort_order
-            )
-        except Exception as exc:
-            if is_not_found_error(exc):
-                raise NotFoundError(uri, "directory") from exc
-            raise
-
-        async for raw_entries in pages:
+        pages = None
+        while True:
+            try:
+                if pages is None:
+                    pages = await self._async_agfs.ls_pages(
+                        path, page_size=raw_limit, sort_by=sort_by, sort_order=sort_order
+                    )
+                raw_entries = await anext(pages)
+            except StopAsyncIteration:
+                break
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    raise NotFoundError(uri, "directory") from exc
+                raise
             entry_items = self._map_read_path_items(uri, raw_entries, ctx=ctx)
             entry_items = [
                 item

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -83,13 +83,22 @@ def ensure_same_encryption_account(src_path: str, dst_path: str) -> None:
 
 
 class _ListingPages:
-    """Async iteration without retaining a generator frame after an early return."""
+    """Retain a native enumeration only when the first raw batch is insufficient."""
 
     def __init__(
-        self, pages: Iterator[list[Dict[str, Any]]], first_page: list[Dict[str, Any]] | None
+        self,
+        first_page: list[Dict[str, Any]],
+        load_remaining: Callable[[], Iterator[list[Dict[str, Any]]]] | None,
     ):
-        self._pages = pages
-        self._first_page = first_page
+        self._pages: Iterator[list[Dict[str, Any]]] | None = None
+        self._first_page: list[Dict[str, Any]] | None = first_page
+        self._load_remaining = load_remaining
+
+    def _next_page(self) -> list[Dict[str, Any]] | None:
+        if self._load_remaining is not None:
+            self._pages = self._load_remaining()
+            self._load_remaining = None
+        return next(self._pages, None) if self._pages is not None else None
 
     def __aiter__(self) -> _ListingPages:
         return self
@@ -98,9 +107,11 @@ class _ListingPages:
         page: list[Dict[str, Any]] | None
         if self._first_page is not None:
             page, self._first_page = self._first_page, None
-            return page
-        page = await run_to_completion(lambda: asyncio.to_thread(next, self._pages, None))
-        if page is None:
+        elif self._pages is None and self._load_remaining is None:
+            raise StopAsyncIteration
+        else:
+            page = await run_to_completion(lambda: asyncio.to_thread(self._next_page))
+        if not page:
             raise StopAsyncIteration
         return page
 
@@ -171,10 +182,29 @@ class AsyncAGFSClient:
             kwargs["sort_order"] = sort_order
         return await self.run("ls", path, **kwargs, ctx=_fs_ctx_or_default(path, fs_ctx))
 
-    async def _listing_pages(self, method: str, path: str, **kwargs: Any) -> _ListingPages:
+    async def _listing_pages(
+        self, method: str, path: str, limit_name: str, page_size: int | None, **kwargs: Any
+    ) -> _ListingPages:
+        if page_size is not None and page_size <= 0:
+            raise ValueError("page_size must be positive")
+        if kwargs.get("sort_by") is None:
+            kwargs.pop("sort_by", None)
+            kwargs.pop("sort_order", None)
+        if not kwargs.get("directories_only"):
+            kwargs.pop("directories_only", None)
+
         def start() -> _ListingPages:
-            pages = getattr(self._client, method)(path, **kwargs)
-            return _ListingPages(pages, next(pages, None))
+            first_page = getattr(self._client, method)(path, **{limit_name: page_size}, **kwargs)
+
+            def load_remaining() -> Iterator[list[Dict[str, Any]]]:
+                return getattr(self._client, f"{method}_pages")(
+                    path, page_size=page_size, offset=page_size, **kwargs
+                )
+
+            return _ListingPages(
+                first_page,
+                load_remaining if page_size is not None and len(first_page) == page_size else None,
+            )
 
         # The common first-page request needs only one executor round trip.
         return await run_to_completion(lambda: asyncio.to_thread(start))
@@ -188,11 +218,12 @@ class AsyncAGFSClient:
         sort_order: str = "asc",
         fs_ctx: Dict[str, str] | None = None,
     ) -> AsyncIterator[list[Dict[str, Any]]]:
-        """Enumerate once, converting one raw page at a time off the event loop."""
+        """Read a bounded first batch, reusing one enumeration if more are needed."""
         return await self._listing_pages(
-            "ls_pages",
+            "ls",
             path,
-            page_size=page_size,
+            "limit",
+            page_size,
             sort_by=sort_by,
             sort_order=sort_order,
             ctx=_fs_ctx_or_default(path, fs_ctx),
@@ -210,12 +241,13 @@ class AsyncAGFSClient:
         directories_only: bool = False,
         fs_ctx: Dict[str, str] | None = None,
     ) -> AsyncIterator[list[Dict[str, Any]]]:
-        """Traverse once, retaining the native result only for this iteration."""
+        """Retain a traversal only when visibility filtering needs another batch."""
         return await self._listing_pages(
-            "tree_directory_pages",
+            "tree_directory",
             path,
+            "node_limit",
+            page_size,
             show_hidden=show_hidden,
-            page_size=page_size,
             level_limit=level_limit,
             sort_by=sort_by,
             sort_order=sort_order,

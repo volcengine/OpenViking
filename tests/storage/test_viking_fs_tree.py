@@ -10,6 +10,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -562,6 +563,20 @@ async def test_tree_denied_ancestor_stays_hidden_across_batches(monkeypatch, fs)
     assert batches == [256, 2]
     assert [entry["info"]["name"] for entry in result] == ["restricted", "visible.md"]
     assert result[0]["access"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_ls_maps_missing_directory_on_later_batch(monkeypatch, fs):
+    async def ls_pages(*args, **kwargs):
+        async def pages():
+            yield []
+            raise FileNotFoundError("removed during pagination")
+
+        return pages()
+
+    monkeypatch.setattr(fs._async_agfs, "ls_pages", ls_pages)
+    with pytest.raises(NotFoundError):
+        await fs.ls("viking://resources", node_limit=1, ctx=_default_ctx())
 
 
 # ── _tree_original tests ──

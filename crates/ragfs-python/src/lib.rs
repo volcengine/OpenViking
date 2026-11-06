@@ -1068,7 +1068,7 @@ enum ListingEntries {
 }
 
 /// Own one enumeration, converting only the next batch to Python objects.
-/// Consumed entries are dropped; no filesystem or permission state is cached.
+/// Consumed entries are dropped; nothing is shared between listing calls.
 #[pyclass]
 struct ListingPages {
     entries: ListingEntries,
@@ -2048,23 +2048,26 @@ impl RAGFSBindingClient {
     }
 
     /// Enumerate once and expose bounded batches for VikingFS visibility filtering.
-    #[pyo3(signature = (path, page_size=None, ctx=None, *, sort_by=None, sort_order=None))]
+    #[pyo3(signature = (path, page_size=None, ctx=None, *, offset=0, sort_by=None, sort_order=None))]
     fn ls_pages(
         &self,
         py: Python<'_>,
         path: String,
         page_size: Option<usize>,
         ctx: Option<HashMap<String, String>>,
+        offset: i64,
         sort_by: Option<&str>,
         sort_order: Option<&str>,
     ) -> PyResult<ListingPages> {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
+        let offset = parse_listing_offset(offset)?;
         let sort_by = parse_list_sort_by(sort_by)?;
         let sort_order = parse_sort_order(sort_order)?;
         let entries = self
             .run_scoped(py, fs_ctx, move || async move {
-                top.read_dir(&path, None, None, sort_by, sort_order).await
+                top.read_dir(&path, Some(offset), None, sort_by, sort_order)
+                    .await
             })
             .map_err(to_py_err)?;
         ListingPages::new(ListingEntries::Directory(entries.into_iter()), page_size)
@@ -2610,7 +2613,7 @@ impl RAGFSBindingClient {
     }
 
     /// Traverse once and expose bounded batches for VikingFS visibility filtering.
-    #[pyo3(signature = (path, show_hidden=false, page_size=None, level_limit=None, ctx=None, *, sort_by=None, sort_order=None, directories_only=false))]
+    #[pyo3(signature = (path, show_hidden=false, page_size=None, level_limit=None, ctx=None, *, offset=0, sort_by=None, sort_order=None, directories_only=false))]
     fn tree_directory_pages(
         &self,
         py: Python<'_>,
@@ -2619,6 +2622,7 @@ impl RAGFSBindingClient {
         page_size: Option<usize>,
         level_limit: Option<i32>,
         ctx: Option<HashMap<String, String>>,
+        offset: i64,
         sort_by: Option<&str>,
         sort_order: Option<&str>,
         directories_only: bool,
@@ -2626,6 +2630,7 @@ impl RAGFSBindingClient {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
         let level_limit = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let offset = parse_listing_offset(offset)?;
         let sort_by = parse_list_sort_by(sort_by)?;
         let sort_order = parse_sort_order(sort_order)?;
         let entries = self
@@ -2635,7 +2640,7 @@ impl RAGFSBindingClient {
                     show_hidden,
                     None,
                     level_limit,
-                    None,
+                    Some(offset),
                     sort_by,
                     sort_order,
                     directories_only,

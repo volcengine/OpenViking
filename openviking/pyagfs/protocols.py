@@ -18,6 +18,7 @@ class AGFSSyncClientProtocol(Protocol):
         page_size: int | None = None,
         ctx: Dict[str, str] | None = None,
         *,
+        offset: int = 0,
         sort_by: str | None = None,
         sort_order: str = "asc",
     ) -> Iterator[list[Dict[str, Any]]]:
@@ -31,6 +32,7 @@ class AGFSSyncClientProtocol(Protocol):
         level_limit: int | None = None,
         ctx: Dict[str, str] | None = None,
         *,
+        offset: int = 0,
         sort_by: str | None = None,
         sort_order: str = "asc",
         directories_only: bool = False,
