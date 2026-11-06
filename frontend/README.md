@@ -31,7 +31,7 @@ npm run preview        # Serve the built documentation at /ui/
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, `ov-` prefixed BEM class names, and React peer dependencies.
 - `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect}`: reusable views with public props types. All five ship placeholder views and will be rewritten against their reviewed contracts; file-tree and file-preview have their shell and interaction in place, while tui, scope-switcher and agent-connect render a fixed-size shell only. See the [module map](./packages/react/README.md#module-map).
-- `packages/react/src/modules/{file-browser,console,task-center,user-usage}`: importable placeholder components with settled public Props / Labels / Slots types, and styles. Business Hooks and interactions are planned.
+- `packages/react/src/modules/{file-browser,console,task-center}`: importable placeholder components with settled public Props / Labels / Slots types, and styles. Business Hooks and interactions are planned.
 - `packages/react/src/client`: the framework-neutral request client, exported from `@openviking/react/client` — a `fetch`-based `createOvClient` plus the contract modules depend on (`OvClient`, `OvRequestOptions`, `OvClientError`).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
@@ -54,7 +54,7 @@ Library output is `packages/react/dist/`; documentation output is `docs/doc_buil
 
 ## Target layout
 
-The workspace currently contains React components, shared SVGs, four business module placeholders, the request client, and documentation. The target also includes framework-neutral libraries, the Client transport, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
+The workspace currently contains React components, shared SVGs, three business module placeholders, the request client, and documentation. The target also includes framework-neutral libraries, the Client transport, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
 
 ```text
 frontend/

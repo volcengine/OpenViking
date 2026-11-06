@@ -20,25 +20,24 @@
 
 - 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
 - 登录、身份切换、路由与权限。
-- 打开资源或定位产物：模块通过 `onOpenUri` 与 `onResourceChange` 上报，不直接操作其他模块的私有状态。
+- 打开资源：模块通过 `onOpenUri` 上报，不直接操作其他模块的私有状态。
 - 输入区上方与工具栏中的入口，通过 `slots` 注入。
 
 ## 属性
 
 模块从子路径和根入口导出 `ConsoleProps`，`ConsoleMode`、`ConsoleLabels` 与 `ConsoleSlots` 只从子路径导出。
 
-| 属性               | 类型                          | 默认值         | 说明                                                                              |
-| ------------------ | ----------------------------- | -------------- | --------------------------------------------------------------------------------- |
-| `requestOptions`   | `OvRequestOptions`            | —              | 请求配置覆盖，逐字段覆盖最近的 Provider。                                         |
-| `mode`             | `'conversation' \| 'command'` | —              | 受控的当前模式。传入时由宿主决定模式，模块只上报切换意图。                        |
-| `defaultMode`      | `'conversation' \| 'command'` | `conversation` | 非受控时的初始模式。                                                              |
-| `onModeChange`     | `(mode: ConsoleMode) => void` | —              | 模式变化后触发。                                                                  |
-| `onOpenUri`        | `(uri: string) => void`       | —              | 资源成功打开后触发；失败时不触发。                                                |
-| `onResourceChange` | `(uri: string) => void`       | —              | 模块产生任务或资源变更时触发，宿主据此刷新目录、打开任务或定位产物。              |
-| `slots`            | `ConsoleSlots`                | —              | `toolbar`、`conversationContext` 与 `commandHelp`。                               |
-| `labels`           | `ConsoleLabels`               | —              | 可替换文案：`conversation`、`command`、`error`、`retry`。未提供时沿用英文默认值。 |
-| `className`        | `string`                      | —              | 容器附加类名。                                                                    |
-| `style`            | `CSSProperties`               | —              | 容器样式覆盖。                                                                    |
+| 属性             | 类型                          | 默认值         | 说明                                                                              |
+| ---------------- | ----------------------------- | -------------- | --------------------------------------------------------------------------------- |
+| `requestOptions` | `OvRequestOptions`            | —              | 请求配置覆盖，逐字段覆盖最近的 Provider。                                         |
+| `mode`           | `'conversation' \| 'command'` | —              | 受控的当前模式。传入时由宿主决定模式，模块只上报切换意图。                        |
+| `defaultMode`    | `'conversation' \| 'command'` | `conversation` | 非受控时的初始模式。                                                              |
+| `onModeChange`   | `(mode: ConsoleMode) => void` | —              | 模式变化后触发。                                                                  |
+| `onOpenUri`      | `(uri: string) => void`       | —              | 资源成功打开后触发；失败时不触发。                                                |
+| `slots`          | `ConsoleSlots`                | —              | `toolbar`、`conversationContext` 与 `commandHelp`。                               |
+| `labels`         | `ConsoleLabels`               | —              | 可替换文案：`conversation`、`command`、`error`、`retry`。未提供时沿用英文默认值。 |
+| `className`      | `string`                      | —              | 容器附加类名。                                                                    |
+| `style`          | `CSSProperties`               | —              | 容器样式覆盖。                                                                    |
 
 文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
 

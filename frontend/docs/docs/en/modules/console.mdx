@@ -20,25 +20,24 @@ The component is a placeholder: it renders the module name and a placeholder mes
 
 - Request configuration through the Provider, overridable per module through `requestOptions`.
 - Sign-in, identity switching, routing and permissions.
-- Opening a resource or locating an artifact: the module reports it through `onOpenUri` and `onResourceChange`, and never reaches into another module's private state.
+- Opening a resource: the module reports it through `onOpenUri`, and never reaches into another module's private state.
 - Entries above the composer and in the toolbar, injected through `slots`.
 
 ## Props
 
 The module exports `ConsoleProps` from the subpath and the root entry, and `ConsoleMode`, `ConsoleLabels` and `ConsoleSlots` from the subpath only.
 
-| Property           | Type                          | Default        | Description                                                                                                      |
-| ------------------ | ----------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `requestOptions`   | `OvRequestOptions`            | —              | Request configuration override, applied field by field over the nearest Provider.                                |
-| `mode`             | `'conversation' \| 'command'` | —              | The controlled mode. When given, the host owns the mode and the module only reports switch intent.               |
-| `defaultMode`      | `'conversation' \| 'command'` | `conversation` | Initial mode when uncontrolled.                                                                                  |
-| `onModeChange`     | `(mode: ConsoleMode) => void` | —              | Called after the mode changes.                                                                                   |
-| `onOpenUri`        | `(uri: string) => void`       | —              | Called after a resource opens successfully; not called on failure.                                               |
-| `onResourceChange` | `(uri: string) => void`       | —              | Called when the module produces a task or a resource change, so the host can refresh or locate it.               |
-| `slots`            | `ConsoleSlots`                | —              | `toolbar`, `conversationContext` and `commandHelp`.                                                              |
-| `labels`           | `ConsoleLabels`               | —              | Replaceable copy: `conversation`, `command`, `error` and `retry`. An omitted label inherits its English default. |
-| `className`        | `string`                      | —              | Additional container class.                                                                                      |
-| `style`            | `CSSProperties`               | —              | Container style overrides.                                                                                       |
+| Property         | Type                          | Default        | Description                                                                                                      |
+| ---------------- | ----------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `requestOptions` | `OvRequestOptions`            | —              | Request configuration override, applied field by field over the nearest Provider.                                |
+| `mode`           | `'conversation' \| 'command'` | —              | The controlled mode. When given, the host owns the mode and the module only reports switch intent.               |
+| `defaultMode`    | `'conversation' \| 'command'` | `conversation` | Initial mode when uncontrolled.                                                                                  |
+| `onModeChange`   | `(mode: ConsoleMode) => void` | —              | Called after the mode changes.                                                                                   |
+| `onOpenUri`      | `(uri: string) => void`       | —              | Called after a resource opens successfully; not called on failure.                                               |
+| `slots`          | `ConsoleSlots`                | —              | `toolbar`, `conversationContext` and `commandHelp`.                                                              |
+| `labels`         | `ConsoleLabels`               | —              | Replaceable copy: `conversation`, `command`, `error` and `retry`. An omitted label inherits its English default. |
+| `className`      | `string`                      | —              | Additional container class.                                                                                      |
+| `style`          | `CSSProperties`               | —              | Container style overrides.                                                                                       |
 
 Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
 

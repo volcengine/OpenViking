@@ -46,16 +46,16 @@ export interface ConsoleLabels {
  * 交互面板模块的属性。
  *
  * 模块自己通过 Hook 取数，props 里没有会话与命令记录：宿主给配置、受控模式、
- * 插槽与文案。打开资源、定位产物通过回调交给宿主，与文件浏览模块的联动不依赖
- * 对方的私有状态。
+ * 插槽与文案。打开资源通过回调交给宿主，与文件浏览模块的联动不依赖对方的私有
+ * 状态。
  *
  * Props of the console module.
  *
  * The module loads its own data through a Hook, so no prop carries sessions or
  * command records: the host supplies configuration, the controlled mode, slots
- * and copy. Opening a resource or locating an artifact goes back to the host
- * through a callback, and coordination with the file browser never reaches into
- * the other module's private state.
+ * and copy. Opening a resource goes back to the host through a callback, and
+ * coordination with the file browser never reaches into the other module's
+ * private state.
  */
 export interface ConsoleProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -83,12 +83,6 @@ export interface ConsoleProps extends Omit<
    * failure.
    */
   onOpenUri?: (uri: string) => void;
-  /**
-   * 模块产生任务或资源变更时触发，宿主据此刷新目录、打开任务或定位产物。
-   * Called when the module produces a task or a resource change, so the host can
-   * refresh a directory, open a task or locate an artifact.
-   */
-  onResourceChange?: (uri: string) => void;
   /**
    * 插槽，见 {@link ConsoleSlots}。
    * Slots, see {@link ConsoleSlots}.
