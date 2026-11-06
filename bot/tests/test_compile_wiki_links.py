@@ -1,5 +1,6 @@
 """Wiki links use the containing page directory, including at publication."""
 
+import asyncio
 from collections import Counter
 from types import SimpleNamespace
 
@@ -18,6 +19,12 @@ def test_wiki_links_preserve_fenced_examples():
         f" ```md\n{example} ```\n"
         f"````md\n```\n{example}````\n"
         f"   ~~~md\n```\n{example}   ~~~~\n"
+        f"> ```md\n> {example}> ```\n"
+        f"- ```md\n  {example}  ```\n"
+        f"``multiline\n{example}``\n"
+        f'<span title="`"></span> `{example.rstrip()}`\n'
+        '<span title="`"></span> [Actual](concept/b.md) `inline code`\n'
+        f"> ```md\n> {example}\n"
         "\n[Actual](concept/b.md)\n\n"
         f"```md\n{example}"
     )
@@ -26,7 +33,7 @@ def test_wiki_links_preserve_fenced_examples():
         body, path="concept/a.md", known_paths={"concept/b.md"}
     )
     assert result == body.replace("[Actual](concept/b.md)", "[Actual](b.md)")
-    assert count == 1
+    assert count == 2
 
 
 def test_normalize_only_unambiguous_known_output_links():
@@ -116,3 +123,65 @@ async def test_finalize_checks_historical_paths_and_records_publication_hashes(e
     assert values["finalize"]["outputs"]["concept/a.md"]["sha256"] == content_hash(published)
     assert values["finalize"]["normalized_links"] == (0 if existing_relative else 1)
     assert queried[0].endswith("/concept/concept/b.md")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_finalize_bounds_and_deduplicates_remote_link_checks(fail):
+    from openviking_cli.exceptions import NotFoundError
+
+    body = "\n".join(f"[Link](concept/{i}.md) [Again](concept/{i}.md)" for i in range(12))
+    values = {
+        "a": {
+            "path": "concept/a.md",
+            "owner": "a",
+            "content": body,
+            "sha256": content_hash(body),
+            "base_hash": None,
+            "source_refs": [],
+        }
+    }
+    active = peak = 0
+    queried = Counter()
+
+    async def stat(uri):
+        nonlocal active, peak
+        queried[uri] += 1
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0)
+            if fail and uri.endswith("/0.md"):
+                raise PermissionError("denied")
+            if "/concept/concept/" in uri:
+                raise NotFoundError(uri)
+            return {"isDir": False}
+        finally:
+            active -= 1
+
+    async def get(ref):
+        return values[ref]
+
+    async def put(ref, value):
+        values[ref] = value
+
+    runtime = SimpleNamespace(
+        files=SimpleNamespace(get=get, put=put),
+        skill_target=False,
+        output_format="wiki",
+        target="viking://resources/wiki",
+        old={},
+        client=SimpleNamespace(stat=stat),
+        metrics=Counter(),
+    )
+    if fail:
+        with pytest.raises(PermissionError, match="denied"):
+            await finalize.run(runtime, ["a"])
+        assert "finalize" not in values
+    else:
+        rendered = await finalize.run(runtime, ["a"])
+        assert rendered.operations[0]["content"] == body.replace("](concept/", "](")
+        assert len(queried) == 24
+    assert set(queried.values()) == {1}
+    assert 1 < peak <= 8
+    assert active == 0

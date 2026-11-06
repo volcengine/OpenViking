@@ -25,19 +25,11 @@ def test_wiki_requires_body_but_metadata_files_remain_valid(runtime):
     assert response.files[0].content is not None
     response.files[0].content += "# Knowledge index\n\n[Project 01](entity/project-01.md)\n"
     file_ops.validate_files(pipeline, response, group, [], {})
+    response.files[0].content = "---\n---\n# Knowledge index\n"
+    file_ops.validate_files(pipeline, response, group, [], {})
     pipeline.direct_output_format = "files"
     response.files[0].content = "---\nsetting: true\n---\n"
     file_ops.validate_files(pipeline, response, group, [], {})
-
-
-def test_wiki_invalid_frontmatter_is_a_repairable_validation_error(runtime):
-    pipeline, _ = runtime
-    pipeline.direct_output_format = "wiki"
-    response = FileResponse(
-        files=[FileDraft(path="index.md", content="---\ntitle: [\n---\n# Knowledge index\n")]
-    )
-    with pytest.raises(ValueError, match="invalid YAML frontmatter"):
-        file_ops.validate_files(pipeline, response, Group("direct", []), [], {})
 
 
 @pytest.mark.parametrize(
@@ -65,10 +57,21 @@ def test_compile_wiki_navigation_requires_valid_markdown_destinations(runtime, l
 
 
 @pytest.mark.asyncio
-async def test_compile_finalize_rejects_invalid_stored_wiki_navigation(runtime):
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [
+        ("# Index\n\n[Project 01](entity/Project 01.md)\n", "unescaped whitespace"),
+        ("---\ntitle: [\n---\n# Index\n", "invalid YAML frontmatter"),
+        ("---\ntitle: [\n# Index\n", "unterminated YAML frontmatter"),
+        ("---\ntype: index\n---\n", "requires a Markdown body"),
+    ],
+)
+async def test_invalid_wiki_output_is_rejected_before_staging_and_publication(runtime, body, error):
     pipeline, _ = runtime
     pipeline.direct_output_format = "wiki"
-    body = "# Index\n\n[Project 01](entity/Project 01.md)\n"
+    response = FileResponse(files=[FileDraft(path="index.md", content=body)])
+    with pytest.raises(ValueError, match=error):
+        file_ops.validate_files(pipeline, response, Group("direct", []), [], {})
     await pipeline.files.put(
         "accepted/index",
         {
@@ -80,7 +83,7 @@ async def test_compile_finalize_rejects_invalid_stored_wiki_navigation(runtime):
             "source_refs": [],
         },
     )
-    with pytest.raises(ValueError, match="unescaped whitespace"):
+    with pytest.raises(ValueError, match=error):
         await finalize_op.run(pipeline, ["accepted/index"])
     assert "finalize" not in pipeline.files.values
 

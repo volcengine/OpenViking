@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING
 
@@ -12,10 +13,9 @@ from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure
 from vikingbot.compile.renderer import (
     RenderedBundle,
-    _split_frontmatter,
     normalize_wiki_page_links,
     validate_relative_file_path,
-    validate_wiki_link_destinations,
+    validate_wiki_page,
     wiki_page_link_targets,
 )
 
@@ -60,8 +60,7 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
         if path.endswith(".json"):
             json.loads(payload)
         if path.lower().endswith(".md") and runtime.output_format == "wiki":
-            _, body = _split_frontmatter(payload.decode("utf-8"))
-            validate_wiki_link_destinations(body)
+            validate_wiki_page(payload.decode("utf-8"), path)
         files[path] = payload
         revisions[path] = artifact["base_hash"]
         outputs[path] = {"source_refs": artifact["source_refs"]}
@@ -84,21 +83,38 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
                 checked.add(path)
             return path in known_paths
 
-        for path, payload in files.items():
-            if path.lower().endswith(".md"):
-                for destination, relative in sorted(
-                    wiki_page_link_targets(payload.decode("utf-8"), path)
-                ):
-                    if not await exists(relative):
-                        await exists(destination)
+        targets = {
+            pair
+            for path, payload in files.items()
+            if path.lower().endswith(".md")
+            for pair in wiki_page_link_targets(payload.decode("utf-8"), path)
+        }
+        concurrency = 8
+
+        async def check_paths(paths):
+            pending = sorted(set(paths) - checked)
+            for start in range(0, len(pending), concurrency):
+                # A failed/auth-denied check must finish its siblings before
+                # propagating; no background requests may outlive finalization.
+                results = await asyncio.gather(
+                    *(exists(path) for path in pending[start : start + concurrency]),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
+
+        await check_paths(relative for _, relative in targets)
+        await check_paths(
+            destination for destination, relative in targets if relative not in known_paths
+        )
         for path, payload in files.items():
             if path.lower().endswith(".md"):
                 text, count = normalize_wiki_page_links(
                     payload.decode("utf-8"), path=path, known_paths=known_paths
                 )
                 if count:
-                    _, body = _split_frontmatter(text)
-                    validate_wiki_link_destinations(body)
+                    validate_wiki_page(text, path)
                 files[path] = text.encode("utf-8")
                 normalized_links += count
         runtime.metrics["wiki_links_normalized"] += normalized_links

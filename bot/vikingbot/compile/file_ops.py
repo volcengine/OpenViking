@@ -19,7 +19,7 @@ from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.renderer import (
     _split_frontmatter,
     validate_relative_file_path,
-    validate_wiki_link_destinations,
+    validate_wiki_page,
 )
 from vikingbot.compile.results import FileDraft, FileResponse, Group, InputReferenceError
 
@@ -176,15 +176,7 @@ def validate_files(runtime: Pipeline, response, group, records, old):
         )
         if output_format == "wiki" and draft.path.lower().endswith(".md"):
             text = value.decode("utf-8") if isinstance(value, bytes) else value
-            try:
-                _, body = _split_frontmatter(text)
-            except yaml.YAMLError as exc:
-                raise ValueError(f'Wiki page "{draft.path}" has invalid YAML frontmatter') from exc
-            if not body.strip():
-                raise ValueError(
-                    f'Wiki page "{draft.path}" requires a Markdown body after frontmatter'
-                )
-            validate_wiki_link_destinations(body)
+            validate_wiki_page(text, draft.path)
         if draft.content_sha256 and content_hash(value) != draft.content_sha256:
             raise ValueError("Artifact content hash mismatch")
         if isinstance(value, bytes) and draft.path.lower().endswith((".md", ".json")):

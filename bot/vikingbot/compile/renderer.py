@@ -31,9 +31,11 @@ from vikingbot.compile.models import (
     WikiLanguage,
 )
 
-_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_FRONTMATTER_RE = re.compile(
+    r"\A---[ \t]*\r?\n(.*?)^---[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE
+)
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
-_FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
+_FRONTMATTER_END_RE = re.compile(rb"(?m)^---[ \t]*(?:\r?\n|\Z)")
 _OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
 _BARE_VIKING_URI_RE = re.compile(r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+""")
 _LEADING_H1_RE = re.compile(r"\A(?:[ \t]*\r?\n)*#[ \t]+[^\r\n]*(?:\r?\n|\Z)")
@@ -78,6 +80,19 @@ def strip_okf_frontmatter(content: str) -> str:
 def has_unclosed_frontmatter(content: bytes) -> bool:
     opening = _FRONTMATTER_START_RE.match(content)
     return opening is not None and _FRONTMATTER_END_RE.search(content[opening.end() :]) is None
+
+
+def validate_wiki_page(content: str, path: str) -> None:
+    """Validate Wiki frontmatter and editable body before staging or publication."""
+    if has_unclosed_frontmatter(content.encode("utf-8")):
+        raise ValueError(f'Wiki page "{path}" has unterminated YAML frontmatter')
+    try:
+        _, body = _split_frontmatter(content)
+    except yaml.YAMLError as exc:
+        raise ValueError(f'Wiki page "{path}" has invalid YAML frontmatter') from exc
+    if not body.strip():
+        raise ValueError(f'Wiki page "{path}" requires a Markdown body after frontmatter')
+    validate_wiki_link_destinations(body)
 
 
 def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:

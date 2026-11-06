@@ -4,7 +4,21 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterator, List, Optional
 from urllib.parse import quote, unquote
 
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import backtick
+
 from openviking.core.namespace import uri_parts
+
+
+def _backtick_with_source_span(state, silent):
+    """Keep the source offsets that CommonMark's inline-code rule consumed."""
+    start, count = state.pos, len(state.tokens)
+    matched = backtick(state, silent)
+    if matched and not silent and len(state.tokens) > count:
+        token = state.tokens[-1]
+        if token.type == "code_inline":
+            token.meta["source_span"] = (start, state.pos)
+    return matched
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,24 +141,35 @@ class LinkRenderer:
     def protected_markdown_spans(content: str) -> List[tuple[int, int]]:
         """Return spans where Compile must never insert a generated WikiLink."""
         spans = [(link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)]
-        opening = None
-        for match in re.finditer(r"(?m)^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|\Z)", content):
-            marker, suffix = match.groups()
-            if opening is None:
-                # Backtick fence info strings cannot themselves contain backticks.
-                if marker[0] == "`" and "`" in suffix:
-                    continue
-                opening = (match.start(), marker)
-            elif (
-                marker[0] == opening[1][0]
-                and len(marker) >= len(opening[1])
-                and not suffix.strip(" \t")
+        # CommonMark resolves container boundaries (quotes/lists) and unclosed
+        # fences. Line maps let us preserve original bytes instead of rerendering.
+        offsets = [0, *(m.end() for m in re.finditer(r"\r\n|\r|\n", content)), len(content)]
+        parser = MarkdownIt("commonmark")
+        parser.inline.ruler.at("backticks", _backtick_with_source_span)
+        for token in parser.parse(content):
+            if token.map is None:
+                continue
+            start, end = (offsets[line] for line in token.map)
+            if token.type in {"fence", "code_block"}:
+                spans.append((start, end))
+            elif token.type == "inline" and any(
+                child.type == "code_inline" for child in token.children or []
             ):
-                spans.append((opening[0], match.end()))
-                opening = None
-        if opening is not None:
-            spans.append((opening[0], len(content)))
-        spans.extend((m.start(), m.end()) for m in re.finditer(r"`+[^\n`]*?`+", content))
+                # Container/heading markers and indentation are stripped from
+                # token.content, but every backtick remains in source order.
+                # Map only delimiters; HTML attributes and escaped backticks are
+                # interpreted by the parser instead of guessed here.
+                ticks = dict(
+                    zip(
+                        (m.start() for m in re.finditer("`", token.content)),
+                        (start + m.start() for m in re.finditer("`", content[start:end])),
+                        strict=True,
+                    )
+                )
+                for child in token.children or []:
+                    if child.type == "code_inline":
+                        opening, closing = child.meta["source_span"]
+                        spans.append((ticks[opening], ticks[closing - 1] + 1))
 
         for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
             if not any(start <= match.start() < end for start, end in spans):
