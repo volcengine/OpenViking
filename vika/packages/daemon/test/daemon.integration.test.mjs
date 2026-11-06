@@ -35,11 +35,13 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
       env.receive(textMessage({ messageId: 'om-inbox-old', chatId: 'oc-old', text: 'older pending body' }));
       await env.waitForCodexInput(/\[Vika inbox notice\]/);
       env.receive(textMessage({ messageId: 'om-inbox-new', chatId: 'oc-new', text: 'newer pending body' }));
-      await env.waitForCodexInput(/pending=2 scopes=1/);
+      await env.waitForCodexInput(/pending=2 scopes=2/);
       const notice = env.codexInput().find((entry) => entry.method === 'turn/steer');
       assert.ok(notice);
+      // Both scopes report their whole backlog, never a body.
+      assert.match(notice.text, /oc-old/);
       assert.match(notice.text, /oc-new/);
-      assert.doesNotMatch(notice.text, /oc-old|older pending body|newer pending body/);
+      assert.doesNotMatch(notice.text, /older pending body|newer pending body/);
       await env.waitForReply(/om-inbox-new/);
       await env.daemon.agentRuntime.whenIdle();
       assert.equal(env.daemon.harness.inbox.pending, 0);

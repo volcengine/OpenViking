@@ -40,7 +40,7 @@ function item(seq, scopeKey = 'A') {
     senderName: '张三', text: `secret-${seq}` };
 }
 
-it('uses a fixed busy window and notices only new scopes while counting all unread items', (t) => {
+it('uses a fixed busy window and notices every scope with its whole backlog', (t) => {
   const { inbox, notices, advance } = setup(t);
   inbox.route(item(1));
   advance(2000);
@@ -56,8 +56,11 @@ it('uses a fixed busy window and notices only new scopes while counting all unre
     first_event: 'evt-1', latest_event: 'evt-2', latest_from: '张三' });
   inbox.route(item(3, 'B'));
   advance(3000);
-  assert.match(notices[1].items[0].text, /pending=3 scopes=1/);
-  assert.doesNotMatch(notices[1].items[0].text, /"scope_key":"A"/);
+  // A notice is a backlog report, not a delta: the model reads it to judge how
+  // far behind it is, so a scope that is still unread stays listed.
+  assert.match(notices[1].items[0].text, /pending=3 scopes=2/);
+  assert.match(notices[1].items[0].text, /"scope_key":"A"/);
+  assert.match(notices[1].items[0].text, /"scope_key":"B"/);
   advance(3000);
   assert.equal(notices.length, 2);
 });

@@ -13,9 +13,9 @@ import { DecisionPolicy } from '../src/decisions.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
-function setup(t, scheduler = 'inbox') {
+function setup(t, scheduler = 'inbox', overrides = {}) {
   const config = { scheduler, connectors: ['lark'], maxEventBytes: 100000,
-    maxEventAgeMs: 60000, ignoredSenderIds: new Set() };
+    maxEventAgeMs: 60000, ignoredSenderIds: new Set(), ...overrides };
   const store = new Store(':memory:', logger);
   store.initializeCognition('codex', 'owner');
   const submitted = [];
@@ -176,6 +176,41 @@ it('blocks a reply based on an older pulled event until the newer same-scope inp
   assert.equal(harness.inbox.pending, 1);
   const read = await service.call('message_check', {}, { authority: 'owner' });
   assert.deepEqual(read.data.items.map((item) => item.event_id), ['message:om_new12345678']);
+});
+
+it('refuses to reply on a peeked event but lets silence settle on the peek', async (t) => {
+  const { harness, store, consumed, service } = setup(t, 'inbox', { explicitSilence: true });
+  harness.handleConnectorEvent(chatEvent({ messageId: 'om_peek12345678', content: 'peeked body' }).envelope);
+  await harness.ingressBarrier;
+  const peek = await service.call('message_check', { peek: true }, { authority: 'owner' });
+  assert.match(peek.text, /peek=1 pending=1/);
+  assert.match(peek.text, /peeked body/);
+  assert.equal(consumed.length, 0);
+  assert.equal(store.cognitionJournal().length, 0);
+  assert.equal(harness.inbox.pending, 1);
+  const decide = { decision_id: 'message:om_peek12345678', message_id: 'om_peek12345678', markdown: 'answer' };
+  await assert.rejects(service.call('reply_message', decide, { authority: 'owner' }), /only announced or peeked/);
+  assert.equal(harness.inbox.pending, 1);
+  assert.equal((await service.call('message_check', { peek: true }, { authority: 'owner' })).data.items.length, 0);
+  const read = await service.call('message_check', {}, { authority: 'owner' });
+  assert.match(read.text, /read=1 pending=0/);
+  assert.match(read.text, /peeked body/);
+  assert.equal(consumed.length, 1);
+  assert.equal(store.cognitionJournal().length, 1);
+  await service.call('reply_message', decide, { authority: 'owner' });
+});
+
+it('records silence on a peeked input and drops it from the backlog', async (t) => {
+  const { harness, service } = setup(t, 'inbox', { explicitSilence: true });
+  harness.handleConnectorEvent(chatEvent({ messageId: 'om_sil1234567890', content: 'chatter between others' }).envelope);
+  await harness.ingressBarrier;
+  const input = { decision_id: 'message:om_sil1234567890' };
+  await assert.rejects(service.call('stay_silent', input, { authority: 'owner' }), /never read or peeked/);
+  assert.equal(harness.inbox.pending, 1);
+  await service.call('message_check', { peek: true }, { authority: 'owner' });
+  const silent = await service.call('stay_silent', input, { authority: 'owner' });
+  assert.match(silent.text, /Recorded/);
+  assert.equal(harness.inbox.pending, 0);
 });
 
 it('keeps the full resolved sender label in notification metadata', async (t) => {

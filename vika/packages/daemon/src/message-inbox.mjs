@@ -13,7 +13,7 @@ export class MessageInbox {
 
   route(item) {
     if (this.stopped) return false;
-    this.entries.push({ item, notified: false });
+    this.entries.push({ item, notified: false, peeked: false });
     if (!this.isTurnInProgress()) this.onAvailable();
     else if (!this.timer) {
       this.timer = this.setTimer(() => {
@@ -25,18 +25,45 @@ export class MessageInbox {
     return true;
   }
 
-  read({ scopeKey = null, limit = 100 } = {}) {
-    const selected = [];
-    const remaining = this.entries.filter((entry) => {
-      if (selected.length >= limit || (scopeKey !== null && entry.item.scopeKey !== scopeKey)) return true;
-      selected.push(entry.item);
-      return false;
-    });
-    this.onRead(selected);
-    this.entries = remaining;
+  // A peek put this body in front of the model once. Silence may settle on
+  // that much, since it sends nothing; a reply may not, since the body could
+  // already be out of context by then.
+  wasPeeked(seq) {
+    return this.entries.some((entry) => entry.item.seq === seq && entry.peeked);
+  }
+
+  // A decision taken without reading the body (silence) still settles the
+  // entry, or the backlog would keep announcing an input already decided on.
+  settle(seq) {
+    const before = this.entries.length;
+    this.entries = this.entries.filter((entry) => entry.item.seq !== seq);
+    if (this.entries.length === before) return false;
     if (this.pending === 0 && this.timer) {
       this.clearTimer(this.timer);
       this.timer = null;
+    }
+    return true;
+  }
+
+  read({ scopeKey = null, limit = 100, peek = false } = {}) {
+    const selected = [];
+    const remaining = this.entries.filter((entry) => {
+      if (selected.length >= limit || (scopeKey !== null && entry.item.scopeKey !== scopeKey)) return true;
+      if (peek && entry.peeked) return true;
+      selected.push(entry.item);
+      // A peek shows the body without settling it: the entry keeps its
+      // `notified` state so the backlog stays announced, and a later peek
+      // skips it so the model never re-reads what it already saw.
+      if (peek) { entry.peeked = true; return true; }
+      return false;
+    });
+    if (!peek) {
+      this.onRead(selected);
+      this.entries = remaining;
+      if (this.pending === 0 && this.timer) {
+        this.clearTimer(this.timer);
+        this.timer = null;
+      }
     }
     return { items: selected, pending: this.pending };
   }
@@ -44,9 +71,14 @@ export class MessageInbox {
   notify({ idle = false } = {}) {
     if (this.stopped || this.pending === 0) return false;
     if (!idle && this.isTurnInProgress() && this.activeInput() !== 'steer') return false;
-    const entries = this.entries.filter((entry) => !entry.notified);
+    // Every scope reports its whole unread backlog, not just what is new here:
+    // the model reads this line to decide whether it is behind, so a count
+    // that only covered fresh arrivals would understate the backlog.
     const scopes = new Map();
-    for (const { item } of entries) {
+    let peeked = 0;
+    for (const entry of this.entries) {
+      const { item } = entry;
+      if (entry.peeked) peeked += 1;
       let scope = scopes.get(item.scopeKey);
       if (!scope) {
         scope = { scope_key: item.scopeKey, source: item.source, chat: item.chatId ?? null,
@@ -60,16 +92,17 @@ export class MessageInbox {
     // A notice is already in the conversation, so re-submitting it at every
     // idle edge adds nothing but a fresh turn: the turn ends unread, calls
     // onAvailable, and the pair repeats forever.
-    if (entries.length === 0) return false;
+    const fresh = this.entries.filter((entry) => !entry.notified);
+    if (fresh.length === 0) return false;
     const text = [
-      `[Vika inbox notice] pending=${this.pending} scopes=${scopes.size}`,
+      `[Vika inbox notice] pending=${this.pending} scopes=${scopes.size}${peeked > 0 ? ` peeked=${peeked}` : ''}`,
       ...[...scopes.values()].map((scope) => JSON.stringify(scope)),
-      'These messages have not been read. Choose when to read them: message_check with scope_key reads one scope; message_check without scope_key reads all pending scopes, up to the requested limit.',
+      `These messages have not been read${peeked > 0 ? `; ${peeked} of them were only peeked and still need a read` : ''}. Choose when to read them: message_check with scope_key reads one scope; message_check without scope_key reads all pending scopes, up to the requested limit.`,
     ].join('\n');
     const accepted = this.submit([{ text, seq: null }], {
       admission: idle ? 'claim-if-idle' : 'enqueue',
     })?.accepted === true;
-    if (accepted) for (const entry of entries) entry.notified = true;
+    if (accepted) for (const entry of fresh) entry.notified = true;
     return accepted;
   }
 

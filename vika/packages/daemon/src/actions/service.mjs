@@ -189,17 +189,20 @@ export class ActionService {
     return TOOLS.filter((tool) => this.offered(tool)).map((tool) => publicTool(this.definition(tool)));
   }
 
-  messageCheck({ scope_key: scopeKey, limit = 100 }) {
-    const result = this.inbox.read({ scopeKey, limit });
-    this.onInboxRead(result.items);
+  messageCheck({ scope_key: scopeKey, limit = 100, peek = false }) {
+    const result = this.inbox.read({ scopeKey, limit, peek });
+    if (!peek) this.onInboxRead(result.items);
     const items = result.items.map((item) => ({
       seq: item.seq, scope_key: item.scopeKey, event_id: item.eventId,
       source: item.source, text: item.text,
     }));
     return {
-      text: [`[Vika inbox] read=${items.length} pending=${result.pending}`,
-        ...items.map((item) => item.text)].join('\n'),
-      data: { items, pending: result.pending },
+      text: [`[Vika inbox] ${peek ? 'peek' : 'read'}=${items.length} pending=${result.pending}`,
+        ...items.map((item) => item.text),
+        ...(peek && items.length > 0
+          ? ['These events are still pending and were not settled by this peek. To answer one, read it first: message_check without peek, then use its event= as decision_id.']
+          : [])].join('\n'),
+      data: { items, pending: result.pending, peek },
     };
   }
 
@@ -429,6 +432,12 @@ export class ActionService {
     if (this.store.decisionFor(row.connector_instance, row.event_id)?.outcome === 'delivered') {
       return { text: 'A delivery is already recorded for this input; nothing to change. Do not call stay_silent for it.', data: { duplicate: true, delivered: true } };
     }
+    // Silence sends nothing, so it may settle on a peek: the body was in front
+    // of the model when it decided. It must still have been seen at all, or a
+    // line nobody looked at would disappear as if it had been judged.
+    if (this.inbox && !this.store.inboundWasRead(row.seq) && !this.inbox.wasPeeked(row.seq)) {
+      throw blocked('unread_decision', 'Silence not recorded: this input was never read or peeked. Look at it first with message_check (peek is enough), then decide.');
+    }
     const newerSeq = this.store.newerAcceptedSeq(row.scope_key, row.seq);
     const superseded = newerSeq !== null;
     if (superseded) caller.trace.newerSeq = newerSeq;
@@ -438,6 +447,7 @@ export class ActionService {
     if (!created) {
       return { text: 'Already recorded: nothing is sent for this input. Do not call stay_silent again for it.', data: { duplicate: true } };
     }
+    this.inbox?.settle(row.seq);
     // A superseded input's OnIt may belong to work on the newer one.
     if (!superseded && row.conv_key) await this.clearTemporaryReaction(row.conv_key, 'silent');
     try {
@@ -465,6 +475,12 @@ export class ActionService {
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
       throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
+    }
+    // Inbox scheduling shows bodies only through message_check, and peeking
+    // does not settle anything: a decision on an event that was merely
+    // announced or peeked would act on text the turn never received.
+    if (this.inbox && !this.store.inboundWasRead(decision.seq)) {
+      throw blocked('unread_decision', 'Delivery blocked: this input was only announced or peeked, never read. Read it first with message_check (no peek), then use its event= as decision_id.');
     }
   }
 

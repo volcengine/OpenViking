@@ -1141,6 +1141,17 @@ export class Store {
     return number(row?.seq) || 0;
   }
 
+  // Whether a turn was actually shown this inbound's body. Inbox scheduling
+  // journals an inbound only when it is read, never on arrival, so a row here
+  // is the durable proof that a peek or a bare notice was not enough. Any
+  // epoch counts: a session reset after the read must not resurrect the body.
+  inboundWasRead(inboundSeq) {
+    if (inboundSeq === null || inboundSeq === undefined) return false;
+    return Boolean(this.db.prepare(`
+      SELECT 1 AS found FROM cognition_journal WHERE inbound_seq = ? AND kind = 'inbound' LIMIT 1
+    `).get(inboundSeq)?.found);
+  }
+
   // One active runtime session is shared across every chat. No per-runtime or
   // per-conversation session cache exists: a hard switch replaces these fields.
   getGlobalSession() {
