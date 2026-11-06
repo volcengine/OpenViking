@@ -140,8 +140,12 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if tags, ok := body["tags"].([]any); !ok || len(tags) != 2 || tags[0] != "topic=docs" || tags[1] != "kind=api" {
 			t.Fatalf("tags = %#v", body["tags"])
 		}
+		if body["include_provenance"] != true {
+			t.Fatalf("include_provenance = %#v", body["include_provenance"])
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
+			"provenance": []map[string]any{{"query": "auth"}},
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9, "tags": []string{"topic=docs", "kind=api"}},
 			},
@@ -149,7 +153,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	}))
 	defer closeServer()
 
+	enabled := true
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
+		IncludeProvenance:         &enabled,
 		TargetURI:                 "resources/docs",
 		Limit:                     5,
 		ContextType:               []string{"resource"},
@@ -168,6 +174,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	}
 	if got := result.Resources[0].Tags; len(got) != 2 || got[0] != "topic=docs" || got[1] != "kind=api" {
 		t.Fatalf("result tags = %#v", got)
+	}
+	if len(result.QueryResults) != 1 || result.QueryResults[0]["query"] != "auth" {
+		t.Fatalf("provenance = %#v", result.QueryResults)
 	}
 }
 
@@ -764,22 +773,34 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if tags, ok := body["tags"].([]any); !ok || len(tags) != 1 || tags[0] != "topic=docs" {
 			t.Fatalf("tags = %#v", body["tags"])
 		}
+		if body["include_provenance"] != true {
+			t.Fatalf("include_provenance = %#v", body["include_provenance"])
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
-		writeOK(t, w, map[string]any{"resources": []any{}})
+		writeOK(t, w, map[string]any{
+			"resources":  []any{},
+			"provenance": []map[string]any{{"query": "auth"}},
+		})
 	}))
 	defer closeServer()
 
-	if _, err := client.Search(context.Background(), "auth", &SearchOptions{
-		TargetURI:  "resources/docs",
-		SessionID:  "session-1",
-		SearchType: "keywords",
-		Since:      "1d",
-		Until:      "2026-06-18",
-		TimeField:  "updated_at",
-		Level:      []int{2},
-		Tags:       []string{"topic=docs"},
-	}); err != nil {
+	enabled := true
+	result, err := client.Search(context.Background(), "auth", &SearchOptions{
+		IncludeProvenance: &enabled,
+		TargetURI:         "resources/docs",
+		SessionID:         "session-1",
+		SearchType:        "keywords",
+		Since:             "1d",
+		Until:             "2026-06-18",
+		TimeField:         "updated_at",
+		Level:             []int{2},
+		Tags:              []string{"topic=docs"},
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(result.QueryResults) != 1 || result.QueryResults[0]["query"] != "auth" {
+		t.Fatalf("provenance = %#v", result.QueryResults)
 	}
 }
 
