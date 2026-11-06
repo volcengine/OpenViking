@@ -1,7 +1,7 @@
 name: Vika Windows native preview
 on:
   push:
-    branches: [ovsawin]
+    branches: [vika-win]
     paths: ['vika/**', '.github/workflows/vika-windows.yml']
   pull_request:
     paths: ['vika/**', '.github/workflows/vika-windows.yml']

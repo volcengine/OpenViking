@@ -1,7 +1,7 @@
 # Native Windows feature coverage
 
 Review baseline: `feat/vika` commit `40a26ec`. Reviewed Windows implementation:
-`e26a9a62a529cec4c76b6cde99889b3486fecc2c` on `ovsawin`.
+`e26a9a62a529cec4c76b6cde99889b3486fecc2c` on `vika-win`.
 This review compares the Vika changes since the baseline and traces relevant
 unchanged runtime, connector, configuration, and OpenViking client paths. It
 is not a claim that every baseline feature has been exercised on Windows.

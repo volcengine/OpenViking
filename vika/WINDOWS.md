@@ -12,7 +12,7 @@ Pi and Durable use their native PowerShell tools on Windows. Standard npm `.cmd`
 run with Node, without passing prompts through a command shell.
 
 ```powershell
-git clone --branch ovsawin https://github.com/openviking-superagent/OpenViking.git
+git clone --branch vika-win https://github.com/openviking-superagent/OpenViking.git
 cd OpenViking
 powershell -NoProfile -ExecutionPolicy Bypass -File .\vika\scripts\install-windows.ps1
 # Open a new terminal after installation:
