@@ -213,25 +213,33 @@ OIDC 按管理员配置完成映射后，原样校验 `account_id` 和 `user_id`
 
 例如默认映射下，`sub=alice_prod` 仍是用户 `alice_prod`；`sub=alice|prod` 会被拒绝，不会再改成 `alice_prod`。
 
-Auth0 的 `auth0|123` 等身份需要显式配置映射。由身份提供方在签名 Token 中加入管理员维护的稳定、唯一 ID：
+Auth0 的 `auth0|123` 等编号不能直接作为 OpenViking 用户 ID。部署管理员可以让公司登录系统提供另一个符合规则的用户编号，再告诉 OpenViking 读取哪个字段。下面以用户张三为例。
+
+**先配置登录系统。** 给张三分配稳定、唯一的编号 `u_1001`，并让登录系统在签发登录凭证（Token）时带上它。凭证中的相关内容如下：
 
 ```json
 {
   "sub": "auth0|123",
-  "https://openviking.example/user_id": "u_1001"
+  "openviking_user_id": "u_1001"
 }
 ```
 
-在 `ov.conf` 中将 `server.oidc.identity.user_id` 配置为：
+这里的 `openviking_user_id` 是示例字段名，`u_1001` 是张三的用户编号；其他用户应有各自不同的编号。
+
+**再配置 OpenViking。** 在 `ov.conf` 中将 `server.oidc.identity.user_id` 配置为：
 
 ```json
 {
   "source": "claim",
-  "claim": "https://openviking.example/user_id"
+  "claim": "openviking_user_id"
 }
 ```
 
-客户端原样发送 Token，不能修改签名字段，也不能通过请求头另选身份。选用的用户字段不能由普通用户自行修改，管理员须保证它在对应 OpenViking 账户内稳定且唯一。服务端只校验 ID 格式，不检查自定义映射是否唯一；小写转换、正则截取或共用用户 fallback 都可能把不同用户合并。账户映射可以有意将多个用户分到同一账户，但不能合并本应隔离的租户。
+`source: claim` 表示从登录凭证中取值，`claim: openviking_user_id` 表示读取名为 `openviking_user_id` 的字段。实际字段名以登录系统签发的内容为准，两边必须一致；只改 `ov.conf` 不会生成该字段，字段缺失时认证失败。
+
+张三登录后，客户端把凭证原样交给 OpenViking。OpenViking 验证签名，再读出 `u_1001`，以用户 `u_1001` 的身份处理请求。客户端不能修改签名字段，也不能通过请求头另选身份。
+
+选用的用户字段不能由普通用户自行修改，管理员须保证它在对应 OpenViking 账户内稳定且唯一。服务端只校验 ID 格式，不检查自定义映射是否唯一；小写转换、正则截取或共用用户 fallback 都可能把不同用户合并。账户映射可以有意将多个用户分到同一账户，但不能合并本应隔离的租户。
 
 **升级影响：** 已移除将不支持的字符自动替换为 `_` 的行为。原本合法的 ID 和数据路径保持不变；依赖自动替换的用户，需要管理员核验数据归属后，再将专用字段映射到原本的本地 ID。改变映射后的 ID 会改变数据命名空间，OpenViking 不会自动重命名或迁移旧数据。
 
