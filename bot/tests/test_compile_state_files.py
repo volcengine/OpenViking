@@ -1,7 +1,8 @@
-"""State publication must preserve complete values without remote shell round trips."""
+"""New shards avoid command sessions; overwrites retain complete atomic publication."""
 
 import asyncio
 import json
+import shlex
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,6 +14,8 @@ from vikingbot.sandbox.backends.opensandbox import OpenSandboxBackend
 
 
 def remote_backend(tmp_path):
+    from opensandbox.exceptions import SandboxApiException
+
     values = {}
 
     async def write(path, value, **kwargs):
@@ -20,7 +23,14 @@ def remote_backend(tmp_path):
 
     async def move(entries):
         for entry in entries:
+            if entry.dest in values:
+                raise SandboxApiException("Destination already exists", status_code=500)
             values[entry.dest] = values.pop(entry.src)
+
+    async def execute(command, **kwargs):
+        _, _, _, source, destination = shlex.split(command)
+        values[destination] = values.pop(source)
+        return "(no output)"
 
     async def read(path, **kwargs):
         if path not in values:
@@ -41,33 +51,52 @@ def remote_backend(tmp_path):
             read_bytes_stream=AsyncMock(side_effect=read),
         )
     )
-    backend.execute = AsyncMock(side_effect=AssertionError("State writes must not execute shell"))
+    backend.execute = AsyncMock(side_effect=execute)
     return backend, values
 
 
 @pytest.mark.asyncio
-async def test_remote_state_replaces_existing_value_without_host_paths_or_exec(tmp_path):
+async def test_new_remote_shards_publish_without_host_paths_or_exec(tmp_path):
     backend, values = remote_backend(tmp_path)
     files = TaskFiles(backend)
     assert await files.get("runtime") is None
     await files.put("runtime", {"generation": 1})
-    await files.put("runtime", {"generation": 2, "facts": ["complete", "证据"]})
-    assert await files.get("runtime") == {"generation": 2, "facts": ["complete", "证据"]}
-    assert list(values) == ["/workspace/__compile_staging__/pipeline/runtime.json"]
+    await files.put("calls/map-1", {"facts": ["complete", "证据"]})
+    assert await files.get("calls/map-1") == {"facts": ["complete", "证据"]}
+    assert len(values) == 2
     assert backend.local_file_path("runtime") is None
     assert not backend.workspace.exists()
     backend.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [OSError, asyncio.CancelledError])
-async def test_failed_or_cancelled_publication_preserves_previous_value(tmp_path, failure):
+@pytest.mark.parametrize("recovered", [False, True])
+async def test_overwrites_use_atomic_fallback_with_no_clobber_file_api(tmp_path, recovered):
     backend, values = remote_backend(tmp_path)
     files = TaskFiles(backend)
     await files.put("runtime", {"generation": 1})
-    backend._sandbox.files.move_files.side_effect = failure("publication interrupted")
+    if recovered:
+        backend._published_paths.clear()
+    await files.put("runtime", {"generation": 2})
+    assert await files.get("runtime") == {"generation": 2}
+    assert len(values) == 1
+    assert backend.execute.await_count == 1
+    assert backend._sandbox.files.move_files.await_count == (2 if recovered else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [OSError, asyncio.CancelledError])
+@pytest.mark.parametrize("overwrite", [False, True])
+async def test_failed_or_cancelled_publication_preserves_previous_value(
+    tmp_path, failure, overwrite
+):
+    backend, values = remote_backend(tmp_path)
+    files = TaskFiles(backend)
+    await files.put("runtime", {"generation": 1})
+    operation = backend.execute if overwrite else backend._sandbox.files.move_files
+    operation.side_effect = failure("publication interrupted")
     with pytest.raises(failure):
-        await files.put("runtime", {"generation": 2})
+        await files.put("runtime" if overwrite else "new", {"generation": 2})
     assert await files.get("runtime") == {"generation": 1}
     assert len([path for path in values if path.endswith(".tmp")]) == 1
 

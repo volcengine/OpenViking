@@ -34,6 +34,7 @@ class OpenSandboxBackend(SandboxBackend):
         self._host_workspace = host_workspace
         self._sandbox = None
         self._connection_config = None
+        self._published_paths: set[str] = set()
 
         self._osb_config = config.backends.opensandbox
 
@@ -188,6 +189,8 @@ class OpenSandboxBackend(SandboxBackend):
         self._sandbox = None
         self._connection_config = None
 
+        self._published_paths.clear()
+
     def is_running(self) -> bool:
         return self._sandbox is not None
 
@@ -217,15 +220,30 @@ class OpenSandboxBackend(SandboxBackend):
         return None
 
     async def replace_file(self, source: str, destination: str) -> None:
-        """Use execd's rename API without starting a shell or exposing a host path."""
+        """Publish new shards by API; retain atomic mv for execd's no-clobber rename."""
         if not self._sandbox:
             raise SandboxNotStartedError()
+        from opensandbox.exceptions import SandboxApiException
         from opensandbox.models.filesystem import MoveEntry
 
         source, destination = self._replacement_paths(source, destination)
-        await self._sandbox.files.move_files(
-            [MoveEntry(src=self._sandbox_path(source), dest=self._sandbox_path(destination))]
-        )
+        if destination not in self._published_paths:
+            try:
+                await self._sandbox.files.move_files(
+                    [
+                        MoveEntry(
+                            src=self._sandbox_path(source), dest=self._sandbox_path(destination)
+                        )
+                    ]
+                )
+            except SandboxApiException:
+                # Execd 1.0.6 refuses existing destinations. Never delete the old
+                # state or upload over it: upload truncates before copying data.
+                await super().replace_file(source, destination)
+        else:
+            await super().replace_file(source, destination)
+        # This is a transport hint only. A stale hint still performs a real rename.
+        self._published_paths.add(destination)
 
     async def read_file(self, path: str) -> str:
         return (await self.read_file_bytes(path)).decode("utf-8")
