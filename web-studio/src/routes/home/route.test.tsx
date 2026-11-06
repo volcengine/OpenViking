@@ -12,6 +12,7 @@ import type { ComponentType } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { Route } from '#/routes/home/route'
+import { OvClientError } from '#/shared/api/ov-client/errors'
 
 const state = vi.hoisted(() => ({
   role: 'user',
@@ -38,7 +39,9 @@ vi.mock('#/features/workbench/home/lib/api', () => ({
   fetchConsoleContextCommits: state.commits,
 }))
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => (key === 'requestFailed' ? '请求失败' : key),
+  }),
 }))
 beforeEach(() => {
   state.role = 'user'
@@ -154,7 +157,7 @@ it.each(['loading', 'error'])(
     const close = await renderHome()
     try {
       await waitFor(() => expect(state.summary).toHaveBeenCalled())
-      if (stateName === 'error') await screen.findAllByText('requestFailed')
+      if (stateName === 'error') await screen.findAllByText('请求失败')
       expect(screen.queryByText('contextData.files')).toBeNull()
       expect(screen.queryAllByText('0')).toHaveLength(0)
     } finally {
@@ -162,3 +165,41 @@ it.each(['loading', 'error'])(
     }
   },
 )
+
+it('shows each query error beneath the localized summary as plain text', async () => {
+  state.summary.mockRejectedValue(
+    new OvClientError({ code: 'UNAUTHENTICATED', message: 'Missing API key.' }),
+  )
+  state.tokens.mockRejectedValue(
+    new Error('<script>network unavailable</script>'),
+  )
+  state.commits.mockRejectedValue(new Error('Service unavailable'))
+  const close = await renderHome()
+  try {
+    expect(await screen.findAllByText('请求失败')).toHaveLength(5)
+    expect(
+      screen.getAllByText(
+        'Missing API key. Please go to Settings and set X-API-Key.',
+      ),
+    ).toHaveLength(3)
+    expect(
+      screen.getByText('<script>network unavailable</script>'),
+    ).toBeTruthy()
+    expect(screen.getByText('Service unavailable')).toBeTruthy()
+    expect(document.querySelector('script')).toBeNull()
+  } finally {
+    close()
+  }
+})
+
+it('retains the localized summary when query errors have blank messages', async () => {
+  state.summary.mockRejectedValue(new Error('   '))
+  state.tokens.mockRejectedValue(new Error(''))
+  state.commits.mockRejectedValue(new Error(''))
+  const close = await renderHome()
+  try {
+    expect(await screen.findAllByText('请求失败')).toHaveLength(5)
+  } finally {
+    close()
+  }
+})
