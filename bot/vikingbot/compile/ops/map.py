@@ -108,6 +108,8 @@ later stages combine the separately extracted image and text facts.
 Use read_evidence with an exact supplied source_range ID to view assigned native images.
 Do not retrieve other source units, implement OCR, or inspect pipeline snapshots.
 
+Use record_fields names for supported facts and include concise routing_text naming
+the subject, key information and relationships; Shuffle does not receive full payloads.
 Return records with payload, scope and supporting input IDs. Do not produce finished
 pages, ready files, a whole-document table or an index in this extraction job.
 For large results use your private scratch files and emit result_ref. Scratch files
