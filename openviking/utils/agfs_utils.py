@@ -181,19 +181,36 @@ def _run_coro_blocking(coro: Any) -> Any:
     return result[0] if result else None
 
 
-def _redis_service_keys(endpoints: Any) -> set[str]:
-    """Normalize Redis endpoints into comparable service keys."""
+def _redis_service_keys(endpoints: Any, *, tls: bool = False) -> set[str]:
+    """Normalize Redis endpoints into comparable service keys.
+
+    Endpoints may be full URLs (``redis://host:port``) or bare ``host:port``
+    addresses. ``ExpiryRedisConfig`` accepts both and resolves bare addresses
+    with its ``tls`` flag at runtime, so bare addresses are resolved the same
+    way here. The transport scheme is not part of the key: one host and port
+    identifies one Redis service, and Redis applies ``maxmemory`` and the
+    eviction policy to the whole service.
+    """
     if not endpoints:
         return set()
     if isinstance(endpoints, str):
         endpoints = [endpoints]
     keys = set()
     for endpoint in endpoints:
-        parsed = urlsplit(str(endpoint))
-        host = (parsed.hostname or "").lower()
+        address = str(endpoint).strip()
+        if not address:
+            continue
+        if "://" not in address:
+            address = ("rediss" if tls else "redis") + f"://{address}"
+        try:
+            parsed = urlsplit(address)
+            host = (parsed.hostname or "").lower()
+            port = parsed.port
+        except ValueError:
+            continue
         if not host:
             continue
-        keys.add(f"{parsed.scheme}://{host}:{parsed.port or 6379}")
+        keys.add(f"{host}:{port or 6379}")
     return keys
 
 
@@ -213,7 +230,10 @@ def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_conf
     cache_params = _get_config_value(cache_config, "params")
     expiry_redis = _get_config_value(expiry_config, "redis")
     cache_keys = _redis_service_keys(_get_config_value(cache_params, "endpoints"))
-    expiry_keys = _redis_service_keys(_get_config_value(expiry_redis, "endpoints"))
+    expiry_keys = _redis_service_keys(
+        _get_config_value(expiry_redis, "endpoints"),
+        tls=bool(_get_config_value(expiry_redis, "tls", False)),
+    )
     return bool(cache_keys & expiry_keys)
 
 

@@ -1242,6 +1242,40 @@ mod tests {
         PluginConfig::single_backend(name, mount_path, HashMap::new())
     }
 
+    /// Verifies the shared-Redis TTL reaches the mount cache configuration.
+    #[cfg(feature = "cache")]
+    #[test]
+    fn shared_redis_ttl_reaches_the_mount_cache_config() {
+        use crate::cache_runtime::MemoryMockProvider;
+
+        let runtime = CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new()));
+        let mountable = MountableFS::with_cache_runtime_and_shared_redis_ttl(
+            runtime,
+            "cache-ttl-test",
+            Some(Duration::from_secs(60)),
+        );
+
+        assert_eq!(
+            mountable.cache.as_ref().and_then(|cache| cache.shared_redis_ttl),
+            Some(Duration::from_secs(60))
+        );
+
+        let without_override =
+            MountableFS::with_cache_runtime_and_shared_redis_ttl(
+                CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
+                "cache-ttl-test",
+                None,
+            );
+
+        assert_eq!(
+            without_override
+                .cache
+                .as_ref()
+                .and_then(|cache| cache.shared_redis_ttl),
+            None
+        );
+    }
+
     /// Helper to create a simple multi-write PluginConfig for tests.
     fn multiwrite_test_config(
         primary_backend: &str,

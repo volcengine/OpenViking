@@ -12,6 +12,8 @@ from openviking.utils.agfs_utils import (
     RagfsBindingConfig,
     _cache_shares_redis_backend,
     _generate_plugin_config,
+    _redis_service_keys,
+    build_runtime_ragfs_binding_config,
     create_agfs_client,
     mount_agfs_backend,
 )
@@ -1357,11 +1359,16 @@ def test_shared_redis_ttl_requires_shared_redis_backend(tmp_path):
     assert isolated["cache"]["shared_redis_ttl_seconds"] == 0
 
 
-def test_cache_shared_redis_backend_detection():
-    cache = {
+def _redis_cache(endpoints=None):
+    """Build the top-level cache section used by the shared-backend checks."""
+    return {
         "provider": "redis",
-        "params": {"endpoints": ["redis://127.0.0.1:6379"]},
+        "params": {"endpoints": endpoints or ["redis://127.0.0.1:6379"]},
     }
+
+
+def test_cache_shared_redis_backend_detection():
+    cache = _redis_cache()
 
     assert _cache_shares_redis_backend(
         cache,
@@ -1383,3 +1390,111 @@ def test_cache_shared_redis_backend_detection():
         {},
         {"redis": {"endpoints": ["redis://127.0.0.1:6380"]}},
     )
+
+
+def test_cache_shares_redis_backend_with_scheme_less_expiry_endpoint():
+    """`ExpiryRedisConfig` accepts bare `host:port` endpoints and resolves them at runtime."""
+    cache = _redis_cache()
+
+    assert _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6379"]}},
+    )
+    assert _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6379"], "tls": True}},
+    )
+    assert _cache_shares_redis_backend(
+        _redis_cache(["rediss://127.0.0.1:6379"]),
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6379"], "tls": True}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.2:6379"]}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6380"]}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": []}},
+    )
+    assert not _cache_shares_redis_backend(cache, {}, None)
+
+
+def test_cache_shares_redis_backend_compares_service_identity():
+    """One host and port identifies one Redis service, whatever the transport scheme."""
+    assert _cache_shares_redis_backend(
+        _redis_cache(["redis://Redis.Local:6379"]),
+        {},
+        {"redis": {"endpoints": ["redis.local:6379"]}},
+    )
+    assert _cache_shares_redis_backend(
+        _redis_cache(["redis://127.0.0.1:6379"]),
+        {},
+        {"redis": {"endpoints": ["rediss://127.0.0.1:6379"]}},
+    )
+
+
+def test_redis_service_keys_normalizes_endpoints():
+    assert _redis_service_keys(["127.0.0.1:6379"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["127.0.0.1:6379"], tls=True) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["redis://127.0.0.1:6379"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["redis://127.0.0.1"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys("127.0.0.1:6379") == {"127.0.0.1:6379"}
+    assert _redis_service_keys([" 127.0.0.1:6379 "]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["REDIS://127.0.0.1:6379"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys([]) == set()
+    assert _redis_service_keys(None) == set()
+    assert _redis_service_keys([""]) == set()
+    assert _redis_service_keys(["redis://"]) == set()
+    assert _redis_service_keys(["redis://host:not-a-port"]) == set()
+    assert _redis_service_keys(["redis://[::1"]) == set()
+
+
+def test_shared_redis_ttl_follows_the_expiry_redis_endpoint(tmp_path):
+    """A bare expiry endpoint still marks the cache Redis as a shared service."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {
+                "workspace": str(tmp_path),
+                "agfs": {
+                    "cachefs": {"backend": "cache", "shared_redis_ttl_seconds": 600},
+                },
+            },
+            "cache": _redis_cache(),
+            "expiry": {"redis": {"endpoints": ["127.0.0.1:6379"]}},
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(config)
+
+    assert binding.shared_redis_backend is True
+    assert binding.to_binding_dict()["cache"]["shared_redis_ttl_seconds"] == 600
+
+
+def test_shared_redis_ttl_is_disabled_for_an_isolated_expiry_redis(tmp_path):
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {
+                "workspace": str(tmp_path),
+                "agfs": {
+                    "cachefs": {"backend": "cache", "shared_redis_ttl_seconds": 600},
+                },
+            },
+            "cache": _redis_cache(),
+            "expiry": {"redis": {"endpoints": ["127.0.0.1:6380"]}},
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(config)
+
+    assert binding.shared_redis_backend is False
+    assert binding.to_binding_dict()["cache"]["shared_redis_ttl_seconds"] == 0
