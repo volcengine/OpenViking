@@ -27,14 +27,12 @@ ToolResultMediaMode = Literal["native", "user_message"]
 
 
 def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
-    """Choose an image representation supported by every possible fallback."""
+    """Use tool images only for all-native chains; otherwise use user images."""
     modes = []
     for backend in backends:
         capability = getattr(backend, "tool_result_media_mode", None)
         modes.append(capability() if callable(capability) else None)
-    if not modes or any(mode not in ("native", "user_message") for mode in modes):
-        return None
-    return "user_message" if "user_message" in modes else "native"
+    return "native" if modes and all(mode == "native" for mode in modes) else "user_message"
 
 
 class UnsupportedMediaInputError(RuntimeError):

@@ -37,13 +37,23 @@ export function handleRowKeyDown(
       moveFocus(event.currentTarget, root, -1);
       break;
     case 'ArrowRight':
-      if (row.type === 'directory' && !row.expanded) {
+      if (
+        !row.disabled &&
+        !row.busy &&
+        row.type === 'directory' &&
+        !row.expanded
+      ) {
         event.preventDefault();
         onToggleExpand?.(row);
       }
       break;
     case 'ArrowLeft':
-      if (row.type === 'directory' && row.expanded) {
+      if (
+        !row.disabled &&
+        !row.busy &&
+        row.type === 'directory' &&
+        row.expanded
+      ) {
         event.preventDefault();
         onToggleExpand?.(row);
       }

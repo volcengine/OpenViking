@@ -7,7 +7,7 @@ import { handleRowKeyDown } from './file-tree-keyboard.js';
 import { DEFAULT_LABELS } from './file-tree-labels.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { useRowTooltip } from './file-tree-tooltip.js';
-import styles from './file-tree.module.css';
+import { useFileTreeActions } from './use-file-tree-actions.js';
 import type {
   FileTreeComponent,
   FileTreeEntryRow,
@@ -26,6 +26,7 @@ export type {
   FileTreeLabels,
   FileTreeLoadingRow,
   FileTreeLoadMoreRow,
+  FileTreeOperations,
   FileTreeProps,
   FileTreeRow,
   FileTreeRowBase,
@@ -38,6 +39,7 @@ export const FileTree: FileTreeComponent = forwardRef<
 >(function FileTree(
   {
     rows,
+    operations,
     selectedId,
     isReady = true,
     loadingFallback,
@@ -61,6 +63,14 @@ export const FileTree: FileTreeComponent = forwardRef<
   const rootRef = useRef<HTMLDivElement>(null);
   const text = { ...DEFAULT_LABELS, ...labels };
   const tooltip = useRowTooltip();
+  const actions = useFileTreeActions({
+    operations,
+    onSelect,
+    onToggleExpand,
+    onLoadMore,
+    onRetry,
+    onOpenRetentionSettings,
+  });
 
   useImperativeHandle(
     ref,
@@ -83,11 +93,7 @@ export const FileTree: FileTreeComponent = forwardRef<
     getRowAttributes,
     renderDashboard,
     renderRowTooltip,
-    onSelect,
-    onToggleExpand,
-    onLoadMore,
-    onRetry,
-    onOpenRetentionSettings,
+    ...actions,
     onRowKeyDown: (
       event: KeyboardEvent<HTMLDivElement>,
       row: FileTreeEntryRow,
@@ -95,8 +101,8 @@ export const FileTree: FileTreeComponent = forwardRef<
       handleRowKeyDown(event, {
         root: rootRef.current,
         row,
-        onSelect,
-        onToggleExpand,
+        onSelect: actions.onSelect,
+        onToggleExpand: actions.onToggleExpand,
       }),
     onRowEnter: tooltip.show,
     onRowLeave: tooltip.hide,
@@ -106,12 +112,16 @@ export const FileTree: FileTreeComponent = forwardRef<
     <div
       {...rest}
       ref={rootRef}
-      className={[styles.root, className].filter(Boolean).join(' ')}
+      className={['ov-file-tree', className].filter(Boolean).join(' ')}
     >
       {slots?.toolbar ? (
-        <div className={styles.toolbar}>{slots.toolbar}</div>
+        <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
       ) : null}
-      <div role="tree" aria-label={rest['aria-label']} className={styles.body}>
+      <div
+        role="tree"
+        aria-label={rest['aria-label']}
+        className="ov-file-tree__body"
+      >
         <FileTreeBody
           rows={rows}
           isReady={isReady}

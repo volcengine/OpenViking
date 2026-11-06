@@ -39,10 +39,25 @@ export interface TuiSearchResultItem {
    */
   metaLabel?: string;
   /**
+   * 标题旁的内容层级标签。
+   * Content level label next to the title.
+   */
+  levelLabel?: string;
+  /**
+   * 分数旁的结果类型标签。
+   * Result type label next to the score.
+   */
+  typeLabel?: string;
+  /**
    * 宿主计算出的分数，显示在右侧。
    * Score rendered on the right when the host computes one.
    */
   scoreLabel?: string;
+  /**
+   * 悬停或键盘聚焦分数时展示的详情；仅在提供 `scoreLabel` 时显示。
+   * Details shown on score hover or keyboard focus; requires `scoreLabel`.
+   */
+  scoreDetails?: ReactNode;
   /**
    * 标题下方的摘录。
    * Short excerpt shown under the title.
@@ -132,7 +147,7 @@ export interface TuiStatusRow {
     | 'pre';
 }
 
-/** 纯文本结果。A plain text result. */
+/** 通用文本结果。A general text result. */
 export interface TuiTextContent {
   /**
    * 变体标记，固定为 `text`。
@@ -144,34 +159,11 @@ export interface TuiTextContent {
    * Text body.
    */
   text: string;
-}
-
-/** Markdown 结果。A Markdown result. */
-export interface TuiMarkdownContent {
   /**
-   * 变体标记，固定为 `markdown`。
-   * Variant discriminator, always `markdown`.
+   * 文本格式，缺省为 `plain`。
+   * Text format; defaults to `plain`.
    */
-  variant: 'markdown';
-  /**
-   * Markdown 原文。
-   * Markdown source.
-   */
-  markdown: string;
-}
-
-/** JSON 结果。A JSON result. */
-export interface TuiJsonContent {
-  /**
-   * 变体标记，固定为 `json`。
-   * Variant discriminator, always `json`.
-   */
-  variant: 'json';
-  /**
-   * 待格式化展示的数据。
-   * Data to format and display.
-   */
-  value: unknown;
+  format?: 'plain' | 'markdown';
 }
 
 /** 检索结果列表。A list of search results. */
@@ -191,6 +183,49 @@ export interface TuiSearchListContent {
    * Summary above the list, rendered by the host.
    */
   summary?: ReactNode;
+}
+
+/**
+ * 单个资源的预览结果，例如读取一个文件。
+ *
+ * A preview of one resource, for example reading a file.
+ */
+export interface TuiResourcePreviewContent {
+  /**
+   * 变体标记，固定为 `resource-preview`。
+   * Variant discriminator, always `resource-preview`.
+   */
+  variant: 'resource-preview';
+  /**
+   * 资源标题。
+   * Resource title.
+   */
+  title: string;
+  /**
+   * 正文，通常是文件内容。
+   * Body, usually the file content.
+   */
+  content: string;
+  /**
+   * 标题下方的元信息，例如类型与大小，按顺序以分隔符连接展示。
+   * Metadata under the title, for example type and size, joined in order.
+   */
+  meta?: readonly string[];
+  /**
+   * 没有 `meta` 时使用的单行说明。
+   * Single-line description used when `meta` is absent.
+   */
+  description?: string;
+  /**
+   * 资源自身的 URI，显示为可点击入口。
+   * The resource's own URI, rendered as an openable entry.
+   */
+  uri?: string;
+  /**
+   * 点击 URI 时跳转到的位置；省略时使用 `uri`。
+   * Where clicking the URI navigates to; `uri` is used when omitted.
+   */
+  navigationUri?: string;
 }
 
 /** 资源树结果。A resource tree result. */
@@ -250,86 +285,71 @@ export interface TuiWriteResultContent {
   title?: string;
 }
 
-/** 执行失败。A failed execution. */
-export interface TuiErrorContent {
-  /**
-   * 变体标记，固定为 `error`。
-   * Variant discriminator, always `error`.
-   */
-  variant: 'error';
-  /**
-   * 失败原因。
-   * Failure reason.
-   */
-  message: string;
-}
-
-/** 宿主自定义渲染。Host-defined rendering. */
-export interface TuiCustomContent {
-  /**
-   * 变体标记，固定为 `custom`。
-   * Variant discriminator, always `custom`.
-   */
-  variant: 'custom';
-  /**
-   * 自定义内容。
-   * Custom content.
-   */
-  content: ReactNode;
-}
-
 /**
- * 一条命令产生的结果。宿主选择变体并提供现成数据，控制台只负责布局。
+ * 命令帮助结果：按分组列出可用命令。
  *
- * What a command produced. The host chooses the variant and supplies already
- * rendered data; the console only lays it out.
+ * A command-help result: available commands listed in groups.
  */
+export interface TuiCommandHelpContent {
+  /**
+   * 变体标记，固定为 `command-help`。
+   * Variant discriminator, always `command-help`.
+   */
+  variant: 'command-help';
+  /**
+   * 命令分组。
+   * Command groups.
+   */
+  sections: readonly TuiCommandHelpSection[];
+}
+
+/** 命令帮助中的一组命令。One group of commands in the help result. */
+export interface TuiCommandHelpSection {
+  /**
+   * 分组唯一标识。
+   * Unique section key.
+   */
+  key: string;
+  /**
+   * 分组标题。
+   * Section title.
+   */
+  label: string;
+  /**
+   * 该组下的命令。
+   * Commands in this group.
+   */
+  items: readonly TuiCommandHelpItem[];
+}
+
+/** 命令帮助中的一条命令。One command in the help result. */
+export interface TuiCommandHelpItem {
+  /**
+   * 命令唯一标识。
+   * Unique command key.
+   */
+  key: string;
+  /**
+   * 命令名，包含开头的斜杠。
+   * Command name including the leading slash.
+   */
+  name: string;
+  /**
+   * 命令说明。
+   * Command description.
+   */
+  description?: string;
+}
+
+/** 命令结果内容。Command result content. */
 export type TuiRecordContent =
-  /**
-   * 纯文本。
-   * Plain text.
-   */
   | TuiTextContent
-  /**
-   * Markdown。
-   * Markdown.
-   */
-  | TuiMarkdownContent
-  /**
-   * JSON。
-   * JSON.
-   */
-  | TuiJsonContent
-  /**
-   * 检索结果列表。
-   * Search result list.
-   */
   | TuiSearchListContent
-  /**
-   * 资源树。
-   * Resource tree.
-   */
+  | TuiResourcePreviewContent
   | TuiResourceTreeContent
-  /**
-   * 状态卡片。
-   * Status card.
-   */
   | TuiStatusContent
-  /**
-   * 写入结果。
-   * Write result.
-   */
   | TuiWriteResultContent
-  /**
-   * 执行失败。
-   * Failed execution.
-   */
-  | TuiErrorContent
-  /**
-   * 宿主自定义渲染。
-   * Host-defined rendering.
-   */
-  | TuiCustomContent;
+  | TuiCommandHelpContent;
 
 /** 一条执行记录。One execution record. */
 export interface TuiRecord {
@@ -344,8 +364,8 @@ export interface TuiRecord {
    */
   command: string;
   /**
-   * 执行状态。
-   * Execution status.
+   * 当前记录的执行状态；不控制其他命令的提交。
+   * Execution status of this record; does not control other submissions.
    */
   status: TuiRecordStatus;
   /**
@@ -354,107 +374,15 @@ export interface TuiRecord {
    */
   content?: TuiRecordContent;
   /**
-   * 状态旁的短标签，例如耗时。
-   * Short label next to the status, for example a duration.
-   */
-  metaLabel?: string;
-  /**
    * 记录头部的展示时间。
    * Timestamp rendered in the record header.
-   */
-  createdAt?: string;
-  /**
-   * 是否可折叠；长输出默认 `true`。
-   * Whether the record can be collapsed; defaults to `true` for long output.
-   */
-  collapsible?: boolean;
-}
-
-/** 命令建议列表中的一项。One entry in the command suggestion list. */
-export interface TuiCommandSuggestion {
-  /**
-   * 建议项唯一标识。
-   * Unique suggestion key.
-   */
-  id: string;
-  /**
-   * 命令名，包含开头的斜杠，例如 `/search`。
-   * Command name including the leading slash, for example `/search`.
-   */
-  name: string;
-  /**
-   * 命令说明。
-   * Command description.
-   */
-  description?: string;
-  /**
-   * 用法示例。
-   * Usage example.
-   */
-  usage?: string;
-  /**
-   * 分组标题；建议按首次出现顺序分组。
-   * Grouping heading; items are grouped in first-seen order.
-   */
-  group?: string;
-  /**
-   * 是否禁用该建议。
-   * Whether the suggestion is disabled.
-   */
-  disabled?: boolean;
-}
-
-/** 控制台为空时展示的快捷入口。A shortcut shown when the console is empty. */
-export interface TuiQuickAction {
-  /**
-   * 快捷入口唯一标识。
-   * Unique quick action key.
-   */
-  key: string;
-  /**
-   * 按钮显示文本。
-   * Button label.
-   */
-  label: string;
-  /**
-   * 按钮下方的说明。
-   * Description shown under the button.
-   */
-  description?: string;
-  /**
-   * 点击后提交的命令文本。
-   * Command text submitted on click.
-   */
-  command: string;
-  /**
-   * 是否禁用该入口。
-   * Whether the shortcut is disabled.
-   */
-  disabled?: boolean;
-}
-
-/** 一条历史命令。A previously submitted command. */
-export interface TuiHistoryEntry {
-  /**
-   * 历史项唯一标识。
-   * Unique history entry key.
-   */
-  id: string;
-  /**
-   * 历史命令文本。
-   * Historical command text.
-   */
-  command: string;
-  /**
-   * 提交时间。
-   * Submission time.
    */
   createdAt?: string;
 }
 
 /**
- * 可替换文案，组件内置英文默认值。
- * Replaceable copy; the component ships English defaults.
+ * 可替换的界面文案，默认英文。
+ * Replaceable interface copy, defaulting to English.
  */
 export interface TuiLabels {
   /**
@@ -463,30 +391,16 @@ export interface TuiLabels {
    */
   placeholder?: string;
   /**
+   * `disabled` 为 `true` 时展示的不可用提示；文案本身不控制禁用状态。
+   * Unavailable message shown when `disabled` is `true`; copy does not control
+   * the disabled state.
+   */
+  unavailableMessage?: string;
+  /**
    * 发送按钮文案。
    * Send button label.
    */
   send?: string;
-  /**
-   * 停止按钮文案。
-   * Stop button label.
-   */
-  stop?: string;
-  /**
-   * 历史按钮文案。
-   * History button label.
-   */
-  history?: string;
-  /**
-   * 历史为空时的提示。
-   * Message shown when the history is empty.
-   */
-  historyEmpty?: string;
-  /**
-   * 清空历史按钮文案。
-   * Clear-history button label.
-   */
-  clear?: string;
   /**
    * 建议列表的无障碍名称。
    * Accessible name of the suggestion list.
@@ -498,13 +412,8 @@ export interface TuiLabels {
    */
   noSuggestions?: string;
   /**
-   * 快捷入口区域标题。
-   * Heading of the quick action area.
-   */
-  quickActions?: string;
-  /**
-   * 执行中状态文本。
-   * Text for the pending status.
+   * 等待中的状态文本。
+   * Text for the pending state.
    */
   pending?: string;
   /**
@@ -528,30 +437,27 @@ export interface TuiLabels {
    */
   copied?: string;
   /**
-   * 展开按钮文案。
-   * Expand button label.
-   */
-  expand?: string;
-  /**
-   * 折叠按钮文案。
-   * Collapse button label.
-   */
-  collapse?: string;
-  /**
    * 无记录时的提示。
    * Message shown when there are no records.
    */
   empty?: string;
 }
 
-/** 命令控制台的公开接口。Public interface of the command console. */
+/**
+ * 当前命令记录、结果与输入区的公开接口；会话、历史面板和外层工具栏由宿主组合。
+ * 提供命令补全、参数提示与帮助。
+ * Public interface for current command records, results and input. The host
+ * composes session controls, history panels and surrounding toolbars separately.
+ * Provides command completion, parameter hints and help.
+ */
 export interface TuiProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onCopy' | 'onSubmit'
 > {
   /**
-   * 按提交顺序排列的执行记录。
-   * Records in submission order.
+   * 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。
+   * Currently displayed execution records in submission order, updated by the
+   * host when switching sessions or historical results.
    */
   records: readonly TuiRecord[];
   /**
@@ -560,103 +466,48 @@ export interface TuiProps extends Omit<
    */
   value: string;
   /**
-   * 是否有命令正在执行；执行时停止动作替代发送。
-   * Whether a command is running; the stop action replaces send.
+   * 是否禁用命令输入与提交，缺省为 `false`。
+   * 禁用时的提示文案由 `labels.unavailableMessage` 提供。
+   * Whether command input and submission are disabled; defaults to `false`.
+   * Disabled copy comes from `labels.unavailableMessage`.
    */
-  running?: boolean;
+  disabled?: boolean;
   /**
-   * 首条命令之前替代记录显示的内容。
-   * Shown instead of records before the first command.
+   * 无记录时展示的完整空态节点，可包含标题、说明与快捷入口。
+   * 省略时展示 `labels.empty`，传 `null` 时隐藏空态内容。
+   * Complete empty-state node when there are no records; may include a
+   * heading, description and shortcuts. Omission shows `labels.empty`;
+   * passing `null` hides empty-state content.
    */
   emptyState?: ReactNode;
   /**
-   * 空态中展示的快捷入口。
-   * Shortcuts rendered in the empty state.
+   * 输入值变化时触发，包括接受补全或参数提示；填入不提交命令。省略时输入框
+   * 只读，用于展示历史记录。
+   * Invoked when the input changes, including accepted completions and parameter
+   * hints; filling the input does not submit a command. Omission makes the input
+   * read-only, for showing history.
    */
-  quickActions?: readonly TuiQuickAction[];
+  onValueChange?: (value: string) => void;
   /**
-   * 输入聚焦且匹配时展示的建议列表。
-   * Suggestion list shown while the input is focused and matches.
+   * 命令发送成功后触发，失败时不触发。省略时不能提交命令。
+   * Called after a command is sent successfully; not called on failure. Omission
+   * disables submission.
    */
-  suggestions?: readonly TuiCommandSuggestion[];
+  onSubmit?: (command: string) => void;
   /**
-   * 历史弹层中的近期命令。
-   * Recent commands for the history popover.
-   */
-  history?: readonly TuiHistoryEntry[];
-  /**
-   * 正在预览、尚未重新提交的历史记录。
-   * A history entry being previewed before it is submitted again.
-   */
-  historyPreview?: TuiRecord | null;
-  /**
-   * 设置后禁止提交并显示该提示。
-   * Disables submission and shows this message when set.
-   */
-  unavailableMessage?: string;
-  /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
-   */
-  labels?: TuiLabels;
-  /**
-   * 记录上方的工具栏插槽，例如视图切换。
-   * Toolbar slot rendered above the records, for example view switches.
-   */
-  toolbar?: ReactNode;
-  /**
-   * 输入框旁的动作插槽，例如用户切换器。
-   * Actions rendered next to the input, for example a user switcher.
-   */
-  inputActions?: ReactNode;
-  /**
-   * 输入值变化时触发。
-   * Invoked when the input value changes.
-   */
-  onValueChange: (value: string) => void;
-  /**
-   * 提交一条命令。
-   * Submits a command.
-   */
-  onSubmit: (command: string) => void;
-  /**
-   * 停止正在执行的命令。
-   * Stops the running command.
-   */
-  onCancel?: () => void;
-  /**
-   * 选中建议项；宿主可以选择填入输入框而非直接提交。
-   * Selects a suggestion; the host may fill the input instead of submitting.
-   */
-  onSuggestionSelect?: (suggestion: TuiCommandSuggestion) => void;
-  /**
-   * 选中快捷入口。
-   * Selects a quick action.
-   */
-  onQuickActionSelect?: (action: TuiQuickAction) => void;
-  /**
-   * 选中历史项。
-   * Selects a history entry.
-   */
-  onHistorySelect?: (entry: TuiHistoryEntry) => void;
-  /**
-   * 预览历史项。
-   * Previews a history entry.
-   */
-  onHistoryPreview?: (entry: TuiHistoryEntry) => void;
-  /**
-   * 清空历史。
-   * Clears the history.
-   */
-  onClearHistory?: () => void;
-  /**
-   * 打开记录中引用的资源。
-   * Opens a resource referenced by a record.
+   * 资源成功打开后触发，参数为已打开的资源 URI；失败时不触发。
+   * Called after a resource opens successfully, with its URI; not called on failure.
    */
   onOpenUri?: (uri: string) => void;
   /**
-   * 复制由宿主执行，控制台只上报意图。
-   * The host performs the copy; the console only reports the intent.
+   * 复制成功后触发，参数为已复制的文本；复制失败时不触发。
+   * Called after copying succeeds, with the copied text; not called on failure.
    */
   onCopy?: (text: string) => void;
+  /**
+   * 统一的界面文案与引导提示；仅替换展示内容，不改变可用性。
+   * Interface copy and guidance; replaces display content without changing
+   * availability.
+   */
+  labels?: TuiLabels;
 }
