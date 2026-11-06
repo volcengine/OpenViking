@@ -391,6 +391,16 @@ impl MetadataStore {
         }
     }
 
+    /// Remove V2 protocol and per-account partition metadata for full re-import.
+    pub(crate) async fn reset_multiwrite_metadata(&self) -> Result<()> {
+        self.remove_file(&self.paths.mount_protocol().0).await?;
+        for account in self.initialized_accounts().await? {
+            self.remove_all(&self.paths.account_partitions(&account)?.0)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Recheck destructive GC safety while the caller holds the account Exact lock.
     pub(crate) async fn gc_scope_is_safe(&self, scope: &ScopeKey) -> Result<bool> {
         let path = self.paths.account_manifest(&scope.account_id)?.0;

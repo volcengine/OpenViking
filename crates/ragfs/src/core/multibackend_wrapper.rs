@@ -143,6 +143,20 @@ impl MultiWriteWrappedFSBuilder {
             .iter()
             .map(|entry| entry.name.clone())
             .collect();
+        let configured_backups = backup_names.iter().cloned().collect::<BTreeSet<_>>();
+        let reset_scopes =
+            backup_membership_reset_scopes(metadata_store.as_ref(), &configured_backups).await?;
+        let reset_for_backup_change = !reset_scopes.is_empty();
+        if reset_for_backup_change {
+            for scope in &reset_scopes {
+                metadata_provider.reset_scope(scope).await?;
+            }
+            metadata_store.reset_multiwrite_metadata().await?;
+            tracing::info!(
+                scopes = reset_scopes.len(),
+                "multi-write backup membership changed; reset V2 metadata"
+            );
+        }
         let metrics = Arc::new(MultiWriteMetricsSnapshot::default());
         let catch_up_targets = self
             .backup_entries
@@ -156,7 +170,6 @@ impl MultiWriteWrappedFSBuilder {
             .detect()
             .await?;
         metrics.set_protocol_status(protocol.status);
-        let configured_backups = backup_names.iter().collect::<BTreeSet<_>>();
         for account in metadata_store.initialized_accounts().await? {
             let path = metadata_store.paths().account_manifest(&account)?.0;
             let manifest: PartitionsManifest = match metadata_store.read_json(&path).await {
@@ -177,7 +190,11 @@ impl MultiWriteWrappedFSBuilder {
                     epoch: manifest.epoch,
                 };
                 metrics.replace_scope(&scope, &segments);
-                let persisted = segments.backend_states.keys().collect::<BTreeSet<_>>();
+                let persisted = segments
+                    .backend_states
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
                 if persisted != configured_backups {
                     return Err(Error::not_supported(format!(
                         "backup membership changed for account {account}"
@@ -227,20 +244,66 @@ impl MultiWriteWrappedFSBuilder {
                 metadata_provider,
                 self.initial_partitions,
                 backup_names,
-                self.reconcile_existing_data,
+                self.reconcile_existing_data || reset_for_backup_change,
             );
+            let catch_up_full_scan =
+                reset_for_backup_change.then(|| fs.inner.runtime.catch_up_full_scan_requester());
             fs.inner.runtime.set_import_worker(async move {
                 let result = importer.run().await;
                 if let Err(error) = &result {
                     tracing::error!(error = %error, "multi-write full-data import failed");
                 } else {
                     import_metrics.set_protocol_status(ProtocolStatus::Stable);
+                    if let Some(catch_up_full_scan) = &catch_up_full_scan {
+                        catch_up_full_scan.request();
+                    }
                 }
                 result
             });
         }
         Ok(fs)
     }
+}
+
+/// Return existing partition scopes when persisted backup names differ from config.
+async fn backup_membership_reset_scopes(
+    metadata_store: &MetadataStore,
+    configured_backups: &BTreeSet<String>,
+) -> Result<Vec<ScopeKey>> {
+    let mut scopes = Vec::new();
+    let mut changed = false;
+    for account in metadata_store.initialized_accounts().await? {
+        let path = metadata_store.paths().account_manifest(&account)?.0;
+        let manifest: PartitionsManifest = match metadata_store.read_json(&path).await {
+            Ok(manifest) => manifest,
+            Err(Error::NotFound(_)) => continue,
+            Err(error) => return Err(error),
+        };
+        manifest.validate()?;
+        for &partition_id in manifest.partitions.keys() {
+            let path = metadata_store
+                .paths()
+                .segment_manifest(&account, partition_id)?
+                .0;
+            let segments: SegmentManifest = metadata_store.read_json(&path).await?;
+            segments.validate()?;
+            if segments
+                .backend_states
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != *configured_backups
+            {
+                changed = true;
+            }
+            scopes.push(ScopeKey {
+                account_id: account.clone(),
+                partition_id,
+                epoch: manifest.epoch,
+            });
+        }
+    }
+    Ok(if changed { scopes } else { Vec::new() })
 }
 
 impl MultiWriteWrappedFS {
