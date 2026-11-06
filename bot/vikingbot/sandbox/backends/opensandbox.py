@@ -216,11 +216,6 @@ class OpenSandboxBackend(SandboxBackend):
     def local_file_path(self, path: str) -> Path | None:
         return None
 
-    @property
-    def persistent_workspace(self) -> Path | None:
-        """Managed workloads use this dedicated host bind mount for every file API."""
-        return self._host_workspace if self._osb_config.managed else None
-
     async def read_file(self, path: str) -> str:
         return (await self.read_file_bytes(path)).decode("utf-8")
 

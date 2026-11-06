@@ -1294,17 +1294,15 @@ class BotCompileService:
                 if preserve_workspace:
                     sandbox = await sandbox_manager.get_sandbox(session_key)
                     workspace = sandbox_manager.get_workspace_path(session_key)
-                    persistent = getattr(sandbox, "persistent_workspace", None)
-                    if persistent is None or persistent.resolve() != workspace.resolve():
-                        for entry in await sandbox.list_files(max_entries=None):
-                            if entry.path.startswith(f"{COMPILE_STAGING_ROOT}/"):
-                                # Remote sandboxes can discard files on stop; retain drafts locally.
-                                path = workspace / sanitize_relative_viking_path(entry.path)
-                                if sandbox.local_file_path(entry.path) == path:
-                                    continue
-                                payload = await sandbox.read_file_bytes(entry.path)
-                                path.parent.mkdir(parents=True, exist_ok=True)
-                                path.write_bytes(payload)
+                    for entry in await sandbox.list_files(max_entries=None):
+                        if entry.path.startswith(f"{COMPILE_STAGING_ROOT}/"):
+                            # Remote sandboxes can discard files on stop; retain drafts locally.
+                            path = workspace / sanitize_relative_viking_path(entry.path)
+                            if sandbox.local_file_path(entry.path) == path:
+                                continue
+                            payload = await sandbox.read_file_bytes(entry.path)
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            path.write_bytes(payload)
                 # Destructive sandbox cleanup requires a complete recovery copy.
                 await sandbox_manager.cleanup_session(session_key)
             finally:

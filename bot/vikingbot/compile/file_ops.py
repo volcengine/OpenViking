@@ -153,9 +153,6 @@ def validate_files(runtime: Pipeline, response, group, records, old):
     if len(set(paths)) != len(paths):
         raise ValueError("A group cannot submit a path more than once")
     allowed = {record.record_id for record in records}
-    # EntryResponse can request pipeline fallback or acknowledge an incremental no-op.
-    if allowed and type(response) is FileResponse and not response.files:
-        raise ValueError("A file-producing assignment with inputs must submit at least one file")
     for draft in response.files:
         if allowed and not draft.inputs:
             raise InputReferenceError(

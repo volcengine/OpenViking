@@ -16,7 +16,7 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT
-from vikingbot.compile.pipeline_io import ModelCallError, ModelOutputError, TaskFiles, retry_allowed
+from vikingbot.compile.pipeline_io import TaskFiles, retry_allowed
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import FileResponse, RecordResponse
 from vikingbot.compile.schemas import result_schema
@@ -51,7 +51,7 @@ class ChildProvider(LLMProvider):
                 return response
             error = "Agent output was truncated; use smaller writes or content_ref and complete tool calls"
             if not retry_allowed(self.failures, error):
-                raise ModelOutputError(error)
+                raise ValueError(error)
             self.model.metrics["repairs"] += 1
             messages = [*messages, {"role": "user", "content": error}]
 
@@ -342,7 +342,7 @@ def agent_runner(loop, session_key, connection, limits):
             should_stop=lambda: not submit.can_retry,
         )
         if submit.result is None:
-            raise ModelCallError(
+            raise ValueError(
                 "Required agent transform ended without validated output: "
                 + (submit.last_error or "No emit result was submitted")
             )

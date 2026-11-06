@@ -94,23 +94,6 @@ read_skill_resource provides local paths for Skill scripts and their dependencie
 Submit the complete result through emit without extra prose.
 """
 
-_SOURCE_RECORD_SCOPE = """
-## Current source assignment
-
-This call extracts records from the assigned inputs. The processing task above
-defines this job's output; overall deliverable requirements do not expand it.
-Other source units are processed separately. Later steps combine their facts and
-produce the complete deliverables, including any full-document tables and index.
-Do not expand this partial assignment to build those task-wide artifacts.
-
-A cited image URI is a link, not assigned image evidence. Preserve that URI, but
-omit values that are unavailable in these inputs. Missing values do not make this
-extraction incomplete and are not contradictory observations. Do not recover them
-by downloading unassigned images, inspecting sibling pipeline artifacts or building
-OCR scripts. Use read_evidence to view assigned native images, without reconstructing
-them as ASCII pixel dumps. Submit the supported records through emit.
-"""
-
 
 async def build_prompt(runtime: Pipeline, transform: Transform) -> str:
     """Build the shared Map prompt with task context and the selected output type.
@@ -177,8 +160,6 @@ async def map_job(runtime: Pipeline, node, item, *, system: str):
     """Expand one packed Map assignment without a parent agent spawning children."""
     index, records = item
     transform = getattr(runtime.contract, node.task)
-    if node.source == "sources" and transform.output == "records":
-        system += _SOURCE_RECORD_SCOPE
     name = f"{node.name}-{index}"
     return await common.job(
         runtime,

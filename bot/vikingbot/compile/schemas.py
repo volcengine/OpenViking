@@ -55,8 +55,6 @@ def result_schema(schema, data):
         result["properties"]["files"].update(minItems=len(paths), maxItems=len(paths))
         result["$defs"]["FileDraft"]["properties"]["path"]["enum"] = paths
     if issubclass(schema, FileResponse) and data.get("inputs"):
-        if schema is FileResponse and "indexes" not in data:
-            result["properties"]["files"]["minItems"] = 1
         file = result["$defs"]["FileDraft"]
         file["required"] = list(dict.fromkeys([*file["required"], "inputs"]))
         file["properties"]["inputs"].update(

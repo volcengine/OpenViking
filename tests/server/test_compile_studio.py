@@ -419,13 +419,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         )
         assert response.status_code == 202, response.text
         task_id = response.json()["result"]["task_id"]
-        # execute() may defer admission/finalization; emulate QueueFS re-delivery.
-
-        async def deliver():
-            while not await service.compile._tasks.execute(task_id, **owner):
-                await asyncio.sleep(0.01)
-
-        await asyncio.wait_for(deliver(), timeout=10)
+        await service.compile._tasks.execute(task_id, **owner)
         return task_id
 
     payload = {
