@@ -7,7 +7,8 @@ import { eventMessage } from '../connectors/protocol.mjs';
 import { safeError } from '../logger.mjs';
 import { MailArchive, parsesAttachment } from './archive.mjs';
 import { ImapConnection } from './imap.mjs';
-import { configuredMailboxes, mailboxIdentity, mailboxPollSeconds } from './mailbox.mjs';
+import { configuredMailboxes, mailboxDiscovery, mailboxIdentity, mailboxPollSeconds } from './mailbox.mjs';
+import { listMailboxes, selectMailboxes } from './list-mailboxes.mjs';
 import { buildReply, decodeCharset, isOwnMessageId, parseMail, replyMessageId } from './mime.mjs';
 import { sendMail, verifySmtp } from './smtp.mjs';
 import { EmailState } from './state.mjs';
@@ -56,7 +57,7 @@ export function loadAccount(file) {
     user: typeof value.username === 'string' && value.username.trim() ? value.username.trim() : address,
     password: value.password,
     imap: { ...server('imap'), mailbox: configuredMailboxes(value.imap)[0],
-      mailboxes: configuredMailboxes(value.imap), pollIntervalSeconds: mailboxPollSeconds(value.imap?.pollIntervalSeconds) },
+      mailboxes: configuredMailboxes(value.imap), discovery: mailboxDiscovery(value.imap), pollIntervalSeconds: mailboxPollSeconds(value.imap?.pollIntervalSeconds) },
     smtp: server('smtp'),
   });
 }
@@ -75,9 +76,12 @@ export async function verifyAccount(account, { connectTls } = {}) {
   try {
     await imap.connect();
     await imap.login(account.user, account.password);
-    let selected = false;
+    const names = account.imap.discovery
+      ? discoveredNames(await listMailboxes(imap), account.imap.discovery)
+      : account.imap.mailboxes ?? [account.imap.mailbox];
+    let selected = names.length === 0 && !!account.imap.discovery;
     let selectionError;
-    for (const name of account.imap.mailboxes ?? [account.imap.mailbox]) {
+    for (const name of names) {
       try { await imap.examine(name); selected = true; } catch (error) {
         if (imap.closed) throw error;
         selectionError = error;
@@ -91,6 +95,12 @@ export async function verifyAccount(account, { connectTls } = {}) {
   }
   await verifySmtp({ ...account.smtp, user: account.user, password: account.password, ...(connectTls ? { connectTls } : {}) });
   return { idle };
+}
+
+function discoveredNames(entries, discovery) {
+  const names = selectMailboxes(entries, discovery).map((entry) => entry.name);
+  if (names.length > 100) throw new Error('Email discovery matched more than 100 folders; narrow imap.discovery.roots or exclude');
+  return names;
 }
 
 function people(list) {
@@ -226,11 +236,12 @@ function sleep(ms, stopped) {
 // an event; replies to a reported mail over SMTP. Never marks, moves or
 // deletes mail.
 export class EmailClient {
-  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS, pollMs, reconnectMs = 1_000 } = {}) {
+  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS, pollMs, discoveryMs, reconnectMs = 1_000 } = {}) {
     this.config = config;
     this.logger = logger;
     this.connectTls = connectTls;
     this.pollMs = pollMs;
+    this.discoveryMs = discoveryMs;
     this.reconnectMs = reconnectMs;
     this.state = new EmailState(config.dataDir, config.instance ?? 'email');
     this.archive = archive;
@@ -287,7 +298,10 @@ export class EmailClient {
   }
 
   async watch(onLine) {
-    const names = this.account.imap.mailboxes ?? [this.account.imap.mailbox];
+    const discovery = this.account.imap.discovery;
+    let names = discovery ? [] : this.account.imap.mailboxes ?? [this.account.imap.mailbox];
+    let refreshedAt = null;
+    const discoveryMs = this.discoveryMs ?? (discovery?.refreshIntervalSeconds ?? 300) * 1_000;
     const pollMs = this.pollMs ?? this.account.imap.pollIntervalSeconds * 1_000;
     let next = 0;
     let failures = 0;
@@ -298,6 +312,19 @@ export class EmailClient {
         if (this.stopping) break;
         while (!this.stopping) {
           let idled = false;
+          if (discovery && (refreshedAt === null || Date.now() - refreshedAt >= discoveryMs)) {
+            try {
+              const found = discoveredNames(await listMailboxes(imap), discovery);
+              names = found;
+              next = names.length ? next % names.length : 0;
+              this.logger.info('email_mailboxes_discovered', { count: names.length });
+            } catch (error) {
+              if (imap.closed) throw error;
+              // Preserve the last successful snapshot on a failed LIST.
+              this.logger.warn('email_mailbox_discovery_failed', { error: safeError(error) });
+            }
+            refreshedAt = Date.now();
+          }
           // Advance before opening a folder. A broken folder or connection
           // cannot indefinitely starve the folders after it.
           for (let count = 0; count < names.length && !this.stopping; count += 1) {
@@ -320,7 +347,7 @@ export class EmailClient {
               this.logger.warn('email_mailbox_unavailable', { mailbox: name, error: safeError(error) });
               continue;
             }
-            if (names.length === 1 && imap.capabilities.has('IDLE') && !this.stopping) {
+            if (!discovery && names.length === 1 && imap.capabilities.has('IDLE') && !this.stopping) {
               await imap.idle(IDLE_MS, () => this.stopping);
               idled = true;
             }
