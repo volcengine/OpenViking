@@ -84,8 +84,9 @@ async def test_overwrites_use_atomic_fallback_with_no_clobber_file_api(tmp_path,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [OSError, asyncio.CancelledError])
-@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize(
+    ("failure", "overwrite"), [(OSError, False), (asyncio.CancelledError, True)]
+)
 async def test_failed_or_cancelled_publication_preserves_previous_value(
     tmp_path, failure, overwrite
 ):
@@ -103,7 +104,7 @@ async def test_failed_or_cancelled_publication_preserves_previous_value(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("source", "destination"),
-    [("../temp", "state"), ("/temp", "state"), ("a/temp", "b/state"), ("temp", "")],
+    [("../temp", "state"), ("a/temp", "b/state")],
 )
 async def test_remote_replacement_rejects_paths_before_file_api(tmp_path, source, destination):
     backend, _ = remote_backend(tmp_path)

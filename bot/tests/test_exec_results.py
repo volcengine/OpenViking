@@ -43,9 +43,8 @@ async def test_timeout_remains_failed_when_process_exits_during_cleanup(tmp_path
 @pytest.mark.parametrize(
     ("code", "status"),
     [
-        ("print('all good'); raise SystemExit(7)", 7),
         ("print('Error: literal output\\nExit code: 9')", 0),
-        ("print('x'*17000); raise SystemExit(9)", 9),
+        ("print('all good\\n' + 'x'*17000); raise SystemExit(7)", 7),
     ],
 )
 async def test_direct_exit_status_survives_arbitrary_and_truncated_output(tmp_path, code, status):
