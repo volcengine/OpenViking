@@ -8,12 +8,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 )
 
 func zipDirectory(dir string) (string, error) {
@@ -143,7 +146,7 @@ func (c *Client) uploadTempFile(ctx context.Context, filePath string) (string, e
 	return result.TempFileID, nil
 }
 
-func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, path string, includeSourceName bool) error {
+func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, path string, includeSourceName, allowInlineContent bool) error {
 	for _, prefix := range []string{"http://", "https://", "git@", "ssh://", "git://"} {
 		if strings.HasPrefix(path, prefix) {
 			payload["path"] = path
@@ -153,7 +156,7 @@ func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, pat
 
 	info, err := os.Stat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || (allowInlineContent && isInlineSkillPathError(err)) {
 			payload["path"] = path
 			return nil
 		}
@@ -188,4 +191,14 @@ func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, pat
 	}
 	payload["path"] = path
 	return nil
+}
+
+func isInlineSkillPathError(err error) bool {
+	if errors.Is(err, syscall.ENAMETOOLONG) {
+		return true
+	}
+	// Windows uses native error codes for invalid or overlong inline content.
+	const errorInvalidName, errorFilenameExcedRange syscall.Errno = 123, 206
+	return runtime.GOOS == "windows" &&
+		(errors.Is(err, errorInvalidName) || errors.Is(err, errorFilenameExcedRange))
 }

@@ -1,7 +1,6 @@
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { Console } from '@openviking/react/modules/console';
 import { TaskCenter } from '@openviking/react/modules/task-center';
-import { UserUsage } from '@openviking/react/modules/user-usage';
 import '@openviking/react/modules/style.css';
 
 export default function ModulesBasic() {
@@ -10,7 +9,6 @@ export default function ModulesBasic() {
       <FileBrowser />
       <Console />
       <TaskCenter />
-      <UserUsage />
     </div>
   );
 }

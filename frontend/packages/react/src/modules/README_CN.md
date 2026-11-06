@@ -6,25 +6,24 @@
 
 ## 当前可接入的占位组件
 
-四个模块已提供可导入的占位组件、Props / Labels 类型和独立样式入口，接入方可以先完成页面布局。当前组件只展示模块名称与占位文案，接受 `className`、`style` 和 `labels`；业务 Hook、共享 Client、Provider 与下文的业务交互仍待实现。
+三个模块已提供可导入的占位组件、公开的 Props / Labels / Slots 类型和独立样式入口，接入方可以先完成页面布局。props 已定型：每个模块都声明了请求配置、受控状态、回调、插槽与文案。组件本体目前仍只渲染模块名称与占位文案，尚未消费这些 props；业务 Hook 与下文的业务交互仍待实现。
+
+模块自己取数，因此 props 里没有数据字段：宿主给配置、受控值与文案，模块通过回调上报变化。
 
 | 模块           | 组件          | 公开入口                                 |
 | -------------- | ------------- | ---------------------------------------- |
 | `file-browser` | `FileBrowser` | `@openviking/react/modules/file-browser` |
 | `console`      | `Console`     | `@openviking/react/modules/console`      |
 | `task-center`  | `TaskCenter`  | `@openviking/react/modules/task-center`  |
-| `user-usage`   | `UserUsage`   | `@openviking/react/modules/user-usage`   |
 
 ```tsx
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser
-  labels={{ title: '文件浏览', description: '占位组件，业务能力待接入。' }}
-/>;
+<FileBrowser labels={{ title: '文件浏览' }} />;
 ```
 
-四个组件与对应类型也从 `@openviking/react` 根入口导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
+三个组件与主 Props 类型也从 `@openviking/react` 根入口导出；Labels、Slots 与枚举类型从模块子路径导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
 
 ## 职责
 
@@ -46,49 +45,71 @@ import '@openviking/react/modules/file-browser/style.css';
 | `components/`  | 通过 props 和事件复用的视图与交互，不自行取业务数据                                  |
 | 服务与基础能力 | 开源原生 API Client、资源类型与纯数据转换；按实际实现放入 `client/`、`lib/` 等边界   |
 
-宿主可以只使用组件、复用模块 Hook 自行组装，或使用模块提供的组合视图。每个业务模块独占一个目录，粒度以可独立接入的交互流程为准：目录、搜索和预览组成 `file-browser`；VikingBot 与 TUI 组成 `console`，在模块内切换模式。宿主组合这两个区域及其他模块，不按内部视图分别接入。
+宿主可以只使用组件、复用模块 Hook 自行组装，或使用模块提供的组合视图。每个业务模块独占一个目录，粒度以可独立接入的交互流程为准：目录、搜索和预览组成 `file-browser`；对话与 TUI 组成 `console`，在模块内切换模式。宿主组合这两个区域及其他模块，不按内部视图分别接入。
 
 ## 请求契约与默认配置
 
-共享 Client 以 OpenViking 原生 API 的 method、路径、query / body 和响应 DTO 为契约，统一维护在 `packages/client/` 的框架无关边界。迁入时复用现有 OpenAPI 生成 SDK 与 Axios Client；Bot 流式请求保留 Fetch / SSE，并与 REST 共用服务地址和鉴权头生成逻辑。模块 Hook 消费原生数据并派生视图所需的状态与操作，不要求宿主逐模块维护数据协议。以下是目标契约，尚未迁入共享库。
+共享 Client 以 OpenViking 原生 API 的 method、路径、query / body 和响应 DTO 为契约，维护在 `src/client/`，从 `@openviking/react/client` 导出。它自带基于 `fetch` 的 `createOvClient`，并提供模块依赖的契约——请求形状、配置解析、`OvClient` 与 `OvClientError`。代码不依赖 React，出现 React 之外的消费方后再拆为独立包。模块 Hook 消费原生数据并派生视图所需的状态与操作，不要求宿主逐模块维护数据协议。
 
-React 接入由 `OpenVikingProvider` 通过 Context 下发通用配置，并在 Provider 实例内复用稳定的 Client。Context 不承担业务数据缓存；Provider 挂载本身不取数，也不读取浏览器中保存的凭证。
+React 接入由 `@openviking/react/client` 的 `OpenVikingProvider` 通过 Context 下发通用配置，并在 Provider 实例内复用稳定的 Client。宿主传的是身份字段——`apiKey`、`accountId`、`userId`、`resourceId`——请求头由 Client 组装；模块通过内部 Hook 取用，不自己拼请求。Context 不承担业务数据缓存；Provider 挂载本身不取数，也不读取浏览器中保存的凭证。
 
-| 配置      | 约定                                                                                                                   |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `baseURL` | 服务地址及可选网关前缀，不包含原生接口的 `/api/v1`；默认空字符串，表示浏览器同源请求。服务端发起请求时显式提供绝对地址 |
-| `headers` | 请求头或每次请求时求值的请求头函数，可异步读取最新登录凭证；`X-API-Key`、Bearer 或身份头由宿主明确提供，不按域名猜测   |
+| 配置          | 约定                                                                                                                   |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `baseURL`     | 服务地址及可选网关前缀，不包含原生接口的 `/api/v1`；默认空字符串，表示浏览器同源请求。服务端发起请求时显式提供绝对地址 |
+| `apiKey`      | 凭证。开源版映射为 `X-API-Key`；商业版由浏览器 Cookie 承载。函数形式每次请求重新求值                                   |
+| `accountId`   | OpenViking 账号，对应数据空间                                                                                          |
+| `userId`      | 账号内的用户                                                                                                           |
+| `resourceId`  | 当前库；数据面接口需要它                                                                                               |
+| `credentials` | 传给 `fetch` 的 `RequestCredentials`。默认 `same-origin`；商业版跨源调用时设为 `include`                               |
 
-模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；headers 按不区分大小写的名称合并，局部同名值优先。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。
+模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值，显式传空字符串则清除它。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。三个模块的 `FileBrowserProps`、`ConsoleProps` 与 `TaskCenterProps` 均已声明该字段。
 
-以下仅为拟定的请求接入方式，Provider 与业务 Hook 尚未实现，不能作为当前包的可运行示例：
+Provider 已实现；业务 Hook 尚未实现，因此模块目前还不会发起请求。宿主在应用根部配置一次：
 
 ```tsx
-<OpenVikingProvider baseURL={endpoint} headers={getAuthHeaders}>
-  <FileBrowser {...browserProps} />
-  <Console {...consoleProps} />
-</OpenVikingProvider>
+import { OpenVikingProvider } from '@openviking/react/client';
+
+<OpenVikingProvider
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>;
 ```
 
-独立使用 Hook 时同样传 `requestOptions`；未使用 Provider 时可显式提供完整配置，纯视图组件无需 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
+模块通过内部 Hook 取客户端，只传需要覆盖的字段，例如访问另一个库时：
+
+```ts
+const rows = await client.request<FsEntry[]>({
+  method: 'GET',
+  path: '/api/v1/fs/ls',
+  query: { uri },
+  options: { resourceId: libraryId },
+});
+```
+
+该 Hook 不对外导出：宿主不需要知道模块会发什么请求。纯视图组件完全不需要 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
 
 - **路径只有一处拼接**：Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
 - **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。JSON 响应保留 `result` 及分页等外层元数据；上传、下载和流式响应按接口契约处理，不统一强转 JSON。
 - **配置与身份变化要隔离**：请求、缓存键和订阅以实际生效的服务地址及宿主当前连接 / 身份作用域隔离。切换服务或账号后取消旧请求并忽略过期结果；动态 headers 不代替身份切换信号，也不把 API Key 明文放入缓存键。
 - **适配集中在接入层**：原生接口只需配置地址和 headers；存量网关若有额外封装，由宿主在共享 Client 接入层统一适配，并保留取消信号、响应状态及流。无法等价表达的能力通过显式扩展契约接入，不在每个模块增加宿主分支。
 
-Provider 的继承遵循 [React Context](https://react.dev/reference/react/useContext)，请求层迁入参考[现有 Client 封装](../../../../../web-studio/src/shared/api/ov-client/client.ts)。这些约定在实际实现 Client、Provider 和首个模块时一起验证。
+Provider 的继承遵循 [React Context](https://react.dev/reference/react/useContext)，请求层迁入参考[现有 Client 封装](../../../../../web-studio/src/shared/api/ov-client/client.ts)。传输层与 Provider 已按这些约定实现；首个模块 Hook 落地时再一起验证。
 
 ## 业务模块划分
 
-四个模块目录及其占位组件已经建立，以下是各模块后续迁入的目标能力，尚未实现。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
+三个模块目录及其占位组件已经建立，以下是各模块后续迁入的目标能力，尚未实现。组合视图所依赖的组件当前也均为占位实现，模块的真实实现需先等这些视图落地。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
 
-| 模块           | Hook 与业务职责                                                                                         | 组合视图                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `file-browser` | 统一管理目录、检索、当前 URI、预览加载与编辑保存；协调定位、刷新、历史与版本对比                        | 组合 `FileTree`、搜索交互与 `FilePreview`，提供目录和内容联动的文件浏览区域          |
-| `console`      | 统一管理 VikingBot / TUI 模式、公共上下文与工具栏；处理对话会话、消息流、附件、记忆提交及命令执行与记录 | 组合 `VikingBot`、`Tui` 与模式切换，提供完整的交互面板                               |
-| `task-center`  | 当前身份可见任务的列表、筛选、详情、执行记录与允许的操作                                                | 任务列表和详情；个人终端本期聚焦资源导入与知识整理任务                               |
-| `user-usage`   | 当前 User 的统计查询、时间范围、加载与失败状态                                                          | 当前 User 的上下文数量、Token、检索与提交统计，不含库 / 空间统计、成员对比或账单费用 |
+| 模块           | Hook 与业务职责                                                                                   | 组合视图                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `file-browser` | 统一管理目录、检索、当前 URI、预览加载与编辑保存；协调定位、刷新、历史与版本对比                  | 组合 `FileTree`、搜索交互与 `FilePreview`，提供目录和内容联动的文件浏览区域 |
+| `console`      | 统一管理对话 / TUI 模式、公共上下文与工具栏；处理对话会话、消息流、附件、记忆提交及命令执行与记录 | 组合模块内的对话视图、`Tui` 与模式切换，提供完整的交互面板                  |
+| `task-center`  | 当前身份可见任务的列表、筛选、详情、执行记录与允许的操作                                          | 任务列表和详情；个人终端本期聚焦资源导入与知识整理任务                      |
 
 历史列表与版本对比先作为 `file-browser` 的预览能力，编译确认作为 `console` 中的 Bot 动作流程；有独立消费需求后再拆公开模块，不为每个按钮或弹窗建模块。公共视图组件按真实复用需求补充，表中组合视图不要求提前新增组件占位。
 
@@ -106,12 +127,12 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ### 交互面板模块
 
-`console` 计划覆盖 VikingBot 与 TUI 共用的整个面板，提供统一的 `useConsole` Hook 与 `Console` 组合视图：
+`console` 计划覆盖对话与 TUI 共用的整个面板，提供统一的 `useConsole` Hook 与 `Console` 组合视图：
 
 - Hook 统一返回当前模式、公共上下文、对话与命令的数据、状态和操作；模式切换与工具栏操作在模块内协调，宿主也可只使用 Hook 组装视图。
-- VikingBot 与 TUI 使用同一服务、身份与宿主传入的资源上下文；各自维护消息历史、命令记录与运行状态，切换模式时保留各自状态。
-- Bot 能力包括会话、消息流、附件、记忆提交与编译动作；TUI 能力包括命令定义、执行、取消与执行记录，可用命令遵循宿主提供的能力。
-- 组合视图负责模式切换、公共工具栏与内容区域，操作按当前模式分发。后续迁入 `VikingBot`、`Tui` 时保持为可独立消费的纯视图组件。
+- 对话与 TUI 使用同一服务、身份与宿主传入的资源上下文；各自维护消息历史、命令记录与运行状态，切换模式时保留各自状态。
+- 对话能力包括会话、消息流、附件、记忆提交与编译动作；TUI 能力包括命令定义、执行、取消与执行记录，可用命令遵循宿主提供的能力。
+- 组合视图负责模式切换、公共工具栏与内容区域，操作按当前模式分发。`Tui` 作为可独立消费的纯视图组件接入；对话视图暂无公共组件，由模块内部实现。
 - 打开资源、定位产物或刷新目录通过事件交给宿主，与 `file-browser` 的联动不依赖对方私有状态；登录、身份切换与产品引导仍由宿主负责。
 
 以上交互与 `useConsole` 仍为规划；当前仅导出 `Console` 占位组件和基础类型。
@@ -121,10 +142,10 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 - **当前资源由文件浏览模块协调**：`file-browser` 默认维护选中 URI 并同步目录、搜索和预览。宿主可受控传入 URI，或通过模块公开操作打开任务产物与 Bot 链接；模块上报资源变化，不直接操作其他模块的 Store 或路由。
 - **预览页签属于同一资源**：个人终端不维护多个已打开文件的工作区页签。L0 / L1 / 目录内容以及经验看板等属于当前资源的内容视图；不据此收窄通用 `FilePreview` 的页签 API。
 - **特定内容通过扩展接入**：经验看板、会话内容及 Wiki 等视图有独立的取数与展示逻辑，通过预览扩展页签接入，留在业务扩展或宿主；不让通用 `FilePreview` 识别这些业务类型。Skill 浏览复用目录与目录内容。
-- **异步结果通过事件联动**：`console` 在产生任务或资源变更时上报任务标识、产物 URI 或受影响目录，由宿主决定刷新目录、打开任务或定位产物。任务状态归任务数据源，不在各模块复制维护。
+- **任务状态归任务数据源**：`console` 不上报任务进度或资源变更——它观察不到请求返回之后才完成的异步工作。需要响应任务结果的宿主自行从任务数据源读取；任务状态不在各模块复制维护。
 - **身份由宿主提供**：库 / 数据空间 / User 切换与登录账号切换是不同操作。作用域切换视图由宿主提供；登录、账号保存、API Key 管理与失效处理仍归宿主。模块按显式作用域隔离请求、缓存与订阅，切换后清理旧操作。
 - **可选能力由宿主接入**：删除、OAuth、OVPack、同步来源、隐私及境外提示由宿主提供服务能力、动作和文案。OVPack 使用独立的目录迁移服务契约，不混入普通资源上传；可作为目录操作扩展。当前不规划 TOS 导入、手写 Skill、独立编译页面或管理后台模块。
-- **布局按模块边界负责**：`file-browser` 负责目录、搜索与预览的内部布局，`console` 负责 VikingBot / TUI 模式切换及面板内部布局；宿主可通过插槽或独立 Hook 定制。两个区域的外部布局由宿主决定；引导、任务、帮助、账号等顶栏入口的位置也归宿主。
+- **布局按模块边界负责**：`file-browser` 负责目录、搜索与预览的内部布局，`console` 负责对话 / TUI 模式切换及面板内部布局；宿主可通过插槽或独立 Hook 定制。两个区域的外部布局由宿主决定；引导、任务、帮助、账号等顶栏入口的位置也归宿主。
 
 ## 当前状态与开发入口
 

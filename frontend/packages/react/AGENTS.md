@@ -7,8 +7,15 @@
 - 目录以 `index.ts` 作为唯一出口，包根入口 `src/index.ts` 只从这里取。
 - 根入口只导出各组件、各业务模块的组件本体与主 Props 类型（`<组件名>Props`），作为最常用的快捷方式。
 - 子类型、回调参数类型、行与选项等数据结构、句柄与文案包，一律只从 `components/<组件>`、`modules/<模块>` 子路径导出。根入口不聚合它们。
+- `src/client/` 的请求客户端不依赖 React，从 `@openviking/react/client` 交付；它不进入根入口。
 - 依赖可选 peer 的组件不进入根入口：`FilePreview` 的类型引用 `@ark-design/ui`，放进根声明会让该可选 peer 对只用其他根导出的消费者变成必需。
 - 新增或调整导出时，同步维护 `package.json` 的 `exports`、Rslib 入口与声明路径，并从真实打包产物验证根入口与各子路径都能解析。
+
+## Props 字段顺序
+
+公开 Props 按 必选参数 → 可选参数 → 回调 → 插槽 → 文案 → `requestOptions` 排列，回调一律可选。同一类别内保持逻辑相邻，例如受控值与其回调、初始值与其受控值。
+
+由 lint 规则 `ov-ui/props-order` 检查，作用于 `packages/react/src/**/types.ts`。
 
 ## useEffect 使用门槛
 

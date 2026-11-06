@@ -4,6 +4,8 @@ English / [中文](README_CN.md)
 
 A directory tree for resource browsing. The host flattens its tree state into an ordered list of rows and supplies async execution through `operations`; the component renders, handles keyboard interaction and notifies after an operation succeeds.
 
+> **This is currently a placeholder implementation.** It renders every documented row type and honours the public props, so consumers can integrate against the API, but styling, iconography and interaction details will change. The view is expected to be rewritten against this contract.
+
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';

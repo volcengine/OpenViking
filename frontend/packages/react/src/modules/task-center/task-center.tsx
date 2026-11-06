@@ -1,10 +1,35 @@
-import { ModulePlaceholder } from '../shared/module-placeholder.js';
-import type { ModulePlaceholderProps } from '../shared/types.js';
+import type { TaskCenterProps } from './types.js';
 
-export type { ModulePlaceholderLabels as TaskCenterLabels } from '../shared/types.js';
-export type TaskCenterProps = ModulePlaceholderProps;
+export type {
+  TaskCenterColumn,
+  TaskCenterColumns,
+  TaskCenterCompileColumnKey,
+  TaskCenterCompileRow,
+  TaskCenterCompileSchedule,
+  TaskCenterImportColumnKey,
+  TaskCenterImportRow,
+  TaskCenterLabels,
+  TaskCenterProps,
+  TaskCenterRow,
+  TaskCenterScope,
+  TaskCenterSlots,
+  TaskCenterTab,
+} from './types.js';
 
-/** Placeholder only; business Hooks and interactions are not implemented yet. */
-export function TaskCenter(props: TaskCenterProps) {
-  return <ModulePlaceholder {...props} name="Task center" />;
+/** 占位组件：渲染一个带模块名的空容器，真实实现随模块 Hook 与组合视图迁入。 */
+export function TaskCenter({ className, style, labels }: TaskCenterProps) {
+  return (
+    <div
+      className={['ov-module-placeholder', className].filter(Boolean).join(' ')}
+      style={style}
+    >
+      <p className="ov-module-placeholder__title">
+        {labels?.title ?? 'Task center'}
+      </p>
+      <p className="ov-module-placeholder__description">
+        {labels?.description ??
+          'Placeholder. Functionality is not available yet.'}
+      </p>
+    </div>
+  );
 }

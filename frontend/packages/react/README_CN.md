@@ -2,26 +2,27 @@
 
 [English](README.md) / 中文
 
-OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目录与局部化样式。FileTree 与 FilePreview 提供可复用视图，另附五种文件类型图标。四个业务模块占位组件支持先完成布局接入，业务 Hook 与交互随后补充。
+OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目录与局部化样式。FileTree 与 FilePreview 提供占位视图，另附五种文件类型图标。三个业务模块占位组件支持先完成布局接入，业务 Hook 与交互随后补充。
 
 本包沿用仓库的 AGPL-3.0-only 许可证。当 `react@<version>` 标签与本包 manifest 中的版本一致时，发布工作流会将其发布到 npm。
 
 ## 模块目录
 
-| 源码目录                                                                  | 公开入口                                      | 职责                                                       |
-| ------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------- |
-| [components/file-tree](./src/components/file-tree/README_CN.md)           | `@openviking/react/components/file-tree`      | 目录树渲染、展开、选中与事件回传                           |
-| [components/file-preview](./src/components/file-preview/README_CN.md)     | `@openviking/react/components/file-preview`   | 只读预览状态与扩展页签                                     |
-| [components/tui](./src/components/tui/README_CN.md)                       | `@openviking/react/components/tui`            | 已确认的命令记录、结果与输入区类型；视图仍为占位实现       |
-| [components/scope-switcher](./src/components/scope-switcher/README_CN.md) | `@openviking/react/components/scope-switcher` | 作用域面包屑的层级、选项、面板与搜索契约；视图仍为占位实现 |
-| [components/agent-connect](./src/components/agent-connect/README_CN.md)   | `@openviking/react/components/agent-connect`  | Agent 接入视图的页签、列表与详情契约；视图仍为占位实现     |
-| [modules](./src/modules/README_CN.md)                                     | `@openviking/react/modules/<模块>`            | 四个业务模块的占位组件与类型                               |
-| [hooks](./src/hooks/README_CN.md)、[utils](./src/utils/README_CN.md)      | 仅包内使用                                    | 跨模块 Hook 与纯工具                                       |
+| 源码目录                                                                  | 公开入口                                      | 职责                                                                |
+| ------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
+| [components/file-tree](./src/components/file-tree/README_CN.md)           | `@openviking/react/components/file-tree`      | 目录树渲染、展开、选中与事件回传；视图为占位实现                    |
+| [components/file-preview](./src/components/file-preview/README_CN.md)     | `@openviking/react/components/file-preview`   | 只读预览状态与扩展页签；视图为占位实现                              |
+| [components/tui](./src/components/tui/README_CN.md)                       | `@openviking/react/components/tui`            | 已确认的命令记录、结果与输入区类型；视图仍为占位实现                |
+| [components/scope-switcher](./src/components/scope-switcher/README_CN.md) | `@openviking/react/components/scope-switcher` | 作用域面包屑的层级、选项、面板与搜索契约；视图仍为占位实现          |
+| [components/agent-connect](./src/components/agent-connect/README_CN.md)   | `@openviking/react/components/agent-connect`  | Agent 接入视图的页签、列表与详情契约；视图仍为占位实现              |
+| [modules](./src/modules/README_CN.md)                                     | `@openviking/react/modules/<模块>`            | 三个业务模块的占位组件与类型                                        |
+| [client](./src/client/index.ts)                                           | `@openviking/react/client`                    | 框架无关的请求客户端：`createOvClient`、`OvClient`、`OvClientError` |
+| [hooks](./src/hooks/README_CN.md)、[utils](./src/utils/README_CN.md)      | 仅包内使用                                    | 跨模块 Hook 与纯工具                                                |
 
-FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯文本预览、编辑基础；具体限制见各自文档。Tui 与 ScopeSwitcher 已确认公开 API，视图仍为占位实现。包还提供五种文件类型图标。
-组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[modules](./src/modules/README_CN.md) 按业务能力规划 Hook 与视图：Hook 负责取数、状态和操作，组合视图将其接入组件。完整页面与产品专属流程由宿主负责，管理后台不在本期范围内。当前 `file-browser`、`console`、`task-center` 与 `user-usage` 已提供占位组件、基础 Props / Labels 类型与样式，可先接入布局；业务 Hook、数据加载和联动尚未实现。
+五个组件的视图均为占位实现，后续按各自已确认的契约重写。FileTree 已按契约渲染全部行类型并实现键盘交互；FilePreview 已实现页签外壳、标题操作与纯文本预览、编辑基础，正文尚未接入 FileViewer。Tui、ScopeSwitcher 与 AgentConnect 只渲染固定尺寸空壳，具体限制见各自文档。包还提供五种文件类型图标。
+组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[modules](./src/modules/README_CN.md) 按业务能力规划 Hook 与视图：Hook 负责取数、状态和操作，组合视图将其接入组件。完整页面与产品专属流程由宿主负责，管理后台不在本期范围内。当前 `file-browser`、`console` 与 `task-center` 已提供占位组件、基础 Props / Labels 类型与样式，可先接入布局；业务 Hook、数据加载和联动尚未实现。
 
-模块默认通过共享 Client 消费 OpenViking 原生 API，由 Provider 下发 `baseURL`、headers 等配置，模块或独立 Hook 可通过 `requestOptions` 局部覆盖。标准接入无需逐模块实现 Adapter；非标准网关集中在宿主请求接入层适配。详见[请求约定](./src/modules/README_CN.md#请求契约与默认配置)；Client 与 Provider 当前也尚未实现或导出。
+模块默认通过共享 Client 消费 OpenViking 原生 API，由 Provider 下发 `baseURL`、headers 等配置，模块或独立 Hook 可通过 `requestOptions` 局部覆盖。标准接入无需逐模块实现 Adapter；非标准网关集中在宿主请求接入层适配。请求契约——`OvRequestOptions`、`OvClient` 与 `OvClientError`——来自 `@openviking/react/client` 子路径，自带基于 `fetch` 的实现；Provider 从同一子路径导出；模块 Hook 尚未实现。详见[请求约定](./src/modules/README_CN.md#请求契约与默认配置)。
 
 ### Props 约定
 
@@ -35,7 +36,7 @@ FileTree 已实现目录树视图与交互，FilePreview 已实现页签与纯�
 
 ## 公开入口与样式
 
-- 根入口只导出各组件、各业务模块的组件本体与主 Props 类型（`<组件名>Props`），当前为 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 与四个业务模块占位组件；行类型、选项类型、句柄与文案包等子类型只从 `components/<组件>`、`modules/<模块>` 子路径导出。`FilePreview` 不在根入口：它的类型依赖可选的 `@ark-design/ui`，放进根声明会让该 peer 变成必需。业务模块当前导出占位组件与类型，真实能力迁入后再导出 Hook。不提供 `@openviking/react/components` 或 `@openviking/react/modules` 分类聚合 JS 入口。包导出显式列举，内部文件不开放。
+- 根入口只导出各组件、各业务模块的组件本体与主 Props 类型（`<组件名>Props`），当前为 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 与三个业务模块占位组件；行类型、选项类型、句柄与文案包等子类型只从 `components/<组件>`、`modules/<模块>` 子路径导出。`FilePreview` 不在根入口：它的类型依赖可选的 `@ark-design/ui`，放进根声明会让该 peer 变成必需。业务模块当前导出占位组件与类型，真实能力迁入后再导出 Hook。不提供 `@openviking/react/components` 或 `@openviking/react/modules` 分类聚合 JS 入口。包导出显式列举，内部文件不开放。
 - 组件只提供明确列出的分层子路径，不保留旧路径别名。
 - JS 入口共享实现，不隐式加载 CSS。整包、组件集合与单模块样式由同一份源码构建，选择所需范围导入即可。
 
@@ -58,7 +59,7 @@ import '@openviking/react/modules/file-browser/style.css';
 />;
 ```
 
-其余模块分别导出 `Console`、`TaskCenter` 和 `UserUsage`，目前都接受 `className`、`style` 与 `labels`，无需 Provider 或请求配置。
+其余模块分别导出 `Console` 和 `TaskCenter`，目前都接受 `className`、`style` 与 `labels`，无需 Provider 或请求配置。
 
 经验看板属于预览扩展；任务进度先归所属模块；API Key 展示控件按需复用，凭证创建及管理由宿主负责。本次不新增这些独立模块。
 
