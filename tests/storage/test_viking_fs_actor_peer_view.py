@@ -80,6 +80,21 @@ class _MemoryAGFS:
                 break
         return entries
 
+    def ls_pages(self, path, page_size=None, ctx=None, **kwargs):
+        entries = self.ls(path, ctx=ctx)
+        size = page_size or max(len(entries), 1)
+        return (entries[offset : offset + size] for offset in range(0, len(entries), size))
+
+    def tree_directory_pages(self, path, page_size=None, ctx=None, **kwargs):
+        entries = self.tree_directory(
+            path,
+            show_hidden=kwargs.get("show_hidden", False),
+            level_limit=kwargs.get("level_limit"),
+            ctx=ctx,
+        )
+        size = page_size or max(len(entries), 1)
+        return (entries[offset : offset + size] for offset in range(0, len(entries), size))
+
     def stat(self, path, ctx=None):
         if path in self.dirs:
             return self._entry(path)

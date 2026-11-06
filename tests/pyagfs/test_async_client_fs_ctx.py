@@ -51,6 +51,24 @@ class _RecordingClient:
         self.tree_options = options
         return []
 
+    def ls_pages(self, path, *, ctx=None, **options):
+        self.calls.append(("ls_pages", path, ctx))
+        return iter([[{"name": "first"}], [{"name": "second"}]])
+
+    def tree_directory_pages(self, path, *, ctx=None, **options):
+        self.calls.append(("tree_directory_pages", path, ctx))
+        return iter([[{"path": path + "/first"}], [{"path": path + "/second"}]])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls_pages", "tree_directory_pages"])
+async def test_listing_batches_keep_account_context(method):
+    client = _RecordingClient()
+    agfs = AsyncAGFSClient(client)
+    batches = await getattr(agfs, method)("/local/acct-1/data", page_size=1)
+    assert len([page async for page in batches]) == 2
+    assert client.calls == [(method, "/local/acct-1/data", {"account_id": "acct-1"})]
+
 
 @pytest.mark.asyncio
 async def test_async_client_derives_account_ctx_from_local_agfs_path() -> None:
