@@ -1,4 +1,4 @@
-.root {
+.ov-module-placeholder {
   display: flex;
   box-sizing: border-box;
   flex-direction: column;
@@ -16,11 +16,11 @@
   overflow-wrap: anywhere;
 }
 
-.label {
+.ov-module-placeholder__label {
   margin: 0;
 }
 
-.description {
+.ov-module-placeholder__description {
   margin: 0;
   color: var(
     --ov-ui-text-muted,

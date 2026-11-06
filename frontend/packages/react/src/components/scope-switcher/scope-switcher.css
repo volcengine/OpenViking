@@ -1,10 +1,10 @@
-.root {
+.ov-scope-switcher {
   display: flex;
   box-sizing: border-box;
-  width: 960px;
-  height: 640px;
+  width: 640px;
+  height: 40px;
   align-items: center;
-  justify-content: center;
+  padding: 0 12px;
   border-radius: var(--ov-ui-radius, 6px);
   background: var(--ov-ui-placeholder, #f3f4f7);
   color: var(--ov-ui-text-muted, #8f959e);

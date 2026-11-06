@@ -50,7 +50,7 @@ import '@openviking/react/modules/file-browser/style.css';
 
 ## 样式
 
-样式通过 CSS Modules 隔离，变量使用 `--ov-ui-` 前缀，不引入全局 reset。JavaScript 导入不会自动加载 CSS；按需选择整包、分类集合或独立样式：
+样式使用 `ov-` 前缀的稳定类名，变量使用 `--ov-ui-` 前缀，不引入全局 reset。JavaScript 导入不会自动加载 CSS；按需选择整包、分类集合或独立样式：
 
 ```ts
 import '@openviking/react/style.css';
@@ -60,6 +60,19 @@ import '@openviking/react/style.css';
 ```
 
 Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。后续单独使用 Hook 无需 CSS。
+
+可以在容器元素上调整主题变量，也可以直接指定具体的组件类名：
+
+```css
+.my-workbench {
+  --ov-ui-radius: 4px;
+  --ov-ui-row-hover: rgb(0 0 0 / 6%);
+}
+
+.my-workbench .ov-file-tree__row {
+  height: 32px;
+}
+```
 
 ## 构建与检查
 
