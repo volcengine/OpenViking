@@ -596,7 +596,8 @@ async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_preserves_media_across_parallel_tool_results(make_loop):
+@pytest.mark.parametrize("parallel", [True, False])
+async def test_agent_loop_preserves_all_tool_images(make_loop, parallel):
     content = [
         {
             "type": "image_url",
@@ -606,8 +607,10 @@ async def test_agent_loop_preserves_media_across_parallel_tool_results(make_loop
             },
         }
     ]
-    provider = _MediaProvider([[_image_call("call-1", "first"), _image_call("call-2", "second")]])
-    loop = make_loop(provider=provider, max_iterations=2)
+    calls = [_image_call("call-1", "first"), _image_call("call-2", "second")]
+    rounds = [calls] if parallel else [[call] for call in calls]
+    provider = _MediaProvider(rounds)
+    loop = make_loop(provider=provider, max_iterations=len(rounds) + 1)
 
     final, *_ = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "read both"}],
@@ -617,41 +620,8 @@ async def test_agent_loop_preserves_media_across_parallel_tool_results(make_loop
     )
 
     assert final == "done"
-    tool_messages = [message for message in provider.calls[1] if message["role"] == "tool"]
-    assert isinstance(tool_messages[0]["content"], list)
-    assert isinstance(tool_messages[1]["content"], list)
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_preserves_media_across_consecutive_tool_rounds(make_loop):
-    content = [
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": "data:image/png;base64,"
-                + base64.b64encode(b"x" * (4 * 1024 * 1024)).decode()
-            },
-        }
-    ]
-    provider = _MediaProvider(
-        [[_image_call("call-1", "image-1")], [_image_call("call-2", "image-2")]]
-    )
-    loop = make_loop(provider=provider, max_iterations=3)
-
-    final, *_ = await loop._run_agent_loop(
-        messages=[{"role": "user", "content": "read two images in sequence"}],
-        session_key=SessionKey(type="cli", channel_id="default", chat_id="media-rounds"),
-        publish_events=False,
-        tool_registry=_ImageRegistry(content),
-    )
-
-    assert final == "done"
-    first_round_tool = next(message for message in provider.calls[1] if message["role"] == "tool")
-    assert isinstance(first_round_tool["content"], list)
-
     tool_messages = [message for message in provider.calls[-1] if message["role"] == "tool"]
-    assert isinstance(tool_messages[0]["content"], list)
-    assert isinstance(tool_messages[1]["content"], list)
+    assert [message["content"] for message in tool_messages] == [content, content]
 
 
 def test_agent_loop_omits_spawn_tool_when_subagents_disabled(make_loop, temp_dir: Path):

@@ -20,7 +20,7 @@ from vikingbot.agent.tools.compile import CompileImageReadTool, CompileSpawnTool
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.queue import MessageBus
-from vikingbot.compile import entry
+from vikingbot.compile import entry, file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops.common import pack, payload
@@ -30,6 +30,7 @@ from vikingbot.compile.pipeline_io import ModelCallError
 from vikingbot.compile.results import (
     CombineResponse,
     FileResponse,
+    Group,
     RecordResponse,
 )
 from vikingbot.compile.service import BotCompileService, _CompileProvider
@@ -118,35 +119,31 @@ async def seed(runtime):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("recovers", [False, True])
-async def test_output_repairs_stop_even_when_invalid_source_ids_change(runtime, recovers):
-    from vikingbot.compile.ops import common
-
+async def test_output_repairs_stop_even_when_invalid_paths_change(runtime):
     pipeline, _ = runtime
-    await seed(runtime)
-    records = list(pipeline.records.values())
-    ids = [record.record_id for record in records]
 
     def respond(**kwargs):
         attempt = pipeline.model.provider.chat.await_count
         assert attempt <= 4, "Changing diagnostics must not grant more output attempts"
-        inputs = ids if recovers and attempt == 4 else [f"unknown-source-{attempt}"]
         return LLMResponse(
             content="",
             tool_calls=[
                 ToolCallRequest(
-                    "submit", "emit", {"records": [{"inputs": inputs, "content": "Fact"}]}, 0
+                    "submit",
+                    "emit",
+                    {"files": [{"path": f".invalid-{attempt}.md", "content": "Fact"}]},
+                    0,
                 )
             ],
         )
 
     pipeline.model.provider.chat.side_effect = respond
-    if recovers:
-        result = await common.transform(pipeline, "combine", None, records, prompt="Keep facts.")
-        assert set(result[0].source_refs) == set(ids)
-    else:
-        with pytest.raises((ValueError, ModelCallError), match="unknown-source-4"):
-            await common.transform(pipeline, "combine", None, records, prompt="Keep facts.")
+
+    def validate(response):
+        file_ops.validate_files(pipeline, response, Group("files", []), [], {})
+
+    with pytest.raises((ValueError, ModelCallError), match="invalid-4"):
+        await pipeline.model.ask("reduce", "Write supported files.", {}, FileResponse, validate)
     assert pipeline.model.provider.chat.await_count == 4
 
 
