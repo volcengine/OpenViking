@@ -216,6 +216,17 @@ class OpenSandboxBackend(SandboxBackend):
     def local_file_path(self, path: str) -> Path | None:
         return None
 
+    async def replace_file(self, source: str, destination: str) -> None:
+        """Use execd's rename API without starting a shell or exposing a host path."""
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        from opensandbox.models.filesystem import MoveEntry
+
+        source, destination = self._replacement_paths(source, destination)
+        await self._sandbox.files.move_files(
+            [MoveEntry(src=self._sandbox_path(source), dest=self._sandbox_path(destination))]
+        )
+
     async def read_file(self, path: str) -> str:
         return (await self.read_file_bytes(path)).decode("utf-8")
 

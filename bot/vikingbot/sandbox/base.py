@@ -4,6 +4,7 @@ import asyncio
 import os
 import posixpath
 import re
+import shlex
 import shutil
 from abc import ABC, abstractmethod
 from collections import deque
@@ -234,6 +235,29 @@ class SandboxBackend(ABC):
         if not sandbox_path.is_file():
             raise IOError(f"Not a file: {path}")
         return sandbox_path
+
+    @staticmethod
+    def _replacement_paths(source: str, destination: str) -> tuple[str, str]:
+        source = SandboxBackend._normalize_workspace_path(source)
+        destination = SandboxBackend._normalize_workspace_path(destination)
+        if (
+            not source
+            or not destination
+            or posixpath.dirname(source) != posixpath.dirname(destination)
+        ):
+            raise ValueError("Atomic replacement requires files in the same sandbox directory")
+        return source, destination
+
+    async def replace_file(self, source: str, destination: str) -> None:
+        """Publish a complete temporary file; remote backends may override the transport."""
+        source, destination = SandboxBackend._replacement_paths(source, destination)
+        local = self.local_file_path(source)
+        if local is not None:
+            await asyncio.to_thread(local.replace, local.with_name(posixpath.basename(destination)))
+            return
+        paths = [shlex.quote(posixpath.join(self.sandbox_cwd, p)) for p in (source, destination)]
+        output = await self.execute(f"mv -f -- {paths[0]} {paths[1]}")
+        self._ensure_command_succeeded(output, "sandbox file replacement")
 
     async def export_file(
         self,
