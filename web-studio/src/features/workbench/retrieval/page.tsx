@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -65,6 +66,7 @@ function optionsFromSearch(search: RetrievalSearch): RetrievalRequestOptions {
 
 export function RetrievalPage() {
   const { t } = useTranslation('retrieval')
+  const queryClient = useQueryClient()
   const navigate = useNavigate({ from: '/retrieval' })
   const search = routeApi.useSearch()
   const hasUrlSearch = hasRetrievalSearch(search)
@@ -116,13 +118,20 @@ export function RetrievalPage() {
       const submission = createRetrievalSubmission(query, mode, options)
       if (!submission) return
 
+      void queryClient.invalidateQueries(
+        {
+          queryKey: ['retrieval', mode, submission.query, options],
+          exact: true,
+        },
+        { cancelRefetch: false },
+      )
       setSubmittedMode(mode)
       setSubmittedOptions(options)
       setSubmittedQuery(submission.query)
       writeLastRetrievalSearch(submission.search)
       void navigate({ replace: true, search: submission.search })
     },
-    [navigate, options, query],
+    [navigate, options, query, queryClient],
   )
 
   const handleSubmit = useCallback(() => {
