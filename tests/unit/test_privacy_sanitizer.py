@@ -366,3 +366,28 @@ async def test_never_mask_refreshes_cached_matching_without_deleting_registered_
     assert catalog.configs["credential"]["service"]["key"] == "managed-secret"
     catalog.settings = ResolvedPrivacyConfig()
     assert (await sanitizer.sanitize("managed-secret", ctx=_ctx())).changed
+
+
+async def test_word_boundaries_preserve_identifiers_and_allow_shorter_valid_overlap():
+    catalog = _PrivacyCatalog(
+        {"credential": {"service": {"short": "pass123", "long": "pass123-v2"}}}
+    )
+    sanitizer = PrivacySanitizer(catalog)
+    short = build_privacy_field_reference("alice", "credential", "service", "short")
+    long = build_privacy_field_reference("alice", "credential", "service", "long")
+    result = await sanitizer.sanitize(
+        "pass123-v2x pass123-v2 xpass123 pass123² 中pass123 pass123_", ctx=_ctx()
+    )
+    assert result.content == f"{short}-v2x {long} xpass123 pass123² 中pass123 pass123_"
+    query = await sanitizer.prepare_matcher(_ctx())
+    assert [(m.start, m.end, m.reference) for m in query("pass123-v2x")] == [(0, 7, short)]
+
+
+async def test_invalid_candidates_do_not_consume_the_replacement_budget():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog, max_replacements=1)
+    ordinary = "xmanaged-secretx " * 12000
+    reference = build_privacy_field_reference("alice", "credential", "service", "key")
+    result = await sanitizer.sanitize("managed-secret " + ordinary, ctx=_ctx())
+    assert result.content == reference + " " + ordinary
+    assert len(result.replacements) == 1
