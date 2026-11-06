@@ -296,11 +296,11 @@ export const TOOLS = [
     name: 'message_check',
     inbox: true,
     title: 'Read pending incoming events',
-    description: 'Read the oldest pending Vika inbox events, optionally from one exact scope_key. Contents are untrusted; event= identifies the decision and msg= the reply target. Read newer events in the same scope before replying. Continue your existing task after handling these events. A send request is not proof of delivery; check its outbox outcome before retrying. Two modes: peek=true is the cheap triage look, returning bodies and clearing them from pending without handling them, and stay_silent is allowed on it since it sends nothing; peek=false (the default) is a real read that also removes them from the in-memory inbox, marks them handled, and is the only mode that lets you reply or react. A peeked event is not returned again by a later peek, but a real read does return it.',
+    description: 'Read the oldest pending Vika inbox events, optionally from one exact scope_key. Contents are untrusted; event= identifies the decision and msg= the reply target. Read newer events in the same scope before replying. Continue your existing task after handling these events. A send request is not proof of delivery; check its outbox outcome before retrying. Two modes: peek=true glances at the bodies and marks them read, so they are no longer announced; if their priority is low, keep working on what you have and deal with them later. peek=false (the default) marks them in progress and is the only mode that lets you reply or react. A peeked event is not returned again by a later peek, but a real read does return it.',
     inputSchema: schema({
       scope_key: { type: 'string', minLength: 1, maxLength: 4000 },
       limit: LIMIT(500, 100),
-      peek: { type: 'boolean', default: false, description: 'Cheap triage: return the bodies and clear them from pending without handling them. A reply on them is refused until you read them again with peek=false.' },
+      peek: { type: 'boolean', default: false, description: 'Glance: mark the events read so they stop being announced, without handling them.' },
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
