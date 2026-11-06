@@ -102,3 +102,21 @@ def test_anydoc_code_outside_tables_is_unchanged(tmp_path: Path, kind: str, expe
 
     assert expected in markdown
     assert r"\|" not in markdown
+
+
+@pytest.mark.parametrize(
+    "markup, expected",
+    [
+        ("<ul><li><code>a|b</code></li></ul>", r"- `a\|b`"),
+        ("<blockquote><p><code>a|b</code></p></blockquote>", r"`a\|b`"),
+        ("<ul><li>a|b</li></ul>", r"- a\|b"),
+        ("<blockquote><p>a|b</p></blockquote>", r"a\|b"),
+        ("<ul><li><code>plain</code></li></ul>", "- `plain`"),
+        ("<blockquote><p><code>plain</code></p></blockquote>", "`plain`"),
+    ],
+)
+def test_anydoc_table_nested_blocks_preserve_pipes(
+    tmp_path: Path, markup: str, expected: str
+) -> None:
+    markdown = _convert_epub(tmp_path, _table(markup))
+    assert f"| {expected} | sentinel |" in markdown.splitlines()
