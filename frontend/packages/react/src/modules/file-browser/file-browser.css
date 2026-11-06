@@ -1,0 +1,83 @@
+.ov-file-browser__toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ov-ui-space-2, 8px);
+  padding: var(--ov-ui-space-2, 8px) var(--ov-ui-space-3, 12px);
+  border: 0;
+  border-radius: var(--ov-ui-radius-sm, 4px);
+  background: transparent;
+  color: var(--ov-ui-color-primary, #1664ff);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-file-browser__toolbar-button:hover:not(:disabled) {
+  background: var(--ov-ui-color-fill-hover, rgba(22, 100, 255, 0.08));
+}
+
+.ov-file-browser__toolbar-button:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, #1664ff);
+  outline-offset: 2px;
+}
+
+.ov-file-browser__toolbar-button:disabled {
+  color: var(--ov-ui-color-text-disabled, rgba(0, 0, 0, 0.25));
+  cursor: not-allowed;
+}
+
+.ov-file-browser__toolbar-button-icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.ov-file-browser__toolbar-button-label {
+  white-space: nowrap;
+}
+
+/**
+ * 宿主入口之间的分隔线。用相邻兄弟选择器判断，不需要数节点数量，宿主传几个、
+ * 怎么嵌套都不影响。
+ *
+ * Dividers between host entries, decided by the adjacent sibling selector. No
+ * node counting is involved, so how many entries the host passes and how they
+ * nest does not matter.
+ */
+.ov-file-browser__toolbar-actions > * + *::before {
+  content: '';
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  margin-right: var(--ov-ui-space-2, 8px);
+  background: var(--ov-ui-color-border, rgba(0, 0, 0, 0.12));
+  vertical-align: middle;
+}
+
+.ov-module-placeholder {
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 160px;
+  padding: 24px;
+  border: 1px dashed var(--ov-ui-border, currentColor);
+  border-radius: var(--ov-ui-radius, 6px);
+  color: inherit;
+  font: inherit;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.ov-module-placeholder__title {
+  margin: 0;
+}
+
+.ov-module-placeholder__description {
+  margin: 0;
+  color: var(
+    --ov-ui-text-muted,
+    color-mix(in srgb, currentColor 75%, transparent)
+  );
+}
