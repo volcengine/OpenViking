@@ -8,6 +8,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { askEmail, emailInstanceId, providerFor, writeEmailAccount } from '../src/email.mjs';
+import { MailboxUnavailableError, OAuthRequiredError } from '../../daemon/src/email/imap.mjs';
 import { Prompter } from '../src/prompt.mjs';
 
 function terminal(answers) {
@@ -41,9 +42,10 @@ test('a failed login says why and asks again; an unknown provider asks for its s
     if (password !== 'right') throw new Error('IMAP LOGIN failed: NO LOGIN Login error or password error');
     return { idle: false };
   };
+  // The first answer picks the mail system: 2, another provider.
   const { prompter, written } = terminal([
-    'me@corp.example', '', '', 'mail.corp.example', '587', 'wrong pass', 'y',
-    '', '', '', '', '', 'right',
+    'me@corp.example', '2', '', '', 'mail.corp.example', '587', 'wrong pass', 'y',
+    '', '2', '', '', '', '', 'right',
   ]);
   const account = await askEmail({ prompter, verify });
   assert.equal(attempts, 2);
@@ -55,12 +57,213 @@ test('a failed login says why and asks again; an unknown provider asks for its s
   assert.match(written(), /登录失败：IMAP LOGIN failed[\s\S]*多半是密码不对/);
   assert.match(written(), /每分钟查一次/);
 
-  const outlook = terminal(['me@outlook.com']);
-  await assert.rejects(askEmail({ prompter: outlook.prompter, verify }));
-  assert.match(outlook.written(), /只能用 OAuth 登录/);
-
   const givenUp = terminal(['me@qq.com', 'nope', 'n']);
   await assert.rejects(askEmail({ prompter: givenUp.prompter, verify }), { name: 'PromptAborted' });
+});
+
+// The browser sign-in the Microsoft mailboxes use, without a browser.
+function fakeLogin({ tokens = { accessToken: 'access-1', refreshToken: 'refresh-1' }, fail = null, seen = [] } = {}) {
+  return {
+    seen,
+    start: async (oauth2) => {
+      seen.push(['start', oauth2]);
+      return { deviceCode: 'device', userCode: 'ABCD-EFGH', verificationUri: 'https://microsoft.com/devicelogin' };
+    },
+    wait: async (oauth2, code) => {
+      seen.push(['wait', oauth2, code]);
+      if (fail) throw fail;
+      return tokens;
+    },
+  };
+}
+
+test('a Microsoft mailbox signs in in the browser, and the account keeps only the refresh token', async () => {
+  const login = fakeLogin();
+  const verified = [];
+  const { prompter, written } = terminal(['me@outlook.com', 'app-id', '']);
+  const account = await askEmail({
+    prompter, login,
+    verify: async (given, { credential }) => { verified.push([given, credential]); return { idle: true }; },
+  });
+
+  assert.deepEqual(account, {
+    address: 'me@outlook.com',
+    imap: { host: 'outlook.office365.com', port: 993 }, smtp: { host: 'smtp-mail.outlook.com', port: 587 },
+    oauth2: { tenant: 'common', clientId: 'app-id', refreshToken: 'refresh-1' },
+  });
+  // No password is asked for, and none is saved.
+  assert.equal(account.password, undefined);
+  assert.deepEqual(login.seen.map(([step]) => step), ['start', 'wait']);
+  // The token just obtained is what the mailbox is checked with.
+  assert.deepEqual(verified.map(([, credential]) => credential), [{ accessToken: 'access-1' }]);
+  assert.match(written(), /microsoft\.com\/devicelogin/);
+  assert.match(written(), /ABCD-EFGH/);
+  assert.match(written(), /收信和发信都登录成功/);
+});
+
+test('a corporate Microsoft 365 mailbox is recognized by the owner saying so, and needs no servers', async () => {
+  const login = fakeLogin();
+  const { prompter, written } = terminal(['me@corp.example', '1', 'app-id', 'contoso.onmicrosoft.com']);
+  const account = await askEmail({ prompter, login, verify: async () => ({ idle: true }) });
+  assert.deepEqual(account, {
+    address: 'me@corp.example',
+    imap: { host: 'outlook.office365.com', port: 993 }, smtp: { host: 'smtp.office365.com', port: 587 },
+    oauth2: { tenant: 'contoso.onmicrosoft.com', clientId: 'app-id', refreshToken: 'refresh-1' },
+  });
+  // No IMAP/SMTP server questions: an Exchange Online mailbox has none of its own.
+  assert.doesNotMatch(written(), /IMAP 服务器|SMTP 服务器/);
+});
+
+test('a mailbox that turns out to refuse passwords switches to the browser sign-in', async () => {
+  const login = fakeLogin();
+  let attempts = 0;
+  // The server says no to passwords before taking one, so only the browser
+  // sign-in can succeed; the servers just typed are the ones that said it.
+  const verify = async (account, options) => {
+    attempts += 1;
+    if (!options?.credential) throw new OAuthRequiredError();
+    return { idle: true };
+  };
+  const { prompter, written } = terminal(['me@corp.example', '2', '', '', '', '', 'some-password', 'app-id', 'contoso.onmicrosoft.com']);
+  const account = await askEmail({ prompter, login, verify });
+  assert.deepEqual(account.oauth2, { tenant: 'contoso.onmicrosoft.com', clientId: 'app-id', refreshToken: 'refresh-1' });
+  assert.equal(account.password, undefined);
+  assert.equal(attempts, 2);
+  assert.match(written(), /这个邮箱不接受密码登录/);
+  assert.deepEqual([account.imap, account.smtp], [{ host: 'imap.corp.example', port: 993 }, { host: 'smtp.corp.example', port: 465 }]);
+});
+
+test('re-authorizing a Microsoft mailbox asks only for the browser step', async () => {
+  const login = fakeLogin({ tokens: { accessToken: 'fresh', refreshToken: 'refresh-9' } });
+  const saved = { address: 'me@outlook.com', imap: { host: 'outlook.office365.com', port: 993 },
+    smtp: { host: 'smtp-mail.outlook.com', port: 587 },
+    oauth2: { tenant: 'contoso.onmicrosoft.com', clientId: 'saved-app', refreshToken: 'old' } };
+  const { prompter, written } = terminal([]);
+  const account = await askEmail({ prompter, fixed: saved, login, verify: async () => ({ idle: true }) });
+  assert.deepEqual(account, { ...saved, oauth2: { ...saved.oauth2, refreshToken: 'refresh-9' } });
+  assert.doesNotMatch(written(), /客户端|租户/);
+});
+
+// The account file is written whole, so a field left out of what the wizard
+// returns is gone. `username` carries the login name of an alias or shared
+// mailbox, which our own docs tell the owner to type by hand — losing it on
+// the next re-authorization breaks sending while receiving keeps working.
+test('re-authorizing keeps the login name and the display name', async () => {
+  const login = fakeLogin({ tokens: { accessToken: 'fresh', refreshToken: 'refresh-9' } });
+  const saved = { address: 'alias@outlook.com', username: 'primary@outlook.com', name: 'Bennett Xu',
+    imap: { host: 'outlook.office365.com', port: 993 }, smtp: { host: 'smtp-mail.outlook.com', port: 587 },
+    oauth2: { tenant: 'consumers', clientId: 'saved-app', refreshToken: 'old' } };
+  const checked = [];
+  const { prompter } = terminal([]);
+  const account = await askEmail({ prompter, fixed: saved, login,
+    verify: async (given) => { checked.push(given); return { idle: true }; } });
+
+  assert.equal(account.username, 'primary@outlook.com', 'the login name was dropped from the account');
+  assert.equal(account.name, 'Bennett Xu', 'the display name was dropped from the account');
+  assert.equal(account.address, 'alias@outlook.com');
+  // And the check signs in the way both protocols will: with the login name,
+  // not the address, since an alias answers IMAP but refuses SMTP AUTH.
+  assert.equal(checked[0].user, 'primary@outlook.com', 'the mailbox was checked with the wrong login name');
+});
+
+test('a terminal can renew a device code or cancel its pending wait', { timeout: 3_000 }, async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  output.resume();
+  const prompter = new Prompter({ input, output });
+  let started = 0;
+  let aborted = 0;
+  const login = {
+    start: async () => ({ deviceCode: `device-${++started}`, userCode: `CODE-${started}`,
+      verificationUri: 'https://microsoft.com/devicelogin' }),
+    wait: (oauth, code, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => { aborted += 1; reject(signal.reason); }, { once: true });
+    }),
+  };
+  const renewing = askEmail({ prompter, login, verify: async () => ({ idle: true }) });
+  input.write('me@outlook.com\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('app-id\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('r');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  input.write('r');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(started, 3, 'each r requested exactly one fresh device code');
+  assert.ok(aborted >= 2, 'renewing did not cancel the old polling operation');
+  input.write('\x1b[D');
+  await assert.rejects(renewing, { name: 'GoBack' });
+  assert.equal(input.listenerCount('keypress'), 0, 'the authorization wait left a key listener behind');
+  prompter.close();
+});
+
+test('Escape cancels the device-code wait', { timeout: 3_000 }, async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  output.resume();
+  const prompter = new Prompter({ input, output });
+  const login = {
+    start: async () => ({ deviceCode: 'device', userCode: 'CODE', verificationUri: 'https://microsoft.com/devicelogin' }),
+    wait: (oauth, code, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  };
+  const pending = askEmail({ prompter, login, verify: async () => ({ idle: true }) });
+  input.write('me@outlook.com\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('app-id\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\x1b');
+  await assert.rejects(pending, { name: 'GoBack' });
+  assert.equal(input.listenerCount('keypress'), 0);
+});
+
+test('a pending device-code request also accepts renew and cancellation keys', { timeout: 3_000 }, async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  output.resume();
+  const prompter = new Prompter({ input, output });
+  let starts = 0;
+  const login = {
+    start: (oauth, { signal }) => new Promise((resolve, reject) => {
+      starts += 1;
+      if (starts > 1) resolve({ deviceCode: 'next', userCode: 'NEXT', verificationUri: 'https://microsoft.com/devicelogin' });
+      else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+    wait: (oauth, code, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  };
+  const pending = askEmail({ prompter, login, verify: async () => ({ idle: true }) });
+  input.write('me@outlook.com\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('app-id\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('r');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(starts, 2, 'r did not abort the pending initial request and start a fresh one');
+  input.write('\x1b');
+  await assert.rejects(pending, { name: 'GoBack' });
+  assert.equal(input.listenerCount('keypress'), 0);
+});
+
+test('a browser sign-in that fails says so and offers to try again', async () => {
+  const login = fakeLogin({ fail: new Error('The Microsoft sign-in code expired; start the sign-in again') });
+  const { prompter, written } = terminal(['me@outlook.com', 'app-id', '', 'n']);
+  await assert.rejects(askEmail({ prompter, login, verify: async () => ({ idle: true }) }), { name: 'PromptAborted' });
+  assert.match(written(), /登录失败：The Microsoft sign-in code expired/);
 });
 
 test('a new password keeps the saved servers; an address already watched is refused; names read as the provider', async () => {
@@ -81,12 +284,31 @@ test('a new password keeps the saved servers; an address already watched is refu
   assert.equal(emailInstanceId('x@gmail.com', ['email-gmail', 'email-gmail-x']), 'email-gmail-2');
 });
 
-test('the account file is private', (t) => {
+test('the account file is private', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-email-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'email', 'primary', 'email-qq.json');
-  writeEmailAccount(file, { address: 'a@qq.com', password: 'p' });
+  await writeEmailAccount(file, { address: 'a@qq.com', password: 'p' });
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['email-qq.json']);
+});
+
+// A mailbox that signs in but refuses IMAP is a setting, not a credential:
+// asking the owner to retype things cannot fix it, and calling it a login
+// failure sends them looking for a password that is already right.
+test('a mailbox with IMAP off names the setting instead of calling it a login failure', async () => {
+  const login = fakeLogin();
+  const { prompter, written } = terminal(['me@outlook.com', 'app-id', '']);
+  // EmailCancelled extends PromptAborted, so the prompt layer's own abort is
+  // what surfaces here; what matters is that it stopped without asking.
+  await assert.rejects(
+    askEmail({ prompter, login, verify: async () => { throw new MailboxUnavailableError('BAD User is authenticated but not connected.'); } }),
+    { name: 'PromptAborted' },
+  );
+  const output = written();
+  assert.match(output, /没有开启 IMAP|IMAP is not enabled/);
+  assert.doesNotMatch(output, /登录失败/);
+  // Nothing to retype, so it does not ask.
+  assert.doesNotMatch(output, /重新输入/);
 });

@@ -93,11 +93,12 @@ export async function loginCommand([connector, requested, ...extra], {
     // Each mailbox's Connector reads its account file when it starts.
     const mailboxes = mailboxesOf(agent);
     const shown = (mailbox) => mailbox.address ?? mailbox.id;
-    const mailbox = mailboxes.length === 1 ? mailboxes[0] : await prompter.select(t('更新哪个邮箱的密码', 'Which mailbox has a new password'),
+    const mailbox = mailboxes.length === 1 ? mailboxes[0] : await prompter.select(
+      t('更新哪个邮箱的密码或授权', 'Which mailbox has a new password or needs a new sign-in'),
       mailboxes.map((candidate) => ({ label: shown(candidate), value: candidate })));
     const account = await connect.email({ prompter, fixed: mailbox.account,
       taken: mailboxes.filter((other) => other !== mailbox).map((other) => other.address).filter(Boolean) });
-    writeEmailAccount(mailbox.config, account);
+    await writeEmailAccount(mailbox.config, account);
     if (!await restart({ agent, prompter, env, control })) return 1;
     prompter.write(t(`\n${agent.displayName}（${agent.id}）的邮箱 ${account.address} 已更新。\n`, `\nMailbox ${account.address} is updated for ${agent.displayName} (${agent.id}).\n`));
     return 0;

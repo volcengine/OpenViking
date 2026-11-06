@@ -483,7 +483,7 @@ async function askMailboxes(ctx, state) {
     const choice = await orElse(() => ctx.prompter.select(t(`邮箱（已接入：${addresses}）`, `Mailboxes (connected: ${addresses})`), [
       { label: t('不改了', 'Done'), value: { kind: 'done' } },
       { label: t('再接一个邮箱', 'Add a mailbox'), value: { kind: 'add' } },
-      ...kept.map((mailbox) => ({ label: t(`更新 ${addressOf(mailbox)} 的密码`, `New password for ${addressOf(mailbox)}`), value: { kind: 'update', mailbox } })),
+      ...kept.map((mailbox) => ({ label: t(`更新 ${addressOf(mailbox)} 的密码或授权`, `New password or sign-in for ${addressOf(mailbox)}`), value: { kind: 'update', mailbox } })),
       ...mailboxList(state).map((mailbox) => ({ label: t(`移除 ${addressOf(mailbox)}`, `Remove ${addressOf(mailbox)}`), value: { kind: 'remove', mailbox } })),
     ], { label: t('邮箱', 'Mailboxes') }), ctx.menu, { kind: 'done' });
     if (choice.kind === 'done') break;
@@ -1675,7 +1675,7 @@ async function setupFlow({
   live?.resume();
   const id = state.id;
   const mail = mailPlan(state);
-  for (const { config, account } of mail.write) writeEmailAccount(config, account);
+  for (const { config, account } of mail.write) await writeEmailAccount(config, account);
   writeRoleFile(state, id);
 
   fs.mkdirSync(state.workspace, { recursive: true, mode: 0o700 });
@@ -1827,9 +1827,9 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     changes.push(`${t('主渠道：', 'Primary channel: ')}${IM_LABELS[before.channel ?? was[0]]} → ${IM_LABELS[after.channel]}`);
   }
   for (const address of mailboxes.added) changes.push(t(`接入邮箱 ${address}`, `Add mailbox ${address}`));
-  for (const address of mailboxes.updated) changes.push(t(`更新邮箱 ${address} 的密码`, `New password for ${address}`));
+  for (const address of mailboxes.updated) changes.push(t(`更新邮箱 ${address} 的密码或授权`, `New password or sign-in for ${address}`));
   for (const mailbox of mailboxes.removed) {
-    changes.push(t(`移除邮箱 ${addressOf(mailbox)}（删掉保存的密码）`, `Remove mailbox ${addressOf(mailbox)} (its saved password is deleted)`));
+    changes.push(t(`移除邮箱 ${addressOf(mailbox)}（删掉保存的密码或授权）`, `Remove mailbox ${addressOf(mailbox)} (its saved password or sign-in is deleted)`));
   }
   return changes;
 }

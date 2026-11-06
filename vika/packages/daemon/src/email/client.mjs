@@ -1,17 +1,19 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { createHash } from 'node:crypto';
-import fs from 'node:fs';
 import { eventMessage } from '../connectors/protocol.mjs';
 import { safeError } from '../logger.mjs';
-import { MailArchive, parsesAttachment } from './archive.mjs';
-import { ImapConnection } from './imap.mjs';
-import { buildReply, decodeCharset, isOwnMessageId, parseMail, replyMessageId } from './mime.mjs';
-import { sendMail, verifySmtp } from './smtp.mjs';
+import { EMAIL_VERSION, MAILBOX, accountTag, credentialSource, loadAccount, verifyAccount } from './account.mjs';
+import { MailArchive } from './archive.mjs';
+import { ImapAuthError, ImapConnection } from './imap.mjs';
+import { buildReply, isOwnMessageId, replyMessageId } from './mime.mjs';
+import {
+  MAX_ATTACHMENTS, MAX_REPLY_RECIPIENTS, attachmentFile, bodyMarkdown, label, mailText, parseStoredMail,
+  replyRecipients, replySubject, sameAddresses, storedText, threadId,
+} from './present.mjs';
+import { SmtpAuthError, sendMail } from './smtp.mjs';
 import { EmailState } from './state.mjs';
 
-const MAILBOX = 'INBOX';
 // Servers may drop an IDLE after 29 minutes; renew it well before.
 const IDLE_MS = 9 * 60_000;
 const POLL_MS = 60_000;
@@ -20,186 +22,8 @@ const MAX_CATCH_UP = 50;
 const FETCH_BATCH = 10;
 // A larger mail is reported from its headers alone.
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
-const MAX_LISTED = 10;
-const MAX_ATTACHMENTS = 20;
-// The whole text OV keeps of a mail (each part is read no further than mime's
-// part limit); a mail OV could not take is reported with its first 6000.
-const STORED_TEXT_CHARS = 1_000_000;
-const INLINE_TEXT_CHARS = 6_000;
-// A stored mail is reported with the start of its text; the rest is a read away.
-const PREVIEW_CHARS = 500;
 // How long a mail's event waits for OV to parse its attachments.
 const ATTACHMENT_WAIT_MS = 60_000;
-// An approval card shows every reply recipient; a mail that would be answered
-// to more addresses than fit there in full cannot be answered at all.
-const MAX_REPLY_RECIPIENTS = 20;
-
-// The account file: { address, password, imap: { host, port }, smtp: { host,
-// port, secure? }, username?, name? }. The password is a client (app) password.
-// SMTP uses implicit TLS on port 465 unless `secure` says otherwise, else STARTTLS.
-export function loadAccount(file) {
-  let value;
-  try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {
-    throw new Error('email config file is unreadable or not JSON');
-  }
-  const address = String(value?.address ?? '').trim().toLowerCase();
-  if (!/^[^\s@<>]+@[^\s@<>]+$/.test(address)) throw new Error('email config needs an address');
-  if (typeof value.password !== 'string' || !value.password) throw new Error('email config needs a password');
-  const server = (key) => {
-    const host = String(value[key]?.host ?? '').trim();
-    const port = Number(value[key]?.port);
-    if (!host || !Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`email config needs ${key}.host and ${key}.port`);
-    return { host, port, ...(typeof value[key].secure === 'boolean' ? { secure: value[key].secure } : {}) };
-  };
-  return Object.freeze({
-    address,
-    name: typeof value.name === 'string' ? value.name.trim() : '',
-    user: typeof value.username === 'string' && value.username.trim() ? value.username.trim() : address,
-    password: value.password,
-    imap: server('imap'),
-    smtp: server('smtp'),
-  });
-}
-
-// Ids carry which account a mail came from: UIDs and UIDVALIDITY are only
-// unique within one mailbox, and an instance may switch to another account.
-export function accountTag(address) {
-  return createHash('sha256').update(address).digest('hex').slice(0, 8);
-}
-
-// Both credentials: an IMAP login with a read-only look at the inbox, then
-// SMTP AUTH. Sends nothing. Resolves with whether new mail is pushed (IDLE).
-export async function verifyAccount(account, { connectTls } = {}) {
-  const imap = new ImapConnection({ ...account.imap, ...(connectTls ? { connect: connectTls } : {}) });
-  let idle;
-  try {
-    await imap.connect();
-    await imap.login(account.user, account.password);
-    await imap.examine(MAILBOX);
-    idle = imap.capabilities.has('IDLE');
-    await imap.logout();
-  } finally {
-    imap.close();
-  }
-  await verifySmtp({ ...account.smtp, user: account.user, password: account.password, ...(connectTls ? { connectTls } : {}) });
-  return { idle };
-}
-
-function people(list) {
-  const shown = list.slice(0, MAX_LISTED).map(({ name, address }) => (name ? `${name} <${address}>` : address));
-  if (list.length > MAX_LISTED) shown.push(`+${list.length - MAX_LISTED} more`);
-  return shown.join(', ');
-}
-
-// Who wrote to whom. Display names are untrusted labels, like the rest of the mail.
-function headerLines(mail) {
-  return [
-    ...(mail.from ? [`From: ${people([mail.from])}`] : []),
-    ...(mail.to.length ? [`To: ${people(mail.to)}`] : []),
-    ...(mail.cc.length ? [`Cc: ${people(mail.cc)}`] : []),
-  ];
-}
-
-// What the model reads of a mail that is not in OV: the senders, then the body.
-function mailText(mail) {
-  const text = mail.text.length > INLINE_TEXT_CHARS ? `${mail.text.slice(0, INLINE_TEXT_CHARS)}\n[truncated]` : mail.text;
-  return [...headerLines(mail), '', text].join('\n').trim();
-}
-
-function label(value) {
-  return String(value).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
-}
-
-function formatSize(bytes) {
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
-
-// One attachment as body.md and the event both list it.
-function attachmentLine({ id, name, type, size, uri, status, reason }) {
-  const head = `${id} ${name} (${type}, ${formatSize(size)})`;
-  if (status === 'stored') return `${head}: ${uri}`;
-  if (status === 'processing') return `${head}: ${uri} (OpenViking is still reading it)`;
-  return `${head}: not stored, ${reason}`;
-}
-
-// The mail as OV keeps it.
-function bodyMarkdown({ mail, messageId, mailbox, instance, attachments, inline }) {
-  const lines = [`# ${mail.subject || '(no subject)'}`, '', ...headerLines(mail).map((line) => `- ${line}`)];
-  if (mail.date) lines.push(`- Date: ${new Date(mail.date).toISOString()}`);
-  lines.push(`- Mailbox: ${mailbox} (${instance})`, `- Message: ${messageId}`);
-  if (attachments.length || inline) {
-    lines.push('', '## Attachments', '', ...attachments.map((attachment) => `- ${attachmentLine(attachment)}`));
-    if (inline) lines.push(`- ${inline} inline image${inline === 1 ? '' : 's'} in the body, not stored`);
-  }
-  lines.push('', '## Body', '', mail.text || '(no text)');
-  return `${lines.join('\n')}\n`;
-}
-
-// What the model reads of a mail in OV: the senders, where the mail and its
-// attachments are, and the start of the text; read_email reads the rest.
-function storedText(mail, archive) {
-  const { text } = mail;
-  const extent = !text ? 'it has no text'
-    : text.length > PREVIEW_CHARS ? `the first ${PREVIEW_CHARS} of its ${text.length} characters are below`
-      : 'all of its text is below';
-  return [
-    ...headerLines(mail),
-    `[mail stored: ${archive.body}; ${extent}]`,
-    ...archive.attachments.map((attachment) => `[attachment ${attachmentLine(attachment)}]`),
-    ...(text ? ['', text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS)}…` : text] : []),
-  ].join('\n');
-}
-
-// A forwarded mail (message/rfc822) as Markdown.
-function forwardedMarkdown(data) {
-  const inner = parseMail(data, { maxTextChars: STORED_TEXT_CHARS });
-  return [`# ${inner.subject || '(no subject)'}`, '', ...headerLines(inner).map((line) => `- ${line}`),
-    ...(inner.date ? [`- Date: ${new Date(inner.date).toISOString()}`] : []), '', inner.text || '(no text)'].join('\n');
-}
-
-// What the archive gets of one attachment: text it writes as is, or bytes for
-// OV to parse. An attachment that cannot be read gets neither and is skipped.
-function attachmentFile(attachment) {
-  const file = { name: label(attachment.name), filename: attachment.filename, type: attachment.type, size: attachment.size };
-  try {
-    if (attachment.type === 'message/rfc822') return { ...file, text: forwardedMarkdown(attachment.data) };
-    if (attachment.type.startsWith('text/') && !parsesAttachment(attachment)) {
-      return { ...file, text: decodeCharset(attachment.data, attachment.charset).slice(0, STORED_TEXT_CHARS) };
-    }
-    return { ...file, data: attachment.data };
-  } catch {
-    return file;
-  }
-}
-
-// Who a reply goes to: Reply-To, else From. A mail the owner sent goes to its
-// other recipients instead. The Core shows the same list on the approval card.
-export function replyRecipients(mail, own) {
-  let to = mail.replyTo.length ? mail.replyTo : mail.from ? [mail.from] : [];
-  const others = mail.to.filter((recipient) => recipient.address !== own);
-  if (to.every((recipient) => recipient.address === own) && others.length > 0) to = others;
-  return to;
-}
-
-function sameAddresses(approved, recipients) {
-  const sorted = (list) => [...list].sort().join('\n');
-  return Array.isArray(approved) && approved.length === recipients.length
-    && sorted(approved) === sorted(recipients.map((recipient) => recipient.address));
-}
-
-export function replySubject(subject) {
-  return /^re:/i.test(subject) ? subject : `Re: ${subject}`;
-}
-
-// A thread as a subject id: Gmail's numeric thread id, or a digest of the
-// thread's first Message-ID, which the sender controls and may make any length.
-function threadId(item, mail, fallback) {
-  if (/^\d{1,32}$/.test(item.thread ?? '')) return `gmail:${item.thread}`;
-  const root = mail.references[0] ?? mail.inReplyTo ?? mail.messageId ?? fallback;
-  return `mid:${createHash('sha256').update(root).digest('hex').slice(0, 32)}`;
-}
 
 function sleep(ms, stopped) {
   return new Promise((resolve) => {
@@ -216,15 +40,23 @@ function sleep(ms, stopped) {
 // Watches one mailbox's INBOX read-only over IMAP and reports each new mail as
 // an event; replies to a reported mail over SMTP. Never marks, moves or
 // deletes mail.
+//
+// This class owns the run: the reading loop, its cursor and the events it
+// emits. What a mail *reads like* is present.mjs; how the account signs in is
+// account.mjs.
 export class EmailClient {
-  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS } = {}) {
+  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS,
+    fetch: fetchImpl = globalThis.fetch, now = Date.now } = {}) {
     this.config = config;
     this.logger = logger;
     this.connectTls = connectTls;
+    this.fetch = fetchImpl;
+    this.now = now;
     this.state = new EmailState(config.dataDir, config.instance ?? 'email');
     this.archive = archive;
     this.attachmentWaitMs = attachmentWaitMs;
     this.account = null;
+    this.credential = null;
     this.tag = null;
     this.imap = null;
     this.loop = null;
@@ -235,35 +67,59 @@ export class EmailClient {
     return new ImapConnection({ ...this.account.imap, ...(this.connectTls ? { connect: this.connectTls } : {}) });
   }
 
-  smtpAccount() {
-    return { ...this.account.smtp, user: this.account.user, password: this.account.password,
+  async smtpAccount(options = {}) {
+    return { ...this.account.smtp, user: this.account.user, ...await this.credential(options),
       ...(this.connectTls ? { connectTls: this.connectTls } : {}) };
   }
 
+  // A new IMAP connection, with the same one-retry rule the SMTP path uses: a
+  // refused token means a fresh one is worth trying, since the server that
+  // refused it is better evidence than our own expiry clock. A mailbox that
+  // reconnects after a long run therefore never reuses a token that has aged
+  // out, and never needs a restart to get a working one.
+  //
+  // What counts as a refusal is `ImapAuthError`, which imap.mjs raises where it
+  // reads the tagged NO — servers word that NO differently, and matching the
+  // wording here would only recover on the one whose text we happened to test.
   async open() {
-    const imap = this.imapConnection();
-    try {
-      await imap.connect();
-      await imap.login(this.account.user, this.account.password);
-      return imap;
-    } catch (error) {
-      imap.close();
-      throw error;
+    let auth = await this.credential();
+    for (let attempt = 0; ; attempt += 1) {
+      const imap = this.imapConnection();
+      try {
+        await imap.connect();
+        if (auth.accessToken) await imap.authenticate(this.account.user, auth.accessToken);
+        else await imap.login(this.account.user, auth.password);
+        return imap;
+      } catch (error) {
+        imap.close();
+        const rejected = Boolean(auth.accessToken) && error instanceof ImapAuthError;
+        if (!rejected || attempt > 0) throw error;
+        this.logger.warn('email_imap_reauth', { error: safeError(error) });
+        auth = await this.credential({ stale: true });
+      }
     }
   }
 
   // Both credentials, before anything starts.
   async preflight() {
     this.account = loadAccount(this.config.emailConfigFile);
+    if (this.account.unusedPassword) {
+      // Not fatal: the mailbox signs in with oauth2 either way. Said once at
+      // start, which is when an owner sees it.
+      this.logger.warn('email_unused_password', {
+        hint: 'the account file has both a password and oauth2; the password is not used',
+      });
+    }
     this.tag = accountTag(this.account.address);
-    await verifyAccount(this.account, { connectTls: this.connectTls });
+    this.credential = credentialSource(this.account, { fetch: this.fetch, now: this.now, logger: this.logger });
+    await verifyAccount(this.account, { connectTls: this.connectTls, credential: await this.credential() });
     // Where reported mail is kept. The daemon checked OV before starting us.
     if (!this.archive && this.config.openVikingConfigPath) {
       this.archive = MailArchive.fromConfigFile(this.config.openVikingConfigPath, { logger: this.logger });
     }
     this.state.prune(Date.now() - this.config.retentionMs);
     // A mailbox is not an IM: notices to the owner never go here.
-    return { version: 'imap-smtp-v1', owner: null };
+    return { version: EMAIL_VERSION, owner: null };
   }
 
   startSubscription(onLine, onUnexpectedExit) {
@@ -340,7 +196,7 @@ export class EmailClient {
 
   async report(item, uidValidity, onLine) {
     if (!item.body) return;
-    const mail = parseMail(item.body, { maxTextChars: STORED_TEXT_CHARS });
+    const mail = parseStoredMail(item.body);
     if (mail.autoReplied || isOwnMessageId(mail.messageId)) {
       this.logger.info('email_skipped', { uid: item.uid, reason: mail.autoReplied ? 'auto_replied' : 'own_reply' });
       return;
@@ -368,7 +224,7 @@ export class EmailClient {
       // card; past the limit only how many. `archive` is where read_email finds it.
       data: { reply: { from: this.account.address, subject: replySubject(mail.subject),
         ...(recipients.length <= MAX_REPLY_RECIPIENTS ? { to: recipients } : { recipients: recipients.length }) },
-      ...(archive ? { archive } : {}) },
+        ...(archive ? { archive } : {}) },
     }));
     // The event is built and checked before the reply headers are kept, so a
     // mail that fails leaves nothing behind.
@@ -419,9 +275,27 @@ export class EmailClient {
       from: { name: this.account.name, address: own }, to, original, text: content.text,
       messageId: replyMessageId(idempotencyKey, own),
     });
-    await sendMail(this.smtpAccount(), { from: own, recipients: to.map((recipient) => recipient.address), raw });
+    await this.deliver({ from: own, recipients: to.map((recipient) => recipient.address), raw });
     this.logger.info('email_replied', { recipients: to.length });
     return { sent: true };
+  }
+
+  // Sends one message, retrying only what is safe to retry.
+  //
+  // A sign-in that failed never got as far as telling the server about this
+  // message, so a new access token and one more attempt are safe — that is the
+  // case a token revoked early produces. A failure after the body was written
+  // is not safe to retry: the mail may already be queued, and a second attempt
+  // would send it twice.
+  async deliver(send) {
+    try {
+      return await sendMail(await this.smtpAccount(), send);
+    } catch (error) {
+      if (!(error instanceof SmtpAuthError) || !this.account.oauth2) throw error;
+      this.logger.warn('email_smtp_reauth', { error: safeError(error) });
+      const fresh = await this.smtpAccount({ stale: true });
+      return await sendMail(fresh, send);
+    }
   }
 
   async stopSubscription() {

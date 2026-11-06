@@ -5,6 +5,7 @@ import { WEIXIN_CHANNEL_VERSION } from '../weixin/api.mjs';
 import { TELEGRAM_VERSION } from '../telegram/api.mjs';
 import { QQ_VERSION } from '../qq/api.mjs';
 import { SLACK_VERSION } from '../slack/api.mjs';
+import { EMAIL_VERSION } from '../email/account.mjs';
 import { connectorManifest } from './protocol.mjs';
 import { DOC_COMMENT_CONVERSATION, MAX_COMMENT_CHARS } from '../lark-doc-comments.mjs';
 
@@ -86,13 +87,18 @@ const MANIFESTS = Object.freeze({
     auth_schema: EMPTY_SCHEMA,
     config_schema: EMPTY_SCHEMA,
   }),
-  // A mailbox the owner reads over IMAP and answers over SMTP. A reply speaks
-  // as the owner to whoever wrote, so the owner approves each one on a card
-  // first (`approval`). SMTP has no idempotency key: an uncertain send is never
-  // retried.
+  // A mailbox the owner reads over IMAP and answers over SMTP, signing in with
+  // a client password or, where the provider turned passwords off, with OAuth2
+  // (SASL XOAUTH2). A reply speaks as the owner to whoever wrote, so the owner
+  // approves each one on a card first (`approval`). SMTP has no idempotency
+  // key: an uncertain send is never retried.
   email: connectorManifest({
     name: 'email',
-    version: 'imap-smtp-v1',
+    version: EMAIL_VERSION,
+    // No credentials travel over the protocol: the mailbox address, the client
+    // password or the OAuth2 refresh token live in the account file the worker
+    // reads and writes itself, so there is nothing for these schemas to
+    // describe. They stay the empty shape the protocol documents.
     capabilities: ['events', 'actions'],
     actions: {
       'message.reply': { content: ['markdown'], approval: true },

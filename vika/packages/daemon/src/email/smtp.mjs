@@ -3,10 +3,11 @@
 
 import net from 'node:net';
 import tls from 'node:tls';
+import { xoauth2 } from './oauth2.mjs';
 
 // The SMTP subset that submits one message: implicit TLS (`secure`, by default
-// on port 465) or STARTTLS, AUTH PLAIN or LOGIN, MAIL/RCPT/DATA. A plaintext
-// session is never authenticated.
+// on port 465) or STARTTLS, AUTH XOAUTH2, PLAIN or LOGIN, MAIL/RCPT/DATA. A
+// plaintext session is never authenticated.
 
 const STEP_TIMEOUT_MS = 60_000;
 
@@ -74,7 +75,9 @@ class SmtpSession {
 
   expect(reply, codes, step) {
     if (!codes.includes(reply.code)) {
-      throw new Error(`SMTP ${step} failed: ${reply.lines.at(-1).slice(0, 200)}`);
+      const error = new Error(`SMTP ${step} failed: ${reply.lines.at(-1).slice(0, 200)}`);
+      error.smtpCode = reply.code;
+      throw error;
     }
     return reply;
   }
@@ -83,8 +86,15 @@ class SmtpSession {
 function connect({ connect: open, secureConnect = false, ...options }) {
   return new Promise((resolve, reject) => {
     const socket = open(options);
-    socket.once(secureConnect ? 'secureConnect' : 'connect', () => resolve(socket));
-    socket.once('error', reject);
+    // A server or a middlebox can accept the connection and then go quiet; without
+    // this the caller waits forever and the worker never returns.
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`SMTP connection to ${options.host}:${options.port} timed out`));
+    }, STEP_TIMEOUT_MS);
+    const settle = (fn) => (value) => { clearTimeout(timer); fn(value); };
+    socket.once(secureConnect ? 'secureConnect' : 'connect', settle(() => resolve(socket)));
+    socket.once('error', settle(reject));
   });
 }
 
@@ -93,15 +103,60 @@ async function hello(session) {
   return reply.lines.map((line) => line.slice(4).toUpperCase());
 }
 
+// The mechanisms a server offers for AUTH. RFC 4954 lets one server spread
+// them over several EHLO lines, and some also send the pre-RFC `AUTH=LOGIN`
+// spelling, so every AUTH line has to be read — taking the first one alone
+// reports "no XOAUTH2" against a server that offers it on the next line.
+function authMechanisms(features) {
+  return features
+    .filter((feature) => /^AUTH\b/.test(feature))
+    .flatMap((feature) => feature.slice(5).split(/\s+/))
+    .filter(Boolean)
+    .join(' ');
+}
+
+// The server rejected the credential (535, RFC 4954 section 6). Nothing was
+// offered yet, so a caller may refresh it and try the same message again.
+// Temporary server failures and an unsupported mechanism have other remedies;
+// they are not proof that the access token is stale.
+export class SmtpAuthError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SmtpAuthError';
+  }
+}
+
+// SASL XOAUTH2. A rejected token comes back as the error challenge first, and
+// the 535 that says so only arrives once the exchange is ended with an empty
+// line; the server's final text is the only useful one to report.
+async function authenticateXoauth2(session, user, accessToken) {
+  const answer = session.reply();
+  session.socket.write(`AUTH XOAUTH2 ${xoauth2(user, accessToken)}\r\n`);
+  const first = await answer;
+  if (first.code === 235) return;
+  if (first.code === 334) {
+    const final = session.reply();
+    session.socket.write('\r\n');
+    const reply = await final;
+    const message = `SMTP AUTH XOAUTH2 failed: ${reply.lines.at(-1).slice(0, 200)}`;
+    if (reply.code === 535) throw new SmtpAuthError(message);
+    throw new Error(message);
+  }
+  const message = `SMTP AUTH XOAUTH2 failed: ${first.lines.at(-1).slice(0, 200)}`;
+  if (first.code === 535) throw new SmtpAuthError(message);
+  throw new Error(message);
+}
+
 // Opens an authenticated session; `run(session)` does the work, then QUIT.
-export async function withSmtp({ host, port, secure = Number(port) === 465, user, password,
+async function withSmtp({ host, port, secure = Number(port) === 465, user, password, accessToken,
   connectTls = tls.connect, connectPlain = net.connect }, run) {
   const implicit = secure;
-  const socket = await connect(implicit
-    ? { host, port, servername: host, connect: connectTls, secureConnect: true }
-    : { host, port, connect: connectPlain });
-  let session = new SmtpSession(socket);
+  let session = null;
   try {
+    const socket = await connect(implicit
+      ? { host, port, servername: host, connect: connectTls, secureConnect: true }
+      : { host, port, connect: connectPlain });
+    session = new SmtpSession(socket);
     session.expect(await session.reply(), [220], 'greeting');
     let features = await hello(session);
     if (!implicit) {
@@ -114,22 +169,35 @@ export async function withSmtp({ host, port, secure = Number(port) === 465, user
       session = new SmtpSession(secure);
       features = await hello(session);
     }
-    const auth = features.find((feature) => feature.startsWith('AUTH')) ?? '';
-    if (/\bPLAIN\b/.test(auth)) {
-      const token = Buffer.from(`\u0000${user}\u0000${password}`, 'utf8').toString('base64');
-      await session.send(`AUTH PLAIN ${token}`, [235], 'AUTH PLAIN');
-    } else if (/\bLOGIN\b/.test(auth)) {
-      await session.send('AUTH LOGIN', [334]);
-      await session.send(Buffer.from(user, 'utf8').toString('base64'), [334], 'AUTH LOGIN user');
-      await session.send(Buffer.from(password, 'utf8').toString('base64'), [235], 'AUTH LOGIN password');
-    } else {
-      throw new Error('SMTP server offers neither AUTH PLAIN nor AUTH LOGIN');
+    const auth = authMechanisms(features);
+    // Only an explicit 535 means the credential was refused. Even during AUTH,
+    // a timeout or a 454 is a transport/server problem, not a stale token.
+    try {
+      if (accessToken) {
+        if (!/\bXOAUTH2\b/.test(auth)) throw new Error('SMTP server offers no AUTH XOAUTH2');
+        await authenticateXoauth2(session, user, accessToken);
+      } else if (/\bPLAIN\b/.test(auth)) {
+        const token = Buffer.from(`\u0000${user}\u0000${password}`, 'utf8').toString('base64');
+        await session.send(`AUTH PLAIN ${token}`, [235], 'AUTH PLAIN');
+      } else if (/\bLOGIN\b/.test(auth)) {
+        await session.send('AUTH LOGIN', [334]);
+        await session.send(Buffer.from(user, 'utf8').toString('base64'), [334], 'AUTH LOGIN user');
+        await session.send(Buffer.from(password, 'utf8').toString('base64'), [235], 'AUTH LOGIN password');
+      } else {
+        throw new SmtpAuthError('SMTP server offers neither AUTH PLAIN nor AUTH LOGIN');
+      }
+    } catch (error) {
+      if (error instanceof SmtpAuthError) throw error;
+      if (error.smtpCode === 535) throw new SmtpAuthError(error.message);
+      throw error;
     }
     const result = await run(session);
     await session.send('QUIT', [221]).catch(() => {});
     return result;
   } finally {
-    session.socket.destroy();
+    // Set only once the connection is up; a failed open() has nothing to close
+    // and connect() already destroyed its own socket.
+    session?.socket.destroy();
   }
 }
 
@@ -140,6 +208,12 @@ function envelopeAddress(address) {
 
 // Submits one message. `raw` uses CRLF line ends; lines starting with a dot
 // are stuffed.
+//
+// A failure from here on is not retryable: the body may already be queued even
+// though the answer never arrived, and SMTP has no idempotency key, so a second
+// attempt would send a second copy. Nothing is marked in this process because
+// nothing here decides it — client.deliver() retries only what it can prove was
+// never offered, which is SmtpAuthError and nothing else.
 export function sendMail(account, { from, recipients, raw }) {
   return withSmtp(account, async (session) => {
     await session.send(`MAIL FROM:${envelopeAddress(from)}`, [250], 'MAIL FROM');

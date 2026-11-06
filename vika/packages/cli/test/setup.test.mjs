@@ -703,7 +703,7 @@ test('an instance\'s mailboxes are changed from their own menu until done', asyn
   assert.match(h.written(), /邮箱（已接入：me@gmail\.com、me@qq\.com）[\s\S]*邮箱（已接入：me@qq\.com）[\s\S]*8\) 邮箱\s+me@qq\.com（已改）/);
   assert.deepEqual(h.manifest().agents[0].emailAccounts, [{ id: 'email-qq', config: file('email-qq') }]);
   assert.equal(fs.existsSync(file('email-gmail')), false);
-  assert.match(h.written(), /移除邮箱 me@gmail\.com（删掉保存的密码）/);
+  assert.match(h.written(), /移除邮箱 me@gmail\.com（删掉保存的密码或授权）/);
   assert.deepEqual(h.calls, [['restart', 'asd']]);
 });
 

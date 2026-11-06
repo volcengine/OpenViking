@@ -2,14 +2,59 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import tls from 'node:tls';
+import { xoauth2 } from './oauth2.mjs';
 
-// The IMAP4rev1 subset a read-only inbox watcher needs: LOGIN, EXAMINE (the
-// mailbox opens read-only, so nothing is ever marked read), UID SEARCH, UID
-// FETCH of BODY.PEEK[], and IDLE. Responses are read with their literals;
-// anything unexpected fails the connection and the Connector restarts.
+// The IMAP4rev1 subset a read-only inbox watcher needs: CAPABILITY, LOGIN or
+// AUTHENTICATE XOAUTH2, EXAMINE (the mailbox opens read-only, so nothing is
+// ever marked read), UID SEARCH, UID FETCH of BODY.PEEK[], and IDLE. Responses
+// are read with their literals; anything unexpected fails the connection and
+// the Connector restarts.
+
+// A refusal of one of these is a refusal of the credential, not of the request.
+const SIGNS_IN = new Set(['LOGIN', 'AUTHENTICATE']);
 
 const COMMAND_TIMEOUT_MS = 60_000;
 const FETCH_TIMEOUT_MS = 300_000;
+
+// A server that turned password sign-in off says so before a password is sent;
+// the caller can then offer OAuth2 instead.
+export class OAuthRequiredError extends Error {
+  constructor() {
+    super('this mailbox only signs in with OAuth2 (the server refuses LOGIN)');
+    this.name = 'OAuthRequiredError';
+  }
+}
+
+// The sign-in worked but the mailbox will not serve it. Exchange answers the
+// first mailbox command with this after a successful AUTHENTICATE when IMAP is
+// switched off for that mailbox, or when the account was not granted access to
+// it — Microsoft's own IMAP OAuth sample checks for this text by name, because
+// the sign-in succeeding makes it look like a credential problem when it is a
+// mailbox setting. A refresh cannot fix it and a restart will not either, so it
+// is reported with what the owner or their administrator has to change.
+export class MailboxUnavailableError extends Error {
+  constructor(detail) {
+    super('the mailbox signed in but refuses IMAP: enable IMAP for this mailbox, or have its owner grant this account access '
+      + `(${detail})`);
+    this.name = 'MailboxUnavailableError';
+  }
+}
+
+// The verbatim text Exchange sends in that case; kept as one constant so the
+// check and the comment above cannot drift apart.
+const MAILBOX_REFUSES_IMAP = /authenticated but not connected/i;
+
+// The server refused the credential. Which words it uses is its own business —
+// `NO AUTHENTICATE failed.`, `NO [AUTHENTICATIONFAILED] Invalid credentials`,
+// `NO LOGIN failed` — so the kind is decided here, where the response is being
+// read, and callers can tell "the credential was refused" from "the connection
+// broke" without matching text.
+export class ImapAuthError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ImapAuthError';
+  }
+}
 
 function quote(value) {
   const text = String(value);
@@ -189,9 +234,18 @@ export class ImapConnection {
     if (!current || !head.startsWith(`${current.tag} `)) return;
     this.current = null;
     const [, status, rest = ''] = /^\S+ (\w+)\s?(.*)$/.exec(head) ?? [];
-    if (status?.toUpperCase() === 'OK') current.resolve({ untagged: current.untagged, text: rest });
     // Server text can echo a mailbox name, never the password; still bound it.
-    else current.reject(new Error(`IMAP ${current.name} failed: ${status ?? ''} ${rest.slice(0, 200)}`.trim()));
+    const message = `IMAP ${current.name} failed: ${status ?? ''} ${rest.slice(0, 200)}`.trim();
+    const outcome = String(status ?? '').toUpperCase();
+    if (outcome === 'OK') current.resolve({ untagged: current.untagged, text: rest });
+    // RFC 3501 gives `NO` for "the command failed" and `BAD` for "the command
+    // was wrong". Only `NO` on a sign-in command says the credential was
+    // refused, which is the one thing a fresh token can fix; a `BAD` there means
+    // the request itself was rejected, so retrying it with a new token would
+    // just fail again.
+    else if (MAILBOX_REFUSES_IMAP.test(rest)) current.reject(new MailboxUnavailableError(rest.slice(0, 200)));
+    else if (outcome === 'NO' && SIGNS_IN.has(current.name)) current.reject(new ImapAuthError(message));
+    else current.reject(new Error(message));
   }
 
   fail(error) {
@@ -218,9 +272,45 @@ export class ImapConnection {
   }
 
   async login(user, password) {
+    // The greeting does not always carry the capabilities; the mechanism check
+    // below needs them before anything is sent.
+    await this.command('CAPABILITY');
+    if (this.capabilities.has('LOGINDISABLED')) {
+      // RFC 3501 6.2.3: LOGINDISABLED alone forbids LOGIN. Only the additional
+      // XOAUTH2 capability says that Microsoft's browser sign-in can replace it.
+      if (this.capabilities.has('AUTH=XOAUTH2')) throw new OAuthRequiredError();
+      throw new Error('IMAP server refuses LOGIN; this mailbox needs a different authentication mechanism');
+    }
     await this.command('LOGIN', `${quote(user)} ${quote(password)}`);
     await this.command('CAPABILITY');
     // Some providers (163.com) refuse a session that never identified its client.
+    if (this.capabilities.has('ID')) await this.command('ID', '("name" "vika")').catch(() => {});
+  }
+
+  // SASL XOAUTH2 with an access token. Servers that advertise SASL-IR take the
+  // token on the command line; the others ask for it with `+`, and a rejected
+  // token comes back as one more `+` carrying the error, which is answered with
+  // an empty line before the tagged NO.
+  async authenticate(user, accessToken) {
+    await this.command('CAPABILITY');
+    if (!this.capabilities.has('AUTH=XOAUTH2')) {
+      throw new Error('IMAP server does not offer AUTH=XOAUTH2');
+    }
+    const response = xoauth2(user, accessToken);
+    if (this.capabilities.has('SASL-IR')) {
+      await this.command('AUTHENTICATE', `XOAUTH2 ${response}`, {
+        continued: () => this.socket.write('\r\n'),
+      });
+    } else {
+      let sent = false;
+      await this.command('AUTHENTICATE', 'XOAUTH2', {
+        continued: () => {
+          this.socket.write(sent ? '\r\n' : `${response}\r\n`);
+          sent = true;
+        },
+      });
+    }
+    await this.command('CAPABILITY');
     if (this.capabilities.has('ID')) await this.command('ID', '("name" "vika")').catch(() => {});
   }
 
