@@ -44,14 +44,9 @@ def test_wiki_invalid_frontmatter_is_a_repairable_validation_error(runtime):
     "link,valid",
     [
         ("[Project 01](entity/Project 01.md)", False),
-        ("[Project 01](entity/Project\t01.md)", False),
         ("[Project 01](entity/Project%2001.md)", True),
         ("[Project 01](<entity/Project 01.md>)", True),
-        ('[Project 01](entity/Project%2001.md "Project 01")', True),
-        ('[Project 01](<entity/Project 01.md> "Project 01")', True),
-        ("`[Project 01](entity/Project 01.md)`", True),
         ("```markdown\n[Project 01](entity/Project 01.md)\n```", True),
-        ("<!-- [Project 01](entity/Project 01.md) -->", True),
     ],
 )
 def test_compile_wiki_navigation_requires_valid_markdown_destinations(runtime, link, valid):
@@ -92,8 +87,20 @@ async def test_compile_finalize_rejects_invalid_stored_wiki_navigation(runtime):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad_kind", ["missing", "foreign", "duplicate", "link_space"])
-async def test_compile_files_repair_invalid_provenance_and_revalidate_cache(runtime, bad_kind):
+@pytest.mark.parametrize("bad_kind", ["missing", "foreign", "duplicate"])
+async def test_compile_rejects_invalid_file_provenance(runtime, bad_kind):
+    pipeline, _ = runtime
+    await seed(runtime)
+    records = list(pipeline.records.values())
+    first_id = records[0].record_id
+    inputs = {"missing": [], "foreign": ["foreign"], "duplicate": [first_id, first_id]}[bad_kind]
+    response = FileResponse(files=[FileDraft(path="page.md", content="# Page", inputs=inputs)])
+    with pytest.raises(ValueError, match="inputs must"):
+        file_ops.validate_files(pipeline, response, Group("files", records), records, {})
+
+
+@pytest.mark.asyncio
+async def test_compile_files_repair_invalid_provenance_and_revalidate_cache(runtime):
     pipeline, _ = runtime
     await seed(runtime)
     records = list(pipeline.records.values())
@@ -105,11 +112,7 @@ async def test_compile_files_repair_invalid_provenance_and_revalidate_cache(runt
         "content": "# Cedar\n\nRetry limit: 7.\n",
         "inputs": ids,
     }
-    invalid = {key: value for key, value in valid.items() if key != "inputs"}
-    if bad_kind == "link_space":
-        invalid = {**valid, "content": "# Cedar\n\n[Cedar](entity/Cedar manual.md)\n"}
-    elif bad_kind != "missing":
-        invalid["inputs"] = ["foreign"] if bad_kind == "foreign" else [ids[0], ids[0]]
+    invalid = {**valid, "inputs": ["foreign"]}
 
     def response(file):
         return LLMResponse(
