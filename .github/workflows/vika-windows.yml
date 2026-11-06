@@ -20,6 +20,8 @@ jobs:
           cache-dependency-path: vika/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
+      - name: Feishu events and OpenViking integration contracts
+        run: node --test packages/daemon/test/event.test.mjs packages/daemon/test/lark-preflight.test.mjs packages/daemon/test/ov-session-context.test.mjs packages/daemon/test/ov-session-lifecycle.test.mjs packages/daemon/test/ov-recall.test.mjs packages/cli/test/check-ov.test.mjs
       - run: node packages/cli/bin/vika.mjs --help
       - name: Parse PowerShell installer
         shell: pwsh
