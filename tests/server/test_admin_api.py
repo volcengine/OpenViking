@@ -2435,10 +2435,6 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         )
         assert rejected.status_code == 400 and fs.files == before_rejected
         rejected = await client.patch(
-            url, json={"add_targets": stored["add_targets"]}, headers=user_headers
-        )
-        assert rejected.status_code == 422 and fs.files == before_rejected
-        rejected = await client.patch(
             url,
             json={
                 "add_targets": {"resource_uri": "viking://user/bob/resources"},

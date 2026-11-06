@@ -12,5 +12,3 @@ export { Console } from './modules/console/index.js';
 export type { ConsoleProps } from './modules/console/index.js';
 export { TaskCenter } from './modules/task-center/index.js';
 export type { TaskCenterProps } from './modules/task-center/index.js';
-export { UserUsage } from './modules/user-usage/index.js';
-export type { UserUsageProps } from './modules/user-usage/index.js';
