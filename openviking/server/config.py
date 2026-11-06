@@ -45,6 +45,11 @@ def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str
     uri = value.strip().rstrip("/")
     if not uri:
         raise ValueError(f"{field_name} must not be empty")
+    # Preserve pre-home-alias add-target configurations when upgrading.
+    if uri in {"viking://user/resources", "viking://user/skills"} or uri.startswith(
+        "viking://user/resources/"
+    ):
+        uri = "viking://~/" + uri.removeprefix("viking://user/")
     return uri
 
 
