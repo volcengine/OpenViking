@@ -1,6 +1,6 @@
 # ScopeSwitcher 作用域选择
 
-作用域面包屑。宿主声明有几个层级、各自叫什么；组件负责渲染并上报搜索与切换意图。
+头部作用域面包屑。宿主声明有几个层级、各自叫什么、选项从哪来；组件渲染面包屑触发器与下拉面板，并上报搜索、切换与动作意图。
 
 当前是占位组件：只渲染一个固定尺寸的空壳，不消费 props，宿主可先对着已发布的包开发，真实视图后续迁入。下方的 props 契约是最终形态，占位实现会被替换。
 
@@ -12,17 +12,196 @@
 
 占位尺寸为 640 × 40，对齐头部作用域条。
 
-## 属性
+## 层级
 
-公开的 props 从同一子路径以类型导出，以源码为准：
+组件不知道「库 / 数据空间 / 用户」这些语义，只按 `levels` 数组顺序从左到右渲染，用 `/` 分隔。声明一层就是单个选择器，声明三层就是完整面包屑：
 
 ```tsx
-import type { ScopeSwitcherProps } from '@openviking/react/components/scope-switcher';
+<ScopeSwitcher
+  levels={[
+    {
+      kind: 'selectable',
+      key: 'library',
+      ariaLabel: '切换库',
+      selectedLabel: library.name,
+      options,
+      selectedId,
+      visible: libraryOpen,
+      onVisibleChange: setLibraryOpen,
+      onSelect,
+    },
+    {
+      kind: 'selectable',
+      key: 'account',
+      ariaLabel: '切换数据空间',
+      selectedLabel: accountId,
+      options,
+      selectedId,
+      visible: accountOpen,
+      onVisibleChange: setAccountOpen,
+      onSelect,
+    },
+    {
+      kind: 'selectable',
+      key: 'user',
+      ariaLabel: '切换用户',
+      selectedLabel: userId,
+      options,
+      selectedId,
+      visible: userOpen,
+      onVisibleChange: setUserOpen,
+      onSelect,
+    },
+  ]}
+/>
 ```
 
-| 属性     | 类型 | 默认值 | 说明                       |
-| -------- | ---- | ------ | -------------------------- |
-| 其余属性 | —    | —      | 占位组件不消费任何 props。 |
+每个层级的搜索关键字、分页与选中项都由宿主持有，组件只负责渲染并上报意图。组件不内置分页规则：首屏由 `onVisibleChange` 通知宿主准备，是否加载下一页由宿主的 `onScroll` 自己判断。
+
+### 固定层级与可切换层级
+
+每个层级按 `kind` 分两种形态，同一行里可以混用：
+
+- `kind: 'selectable'` —— 渲染可展开的触发器与下拉面板，需要 `options` 与 `onSelect`。
+- `kind: 'fixed'` —— 只展示当前值，没有展开箭头、不可点击，不接收任何选项或面板字段。
+
+宿主按当前作用域是否可切换来选择形态，不需要伪造空选项列表来表达「不可切换」：
+
+```tsx
+// 个人终端：库与数据空间跟随登录态固定，只有用户可切换
+levels={[
+  { kind: 'fixed', key: 'library', ariaLabel: '库', selectedLabel: library.name },
+  { kind: 'fixed', key: 'account', ariaLabel: '数据空间', selectedLabel: accountId },
+  { kind: 'selectable', key: 'user', ariaLabel: '切换用户', selectedLabel: userId, options, selectedId, visible: userOpen, onVisibleChange: setUserOpen, onSelect },
+]}
+```
+
+`kind: 'selectable'` 上的 `disabled` 表达的是另一种语义：本可以切换，只是当前不可用，因此渲染置灰的触发器而不是省略展开箭头。
+
+层数也可以随登录方式变化。宿主暂时解析不到某一层时直接不声明它，组件既不渲染也不占位：
+
+```tsx
+// 只能拿到数据空间时，只声明两层
+levels={[dataSpaceLevel, userLevel]}
+```
+
+## 面板
+
+每个层级对应一个下拉面板。组件只负责三样：搜索框、选项列表、加载/空/失败三态。其余内容全部由宿主的 `renderPanel` 实现。
+
+`renderPanel` 收到 `{ search, list }`：`search` 是搜索框，`list` 是列表与三态。宿主可以分别摆放、也可以只放其中一块。面板何时关闭由宿主控制（`visible` 受控），所以在面板里执行完动作后，宿主自己把 `visible` 置为 `false` 即可：
+
+```tsx
+{
+  kind: 'selectable',
+  key: 'library',
+  selectedLabel: library.name,
+  options,
+  selectedId: library.id,
+  visible,
+  onVisibleChange: setVisible,
+  onSelect,
+  renderPanel: ({ search, list }) => (
+    <>
+      <header>
+        <span>全部库</span>
+        <Button onClick={() => { setVisible(false); onCreate(); }}>创建</Button>
+      </header>
+      {search}
+      {list}
+      <footer>
+        <Link to={settingsPath} onClick={() => setVisible(false)}>库设置</Link>
+        <a href={billingUrl}>查看账单</a>
+        <button onClick={onUnsubscribe}>退订</button>
+      </footer>
+    </>
+  ),
+  renderOption: (content, option) => <>{content}<LibraryRowMenu option={option} /></>,
+}
+```
+
+数据空间与用户面板同理，各自渲染自己的「选择 XXX」标题与「管理空间 / 管理 User」入口。需要把当前输入直接当作新选项的宿主，也可以在 `list` 下方追加这样的入口。
+
+为什么不在组件里定义这些入口：三个宿主的「库设置」「查看账单」「退订」「管理空间」在跳转目标、权限与可用性上完全不同，结构化字段只能不断长出新属性（`href`、`trailingIcon`、`destructive`、`disabled`……）来逼近，最终把页面职责搬进组件。而且三者的底部形态本身就不一样——库是三条纯文字，数据空间和用户是一个带边框的整宽按钮，组件无法用同一个容器表达。
+
+- `emptyFallback` / `errorFallback` —— 替换空态与失败态，不传时用内置文案。
+- `renderOption(content, option)` —— 在默认行内容 `content` 上追加或替换，例如行尾「更多」菜单、失效态标记。
+
+面板可见性受控：宿主用 `visible` 决定开合，`onVisibleChange` 回调时写回。这样「打开面板才取数」「异步切换成功后才关」都能由宿主决定，不必在挂载时就请求所有层级的选项。
+
+## 内部推导
+
+- 搜索框可见性由组件判断：已加载条数或 `total` 超过 `SCOPE_SWITCHER_SEARCH_THRESHOLD`（10），或 `searchKeyword` 非空时显示。
+- 命中高亮按 `searchKeyword` 在组件内部计算。
+- 选中项统一用 `role="listbox"` + `role="option"` + `aria-selected`，触发器带 `aria-haspopup="listbox"` 与 `aria-expanded`。
+
+## 属性
+
+### ScopeSwitcherProps
+
+| 属性     | 类型                             | 默认值 | 说明                               |
+| -------- | -------------------------------- | ------ | ---------------------------------- |
+| `levels` | `readonly ScopeSwitcherLevel[]`  | 必填   | 从左到右渲染的层级。               |
+| `labels` | `ScopeSwitcherLabels`            | 英文   | 可替换文案。                       |
+| 其余属性 | `HTMLAttributes<HTMLDivElement>` | —      | 标准 div 属性，`children` 已排除。 |
+
+### ScopeSwitcherLevel
+
+`ScopeSwitcherLevel = ScopeSwitcherFixedLevel | ScopeSwitcherSelectableLevel`，按 `kind` 判别。
+
+公共字段（`ScopeSwitcherLevelBase`）：
+
+| 属性            | 类型                      | 说明                                                                  |
+| --------------- | ------------------------- | --------------------------------------------------------------------- |
+| `kind`          | `'fixed' \| 'selectable'` | `'fixed'` 只展示值、不渲染下拉；`'selectable'` 渲染触发器与面板。     |
+| `key`           | `string`                  | 稳定标识，例如 `library`、`account`、`user`。                         |
+| `ariaLabel`     | `string`                  | 触发器的无障碍名称，只写入 `aria-label`，不出现在界面上；不传则不写。 |
+| `selectedLabel` | `string`                  | 触发器上展示的当前选中项文本，可不在 `options` 中。                   |
+| `icon`          | `ReactNode`               | 触发器图标。                                                          |
+| `tag`           | `ReactNode`               | 触发器末尾标记，例如套餐名。                                          |
+
+以下字段只属于 `ScopeSwitcherSelectableLevel`：
+
+| 属性                    | 类型                                              | 说明                                                       |
+| ----------------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| `options`               | `readonly ScopeSwitcherOption[]`                  | 可选项列表。                                               |
+| `selectedId`            | `string`                                          | 当前选中项 id，必填；尚未取到数据时传空字符串。            |
+| `total`                 | `number`                                          | 总条数，用于判断搜索框是否可见。                           |
+| `loading`               | `boolean`                                         | 首次加载中，面板显示加载态。                               |
+| `searchKeyword`         | `string`                                          | 当前搜索关键字。                                           |
+| `disabled`              | `boolean`                                         | 该层级暂不可切换，渲染置灰触发器；没有这种状态的宿主不传。 |
+| `error`                 | `boolean`                                         | 列表加载失败，渲染 `errorFallback`。                       |
+| `busy`                  | `boolean`                                         | 该层级有变更正在进行，组件禁用整个列表。                   |
+| `renderPanel`           | `(panel: ScopeSwitcherPanelContent) => ReactNode` | 面板外壳：参数含 `search` 与 `list`。不传时只渲染这两块。  |
+| `renderOption`          | `(content, option) => ReactNode`                  | 在默认行内容上追加或替换；点击与选中态仍由组件处理。       |
+| `emptyFallback`         | `ReactNode`                                       | 空态内容。                                                 |
+| `errorFallback`         | `ReactNode`                                       | 失败态内容。                                               |
+| `visible`               | `boolean`                                         | 面板是否可见，必填，由宿主持有。                           |
+| `onVisibleChange`       | `(visible: boolean) => void`                      | 面板可见性变化，宿主持回 `visible`。                       |
+| `onSelect`              | `(option) => void`                                | 选中选项时触发，组件不改变面板可见性。                     |
+| `onSearchKeywordChange` | `(keyword: string) => void`                       | 搜索关键字变化，不传不渲染搜索框。                         |
+| `onScroll`              | `(metrics: ScopeSwitcherScrollMetrics) => void`   | 列表滚动时触发，是否加载下一页由宿主判断。                 |
+
+### ScopeSwitcherOption
+
+| 属性          | 类型        | 说明                                   |
+| ------------- | ----------- | -------------------------------------- |
+| `id`          | `string`    | 选项唯一标识。                         |
+| `label`       | `string`    | 显示文本，搜索命中时高亮。             |
+| `icon`        | `ReactNode` | 行首图标，例如库、数据空间或用户头像。 |
+| `description` | `string`    | 标签下方的次要说明。                   |
+| `disabled`    | `boolean`   | 是否禁用：渲染置灰样式且不响应点击。   |
+
+行内操作与失效态这类单行样式不放这里：它们由层级的 `renderOption` 渲染，宿主自己决定放什么。
+
+### ScopeSwitcherLabels
+
+| 属性                | 说明                       |
+| ------------------- | -------------------------- |
+| `searchPlaceholder` | 搜索框占位文本。           |
+| `empty`             | 无可选项时的提示。         |
+| `noMatch`           | 有关键字但无命中时的提示。 |
+| `error`             | 加载失败时的提示。         |
 
 ```tsx
 import { ScopeSwitcher } from '@openviking/react/components/scope-switcher';

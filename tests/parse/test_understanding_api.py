@@ -344,7 +344,11 @@ def _api_with_transport(monkeypatch, handler):
 
 @pytest.mark.asyncio
 async def test_understanding_counts_submissions_but_not_uploads_or_polling(monkeypatch):
-    from openviking.observability.events import register_event_subscriber, unregister_event_subscriber
+    from openviking.observability.events import (
+        register_event_subscriber,
+        unregister_event_subscriber,
+    )
+
     events = []
     register_event_subscriber("understanding_count_test", events.append)
 
@@ -369,10 +373,16 @@ async def test_understanding_counts_submissions_but_not_uploads_or_polling(monke
 
 @pytest.mark.asyncio
 async def test_understanding_failed_submission_is_still_one_call(monkeypatch):
-    from openviking.observability.events import register_event_subscriber, unregister_event_subscriber
+    from openviking.observability.events import (
+        register_event_subscriber,
+        unregister_event_subscriber,
+    )
+
     events = []
     register_event_subscriber("understanding_failure_test", events.append)
-    api = _api_with_transport(monkeypatch, lambda request: httpx.Response(503, json={"error": {"message": "unavailable"}}))
+    api = _api_with_transport(
+        monkeypatch, lambda request: httpx.Response(503, json={"error": {"message": "unavailable"}})
+    )
     try:
         with pytest.raises(httpx.HTTPStatusError):
             await api._create_response_for_file(file_id="file_one")

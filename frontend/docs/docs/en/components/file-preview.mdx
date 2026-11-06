@@ -2,7 +2,7 @@
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-This is a placeholder implementation: the tab row, header row, tab switching, copy, the preview/source switch and the ref handle work, and the file body falls back to plain text until FileViewer is wired in. The editing flow is a skeleton too — it does not yet isolate an in-flight fetch from a tab switch, nor keep the draft when a save fails; both will be handled when the real implementation replaces it.
+This is a placeholder implementation: the shell, editing flow and success notifications are in place and interactive, and the file body falls back to plain text until FileViewer is wired in. The view will be rewritten against the contract described here.
 
 ## Basic usage
 
@@ -46,7 +46,9 @@ Loading, failure and unsupported formats are not props — the component decides
 - `slots.errorFallback`
 - `slots.unsupportedFallback`
 
-Editing is internal too. The host supplies `editing.onSave`, and optionally `editing.onRequestEdit` — called before editing starts, returning the full text so a truncated preview can fetch it first. Returning `undefined` abandons the edit; a rejection shows the load-failure message.
+The host supplies asynchronous `editing.save` and optional `editing.loadContent` capabilities. `loadContent` returns the full text; `undefined` abandons the edit, and rejection shows a read error. A failed save retains the draft and shows an error. `editing.onSave` only reports a successful save; `editing.onCancel` reports a discarded draft. Saving prevents duplicate submissions and tab changes until completion.
+
+Execution capabilities and notifications are separate. Operation resolution triggers the corresponding `on…` callback; rejection does not. Missing methods hide or disable their controls, and notifications do not perform the operations. URI handling will be wired into the future FileViewer body.
 
 ## Props
 
@@ -60,38 +62,70 @@ Editing is internal too. The host supplies `editing.onSave`, and optionally `edi
 
 Shared by both kinds:
 
-| Property             | Type                         | Default   | Description                                        |
-| -------------------- | ---------------------------- | --------- | -------------------------------------------------- |
-| `key`                | `string`                     | Required  | Unique tab key.                                    |
-| `title`              | `ReactNode`                  | File name | What the tab row shows. Required for content tabs. |
-| `icon`               | `ReactNode`                  | By format | Tab icon.                                          |
-| `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.             |
-| `disabled`           | `boolean`                    | `false`   | Disables the tab.                                  |
-| `onOpenParent`       | `(path: string) => void`     | —         | Back entry on the path breadcrumb.                 |
-| `onCopyPath`         | `(path: string) => void`     | —         | Copy-path button; needs `source.path`.             |
-| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.             |
-| `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                           |
+| Property             | Type                         | Default   | Description                                                                  |
+| -------------------- | ---------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `key`                | `string`                     | Required  | Unique tab key.                                                              |
+| `title`              | `ReactNode`                  | File name | What the tab row shows. Required for content tabs.                           |
+| `icon`               | `ReactNode`                  | By format | Tab icon.                                                                    |
+| `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.                                       |
+| `disabled`           | `boolean`                    | `false`   | Disables the tab.                                                            |
+| `onOpenParent`       | `(path: string) => void`     | —         | Called after the parent directory opens successfully; not called on failure. |
+| `onCopyPath`         | `(path: string) => void`     | —         | Called after path copying succeeds.                                          |
+| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.                                       |
+| `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                                                     |
 
 File tabs add:
 
-| Property        | Type                            | Default  | Description                             |
-| --------------- | ------------------------------- | -------- | --------------------------------------- |
-| `source`        | `FilePreviewSource`             | Required | The content and file name.              |
-| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.     |
-| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only. |
-| `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.         |
-| `onCopyContent` | `(text: string) => void`        | —        | Copy-content button.                    |
-| `onDownload`    | `() => void`                    | —        | Download button.                        |
-| `onOpenUri`     | `(uri: string) => void`         | —        | Navigate to a URI in the content.       |
+| Property        | Type                            | Default  | Description                                                                                             |
+| --------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `source`        | `FilePreviewSource`             | Required | The content and file name.                                                                              |
+| `operations`    | `FilePreviewOperations`         | —        | Async `openParent(path)`, `download()` and `openUri(uri)` capabilities, each returning `Promise<void>`. |
+| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.                                                                     |
+| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only.                                                                 |
+| `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.                                                                         |
+| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.                                                                  |
+| `onDownload`    | `() => void`                    | —        | Called after the download operation succeeds; not called on failure.                                    |
+| `onOpenUri`     | `(uri: string) => void`         | —        | Called after a content resource opens successfully; not called on failure.                              |
 
 ```tsx
 import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
 
+Copying is handled by the component. File tabs with `source.path` show the copy-path button. The content-copy button is disabled when no copyable text is available. Both callbacks receive the value already copied, run only on success, and are optional; omitting them does not affect copying. Hosts do not perform another copy.
+
 ## Accessibility
 
-The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-selected`. Every icon-only control carries an accessible name through `aria-label` and a `title` tooltip. The path breadcrumb is a button only when `onOpenParent` is supplied.
+The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-selected`. Every icon-only control carries an accessible name through `aria-label` and a `title` tooltip. The path breadcrumb is enabled only when `operations.openParent` is supplied.
+
+## Class names
+
+Class names are prefixed with `ov-`. The block is `ov-file-preview`; elements use `ov-file-preview__<element>`.
+
+| Class name                         | Element      | Purpose                                |
+| ---------------------------------- | ------------ | -------------------------------------- |
+| `ov-file-preview`                  | Root         | Column layout and base typography.     |
+| `ov-file-preview__tab-row`         | Tab bar      | Scrollable row of tabs.                |
+| `ov-file-preview__tab`             | Tab          | One tab; carries `aria-selected`.      |
+| `ov-file-preview__tab-title`       | Tab label    | Truncated tab text.                    |
+| `ov-file-preview__header`          | Header       | Path row and action area.              |
+| `ov-file-preview__breadcrumb`      | Breadcrumb   | Parent navigation button.              |
+| `ov-file-preview__header-actions`  | Action area  | Switch, buttons, and extra actions.    |
+| `ov-file-preview__action`          | Icon button  | Square icon-only control.              |
+| `ov-file-preview__button`          | Button       | Secondary button.                      |
+| `ov-file-preview__button--primary` | Button       | Primary (save) button.                 |
+| `ov-file-preview__switch`          | Switch group | Edit/preview toggle container.         |
+| `ov-file-preview__switch-item`     | Switch item  | One toggle; carries `data-active`.     |
+| `ov-file-preview__body`            | Scroll body  | The scrolling content region.          |
+| `ov-file-preview__pre`             | Preview text | Read-only text content.                |
+| `ov-file-preview__textarea`        | Editor       | Editable text area.                    |
+| `ov-file-preview__state`           | State panel  | Full-height loading, empty, and error. |
+
+```css
+.my-workbench .ov-file-preview__tab {
+  max-width: 180px;
+}
+```
 
 ## Theme tokens
 
@@ -108,4 +142,4 @@ The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-se
 
 ## Implementation scope
 
-The component renders the shell and reports intent. Reading, saving, downloading and permissions belong to the host.
+The component renders the shell and reports successful operations. Reading, saving, downloading and navigation are supplied as execution capabilities by the host; success notifications do not execute them.

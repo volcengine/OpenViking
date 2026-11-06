@@ -1,6 +1,5 @@
 import type { MouseEvent } from 'react';
 
-import styles from './file-tree.module.css';
 import { Chevron, FileIcon, FolderIcon, Spinner } from './file-tree-icons.js';
 import { fillName } from './file-tree-labels.js';
 import { rowIndent, type FileTreeRowContext } from './file-tree-row-context.js';
@@ -56,7 +55,9 @@ export function FileTreeEntryRowView({
       aria-disabled={row.disabled || undefined}
       {...extraAttributes}
       {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
-      className={[styles.row, extraClassName].filter(Boolean).join(' ')}
+      className={['ov-file-tree__row', extraClassName]
+        .filter(Boolean)
+        .join(' ')}
       data-selected={isSelected || undefined}
       data-disabled={row.disabled || undefined}
       data-kind={row.kind}
@@ -72,12 +73,13 @@ export function FileTreeEntryRowView({
         <button
           type="button"
           data-role="toggle"
-          className={styles.toggle}
+          className="ov-file-tree__toggle"
           aria-label={fillName(
             row.expanded ? text.collapse : text.expand,
             row.name,
           )}
           tabIndex={-1}
+          disabled={!onToggleExpand || row.disabled || row.busy}
           onClick={(event) => {
             event.stopPropagation();
             onToggleExpand?.(row);
@@ -86,10 +88,10 @@ export function FileTreeEntryRowView({
           <Chevron expanded={Boolean(row.expanded)} />
         </button>
       ) : (
-        <span aria-hidden="true" className={styles.toggleSpacer} />
+        <span aria-hidden="true" className="ov-file-tree__toggle-spacer" />
       )}
 
-      <span className={styles.iconSlot}>
+      <span className="ov-file-tree__icon-slot">
         {isDirectory ? (
           <FolderIcon open={Boolean(row.expanded)} />
         ) : (
@@ -97,23 +99,23 @@ export function FileTreeEntryRowView({
         )}
       </span>
 
-      <span className={styles.labelGroup}>
-        <span className={styles.label} title={row.name}>
+      <span className="ov-file-tree__label-group">
+        <span className="ov-file-tree__label" title={row.name}>
           {row.name}
         </span>
         {row.description ? (
-          <span className={styles.description}>{row.description}</span>
+          <span className="ov-file-tree__description">{row.description}</span>
         ) : null}
       </span>
 
       {row.busy ? <Spinner /> : null}
 
       {row.expiresAt ? (
-        <span className={styles.expiry} title={row.expiresAt}>
+        <span className="ov-file-tree__expiry" title={row.expiresAt}>
           {onOpenRetentionSettings ? (
             <button
               type="button"
-              className={styles.expiryAction}
+              className="ov-file-tree__expiry-action"
               onClick={(event) => {
                 event.stopPropagation();
                 onOpenRetentionSettings(row.uri);
@@ -128,13 +130,15 @@ export function FileTreeEntryRowView({
       ) : null}
 
       {row.levelLabel ? (
-        <span className={styles.level}>{row.levelLabel}</span>
+        <span className="ov-file-tree__level">{row.levelLabel}</span>
       ) : null}
 
-      {dashboard ? <span className={styles.dashboard}>{dashboard}</span> : null}
+      {dashboard ? (
+        <span className="ov-file-tree__dashboard">{dashboard}</span>
+      ) : null}
 
       {tooltip && tooltipRowId === row.id ? (
-        <span role="tooltip" className={styles.tooltip}>
+        <span role="tooltip" className="ov-file-tree__tooltip">
           {tooltip}
         </span>
       ) : null}

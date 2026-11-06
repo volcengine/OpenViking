@@ -2527,7 +2527,9 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch, caplog):
+    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(
+        self, monkeypatch, caplog
+    ):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 

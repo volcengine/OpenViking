@@ -99,9 +99,7 @@ class AccountEmbeddingConfig(BaseModel):
     hybrid: Optional[AccountEmbeddingModelConfig] = RuntimeField(default=None)
     max_concurrent: Optional[int] = RuntimeField(default=None, ge=1)
     max_retries: Optional[int] = RuntimeField(default=None, ge=0)
-    circuit_breaker: Optional[AccountEmbeddingCircuitBreakerConfig] = RuntimeField(
-        default=None
-    )
+    circuit_breaker: Optional[AccountEmbeddingCircuitBreakerConfig] = RuntimeField(default=None)
     text_source: Optional[Literal["content_only", "summary_first"]] = RuntimeField(
         default=None,
         dynamic=False,
@@ -179,9 +177,7 @@ class AccountVectorDBConfig(BaseModel):
                 raise ValueError("Account Volcengine VectorDB requires volcengine configuration")
             if config.api_key:
                 if not (config.host or config.region):
-                    raise ValueError(
-                        "Account Volcengine api_key mode requires host or region"
-                    )
+                    raise ValueError("Account Volcengine api_key mode requires host or region")
             elif not (config.ak and config.sk and config.region):
                 raise ValueError(
                     "Account Volcengine VectorDB requires ak, sk and region "

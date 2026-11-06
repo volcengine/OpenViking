@@ -72,9 +72,9 @@ class QueryEmbeddingCache(dict[Any, _SharedQueryEmbedding]):
             self.pop(key, None)
 
     async def close(self) -> None:
-        pending = {
-            entry.task for entry in self.values() if not entry.task.done()
-        } | {task for task in self._pending_tasks if not task.done()}
+        pending = {entry.task for entry in self.values() if not entry.task.done()} | {
+            task for task in self._pending_tasks if not task.done()
+        }
         for task in pending:
             task.cancel()
         if pending:
@@ -168,7 +168,9 @@ async def embed_compat(
     embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
 ) -> "EmbedResult":
     from contextlib import nullcontext
+
     from openviking.observability.reporting.facts import bind_embedding_purpose
+
     with bind_embedding_purpose("search_query") if is_query else nullcontext():
         return await _embed_compat_impl(embedder, content, is_query=is_query)
 

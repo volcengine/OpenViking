@@ -44,6 +44,12 @@ finally:
 
 外部传入的 client 仍由调用方管理。通过 `url=` 创建的 client 由适配器管理。
 
+`create_openviking_tools` 的 retrieval、agent 和 admin profile 都包含
+`viking_rule_search`。传入 `task_context` 与可选的 `rule_probability_threshold`
+（默认 `0.65`），在操作或回复前检查已编译的约束。工具返回完整 Rule，不截断正文。
+需要支持 `rule_search` 的 SDK client 和提供 `POST /api/v1/rules/search` 的服务端；
+调用错误不能视为没有适用 Rule。
+
 ## 导入迁移
 
 从 v0.5.0 之后的下一个服务端版本开始，旧的 `openviking.integrations.langchain`

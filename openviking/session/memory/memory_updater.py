@@ -1060,6 +1060,7 @@ class MemoryUpdater:
         for resolved_op in applicable_upserts:
             try:
                 from openviking.observability.reporting.facts import bind_memory_type
+
                 with bind_memory_type(
                     resolved_op.memory_type,
                     task_id=getattr(resolved_op.source, "task_id", None),

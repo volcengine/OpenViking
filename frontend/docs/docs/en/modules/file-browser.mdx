@@ -1,0 +1,86 @@
+# FileBrowser
+
+Directory navigation, search and content preview as one module. The module loads its own data; the host supplies configuration, the controlled current resource, the toolbar entries and copy.
+
+The component is a placeholder: it renders the module name and a placeholder message. The props below are settled, so applications can integrate the container and wire their state now; the composite view and `useFileBrowser` follow.
+
+## Basic usage
+
+```tsx file="../../_demos/file-browser-placeholder.tsx" preview
+
+```
+
+## Scope
+
+The module covers the file tree and the file preview only. The command panel belongs to `console`.
+
+## What the module owns
+
+- Directory, search, current URI and preview loading, coordinated inside the module: clicking a directory node or a search result moves the selection and loads the preview, and switching resources drops stale requests.
+- Refreshing the affected directory, search results and preview after a save, rename or delete.
+- The layout of the search, directory and preview area.
+- The search box and refresh control in the toolbar, plus per-row state such as uploading progress, conflicts and retention settings.
+- The preview tabs. Which tabs a resource has follows from the resource itself, so the host does not supply them.
+- The search view. Search is a private view inside this module, not a published component or module: it opens from the toolbar or ⌘K, and picking a result moves the tree and loads the preview. Nothing about it is exported, because leaving the tree leaves it without a destination. `console` has its own `@` picker over the same kind of API; that is a separate view, not this one.
+
+## What the host owns
+
+- Request configuration through the Provider, overridable per module through `requestOptions`.
+- Sign-in, account scope, routing and permissions.
+- The toolbar entries: connect an agent, import resources. Compose them with `FileBrowserToolbarButton` inside `toolbarActions` so they match the module's own buttons. Entries can nest inside a popover or dropdown when a click alone is not enough.
+- Connection dialogs, import flows and onboarding. The module embeds none of them.
+
+## Toolbar entries
+
+The module renders the search box, the refresh button and the dividers. The host adds its own entries through `toolbarActions` and uses `FileBrowserToolbarButton` so the styling matches:
+
+```tsx
+import {
+  FileBrowser,
+  FileBrowserToolbarButton,
+} from '@openviking/react/modules/file-browser';
+
+<FileBrowser
+  toolbarActions={
+    <>
+      <FileBrowserToolbarButton icon={<ConnectIcon />} onClick={connect}>
+        Connect agent
+      </FileBrowserToolbarButton>
+      <FileBrowserToolbarButton icon={<UploadIcon />} onClick={openImport}>
+        Import resources
+      </FileBrowserToolbarButton>
+    </>
+  }
+/>;
+```
+
+Because `toolbarActions` is a node, an entry that needs a menu wraps its button instead of asking for another prop:
+
+```tsx
+<Popover content={<ResourceMenu />} trigger="hover">
+  <FileBrowserToolbarButton icon={<UploadIcon />}>
+    Import resources
+  </FileBrowserToolbarButton>
+</Popover>
+```
+
+Dividers between entries come from a CSS adjacent-sibling rule, so how many entries the host passes and how they nest makes no difference.
+
+## Props
+
+The module exports `FileBrowserProps` from the subpath and the root entry. `FileBrowserToolbarButton`, `FileBrowserToolbarButtonProps` and `FileBrowserLabels` come from the subpath only.
+
+| Property         | Type                            | Default | Description                                                                                                                                                           |
+| ---------------- | ------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestOptions` | `OvRequestOptions`              | —       | Request configuration override, applied field by field over the nearest Provider.                                                                                     |
+| `uri`            | `string`                        | —       | The controlled current resource URI. When given, the host owns the current resource and the module only reports switch intent.                                        |
+| `defaultUri`     | `string`                        | —       | Initial resource URI when uncontrolled. Nothing is selected when omitted.                                                                                             |
+| `toolbarActions` | `ReactNode`                     | —       | Host entries on the left of the toolbar, composed with `FileBrowserToolbarButton`. Search, refresh and the dividers between entries stay with the module.             |
+| `onUriChange`    | `(uri: string \| null) => void` | —       | Called after the current resource changes; `null` when the selection is cleared.                                                                                      |
+| `labels`         | `FileBrowserLabels`             | —       | Replaceable copy: `title`, `description`, `searchPlaceholder`, `searchEmpty`, `refresh`, `empty`, `error` and `retry`. An omitted label inherits its English default. |
+| `className`      | `string`                        | —       | Additional container class.                                                                                                                                           |
+| `style`          | `CSSProperties`                 | —       | Container style overrides.                                                                                                                                            |
+
+Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
+
+The placeholder component itself consumes `className`, `style`, `labels.title` and `labels.description` only.

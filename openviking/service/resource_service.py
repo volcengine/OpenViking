@@ -805,8 +805,13 @@ class ResourceService:
 
             async def dispatch() -> str:
                 nonlocal enqueued
-                with bind_task_context(task.task_id, task_account_id, task_user_id,
-                                       task_type=task.task_type, mode=task.meta.get("mode")):
+                with bind_task_context(
+                    task.task_id,
+                    task_account_id,
+                    task_user_id,
+                    task_type=task.task_type,
+                    mode=task.meta.get("mode"),
+                ):
                     result = await get_queue_manager().enqueue(queue_name, msg.to_dict())
                 enqueued = True
                 if on_enqueued is not None:

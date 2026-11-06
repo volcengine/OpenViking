@@ -1748,12 +1748,14 @@ impl HttpClient {
         account_id: &str,
         enabled: bool,
     ) -> Result<Value> {
-        let path = format!("/api/v1/admin/accounts/{}/settings", account_id);
+        let path = format!("/api/v1/admin/accounts/{}/configuration", account_id);
         self.patch(
             &path,
             &serde_json::json!({
-                "acl": {
-                    "enabled": enabled,
+                "settings": {
+                    "acl": {
+                        "enabled": enabled,
+                    }
                 }
             }),
             &[],
@@ -3230,8 +3232,8 @@ mod tests {
             .await
             .expect("set account settings should succeed");
         let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/settings "));
-        assert!(request.contains(r#""acl":{"enabled":true}"#));
+        assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/configuration "));
+        assert!(request.contains(r#""settings":{"acl":{"enabled":true}}"#));
     }
 
     #[test]

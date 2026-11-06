@@ -300,6 +300,8 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     import base64
     from datetime import datetime, timedelta
 
+    from openviking.observability.reporting import facts
+    from openviking.observability.reporting import runtime as reporting_runtime
     from openviking.server.auth import get_request_context
     from openviking.server.identity import ResolvedIdentity
     from openviking.service.compile_scheduler import (
@@ -312,13 +314,17 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     from openviking.storage.acl import AclMode
     from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 
-    from openviking.observability.reporting import facts, runtime as reporting_runtime
-
     compile_metric_events = []
     monkeypatch.setattr(reporting_runtime, "is_reporting_enabled", lambda: True)
-    monkeypatch.setattr(facts, "try_publish_event", lambda name, payload:
-                        compile_metric_events.append(dict(payload))
-                        if payload.get("operation") == "compile_commit" else None)
+    monkeypatch.setattr(
+        facts,
+        "try_publish_event",
+        lambda name, payload: (
+            compile_metric_events.append(dict(payload))
+            if payload.get("operation") == "compile_commit"
+            else None
+        ),
+    )
 
     ctx = RequestContext(
         user=service.user, role=Role.USER, group_ids=("engineering",), api_key="test-compile-key"

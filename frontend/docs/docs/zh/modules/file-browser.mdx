@@ -1,0 +1,86 @@
+# FileBrowser 文件浏览
+
+目录导航、搜索与内容预览作为一个模块。模块自己取数，宿主提供配置、受控的当前资源、工具栏入口与文案。
+
+组件当前是占位实现：只展示模块名称与占位文案。下面的 props 已定型，接入方可以先完成容器与状态接入；组合视图与 `useFileBrowser` 随后补充。
+
+## 基础用法
+
+```tsx file="../../_demos/file-browser-placeholder.tsx" preview
+
+```
+
+## 范围
+
+模块只覆盖文件树与文件预览两块。命令面板属于 `console`。
+
+## 模块负责什么
+
+- 目录、搜索、当前 URI 与预览加载在模块内协调：点击目录节点或搜索结果即移动选中并加载预览，切换资源时丢弃过期请求。
+- 保存、重命名或删除后刷新受影响的目录、搜索结果与预览。
+- 搜索、目录与预览区域的布局。
+- 工具栏里的搜索框与刷新按钮，以及行级状态，例如上传进度、冲突标记与保留策略设置。
+- 预览页签。某个资源有哪些页签由资源本身决定，宿主不需要提供。
+- 搜索视图。搜索是本模块内部的私有视图，不是公开的组件或模块：从工具栏或 ⌘K 打开，选中结果后移动目录树并加载预览。它不对外导出——离开目录树，搜索就没有去处。`console` 的 `@` 引用是基于同类接口的另一个视图，不是这一个。
+
+## 宿主负责什么
+
+- 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
+- 登录、账号作用域、路由与权限。
+- 工具栏入口，例如连接 Agent、导入资源。用 `FileBrowserToolbarButton` 在 `toolbarActions` 里组合，保证与模块内置按钮外观一致。只靠点击不够时，入口可以包在气泡或下拉里。
+- 接入弹窗、导入流程与引导。模块都不内置。
+
+## 工具栏入口
+
+搜索框、刷新按钮与分隔线由模块渲染。宿主通过 `toolbarActions` 添加自己的入口，用 `FileBrowserToolbarButton` 保证样式一致：
+
+```tsx
+import {
+  FileBrowser,
+  FileBrowserToolbarButton,
+} from '@openviking/react/modules/file-browser';
+
+<FileBrowser
+  toolbarActions={
+    <>
+      <FileBrowserToolbarButton icon={<ConnectIcon />} onClick={connect}>
+        连接 Agent
+      </FileBrowserToolbarButton>
+      <FileBrowserToolbarButton icon={<UploadIcon />} onClick={openImport}>
+        导入资源
+      </FileBrowserToolbarButton>
+    </>
+  }
+/>;
+```
+
+`toolbarActions` 是节点，所以需要菜单的入口直接把自己的按钮包起来，不需要再加字段：
+
+```tsx
+<Popover content={<ResourceMenu />} trigger="hover">
+  <FileBrowserToolbarButton icon={<UploadIcon />}>
+    导入资源
+  </FileBrowserToolbarButton>
+</Popover>
+```
+
+入口之间的分隔线由 CSS 相邻兄弟选择器处理，宿主传几个、怎么嵌套都不影响。
+
+## 属性
+
+模块从子路径和根入口导出 `FileBrowserProps`，`FileBrowserToolbarButton`、`FileBrowserToolbarButtonProps` 与 `FileBrowserLabels` 只从子路径导出。
+
+| 属性             | 类型                            | 默认值 | 说明                                                                                                                                   |
+| ---------------- | ------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestOptions` | `OvRequestOptions`              | —      | 请求配置覆盖，逐字段覆盖最近的 Provider。                                                                                              |
+| `uri`            | `string`                        | —      | 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。                                                                     |
+| `defaultUri`     | `string`                        | —      | 非受控时的初始资源 URI。省略时不选中任何资源。                                                                                         |
+| `toolbarActions` | `ReactNode`                     | —      | 工具栏左侧的宿主入口，用 `FileBrowserToolbarButton` 组合。搜索、刷新与入口之间的分隔线由模块负责。                                     |
+| `onUriChange`    | `(uri: string \| null) => void` | —      | 当前资源变化后触发；清除选中时传入 `null`。                                                                                            |
+| `labels`         | `FileBrowserLabels`             | —      | 可替换文案：`title`、`description`、`searchPlaceholder`、`searchEmpty`、`refresh`、`empty`、`error`、`retry`。未提供时沿用英文默认值。 |
+| `className`      | `string`                        | —      | 容器附加类名。                                                                                                                         |
+| `style`          | `CSSProperties`                 | —      | 容器样式覆盖。                                                                                                                         |
+
+文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
+
+占位组件当前只消费 `className`、`style`、`labels.title` 与 `labels.description`。

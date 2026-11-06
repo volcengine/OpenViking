@@ -1430,10 +1430,14 @@ class CompileLifecycle:
                                 if not run_meta.get("target_committed_at"):
                                     run_meta["target_committed_at"] = int(time.time() * 1000)
                                     await self._store.put_operation(account_id, target_to, run)
-                                from openviking.observability.reporting.facts import emit_compile_outputs
+                                from openviking.observability.reporting.facts import (
+                                    emit_compile_outputs,
+                                )
 
                                 emit_compile_outputs(
-                                    task, changes, snapshot_id=head,
+                                    task,
+                                    changes,
+                                    snapshot_id=head,
                                     committed_at=run_meta["target_committed_at"],
                                 )
                                 if (

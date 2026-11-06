@@ -579,6 +579,13 @@ to read Kafka connection, authentication and topic settings from an external JSO
 file (`NACOS_CONFIG_FILE`) or the configured Nacos service. Reporting is disabled
 by default and export failures do not interrupt business requests.
 
+The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
+integer (default `1024`). Full queues, exhausted delivery retries and process
+termination can lose events. Delivery failures and dropped events produce sampled
+warnings containing counts only. This exporter is suitable for best-effort analytics;
+it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
+drain the queue before stopping the process.
+
 Deployments may bind an outer account and instance with `OV_METRICS_ACCOUNT_ID`
 and `OV_RESOURCE_ID`; original space and member identities remain in
 `ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`

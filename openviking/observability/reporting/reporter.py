@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
 import time
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_count(message: str, count: int) -> None:
+    """Keep failures visible without logging every event during an outage."""
+    if count & (count - 1) == 0:
+        logger.warning("%s (count=%d)", message, count)
 
 
 class KafkaEventReporter:
     def __init__(self, config: dict, *, producer=None):
         kafka = config.get("kafka", {})
         options = config.get("telemetry", {})
+        capacity = int(options.get("queue_capacity", 1024))
+        if capacity <= 0:
+            raise ValueError("telemetry.queue_capacity must be a positive integer")
         self.topic = kafka.get("topic", "")
         if not self.topic:
             raise ValueError("kafka.topic is required")
@@ -21,19 +33,27 @@ class KafkaEventReporter:
             properties = kafka.get("properties", {})
             kwargs = {
                 "bootstrap_servers": kafka["bootstrap_servers"].split(","),
-                "security_protocol": kafka.get("security_protocol", properties.get("security.protocol", "PLAINTEXT")),
-                "acks": "all", "retries": 2, "max_block_ms": 5000,
-                "request_timeout_ms": 10000, "delivery_timeout_ms": 20000,
+                "security_protocol": kafka.get(
+                    "security_protocol", properties.get("security.protocol", "PLAINTEXT")
+                ),
+                "acks": "all",
+                "retries": 2,
+                "max_block_ms": 5000,
+                "request_timeout_ms": 10000,
+                "delivery_timeout_ms": 20000,
                 "allow_auto_create_topics": False,
             }
             if kwargs["security_protocol"].startswith("SASL_"):
-                kwargs.update(sasl_mechanism=properties.get("sasl.mechanism", "PLAIN"),
-                              sasl_plain_username=kafka["username"], sasl_plain_password=kafka["password"])
+                kwargs.update(
+                    sasl_mechanism=properties.get("sasl.mechanism", "PLAIN"),
+                    sasl_plain_username=kafka["username"],
+                    sasl_plain_password=kafka["password"],
+                )
             if kafka.get("proxy_url"):
                 kwargs["proxy_url"] = kafka["proxy_url"]
             self._producer_factory = lambda: KafkaProducer(**kwargs)
         self.producer = producer
-        self.queue = queue.Queue(maxsize=int(options.get("queue_capacity", 1024)))
+        self.queue: queue.Queue[tuple[bytes, bytes]] = queue.Queue(maxsize=capacity)
         self.sent = self.failed = self.dropped = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -42,10 +62,14 @@ class KafkaEventReporter:
 
     def report(self, event: dict) -> bool:
         try:
-            payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
+            payload = json.dumps(
+                event, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode()
             if len(payload) > 1024 * 1024:
                 raise ValueError("event too large")
-            key = "|".join(str(event.get(k) or "") for k in ("account_id", "resource_id", "ov_account_id")).encode()
+            key = "|".join(
+                str(event.get(k) or "") for k in ("account_id", "resource_id", "ov_account_id")
+            ).encode()
             with self._lock:
                 if self._closed:
                     raise ValueError("reporter closed")
@@ -54,6 +78,8 @@ class KafkaEventReporter:
         except (ValueError, TypeError, queue.Full):
             with self._lock:
                 self.dropped += 1
+                dropped = self.dropped
+            _warn_count("Event exporter dropped events", dropped)
             return False
 
     def _run(self):
@@ -77,6 +103,8 @@ class KafkaEventReporter:
                 except Exception:
                     with self._lock:
                         self.failed += 1
+                        failed = self.failed
+                    _warn_count("Event exporter delivery failed", failed)
                 finally:
                     self.queue.task_done()
         finally:

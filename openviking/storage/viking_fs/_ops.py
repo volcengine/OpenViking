@@ -12,12 +12,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
-from openviking.observability.reporting.facts import emit_file_change, file_exists_before
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
     uri_parts,
 )
+from openviking.observability.reporting.facts import emit_file_change, file_exists_before
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -404,7 +404,7 @@ class _OpsMixin:
                     )
                 raise
             # Add estimated_deleted_count to the result
-            emit_file_change(target_uri, self._ctx_or_default(ctx), "deleted", is_dir=is_dir)
+            emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:
@@ -937,7 +937,9 @@ class _OpsMixin:
                 "directory" if is_dir else "file",
                 is_dir,
             )
-            emit_file_change(new_uri, ctx, "modified", old_uri=old_uri, is_dir=is_dir, operation="move")
+            emit_file_change(
+                new_uri, ctx, "modified", old_uri=old_uri, is_dir=is_dir, operation="move"
+            )
             return result
         finally:
             await self._async_agfs.pathlock_release(lease)
@@ -2163,7 +2165,8 @@ class _OpsMixin:
             raise
         if isinstance(stat, dict) and stat.get("isDir", False):
             raise InvalidArgumentError(
-                f"Cannot read directory as file: {uri}",
+                f"Directory URI is not readable as a file: {uri}. "
+                "List it first, then read a file URI.",
                 details={"resource": uri, "expected": "file", "actual": "directory"},
             )
         if max_bytes is not None:
@@ -2268,7 +2271,9 @@ class _OpsMixin:
                 final_content,
                 fs_ctx=fs_ctx,
             )
-            emit_file_change(uri, ctx, "modified" if existed else "added" if existed is False else None)
+            emit_file_change(
+                uri, ctx, "modified" if existed else "added" if existed is False else None
+            )
             if getattr(self, "_post_write_hook", None) is not None:
                 written_at_ms = time.time_ns() // 1_000_000
 

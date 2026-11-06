@@ -2,7 +2,7 @@ import type { MouseEvent } from 'react';
 
 import { CopyIcon } from './file-preview-icons.js';
 import { readCopyableText } from './file-preview-labels.js';
-import styles from './file-preview.module.css';
+import { performPreviewOperation } from './file-preview-operations.js';
 import type {
   FilePreviewFileTab,
   FilePreviewLabels,
@@ -15,10 +15,21 @@ export interface FilePreviewHeaderProps {
   text: Required<FilePreviewLabels>;
   viewMode: 'preview' | 'source';
   editing: boolean;
+  loadingEdit: boolean;
+  saving: boolean;
   onViewModeChange: (mode: 'preview' | 'source') => void;
   onEditStart: () => void;
   onEditCancel: () => void;
   onEditSave: () => void;
+}
+
+async function copyText(value: string, onCopied?: (text: string) => void) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    return;
+  }
+  onCopied?.(value);
 }
 
 /** 内容区标题行：路径面包屑、复制、视图切换、编辑与页签级插槽。 */
@@ -28,6 +39,8 @@ export function FilePreviewHeader({
   text,
   viewMode,
   editing,
+  loadingEdit,
+  saving,
   onViewModeChange,
   onEditStart,
   onEditCancel,
@@ -38,48 +51,53 @@ export function FilePreviewHeader({
   const path = fileTab?.source.path;
 
   return (
-    <div className={styles.header}>
-      <div className={styles.pathRow}>
+    <div className="ov-file-preview__header">
+      <div className="ov-file-preview__path-row">
         {path ? (
           <button
             type="button"
-            className={styles.breadcrumb}
+            className="ov-file-preview__breadcrumb"
             onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
-              fileTab.onOpenParent?.(path);
+              void performPreviewOperation(
+                fileTab.operations?.openParent
+                  ? () => fileTab.operations!.openParent!(path)
+                  : undefined,
+                () => fileTab.onOpenParent?.(path),
+              );
             }}
-            disabled={!fileTab.onOpenParent}
+            disabled={!fileTab.operations?.openParent || saving}
             title={path}
           >
             {path}
           </button>
         ) : (
-          <span className={styles.breadcrumb}>{activeTab.key}</span>
+          <span className="ov-file-preview__breadcrumb">{activeTab.key}</span>
         )}
 
-        {fileTab?.onCopyPath && path ? (
+        {path ? (
           <button
             type="button"
-            className={styles.action}
+            className="ov-file-preview__action"
             aria-label={text.copyPath}
             title={text.copyPath}
-            onClick={() => fileTab.onCopyPath?.(path)}
+            onClick={() => void copyText(path, fileTab.onCopyPath)}
           >
             <CopyIcon />
           </button>
         ) : null}
 
         {titleExtra ? (
-          <span className={styles.titleExtra}>{titleExtra}</span>
+          <span className="ov-file-preview__title-extra">{titleExtra}</span>
         ) : null}
       </div>
 
-      <div className={styles.headerActions}>
+      <div className="ov-file-preview__header-actions">
         {fileTab && fileTab.showViewModeSwitch !== false ? (
-          <span className={styles.switch}>
+          <span className="ov-file-preview__switch">
             <button
               type="button"
-              className={styles.switchItem}
+              className="ov-file-preview__switch-item"
               data-active={viewMode === 'preview' || undefined}
               onClick={() => onViewModeChange('preview')}
             >
@@ -87,7 +105,7 @@ export function FilePreviewHeader({
             </button>
             <button
               type="button"
-              className={styles.switchItem}
+              className="ov-file-preview__switch-item"
               data-active={viewMode === 'source' || undefined}
               onClick={() => onViewModeChange('source')}
             >
@@ -96,10 +114,10 @@ export function FilePreviewHeader({
           </span>
         ) : null}
 
-        {fileTab?.onCopyContent ? (
+        {fileTab ? (
           <button
             type="button"
-            className={styles.action}
+            className="ov-file-preview__action"
             aria-label={text.copyContent}
             title={
               readCopyableText(fileTab)
@@ -109,7 +127,7 @@ export function FilePreviewHeader({
             disabled={!readCopyableText(fileTab)}
             onClick={() => {
               const value = readCopyableText(fileTab);
-              if (value) fileTab.onCopyContent?.(value);
+              if (value) void copyText(value, fileTab.onCopyContent);
             }}
           >
             <CopyIcon />
@@ -117,7 +135,17 @@ export function FilePreviewHeader({
         ) : null}
 
         {fileTab?.editing && !editing ? (
-          <button type="button" className={styles.button} onClick={onEditStart}>
+          <button
+            type="button"
+            className="ov-file-preview__button"
+            disabled={
+              loadingEdit ||
+              (!fileTab.editing.loadContent &&
+                fileTab.source.content === undefined &&
+                !fileTab.source.file)
+            }
+            onClick={onEditStart}
+          >
             {text.edit}
           </button>
         ) : null}
@@ -126,33 +154,42 @@ export function FilePreviewHeader({
           <>
             <button
               type="button"
-              className={styles.button}
+              className="ov-file-preview__button"
               onClick={onEditCancel}
+              disabled={saving}
             >
               {text.cancel}
             </button>
             <button
               type="button"
-              className={styles.buttonPrimary}
+              className="ov-file-preview__button--primary"
               onClick={onEditSave}
+              disabled={saving}
             >
               {text.save}
             </button>
           </>
         ) : null}
 
-        {fileTab?.onDownload ? (
+        {fileTab?.operations?.download ? (
           <button
             type="button"
-            className={styles.button}
-            onClick={() => fileTab.onDownload?.()}
+            className="ov-file-preview__button"
+            onClick={() => {
+              void performPreviewOperation(
+                fileTab.operations?.download,
+                fileTab.onDownload,
+              );
+            }}
           >
             {text.download}
           </button>
         ) : null}
 
         {headerActions ? (
-          <span className={styles.extraActions}>{headerActions}</span>
+          <span className="ov-file-preview__extra-actions">
+            {headerActions}
+          </span>
         ) : null}
       </div>
     </div>

@@ -584,12 +584,17 @@ class UnderstandingAPI(BaseParser):
             model_name = str(result.get("model") or "unknown")
             return result
         finally:
-            try_publish_event("understanding_call", {
-                "provider": "understanding_api", "model_name": model_name,
-                "usage_purpose": "resource_parse", "status": status,
-                "error_code": "OK" if status == "ok" else "ERROR",
-                "duration_seconds": time.monotonic() - started,
-            })
+            try_publish_event(
+                "understanding_call",
+                {
+                    "provider": "understanding_api",
+                    "model_name": model_name,
+                    "usage_purpose": "resource_parse",
+                    "status": status,
+                    "error_code": "OK" if status == "ok" else "ERROR",
+                    "duration_seconds": time.monotonic() - started,
+                },
+            )
 
     @staticmethod
     def _is_feishu_url(source: str) -> bool:

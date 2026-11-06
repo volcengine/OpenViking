@@ -1,8 +1,8 @@
 # 快速开始
 
-OpenViking UI 是 OpenViking 仓库中的 React 组件库 workspace。当前版本提供构建和文档基础设施，并以 `StatusBadge` 作为示例模块。
+OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
 
-该包目前为私有包，尚未发布到 npm。文件树、预览和 TUI 尚未迁入。
+包提供 FileTree、FilePreview、Tui、ScopeSwitcher、AgentConnect 五个占位视图组件、五种文件类型图标，以及四个业务模块占位组件。当前范围见[组件概览](../components/)和[模块概览](../modules/)；业务 Hook 尚未实现。
 
 ## 本地运行
 
@@ -14,82 +14,82 @@ npm ci
 npm run dev
 ```
 
-打开 Rspress 输出的 `/ui/` 地址。使用顶部语言菜单切换为简体中文，或直接访问 `/ui/zh/`。本地和生产环境使用相同的部署前缀。
+打开 Rspress 输出的 `/ui/` 地址。英文使用 `/ui/`，简体中文使用 `/ui/zh/`；顶部语言菜单支持在对应页面间切换。
 
-## 使用示例
+workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档示例通过公开导出使用构建产物，不使用源码别名。React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
 
-在此 workspace 内，从公开包入口导入组件及样式：
+## 组织应用代码
+
+- `packages/react/src/components/`：可复用视图，通过 props 接收处理后的数据，通过回调表达用户意图。
+- `packages/react/src/modules/`：四个可导入的占位组件，业务 Hook 与组合交互后续迁入。
+- `packages/react/src/hooks/` 与 `utils/`：包内共享逻辑，没有公开子路径。
+- `docs/docs/en/` 与 `docs/docs/zh/`：对应的双语文档页面；共用的可运行示例放在 `docs/docs/_demos/`。
+
+应用专属流程与认证留在应用层；模块 Hook 通过共享 Client 加载数据。组件不获取业务数据，也不依赖应用路由。
+
+## 公开入口
+
+根入口 `@openviking/react` 当前导出 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 与四个业务模块占位组件及其主 Props 类型；`FilePreview` 只从 `components/file-preview` 子路径导出，因为它的类型依赖可选的 `@ark-design/ui`。行类型、选项类型、句柄与文案包等子类型一律从子路径导入。`@openviking/react/icons` 提供五种文件类型图标。
+
+没有 `components` 或 `modules` 分类聚合 JavaScript 入口。业务占位组件使用独立的 `modules/<模块>` 入口：
 
 ```tsx
-import { StatusBadge } from '@openviking/react';
-import '@openviking/react/style.css';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
 
-export default function Example() {
-  return <StatusBadge status="ready">已连接</StatusBadge>;
+<FileBrowser />;
+```
+
+四个模块的 props 已定型——请求配置、受控状态、回调、插槽与文案——但占位组件本体仍只消费 `className`、`style` 与一个文案字段，且均无需 Provider。可运行示例与完整属性表见[业务模块](../modules/)。
+
+业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口分别导出 Hook 和组合视图，接入方可只复用 Hook 并自行组装 UI。认证、账号作用域、路由、权限及完整页面流程由宿主负责。业务 Hook 及跨模块公共 Hook 当前尚无实现或导出。
+
+模块规划聚焦个人终端：`file-browser` 将目录、搜索和预览作为一个整体，统一维护资源选择、结果定位、内容加载与刷新联动；宿主可按需受控指定当前资源。`console` 将对话视图与 TUI 作为一个交互面板，内部协调模式切换、工具栏和公共上下文，各自保留会话与命令状态。Agent 接入、任务管理和当前 User 的用量统计分别接入。宿主负责模块间布局、导航与联动；产品引导、资源与 Skill 导入流程及同步配置由宿主负责，经验看板和会话内容通过文件浏览模块的预览扩展接入，管理后台不在此范围内。这些交互仍为规划，当前模块组件仅展示占位内容。
+
+请求配置通过 `@openviking/react/client` 的 `OpenVikingProvider` 下发：`baseURL` 与身份字段（`apiKey`、`accountId`、`userId`、`resourceId`），请求头由 Client 组装。请求客户端已作为 `@openviking/react/client` 子路径落地：基于 `fetch` 的 `createOvClient`，以及 `OvRequestOptions`、`OvClient` 与 `OvClientError`。模块和独立 Hook 可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。Provider 已实现并导出；模块 Hook 尚未实现。
+
+## 样式
+
+样式使用 `ov-` 前缀的稳定类名，变量使用 `--ov-ui-` 前缀，不引入全局 reset。JavaScript 导入不会自动加载 CSS；按需选择整包、分类集合或独立样式：
+
+```ts
+import '@openviking/react/style.css';
+// 也可选择 @openviking/react/components/style.css
+// 或 @openviking/react/modules/style.css。
+// 独立入口：@openviking/react/<分类>/<模块>/style.css。
+```
+
+Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。后续单独使用 Hook 无需 CSS。
+
+可以在容器元素上调整主题变量，也可以直接指定具体的组件类名：
+
+```css
+.my-workbench {
+  --ov-ui-radius: 4px;
+  --ov-ui-row-hover: rgb(0 0 0 / 6%);
+}
+
+.my-workbench .ov-file-tree__row {
+  height: 32px;
 }
 ```
 
-React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
-
-官方 workspace 开发插件会在文档服务器启动前运行组件库的 Rslib watch。开发与生产示例都通过公开包入口消费构建产物，验证应用将使用的 JavaScript 和样式。Rslib 将 ESM JavaScript、TypeScript 类型声明和 `style.css` 输出到 `packages/react/dist/`；公开样式入口仍为 `@openviking/react/style.css`。
-
 ## 构建与检查
+
+在 `frontend/` 中执行：
 
 ```bash
 npm run lint
-npm run lint:fix
 npm run typecheck
+npm test
 npm run build
 npm run preview
 ```
 
-静态站点输出到 `frontend/docs/doc_build/`。也可以通过 `npm run build:lib` 单独构建组件库。检查命令会先构建组件库，让示例能够解析其声明。`npm run lint` 通过 Rslint 检查代码规则与类型，并使用 Prettier 检查格式。`npm run lint:fix` 应用可用的 lint 修复并格式化文件。`npm run typecheck` 使用 TypeScript 的 `tsc --noEmit` 检查组件库、构建配置和文档项目，不运行格式检查和 lint 规则。TypeScript 也用于生成组件库的类型声明。
+`lint` 先构建组件库，再通过 Rslint 检查代码规则与类型，并使用 Prettier 检查格式。`typecheck` 检查组件库、构建配置与文档 TypeScript 项目。`test` 构建组件库并验证公开包入口。`build` 生成组件库和静态文档，站点输出到 `docs/doc_build/`。
 
-在 `--` 后传入文件、目录或加引号的 glob，即可限定格式检查和 lint 规则的目标。不传参数时，`lint` 和 `lint:fix` 检查整个前端 workspace。类型检查始终覆盖配置的完整 TypeScript 项目，即使 lint 指定了文件。类型错误需要手动修正。
-
-JavaScript 和 TypeScript 文件（含 JSX、TSX）每个文件最多 200 行，不计空行和纯注释行，超出时 lint 报错。
-
-```bash
-npm run lint -- packages/react/src/index.ts
-npm run lint -- packages/react/src/index.ts docs/rspress.config.ts
-npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
-```
-
-## 公开入口
-
-从 `@openviking/react` 或 `@openviking/react/components/<模块>` 导入已实现能力。不提供 `components`、`pages` 分类聚合 JS 入口。原 `/tree`、`/preview`、`/console`、`/tui`、`/viking-bot` 路径已替换为分层组件路径。
-
-目前预留 `file-tree`、`file-preview`、`tui`、`viking-bot`、`scope-switcher`、`agent-connect`、`search` 七个业务模块，其中前六个导出 props 类型与占位组件；`search` 目前只导出占位组件，props 契约仍在定稿中。页面及公共 Hook 尚无实现或导出，首个页面暂未定义。
-
-## 样式
-
-按需选择整包、组件集合或单组件样式，各入口可独立使用，JS 不自动加载 CSS。业务占位模块目前提供空样式文件。
-
-```tsx
-import { StatusBadge } from '@openviking/react/components/status-badge';
-import '@openviking/react/components/status-badge/style.css';
-// 也可选择 @openviking/react/components/style.css 或 @openviking/react/style.css
-```
-
-页面实现后再提供 `pages/style.css` 和 `pages/<页面>/style.css`，单页面样式包含所需组件样式；当前尚无页面 CSS 导出。
-
-模块通过 CSS Modules 隔离样式，不依赖 Tailwind、Arco 或全局 reset。可以在容器元素上覆盖主题颜色：
-
-```css
-.my-workbench {
-  --ov-ui-status-ready: #187347;
-  --ov-ui-status-processing: #2563c5;
-  --ov-ui-status-error: #c43838;
-  --ov-ui-radius: 6px;
-}
-```
-
-文档提供亮色与暗色主题下的示例。应用需根据自身背景选择合适的颜色。
+在 `npm run lint --` 后传入文件或加引号的 glob，可限定格式检查和 lint 的目标；类型检查仍覆盖配置的完整项目。JavaScript 和 TypeScript 文件最多 200 行，不计空行和纯注释行。
 
 ## 部署
 
-`frontend/` 下的变更会触发 UI 检查工作流。在 `main` 分支上，现有产品文档部署流程会构建 UI 站点，并将其放入同一产物或存储桶的 `/ui/` 路径。
-
-GitHub Pages 发布完整站点产物，因此部署前会合并组件站与产品文档。TOS 部署复用仓库现有凭证。npm 发布属于后续独立步骤。
-
-使用方式与交互示例见 [StatusBadge 状态徽标](../components/status-badge)。
+`frontend/` 下的变更触发 UI 检查。在 `main` 上，现有产品文档部署会将 UI 站点合并到同一完整产物或存储桶的 `/ui/` 路径。npm 发布使用独立的标签触发流程，本地构建与测试不会发布包。

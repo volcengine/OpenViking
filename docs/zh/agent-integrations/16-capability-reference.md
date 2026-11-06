@@ -24,7 +24,7 @@
 
 ### 可调用工具
 
-“服务端 MCP 工具”指服务端 `tools/list` 返回的工具：当前服务端有 21 个，列在[服务端 MCP 工具](#服务端-mcp-工具)。
+“服务端 MCP 工具”指服务端 `tools/list` 返回的工具：当前服务端有 22 个，列在[服务端 MCP 工具](#服务端-mcp-工具)。
 
 | 集成 | 接入方式 | Agent 可调用的工具 |
 |---|---|---|
@@ -38,8 +38,8 @@
 | [OpenCode](#opencode) | npm 插件，自动添加 MCP 条目 | 服务端 MCP 工具，名为 `openviking_<tool>` |
 | [DSH](#dsh) | 同进程 Cordis 插件 + MCP 代理 | 服务端 MCP 工具，名为 `mcp__openviking__<tool>` |
 | [pi](#pi) | 原生扩展，内置 MCP 客户端 | 服务端 MCP 工具；MCP 握手成功后注册为 `openviking_<tool>` |
-| [OpenClaw](#openclaw) | context-engine 插件 | 15 个原生工具，默认启用 14 个 |
-| [Hermes](#hermes) | Hermes memory provider | 6 个原生 `viking_*` 工具 |
+| [OpenClaw](#openclaw) | context-engine 插件 | 16 个原生工具，默认启用 15 个 |
+| [Hermes](#hermes) | Hermes memory provider | 更新后的外部插件有 7 个原生 `viking_*` 工具；旧版内置 provider 有 6 个 |
 | [MCP 客户端、Agent Plugins](#其他集成) | 仅 MCP | 服务端 MCP 工具 |
 | [ov CLI](#ov-cli) | 命令行客户端 | 每个操作都是显式命令，不经过 Agent |
 
@@ -83,7 +83,7 @@
 
 | 分组 | 工具 |
 |---|---|
-| 检索与浏览 | `find`、`search`、`read`、`download`、`list`、`tree`、`grep`、`glob` |
+| 检索与浏览 | `find`、`search`、`rule_search`、`read`、`download`、`list`、`tree`、`grep`、`glob` |
 | 写入 | `remember`、`write`、`edit`、`add_resource`、`add_skill` |
 | 删除 | `forget` |
 | 监听资源 | `list_watches`、`cancel_watch`（商业版暂不支持） |
@@ -107,6 +107,34 @@
 - **pi** 只在以下条件都满足时注册工具：会话未被 bypass、健康检查通过、OpenViking 会话存在、`/mcp` 握手返回了工具列表。握手失败时，本次会话没有 OpenViking 工具，但召回、同步和 takeover 照常进行，后续轮次会重试握手。`mcpEnabled: false` 会关闭这条桥接。root API key 访问 `/mcp` 会得到 403，所以凭据链最终落到 `ov.conf` 的 `server.root_api_key` 时，会话里没有工具。
 - **Codex** 只把 `.mcp.json` 的 `env_vars` 中列出的环境变量传给 MCP 服务。
 
+### 各 Agent 的 Rule 检索
+
+Rule Search 是执行受约束的操作或回复前，由模型按需调用的只读检查。
+`task_context` 应包含用户目标、计划操作与相关事实；
+`rule_probability_threshold` 默认 `0.65`。返回结果保留完整 Rule。
+调用方仍需逐条检查 `applies_when`、`exception` 和 `content`，并遵守所有适用 Rule。
+工具不可用或请求失败，不代表没有适用 Rule。
+
+| 集成 | 注册的工具名 |
+|---|---|
+| Claude Code、Codex、TraeCode CLI、Cursor、TRAE/CN、ZCode、Kimi Code、CodeBuddy、Agent Plugins、其他 MCP 客户端 | 服务端 `rule_search`，带宿主的 MCP 命名空间 |
+| DSH / Desktop | `mcp__openviking__rule_search` |
+| OpenCode、pi、VikingBot | `openviking_rule_search` |
+| VikingBot 通过 MCP | `mcp_<server_name>_rule_search` |
+| Microsoft Agent Framework 通过 MCP | 动态发现的 `rule_search`，可带配置的前缀 |
+| OpenClaw、Open WebUI | `ov_rule_search` |
+| Hermes 外部插件、LangChain / LangGraph | `viking_rule_search` |
+| Magpie | `magpie-plugin_rule_search`，源码安装使用目录名前缀 |
+
+先升级到会发布 `rule_search` 的服务端版本，再重连 MCP 客户端。
+使用独立 REST 工具的接入端需要升级插件。共享 `openviking-rule-search` skill 随
+Claude Code、Codex/TraeCode CLI、Cursor、CodeBuddy、OpenCode、DSH、pi、
+OpenClaw 和 Agent Plugins 分发；没有附带 skill 的宿主仍可发现工具。
+沿用现有 MCP 开关与工具白名单。新增的是按需查询入口，没有增加每轮自动检查或强制拦截 hook。
+
+Hermes 的 catalog 安装固定在指定 commit，需要更新 catalog pin 才能收到新插件；
+旧版内置 provider 保留原工具集。
+
 ### OpenClaw 工具
 
 OpenClaw 注册自己的工具，不转发 MCP 工具。
@@ -114,6 +142,7 @@ OpenClaw 注册自己的工具，不转发 MCP 工具。
 | 分组 | 工具 | 说明 |
 |---|---|---|
 | 记忆 | `memory_recall`、`memory_store`、`memory_forget` | `memory_recall` 检索记忆；`memory_store` 通过临时会话提交 |
+| Rule | `ov_rule_search` | 返回完整适用约束；默认启用，也可用 `rules` 分组选择 |
 | 资源与 skill | `ov_search`、`ov_read`、`ov_multi_read`、`ov_list`、`add_skill`、`add_resource` | `ov_search` 默认检索资源和用户的 skill。`add_resource` 默认关闭，还需要开启 `enableAddResourceTool` |
 | 会话归档 | `ov_archive_search`、`ov_archive_expand` | 检索并展开已归档的历史 |
 | 大块工具输出 | `openviking_tool_result_read`、`openviking_tool_result_search`、`openviking_tool_result_list` | 读取服务端单独存放的工具输出 |
@@ -121,7 +150,7 @@ OpenClaw 注册自己的工具，不转发 MCP 工具。
 
 ### Hermes 工具
 
-Hermes 有 6 个工具：`viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。内置 provider 与外部插件的区别见 [Hermes](#hermes)。
+更新后的 Hermes 外部插件有 7 个工具：`viking_search`、`viking_rule_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 安装工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。旧版内置 provider 保留原来的 6 个工具。分发方式的区别见 [Hermes](#hermes)。
 
 <a id="_3-5-写入与删除的类型边界"></a><a id="_3-5-1-写入边界"></a><a id="_3-5-2-删除边界"></a>
 
@@ -547,15 +576,15 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 状态栏 | 命令 | 附带的 skill | 配置向导 |
 |---|---|---|---|---|
-| Claude Code | 有 | `/openviking-memory:ov` 显示服务端状态、身份和注入内容的来源 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`ov-memory-doctor` | 有 |
-| Codex、TraeCode CLI 2.0 | 无 | 无 | 与 Claude Code 相同的四个 | 有 |
-| Cursor | 无 | 无 | 一条常驻 rule，加上 `openviking-memory`、`openviking-skills`、`ov-experience-memory` | 安装器菜单 |
+| Claude Code | 有 | `/openviking-memory:ov` 显示服务端状态、身份和注入内容的来源 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` | 有 |
+| Codex、TraeCode CLI 2.0 | 无 | 无 | 与 Claude Code 相同的五个 | 有 |
+| Cursor | 无 | 无 | 一条常驻 rule，加上 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` | 安装器菜单 |
 | TRAE、TRAE CN、ZCode | 无 | 无 | 无 | 安装器菜单 |
-| OpenCode | 无 | 无 | 与 Cursor 相同的三个，仅在插件注册自己的 MCP 服务时提供 | 有 |
-| DSH | 无 | 无 | 与 Cursor 相同的三个 | 无 |
-| CodeBuddy Code | 无 | 无 | 与 Cursor 相同的三个 | 无 |
-| pi | 有 | `/viking`、`/viking commit` | 与 Cursor 相同的三个，`mcpEnabled` 为 `false` 时不提供 | 有 |
-| OpenClaw | 无 | `/add-resource`、`/add-skill`、`/ov-search`、`/ov-query-config`、`/ov-recall-trace` | 三个插件 skill | 有；检查 key 的角色和版本兼容性 |
+| OpenCode | 无 | 无 | 与 Cursor 相同的四个，仅在插件注册自己的 MCP 服务时提供 | 有 |
+| DSH | 无 | 无 | 与 Cursor 相同的四个 | 无 |
+| CodeBuddy Code | 无 | 无 | 与 Cursor 相同的四个 | 无 |
+| pi | 有 | `/viking`、`/viking commit` | 与 Cursor 相同的四个，`mcpEnabled` 为 `false` 时不提供 | 有 |
+| OpenClaw | 无 | `/add-resource`、`/add-skill`、`/ov-search`、`/ov-query-config`、`/ov-recall-trace` | 四个插件 skill，含 `openviking-rule-search` | 有；检查 key 的角色和版本兼容性 |
 | Hermes（内置） | 无 | 无 | 无 | 有；`hermes memory status` 列出环境变量覆盖项 |
 | ov CLI | 无 | CLI 本身 | 无 | `ov config` |
 

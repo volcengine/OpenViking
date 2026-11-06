@@ -8,6 +8,7 @@ import json
 import threading
 import time
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import create_autospec
 
 import pytest
@@ -372,7 +373,7 @@ async def test_patch_stage_and_record_owner_cancelled(tracker: TaskTracker):
     cancelled = await tracker.get(task.task_id)
     assert cancelled is not None
     assert cancelled.status == TaskStatus.CANCELLED
-    assert cancelled.stage == "cancelled"
+    assert cancelled.stage == "parsing"
 
 
 async def test_patch_task_updates_fields_and_dispatch_marker_atomically(tracker: TaskTracker):
@@ -476,7 +477,7 @@ async def test_fail_task(tracker: TaskTracker):
 async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
     tracker: TaskTracker,
 ):
-    task = await tracker.create("connector_import", **_owner_kwargs())
+    task = await tracker.create("content_write", **_owner_kwargs())
     await tracker.start(task.task_id)
 
     with pytest.raises(ValueError, match="does not support cancellation"):
@@ -487,7 +488,7 @@ async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
     retrieved = await tracker.get(task.task_id)
     assert retrieved is not None
     assert retrieved.status == TaskStatus.CANCELLED
-    assert retrieved.stage == "cancelled"
+    assert retrieved.stage is None
 
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
@@ -1481,6 +1482,51 @@ async def test_terminal_event_waits_for_owned_work(tracker, outcome):
     last = snapshot.execution_events["items"][-1]
     assert last["kind"] == "status_changed"
     assert last["status"] == ("completed" if outcome == "complete" else "failed")
+
+
+@pytest.mark.parametrize(
+    "transition", ["cancel_pending", "cancel_requeue", "discard_after_outcome"]
+)
+async def test_metric_terminal_event_covers_queue_cancellation_and_discard(
+    tracker, monkeypatch, transition
+):
+    from openviking.observability.events import (
+        register_event_subscriber,
+        unregister_event_subscriber,
+    )
+    from openviking.observability.reporting import runtime
+
+    emitted = []
+    monkeypatch.setattr(runtime, "_reporter", object())
+    register_event_subscriber(
+        "metric_lifecycle_test",
+        runtime.make_subscriber(SimpleNamespace(report=emitted.append), {}),
+    )
+    owner = _owner_kwargs()
+    try:
+        task = await tracker.create("add_resource", **owner)
+        await tracker.register_work(task.task_id, "child-work", "Semantic", **owner)
+        if transition == "cancel_pending":
+            await tracker.cancel(task.task_id, **owner)
+        elif transition == "cancel_requeue":
+            await tracker.start_work(task.task_id, "child-work", **owner)
+            await tracker.cancel(task.task_id, **owner)
+            assert not emitted
+            await tracker.mark_work_requeued(task.task_id, "child-work", **owner)
+        else:
+            await tracker.complete(task.task_id, {"done": True}, **owner)
+            assert not emitted
+            await tracker.discard_work(task.task_id, "child-work", **owner)
+        terminal = await tracker.get(task.task_id, **owner)
+        expected = "completed" if transition == "discard_after_outcome" else "cancelled"
+        assert terminal.status.value == expected
+        assert [(event["event_name"], event["task_id"], event["status"]) for event in emitted] == [
+            ("task_terminal", task.task_id, expected)
+        ]
+        assert emitted[0]["ov_account_id"] == owner["account_id"]
+        assert emitted[0]["ov_user_id"] == owner["user_id"]
+    finally:
+        unregister_event_subscriber("metric_lifecycle_test")
 
 
 async def test_legacy_tasks_do_not_get_invented_history():

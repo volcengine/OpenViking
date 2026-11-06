@@ -5,6 +5,7 @@ import os
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,40 @@ def test_external_discovery_preserves_profile_config_and_relative_setup(external
     assert module_b._setup._ov() is module_b
     assert provider_again.get_tool_schemas() == provider_a.get_tool_schemas()
     assert (home_a / "config.yaml").read_bytes() == before
+
+
+def test_rule_search_keeps_complete_rules_and_does_not_reingest_them(external_provider, monkeypatch):
+    _, provider, module, _ = external_provider("rules")
+    rendered = "完整规则\n" * 17000 + "LAST RULE"
+    calls = []
+
+    def post(path, payload):
+        calls.append((path, payload))
+        return {"result": {"rendered": rendered}}
+
+    monkeypatch.setattr(provider, "_ensure_client", lambda: True)
+    provider._client = SimpleNamespace(post=post)
+    assert "viking_rule_search" in {schema["name"] for schema in provider.get_tool_schemas()}
+    assert provider.handle_tool_call("viking_rule_search", {
+        "task_context": "deploy", "rule_probability_threshold": 0,
+    }) == rendered
+    assert calls == [("/api/v1/rules/search", {
+        "task_context": "deploy", "rule_probability_threshold": 0,
+    })]
+    assert module._is_openviking_recall_tool_name("viking_rule_search")
+    for args in (
+        {"task_context": " "}, {"task_context": "x" * 64001},
+        {"task_context": "deploy", "rule_probability_threshold": True},
+        {"task_context": "deploy", "rule_probability_threshold": float("nan")},
+    ):
+        assert "error" in provider.handle_tool_call("viking_rule_search", args)
+    assert len(calls) == 1
+
+    def fail(*_args):
+        raise RuntimeError("judge unavailable")
+
+    provider._client = SimpleNamespace(post=fail)
+    assert "judge unavailable" in provider.handle_tool_call("viking_rule_search", {"task_context": "deploy"})
 
 
 def test_initialized_profile_owns_connection_and_recall_across_other_profile(external_provider, monkeypatch):

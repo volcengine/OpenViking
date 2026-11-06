@@ -39,8 +39,11 @@ async def test_memory_write_fact_reuses_created_root_task(service, monkeypatch):
     finally:
         bus.unregister("content_write_root_fact_test")
 
-    facts = [event for event in events
-             if event.event_name == "file_mutation" and event.payload.get("uri") == uri]
+    facts = [
+        event
+        for event in events
+        if event.event_name == "file_mutation" and event.payload.get("uri") == uri
+    ]
     assert len(facts) == 1
     assert facts[0].payload["task_id"] == result["task_id"]
     assert facts[0].payload["task_type"] == "content_write"
@@ -718,7 +721,6 @@ async def test_write_lock_storage_error_is_not_mapped_to_resource_busy(file_uri)
         )
 
 
-
 class _AnyDirVikingFS:
     """Stats the given file uri as a file and every other uri as a directory."""
 
@@ -766,7 +768,6 @@ async def test_resource_write_anchors_nested_file_to_direct_parent(
 
     assert write_anchor == parent_uri
     assert set_tags_anchor == project_root
-
 
 
 @pytest.mark.asyncio

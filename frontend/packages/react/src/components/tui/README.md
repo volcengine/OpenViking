@@ -1,32 +1,53 @@
 # TUI
 
-命令输入、执行状态与结果展示的视图与交互。执行状态与结果由上层传入；提交、取消和导航等意图通过事件回调上报，组件不执行命令或维护执行连接。
+English / [中文](README_CN.md)
 
-`tui.tsx` 对应 `@openviking/react/components/tui`。当前是占位组件：只渲染固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API。真实实现按本文与类型声明重写，接口以源码为准，本文不重复列举。
+The view and interaction for command records, results and input. The record area, empty state, input, command suggestions and parameter help make up the TUI body. Execution results are passed in from above; command sending, resource opening and copy completion are reported back to the host through callbacks, and a failure does not fire the corresponding callback.
 
-## 职责边界
+`tui.tsx` maps to `@openviking/react/components/tui`. It is currently a placeholder: it renders a fixed-size empty shell and consumes no props, so the package can be published for hosts to compare against the API. The real implementation will be rewritten against this document and the type declarations; the source is the source of truth and this document does not repeat the field list.
 
-- 命令执行完全在宿主。组件不认识任何具体命令，只按宿主给出的结果变体渲染。
-- 结果内容用联合类型表达，宿主选择变体并提供现成数据；内置变体覆盖常见的检索列表、资源树、状态卡与写入结果，无法归类时用自定义变体交给宿主渲染。
-- 输入是受控的，提交、取消、历史预览都只上报意图，组件不维护执行状态。
-- 建议、历史与快捷入口的数据都由宿主提供，组件不解析命令、不读写本地存储。
+## Responsibilities
 
-## 可选能力
+- The TUI contains only the command record and result area, the input area, and its suggestions and help. New sessions, the history panel, view and user switching, the outer toolbar and the bottom shortcut hints are composed by the host from separate components — they are not part of the TUI, and no slot is provided for them.
+- The host handles creating sessions, choosing from history and clearing, then updates `records` and `value`; the TUI renders only the records it is given and keeps no history list or dedicated history-preview state.
+- Command execution is entirely the host's. The component reuses shared command metadata to provide the input interaction, and renders execution results according to the content variant the host supplies.
+- Result content is expressed as a union covering generic text and six structured results; results that do not fit are shown as generic text.
+- The input is controlled. After accepting a completion or parameter hint the component updates the input through `onValueChange`; it does not submit the command.
+- `onSubmit` reports the command text only after the command has been sent successfully, and does not fire on failure. That notification does not perform the send, and does not mean the background command has finished executing; the send path does not depend on its return value. The host updates later results and errors through `records`; a background task still `pending` does not block further submissions.
+- `onOpenUri` reports the URI after a resource has been opened successfully, and does not fire on failure; the navigation capability belongs to the integration layer.
+- Copying is performed by the component and reported through `onCopy` on success, with the copied text as the argument; the callback does not fire on failure. Omitting the callback does not affect copying.
+- Command matching, the candidate list, highlighting and keyboard selection, parameter hints and the help panel are all handled inside the component. Command names, parameters, descriptions and examples must reuse the same CLI command metadata; the host does not maintain or render command help entry by entry, and the component neither fetches data nor reads or writes local storage.
+- `emptyState` is the single configuration entry for the complete empty state and can combine a title, description and shortcut entries, with the related interaction handled by the host inside the node. It is shown when there are no records; when omitted, `labels.empty` is used, and passing `null` hides the empty-state content.
+- Component copy and guidance text are configured uniformly through `labels`. `disabled` independently controls whether the command input and submit are available, and `labels.unavailableMessage` provides the hint while disabled; setting the copy alone does not disable the component.
 
-部分字段表达的是宿主能力，不传即降级为对应表现：
+Only the interface boundary is defined today; completion, the help panel and the CLI shared command metadata are not implemented, and automatic sync of new CLI commands needs that link wired up in the real implementation. Metadata loading and transport should go through the shared adapter layer, with no requests or per-command adapters placed in individual hosts.
 
-| 字段     | 不传时           | 传值时的表现               |
-| -------- | ---------------- | -------------------------- |
-| 运行状态 | 始终显示发送入口 | 运行中显示停止入口         |
-| 建议列表 | 不显示命令建议   | 输入时展示匹配建议         |
-| 历史记录 | 不显示历史入口   | 提供历史弹层与预览         |
-| 快捷入口 | 空态不显示入口   | 空态展示可直接提交的快捷项 |
-| 工具栏   | 不渲染工具栏     | 在记录上方渲染宿主工具栏   |
+## Result content
 
-设置不可用提示后，输入区被禁用并展示该文案，用于宿主表达「当前作用域下不能执行命令」。
+`TuiRecordContent` has seven variants: `text`, `search-list`, `resource-preview`, `resource-tree`, `status`, `write-result` and `command-help`.
 
-## 开发入口
+- `text` distinguishes `plain` and `markdown` through `format`, defaulting to `plain`. JSON is formatted and shown as text.
+- Failure is expressed through `TuiRecord.status: 'error'`; the error body uses generic text, and no separate error content variant is defined.
+- Command help is generated from the shared command definitions, and other results are converted uniformly by the shared adapter layer; the host reuses the converted result rather than adapting commands one by one.
 
-开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
+These variants define the target contract for unified display; the shared result conversion and the actual view are still to be implemented.
 
-独立样式入口为 `@openviking/react/components/tui/style.css`，当前只含占位壳的样式。
+## Optional capabilities
+
+Some fields express host capabilities; omitting one degrades to the corresponding behaviour:
+
+| Field                    | When omitted         | When provided                                                       |
+| ------------------------ | -------------------- | ------------------------------------------------------------------- |
+| Empty-state node         | Shows `labels.empty` | Shows the full node when there are no records; `null` hides it      |
+| Retrieval level and type | No labels shown      | Shown next to the title and next to the score respectively          |
+| Score detail             | Score shown as text  | When score copy is provided, hover or focus shows the host's detail |
+
+While a record is `pending`, the component matches `command` against the shared command definitions and picks the corresponding skeleton, falling back to the generic skeleton when nothing matches. `content` may be omitted while waiting; the host does not need to specify a skeleton shape.
+
+`disabled` defaults to `false`. When `true` the command input and submit are disabled and `labels.unavailableMessage` is shown; the built-in English hint is used when that copy is not overridden.
+
+## Development entry
+
+Development and build commands are in the [frontend workspace README](../../../../../README.md); module conventions are in the [package guide](../../../README.md).
+
+The standalone style entry is `@openviking/react/components/tui/style.css`, which currently contains only the placeholder shell styles.

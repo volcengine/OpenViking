@@ -69,9 +69,7 @@ class AccountStore(ABC):
     @abstractmethod
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None: ...
 
-    async def get_user_membership(
-        self, account_id: str, user_id: str
-    ) -> UserSummary | None:
+    async def get_user_membership(self, account_id: str, user_id: str) -> UserSummary | None:
         """Point-read one user for the admin membership probe.
 
         Mirrors ``get_account``: stores whose in-memory state can lag a peer
@@ -130,9 +128,7 @@ class AccountStore(ABC):
     async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]: ...
 
     @abstractmethod
-    async def add_group_members(
-        self, account_id: str, group_id: str, user_ids: list[str]
-    ) -> bool:
+    async def add_group_members(self, account_id: str, group_id: str, user_ids: list[str]) -> bool:
         """Atomically add existing active users, ignoring duplicate memberships."""
         ...
 

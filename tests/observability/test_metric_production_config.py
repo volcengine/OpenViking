@@ -51,44 +51,68 @@ def capture_export(monkeypatch):
     monkeypatch.setenv("OV_MODEL_COST_BEARER", "customer")
     capture = Capture()
     # Deliberately contradictory legacy mapping must not win over each call.
-    register_event_subscriber("test_export", runtime.make_subscriber(capture, {
-        "telemetry": {"model_cost_bearers": [
-            {"provider": "openai", "model_name": "same_endpoint", "cost_bearer": "ov"},
-        ]},
-    }))
+    register_event_subscriber(
+        "test_export",
+        runtime.make_subscriber(
+            capture,
+            {
+                "telemetry": {
+                    "model_cost_bearers": [
+                        {"provider": "openai", "model_name": "same_endpoint", "cost_bearer": "ov"},
+                    ]
+                },
+            },
+        ),
+    )
     return capture
 
 
 def test_vlm_owner_follows_each_credential_even_for_same_endpoint(monkeypatch):
     capture = capture_export(monkeypatch)
-    cfg = VLMConfig(model="same_endpoint", credentials=[
-        {"id": owner, "provider": "openai", "api_key": "test-key", "cost_bearer": owner}
-        for owner in ["customer", "ov", "unknown"]
-    ])
+    cfg = VLMConfig(
+        model="same_endpoint",
+        credentials=[
+            {"id": owner, "provider": "openai", "api_key": "test-key", "cost_bearer": owner}
+            for owner in ["customer", "ov", "unknown"]
+        ],
+    )
     for cred in cfg.credentials:
         backend = MetricVLM(cfg.build_vlm_config_dict_for_credential(cred))
         backend.update_token_usage("same_endpoint", "openai", 11, 3, duration_seconds=0.1)
         backend.record_failed_call(duration_seconds=0.2, error=TimeoutError("request failed"))
     assert [e["cost_bearer"] for e in capture.events] == [
-        "customer", "customer", "ov", "ov", "unknown", "unknown"
+        "customer",
+        "customer",
+        "ov",
+        "ov",
+        "unknown",
+        "unknown",
     ]
     assert [e["prompt_tokens"] for e in capture.events] == [11, 0, 11, 0, 11, 0]
 
 
 def test_embedding_owner_reaches_actual_retry_and_failover_children(monkeypatch):
     capture = capture_export(monkeypatch)
-    cfg = EmbeddingConfig(dense=EmbeddingModelConfig(
-        provider="openai", model="text-embedding-3-small", dimension=1536,
-        credentials=[
-            {"id": owner, "api_key": "test-key", "cost_bearer": owner}
-            for owner in ["customer", "ov"]
-        ],
-    ))
+    cfg = EmbeddingConfig(
+        dense=EmbeddingModelConfig(
+            provider="openai",
+            model="text-embedding-3-small",
+            dimension=1536,
+            credentials=[
+                {"id": owner, "api_key": "test-key", "cost_bearer": owner}
+                for owner in ["customer", "ov"]
+            ],
+        )
+    )
     embedder = cfg.get_embedder()
     try:
         for candidate in embedder._embedders:
-            candidate.inner.update_token_usage("same_endpoint", "openai", 7, 0, duration_seconds=0.1)
-            _record_failed_embedding_call(candidate.inner, duration_seconds=0.2, error=TimeoutError("failed"))
+            candidate.inner.update_token_usage(
+                "same_endpoint", "openai", 7, 0, duration_seconds=0.1
+            )
+            _record_failed_embedding_call(
+                candidate.inner, duration_seconds=0.2, error=TimeoutError("failed")
+            )
         assert [e["cost_bearer"] for e in capture.events] == ["customer", "customer", "ov", "ov"]
     finally:
         embedder.close()
@@ -97,8 +121,14 @@ def test_embedding_owner_reaches_actual_retry_and_failover_children(monkeypatch)
 def test_unknown_or_invalid_owner_is_not_silently_billed_to_platform(monkeypatch):
     capture = capture_export(monkeypatch)
     for owner in ["unknown", "invalid"]:
-        EmbeddingEventDataSource.record_call(provider="openai", model_name="same_endpoint",
-            duration_seconds=0.1, prompt_tokens=5, completion_tokens=0, cost_bearer=owner)
+        EmbeddingEventDataSource.record_call(
+            provider="openai",
+            model_name="same_endpoint",
+            duration_seconds=0.1,
+            prompt_tokens=5,
+            completion_tokens=0,
+            cost_bearer=owner,
+        )
     assert [e["cost_bearer"] for e in capture.events] == ["unknown", "unknown"]
     with pytest.raises(ValidationError):
         VLMCredential(cost_bearer="invalid")
@@ -108,24 +138,48 @@ def test_unknown_or_invalid_owner_is_not_silently_billed_to_platform(monkeypatch
 def test_reporting_uses_environment_location_with_explicit_config_precedence(monkeypatch, explicit):
     monkeypatch.delenv("NACOS_CONFIG_FILE", raising=False)
     monkeypatch.delenv("NACOS_USERNAME", raising=False)
-    for key, value in {"NACOS_SERVER_ADDR":"http://config-center:8848", "NACOS_NAMESPACE":"environment",
-                       "NACOS_DATA_ID":"environment_config", "NACOS_GROUP":"environment_group"}.items():
+    for key, value in {
+        "NACOS_SERVER_ADDR": "http://config-center:8848",
+        "NACOS_NAMESPACE": "environment",
+        "NACOS_DATA_ID": "environment_config",
+        "NACOS_GROUP": "environment_group",
+    }.items():
         monkeypatch.setenv(key, value)
     seen = []
 
     class Opener:
         def open(self, request, **kwargs):
             seen.append(request)
-            return io.BytesIO(json.dumps({"kafka":{"topic":"metric-log"}, "telemetry":{"enabled":True},
-                "connections":{"other":{"password":"${UNAVAILABLE_OTHER_PASSWORD}"}}}).encode())
+            return io.BytesIO(
+                json.dumps(
+                    {
+                        "kafka": {"topic": "metric-log"},
+                        "telemetry": {"enabled": True},
+                        "connections": {"other": {"password": "${UNAVAILABLE_OTHER_PASSWORD}"}},
+                    }
+                ).encode()
+            )
 
     monkeypatch.setattr(reporting_config, "build_opener", lambda *args: Opener())
-    settings = EventReportingConfig(**({"nacos_namespace":"explicit", "nacos_data_id":"explicit_config",
-                                       "nacos_group":"explicit_group"} if explicit else {}))
+    settings = EventReportingConfig(
+        **(
+            {
+                "nacos_namespace": "explicit",
+                "nacos_data_id": "explicit_config",
+                "nacos_group": "explicit_group",
+            }
+            if explicit
+            else {}
+        )
+    )
     config = reporting_config.load_configuration(settings)
     params = parse_qs(urlsplit(seen[0]).query)
     prefix = "explicit" if explicit else "environment"
-    assert params == {"tenant":[prefix], "dataId":[prefix+"_config"], "group":[prefix+"_group"]}
+    assert params == {
+        "tenant": [prefix],
+        "dataId": [prefix + "_config"],
+        "group": [prefix + "_group"],
+    }
     assert set(config) == {"kafka", "telemetry"}
 
 

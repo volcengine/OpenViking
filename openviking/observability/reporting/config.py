@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 from urllib.parse import urlencode
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -40,7 +40,11 @@ def load_configuration(settings) -> dict:
         username = os.getenv("NACOS_USERNAME")
         if username:
             form = urlencode({"username": username, "password": os.getenv("NACOS_PASSWORD", "")})
-            request = Request(server + "/v1/auth/login", data=form.encode(), headers={"Content-Type": "application/x-www-form-urlencoded"})
+            request = Request(
+                server + "/v1/auth/login",
+                data=form.encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
             with opener.open(request, timeout=10) as response:
                 query["accessToken"] = json.load(response)["accessToken"]
         with opener.open(server + "/v1/cs/configs?" + urlencode(query), timeout=10) as response:
@@ -55,6 +59,7 @@ def load_configuration(settings) -> dict:
     config = json.loads(content)
     if not isinstance(config, dict):
         raise ValueError("Reporting configuration must be a JSON object")
+
     def resolve(value):
         if isinstance(value, str):
             return re.sub(r"\$\{([A-Z][A-Z0-9_]*)\}", replacement, value)
@@ -63,5 +68,6 @@ def load_configuration(settings) -> dict:
         if isinstance(value, list):
             return [resolve(item) for item in value]
         return value
+
     # Other services' shared secrets do not become bootstrap requirements for OV.
     return resolve({key: config[key] for key in ("kafka", "telemetry") if key in config})

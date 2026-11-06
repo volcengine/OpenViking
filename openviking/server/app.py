@@ -500,6 +500,7 @@ def create_app(
         if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
             await usage_reporter.close()
         from openviking.observability.reporting import stop_reporting
+
         await stop_reporting()
 
     app = FastAPI(

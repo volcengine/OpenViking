@@ -493,6 +493,7 @@ class TaskTracker:
             existing = await self.get(task_id, account_id=account_id, user_id=user_id)
             if existing is not None:
                 from openviking.observability.reporting.facts import remember_request_task
+
                 remember_request_task(existing)
                 return existing
         admission = _admission.get()
@@ -548,6 +549,7 @@ class TaskTracker:
                     logger.exception("[TaskTracker] Failed to withdraw Task %s", task.task_id)
             raise
         from openviking.observability.reporting.facts import remember_request_task
+
         remember_request_task(created)
         return created
 
@@ -694,10 +696,12 @@ class TaskTracker:
 
     async def _emit_terminal(self, task_id, account_id, user_id):
         from openviking.observability.reporting.runtime import is_reporting_enabled
+
         if not is_reporting_enabled():
             return
         try:
             from openviking.observability.reporting.facts import emit_terminal
+
             emit_terminal(await self.get(task_id, account_id=account_id, user_id=user_id))
         except Exception:
             logger.warning("Task terminal telemetry could not be projected")
@@ -750,7 +754,7 @@ class TaskTracker:
         user_id: str,
         allow_terminal: bool,
     ) -> StoreOperationResult:
-        return await run_to_completion(
+        result = await run_to_completion(
             lambda: self._store.request_cancellation(
                 task_id,
                 cancellable_types=_CANCELLABLE_TASK_TYPES,
@@ -759,6 +763,9 @@ class TaskTracker:
                 user_id=user_id,
             )
         )
+        if result.is_applied:
+            await self._emit_terminal(task_id, account_id, user_id)
+        return result
 
     async def register_running_task(
         self,
@@ -770,8 +777,7 @@ class TaskTracker:
     ) -> str:
         self._validate_owner(account_id, user_id)
         active_task = asyncio.current_task()
-        status = await self._store.get_task_status(task_id, account_id=account_id, user_id=user_id)
-        if active_task is None or status is None or status in TERMINAL_TASK_STATUSES:
+        if active_task is None:
             raise TaskWorkRejected(f"Task {task_id} is unavailable")
         inline = work_id is None
         running_work_id = work_id or f"inline:{uuid4()}"
@@ -786,12 +792,14 @@ class TaskTracker:
             if registration is WorkRegistration.REJECTED:
                 raise TaskWorkRejected(f"Task {task_id} rejects inline work")
             try:
-                await self.start_work(
+                accepted = await self.start_work(
                     task_id,
                     running_work_id,
                     account_id=account_id,
                     user_id=user_id,
                 )
+                if not accepted.is_applied:
+                    raise TaskWorkRejected(f"Task {task_id} rejects inline work")
             except BaseException:
                 if registration is WorkRegistration.CREATED:
                     await run_to_completion(
@@ -906,9 +914,7 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Task {task_id}")
                 await asyncio.sleep(
-                    next_poll_interval
-                    if remaining is None
-                    else min(next_poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
                 next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
@@ -1074,6 +1080,7 @@ class TaskTracker:
                 task_id, work_id, account_id=account_id, user_id=user_id
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def reconcile_delivery(
         self,
@@ -1100,9 +1107,17 @@ class TaskTracker:
         return work.state if work is not None else None
 
     async def start_work(
-        self, task_id: str, work_id: str, *, account_id: str, user_id: str
-    ) -> None:
-        await self._store.start_work(task_id, work_id, account_id=account_id, user_id=user_id)
+        self,
+        task_id: str,
+        work_id: str,
+        *,
+        account_id: str,
+        user_id: str,
+        queue_name: Optional[str] = None,
+    ) -> StoreOperationResult:
+        return await self._store.start_work(
+            task_id, work_id, account_id=account_id, user_id=user_id, queue_name=queue_name
+        )
 
     async def mark_work_done(
         self,
@@ -1162,6 +1177,7 @@ class TaskTracker:
             account_id=account_id,
             user_id=user_id,
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def _finish_work(
         self,
@@ -1269,9 +1285,7 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
                 await asyncio.sleep(
-                    next_poll_interval
-                    if remaining is None
-                    else min(next_poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
                 next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
@@ -1297,9 +1311,7 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
                 await asyncio.sleep(
-                    next_poll_interval
-                    if remaining is None
-                    else min(next_poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
                 next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
@@ -1342,8 +1354,7 @@ class TaskTracker:
                 "requeue_count": queue.requeue_count,
                 "error_count": queue.error_count,
                 "errors": [
-                    project_work_error(error)
-                    for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
+                    project_work_error(error) for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
                 ],
             }
         return result

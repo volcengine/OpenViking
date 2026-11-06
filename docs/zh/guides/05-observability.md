@@ -571,6 +571,11 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 Kafka 的地址、认证和 topic 来自该配置的 `kafka`，不能写入业务代码。
 该功能默认关闭，业务调用不会因上报失败而中断。
 
+上报器使用内存队列；`telemetry.queue_capacity` 必须为正整数，默认 `1024`。
+队列满、投递重试耗尽或进程退出时可能丢失事件。投递失败和丢弃事件会输出采样告警，
+日志只包含数量。此上报器适用于允许少量丢失的分析统计，不提供持久化审计或计费账本
+保证。停止服务时应预留优雅退出时间，等待队列发送完成。
+
 部署可通过 `OV_METRICS_ACCOUNT_ID` 和 `OV_RESOURCE_ID` 绑定外层云账号与实例，
 原始数据空间和成员保留为 `ov_account_id`、`ov_user_id`。仅当部署能够确定模型凭据
 归属时，设置 `OV_MODEL_COST_BEARER=customer` 或 `ov`；未设置时保持 `unknown`。
