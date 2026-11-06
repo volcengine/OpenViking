@@ -1,7 +1,7 @@
 # Native Windows feature coverage
 
 Review baseline: `feat/vika` commit `40a26ec`. Reviewed Windows implementation:
-`bdccae0574c1bf0a9cf08935f1e9e142d1026c24` on `ovsawin`.
+`e26a9a62a529cec4c76b6cde99889b3486fecc2c` on `ovsawin`.
 This review compares the Vika changes since the baseline and traces relevant
 unchanged runtime, connector, configuration, and OpenViking client paths. It
 is not a claim that every baseline feature has been exercised on Windows.
@@ -9,11 +9,13 @@ See [Windows installation instructions](../WINDOWS.md).
 
 ## Evidence and status definitions
 
-The native Windows test step, CLI help, and PowerShell syntax check passed in
-[CI run 42198383426](https://github.com/openviking-superagent/OpenViking/actions/runs/42198383426)
-for the reviewed commit. At this review's checkpoint, the real source installer
-step was still running: neither installer success nor overall workflow success
-is claimed here. Consult the linked run for its eventual result.
+[CI run 42199232146](https://github.com/openviking-superagent/OpenViking/actions/runs/42199232146)
+completed successfully for the reviewed implementation: **25/25 native tests**,
+**58/58 Feishu/OpenViking integration-contract tests**, CLI help, PowerShell
+syntax checks, and the real source installer in an isolated Unicode Windows home.
+The installer ran npm lifecycle scripts, checked Pi 1.4.0 and Lark CLI 1.0.94,
+validated both launchers and the directory junction, and refused an existing
+installation. These tests do not use live service credentials.
 
 The native test step includes process invocation, named pipes, process-tree
 termination, PowerShell quoting, startup files, isolated PM2 lifecycle, private
@@ -34,7 +36,7 @@ Paths in the evidence column are relative to `vika/`.
 
 | Feature | Windows status | Implementation and limits |
 |---|---|---|
-| Source installation and launchers | Partial; installer result pending at checkpoint | `scripts/install-windows.ps1`, `scripts/windows-launch.mjs`. Node 24, npm lifecycle installation, `current` junction and `vika.cmd`. `scripts/test-install-windows.ps1` exercises an isolated Unicode home, both launchers, installed Pi/Lark executables and refusal to overwrite an installation. No published Windows release artifact. |
+| Source installation and launchers | Implemented / installer smoke-tested | `scripts/install-windows.ps1`, `scripts/windows-launch.mjs`. Node 24, npm lifecycle installation, `current` junction and `vika.cmd`. `scripts/test-install-windows.ps1` exercises an isolated Unicode home, both launchers, installed Pi/Lark executables and refusal to overwrite an installation. No published Windows release artifact. |
 | Interactive setup, Lark login and QR authorization | Partial; live flow unverified | `packages/cli/src/setup.mjs`, `lark-cli.mjs`, `qr.mjs`. Windows executable invocation and Explorer opening implemented. No real authorization or interactive wizard acceptance evidence. |
 | PM2 start/stop/restart/status/logs | Implemented / component-tested | `packages/cli/src/control.mjs`, `scripts/pm2-windows.cjs`, `packages/updater/src/pm2.mjs`. Isolated pipes derived from PM2 home; adapter pinned to PM2 6.0.14. Release verification resolves junction/short-path aliases. Native fixture tests startup, readiness and graceful stop; full configured Vika lifecycle remains unverified. |
 | Multiple agent instances | Partial | Existing configuration and per-instance action pipe paths retained. PM2 fixture is isolated; simultaneous real connector/runtime instances are not acceptance-tested. |
@@ -92,7 +94,7 @@ The native component tests establish useful infrastructure coverage. They do
 not yet demonstrate the user's complete Feishu + remote OpenViking workflow.
 Acceptance should record Windows, Node, runtime and Lark CLI versions and cover:
 
-1. Finish the real installer smoke and interactive setup with an authorized
+1. On the target workstation, finish interactive setup with an authorized
    Lark account and a reachable OV server; verify OV health and actual identity.
 2. Start a configured daemon and one real runtime. Receive a Lark event, invoke
    the Core delivery tool and deliver text in the correct conversation/thread.
