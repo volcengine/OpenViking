@@ -30,6 +30,7 @@ class WorkState(str, Enum):
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class WorkRecoveryMode(str, Enum):
@@ -49,7 +50,7 @@ ACTIVE_TASK_STATUSES = (
     TaskStatus.RUNNING,
     TaskStatus.CANCELLING,
 )
-TERMINAL_WORK_STATES = (WorkState.DONE, WorkState.FAILED)
+TERMINAL_WORK_STATES = (WorkState.DONE, WorkState.FAILED, WorkState.CANCELLED)
 MAX_QUEUE_ERROR_DETAILS = 100
 
 
@@ -466,7 +467,10 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
                     if projected.get(queue_name, {}).get("error_count", 0)
                     else "complete"
                 )
-    task.stage = task.status.value
-    task.auth = {}
+    # Cancelled deliveries still need their execution stage and private context
+    # for recovery and cleanup. Both expire with the Task record.
+    if task.status != TaskStatus.CANCELLED:
+        task.stage = task.status.value
+        task.auth = {}
     task.processing_seconds = processing_seconds(works)
     return True

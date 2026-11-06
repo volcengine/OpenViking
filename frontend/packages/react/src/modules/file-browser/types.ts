@@ -1,39 +1,22 @@
 import type { OvRequestOptions } from '../../client/index.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 
-/** 文件浏览模块的插槽。Slots of the file browser module. */
-export interface FileBrowserSlots {
-  /**
-   * 目录区工具栏。搜索与刷新由模块自己提供，这里放宿主专属入口，例如接入
-   * Agent、导入资源。
-   * Toolbar of the directory area. Search and refresh come from the module; put
-   * host-specific entries here, for example connecting an agent or importing
-   * resources.
-   */
-  toolbar?: ReactNode;
-  /**
-   * 预览区额外的页签。经验看板、会话内容等有独立取数逻辑的视图由宿主提供节点，
-   * 模块不识别它们的业务类型。
-   * Extra preview tabs. Views with their own loading logic, such as experience
-   * dashboards or session content, are supplied by the host; the module does not
-   * recognise their business types.
-   */
-  previewTabs?: ReactNode;
-  /**
-   * 配额提示等产品内容。
-   * Product content such as quota hints.
-   */
-  quotaHint?: ReactNode;
-}
-
 /** 文件浏览模块的可替换文案。Replaceable copy of the file browser module. */
 export interface FileBrowserLabels {
+  /**
+   * 占位说明。缺省为 `Placeholder. Functionality is not available yet.`。
+   * Placeholder description. Defaults to "Placeholder. Functionality is not
+   * available yet.".
+   */
+  description?: string;
   /** 区域标题。Area title. */
   title?: string;
   /** 搜索框占位文案。Search placeholder. */
   searchPlaceholder?: string;
   /** 搜索无结果提示。Message shown when a search returns nothing. */
   searchEmpty?: string;
+  /** 刷新按钮的无障碍名称。Accessible name of the refresh control. */
+  refresh?: string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */
@@ -43,19 +26,43 @@ export interface FileBrowserLabels {
 }
 
 /**
+ * 工具栏按钮的属性。宿主在 `toolbarActions` 里用它组合自己的入口。
+ * Props of a toolbar button. The host composes its own entries with it inside
+ * `toolbarActions`.
+ */
+export interface FileBrowserToolbarButtonProps extends Omit<
+  HTMLAttributes<HTMLButtonElement>,
+  'children' | 'onClick'
+> {
+  /** 按钮图标。Button icon. */
+  icon: ReactNode;
+  /** 按钮文案。Button label. */
+  children: ReactNode;
+  /** 是否禁用，缺省为 `false`。Whether the button is disabled; defaults to `false`. */
+  disabled?: boolean;
+  /** 点击后触发。Called on click. */
+  onClick?: () => void;
+}
+
+/**
  * 文件浏览模块的属性。
  *
  * 模块自己通过 Hook 取数，props 里没有数据字段：宿主给配置、受控的当前资源、
- * 插槽与文案，模块通过回调上报资源变化。目录、搜索与预览的联动在模块内维护，
- * 宿主无需重复组装。
+ * 工具栏入口、文案与请求配置。目录、搜索、预览页签与行级状态都在模块内维护，
+ * 宿主不需要重复组装。
+ *
+ * 模块只覆盖文件树与文件预览两块。命令面板属于 `console`。
  *
  * Props of the file browser module.
  *
  * The module loads its own data through a Hook, so no prop carries data: the
- * host supplies configuration, the controlled current resource, slots and copy,
- * and the module reports resource changes through a callback. Coordination
- * between directory, search and preview stays inside the module, so the host
- * does not assemble it again.
+ * host supplies configuration, the controlled current resource, the toolbar
+ * entries, copy and request configuration. The directory, search, preview tabs
+ * and per-row state all live inside the module, so the host does not assemble
+ * them again.
+ *
+ * The module covers only the file tree and the file preview. The command panel
+ * belongs to `console`.
  */
 export interface FileBrowserProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -73,16 +80,22 @@ export interface FileBrowserProps extends Omit<
    */
   defaultUri?: string;
   /**
+   * 工具栏左侧的宿主入口，例如连接 Agent、导入资源。用
+   * {@link FileBrowserToolbarButton} 组合，保证与模块内置按钮外观一致。
+   * 搜索与刷新由模块渲染，入口之间的分隔线也由模块处理。
+   *
+   * Host entries on the left of the toolbar, for example connecting an agent or
+   * importing resources. Compose them with {@link FileBrowserToolbarButton} so
+   * they match the module's own buttons. Search and refresh are rendered by the
+   * module, and so are the dividers between entries.
+   */
+  toolbarActions?: ReactNode;
+  /**
    * 当前资源变化后触发，参数为新的 URI；清除选中时传入 `null`。
    * Called after the current resource changes, with the new URI; `null` when
    * the selection is cleared.
    */
   onUriChange?: (uri: string | null) => void;
-  /**
-   * 插槽，见 {@link FileBrowserSlots}。
-   * Slots, see {@link FileBrowserSlots}.
-   */
-  slots?: FileBrowserSlots;
   /**
    * 可替换文案，缺省为英文。
    * Replaceable copy; English by default.

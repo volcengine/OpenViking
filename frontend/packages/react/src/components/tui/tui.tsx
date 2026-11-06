@@ -1,5 +1,3 @@
-import styles from './tui.module.css';
-
 export type {
   TuiCommandHelpContent,
   TuiCommandHelpItem,
@@ -23,5 +21,5 @@ export type {
 
 /** 占位组件：仅渲染固定尺寸的空壳，真实实现按 props 契约重写。 */
 export function Tui() {
-  return <div className={styles.root}>Tui</div>;
+  return <div className="ov-tui">Tui</div>;
 }
