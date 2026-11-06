@@ -583,7 +583,17 @@ Parsers live under `parsers`:
       "max_records_per_table": 1000,
       "download_images": true
     },
-    "webfeed": {}
+    "webfeed": {
+      "max_pages": 200,
+      "max_concurrency": 5,
+      "request_timeout": 30.0,
+      "politeness_delay": 0.2,
+      "same_host_only": true,
+      "respect_robots": true,
+      "max_depth": 2,
+      "suggest_feed": true,
+      "suggest_timeout": 2.5
+    }
   }
 }
 ```
@@ -622,6 +632,24 @@ Understanding API backend.
 | `webfeed` | Sitemap, RSS, and Atom ingestion |
 
 Provider-, parser-, storage-, and encryption-specific fields are documented in [Configuration](../guides/01-configuration.md).
+
+### `parsers.webfeed`
+
+Whole-site ingestion mirrors the pages listed by a sitemap, sitemap index, RSS, or Atom URL into one resource tree. These settings use the defaults shown above:
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `max_pages` | integer | `200` | Maximum pages mirrored from a feed after filtering |
+| `max_concurrency` | integer | `5` | Maximum concurrent page fetches |
+| `request_timeout` | number | `30.0` | Timeout in seconds for each feed, robots.txt, or page request |
+| `politeness_delay` | number | `0.2` | Delay in seconds before each mirrored page; concurrent fetches can overlap |
+| `same_host_only` | boolean | `true` | Skip entries outside the feed's host |
+| `respect_robots` | boolean | `true` | Consult robots.txt before mirroring pages |
+| `max_depth` | integer | `2` | Maximum sitemap-index recursion depth |
+| `suggest_feed` | boolean | `true` | Enable optional feed-discovery hints for MCP single-homepage imports |
+| `suggest_timeout` | number | `2.5` | Total time budget in seconds for that best-effort hint probe |
+
+Counts and timeouts must be positive; `politeness_delay` may be zero. Per-call `add_resource` arguments can override the ingestion settings, for example `args={"max_pages": 50}`. `args={"site": true}` discovers a feed from an ordinary page URL; `args={"site": false}` routes a feed-looking URL through single-page HTTP ingestion. The MCP hint never starts a whole-site import. See [Resources](../api/02-resources.md) for feed imports and `watch_interval` refreshes.
 
 ## Minimal Example
 
