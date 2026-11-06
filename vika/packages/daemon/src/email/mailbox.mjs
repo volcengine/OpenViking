@@ -46,3 +46,22 @@ export function mailboxPollSeconds(value = 60) {
   }
   return value;
 }
+
+// Discovery is opt-in and replaces the explicit set, rather than silently
+// subscribing existing accounts to all folders.
+export function mailboxDiscovery(imap = {}) {
+  const value = imap.discovery;
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('imap.discovery must be an object');
+  if (imap.mailbox !== undefined || imap.mailboxes !== undefined) throw new Error('imap.discovery cannot be combined with mailbox or mailboxes');
+  const names = (key) => {
+    const items = value[key] ?? [];
+    if (!Array.isArray(items) || items.length > 100) throw new Error(`imap.discovery.${key} must be an array of at most 100 names`);
+    return [...new Set(items.map(mailboxName))];
+  };
+  const refreshIntervalSeconds = value.refreshIntervalSeconds ?? 300;
+  if (!Number.isInteger(refreshIntervalSeconds) || refreshIntervalSeconds < 15 || refreshIntervalSeconds > 86400) {
+    throw new Error('imap.discovery.refreshIntervalSeconds must be an integer from 15 to 86400');
+  }
+  return { roots: names('roots'), exclude: names('exclude'), refreshIntervalSeconds };
+}

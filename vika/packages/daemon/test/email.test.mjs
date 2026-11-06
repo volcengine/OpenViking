@@ -74,7 +74,7 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
           socket.mailbox = JSON.parse(command.slice(8));
           if (!state.folders.has(socket.mailbox)) state.folders.set(socket.mailbox, []);
         }
-        const selected = state.folders.get(socket.mailbox);
+        const selected = state.folders.get(socket.mailbox) ?? [];
         const uidNext = (selected.at(-1)?.uid ?? 0) + 1;
         let match;
         if (command.startsWith('LOGIN ')) {
@@ -82,6 +82,12 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
           else socket.write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials\r\n`);
         } else if (command === 'CAPABILITY') {
           socket.write(`* CAPABILITY IMAP4rev1 IDLE${gmail ? ' X-GM-EXT-1' : ''}\r\n`);
+          ok();
+        } else if (command === 'LIST "" "*"') {
+          if (state.listFailure) { socket.write(`${tag} NO temporary LIST failure\r\n`); continue; }
+          for (const name of state.folders.keys()) {
+            socket.write(`* LIST () "/" ${JSON.stringify(mailboxWireName(name))}\r\n`);
+          }
           ok();
         } else if (command.startsWith('EXAMINE ')) {
           socket.write(`* ${selected.length} EXISTS\r\n* OK [UIDVALIDITY ${state.validities.get(socket.mailbox) ?? uidValidity}] ok\r\n* OK [UIDNEXT ${uidNext}] ok\r\n`);
@@ -215,14 +221,14 @@ async function setup(t, { mails = [], password = PASSWORD, gmail = true, instanc
   const config = { emailConfigFile: configFile, dataDir: directory, retentionMs: 86_400_000, ...(instance ? { instance } : {}) };
   const clients = [];
   const start = async () => {
-    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, archive, attachmentWaitMs, pollMs, reconnectMs: 10 });
+    const client = new EmailClient(config, null, quiet, { connectTls: plainTls, archive, attachmentWaitMs, pollMs, discoveryMs: pollMs, reconnectMs: 10 });
     clients.push(client);
     await client.preflight();
     const events = [];
     const exits = [];
     client.startSubscription((line) => events.push(normalizeEvent(JSON.parse(line))), (exit) => exits.push(exit));
     const names = client.account.imap.mailboxes;
-    await until(() => names.length === 1 ? imap.state.idlers.size === 1
+    await until(() => client.account.imap.discovery ? imap.state.commands.filter((command) => command === 'LIST "" "*"').length >= 2 : names.length === 1 ? imap.state.idlers.size === 1
       : names.filter((name) => !imap.state.unavailable.has(name)).every((name) => client.state.cursor(`${TAG}:${name}`)));
     return { client, events, exits };
   };
@@ -359,6 +365,77 @@ describe('email connector', () => {
     account.imap.pollIntervalSeconds = 0;
     fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
     assert.throws(() => loadAccount(config.emailConfigFile), /pollIntervalSeconds/);
+  });
+
+  it('discovers new folders, excludes subtrees, and preserves its snapshot when LIST fails', async (t) => {
+    const { imap, config, start } = await setup(t, { pollMs: 20 });
+    imap.state.folders.set('Work', []);
+    imap.state.folders.set('Work/Trash', []);
+    imap.state.folders.set('Work/Trash/Old', []);
+    imap.state.folders.set('Workshops', []);
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    account.imap.discovery = { roots: ['Work'], exclude: ['Work/Trash'] };
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    const running = await start();
+    await until(() => running.client.state.cursor(`${TAG}:Work`));
+    assert.equal(running.client.state.cursor(`${TAG}:Workshops`), null);
+    assert.equal(running.client.state.cursor(`${TAG}:Work/Trash`), null);
+    assert.equal(running.client.state.cursor(`${TAG}:Work/Trash/Old`), null);
+    imap.deliver(mail(), 'Work/New'); // first discovery skips historical messages
+    await until(() => running.client.state.cursor(`${TAG}:Work/New`)?.lastUid === 1);
+    assert.equal(running.events.length, 0);
+    imap.deliver(mail({ id: 'new-folder@example.com' }), 'Work/New');
+    await until(() => running.events.length === 1);
+    imap.state.listFailure = true;
+    imap.deliver(mail({ id: 'list-failed@example.com' }), 'Work');
+    await until(() => running.events.length === 2);
+    assert.equal(running.events[1].data.mailbox, 'Work');
+    assert.equal(running.exits.length, 0);
+    imap.state.listFailure = false;
+    // A removed folder stops being selected but its cursor stays for reappearance.
+    const saved = imap.state.folders.get('Work/New');
+    imap.state.folders.delete('Work/New');
+    imap.state.unavailable.add('Work/New');
+    const lists = imap.state.commands.filter((command) => command === 'LIST "" "*"').length;
+    await until(() => imap.state.commands.filter((command) => command === 'LIST "" "*"').length > lists);
+    assert.equal(running.client.state.cursor(`${TAG}:Work/New`).lastUid, 2);
+    imap.state.unavailable.delete('Work/New');
+    imap.state.folders.set('Work/New', saved);
+    imap.deliver(mail({ id: 'reappeared@example.com' }), 'Work/New');
+    await until(() => running.events.length === 3);
+    assert.equal(running.events[2].data.mailbox, 'Work/New');
+  });
+
+  it('discovers from an empty list and retains a usable snapshot if the folder limit is exceeded', async (t) => {
+    const { imap, config, start } = await setup(t, { pollMs: 20 });
+    imap.state.folders.clear();
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    account.imap.discovery = {};
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    const running = await start();
+    imap.state.folders.set('Later', []);
+    await until(() => running.client.state.cursor(`${TAG}:Later`));
+    for (let i = 0; i < 101; i += 1) imap.state.folders.set(`Extra${i}`, []);
+    const lists = imap.state.commands.filter((command) => command === 'LIST "" "*"').length;
+    await until(() => imap.state.commands.filter((command) => command === 'LIST "" "*"').length > lists);
+    imap.deliver(mail(), 'Later');
+    await until(() => running.events.length === 1);
+    assert.equal(running.events[0].data.mailbox, 'Later');
+    assert.equal(running.client.state.cursor(`${TAG}:Extra0`), null);
+  });
+
+  it('rejects ambiguous or invalid discovery configuration', async (t) => {
+    const { config } = await setup(t);
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    for (const discovery of [true, [], null, { roots: 'Work' }, { exclude: [null] }, { refreshIntervalSeconds: 0 }]) {
+      account.imap.discovery = discovery;
+      fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+      assert.throws(() => loadAccount(config.emailConfigFile), /discovery|mailbox/);
+    }
+    account.imap.discovery = {};
+    account.imap.mailboxes = ['INBOX'];
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    assert.throws(() => loadAccount(config.emailConfigFile), /cannot be combined/);
   });
 
   it('validates mailbox configuration and encodes rev1 mailbox names', async (t) => {

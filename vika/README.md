@@ -169,6 +169,26 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 
 每个文件夹独立记录 UIDVALIDITY 和 UID。某个目录临时无权限或被删除不会阻塞其他目录，断线后退避重连并续接游标；目录重编号时只重置该目录，按首次监听规则从新邮件开始。每轮每目录最多处理最新 50 封待处理邮件，超出部分跳过（SEARCH 响应本身未限量）；附件处理也会延长轮询周期。跨文件夹移动/复制邮件可能再次提醒，因为它在目标目录获得新的 IMAP 身份，不按 Message-ID 全局去重。
 
+需要发现后来新建的文件夹时，改用 `imap.discovery`（不能与 `mailbox` / `mailboxes` 并用）：
+
+```json
+{
+  "host": "imap.example.com",
+  "port": 993,
+  "pollIntervalSeconds": 60,
+  "discovery": {
+    "roots": ["INBOX", "Projects"],
+    "exclude": ["Projects/Trash"],
+    "refreshIntervalSeconds": 300
+  }
+}
+```
+
+以上是账号文件中的 `imap` 对象。通过 `LIST "" "*"` 获取可选择目录，按服务器返回的层级分隔符选择根目录及子目录；`Projects` 不会误匹配 `ProjectsOld`。`roots` 留空表示所有可选择目录，排除项也作用于其子目录。垃圾箱、已发送目录的名字由供应商决定，请明确填写排除项；不会猜测文件夹的用途。发现模式始终轮询，默认每 300 秒刷新列表（可设 15–86400 秒，实际还受轮询和处理时间影响）。最多匹配 100 个目录，超过时拒绝该次刷新，请缩小范围。刷新失败保留最近一次成功列表，删除目录保留游标以便重现后续接；新发现目录仍只提醒之后的新邮件。日志中的 `email_mailboxes_discovered` 记录匹配数量，失败会记录 `email_mailbox_discovery_failed`，不会静默切回 INBOX。
+
+协议依据：[RFC 9051](https://www.rfc-editor.org/rfc/rfc9051.html) 的 mailbox、UIDVALIDITY、UID 身份与 LIST；[RFC 2177](https://www.rfc-editor.org/rfc/rfc2177.html) 的 IDLE；IMAP4rev1 非 ASCII 名称按 [RFC 3501 §5.1.3](https://www.rfc-editor.org/rfc/rfc3501.html#section-5.1.3) 编码。NOTIFY / OBJECTID 不属于这一版实现。
+
+
 
 `password` 是邮箱给第三方客户端用的专用密码，按邮箱账号生成一次，IMAP 和 SMTP 共用：Gmail 叫应用密码（需先开两步验证，填写时去掉空格），QQ/163 叫授权码（需先在设置里开启 IMAP/SMTP）。SMTP 在 465 端口用直连 TLS，其他端口用 STARTTLS，可用 `smtp.secure` 覆盖；可选 `username`（默认同 `address`）和 `name`（回信的发件人名）。只用 OAuth 的邮箱（如 Outlook）暂不支持。方舟 Self-hosted Ark 用不了 Agent 工具，因此不支持邮箱。
 
