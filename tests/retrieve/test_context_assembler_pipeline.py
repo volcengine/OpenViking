@@ -173,15 +173,28 @@ async def test_assembly_returns_readable_entries_within_budget():
 
 async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     queries_seen = []
+    peer_queries_seen = []
     auto_create_flags = []
+    project_uri = "viking://resources/project"
 
     async def fake_expand(*, query, session, mode, **kwargs):
         del session, mode, kwargs
         return [query, "expanded query"], "used"
 
     async def fake_find(**kwargs):
-        queries_seen.append(kwargs["query"])
         assert kwargs["events_time_decay_protection"] == "2d"
+        if kwargs["target_uri"]:
+            peer_queries_seen.append(kwargs["query"])
+            assert kwargs["target_uri"] == f"{USER_ROOT}/peers"
+            assert kwargs["filter"] == {"op": "must", "field": "context_type", "conds": ["memory"]}
+        else:
+            queries_seen.append(kwargs["query"])
+            assert {
+                "op": "must",
+                "field": "uri",
+                "conds": [project_uri],
+                "para": "-d=-1",
+            } in kwargs["filter"]["conds"]
         return _FakeFindResult()
 
     async def fake_get(session_id, ctx, *, auto_create=False):
@@ -205,14 +218,15 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
         params=AssembleParams(
             query="short",
             events_time_decay_protection="2d",
+            resource_uris=[project_uri],
             session_id="s1",
             query_expansion="auto",
-            peer_scope="actor",
         ),
     )
 
     assert auto_create_flags == [False]
     assert queries_seen == ["short", "expanded query"]
+    assert peer_queries_seen == queries_seen
     assert result.stats["query_expansion"] == "used"
 
 

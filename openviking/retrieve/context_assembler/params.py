@@ -34,6 +34,7 @@ PINNABLE_TIERS: Tuple[Detail, ...] = ("abstract", "overview", "full")
 DEFAULT_MAX_TOKENS = 1600
 DEFAULT_LIMIT = 10
 MAX_EXCLUDE_URIS = 200
+MAX_RESOURCE_URIS = 50
 MAX_PLANNED_QUERIES = 3
 READ_CONCURRENCY = 8
 OTHER_PEER_OVERFETCH = 4
@@ -141,6 +142,7 @@ class AssembleParams:
     detail: Any = None
     dedup_turns: int = 0
     exclude_uris: Sequence[str] = field(default_factory=tuple)
+    resource_uris: Sequence[str] = field(default_factory=tuple)
     peer_scope: Literal["actor", "all"] = "all"
     other_peer_penalty: Any = None
 

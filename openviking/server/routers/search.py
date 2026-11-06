@@ -12,13 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_types import SearchType
-from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.core.uri_validation import validate_content_target_uri, validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.retrieve.context_assembler import (
     CATEGORY_KEYS,
     DEFAULT_LIMIT,
     DEFAULT_MAX_TOKENS,
     MAX_EXCLUDE_URIS,
+    MAX_RESOURCE_URIS,
     REPORTED_CATEGORY_KEYS,
     AssembleParams,
     DetailRequest,
@@ -112,6 +113,24 @@ def _resolve_uri_list(uris: Sequence[str], ctx: RequestContext) -> list[str]:
     return [validate_request_viking_uri(resolve_path_variables(uri), ctx) for uri in uris]
 
 
+def resolve_resource_scope_uris(uris: Sequence[str] | None, ctx: RequestContext) -> tuple[str, ...]:
+    """Validate and canonicalize the caller's context resource scope."""
+    if uris is None:
+        return ()
+    if not 1 <= len(uris) <= MAX_RESOURCE_URIS:
+        raise InvalidArgumentError(
+            f"resource_uris must contain between 1 and {MAX_RESOURCE_URIS} URIs"
+        )
+    return tuple(
+        dict.fromkeys(
+            validate_content_target_uri(
+                resolve_path_variables(uri), ctx, kind="resource", field_name="resource_uris"
+            )
+            for uri in uris
+        )
+    )
+
+
 def _resolve_image_url(
     image_url: str | list[str] | None, ctx: RequestContext
 ) -> str | list[str] | None:
@@ -182,6 +201,7 @@ CONTEXT_ONLY_FIELDS = (
     "detail",
     "dedup_turns",
     "exclude_uris",
+    "resource_uris",
     "peer_scope",
     "other_peer_penalty",
     "rewrite",
@@ -252,6 +272,9 @@ class SearchRequest(BaseModel):
     detail: Optional[DetailRequest] = None
     dedup_turns: int = Field(default=0, ge=0, le=100)
     exclude_uris: List[str] = Field(default_factory=list, max_length=MAX_EXCLUDE_URIS)
+    resource_uris: Optional[List[str]] = Field(
+        default=None, min_length=1, max_length=MAX_RESOURCE_URIS
+    )
     peer_scope: Literal["actor", "all"] = "all"
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
     rewrite: Union[bool, Literal["auto"]] = False
@@ -456,6 +479,7 @@ async def _search_context(
         detail=request.detail,
         dedup_turns=request.dedup_turns,
         exclude_uris=_resolve_uri_list(request.exclude_uris, ctx),
+        resource_uris=resolve_resource_scope_uris(request.resource_uris, ctx),
         peer_scope=request.peer_scope,
         other_peer_penalty=request.other_peer_penalty,
         rewrite=request.rewrite,

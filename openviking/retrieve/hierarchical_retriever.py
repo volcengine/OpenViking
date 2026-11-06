@@ -24,6 +24,7 @@ from openviking.storage.abstract_overview import AbstractOverviewFormatError, bo
 from openviking.storage.expr import FilterExpr
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.search_filters import has_context_type_filter
 from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_decay import parse_duration_ms
 from openviking_cli.exceptions import InvalidArgumentError
@@ -37,23 +38,6 @@ from openviking_cli.utils.config import RerankConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-def _has_context_type_filter(scope: Any) -> bool:
-    """Recognize explicit type constraints in public DSL and internal filter ASTs."""
-    if isinstance(scope, dict):
-        return scope.get("field") == "context_type" or any(
-            _has_context_type_filter(value)
-            for value in scope.values()
-            if isinstance(value, (dict, list))
-        )
-    if isinstance(scope, list):
-        return any(_has_context_type_filter(value) for value in scope)
-    if hasattr(scope, "payload"):
-        return _has_context_type_filter(scope.payload)
-    return getattr(scope, "field", None) == "context_type" or any(
-        _has_context_type_filter(value) for value in getattr(scope, "conds", [])
-    )
 
 
 class RetrieverMode(str):
@@ -195,7 +179,7 @@ class HierarchicalRetriever:
             image_query
             and context_type is None
             and not has_explicit_target
-            and not _has_context_type_filter(scope_dsl)
+            and not has_context_type_filter(scope_dsl)
         ):
             context_type = ContextType.RESOURCE.value
 
