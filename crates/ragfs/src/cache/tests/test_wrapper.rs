@@ -304,7 +304,10 @@ async fn shared_redis_ttl_reaches_the_query_bucket_expiration() {
     let cached = CachedFileSystem::with_runtime(Box::new(backend), runtime, SERVICE_NAME)
         .with_shared_redis_ttl(Some(Duration::from_secs(60)));
 
-    cached.read_dir("/docs", None, None, None, None).await.unwrap();
+    cached
+        .read_dir("/docs", None, None, None, None)
+        .await
+        .unwrap();
 
     let bucket_key = query_bucket_key(SERVICE_NAME, "/docs", "read_dir");
     let remaining = provider
@@ -334,7 +337,10 @@ async fn query_bucket_ttl_stays_on_the_provider_default() {
     let runtime = CacheRuntime::memory_with_provider(Arc::clone(&provider));
     let cached = CachedFileSystem::with_runtime(Box::new(backend), runtime, SERVICE_NAME);
 
-    cached.read_dir("/docs", None, None, None, None).await.unwrap();
+    cached
+        .read_dir("/docs", None, None, None, None)
+        .await
+        .unwrap();
 
     let bucket_key = query_bucket_key(SERVICE_NAME, "/docs", "read_dir");
     let remaining = provider

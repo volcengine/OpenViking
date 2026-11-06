@@ -1256,16 +1256,18 @@ mod tests {
         );
 
         assert_eq!(
-            mountable.cache.as_ref().and_then(|cache| cache.shared_redis_ttl),
+            mountable
+                .cache
+                .as_ref()
+                .and_then(|cache| cache.shared_redis_ttl),
             Some(Duration::from_secs(60))
         );
 
-        let without_override =
-            MountableFS::with_cache_runtime_and_shared_redis_ttl(
-                CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
-                "cache-ttl-test",
-                None,
-            );
+        let without_override = MountableFS::with_cache_runtime_and_shared_redis_ttl(
+            CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
+            "cache-ttl-test",
+            None,
+        );
 
         assert_eq!(
             without_override
