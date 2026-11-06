@@ -163,6 +163,8 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 }
 ```
 
+可选 `imap.mailbox` 指定要监听的一个 IMAP 文件夹，默认 `INBOX`，例如 `"imap": { "host": "imap.example.com", "port": 993, "mailbox": "Projects" }`。文件夹名保留大小写和空格（只有 INBOX 不区分大小写），支持非 ASCII 名称。首次监听某文件夹从之后的新邮件开始，不导入已有邮件；切换回曾监听的文件夹会从各自保存的位置继续。不同文件夹的邮件身份相互独立，原有 INBOX 邮件和归档仍可读取、回复。
+
 `password` 是邮箱给第三方客户端用的专用密码，按邮箱账号生成一次，IMAP 和 SMTP 共用：Gmail 叫应用密码（需先开两步验证，填写时去掉空格），QQ/163 叫授权码（需先在设置里开启 IMAP/SMTP）。SMTP 在 465 端口用直连 TLS，其他端口用 STARTTLS，可用 `smtp.secure` 覆盖；可选 `username`（默认同 `address`）和 `name`（回信的发件人名）。只用 OAuth 的邮箱（如 Outlook）暂不支持。方舟 Self-hosted Ark 用不了 Agent 工具，因此不支持邮箱。
 
 ## 文档附件与交互卡片

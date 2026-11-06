@@ -8,8 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { ActionService } from '../src/actions/service.mjs';
-import { MailArchive, chunkOffset, needsChunks, readTarget } from '../src/email/archive.mjs';
-import { EmailClient, accountTag } from '../src/email/client.mjs';
+import { MailArchive, chunkOffset, needsChunks, readTarget, mailFolder } from '../src/email/archive.mjs';
+import { EmailClient, accountTag, loadAccount } from '../src/email/client.mjs';
+import { mailboxIdentity, mailboxWireName } from '../src/email/mailbox.mjs';
 import { EmailState } from '../src/email/state.mjs';
 import { fetchAttributes, parseResponse } from '../src/email/imap.mjs';
 import { buildReply, htmlToText, isOwnMessageId, parseAddresses, parseMail, replyMessageId } from '../src/email/mime.mjs';
@@ -35,8 +36,10 @@ function mail({ from = 'Alice <alice@example.com>', to = ME, subject = 'Thursday
 // A scripted IMAP server: the commands it was sent, the mailbox, and IDLE
 // sessions to wake with `deliver(raw)`.
 async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
-  const state = { mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [], idlers: new Set(), sockets: new Set() };
+  const state = { folders: new Map(), mails: mails.map((raw, index) => ({ uid: index + 1, raw })), commands: [], idlers: new Set(), sockets: new Set() };
+  state.folders.set('INBOX', state.mails);
   const server = net.createServer((socket) => {
+    socket.mailbox = 'INBOX';
     state.sockets.add(socket);
     socket.on('close', () => { state.sockets.delete(socket); state.idlers.delete(socket); });
     socket.on('error', () => {});
@@ -62,7 +65,12 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
         const command = line.slice(space + 1);
         state.commands.push(command.startsWith('LOGIN ') ? 'LOGIN' : command);
         const ok = (text = 'done') => socket.write(`${tag} OK ${text}\r\n`);
-        const uidNext = (state.mails.at(-1)?.uid ?? 0) + 1;
+        if (command.startsWith('EXAMINE ')) {
+          socket.mailbox = JSON.parse(command.slice(8));
+          if (!state.folders.has(socket.mailbox)) state.folders.set(socket.mailbox, []);
+        }
+        const selected = state.folders.get(socket.mailbox);
+        const uidNext = (selected.at(-1)?.uid ?? 0) + 1;
         let match;
         if (command.startsWith('LOGIN ')) {
           if (command.includes(`"${PASSWORD}"`)) ok();
@@ -71,21 +79,21 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
           socket.write(`* CAPABILITY IMAP4rev1 IDLE${gmail ? ' X-GM-EXT-1' : ''}\r\n`);
           ok();
         } else if (command.startsWith('EXAMINE ')) {
-          socket.write(`* ${state.mails.length} EXISTS\r\n* OK [UIDVALIDITY ${uidValidity}] ok\r\n* OK [UIDNEXT ${uidNext}] ok\r\n`);
-          socket.known = state.mails.length;
+          socket.write(`* ${selected.length} EXISTS\r\n* OK [UIDVALIDITY ${uidValidity}] ok\r\n* OK [UIDNEXT ${uidNext}] ok\r\n`);
+          socket.known = selected.length;
           ok('[READ-ONLY] EXAMINE completed');
         } else if ((match = /^UID SEARCH UID (\d+):\*$/.exec(command))) {
           const from = Number(match[1]);
-          const found = state.mails.filter((item) => item.uid >= from).map((item) => item.uid);
+          const found = selected.filter((item) => item.uid >= from).map((item) => item.uid);
           // RFC 3501: `n:*` always includes the newest message.
-          if (found.length === 0 && state.mails.length) found.push(state.mails.at(-1).uid);
+          if (found.length === 0 && selected.length) found.push(selected.at(-1).uid);
           socket.write(`* SEARCH${found.map((uid) => ` ${uid}`).join('')}\r\n`);
           ok();
         } else if ((match = /^UID FETCH ([\d,]+) \((.*)\)$/.exec(command))) {
           for (const uid of match[1].split(',').map(Number)) {
-            const index = state.mails.findIndex((item) => item.uid === uid);
+            const index = selected.findIndex((item) => item.uid === uid);
             if (index < 0) continue;
-            const { raw } = state.mails[index];
+            const { raw } = selected[index];
             const fields = [`UID ${uid}`, `RFC822.SIZE ${raw.length}`];
             if (match[2].includes('X-GM-THRID')) fields.push('X-GM-THRID 9001');
             if (match[2].includes('INTERNALDATE')) fields.push('INTERNALDATE "13-Oct-2026 08:10:00 +0000"');
@@ -104,8 +112,8 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
           state.idlers.add(socket);
           socket.write('+ idling\r\n');
           // Like a real server, tell a client that was busy when mail arrived.
-          if (state.mails.length !== socket.known) {
-            socket.known = state.mails.length;
+          if (selected.length !== socket.known) {
+            socket.known = selected.length;
             socket.write(`* ${socket.known} EXISTS\r\n`);
           }
         } else if (command === 'NOOP' || command.startsWith('ID ')) {
@@ -128,10 +136,13 @@ async function fakeImap(t, { mails = [], uidValidity = 1, gmail = true } = {}) {
   return {
     state,
     port: server.address().port,
-    deliver(raw) {
-      state.mails.push({ uid: (state.mails.at(-1)?.uid ?? 0) + 1, raw });
+    deliver(raw, mailbox = 'INBOX') {
+      if (!state.folders.has(mailbox)) state.folders.set(mailbox, []);
+      const selected = state.folders.get(mailbox);
+      selected.push({ uid: (selected.at(-1)?.uid ?? 0) + 1, raw });
       for (const socket of state.idlers) {
-        socket.known = state.mails.length;
+        if (socket.mailbox !== mailbox) continue;
+        socket.known = selected.length;
         socket.write(`* ${socket.known} EXISTS\r\n`);
       }
     },
@@ -221,6 +232,66 @@ async function until(check, timeoutMs = 3_000) {
 }
 
 describe('email connector', () => {
+  it('isolates a configured folder from INBOX while retaining old mail and cursor identities', async (t) => {
+    const bodies = new Map();
+    const archive = {
+      folder: (id) => mailFolder('viking://~/resources/emails', id),
+      storeAttachments: async () => [],
+      write: async (uri, body) => { bodies.set(uri, body); return uri; },
+      chunk: async () => {},
+    };
+    const { imap, start, config } = await setup(t, { archive });
+    const first = await start();
+    imap.deliver(mail());
+    await until(() => first.events.length === 1);
+    await first.client.stopSubscription();
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    account.imap.mailbox = 'Projects';
+    fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+    const second = await start();
+    assert.ok(imap.state.commands.includes('EXAMINE "Projects"'));
+    imap.deliver(mail(), 'Projects');
+    await until(() => second.events.length === 1);
+    const a = first.events[0].messageId;
+    const b = second.events[0].messageId;
+    assert.equal(a, `mail:${TAG}:1:1`);
+    assert.equal(b, `mail:${mailboxIdentity(TAG, 'Projects', 1, 1)}`);
+    assert.notEqual(first.events[0].eventId, second.events[0].eventId);
+    assert.ok(second.client.state.mail(a));
+    assert.ok(second.client.state.mail(b));
+    assert.equal(second.events[0].data.mailbox, 'Projects');
+    assert.deepEqual(second.client.state.cursor(`${TAG}:INBOX`), { uidValidity: 1, lastUid: 1 });
+    const root = 'viking://~/resources/emails';
+    const oldFolder = mailFolder(root, a);
+    const newFolder = mailFolder(root, b);
+    assert.equal(oldFolder, `${root}/${TAG}-1-1`);
+    assert.notEqual(oldFolder, newFolder);
+    assert.match(bodies.get(`${newFolder}/body.md`), /IMAP folder: Projects/);
+    for (const folder of [oldFolder, newFolder]) {
+      assert.deepEqual(readTarget(root, `${folder}/body.md`), { target: `${folder}/body.md` });
+    }
+  });
+
+  it('validates mailbox configuration and encodes rev1 mailbox names', async (t) => {
+    const { config } = await setup(t);
+    const account = JSON.parse(fs.readFileSync(config.emailConfigFile, 'utf8'));
+    assert.equal(loadAccount(config.emailConfigFile).imap.mailbox, 'INBOX');
+    for (const [value, expected] of [['inbox', 'INBOX'], [' Projects ', ' Projects '], ['收件箱', '收件箱']]) {
+      account.imap.mailbox = value;
+      fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+      assert.equal(loadAccount(config.emailConfigFile).imap.mailbox, expected);
+    }
+    for (const value of ['', null, [], 'x\r\nLOGIN', 'x\u0000']) {
+      account.imap.mailbox = value;
+      fs.writeFileSync(config.emailConfigFile, JSON.stringify(account));
+      assert.throws(() => loadAccount(config.emailConfigFile), /imap.mailbox/);
+    }
+    assert.equal(mailboxWireName('台北&'), '&U,BTFw-&-');
+    assert.equal(mailboxWireName('台北&', true), '台北&');
+    assert.notEqual(mailboxIdentity(TAG, 'Projects', 1, 1), mailboxIdentity(TAG, 'projects', 1, 1));
+    assert.equal(mailboxIdentity(TAG, 'inbox', 1, 1), `${TAG}:1:1`);
+  });
+
   it('reports mail that arrives after it starts, read-only, and skips its own replies and auto-replies', async (t) => {
     const { imap, start } = await setup(t, { mails: [mail({ id: 'old-1@example.com' }), mail({ id: 'old-2@example.com' })] });
     const { events, exits } = await start();
