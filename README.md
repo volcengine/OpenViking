@@ -322,6 +322,20 @@ Download:
 - [macOS Intel (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/darwin-x64/openviking-helper-0.0.19-x64.dmg)
 - [Windows (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/win32-x64/openviking-helper-0.0.19-x64.exe)
 
+## OpenViking SuperAgent
+
+OpenViking SuperAgent brings a general-purpose agent into your everyday chats, with **OpenViking as its long-term memory and context foundation**. Connect your preferred agent runtime to Feishu/Lark, WeChat, Telegram, Slack, or QQ to research, write documents, work on code, and follow up on tasks across conversations and days.
+
+<img src="docs/images/superagent-overview.png" alt="OpenViking SuperAgent: chat anywhere, remember context with OpenViking, and get work done." width="100%" />
+
+Install on macOS or Linux:
+
+```bash
+curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
+```
+
+The installer launches `vika setup` to configure your agent and chat connections. See the [SuperAgent overview](vika/README.md) and [installation guide](vika/install.md) for setup and runtime options.
+
 ## VikingBot
 
 VikingBot is an AI agent framework built on top of OpenViking:
