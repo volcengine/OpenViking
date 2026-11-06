@@ -37,10 +37,7 @@ Agent file-output Map and Reduce can use scripts for their assigned work.
 
 Collects records into groups according to a grouping rule.
 Each group is a collection of records that Reduce will process together.
-Semantic groups are independent local assignments. If the requested deliverable
-needs collection-wide coordination, choose mode=all so one Reduce owns the whole
-collection. Examples include a complete navigational index, cross-page semantic
-deduplication or a coherent multi-file package. Do not give every local group the
+Semantic groups are independent local assignments. Do not give every local group the
 same global publication duty or expect them to see each other's unfinished files.
 
 ### Reduce
