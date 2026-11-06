@@ -381,7 +381,10 @@ class CollectionAdapter(ABC):
                 if expr.field in self._URI_FIELD_NAMES
                 else list(expr.values)
             )
-            return {"op": "must", "field": expr.field, "conds": values}
+            payload = {"op": "must", "field": expr.field, "conds": values}
+            if expr.field in self._URI_FIELD_NAMES:
+                payload["para"] = "-d=0"
+            return payload
         if isinstance(expr, PathScope):
             path = (
                 self._encode_uri_field_value(expr.path)
