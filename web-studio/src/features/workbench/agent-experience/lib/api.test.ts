@@ -135,7 +135,6 @@ describe('account-scoped evolution settings', () => {
     get.mockResolvedValue({
       account_id: 'acme',
       settings: { agent_evolution: { enabled: true } },
-      overrides: {},
     })
     const signal = new AbortController().signal
     expect(await fetchAgentEvolutionStatus('acme', signal)).toEqual({
@@ -143,12 +142,12 @@ describe('account-scoped evolution settings', () => {
       enabled: true,
     })
     expect(get).toHaveBeenCalledWith({
-      url: '/api/v1/admin/accounts/acme/settings',
+      url: '/api/v1/admin/accounts/acme/configuration',
       signal,
     })
     await fetchAgentEvolutionStatus('other')
     expect(get).toHaveBeenLastCalledWith({
-      url: '/api/v1/admin/accounts/other/settings',
+      url: '/api/v1/admin/accounts/other/configuration',
       signal: undefined,
     })
   })
@@ -163,8 +162,8 @@ describe('account-scoped evolution settings', () => {
       enabled: false,
     })
     expect(patch).toHaveBeenCalledWith({
-      url: '/api/v1/admin/accounts/acme/settings',
-      body: { agent_evolution: { enabled: false } },
+      url: '/api/v1/admin/accounts/acme/configuration',
+      body: { settings: { agent_evolution: { enabled: false } } },
     })
   })
 

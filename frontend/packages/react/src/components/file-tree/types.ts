@@ -368,17 +368,6 @@ export interface FileTreeProps extends Omit<
    */
   emptyFallback?: ReactNode;
   /**
-   * 树的插槽。工具栏由页面层实现，可以是搜索、导入来源、刷新等任意组合。
-   * Slots of the tree. The toolbar is implemented by the page layer and can
-   * hold search, import sources, refresh or any other combination.
-   */
-  slots?: FileTreeSlots;
-  /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
-   */
-  labels?: FileTreeLabels;
-  /**
    * 为行元素追加属性。返回的 `className` 会与组件自身的类名合并，
    * 其余属性覆盖到行元素上，用于一次性高亮、埋点或自定义 `data-*`。
    * Extra attributes for a row element. The returned `className` is merged with
@@ -426,6 +415,17 @@ export interface FileTreeProps extends Omit<
    * Called after retention settings open successfully, with the URI; not called on failure.
    */
   onOpenRetentionSettings?: (uri: string) => void;
+  /**
+   * 树的插槽。工具栏由页面层实现，可以是搜索、导入来源、刷新等任意组合。
+   * Slots of the tree. The toolbar is implemented by the page layer and can
+   * hold search, import sources, refresh or any other combination.
+   */
+  slots?: FileTreeSlots;
+  /**
+   * 可替换文案，缺省为英文。
+   * Replaceable copy; English by default.
+   */
+  labels?: FileTreeLabels;
 }
 
 /**

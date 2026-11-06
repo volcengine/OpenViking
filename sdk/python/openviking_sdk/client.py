@@ -2505,34 +2505,6 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def admin_get_agent_evolution(self) -> Dict[str, Any]:
-        """Return the effective Agent Evolution switch for the caller's account."""
-        response = await self._request("GET", "/api/v1/admin/agent-evolution")
-        return self._handle_response(response)
-
-    async def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
-        """Persist and hot-reload Agent Evolution for the caller's account."""
-        response = await self._request(
-            "PUT", "/api/v1/admin/agent-evolution", json={"enabled": enabled}
-        )
-        return self._handle_response(response)
-
-    async def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
-        """Return effective and explicitly overridden settings for one account."""
-        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}/settings")
-        return self._handle_response(response)
-
-    async def admin_set_account_agent_evolution(
-        self, account_id: str, enabled: bool
-    ) -> Dict[str, Any]:
-        """Update the allowlisted Agent Evolution setting for one account."""
-        response = await self._request(
-            "PATCH",
-            f"/api/v1/admin/accounts/{account_id}/settings",
-            json={"agent_evolution": {"enabled": enabled}},
-        )
-        return self._handle_response(response)
-
     async def list_experience_trajectories(
         self,
         experience_uri: str,
@@ -3795,18 +3767,6 @@ class SyncHTTPClient:
         return run_async(
             self._async_client.admin_remove_group_member(account_id, group_id, user_id)
         )
-
-    def admin_get_agent_evolution(self) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_get_agent_evolution())
-
-    def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_set_agent_evolution(enabled))
-
-    def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_get_account_settings(account_id))
-
-    def admin_set_account_agent_evolution(self, account_id: str, enabled: bool) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_set_account_agent_evolution(account_id, enabled))
 
     def list_experience_trajectories(
         self,

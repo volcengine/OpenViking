@@ -216,8 +216,12 @@ worker 在追加消息或 commit 前重新读取配置，检查连接身份、�
 工具默认关闭。设置 `plugin.magpie.mcpEnabled: true`，或在 Magpie 选项中保存 `mcpEnabled: true`，然后在 Magpie Library/MCP 路由
 中为需要的 Agent 开启插件服务。也可通过 Magpie 的 `/mcp/magpie/tools` 访问。
 
-提供 `status`、`find`、`read`、`ls`、`remember`，实际名称由 Magpie 加插件前缀。
+提供 `status`、`find`、`rule_search`、`read`、`ls`、`remember`，实际名称由 Magpie 加插件前缀。
 `status` 检查鉴权后的连接；`read` 最多读取 200 行，`ls` 最多返回 100 项。
+
+`rule_search` 接收 `task_context` 与可选的 `rule_probability_threshold`（默认 `0.65`），
+通过 `POST /api/v1/rules/search` 返回完整 Rule。执行受约束的操作或回复前，
+逐条检查条件、例外和正文，遵守所有适用规则。npm 安装时工具名为 `magpie-plugin_rule_search`。
 
 **工具回调不提供调用者的认证身份。开启工具意味着将当前文件的 OV 身份授权给能调用
 该 MCP 服务的调用者。** 共享网关应保持关闭，除非允许的工具调用者都应拥有该访问权限。

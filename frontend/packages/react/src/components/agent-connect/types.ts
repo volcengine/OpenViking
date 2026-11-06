@@ -158,11 +158,6 @@ export interface AgentConnectProps extends Omit<
    */
   detail?: AgentConnectDetail;
   /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
-   */
-  labels?: AgentConnectLabels;
-  /**
    * 切换页签时触发。
    * Invoked when a tab is selected.
    */
@@ -180,4 +175,9 @@ export interface AgentConnectProps extends Omit<
    * control still renders when omitted, it just reports nothing.
    */
   onCopy?: (text: string) => void;
+  /**
+   * 可替换文案，缺省为英文。
+   * Replaceable copy; English by default.
+   */
+  labels?: AgentConnectLabels;
 }

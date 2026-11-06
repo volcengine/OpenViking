@@ -43,6 +43,7 @@ from openviking.server.mcp_endpoint import (
     list_watches,
     read,
     remember,
+    rule_search,
     search,
     tree,
     write,
@@ -51,7 +52,6 @@ from openviking.server.mcp_endpoint import ls as list_tool
 from openviking.server.routers import content as content_router
 from openviking.service.fs_service import ListingPage
 from openviking_cli.exceptions import (
-    FailedPreconditionError,
     InvalidArgumentError,
     InvalidURIError,
     NotFoundError,
@@ -359,9 +359,52 @@ async def test_health_returns_unhealthy_when_no_service(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_search_no_results(service):
+async def test_search_no_results(service, monkeypatch):
+    # Constant fake embeddings match built-in skills and scope summaries.
+    # Return an empty retrieval response while exercising the MCP handler.
+    empty_search = AsyncMock(
+        spec=service.search.search,
+        return_value=SimpleNamespace(memories=[], resources=[], skills=[]),
+    )
+    monkeypatch.setattr(service.search, "search", empty_search)
+
     result = await search(query="zzz_nonexistent_query_xyz_12345")
+
     assert result == "No matching context found."
+    empty_search.assert_awaited_once()
+    assert empty_search.call_args.kwargs["query"] == "zzz_nonexistent_query_xyz_12345"
+    assert empty_search.call_args.kwargs["ctx"] == DEFAULT_CTX
+
+
+async def test_rule_search_tool_schema_and_annotations():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    tool = tools["rule_search"]
+    assert tool.annotations.readOnlyHint is True
+    assert tool.annotations.destructiveHint is False
+    assert set(tool.inputSchema["properties"]) == {
+        "task_context",
+        "rule_probability_threshold",
+    }
+    assert tool.inputSchema["required"] == ["task_context"]
+
+
+async def test_rule_search_returns_rendered_rules(service, monkeypatch):
+    search_rules = AsyncMock(
+        return_value={"rendered": "# Applicable Rules\n\n- Confirm before deleting."}
+    )
+    monkeypatch.setattr(service.rules, "search_rules", search_rules)
+
+    result = await rule_search(
+        task_context="Delete a generated report after confirming it is obsolete.",
+        rule_probability_threshold=0.7,
+    )
+
+    assert result == "# Applicable Rules\n\n- Confirm before deleting."
+    request = search_rules.await_args.args[0]
+    assert request.task_context == "Delete a generated report after confirming it is obsolete."
+    assert request.rule_probability_threshold == 0.7
+    assert search_rules.await_args.kwargs["ctx"] == DEFAULT_CTX
 
 
 async def test_search_returns_formatted_results(service, client_with_resource):
@@ -1182,7 +1225,10 @@ async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(read_visible=read_visible),
+            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
+        ),
     )
     requested = next(iter(arguments.values()))
     expected = requested if isinstance(requested, list) else [requested]
@@ -2327,7 +2373,7 @@ async def test_forget_directory_without_recursive_fails(service):
     await service.viking_fs.mkdir(dir_uri, ctx=ctx, exist_ok=True)
     await service.viking_fs.write(child_uri, "child data", ctx=ctx)
 
-    with pytest.raises(FailedPreconditionError):
+    with pytest.raises(InvalidArgumentError, match="recursive"):
         await forget(uri=dir_uri)
 
 

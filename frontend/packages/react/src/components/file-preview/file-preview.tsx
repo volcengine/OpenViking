@@ -4,7 +4,6 @@ import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import { FileIcon } from './file-preview-icons.js';
 import { DEFAULT_LABELS } from './file-preview-labels.js';
-import styles from './file-preview.module.css';
 import { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewComponent,
@@ -89,9 +88,9 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   return (
     <div
       {...rest}
-      className={[styles.root, className].filter(Boolean).join(' ')}
+      className={['ov-file-preview', className].filter(Boolean).join(' ')}
     >
-      <div role="tablist" className={styles.tabRow}>
+      <div role="tablist" className="ov-file-preview__tab-row">
         {tabs.map((tab) => (
           <button
             key={tab.key}
@@ -99,11 +98,13 @@ export const FilePreview: FilePreviewComponent = forwardRef<
             role="tab"
             aria-selected={tab.key === activeTab.key}
             disabled={tab.disabled || editor.saving}
-            className={styles.tab}
+            className="ov-file-preview__tab"
             onClick={() => handleTabClick(tab)}
           >
-            <span className={styles.iconSlot}>{tab.icon ?? <FileIcon />}</span>
-            <span className={styles.tabTitle}>
+            <span className="ov-file-preview__icon-slot">
+              {tab.icon ?? <FileIcon />}
+            </span>
+            <span className="ov-file-preview__tab-title">
               {tab.title ?? (isFileTab(tab) ? tab.source.fileName : tab.key)}
             </span>
           </button>
@@ -128,7 +129,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         }}
       />
 
-      <div className={styles.body}>
+      <div className="ov-file-preview__body">
         <FilePreviewBody
           fileTab={fileTab}
           contentTab={contentTab}

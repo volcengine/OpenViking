@@ -11,6 +11,7 @@ export default defineConfig({
         entry: {
           index: './src/index.ts',
           icons: './src/icons/index.tsx',
+          client: './src/client/index.ts',
           'components/file-tree': './src/components/file-tree/index.ts',
           'components/file-preview': './src/components/file-preview/index.ts',
           'components/tui': './src/components/tui/index.ts',

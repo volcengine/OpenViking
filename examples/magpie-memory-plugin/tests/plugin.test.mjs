@@ -465,6 +465,33 @@ test("tools require opt-in, validate arguments and use the same file connection"
   assert.ok(f.calls.every((c) => c.headers.authorization === "Bearer test-secret"));
 });
 
+test("Rule search preserves complete constraints, opt-in, identity and errors", async (t) => {
+  const rendered = "完整规则\n".repeat(17000) + "LAST RULE";
+  const f = await fixture(t, (call, res) => {
+    if (call.body?.task_context === "fail") res.statusCode = 503;
+    return { rendered };
+  });
+  const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+  process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
+  t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+  const { tool } = await OpenVikingMemory();
+  const ctx = { abort: new AbortController().signal };
+  await assert.rejects(tool.rule_search.execute({ task_context: "deploy" }, ctx), /disabled/);
+  await f.save({ actor_peer_id: "project", plugin: { magpie: { mcpEnabled: true } } });
+  const task_context = "plan".repeat(10000);
+  assert.equal(await tool.rule_search.execute({ task_context, rule_probability_threshold: 0 }, ctx), rendered);
+  assert.equal(f.calls[0].path, "/api/v1/rules/search");
+  assert.deepEqual(f.calls[0].body, { task_context, rule_probability_threshold: 0 });
+  assert.equal(f.calls[0].headers.authorization, "Bearer test-secret");
+  assert.equal(f.calls[0].headers["x-openviking-user"], "test-user");
+  assert.equal(f.calls[0].headers["x-openviking-actor-peer"], "project");
+  for (const threshold of [null, -1, 2, "0.5", NaN]) {
+    await assert.rejects(tool.rule_search.execute({ task_context: "deploy", rule_probability_threshold: threshold }, ctx), /invalid/);
+  }
+  assert.equal(f.calls.length, 1);
+  await assert.rejects(tool.rule_search.execute({ task_context: "fail" }, ctx), /unavailable/);
+});
+
 test("actual Magpie Bun host loads package, runs recall and exposes working tools", {
   skip: !process.env.MAGPIE_PLUGIN_HOST,
 }, async (t) => {

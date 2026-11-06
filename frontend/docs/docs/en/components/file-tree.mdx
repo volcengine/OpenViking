@@ -2,7 +2,7 @@
 
 A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
 
-This is a placeholder implementation: it renders every documented row type and honours the public props, so consumers can integrate against the API before the full view lands. Styling, iconography and interaction details will change.
+This is a placeholder implementation: it renders every documented row type and honours the public props, so consumers can integrate against the API before the full view lands. Styling, iconography and interaction details will change, and the view will be rewritten against this contract.
 
 ## Basic usage
 
@@ -76,6 +76,34 @@ import '@openviking/react/components/file-tree/style.css';
 ## Accessibility
 
 The tree uses `role="tree"` with `role="treeitem"` rows and reports `aria-level`, `aria-selected` and `aria-expanded`. Arrow keys move between rows, Right/Left expand and collapse, Enter and Space select. Status is carried by visible text, not colour alone.
+
+## Class names
+
+Class names are prefixed with `ov-`. The block is `ov-file-tree`; elements use `ov-file-tree__<element>`.
+
+| Class name                  | Element       | Purpose                                  |
+| --------------------------- | ------------- | ---------------------------------------- |
+| `ov-file-tree`              | Root          | Column layout and base typography.       |
+| `ov-file-tree__toolbar`     | Toolbar slot  | Host toolbar above the rows.             |
+| `ov-file-tree__body`        | Scroll body   | The scrolling region.                    |
+| `ov-file-tree__rows`        | Row container | Vertical stack of rows.                  |
+| `ov-file-tree__row`         | Row           | One entry row; carries `data-selected`.  |
+| `ov-file-tree__row:hover`   | Row           | Hover background.                        |
+| `ov-file-tree__toggle`      | Expand button | Expand/collapse control.                 |
+| `ov-file-tree__chevron`     | Chevron icon  | Rotates when `data-expanded` is present. |
+| `ov-file-tree__label`       | Name          | The row's primary text.                  |
+| `ov-file-tree__description` | Description   | Secondary text next to the name.         |
+| `ov-file-tree__level`       | Level badge   | Context level chip.                      |
+| `ov-file-tree__expiry`      | Expiry hint   | Expiry text and its action button.       |
+| `ov-file-tree__tooltip`     | Tooltip       | Row tooltip surface.                     |
+| `ov-file-tree__child-row`   | Child row     | Loading, empty, and error rows.          |
+| `ov-file-tree__state`       | State panel   | Full-height loading, empty, and error.   |
+
+```css
+.my-workbench .ov-file-tree__row {
+  height: 32px;
+}
+```
 
 ## Theme tokens
 

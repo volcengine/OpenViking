@@ -151,8 +151,9 @@ PATCH /api/v1/admin/accounts/{account_id}/configuration
 ```
 
 PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置或替换，`null`
-表示从当前作用域删除该值。对象递归合并，数组整体替换。响应只返回该作用域
-的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
+表示从当前作用域删除该值。对象递归合并，数组整体替换。响应主要返回该作用域
+的显式配置；Account configuration 额外保证 `agent_evolution.enabled` 为实际生效值，
+其他字段不补全默认值。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
 
@@ -1071,6 +1072,32 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
 其他 Git 主机统一添加到 `code_hosting_domains`。
+
+#### 语法包下载与镜像（网络受限 / 离线）
+
+`tree-sitter-language-pack.process()` 首次解析某种语言时，会按需从 GitHub Releases 下载语法整包（单个平台包内含全部语言，约 20MB），下载后缓存在本地，之后的解析直接读缓存、不再联网。
+
+- **Docker 部署**：镜像在构建阶段已执行 `download_all()` 预热全部语法，并校验所有语言就绪（缺失则镜像构建失败）；生产环境直接命中镜像内缓存，无需也不会访问 GitHub。
+- **个人本地使用（非 Docker）**：默认仍按需从 GitHub 下载，不会强制预取。如果你的网络无法访问 GitHub，可把环境变量指向 OpenViking 随包内置的代理清单（下载地址已改写为公共代理 `gh-proxy.com`）：
+
+```bash
+# 1. 找到随包安装的代理清单路径
+python -c "import openviking.parse.parsers.code.ast as m, os; print(os.path.join(os.path.dirname(m.__file__), 'assets', 'parsers.ghproxy.json'))"
+
+# 2. 指向它（建议写入 ~/.zshrc / ~/.bashrc）
+export TREE_SITTER_LANGUAGE_PACK_MANIFEST_URL="file://<上一步输出的绝对路径>"
+```
+
+说明：
+
+- 该环境变量只替换**清单文件**地址；清单内各平台整包 URL 已改写为代理地址，整包也会走代理，`sha256` 保持不变。
+- 想彻底离线，可在能联网时手动预热一次，之后全程使用本地缓存：
+
+```bash
+python -c "from tree_sitter_language_pack import download_all; download_all()"
+```
+
+- 如需使用自建镜像，把环境变量指向你自己的 `parsers.json`（同步改写其中的整包 URL）即可，支持 `http(s)://` 与 `file://`。
 
 ### pdf
 
@@ -2244,9 +2271,8 @@ Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
 
 支持的 add target URI：
 
-- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
-- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://~/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
-- 旧写法兼容：早期配置中的 `viking://user/resources` 和 `viking://user/skills` 会在配置加载时自动归一化为 `viking://~/resources` 和 `viking://~/skills`，并打印一条 info 日志。新配置请直接使用 `viking://~/...`；在 `add_targets` 之外，无 uid 的写法会在请求入口被拒绝。
+- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
+- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。支持 `viking://~/skills` 和 `viking://agent/skills`。
 
 ### 运行时配置来源 {#runtime-configuration-source}
 
