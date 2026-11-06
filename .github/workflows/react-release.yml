@@ -53,4 +53,18 @@ jobs:
         if: steps.published.outputs.exists == 'false'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --workspace @openviking/react --access public --provenance
+        run: |
+          # setup-node writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+          # into .npmrc. With the secret unset that line expands to an empty
+          # bearer token and npm fails with 401 instead of falling back to
+          # trusted publishing, so drop both the variable and the line when
+          # there is no token.
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            unset NODE_AUTH_TOKEN
+            if [ -f .npmrc ]; then
+              grep -v '_authToken' .npmrc > .npmrc.tmp || true
+              mv .npmrc.tmp .npmrc
+            fi
+            echo "No NPM_TOKEN secret; publishing with npm trusted publishing (OIDC)."
+          fi
+          npm publish --workspace @openviking/react --access public --provenance
