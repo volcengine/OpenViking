@@ -22,7 +22,8 @@ use super::provider::{
     PathLockProvider,
 };
 use super::types::{
-    HandoffRecoveryReason, LockToken, PathLockError, PathLockKind, PathLockRequest, PathLockResult,
+    HandoffRecoveryReason, LockHolder, LockToken, PathLockError, PathLockKind, PathLockRequest,
+    PathLockResult,
 };
 
 const ACQUIRE_BATCH_ID: &str = "pathlock.acquire_batch.v5";
@@ -32,6 +33,7 @@ const COMPARE_REMOVE_ID: &str = "pathlock.compare_remove.v2";
 const REFRESH_ID: &str = "pathlock.refresh.v2";
 const REFRESH_BATCH_ID: &str = "pathlock.refresh_batch.v3";
 const MUTATE_HOLDER_ID: &str = "pathlock.mutate_holder.v1";
+const REPLACE_HOLDER_ID: &str = "pathlock.replace_holder.v1";
 // Bound each Lua execution so large leases do not monopolize Redis.
 const REFRESH_BATCH_SIZE: usize = 256;
 const IS_LOCKED_ID: &str = "pathlock.is_locked.v3";
@@ -524,8 +526,8 @@ local token = decode_token(current)
 if not token then
     return redis.error_reply("invalid compare write token")
 end
--- Holder CAS restores complete snapshots during failed handoff adoption.
--- Ordinary holder renew/release uses the server-clock mutation script below.
+-- Low-level holder CAS preserves supplied snapshots. Ordinary holder renewal,
+-- release and failed handoff rollback use the server-clock mutation scripts.
 if ARGV[5] == "holders" then
     local replacement = decode_token(ARGV[7])
     if not replacement or not replacement.holders or replacement.owner ~= ARGV[3] then
@@ -729,6 +731,53 @@ return { "ok" }
 "#
 );
 
+// Failed adoption must not filter Redis timestamps using the client's clock or
+// restore a complete snapshot over a concurrently renewed sibling.
+const REPLACE_HOLDER_SCRIPT: &str = token_script!(
+    r#"
+local lease_ns, ttl_ms = lease_values(ARGV[7])
+local restored_time = normalize_decimal(ARGV[6])
+if not lease_ns or not valid_owner(ARGV[2]) or not valid_owner(ARGV[3])
+    or not valid_owner(ARGV[4]) or ARGV[3] == ARGV[4] or not restored_time
+    or (ARGV[5] ~= "E" and ARGV[5] ~= "T") then
+    return { "invalid_request", "invalid holder rollback" }
+end
+local raw = redis.call("HGET", KEYS[1], ARGV[1])
+if not raw then return { "missing" } end
+local token = decode_token(raw)
+if not token then return { "invalid_token", raw } end
+if token.owner ~= ARGV[2] then return { "owner_mismatch" } end
+local stale_before = decimal_subtract(server_now_ns(), lease_ns)
+local found = false
+local source_found = false
+local refs = {}
+for _, h in ipairs(token.holders or {}) do
+    if h.id == ARGV[3] then
+        found = true
+    elseif decimal_less(h.time_ns, stale_before) ~= true then
+        table.insert(refs, h)
+        if h.id == ARGV[4] then source_found = true end
+    end
+end
+if not found then return { "missing" } end
+if not source_found and decimal_less(restored_time, stale_before) ~= true then
+    table.insert(refs, { id = ARGV[4], kind = ARGV[5], time_ns = restored_time })
+end
+if #refs == 0 then
+    redis.call("HDEL", KEYS[1], ARGV[1])
+else
+    table.sort(refs, holder_less)
+    local parts = {}
+    for _, h in ipairs(refs) do
+        table.insert(parts, h.id .. ":" .. h.kind .. ":" .. h.time_ns)
+    end
+    redis.call("HSET", KEYS[1], ARGV[1], "v2|" .. token.owner .. "|" .. table.concat(parts, ","))
+end
+if redis.call("HLEN", KEYS[1]) > 0 then redis.call("PEXPIRE", KEYS[1], ttl_ms) end
+return { "ok" }
+"#
+);
+
 const IS_LOCKED_SCRIPT: &str = token_script!(
     r#"
 local path = ARGV[1]
@@ -837,6 +886,7 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
     script!(REFRESH_ID, REFRESH_SCRIPT),
     script!(REFRESH_BATCH_ID, REFRESH_BATCH_SCRIPT),
     script!(MUTATE_HOLDER_ID, MUTATE_HOLDER_SCRIPT),
+    script!(REPLACE_HOLDER_ID, REPLACE_HOLDER_SCRIPT),
     script!(IS_LOCKED_ID, IS_LOCKED_SCRIPT),
     script!(SCAN_DESCENDANTS_ID, SCAN_DESCENDANTS_SCRIPT),
     script!(READ_MANY_ID, READ_MANY_SCRIPT),
@@ -1159,6 +1209,42 @@ impl RedisPathLockProvider {
 
 #[async_trait]
 impl PathLockProvider for RedisPathLockProvider {
+    async fn replace_holder(
+        &self,
+        path: &str,
+        owner: &str,
+        holder: &str,
+        restored: LockHolder,
+        _stale_before: u128,
+    ) -> PathLockResult<()> {
+        if !LockTokenCodec::valid_id(owner)
+            || !LockTokenCodec::valid_id(holder)
+            || !LockTokenCodec::valid_id(&restored.id)
+            || holder == restored.id
+        {
+            return Err(PathLockError::InvalidRequest(
+                "invalid holder rollback identity".into(),
+            ));
+        }
+        Self::validate_lock_scope(path, restored.kind)?;
+        let values = self
+            .execute_array(
+                REPLACE_HOLDER_ID,
+                self.tokens_key_for_path(path)?,
+                vec![
+                    Self::bytes(path),
+                    Self::bytes(owner),
+                    Self::bytes(holder),
+                    Self::bytes(&restored.id),
+                    Self::bytes(Self::kind_code(restored.kind)),
+                    Self::bytes(restored.time_ns.to_string()),
+                    Self::bytes(self.lease_ms.to_string()),
+                ],
+            )
+            .await?;
+        Self::decode_refresh_result(path, &values).map(|_| ())
+    }
+
     async fn mutate_holder(
         &self,
         path: &str,
@@ -1703,6 +1789,10 @@ mod refresh_tests;
 #[cfg(test)]
 #[path = "cache_time_tests.rs"]
 mod time_tests;
+
+#[cfg(test)]
+#[path = "cache_handoff_tests.rs"]
+mod handoff_tests;
 
 #[cfg(test)]
 #[path = "cache_clock_perf_tests.rs"]
