@@ -114,16 +114,23 @@ async def test_long_markdown_default_mode_still_splits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_split_keeps_lower_level_headings_before_first_top_level_heading() -> None:
+async def test_split_preserves_preface_and_body_after_empty_headings() -> None:
     body = "\n\n".join(f"paragraph {index} " + "x" * 500 for index in range(10))
-    content = f"## Preface\n\nPREFACE {body}\n\n# Chapter 1\n\n{body}\n\n# Chapter 2\n\n{body}"
+    preface = (
+        "## Preface\n\nPREFACE\n\n"
+        "#\n\nThe first paragraph remains body text.\n\n"
+        "# \t\r\n\r\nThe second paragraph remains body text.\r\n\r\n"
+        "# \t\r\n\r\nThe third paragraph remains body text."
+    )
+    content = f"{preface}\n\n{body}\n\n# Chapter 1\n\n{body}\n\n# Chapter 2\n\n{body}"
     parser = MarkdownParser(config=ParserConfig(max_section_size=512, max_section_chars=2048))
 
     layout = await parser._compute_layout(content, "viking://temp/test", resource_name="book")
 
-    written = "".join(op.content for op in layout.ops if op.kind == "write")
-    assert "## Preface" in written
-    assert "PREFACE" in written
+    writes = [op for op in layout.ops if op.kind == "write"]
+    assert len(writes) > 1
+    assert len({op.uri for op in writes}) == len(writes)
+    assert preface in "".join(op.content for op in writes)
 
 
 @pytest.mark.asyncio
@@ -160,67 +167,3 @@ async def test_pdf_no_split_converts_to_one_complete_markdown(
         == content
     )
     assert not any(uri.endswith(".pdf") for uri in fake_fs.files)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("newline", ["\n", "\r\n"])
-async def test_split_preserves_paragraph_after_empty_heading(newline: str) -> None:
-    paragraph = "A paragraph must stay ordinary body text."
-    content = newline.join(
-        [
-            "#",
-            "",
-            paragraph,
-            "",
-            "Normal article body with reproducible technical instructions. " * 52,
-            "",
-            "# Next section",
-            "",
-            "The next chapter contains independent ordinary prose. " * 45,
-        ]
-    )
-    parser = MarkdownParser(config=ParserConfig(max_section_chars=2000))
-
-    layout = await parser._compute_layout(
-        content, "viking://temp/empty-heading", resource_name="guide"
-    )
-
-    writes = [op for op in layout.ops if op.kind == "write"]
-    assert len(writes) > 1
-    planned_lines = [line for op in writes for line in (op.content or "").splitlines()]
-    assert paragraph in planned_lines
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("heading", ["#", "# \t"])
-@pytest.mark.parametrize("newline", ["\n", "\r\n"])
-async def test_split_keeps_multiple_empty_headings_body(heading: str, newline: str) -> None:
-    first = "The first paragraph must remain ordinary body text."
-    second = "The second paragraph must remain ordinary body text."
-    content = newline.join(
-        [
-            heading,
-            "",
-            first,
-            "",
-            "Alpha ordinary article words. " * 35,
-            "",
-            heading,
-            "",
-            second,
-            "",
-            "Beta ordinary article words. " * 35,
-        ]
-    )
-    parser = MarkdownParser(config=ParserConfig(max_section_chars=2000))
-
-    layout = await parser._compute_layout(
-        content, "viking://temp/multiple-empty-headings", resource_name="guide"
-    )
-
-    writes = [op for op in layout.ops if op.kind == "write"]
-    assert len(writes) > 1
-    assert len({op.uri for op in writes}) == len(writes)
-    planned_lines = [line for op in writes for line in (op.content or "").splitlines()]
-    assert first in planned_lines
-    assert second in planned_lines
