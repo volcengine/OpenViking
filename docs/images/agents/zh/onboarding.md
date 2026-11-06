@@ -178,7 +178,7 @@ node "${TMPDIR:-/tmp}/ov-import-history.mjs" --harness <claude|codex> --cwd "$PW
    ov read <记忆的 URI>
    ```
 
-3. 只有两种情况读导入的原对话：他想看当时的原话，或者没有提取出记忆（`extraction` 不是 `completed`，或者第 1 步什么都没查到）。直接读归档里的原始消息：会话 id 用导入 JSON 里的 `id`，导入只提交一次，归档就是 `archive_001`。不要用 `ov session get-session-archive`，它只返回记忆整理完成的归档，正好在这两种情况下找不到。插件保存的 `live` 会话不用读原对话，以第 1 步的结果为准：
+3. 只有两种情况读导入的原对话：他想看当时的原话，或者没有提取出记忆（`extraction` 不是 `completed`，或者第 1 步什么都没查到）。直接读归档里的原始消息：会话 id 用导入 JSON 里的 `id`，导入只提交一次，归档就是 `archive_001`。不要用 `ov session get-session-archive`，较旧的服务端只返回记忆整理完成的归档，正好在这两种情况下可能找不到。插件保存的 `live` 会话不用读原对话，以第 1 步的结果为准：
 
    ```bash
    ov read viking://user/<user_id>/sessions/<会话 id>/history/archive_001/messages.jsonl

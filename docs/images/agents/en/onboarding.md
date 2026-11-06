@@ -178,7 +178,7 @@ Then **read back**. Whenever any session is in OpenViking (imported this time, i
    ov read <memory URI>
    ```
 
-3. Read the imported conversation itself only in two cases: they want the original wording, or no memories were extracted (`extraction` isn't `completed`, or item 1 found nothing). Read the raw messages in the archive directly: use the session `id` from the import JSON; an import commits once, so the archive is `archive_001`. Don't use `ov session get-session-archive`: it only returns archives whose memory processing has completed, so it finds nothing in exactly these cases. Sessions the plugin saved (`live`) aren't read this way; go by what item 1 returned:
+3. Read the imported conversation itself only in two cases: they want the original wording, or no memories were extracted (`extraction` isn't `completed`, or item 1 found nothing). Read the raw messages in the archive directly: use the session `id` from the import JSON; an import commits once, so the archive is `archive_001`. Don't use `ov session get-session-archive`: older servers return only archives whose memory processing has completed, so it can find nothing in exactly these cases. Sessions the plugin saved (`live`) aren't read this way; go by what item 1 returned:
 
    ```bash
    ov read viking://user/<user_id>/sessions/<session id>/history/archive_001/messages.jsonl
