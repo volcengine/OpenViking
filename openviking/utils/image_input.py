@@ -28,11 +28,18 @@ def compress_image_input(data: bytes, mime_type: str) -> tuple[bytes, str]:
         # RGB conversion clips high-bit-depth intensities instead of scaling them.
         if original.mode in {"I", "F"} or original.mode.startswith("I;16"):
             return data, mime_type
-        image = ImageOps.exif_transpose(original)
+        if original.format == "JPEG":
+            scale = min(1.0, DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION / max(original.size))
+            original.draft(None, tuple(max(1, int(side * scale)) for side in original.size))
+        # PNG can carry a transparent color without an alpha channel. Expand it
+        # before resampling so edge pixels retain their transparency, too.
+        image = original.convert("RGBA") if "transparency" in original.info else original
         image.thumbnail(
             (DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION, DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION),
             Image.Resampling.LANCZOS,
         )
+        # Transpose after shrinking to avoid copying the full decoded image.
+        image = ImageOps.exif_transpose(image)
         if image.mode in {"RGBA", "LA", "P"}:
             rgba = image.convert("RGBA")
             background = Image.new("RGBA", rgba.size, "white")
