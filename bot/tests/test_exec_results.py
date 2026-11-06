@@ -101,14 +101,15 @@ async def test_remote_backends_preserve_structured_status(tmp_path, kind, status
 
 
 @pytest.mark.asyncio
-async def test_tool_observability_marks_nonzero_exit_as_failed(monkeypatch):
+@pytest.mark.parametrize("status", [0, 7])
+async def test_tool_observability_uses_exit_status(monkeypatch, status):
     class Probe(Tool):
         name = "exec"
         description = "Return command output."
         parameters = {"type": "object", "properties": {}}
 
         async def execute(self, tool_context, **kwargs):
-            return CommandResult("all good", 7)
+            return CommandResult("Error: literal" if status == 0 else "all good", status)
 
     registry = ToolRegistry()
     registry.register(Probe())
@@ -127,5 +128,5 @@ async def test_tool_observability_marks_nonzero_exit_as_failed(monkeypatch):
     outcome = await registry.execute_detailed(
         "exec", {}, session_key=SessionKey(type="cli", channel_id="status", chat_id="test")
     )
-    assert outcome.result.exit_code == 7
-    assert registry.langfuse.end_tool_call.call_args.kwargs["success"] is False
+    assert outcome.result.exit_code == status
+    assert registry.langfuse.end_tool_call.call_args.kwargs["success"] == (status == 0)
