@@ -492,7 +492,8 @@ function renderTurn(turn, index) {
   if (turn.implicit) head.append(h('span', 'aux', '未记录开始'));
   const dur = h('span', 'aux');
   if (turn.endRow) dur.textContent = fmtDur(meta.durationMs ?? (turn.endMs - turn.startMs));
-  else since(dur, turn.startMs);
+  // 只有确实还在跑的回合才走秒表；隐式且已不在运行的回合不该一直计时
+  else if (status.cls === 'running') since(dur, turn.startMs);
   head.append(dur);
   if (Number.isFinite(meta.inputTokens)) {
     const ctx = Number.isFinite(meta.contextWindow) ? ` / ${fmtTokens(meta.contextWindow)}` : '';
@@ -532,7 +533,11 @@ function renderTurn(turn, index) {
   if (turn.endRow && status.cls === 'failed' && turn.endRow.summary) {
     output.append(h('div', 'turn-error txt', turn.endRow.summary));
   } else if (!deliveries.length) {
-    output.append(h('div', 'io-empty', !turn.endRow ? '进行中…' : '没有发出消息（静默或仅模型文本）'));
+    // 输出占位文案跟回合状态走，避免标题写“记录不全”、框里还写“进行中…”
+    const empty = status.cls === 'running'
+      ? '进行中…'
+      : turn.endRow ? '没有发出消息（静默或仅模型文本）' : '没有记录到输出';
+    output.append(h('div', 'io-empty', empty));
   }
   el.append(output);
   return el;

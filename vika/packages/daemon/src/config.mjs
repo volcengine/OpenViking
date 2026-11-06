@@ -285,9 +285,11 @@ export function getConfig() {
       min: 1_000,
       max: 86_400_000,
     }),
-    // Opt-in per instance (agents[].explicitSilence): the stay_silent tool, the
-    // decisions ledger and the turn-end decision check. Off, the daemon offers
-    // the same tools and assembles the same policy text as without them.
+    // Per instance (agents[].explicitSilence; the manifest defaults it on except
+    // on Ark and always pins this env): the stay_silent tool, the decisions
+    // ledger and the turn-end decision check. Off, the daemon offers the same
+    // tools and assembles the same policy text as without them. Unpinned (a
+    // daemon started without a manifest) it stays off.
     explicitSilence: boolEnv('VIKA_EXPLICIT_SILENCE', false),
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
