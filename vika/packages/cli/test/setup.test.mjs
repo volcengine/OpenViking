@@ -611,7 +611,7 @@ test('其他设置 switches each setting where it is, says what changes, and sav
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, naturalWriting: false, explicitSilence: true }]);
   const text = h.written();
-  assert.match(text, /1\) 分段回复\s+关 · 复杂任务先表态，做的过程中发阶段性结论；简单问题仍只回一条\n  2\) 自然写作\s+开 · [^\n]+\n  3\) 显式不回复\s+关 · [^\n]+\n  4\) OpenViking 自动召回\s+关 · [^\n]+\n  5\) OpenViking 显式记忆\s+关 · [^\n]+\n  6\) 会议纪要入库\s+关 · [^\n]+\n  7\) 完成/);
+  assert.match(text, /1\) 分段回复\s+关 · 复杂任务先表态，做的过程中发阶段性结论；简单问题仍只回一条\n  2\) 自然写作\s+开 · [^\n]+\n  3\) 显式不回复\s+关 · [^\n]+\n  4\) OpenViking 自动召回\s+关 · [^\n]+\n  5\) OpenViking 主动记忆\s+关 · [^\n]+\n  6\) 会议纪要入库\s+关 · [^\n]+\n  7\) 完成/);
   assert.match(text, /1\) 分段回复\s+开 · /, 'a switch shows its new value at once');
   assert.match(text, /10\) 其他设置\s+开着：显式不回复（已改）/);
   assert.match(text, /将修改 ASD（asd）：\n  自然写作：开 → 关（模型会开一次新的会话）\n  显式不回复：关 → 开（模型会开一次新的会话）\n/);
@@ -626,8 +626,8 @@ test('其他设置 switches each setting where it is, says what changes, and sav
   fs.writeFileSync(path.join(recall.home, '.vika', 'config.json'), JSON.stringify({ version: 1, defaultInstance: old.id, env: {}, agents: [old] }));
   assert.equal(await setupCommand(recall.options), 0);
   assert.deepEqual(recall.manifest().agents, [{ ...old, stagedReplies: false, naturalWriting: true, explicitSilence: false, ovAutoRecall: true, ovRemember: true }]);
-  assert.match(recall.written(), /将修改 ASD（asd）：\n  OpenViking 自动召回：关 → 开\n  OpenViking 显式记忆：关 → 开\n/);
-  assert.doesNotMatch(recall.written(), /显式记忆：[^\n]*模型会开一次新的会话/);
+  assert.match(recall.written(), /将修改 ASD（asd）：\n  OpenViking 自动召回：关 → 开\n  OpenViking 主动记忆：关 → 开\n/);
+  assert.doesNotMatch(recall.written(), /主动记忆：[^\n]*模型会开一次新的会话/);
 });
 
 test('a new instance takes a shipped role by what it is for', async (t) => {
