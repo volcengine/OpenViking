@@ -1298,8 +1298,8 @@ export class ActionService {
   }
 
   async readOVSession(input, caller) {
-    const state = this.store.db.prepare('SELECT session_id, uri FROM ov_session_sync WHERE epoch = ?').get(input.epoch);
-    if (!state?.uri) throw new Error('No OpenViking session is linked to this epoch');
+    const state = this.store.ovSessionFor?.(input.epoch);
+    if (!state) throw new Error('No OpenViking session is linked to this epoch');
     const client = this.ovClient ?? new OVSessionClient(this.config.openVikingConfigPath);
     let result;
     if (input.archive_id) result = await client.archive(state.uri, input.archive_id);

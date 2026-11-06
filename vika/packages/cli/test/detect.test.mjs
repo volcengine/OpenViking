@@ -6,7 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { LOCAL_OV_URL, detectOpenViking, writeInstanceOvConfig } from '../src/ov.mjs';
+import {
+  LOCAL_OV_URL, OVRegistrations, detectOpenViking, instanceOvConfig, instanceUserName, requestNamesUser, writeInstanceOvConfig,
+} from '../src/ov.mjs';
 import { detectRuntimes, which } from '../src/runtimes.mjs';
 
 function tempDir(t, prefix) {
@@ -38,18 +40,56 @@ test('OpenViking: the user config wins, its credentials prove who the user is', 
   const detected = await detectOpenViking({ env: {}, homeDir: home, fetchImpl });
   assert.deepEqual(detected, {
     configPath: path.join(home, '.openviking', 'ovcli.conf'), url: 'https://ov.example', usable: true,
-    user: 'amy', authMode: 'api_key', reason: null,
+    user: 'amy', account: null, role: null, authMode: 'api_key', reason: null,
   });
   assert.equal(calls[0].headers['X-API-Key'], 'key-1');
   assert.equal(calls[0].headers['X-OpenViking-Account'], 'acme');
 
+  // Under an API key the key is the identity; the copy names no peer.
   const target = path.join(home, '.vika', 'ov', 'primary.json');
-  writeInstanceOvConfig({ detected, instanceId: 'primary', target });
+  writeInstanceOvConfig({ config: await instanceOvConfig({ detected, instanceId: 'primary' }), target });
   assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), {
-    url: 'https://ov.example', api_key: 'key-1', account: 'acme', plugin: { recall: true }, actor_peer_id: 'primary',
+    url: 'https://ov.example', api_key: 'key-1', account: 'acme', plugin: { recall: true },
   });
   assert.equal(fs.statSync(target).mode & 0o777, 0o600);
   assert.equal(JSON.parse(fs.readFileSync(detected.configPath, 'utf8')).actor_peer_id, 'source-actor');
+});
+
+test('OpenViking: where requests name the user, each instance is a user of its own', async (t) => {
+  const home = tempDir(t, 'vika-ov-');
+  const trusted = { configPath: null, url: LOCAL_OV_URL, usable: true, authMode: 'trusted',
+    config: { url: LOCAL_OV_URL, api_key: 'root-key', account: 'team', user: 'owner', actor_peer_id: 'old' } };
+  assert.deepEqual(await instanceOvConfig({ detected: trusted, instanceId: 'asd' }),
+    { url: LOCAL_OV_URL, api_key: 'root-key', account: 'team', user: 'owner.asd' });
+  // The instance's own config chosen again keeps its name.
+  assert.equal((await instanceOvConfig({ detected: { ...trusted, config: { ...trusted.config, user: 'owner.asd' } }, instanceId: 'asd' })).user,
+    'owner.asd');
+  // A server that does not say how it authenticates: no key means requests name the user.
+  assert.equal((await instanceOvConfig({ detected: { url: LOCAL_OV_URL, config: { url: LOCAL_OV_URL } }, instanceId: 'asd' })).user, 'asd');
+  assert.equal(instanceUserName('', 'asd'), 'asd');
+  assert.equal(instanceUserName('weihan.liu', 'asd'), 'weihan.liu.asd');
+  assert.equal(instanceUserName('weihan.liu.asd', 'asd'), 'weihan.liu.asd');
+  assert.equal(requestNamesUser('api_key', {}), false);
+  assert.equal(requestNamesUser(null, { api_key: 'k' }), false);
+  assert.ok(fs.readdirSync(home).length === 0);
+});
+
+test('OpenViking: an administrator key creates the instance its own user, and the administrator key is not kept', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, headers: init.headers, body: init.body && JSON.parse(init.body) });
+    if (init.body && JSON.parse(init.body).user_id === 'taken.asd') return Response.json({ status: 'error' }, { status: 409 });
+    return Response.json({ status: 'ok', result: { account_id: 'team', user_id: 'boss.asd', user_key: 'new-user-key' } });
+  };
+  const detected = { url: 'https://ov.example', usable: true, authMode: 'api_key', role: 'admin', account: 'team', user: 'boss',
+    identity: { mode: 'register' }, config: { url: 'https://ov.example', api_key: 'admin-key', user: 'boss', plugin: { recall: true } } };
+  const config = await instanceOvConfig({ detected, instanceId: 'asd', fetchImpl });
+  assert.deepEqual(config, { url: 'https://ov.example', api_key: 'new-user-key', user: 'boss.asd', plugin: { recall: true } });
+  assert.equal(calls[0].url, 'https://ov.example/api/v1/admin/accounts/team/users');
+  assert.equal(calls[0].headers['X-API-Key'], 'admin-key');
+  assert.deepEqual(calls[0].body, { user_id: 'boss.asd', role: 'user' });
+  await assert.rejects(instanceOvConfig({ detected: { ...detected, user: 'taken' }, instanceId: 'asd', fetchImpl }),
+    /already has a user taken\.asd|已有用户 taken\.asd/);
 });
 
 test('OpenViking: a config whose server is down is reported, not offered', async (t) => {
@@ -68,8 +108,8 @@ test('OpenViking: without a config only a dev-mode local server is usable', asyn
   }).fetchImpl });
   assert.equal(dev.usable, true);
   const target = path.join(home, 'dev.json');
-  writeInstanceOvConfig({ detected: dev, instanceId: 'primary', target });
-  assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), { url: LOCAL_OV_URL, actor_peer_id: 'primary' });
+  writeInstanceOvConfig({ config: await instanceOvConfig({ detected: dev, instanceId: 'primary' }), target });
+  assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), { url: LOCAL_OV_URL, user: 'primary' });
 
   const trusted = await detectOpenViking({ env: {}, homeDir: home, fetchImpl: healthServer({
     [`${LOCAL_OV_URL}/health`]: { status: 'ok', auth_mode: 'trusted' },
@@ -325,4 +365,71 @@ test('OpenCode: an unsupported 2.x CLI is reported and not offered', async (t) =
   assert.equal(runtime.available, false);
   assert.match(runtime.note, /OpenCode 1\.x/);
   assert.deepEqual(acpProbes, [], 'version gate runs before the ACP handshake');
+});
+
+// An OV with two accounts whose administrators share a name. Deleting a user
+// answers 202 and runs in the background, as a task.
+function adminServer() {
+  const calls = [];
+  const tasks = new Map();
+  const fetchImpl = async (url, init) => {
+    const { pathname } = new URL(url);
+    calls.push({ method: init.method ?? 'GET', path: pathname, key: init.headers['X-API-Key'] });
+    const ok = (result, status = 200) => Response.json({ status: 'ok', result }, { status });
+    const deleted = pathname.match(/^\/api\/v1\/admin\/accounts\/([^/]+)\/users\/(.+)$/);
+    if (init.method === 'DELETE' && deleted) {
+      const user = decodeURIComponent(deleted[2]);
+      if (user.endsWith('.gone')) return Response.json({ status: 'error' }, { status: 404 });
+      const outcome = user.endsWith('.broken') ? ['running', 'failed'] : user.endsWith('.slow') ? ['running'] : ['running', 'completed'];
+      tasks.set(`task-${user}`, outcome);
+      return ok({ status: 'deleting', task_id: `task-${user}` }, 202);
+    }
+    const task = pathname.match(/^\/api\/v1\/tasks\/(.+)$/);
+    if (task) {
+      const states = tasks.get(decodeURIComponent(task[1]));
+      return ok({ status: states.length > 1 ? states.shift() : states[0] });
+    }
+    const account = pathname.split('/')[5];
+    const { user_id: user } = JSON.parse(init.body);
+    return ok({ user_id: user, user_key: `${account}-key-of-${user}` });
+  };
+  return { calls, fetchImpl };
+}
+
+const adminOf = (account) => ({ url: 'https://ov.example', usable: true, authMode: 'api_key', role: 'admin', account, user: 'boss',
+  identity: { mode: 'register' }, config: { url: 'https://ov.example', api_key: `${account}-admin-key` } });
+
+test('OpenViking: a user created during setup is reused on the way back, in its own account only', async () => {
+  const { calls, fetchImpl } = adminServer();
+  const registrations = new OVRegistrations();
+  const first = await instanceOvConfig({ detected: adminOf('team-a'), instanceId: 'asd', fetchImpl, registrations });
+  // Going back and preparing again: the same user and key, no second registration (OV would answer 409).
+  assert.deepEqual(await instanceOvConfig({ detected: adminOf('team-a'), instanceId: 'asd', fetchImpl, registrations }), first);
+  // Another account on the same server, whose administrator has the same name: its own user and key.
+  const other = await instanceOvConfig({ detected: adminOf('team-b'), instanceId: 'asd', fetchImpl, registrations });
+  assert.equal(other.api_key, 'team-b-key-of-boss.asd');
+  assert.equal(first.api_key, 'team-a-key-of-boss.asd');
+  assert.deepEqual(calls.filter(({ method }) => method === 'POST').map(({ path, key }) => [path, key]), [
+    ['/api/v1/admin/accounts/team-a/users', 'team-a-admin-key'],
+    ['/api/v1/admin/accounts/team-b/users', 'team-b-admin-key'],
+  ]);
+});
+
+test('OpenViking: setup deletes the users it created and did not keep, and waits for OV to finish', async () => {
+  const { calls, fetchImpl } = adminServer();
+  const registrations = new OVRegistrations({ deleteWaitMs: 50, pollMs: 5 });
+  const make = (instanceId) => instanceOvConfig({ detected: adminOf('team'), instanceId, fetchImpl, registrations });
+  const kept = await make('alpha');
+  for (const name of ['asd', 'gone', 'broken', 'slow']) await make(name);
+  const saved = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ov-')), 'alpha.json');
+  writeInstanceOvConfig({ config: kept, target: saved });
+  registrations.keep(saved);
+  const { failed, pending } = await registrations.discard({ fetchImpl });
+  const deletes = calls.filter(({ method }) => method === 'DELETE');
+  assert.deepEqual(deletes.map(({ path }) => path.split('/').pop()), ['boss.asd', 'boss.gone', 'boss.broken', 'boss.slow']);
+  assert.ok(deletes.every(({ key }) => key === 'team-admin-key'));
+  assert.ok(calls.some(({ path }) => path === '/api/v1/tasks/task-boss.asd'), 'the deletion task is followed to its end');
+  assert.deepEqual(failed, ['boss.broken'], 'one already gone is fine');
+  assert.deepEqual(pending, ['boss.slow'], 'one OV is still deleting is named, not taken for done');
+  assert.deepEqual(await registrations.discard({ fetchImpl }), { failed: [], pending: [] }, 'nothing is deleted twice');
 });

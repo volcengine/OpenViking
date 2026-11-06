@@ -19,8 +19,8 @@ import {
   ROLE_PRESETS, WEB_PORT, allocatePort, availableInstanceOvConfig, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, vikaCommand,
   vikaHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
 } from './manifest.mjs';
-import { detectOpenViking, writeInstanceOvConfig } from './ov.mjs';
-import { configureOpenViking, prepareInstanceOpenViking, saveOVConnection } from './ov-setup.mjs';
+import { OVRegistrations, detectOpenViking, instanceOvConfig, writeInstanceOvConfig } from './ov.mjs';
+import { configureOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from './ov-setup.mjs';
 import { detectRuntimes, which } from './runtimes.mjs';
 import { showScan } from './qr.mjs';
 import { restartCommand, startCommand } from './control.mjs';
@@ -548,7 +548,7 @@ const SWITCHES = () => [
   { key: 'explicitSilence', label: t('显式不回复', 'Explicit silence'),
     hint: t('每条消息都要模型表态：回复，或记下不回；漏了提醒一次', 'the model decides on every message: a reply, or a note that it stays silent; a miss gets one reminder') },
   { key: 'ovAutoRecall', label: t('OpenViking 自动召回', 'OpenViking auto-recall'),
-    hint: t('每轮自动召回 OpenViking 里的相关记忆', 'recalls related OpenViking memory on every turn') },
+    hint: t('别人找它时，先按发送者召回 OpenViking 里的相关记忆', 'recalls related OpenViking memory, by sender, when someone turns to it') },
   { key: 'meetingNotes', label: t('会议纪要入库', 'Meeting notes'),
     hint: t('你参加的飞书会议，智能纪要和文字记录存进 OpenViking；一台机器上只有一个实例能开',
       'the Feishu/Lark AI notes and transcripts of your meetings go into OpenViking; one instance per machine') },
@@ -1363,12 +1363,14 @@ export async function setupCommand(options = {}) {
   // What the first pass learned (the detected agents), kept when ← goes all
   // the way back to 要做什么 and setup starts over.
   const memo = {};
+  // OV users an administrator key created in this run, across starting over.
+  const registrations = new OVRegistrations();
   prompter.pageTop = () => live?.top() ?? null;
   try {
     for (;;) {
       const pendingOV = new Set();
       try {
-        return await setupFlow({ ...options, live, memo, pendingOV });
+        return await setupFlow({ ...options, live, memo, pendingOV, registrations });
       } catch (error) {
         if (!(error instanceof StartOver)) throw error;
       } finally {
@@ -1376,6 +1378,17 @@ export async function setupCommand(options = {}) {
       }
     }
   } finally {
+    // Saved, cancelled or failed: a user created here that no saved instance
+    // uses is deleted again, or named for the owner to remove.
+    const { failed, pending } = await registrations.discard({ fetchImpl: options.fetchImpl ?? globalThis.fetch });
+    if (pending.length) {
+      prompter.warn(t(`OpenViking 还在删除这次 setup 创建但没有用上的用户 ${pending.join('、')}，删完之前同名用户无法再创建，稍后再重试 setup`,
+        `OpenViking is still deleting the users this setup created and did not use: ${pending.join(', ')}. Until it is done the name cannot be created again; retry setup in a moment`));
+    }
+    if (failed.length) {
+      prompter.warn(t(`OpenViking 里留下了这次 setup 创建但没有用上的用户 ${failed.join('、')}，请管理员删除`,
+        `This setup created OpenViking users it did not use and could not delete: ${failed.join(', ')}. Ask an administrator to remove them`));
+    }
     prompter.navigable = false;
     prompter.pageTop = null;
     live?.release();
@@ -1396,6 +1409,7 @@ async function setupFlow({
   live = null,
   memo = {},
   pendingOV = new Set(),
+  registrations,
 }) {
   const out = (text) => prompter.write(text);
   const vika = vikaCommand(env);
@@ -1445,11 +1459,12 @@ async function setupFlow({
   ctx.editOV = async () => {
     const detected = await configureOV({ prompter, env, homeDir, fetchImpl, detect: detect.openViking,
       preferredConfigPath: state.ovConfig, title: `OpenViking · ${current.id}`, canGoBack: true,
-      leaveTo: t('返回实例设置', 'Back to instance settings') });
+      leaveTo: t('返回实例设置', 'Back to instance settings'),
+      taken: takenIdentities({ agents: manifest.agents, exclude: current.id, homeDir }), instanceId: current.id });
     const pending = new Set();
     try {
       const target = await prepareInstanceOpenViking({
-        agent: { ...current, ovConfig: state.ovConfig }, detected, pending, env, homeDir, fetchImpl,
+        agent: { ...current, ovConfig: state.ovConfig }, detected, pending, env, homeDir, fetchImpl, registrations,
         detect: detect.openViking, reserved: new Set(manifest.agents.map(({ ovConfig }) => ovConfig)),
       });
       if (target !== state.ovConfig && pendingOV.has(state.ovConfig)) {
@@ -1476,20 +1491,29 @@ async function setupFlow({
     return checked;
   };
   ctx.checkOV = checkOV;
+  // The instance is a user of its own in OV (instanceOvConfig), said once here.
   const prepareOV = () => step(prompter, t('准备并验证实例的 OpenViking 配置', 'Preparing and checking this instance’s OpenViking config'), async () => {
     if (prepared?.id !== state.id || prepared?.ov !== ov) {
       for (const file of pendingOV) fs.rmSync(file, { force: true });
       pendingOV.clear();
       state.ovConfig = availableInstanceOvConfig(env, state.id, new Set(manifest?.agents.map(({ ovConfig }) => ovConfig)));
-      writeInstanceOvConfig({ detected: ov, instanceId: state.id, target: state.ovConfig, exclusive: true });
+      const config = await instanceOvConfig({ detected: ov, instanceId: state.id, fetchImpl, registrations });
+      writeInstanceOvConfig({ config, target: state.ovConfig, exclusive: true });
       pendingOV.add(state.ovConfig);
-      prepared = { id: state.id, ov };
+      // Under an API key the key's user, as the connection check reported it.
+      prepared = { id: state.id, ov, user: config.user ?? ov?.user ?? null };
     }
     await checkOV();
-  }, t('OpenViking 已就绪，接下来接入 IM', 'OpenViking is ready; next, connect your IMs'));
+    return prepared.user;
+  }, (user) => (user
+    ? t(`OpenViking 已就绪，接下来接入 IM（这个实例在 OpenViking 里是用户 ${user}）`,
+      `OpenViking is ready; next, connect your IMs (this instance is the OpenViking user ${user})`)
+    : t('OpenViking 已就绪，接下来接入 IM', 'OpenViking is ready; next, connect your IMs')));
   // The section heading comes from the wizard; ← goes back to 要做什么, if there was a choice.
   const chooseOV = async () => {
-    ov = await configureOV({ prompter, env, homeDir, fetchImpl, detect: detect.openViking, title: null, canGoBack: others, previous: ov });
+    ov = await configureOV({ prompter, env, homeDir, fetchImpl, detect: detect.openViking, title: null, canGoBack: others, previous: ov,
+      // Not named yet: the name is asked after the connection.
+      taken: takenIdentities({ agents: manifest?.agents ?? [], homeDir }) });
   };
 
   // The instance as the manifest will hold it.
@@ -1681,6 +1705,7 @@ async function setupFlow({
   fs.mkdirSync(state.workspace, { recursive: true, mode: 0o700 });
   writeManifest(configPath, manifestWith(agent), { expected: manifest });
   pendingOV.delete(agent.ovConfig);
+  registrations?.keep(agent.ovConfig);
   if (ov && agent.ovConfig !== current?.ovConfig) saveOVConnection(ov, { env, homeDir });
   for (const mailbox of mail.removed) fs.rmSync(mailbox.config, { force: true });
 

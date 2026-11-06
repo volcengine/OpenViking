@@ -110,9 +110,12 @@ describe('module boundaries', () => {
     assert.equal(alpha.env.VIKA_AGENT_NAME, 'Alpha');
     assert.equal(alpha.env.VIKA_UPGRADE_TARGET, 'alpha');
     assert.equal(alpha.env.OPENVIKING_CLI_CONFIG_FILE, '/Users/test/.openviking/ovcli.conf.alpha');
+    // Recall is the daemon's; the plugins' own is off on every instance.
     assert.equal(alpha.env.OPENVIKING_AUTO_RECALL, '0');
-    assert.equal(beta.env.OPENVIKING_AUTO_RECALL, '1');
-    assert.equal(beta.env.OPENVIKING_RECALL_PEER_SCOPE, 'actor');
+    assert.equal(beta.env.OPENVIKING_AUTO_RECALL, '0');
+    assert.equal(beta.env.OPENVIKING_RECALL_PEER_SCOPE, 'all');
+    assert.equal(alpha.env.OPENVIKING_AUTO_CAPTURE, '0');
+    assert.equal(alpha.env.OPENVIKING_PENDING_DIR, '/Users/test/.vika/data/alpha/openviking/pending');
     assert.equal(alpha.env.VIKA_CODEX_MODEL, undefined);
     assert.equal(alpha.env.VIKA_MODEL, 'gpt-5.6-sol');
     assert.equal(alpha.env.VIKA_LOG_LEVEL, 'debug');

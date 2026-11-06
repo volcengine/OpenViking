@@ -219,4 +219,6 @@ node scripts/build-release.mjs --all --download-base https://ovrelease.tos-cn-be
 
 在 `config.json` 的 `agents` 增加 agent。每个 agent 都要使用独立的 id、端口、dataDir、workspace，飞书实例还要独立的 profile，还要独立的 OV 配置；它们共享 release、Web 与 updater。`channel` 保留单 Connector 兼容行为；可选 `connectors` 数组允许一个 Core 同时启动 `lark`、`weixin`、`telegram`、`slack`、`qq` 和 `email`（邮箱至少搭配一个聊天 IM）。省略两者时走飞书。最简单的是再运行一次 `vika setup`；手改 manifest 后执行 `vika start <新实例>` 和 `vika restart web`，updater 每次请求都重读 manifest，不用重启。
 
-自动召回按实例设置：在 `config.json` 的 `agents[]` 中填写 `"ovAutoRecall": true`，重启实例后生效，缺省为 `false`。开启时固定 `OPENVIKING_RECALL_PEER_SCOPE=actor`；不会关闭自动捕获或会话历史同步。运行中 OV 不可用时继续收发消息，新会话允许暂时跳过 OV 历史，后台同步会重试。
+自动召回按实例设置：在 `config.json` 的 `agents[]` 中填写 `"ovAutoRecall": true`，重启实例后生效，缺省为 `false`。开启后由 daemon 按发送者检索 OV（所有 runtime 一样），`"ovRecallScope"` 缺省 `"all"`，面向外部人员的实例可填 `"actor"`，只检索当前发送者和主人自己的记忆；不影响会话历史同步。运行中 OV 不可用时继续收发消息，新会话允许暂时跳过 OV 历史，后台同步会重试。
+
+对话写进 OV 只由 Vika 的会话同步完成。Vika 启动的 runtime 里，OpenViking 插件不再自动写入，也不自己召回：自动召回、自动捕获、compact 时提交、Pi 的压缩接管（Pi 改用自带压缩）和按工作目录推导 peer 都关闭，插件的会话状态、待发写入和召回去重记录放在实例 dataDir 下的 `openviking/`。这些设置只通过实例进程的环境变量生效，你自己运行的 Codex、Claude Code、Pi 插件行为不变。

@@ -20,21 +20,68 @@ discarded on that failure; transport cursors and uncertain writes remain durable
 and the idle checkpoint retries. Recovery does not inject history into an
 already-running native transcript.
 
-`agents[].ovAutoRecall` defaults to `false`. When enabled it sets the runtime
-plugin's auto-recall switch with `peer_scope=actor`; it does not control this
-session transport, auto-capture, or commit-on-compact.
+`agents[].ovAutoRecall` defaults to `false`. When enabled the daemon recalls
+(`ov-recall.mjs`), the same for every runtime: for a direct chat, a line that
+@mentions the agent, a document comment, or an event outside chats such as
+mail, one context search (`/api/v1/search/search`, mode `context`) runs on the
+ingress path before the line reaches the runtime, with the sender's peer as
+the actor peer (none for the owner). `agents[].ovRecallScope` `all` (default)
+searches every peer and ranks the sender's first; `actor` searches only the
+sender's and the owner's own. The sender's peer profile, which search never
+returns, goes first. Each `<memory>` says whose it is (`who=` owner, sender,
+or another person). Once OV has this epoch's session the search names it, so
+OV's dedup ledger (a file of its own, not a session message) keeps entries
+from coming back turn after turn. The search is bounded at 3 s; on a timeout
+or a failure the line goes on without recall. It does not control this
+session transport.
+
+This session transport is the only writer of the conversation. In a runtime
+the daemon starts, the OpenViking plugin writes nothing and recalls nothing on
+its own: auto-recall, auto-capture, commit-on-compact, Pi's compaction
+takeover (Pi compacts natively) and the workspace-derived peer are off, and its
+session state, queued writes and recall ledger live under
+`<dataDir>/openviking/`, so its session-start sweep never commits or replays
+sessions of the owner's own Codex / Claude Code / Pi through this instance's
+identity. All of it is process environment of the instance
+(`openVikingAgentEnv` in `deployment-config.cjs`), which the plugins rank
+above their config files; the owner's own clients are unaffected. Their
+session-start injection and MCP tools stay.
 
 Each cognition epoch owns a stable, private-to-this-daemon OV session. Switching
 providers keeps that session; `/new` starts a new epoch. Existing local ledger rows
 are uploaded on first use, in sequence. Only observable inbound Connector events,
-outbound actions (including uncertain outcomes), and controls are mirrored:
-inbound and control rows as `user` messages, outbound rows as `assistant`
-messages. Native reasoning and arbitrary tool results are not session archives.
+outbound actions (including uncertain outcomes), and controls are mirrored.
+Each message says who said it, because memory extraction files what a `user`
+message says under its speaker (`ovAttribution`). The instance is an OV user of
+its own and its owner speaks as that user: the owner's messages are `user`
+messages without a peer. Anyone else, people and other bots alike, is a peer:
+their messages are `user` messages with a message-level `peer_id` named after
+the channel identity they came with (`ov-peer.mjs`, decided at ingest, when the
+Connector's owner is known), such as `lark-ou_…`, `slack-<team>-<user>` or
+`email-<address>`. A mail's From address is not verified, so a forged one only
+writes under that address's own peer. The same person on two channels is two
+peers. Outbound rows, control rows and the agent's own reminders (events
+without a sender) are `assistant` messages: context, never the owner's words.
+Rows recorded before peers were are mirrored as plain `user` messages. The
+server must keep peer memory on (`memory_policy.peer`, the default); with it
+off, OV skips a peer's messages rather than filing them under the owner.
+Native reasoning and arbitrary tool results are not session archives.
 An outbound row still `PENDING` holds the sync cursor until it settles; a
 handoff prepared meanwhile carries the rows before it.
 
-`ov_session_sync` persists session identity, acknowledged sequence and uncertain
-append intent. SQLite's cognition journal remains the durable source for this
+`ov_session_sync` binds each epoch's session to the namespace the connection
+writes to (server, and the account and user OV authenticated; rotating a key
+for the same user keeps it), and persists the acknowledged sequence, uncertain
+append intent and finalization watermark. Recall and the archive tool use only
+sessions of the current namespace (`ovSessionFor`). Changing the connection's
+identity starts the current epoch over in a fresh session, replaying its journal;
+an old identity's pending write is never reconciled against the new connection,
+and older epochs and archives stay under the identity they were created in. At
+first binding, a row from before rows were bound is this namespace's only if its
+session is found here under the same URI; any other is logged once
+(`ov_epochs_left_behind`) and left alone. Older epochs that were never mirrored
+are not imported: their identity is unknown.
+SQLite's cognition journal remains the durable source for this
 sync and the outbound delivery ledger; the `outbox` table guards the external
 side effects themselves. Neither is read to assemble historical prompts. This
 intentionally separates context storage from external side-effect reliability.
@@ -55,11 +102,24 @@ raw messages on every release. A checkpoint (at most 1,024 tokens, one turn)
 still counts against the context budget before it is dropped. The daemon disables OV auto-commit. At idle boundaries, once
 OV reports 24,000 pending tokens, it commits with `retention_mode=turn_budget`,
 keeping the newest complete turns, up to 24,000 tokens, live as raw messages.
-Assembly requests 48,000 tokens, so the live session fits whole. No commit
-state is kept locally: OV's pending tokens decide every commit, and a commit
-with an unknown outcome is safe to repeat, because one that landed leaves
-nothing pending. A commit runs only after a complete sync, so an uncertain
-append is reconciled before it can be archived. This protocol assumes exclusive
+Assembly requests 48,000 tokens, so the live session fits whole. OV's pending
+tokens decide commits of the active epoch, and a commit with an unknown outcome
+is safe to repeat, because one that landed leaves nothing pending. A commit
+runs only after a complete sync, so an uncertain append is reconciled before it
+can be archived.
+
+After `/new`, the idle checkpoint also syncs retired epochs and commits them in
+full (`keep_recent_count=0`), even below the token threshold or if they were
+never mirrored, so a short conversation still reaches memory extraction. The
+watermark advances only after OV acknowledges the archive (retrying a lost
+response commits an empty session, a no-op); failures are retried on later
+checks and after restart, and logged with their cause
+(`ov_epoch_finalize_failed`). Retired epochs have a queue of their own, started
+after the current epoch's queued work: OV answers a full commit only once the
+session is archived, and the history a fresh session needs after `/new` never
+waits for that. One session that times out or fails does not hold up the next;
+only when OV cannot be reached at all do the retired epochs wait for the next
+check. This protocol assumes exclusive
 daemon ownership of these sessions: do not append or commit them from another
 client.
 
