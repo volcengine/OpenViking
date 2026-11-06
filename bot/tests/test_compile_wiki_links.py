@@ -6,7 +6,33 @@ from types import SimpleNamespace
 import pytest
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.ops import finalize
-from vikingbot.compile.renderer import normalize_wiki_page_links
+from vikingbot.compile.renderer import (
+    _split_frontmatter,
+    normalize_wiki_page_links,
+    validate_wiki_link_destinations,
+)
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [
+        (" ```md\n", " ```\n"),
+        ("````md\n```\n", "````\n"),
+        ("   ~~~md\n```\n", "   ~~~~\n"),
+        ("```md\n", ""),
+    ],
+)
+def test_wiki_links_preserve_fenced_examples(opening, closing):
+    example = "[Example](concept/b.md) [Whitespace](concept/a b.md)\n"
+    body = opening + example + closing
+    if closing:
+        body += "\n[Actual](concept/b.md)"
+    validate_wiki_link_destinations(body)
+    result, count = normalize_wiki_page_links(
+        body, path="concept/a.md", known_paths={"concept/b.md"}
+    )
+    assert result == body.replace("[Actual](concept/b.md)", "[Actual](b.md)")
+    assert count == int(bool(closing))
 
 
 def test_normalize_only_unambiguous_known_output_links():
@@ -48,7 +74,8 @@ def test_normalize_preserves_valid_relative_meaning_and_encoded_literal_names():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("existing_relative", [False, True])
 async def test_finalize_checks_historical_paths_and_records_publication_hashes(existing_relative):
-    original = "---\ntype: concept\n---\n[Sibling](concept/b.md)"
+    frontmatter = "---\ntype: concept\nexample: '[Book](concept/O%27Reilly.md)'\n---\n"
+    original = frontmatter + "[Sibling](concept/b.md)"
     values = {
         "a": {
             "path": "concept/a.md",
@@ -81,13 +108,15 @@ async def test_finalize_checks_historical_paths_and_records_publication_hashes(e
         skill_target=False,
         output_format="wiki",
         target="viking://resources/wiki",
-        old={},
+        old={"concept/O'Reilly.md": "Existing book", "concept/concept/O'Reilly.md": None},
         catalog={"concept/b.md": {}},
         client=SimpleNamespace(stat=stat),
         metrics=Counter(),
     )
     rendered = await finalize.run(runtime, ["a"])
     published = rendered.operations[0]["content"]
+    assert published.startswith(frontmatter)
+    assert _split_frontmatter(published)[0]["example"] == "[Book](concept/O%27Reilly.md)"
     if existing_relative:
         assert "[Sibling](concept/b.md)" in published
     else:

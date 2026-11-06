@@ -127,10 +127,23 @@ class LinkRenderer:
     def protected_markdown_spans(content: str) -> List[tuple[int, int]]:
         """Return spans where Compile must never insert a generated WikiLink."""
         spans = [(link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)]
-        spans.extend(
-            (m.start(), m.end())
-            for m in re.finditer(r"(?ms)^(?:```|~~~).*?^(?:```|~~~)[ \t]*$", content)
-        )
+        opening = None
+        for match in re.finditer(r"(?m)^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|\Z)", content):
+            marker, suffix = match.groups()
+            if opening is None:
+                # Backtick fence info strings cannot themselves contain backticks.
+                if marker[0] == "`" and "`" in suffix:
+                    continue
+                opening = (match.start(), marker)
+            elif (
+                marker[0] == opening[1][0]
+                and len(marker) >= len(opening[1])
+                and not suffix.strip(" \t")
+            ):
+                spans.append((opening[0], match.end()))
+                opening = None
+        if opening is not None:
+            spans.append((opening[0], len(content)))
         spans.extend((m.start(), m.end()) for m in re.finditer(r"`+[^\n`]*?`+", content))
 
         for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):

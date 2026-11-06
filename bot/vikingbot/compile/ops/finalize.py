@@ -96,6 +96,9 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
                 text, count = normalize_wiki_page_links(
                     payload.decode("utf-8"), path=path, known_paths=known_paths
                 )
+                if count:
+                    _, body = _split_frontmatter(text)
+                    validate_wiki_link_destinations(body)
                 files[path] = text.encode("utf-8")
                 normalized_links += count
         runtime.metrics["wiki_links_normalized"] += normalized_links

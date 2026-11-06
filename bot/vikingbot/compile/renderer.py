@@ -303,7 +303,10 @@ def validate_wiki_link_destinations(body: str) -> None:
 
 def _local_wiki_links(content: str, path: str):
     directory = posixpath.dirname(path) or "."
-    for link in _body_markdown_links(content):
+    frontmatter = _FRONTMATTER_RE.match(content)
+    offset = frontmatter.end() if frontmatter else 0
+    for link in _body_markdown_links(content[offset:]):
+        link = MarkdownLink(link.start + offset, link.end + offset, link.text, link.target)
         target = link.target
         angle = target.startswith("<") and target.endswith(">")
         bare = target[1:-1] if angle else target
