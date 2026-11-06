@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn } from './platform.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';

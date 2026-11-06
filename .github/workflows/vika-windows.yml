@@ -1,0 +1,29 @@
+name: Vika Windows native preview
+on:
+  push:
+    branches: [ovsawin]
+    paths: ['vika/**', '.github/workflows/vika-windows.yml']
+  pull_request:
+    paths: ['vika/**', '.github/workflows/vika-windows.yml']
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: vika
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: vika/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/cli/test/windows-autostart.test.mjs
+      - run: node packages/cli/bin/vika.mjs --help
+      - name: Parse PowerShell installer
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/install-windows.ps1'), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count) { throw ($errors | Out-String) }

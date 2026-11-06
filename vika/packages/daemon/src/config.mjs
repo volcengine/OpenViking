@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { localSocketPath } from './platform.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -105,6 +106,7 @@ function privateRegularFileEnv(name) {
 }
 
 function privateRegularFile(value, name) {
+  if (process.platform === 'win32') throw new Error('Email account ACL validation is not implemented on Windows; remove the email connector.');
   const raw = String(value ?? '').trim();
   if (!raw || !path.isAbsolute(raw)) throw new Error(`${name} must be an absolute path`);
   const resolved = path.normalize(raw);
@@ -217,7 +219,7 @@ export function getConfig() {
     channel,
     connectors: Object.freeze(connectors),
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
-    actionSocketPath: path.join(dataDir, 'actions.sock'),
+    actionSocketPath: localSocketPath(dataDir),
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),
     larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),

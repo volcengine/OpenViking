@@ -113,7 +113,7 @@ function resolveDeploymentManifestPath(env = process.env) {
     }
     return path.normalize(override);
   }
-  const home = typeof env.HOME === 'string' ? env.HOME.trim() : '';
+  const home = typeof (env.HOME || env.USERPROFILE) === 'string' ? (env.HOME || env.USERPROFILE).trim() : '';
   if (!home || !path.isAbsolute(home)) throw new Error('HOME must be an absolute path');
   return path.join(path.normalize(home), '.vika', 'config.json');
 }
@@ -132,7 +132,7 @@ function resolveSecretsFilePath(env = process.env) {
     }
     return path.normalize(override);
   }
-  const home = typeof env.HOME === 'string' ? env.HOME.trim() : '';
+  const home = typeof (env.HOME || env.USERPROFILE) === 'string' ? (env.HOME || env.USERPROFILE).trim() : '';
   if (!home || !path.isAbsolute(home)) return null;
   return path.join(path.normalize(home), '.vika', 'secrets.env');
 }

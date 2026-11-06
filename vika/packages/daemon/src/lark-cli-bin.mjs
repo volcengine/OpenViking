@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 export function bundledLarkCli() {
   try {
     const packageDir = path.dirname(createRequire(import.meta.url).resolve('@larksuite/cli/package.json'));
-    const bin = path.join(packageDir, 'bin', 'lark-cli');
+    const bin = path.join(packageDir, 'bin', process.platform === 'win32' ? 'lark-cli.exe' : 'lark-cli');
     if (fs.existsSync(bin)) return bin;
   } catch {}
   return 'lark-cli';

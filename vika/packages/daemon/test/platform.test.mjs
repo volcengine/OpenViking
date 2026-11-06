@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { findExecutable, executableInvocation, execFile, localSocketPath, isNamedPipe } from '../src/platform.mjs';
+
+test('pipe identity is stable, case insensitive and scoped to the instance directory', () => {
+  const one = localSocketPath('C:\\Users\\Alice\\.vika\\primary', 'actions', 'win32');
+  assert.ok(isNamedPipe(one));
+  assert.equal(one, localSocketPath('c:\\users\\alice\\.vika\\primary', 'actions', 'win32'));
+  assert.notEqual(one, localSocketPath('C:\\Users\\Alice\\.vika\\other', 'actions', 'win32'));
+  assert.equal(localSocketPath('/tmp/vika', 'actions', 'linux'), '/tmp/vika/actions.sock');
+});
+
+test('POSIX invocation preserves argv and executable', () => {
+  const args = ['a b', '$HOME', '&|<>"'];
+  assert.deepEqual(executableInvocation('/usr/bin/tool', args, { platform: 'linux' }), { command: '/usr/bin/tool', args });
+});
+
+test('execFile promisify preserves stdout/stderr object and does not evaluate arguments', async () => {
+  const args = ['space value', '& echo injected', '%PATH%', 'quote"here', '$HOME'];
+  const result = await promisify(execFile)(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1)))', ...args], {});
+  assert.deepEqual(JSON.parse(result.stdout), args);
+  assert.equal(result.stderr, '');
+});
+
+test('Windows npm shims run Node without a command shell', { skip: process.platform !== 'win32' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika shim '));
+  try {
+    fs.mkdirSync(path.join(dir, 'node_modules', 'fixture'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'node_modules', 'fixture', 'cli.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+    fs.writeFileSync(path.join(dir, 'fixture.cmd'), '@echo off\r\n"node" "%dp0%\\node_modules\\fixture\\cli.js" %*\r\n');
+    // npm also writes a POSIX shim with no extension; never choose it first.
+    fs.writeFileSync(path.join(dir, 'fixture'), '#!/bin/sh\nexit 1');
+    const env = { ...process.env, PATH: dir, PATHEXT: '.EXE;.CMD' };
+    const found = findExecutable('fixture', env);
+    assert.ok(found.toLowerCase().endsWith('fixture.cmd'));
+    const args = ['& echo injected', 'a b', '%USERPROFILE%', '"quoted"', '中文'];
+    const { stdout } = await promisify(execFile)(found, args, { env });
+    assert.deepEqual(JSON.parse(stdout), args);
+    fs.writeFileSync(path.join(dir, 'other.cmd'), '@echo off\necho arbitrary script');
+    assert.throws(() => executableInvocation(path.join(dir, 'other.cmd'), [], { env }), /Unsupported Windows command shim/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

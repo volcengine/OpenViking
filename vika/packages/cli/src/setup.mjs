@@ -76,7 +76,7 @@ const imChoices = () => [
     hint: t('工作区里的 Slack App（新建或用已有的，Socket Mode）；需要粘贴两个 token', 'a new or existing app in your Slack workspace (Socket Mode); paste two tokens') },
   { label: 'QQ', value: 'qq',
     hint: t('腾讯官方机器人；需要 AppID / AppSecret 和本人私聊验证码', 'official Tencent bot; needs AppID / AppSecret and a private-chat verification code') },
-];
+].filter(choice => process.platform !== 'win32' || choice.value !== 'email');
 
 // IMs connected by pasting tokens rather than scanning a code.
 const TOKEN_IMS = ['telegram', 'slack', 'qq'];
@@ -1728,7 +1728,7 @@ async function setupFlow({
     // restarts to pick this one up) and the updater are helpers: report, go on.
     for (const [action, target, label] of [
       ['restart', 'web', t(`控制台 http://127.0.0.1:${WEB_PORT}`, `Console http://127.0.0.1:${WEB_PORT}`)],
-      ['start', 'updater', t('自动升级服务', 'Auto-upgrade service')],
+      ...(process.platform === 'win32' ? [] : [['start', 'updater', t('自动升级服务', 'Auto-upgrade service')]]),
     ]) {
       const spinning = prompter.spin(t(`启动${label}`, `Starting the ${label.toLowerCase()}`));
       await control[action](target, { env, stdout: quiet }).then(

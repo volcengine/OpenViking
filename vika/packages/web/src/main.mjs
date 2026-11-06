@@ -53,6 +53,14 @@ async function stop(signal, exitCode = 0) {
   process.exitCode = exitCode;
 }
 
+if (process.platform === 'win32') {
+  process.on('message', (message) => {
+    if (message === 'shutdown') void stop('shutdown').then(() => {
+      if (process.connected) process.disconnect();
+    });
+  });
+}
+
 process.on('SIGINT', () => void stop('SIGINT'));
 process.on('SIGTERM', () => void stop('SIGTERM'));
 process.on('SIGHUP', () => void stop('SIGHUP'));

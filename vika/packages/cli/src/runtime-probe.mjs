@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn } from 'node:child_process';
+import { spawn } from '../../daemon/src/platform.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from '../../daemon/src/process-utils.mjs';
 import { captureStartupStderr } from '../../daemon/src/runtime-diagnostics.mjs';
 import { safeError } from '../../daemon/src/logger.mjs';
