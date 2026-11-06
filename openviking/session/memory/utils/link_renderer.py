@@ -1,24 +1,37 @@
 import posixpath
 import re
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable, Dict, Iterator, List, Optional
 from urllib.parse import quote, unquote
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_inline import backtick
+from markdown_it.rules_inline import image as image_rule
 
 from openviking.core.namespace import uri_parts
 
 
-def _backtick_with_source_span(state, silent):
-    """Keep the source offsets that CommonMark's inline-code rule consumed."""
+def _inline_with_source_span(rule, state, silent):
+    """Keep source offsets consumed by CommonMark's code and image rules."""
     start, count = state.pos, len(state.tokens)
-    matched = backtick(state, silent)
+    matched = rule(state, silent)
     if matched and not silent and len(state.tokens) > count:
         token = state.tokens[-1]
-        if token.type == "code_inline":
+        if token.type in {"code_inline", "image"}:
             token.meta["source_span"] = (start, state.pos)
     return matched
+
+
+def _inline_code_spans(tokens, offset=0):
+    for token in tokens:
+        if token.type == "code_inline":
+            start, end = token.meta["source_span"]
+            yield offset + start, offset + end
+        elif token.type == "image":
+            # Image alt text is parsed separately, starting just after ![.
+            start, _ = token.meta["source_span"]
+            yield from _inline_code_spans(token.children or [], offset + start + 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,16 +158,18 @@ class LinkRenderer:
         # fences. Line maps let us preserve original bytes instead of rerendering.
         offsets = [0, *(m.end() for m in re.finditer(r"\r\n|\r|\n", content)), len(content)]
         parser = MarkdownIt("commonmark")
-        parser.inline.ruler.at("backticks", _backtick_with_source_span)
+        parser.inline.ruler.at("backticks", partial(_inline_with_source_span, backtick))
+        parser.inline.ruler.at("image", partial(_inline_with_source_span, image_rule))
         for token in parser.parse(content):
             if token.map is None:
                 continue
             start, end = (offsets[line] for line in token.map)
             if token.type in {"fence", "code_block"}:
                 spans.append((start, end))
-            elif token.type == "inline" and any(
-                child.type == "code_inline" for child in token.children or []
-            ):
+            elif token.type == "inline":
+                code_spans = list(_inline_code_spans(token.children or []))
+                if not code_spans:
+                    continue
                 # Container/heading markers and indentation are stripped from
                 # token.content, but every backtick remains in source order.
                 # Map only delimiters; HTML attributes and escaped backticks are
@@ -166,10 +181,8 @@ class LinkRenderer:
                         strict=True,
                     )
                 )
-                for child in token.children or []:
-                    if child.type == "code_inline":
-                        opening, closing = child.meta["source_span"]
-                        spans.append((ticks[opening], ticks[closing - 1] + 1))
+                for opening, closing in code_spans:
+                    spans.append((ticks[opening], ticks[closing - 1] + 1))
 
         for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
             if not any(start <= match.start() < end for start, end in spans):

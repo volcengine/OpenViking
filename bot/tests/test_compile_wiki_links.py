@@ -24,6 +24,7 @@ def test_wiki_links_preserve_fenced_examples():
         f"``multiline\n{example}``\n"
         f'<span title="`"></span> `{example.rstrip()}`\n'
         '<span title="`"></span> [Actual](concept/b.md) `inline code`\n'
+        f"![`{example.rstrip()}`][preview]\n\n[preview]: preview.png\n\n"
         f"> ```md\n> {example}\n"
         "\n[Actual](concept/b.md)\n\n"
         f"```md\n{example}"
