@@ -7,13 +7,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { windowsPowerShellEnvironment } from '../src/windows-acl.mjs';
 import { preparePrivateDirectory, assertPrivateDirectory } from '../src/private-temp.mjs';
 
 const windows = process.platform === 'win32';
 function powershell(script, directory) {
   return execFileSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-      env: { ...process.env, TEST_PRIVATE_DIRECTORY: directory }, encoding: 'utf8', windowsHide: true,
+      env: { ...windowsPowerShellEnvironment(), TEST_PRIVATE_DIRECTORY: directory }, encoding: 'utf8', windowsHide: true,
     });
 }
 function fixture(t) {
@@ -107,4 +108,39 @@ test('Windows outgoing file snapshots use private ACLs and retain bytes until cl
     assert.doesNotThrow(() => assertPrivateDirectory(path.join(tempDir, 'outbox')));
   } finally { resolved.cleanup(); }
   assert.equal(fs.existsSync(resolved.payload.path), false);
+});
+
+
+test('Windows PowerShell environment removes every module-path casing without changing the parent', () => {
+  const parent = { PSModulePath: 'PowerShell7', pSmOdUlEpAtH: 'other', Path: 'keep', USERPROFILE: 'keep-home' };
+  assert.deepEqual(windowsPowerShellEnvironment(parent), { Path: 'keep', USERPROFILE: 'keep-home' });
+  assert.equal(parent.PSModulePath, 'PowerShell7');
+});
+
+test('Windows ACL production and test calls ignore an inherited incompatible module path', { skip: !windows }, (t) => {
+  const root = fixture(t);
+  const moduleRoot = path.join(root, 'ps7-only');
+  const moduleDir = path.join(moduleRoot, 'Microsoft.PowerShell.Security');
+  fs.mkdirSync(moduleDir, { recursive: true });
+  fs.writeFileSync(path.join(moduleDir, 'Microsoft.PowerShell.Security.psm1'), "throw 'Incompatible inherited module must not load'");
+  const previous = process.env.PSModulePath;
+  process.env.PSModulePath = moduleRoot;
+  try {
+    const directory = path.join(root, 'private');
+    preparePrivateDirectory(directory);
+    assertPrivateDirectory(directory);
+    assert.ok(powershell('(Get-Acl -LiteralPath $env:TEST_PRIVATE_DIRECTORY).AreAccessRulesProtected', directory).trim() === 'True');
+    const shared = path.join(root, 'shared');
+    fs.mkdirSync(shared);
+    assert.throws(() => assertPrivateDirectory(shared), (error) => {
+      assert.ok(error.cause instanceof Error);
+      assert.equal(error.cause.status, 1);
+      assert.ok(!error.cause.message.includes(root));
+      assert.equal(error.cause.stderr, undefined);
+      return true;
+    });
+  } finally {
+    if (previous === undefined) delete process.env.PSModulePath;
+    else process.env.PSModulePath = previous;
+  }
 });

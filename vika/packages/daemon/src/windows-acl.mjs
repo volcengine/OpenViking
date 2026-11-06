@@ -4,6 +4,25 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
+// PowerShell 7 exports its module path to children. Windows PowerShell 5.1
+// must build its own defaults instead of trying to load incompatible modules.
+export function windowsPowerShellEnvironment(environment = process.env) {
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'));
+}
+
+function diagnosticCause(error) {
+  const stderr = String(error?.stderr ?? '');
+  const category = /CouldNotAutoloadMatchingModule|module could not be/i.test(stderr) ? 'module_load_failed'
+    : /UnauthorizedAccess|AccessDenied|access.*denied/i.test(stderr) ? 'access_denied'
+      : 'acl_check_failed';
+  const cause = new Error(`Windows PowerShell ${category}`);
+  cause.code = /^[A-Z0-9_]+$/.test(error?.code ?? '') ? error.code : category;
+  if (Number.isInteger(error?.status)) cause.status = error.status;
+  if (/^SIG[A-Z0-9]+$/.test(error?.signal ?? '')) cause.signal = error.signal;
+  // Never attach the original exec error: its command/output can include paths.
+  return cause;
+}
+
 // The script is fixed; a directory name is data in the environment, never code.
 // Existing directories are checked only. Only the caller's newly created,
 // dedicated directory receives a protected current-user-only DACL.
@@ -49,9 +68,9 @@ export function assertWindowsPrivateDirectory(directory, { created = false } = {
   try {
     execFileSync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', ENCODED_SCRIPT], {
       windowsHide: true, timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, VIKA_PRIVATE_DIRECTORY: directory, VIKA_PRIVATE_DIRECTORY_CREATED: created ? '1' : '0' },
+      env: { ...windowsPowerShellEnvironment(), VIKA_PRIVATE_DIRECTORY: directory, VIKA_PRIVATE_DIRECTORY_CREATED: created ? '1' : '0' },
     });
-  } catch {
-    throw new Error('Windows private directory ACL validation failed: require current-user ownership, protected inheritance, and current-user-only full access');
+  } catch (error) {
+    throw new Error('Windows private directory ACL validation failed: require current-user ownership, protected inheritance, and current-user-only full access', { cause: diagnosticCause(error) });
   }
 }
