@@ -4,6 +4,7 @@ import shlex
 from typing import TYPE_CHECKING, Any
 
 from vikingbot.agent.tools.base import Tool
+from vikingbot.sandbox.base import CommandResult
 
 if TYPE_CHECKING:
     from vikingbot.agent.tools.base import ToolContext
@@ -58,4 +59,4 @@ class ExecTool(Tool):
 
             return await sandbox.execute(command, timeout=self.timeout)
         except Exception as e:
-            return f"Error executing: {str(e)}"
+            return CommandResult(f"Error executing: {str(e)}", 1)

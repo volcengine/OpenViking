@@ -14,6 +14,17 @@ from pathlib import Path
 from typing import Any
 
 
+class CommandResult(str):
+    """Command display text with an exit status preserved independently of output."""
+
+    exit_code: int | None
+
+    def __new__(cls, text: str, exit_code: int | None = None):
+        value = super().__new__(cls, text)
+        value.exit_code = exit_code
+        return value
+
+
 @dataclass(frozen=True)
 class SandboxFileInfo:
     """A regular file in the sandbox workspace."""
@@ -412,6 +423,10 @@ class SandboxBackend(ABC):
     @staticmethod
     def _ensure_command_succeeded(output: str, operation: str) -> None:
         """Raise when a backend's rendered command result contains a non-zero exit code."""
+        if isinstance(output, CommandResult) and output.exit_code is not None:
+            if output.exit_code != 0:
+                raise IOError(f"{operation} failed (exit code {output.exit_code}): {output}")
+            return
         exit_codes = [
             int(value) for value in re.findall(r"(?:^|\n)Exit code:\s*(-?\d+)(?:\n|$)", str(output))
         ]
