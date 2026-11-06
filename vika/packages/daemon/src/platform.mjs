@@ -7,14 +7,30 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process';
 
+// Object spreads can retain Windows' inherited `Path` beside an explicit
+// `PATH` override. Node otherwise chooses one duplicate lexicographically.
+// Use the explicit uppercase override consistently for lookup and the child.
+export function normalizeEnvironment(env = process.env, platform = process.platform) {
+  if (platform !== 'win32') return env;
+  const result = { ...env };
+  for (const name of ['PATH', 'PATHEXT']) {
+    const keys = Object.keys(env).filter(key => key.toUpperCase() === name);
+    if (!keys.length) continue;
+    const value = env[name] ?? env[keys[0]];
+    for (const key of keys) delete result[key];
+    result[name] = value;
+  }
+  return result;
+}
+
 export function findExecutable(command, env = process.env, platform = process.platform) {
   const windows = platform === 'win32';
-  const paths = windows ? path.win32 : path;
-  const key = Object.keys(env).find(key => key.toUpperCase() === 'PATH');
+  const paths = windows ? path.win32 : path.posix;
+  env = normalizeEnvironment(env, platform);
   const extensions = windows && !paths.extname(command)
     ? [...String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), ''] : [''];
   const directories = paths.isAbsolute(command) || command.includes(paths.sep)
-    ? [''] : String(env[key] || '').split(windows ? ';' : path.delimiter).filter(Boolean);
+    ? [''] : String(env.PATH || '').split(windows ? ';' : ':').filter(Boolean);
   for (const directory of directories) {
     for (const extension of extensions) {
       const candidate = paths.join(directory.replace(/^"|"$/g, ''), command + extension);
@@ -56,16 +72,16 @@ export function executableInvocation(command, args, { platform = process.platfor
 
 export function spawn(command, args = [], options = {}) {
   const invocation = executableInvocation(command, args, { env: options.env });
-  return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options });
+  return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 }
 
 export function execFile(command, args, options, callback) {
   const invocation = executableInvocation(command, args, { env: options?.env });
-  return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options }, callback);
+  return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) }, callback);
 }
 
 export function localSocketPath(directory, name = 'actions', platform = process.platform) {
-  if (platform !== 'win32') return path.join(directory, `${name}.sock`);
+  if (platform !== 'win32') return path.posix.join(directory, `${name}.sock`);
   const identity = path.win32.resolve(directory).toLowerCase();
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 32);
   return `\\\\.\\pipe\\vika-${name}-${digest}`;
@@ -77,5 +93,5 @@ export function isNamedPipe(value) {
 
 execFile[promisify.custom] = (command, args, options = {}) => {
   const invocation = executableInvocation(command, args, { env: options.env });
-  return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options });
+  return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 };

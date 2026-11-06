@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { findExecutable, executableInvocation, npmShimEntrypoint, execFile, localSocketPath, isNamedPipe } from '../src/platform.mjs';
+import { findExecutable, executableInvocation, npmShimEntrypoint, normalizeEnvironment, execFile, localSocketPath, isNamedPipe } from '../src/platform.mjs';
 
 test('pipe identity is stable, case insensitive and scoped to the instance directory', () => {
   const one = localSocketPath('C:\\Users\\Alice\\.vika\\primary', 'actions', 'win32');
@@ -34,9 +34,13 @@ test('Windows npm shims run Node without a command shell', { skip: process.platf
     fs.writeFileSync(path.join(dir, 'fixture.cmd'), '@echo off\r\n"node" "%dp0%\\node_modules\\fixture\\cli.js" %*\r\n');
     // npm also writes a POSIX shim with no extension; never choose it first.
     fs.writeFileSync(path.join(dir, 'fixture'), '#!/bin/sh\nexit 1');
-    const env = { ...process.env, PATH: dir, PATHEXT: '.EXE;.CMD' };
+    const env = { ...process.env, Path: 'C:\\missing-inherited-path', PATH: dir, Pathext: '.COM', PATHEXT: '.EXE;.CMD' };
     const found = findExecutable('fixture', env);
+    assert.ok(found, 'explicit PATH must override inherited Path');
     assert.ok(found.toLowerCase().endsWith('fixture.cmd'));
+    assert.ok(findExecutable('fixture', { Path: dir, Pathext: '.CMD' }));
+    const childEnv = await promisify(execFile)(process.execPath, ['-e', 'process.stdout.write(process.env.PATH)'], { env });
+    assert.equal(childEnv.stdout, dir);
     const args = ['& echo injected', 'a b', '%USERPROFILE%', '"quoted"', '中文'];
     const { stdout } = await promisify(execFile)(found, args, { env });
     assert.deepEqual(JSON.parse(stdout), args);
@@ -54,4 +58,13 @@ test('npm shim parsing accepts extensionless Node entrypoints, not arbitrary bat
   assert.equal(npmShimEntrypoint(shim), 'node_modules\\tool\\bin\\tool');
   assert.equal(npmShimEntrypoint('"cmd.exe" "%dp0%\\arbitrary.bat" %*'), null);
   assert.equal(npmShimEntrypoint('echo "%dp0%\\tool.js"'), null);
+});
+
+test('Windows environment normalization makes lookup and child overrides consistent', () => {
+  const inherited = { Path: 'C:\\old', PATH: 'C:\\new', Pathext: '.COM', PATHEXT: '.EXE;.CMD', TOKEN: 'preserved' };
+  const normalized = normalizeEnvironment(inherited, 'win32');
+  assert.deepEqual(normalized, { PATH: 'C:\\new', PATHEXT: '.EXE;.CMD', TOKEN: 'preserved' });
+  assert.equal(inherited.Path, 'C:\\old');
+  assert.deepEqual(normalizeEnvironment({ Path: 'C:\\only', Pathext: '.CMD' }, 'win32'), { PATH: 'C:\\only', PATHEXT: '.CMD' });
+  assert.equal(normalizeEnvironment(inherited, 'linux'), inherited);
 });
