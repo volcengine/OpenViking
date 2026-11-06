@@ -3,6 +3,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use ragfs::privacy_extractor::PrivacyExtractor;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[pyclass(name = "PrivacyExtractor", module = "ragfs_python")]
@@ -13,15 +14,26 @@ pub(crate) struct PyPrivacyExtractor {
 #[pymethods]
 impl PyPrivacyExtractor {
     #[new]
-    fn new() -> PyResult<Self> {
+    #[pyo3(signature = (custom_rules_json="[]"))]
+    fn new(custom_rules_json: &str) -> PyResult<Self> {
         Ok(Self {
-            inner: Arc::new(PrivacyExtractor::new().map_err(PyValueError::new_err)?),
+            inner: Arc::new(
+                PrivacyExtractor::with_custom_rules(custom_rules_json)
+                    .map_err(PyValueError::new_err)?,
+            ),
         })
     }
 
-    fn extract(&self, py: Python<'_>, content: String) -> PyResult<Vec<(usize, usize, String)>> {
+    #[pyo3(signature = (content, never_mask=None))]
+    fn extract(
+        &self,
+        py: Python<'_>,
+        content: String,
+        never_mask: Option<Vec<String>>,
+    ) -> PyResult<Vec<(usize, usize, String)>> {
         let inner = self.inner.clone();
-        py.detach(move || inner.extract(&content))
+        let never_mask: HashSet<_> = never_mask.unwrap_or_default().into_iter().collect();
+        py.detach(move || inner.extract_excluding(&content, &never_mask))
             .map_err(PyValueError::new_err)
     }
 }

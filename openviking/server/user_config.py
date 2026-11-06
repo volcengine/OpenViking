@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal, Optional, TypeVar
 
 from openviking.core.namespace import canonical_user_root
@@ -31,6 +31,8 @@ class ResolvedAddTargets:
 class ResolvedPrivacyConfig:
     mode: Literal["off", "registered", "auto"] = "off"
     restore: bool = True
+    custom_rules: list[dict[str, Any]] = field(default_factory=list)
+    never_mask: list[str] = field(default_factory=list)
 
 
 _UpdateResult = TypeVar("_UpdateResult")

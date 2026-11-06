@@ -65,7 +65,7 @@ async def test_privacy_settings_inherit_patch_and_reset(
     assert response.status_code == 200, response.text
     assert response.json()["result"] == {
         "override": {},
-        "effective": {"mode": "off", "restore": True},
+        "effective": {"mode": "off", "restore": True, "custom_rules": [], "never_mask": []},
     }
 
     app.state.config.user_config_defaults.privacy = PrivacyConfig(mode="auto", restore=False)
@@ -81,7 +81,10 @@ async def test_privacy_settings_inherit_patch_and_reset(
     ]:
         response = await client.patch(URL, json=patch)
         assert response.status_code == 200, response.text
-        assert response.json()["result"] == {"override": override, "effective": effective}
+        assert response.json()["result"] == {
+            "override": override,
+            "effective": {**effective, "custom_rules": [], "never_mask": []},
+        }
         persisted = json.loads(await service.viking_fs.read_file(user_config_uri(owner), ctx=owner))
         assert persisted["privacy"] == override
 
@@ -89,7 +92,7 @@ async def test_privacy_settings_inherit_patch_and_reset(
     assert response.status_code == 200, response.text
     assert response.json()["result"] == {
         "override": {},
-        "effective": {"mode": "auto", "restore": False},
+        "effective": {"mode": "auto", "restore": False, "custom_rules": [], "never_mask": []},
     }
 
 
@@ -113,14 +116,18 @@ async def test_privacy_patches_are_locked_and_owner_scoped(
             response = await client.patch(URL, json=patch)
             assert response.status_code == 200, response.text
     expected = {"mode": "registered", "restore": False}
-    assert (await read_user_privacy(service.viking_fs, owner)).model_dump() == expected
+    assert (await read_user_privacy(service.viking_fs, owner)).model_dump(
+        exclude_none=True
+    ) == expected
 
     other = RequestContext(user=UserIdentifier("default", "bob"), role=Role.USER)
     app.dependency_overrides[get_request_context] = lambda: other
     response = await client.get(URL)
     assert response.json()["result"]["override"] == {}
     await client.delete(URL)
-    assert (await read_user_privacy(service.viking_fs, owner)).model_dump() == expected
+    assert (await read_user_privacy(service.viking_fs, owner)).model_dump(
+        exclude_none=True
+    ) == expected
 
 
 async def test_privacy_patch_rolls_back_failed_write(service, owner, monkeypatch):
@@ -168,3 +175,106 @@ def test_privacy_deployment_defaults_load(isolated_config):
     isolated_config.write_text(json.dumps(payload), encoding="utf-8")
     config = load_server_config(str(isolated_config))
     assert config.user_config_defaults.privacy == PrivacyConfig(mode="registered", restore=False)
+
+
+async def test_custom_rules_inherit_replace_and_validate_before_writing(
+    client, app, service, owner
+):
+    defaults = [{"id": "company", "prefix": "company_", "min_length": 12}]
+    app.state.config.user_config_defaults.privacy = PrivacyConfig(
+        custom_rules=defaults, never_mask=["public-value"]
+    )
+    response = await client.get(URL)
+    assert response.json()["result"]["effective"]["custom_rules"] == defaults
+    response = await client.patch(URL, json={"custom_rules": [], "never_mask": []})
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["effective"]["custom_rules"] == []
+    before = await service.viking_fs.read_file(user_config_uri(owner), ctx=owner)
+    invalid_rules = [
+        [{"id": "x", "regex": "("}],
+        [{"id": "x", "regex": "a*"}],
+        [{"id": "x", "regex": "(?=secret)"}],
+        [{"id": "x", "prefix": "acme_"}],
+        [{"id": "x", "prefix": "acme_", "min_length": True}],
+        [{"id": "x", "prefix": "acme_", "min_length": 0}],
+        [{"id": "x", "prefix": "acme_", "min_length": 12, "regex": "secret"}],
+        [{"id": "x", "keys": ["password"]}],
+        [{"id": "x", "regex": "a"}, {"id": "x", "regex": "b"}],
+        [{"id": "x", "regex": "[a-zA-Z0-9]{1000000000}"}],
+    ]
+    for rules in invalid_rules:
+        response = await client.patch(URL, json={"custom_rules": rules})
+        assert response.status_code == 400, response.text
+        assert await service.viking_fs.read_file(user_config_uri(owner), ctx=owner) == before
+    response = await client.patch(URL, json={"custom_rules": None, "never_mask": None})
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["override"] == {}
+    assert response.json()["result"]["effective"]["custom_rules"] == defaults
+    assert response.json()["result"]["effective"]["never_mask"] == ["public-value"]
+
+
+async def test_custom_rules_and_never_mask_apply_to_skill_session_and_registered_values(
+    client, app, service, owner
+):
+    from openviking.message import TextPart
+    from openviking.privacy.reference import build_privacy_field_reference
+
+    value = "company_aB3dE5gH7jK9mN2pQ4sT"
+    excluded = "company_xY7zA9bC2dE4fG6hJ8kL"
+    rules = [{"id": "company", "prefix": "company_", "min_length": 20}]
+    response = await client.patch(
+        URL,
+        json={"mode": "auto", "custom_rules": rules, "never_mask": [excluded, "managed-secret"]},
+    )
+    assert response.status_code == 200, response.text
+    await service.privacy_configs.upsert(owner, "credential", "managed", {"key": "managed-secret"})
+    original = f"正文🙂 `{value}` {excluded} managed-secret; password=sample"
+    session = await service.sessions.create(owner, "custom-discovery")
+    await session.add_message_async("user", [TextPart(original)])
+    current = await service.privacy_configs.get_current(owner, "session", session.session_id)
+    assert list(current.values.values()) == [value]
+    stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=owner)
+    assert value not in stored and excluded in stored and "managed-secret" in stored
+    assert (
+        original
+        in json.loads(await service.fs.read(session.uri + "/messages.jsonl", ctx=owner))["parts"][
+            0
+        ]["text"]
+    )
+    # Use a different custom value so the Skill discovers it rather than reusing Session's catalog.
+    skill_value = "company_zY9xW7vU5tS3rQ1pN8mL"
+    await service.resources.add_skill(
+        data={
+            "name": "custom-rules",
+            "description": "custom detector",
+            "content": f"`{skill_value}` {excluded}",
+        },
+        ctx=owner,
+        wait=False,
+    )
+    current = await service.privacy_configs.get_current(owner, "skill", "custom-rules")
+    assert list(current.values.values()) == [skill_value]
+    reference = build_privacy_field_reference(owner.user.user_id, "credential", "managed", "key")
+    await session.add_message_async("user", [TextPart(reference)])
+    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=owner)
+    assert json.loads(restored.splitlines()[1])["parts"][0]["text"] == "managed-secret"
+    persisted = json.loads(await service.viking_fs.read_file(user_config_uri(owner), ctx=owner))
+    assert persisted["privacy"]["never_mask"] == [excluded, "managed-secret"]
+
+
+async def test_overlapping_rules_count_session_discoveries_once(client, service, owner):
+    from openviking.message import TextPart
+
+    rules = [{"id": f"rule{i}", "prefix": "corp_", "min_length": 20} for i in range(64)]
+    response = await client.patch(URL, json={"mode": "auto", "custom_rules": rules})
+    assert response.status_code == 200, response.text
+    value = "corp_A7b9C2d4E6f8G0h1J3k5"
+    original = (value + " ") * 313
+    session = await service.sessions.create(owner, "overlapping-rules")
+    await session.add_message_async("user", [TextPart(original)])
+    current = await service.privacy_configs.get_current(owner, "session", session.session_id)
+    assert list(current.values.values()) == [value]
+    stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=owner)
+    assert value not in stored
+    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=owner)
+    assert json.loads(restored)["parts"][0]["text"] == original

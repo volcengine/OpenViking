@@ -2,14 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Python interface to native credential format detection."""
 
-from dataclasses import dataclass
-from functools import lru_cache
+from __future__ import annotations
 
+import json
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from threading import Lock
+from typing import TYPE_CHECKING, Any
+
+from openviking.privacy.sanitizer import DEFAULT_MATCHER_CACHE_TTL_SECONDS
 from openviking.pyagfs import get_privacy_extractor_class
 from openviking_cli.exceptions import InvalidArgumentError
 
-MAX_TEXT_CHARS = 4 * 1024 * 1024
-MAX_MATCHES = 100_000
+if TYPE_CHECKING:
+    from openviking.server.user_config import ResolvedPrivacyConfig
 
 
 @dataclass(frozen=True)
@@ -19,22 +26,69 @@ class PrivacyMatch:
     detector_id: str
 
 
-@lru_cache(maxsize=1)
-def _extractor():
-    return get_privacy_extractor_class()()
+_extractor_cache: dict[str, tuple[float, Any]] = {}
+_extractor_cache_lock = Lock()
 
 
-def find_privacy_matches(content: str) -> list[PrivacyMatch]:
-    """Discover sensitive spans using Unicode character offsets."""
-    if len(content) > MAX_TEXT_CHARS:
-        raise InvalidArgumentError("Privacy extraction text limit exceeded")
+def _extractor(custom_rules_json: str = "[]"):
+    now = time.monotonic()
+    cached = _extractor_cache.get(custom_rules_json)
+    if cached is not None and now - cached[0] < DEFAULT_MATCHER_CACHE_TTL_SECONDS:
+        return cached[1]
+    with _extractor_cache_lock:
+        now = time.monotonic()
+        cached = _extractor_cache.get(custom_rules_json)
+        if cached is not None and now - cached[0] < DEFAULT_MATCHER_CACHE_TTL_SECONDS:
+            return cached[1]
+        expired = []
+        # Creation order is also expiry order because all entries share one TTL.
+        for key, (created, _) in _extractor_cache.items():
+            if now - created < DEFAULT_MATCHER_CACHE_TTL_SECONDS:
+                break
+            expired.append(key)
+        for key in expired:
+            del _extractor_cache[key]
+        extractor = get_privacy_extractor_class()(custom_rules_json)
+        _extractor_cache[custom_rules_json] = (time.monotonic(), extractor)
+        return extractor
+
+
+def validate_custom_rules(rules: list[dict]) -> None:
+    _extractor(json.dumps(rules, sort_keys=True))
+
+
+def prepare_privacy_extractor(
+    *, settings: ResolvedPrivacyConfig | None = None
+) -> Callable[[str], list[PrivacyMatch]]:
+    """Prepare format detection for one batch of texts."""
     try:
-        return [PrivacyMatch(*match) for match in _extractor().extract(content)]
+        rules = (
+            json.dumps(settings.custom_rules, sort_keys=True)
+            if settings and settings.custom_rules
+            else "[]"
+        )
+        extractor = _extractor(rules)
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from None
+    never_mask = settings.never_mask if settings else []
+
+    def find(content: str) -> list[PrivacyMatch]:
+        try:
+            return [PrivacyMatch(*match) for match in extractor.extract(content, never_mask)]
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from None
+
+    return find
 
 
-def is_sensitive_value(value: str) -> bool:
+def find_privacy_matches(
+    content: str, *, settings: ResolvedPrivacyConfig | None = None
+) -> list[PrivacyMatch]:
+    """Discover sensitive spans using Unicode character offsets."""
+    return prepare_privacy_extractor(settings=settings)(content)
+
+
+def is_sensitive_value(value: str, *, settings: ResolvedPrivacyConfig | None = None) -> bool:
     """Whether the complete value matches a supported credential format."""
-    matches = find_privacy_matches(value)
+    matches = find_privacy_matches(value, settings=settings)
     return len(matches) == 1 and matches[0].start == 0 and matches[0].end == len(value)

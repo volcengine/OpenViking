@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Extract sensitive values from skill content."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from secrets import token_urlsafe
+from typing import TYPE_CHECKING
 
 from openviking.config.vlm import VLMHandle
 from openviking.privacy.rules import find_privacy_matches, is_sensitive_value
@@ -14,6 +17,9 @@ from openviking.privacy.skill_placeholder import (
 from openviking.prompts import render_prompt
 from openviking_cli.exceptions import ResourceExhaustedError
 from openviking_cli.utils.llm import parse_json_from_response
+
+if TYPE_CHECKING:
+    from openviking.server.user_config import ResolvedPrivacyConfig
 
 
 @dataclass
@@ -31,6 +37,7 @@ async def extract_skill_privacy_values(
     skill_description: str,
     content: str,
     vlm: VLMHandle,
+    settings: ResolvedPrivacyConfig | None = None,
 ) -> SkillPrivacyExtractionResult:
     if vlm is None:
         raise ValueError("Skill privacy extraction requires an explicitly resolved VLM")
@@ -52,7 +59,9 @@ async def extract_skill_privacy_values(
             values = {
                 str(key): value
                 for key, value in raw_values.items()
-                if str(key).strip() and isinstance(value, str) and is_sensitive_value(value)
+                if str(key).strip()
+                and isinstance(value, str)
+                and is_sensitive_value(value, settings=settings)
             }
 
     placeholder_result = placeholderize_skill_content_with_blocks(content, skill_name, values)
@@ -66,14 +75,18 @@ async def extract_skill_privacy_values(
 
 
 def extract_skill_privacy_values_by_rules(
-    *, skill_name: str, content: str, reserved_fields: set[str] | None = None
+    *,
+    skill_name: str,
+    content: str,
+    reserved_fields: set[str] | None = None,
+    settings: ResolvedPrivacyConfig | None = None,
 ) -> SkillPrivacyExtractionResult:
     """Replace detected spans while preserving the surrounding Skill content."""
     values: dict[str, str] = {}
     references: dict[str, str] = {}
     chunks: list[str] = []
     cursor = 0
-    for match in find_privacy_matches(content):
+    for match in find_privacy_matches(content, settings=settings):
         value = content[match.start : match.end]
         reference = references.get(value)
         if reference is None:

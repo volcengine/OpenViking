@@ -2377,7 +2377,12 @@ async def test_admin_can_inspect_but_not_set_user_privacy(
     url = f"/api/v1/admin/accounts/{account}/users/alice/settings"
     response = await client.get(url, headers=root_headers())
     assert response.status_code == 200, response.text
-    assert response.json()["result"]["privacy"] == {"mode": "registered", "restore": False}
+    assert response.json()["result"]["privacy"] == {
+        "mode": "registered",
+        "restore": False,
+        "custom_rules": [],
+        "never_mask": [],
+    }
     rejected = await client.patch(url, json={"privacy": {"mode": "auto"}}, headers=root_headers())
     assert rejected.status_code == 422, rejected.text
     for privacy in ({"mode": "auto"}, {"mode": "off"}, {"restore": False}):

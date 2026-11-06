@@ -6,10 +6,10 @@ from dataclasses import asdict
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
 from openviking.server.auth import get_request_context
-from openviking.server.config import AddTargetsConfig, PrivacyConfig
+from openviking.server.config import AddTargetsConfig, PrivacyConfig, PrivacyRuleConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
@@ -42,6 +42,8 @@ class PatchPrivacyRequest(BaseModel):
 
     mode: Optional[Literal["off", "registered", "auto"]] = None
     restore: Optional[StrictBool] = None
+    custom_rules: Optional[list[PrivacyRuleConfig]] = None
+    never_mask: Optional[list[StrictStr]] = Field(default=None, max_length=1024)
 
 
 def _viking_fs():

@@ -525,12 +525,14 @@ class SkillProcessor:
             prepared_skill["content"] = sanitized_by_catalog
             prepared_skill["description"] = sanitized_description
         content = sanitized_by_catalog
+        settings = await self._privacy_config_service.get_settings(ctx)
         if _SKILL_PRIVACY_EXTRACTION_METHOD == "rule":
             extraction_result = await asyncio.to_thread(
                 extract_skill_privacy_values_by_rules,
                 skill_name=prepared_skill.get("name", ""),
                 content=content,
                 reserved_fields=self._referenced_privacy_fields(prepared_skill, ctx),
+                settings=settings,
             )
         else:
             if self._vlm_resolver is None:
@@ -540,6 +542,7 @@ class SkillProcessor:
                 skill_description=prepared_skill.get("description", ""),
                 content=content,
                 vlm=await self._vlm_resolver.get_vlm(ctx.account_id),
+                settings=settings,
             )
         if not extraction_result.values:
             return prepared_skill, {}

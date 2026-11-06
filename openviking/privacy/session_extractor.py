@@ -12,29 +12,26 @@ from typing import Any, TypeVar
 
 from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart
 from openviking.privacy.reference import parse_privacy_field_reference
-from openviking.privacy.rules import (
-    MAX_MATCHES,
-    MAX_TEXT_CHARS,
-    find_privacy_matches,
+from openviking.privacy.rules import prepare_privacy_extractor
+from openviking.privacy.sanitizer import (
+    DEFAULT_SANITIZER_MAX_CONTENT_BYTES,
+    DEFAULT_SANITIZER_MAX_REPLACEMENTS,
+    PrivacyReplacement,
+    PrivacySanitizer,
 )
-from openviking.privacy.sanitizer import PrivacyReplacement, PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.validation import validate_privacy_identifier
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
     ResourceExhaustedError,
 )
 
-MAX_BATCH_CHARS = 16 * 1024 * 1024
 MAX_DEPTH = 32
 MAX_NODES = 100_000
 MAX_FIELD_ID_ATTEMPTS = 8
-# TODO: Revisit new-value discovery after fixing false positives that pollute
-# Session privacy storage. Keep registered-value matching and restoration active.
-# This is intentionally disabled in code, not exposed as a runtime setting.
-_SESSION_PRIVACY_DISCOVERY_ENABLED = False
 _Matcher = Callable[[str], list[PrivacyReplacement]]
 _Text = TypeVar("_Text", str, None)
 _HASHED_TARGET = re.compile(r"_[0-9a-f]{24}")
@@ -47,16 +44,18 @@ async def extract_and_store_session_privacy(
     privacy: UserPrivacyConfigService,
     sanitizer: PrivacySanitizer | None,
 ) -> list[dict]:
-    """Protect copies with registered values; new-value discovery is paused."""
+    """Protect copies and discover new values when the user's mode is auto."""
     target_key = session_privacy_target(session_id)
     labels = None if target_key == session_id else {"session_id": session_id}
-    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key)
+    settings = await privacy.get_settings(ctx)
+    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
     for _ in range(MAX_FIELD_ID_ATTEMPTS):
         sanitized, added = await asyncio.to_thread(
             extract_session_privacy_values,
             target_key,
             messages_spec,
             match_registered=matcher,
+            settings=settings,
         )
         if not added:
             return sanitized
@@ -76,7 +75,7 @@ async def extract_and_store_session_privacy(
     else:
         raise ResourceExhaustedError("Could not allocate unique Session privacy field IDs")
     # Refresh the matcher to include newly saved values.
-    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key)
+    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
     rewriter = _SessionReferenceRewriter(matcher)
     return await asyncio.to_thread(rewriter.transform_messages, sanitized)
 
@@ -86,9 +85,10 @@ def extract_session_privacy_values(
     messages_spec: list[dict],
     *,
     match_registered: _Matcher | None = None,
+    settings: ResolvedPrivacyConfig | None = None,
 ) -> tuple[list[dict], dict[str, str]]:
     """Return protected copies and discoveries without modifying caller-owned data."""
-    extraction = _SessionExtraction(target_key, match_registered or (lambda _: []))
+    extraction = _SessionExtraction(target_key, match_registered or (lambda _: []), settings)
     return extraction.transform_messages(messages_spec), extraction.values
 
 
@@ -109,12 +109,16 @@ def build_session_placeholder(target_key: str, key: str) -> str:
 
 
 async def _prepare_session_matcher(
-    sanitizer: PrivacySanitizer | None, ctx: RequestContext, target_key: str
+    sanitizer: PrivacySanitizer | None,
+    ctx: RequestContext,
+    target_key: str,
+    *,
+    settings: ResolvedPrivacyConfig,
 ) -> _Matcher:
     """Use Session placeholders for matching eight-character fields in this Session."""
     if sanitizer is None:
         return lambda _: []
-    matcher = await sanitizer.prepare_matcher(ctx, prefer_credentials=True)
+    matcher = await sanitizer.prepare_matcher(ctx, prefer_credentials=True, settings=settings)
 
     def find(text: str) -> list[PrivacyReplacement]:
         matches: list[PrivacyReplacement] = []
@@ -139,7 +143,7 @@ async def _prepare_session_matcher(
 @dataclass
 class _ExtractionBudget:
     nodes: int = 0
-    chars: int = 0
+    content_bytes: int = 0
     matches: int = 0
 
     def check_node(self, depth: int) -> None:
@@ -150,13 +154,13 @@ class _ExtractionBudget:
     def check_text(self, text: str | None) -> None:
         if not text:
             return
-        self.chars += len(text)
-        if len(text) > MAX_TEXT_CHARS or self.chars > MAX_BATCH_CHARS:
+        self.content_bytes += len(text.encode("utf-8"))
+        if self.content_bytes > DEFAULT_SANITIZER_MAX_CONTENT_BYTES:
             raise InvalidArgumentError("Session privacy text limit exceeded")
 
     def record_match(self) -> None:
         self.matches += 1
-        if self.matches > MAX_MATCHES:
+        if self.matches > DEFAULT_SANITIZER_MAX_REPLACEMENTS:
             raise InvalidArgumentError("Session privacy match limit exceeded")
 
 
@@ -231,9 +235,16 @@ class _SessionExtraction(_PayloadTransformer):
 
     budget: _ExtractionBudget
 
-    def __init__(self, target_key: str, value_matcher: _Matcher):
+    def __init__(
+        self, target_key: str, value_matcher: _Matcher, settings: ResolvedPrivacyConfig | None
+    ):
         super().__init__(_ExtractionBudget())
         self.target_key = target_key
+        self.rule_matcher = (
+            prepare_privacy_extractor(settings=settings)
+            if settings is not None and settings.mode == "auto"
+            else None
+        )
         self.value_matcher = value_matcher
         self.values: dict[str, str] = {}
         self.text_references: dict[str, str] = {}
@@ -263,8 +274,8 @@ class _SessionExtraction(_PayloadTransformer):
         spans: list[tuple[int, int, str | None]] = [
             (match.start, match.end, match.reference) for match in self.value_matcher(text)
         ]
-        if _SESSION_PRIVACY_DISCOVERY_ENABLED:
-            spans.extend((match.start, match.end, None) for match in find_privacy_matches(text))
+        if self.rule_matcher is not None:
+            spans.extend((match.start, match.end, None) for match in self.rule_matcher(text))
         replacements = []
         for start, end, reference in _merge_spans(spans):
             if reference is None:

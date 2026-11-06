@@ -355,8 +355,8 @@ def test_rule_extraction_preserves_text_and_reuses_repeated_credentials(monkeypa
     content = (
         f"标题🙂 `{SECRET}`; URL?token={second}&scope=repo\n"
         f"再次出现：{SECRET}\n{existing}\n"
-        "password=deploy; OPENAI_API_KEY=magpie; base_url=https://usemagpie.ai\n"
-        r"TOKEN=$K\"; password=$(grep TOKEN config); token=Optional[str]"
+        "password=staging; OPENAI_API_KEY=sample; base_url=https://sample.example.test\n"
+        r"TOKEN=$LOCAL_TOKEN\"; password=$(cat settings.env); token=Optional[str]"
     )
     result = extract_skill_privacy_values_by_rules(
         skill_name="extract-block-skill", content=content, reserved_fields={"existing"}
@@ -374,9 +374,9 @@ def test_rule_extraction_preserves_text_and_reuses_repeated_credentials(monkeypa
 async def test_skill_filters_vlm_candidates_before_placeholderization():
     values = {
         "api_key": SECRET,
-        "password": "deploy",
+        "password": "staging",
         "base_url": "https://example.com",
-        "token": "magpie",
+        "token": "sample",
         "count": 1234,
         "credentials": {"api_key": SECRET},
         "empty": None,

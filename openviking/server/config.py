@@ -5,7 +5,16 @@
 import sys
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    field_validator,
+)
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
@@ -137,6 +146,17 @@ class DeprecatedUserAgentEvolutionConfig(BaseModel):
     enabled: Optional[bool] = None
 
 
+class PrivacyRuleConfig(BaseModel):
+    """A credential prefix or a Rust regular expression."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: StrictStr
+    prefix: Optional[StrictStr] = None
+    min_length: Optional[StrictInt] = None
+    regex: Optional[StrictStr] = None
+
+
 class PrivacyConfig(BaseModel):
     """Sparse privacy overrides; unset fields inherit deployment defaults."""
 
@@ -144,6 +164,19 @@ class PrivacyConfig(BaseModel):
 
     mode: Optional[Literal["off", "registered", "auto"]] = None
     restore: Optional[StrictBool] = None
+    custom_rules: Optional[list[PrivacyRuleConfig]] = None
+    never_mask: Optional[list[StrictStr]] = Field(default=None, max_length=1024)
+
+    @field_validator("custom_rules")
+    @classmethod
+    def validate_custom_rules(
+        cls, value: Optional[list[PrivacyRuleConfig]]
+    ) -> Optional[list[PrivacyRuleConfig]]:
+        if value is not None:
+            from openviking.privacy.rules import validate_custom_rules
+
+            validate_custom_rules([rule.model_dump(exclude_none=True) for rule in value])
+        return value
 
 
 class UserConfig(BaseModel):

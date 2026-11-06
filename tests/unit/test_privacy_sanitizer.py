@@ -196,6 +196,23 @@ async def test_sanitizer_cache_tracks_catalog_and_settings():
     assert catalog.build_reads == 3
 
 
+async def test_waiting_matcher_reuses_the_latest_catalog_revision():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    async with sanitizer._cache_lock:
+        pending = asyncio.create_task(sanitizer.prepare_matcher(_ctx()))
+        await asyncio.sleep(0)
+        catalog.configs["credential"]["service"]["key"] = "second2"
+        catalog.revision += 1
+
+    await pending
+    find = await sanitizer.prepare_matcher(_ctx())
+    assert [m.reference for m in find("second2")] == [
+        build_privacy_field_reference("alice", "credential", "service", "key")
+    ]
+    assert catalog.build_reads == 1
+
+
 async def test_sanitizer_cache_expires_after_ttl_even_without_local_revision_change():
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
     now = [100.0]
@@ -337,3 +354,15 @@ async def test_matcher_cache_separates_policies_and_refreshes_both_after_rotatio
             "shared-secret rotated-secret", ctx=_ctx(), prefer_credentials=preferred
         )
         assert result.content == f"{captured} {credential}"
+
+
+async def test_never_mask_refreshes_cached_matching_without_deleting_registered_values():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    assert (await sanitizer.sanitize("managed-secret", ctx=_ctx())).changed
+    catalog.settings = ResolvedPrivacyConfig(never_mask=["managed-secret"])
+    result = await sanitizer.sanitize("managed-secret", ctx=_ctx())
+    assert result.content == "managed-secret" and not result.changed
+    assert catalog.configs["credential"]["service"]["key"] == "managed-secret"
+    catalog.settings = ResolvedPrivacyConfig()
+    assert (await sanitizer.sanitize("managed-secret", ctx=_ctx())).changed

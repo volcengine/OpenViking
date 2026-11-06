@@ -15,6 +15,7 @@ from openviking.core.namespace import canonical_user_root
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 
 if TYPE_CHECKING:
@@ -84,14 +85,18 @@ class PrivacySanitizer:
         return self._max_replacements
 
     async def prepare_matcher(
-        self, ctx: RequestContext, *, prefer_credentials: bool = False
+        self,
+        ctx: RequestContext,
+        *,
+        prefer_credentials: bool = False,
+        settings: ResolvedPrivacyConfig | None = None,
     ) -> Callable[[str], list[PrivacyReplacement]]:
         """Prepare a cached, bounded match query for a batch of original texts.
 
         The callable may run in a worker thread. It returns positions and existing
         references so rule extraction can combine hits before rewriting content.
         """
-        matcher = await self._matcher(ctx, prefer_credentials=prefer_credentials)
+        matcher = await self._matcher(ctx, prefer_credentials=prefer_credentials, settings=settings)
 
         def find(content: str) -> list[PrivacyReplacement]:
             try:
@@ -168,8 +173,15 @@ class PrivacySanitizer:
             match_limit_exceeded=match_limit_exceeded,
         )
 
-    async def _matcher(self, ctx: RequestContext, *, prefer_credentials: bool = False) -> Any:
-        settings = await self._privacy.get_settings(ctx)
+    async def _matcher(
+        self,
+        ctx: RequestContext,
+        *,
+        prefer_credentials: bool = False,
+        settings: ResolvedPrivacyConfig | None = None,
+    ) -> Any:
+        if settings is None:
+            settings = await self._privacy.get_settings(ctx)
         settings_hash = hashlib.sha256(
             json.dumps(asdict(settings), sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -186,6 +198,13 @@ class PrivacySanitizer:
         if cached is not None and now - cached[0] < self._cache_ttl_seconds:
             return cached[1]
         async with self._cache_lock:
+            cache_key = (
+                ctx.account_id,
+                ctx.user.user_id,
+                self._privacy.catalog_revision(ctx),
+                settings_hash,
+                prefer_credentials,
+            )
             now = self._monotonic_clock()
             self._cache = {
                 key: item
@@ -195,7 +214,9 @@ class PrivacySanitizer:
             cached = self._cache.get(cache_key)
             if cached is not None and now - cached[0] < self._cache_ttl_seconds:
                 return cached[1]
-            matcher = await self._build_matcher(ctx, prefer_credentials=prefer_credentials)
+            matcher = await self._build_matcher(
+                ctx, prefer_credentials=prefer_credentials, settings=settings
+            )
             owner_key = cache_key[:2]
             self._cache = {
                 key: item
@@ -205,7 +226,14 @@ class PrivacySanitizer:
             self._cache[cache_key] = (now, matcher)
             return matcher
 
-    async def _build_matcher(self, ctx: RequestContext, *, prefer_credentials: bool = False) -> Any:
+    async def _build_matcher(
+        self,
+        ctx: RequestContext,
+        *,
+        prefer_credentials: bool = False,
+        settings: ResolvedPrivacyConfig | None = None,
+    ) -> Any:
+        never_mask = set(settings.never_mask) if settings is not None else set()
         references: dict[str, list[str]] = {}
         credentials: dict[str, list[str]] = {}
         for category in await self._privacy.list_categories(ctx):
@@ -218,7 +246,11 @@ class PrivacySanitizer:
                     # sensitivity from field names. Very short values are not
                     # safe for global substring replacement because ordinary
                     # prose would produce excessive false positives.
-                    if not isinstance(value, str) or len(value) < MIN_PROTECTED_VALUE_CHARS:
+                    if (
+                        not isinstance(value, str)
+                        or len(value) < MIN_PROTECTED_VALUE_CHARS
+                        or value in never_mask
+                    ):
                         continue
                     reference = build_privacy_field_reference(
                         ctx.user.user_id,
