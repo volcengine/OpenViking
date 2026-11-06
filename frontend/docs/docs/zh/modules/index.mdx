@@ -29,3 +29,7 @@ JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/s
 ## 宿主职责
 
 页面布局、认证、账号作用域、路由和权限由宿主负责。产品引导、资源与 Skill 导入流程及同步配置留在宿主；管理后台不在这些模块的范围内。
+
+## 级联选择
+
+[ScopeCascade 级联选择](./scope-cascade) 提供已实现的请求与级联 Hook 及默认视图。只需传三个宿主接口，各级独立订阅。

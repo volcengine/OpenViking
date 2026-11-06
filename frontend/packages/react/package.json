@@ -76,7 +76,12 @@
     "./client": {
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client.js"
-    }
+    },
+    "./modules/scope-cascade": {
+      "types": "./dist/modules/scope-cascade/index.d.ts",
+      "import": "./dist/modules/scope-cascade.js"
+    },
+    "./modules/scope-cascade/style.css": "./dist/modules/scope-cascade/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",
