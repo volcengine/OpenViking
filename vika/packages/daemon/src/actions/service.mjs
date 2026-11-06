@@ -200,7 +200,7 @@ export class ActionService {
       text: [`[Vika inbox] ${peek ? 'peek' : 'read'}=${items.length} pending=${result.pending}`,
         ...items.map((item) => item.text),
         ...(peek && items.length > 0
-          ? ['These events are still pending and were not settled by this peek. To answer one, read it first: message_check without peek, then use its event= as decision_id.']
+          ? ['These events count as read now and are no longer announced, but they are not processed yet. To answer one, read it again with message_check without peek, then use its event= as decision_id.']
           : [])].join('\n'),
       data: { items, pending: result.pending, peek },
     };

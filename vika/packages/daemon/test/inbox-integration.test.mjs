@@ -178,19 +178,18 @@ it('blocks a reply based on an older pulled event until the newer same-scope inp
   assert.deepEqual(read.data.items.map((item) => item.event_id), ['message:om_new12345678']);
 });
 
-it('refuses to reply on a peeked event but lets silence settle on the peek', async (t) => {
+it('treats a peek as read but not processed: it leaves pending and still needs a real read to reply', async (t) => {
   const { harness, store, consumed, service } = setup(t, 'inbox', { explicitSilence: true });
   harness.handleConnectorEvent(chatEvent({ messageId: 'om_peek12345678', content: 'peeked body' }).envelope);
   await harness.ingressBarrier;
   const peek = await service.call('message_check', { peek: true }, { authority: 'owner' });
-  assert.match(peek.text, /peek=1 pending=1/);
+  assert.match(peek.text, /peek=1 pending=0/);
   assert.match(peek.text, /peeked body/);
   assert.equal(consumed.length, 0);
   assert.equal(store.cognitionJournal().length, 0);
-  assert.equal(harness.inbox.pending, 1);
+  assert.equal(harness.inbox.pending, 0);
   const decide = { decision_id: 'message:om_peek12345678', message_id: 'om_peek12345678', markdown: 'answer' };
   await assert.rejects(service.call('reply_message', decide, { authority: 'owner' }), /only announced or peeked/);
-  assert.equal(harness.inbox.pending, 1);
   assert.equal((await service.call('message_check', { peek: true }, { authority: 'owner' })).data.items.length, 0);
   const read = await service.call('message_check', {}, { authority: 'owner' });
   assert.match(read.text, /read=1 pending=0/);
@@ -198,6 +197,20 @@ it('refuses to reply on a peeked event but lets silence settle on the peek', asy
   assert.equal(consumed.length, 1);
   assert.equal(store.cognitionJournal().length, 1);
   await service.call('reply_message', decide, { authority: 'owner' });
+});
+
+it('stops announcing a scope once its backlog was peeked and only reports what is still unread', async (t) => {
+  const { harness, service, submitted } = setup(t);
+  harness.handleConnectorEvent(chatEvent({ messageId: 'om_a12345678', chatId: 'oc_a' }).envelope);
+  await harness.ingressBarrier;
+  await service.call('message_check', { peek: true }, { authority: 'owner' });
+  assert.equal(harness.inbox.pending, 0);
+  harness.handleConnectorEvent(chatEvent({ messageId: 'om_b12345678', chatId: 'oc_b' }).envelope);
+  await harness.ingressBarrier;
+  const notice = submitted.at(-1).text;
+  assert.match(notice, /pending=1 scopes=1/);
+  assert.doesNotMatch(notice, /oc_a/);
+  assert.match(notice, /oc_b/);
 });
 
 it('records silence on a peeked input and drops it from the backlog', async (t) => {

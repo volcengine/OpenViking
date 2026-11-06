@@ -142,6 +142,42 @@ it('drops unread items and cancels notification timers on stop without redeliver
   assert.equal(notices.length, 0);
 });
 
+it('treats a peek as read so it leaves pending and stops being announced', (t) => {
+  const { inbox, notices, advance } = setup(t);
+  inbox.route(item(1));
+  inbox.route(item(2));
+  const peeked = inbox.read({ peek: true, limit: 1 });
+  assert.deepEqual(peeked.items.map((entry) => entry.seq), [1]);
+  assert.equal(peeked.pending, 1);
+  assert.equal(inbox.wasPeeked(1), true);
+  // Seen is seen: a second peek shows only what was not looked at yet.
+  assert.deepEqual(inbox.read({ peek: true }).items.map((entry) => entry.seq), [2]);
+  assert.equal(inbox.pending, 0);
+  assert.equal(inbox.wasPeeked(2), true);
+  // Nothing unread is left, so nothing is announced.
+  advance(3000);
+  assert.equal(notices.length, 0);
+  // A real read still returns the peeked bodies and is what processes them.
+  assert.deepEqual(inbox.read().items.map((entry) => entry.seq), [1, 2]);
+  assert.equal(inbox.pending, 0);
+});
+
+it('reports only the unread backlog in a notice, never the peeked entries', (t) => {
+  const { inbox, notices, advance } = setup(t);
+  inbox.route(item(1));
+  inbox.route(item(2, 'B'));
+  advance(3000);
+  assert.equal(notices.length, 1);
+  inbox.read({ peek: true });
+  inbox.route(item(3, 'C'));
+  advance(3000);
+  assert.equal(notices.length, 2);
+  assert.match(notices[1].items[0].text, /pending=1 scopes=1/);
+  assert.doesNotMatch(notices[1].items[0].text, /"scope_key":"A"/);
+  assert.doesNotMatch(notices[1].items[0].text, /"scope_key":"B"/);
+  assert.match(notices[1].items[0].text, /"scope_key":"C"/);
+});
+
 it('does not lose messages when recording a read fails', (t) => {
   const { inbox } = setup(t);
   inbox.route(item(1));
