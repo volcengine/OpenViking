@@ -71,3 +71,5 @@ Lark executables, tests both generated launchers, and verifies that an existing
 installation is refused. It does not log in to external services or validate
 interactive setup or real connector deliveries. Linux unit tests alone
 are not proof that the full Windows workflow works.
+
+Review scope and known differences: [feature parity](docs/windows-feature-parity.md) and [native audit](docs/windows-native-review.md). The feature-parity report includes a real-account Feishu + OpenViking acceptance checklist for Windows testers.
