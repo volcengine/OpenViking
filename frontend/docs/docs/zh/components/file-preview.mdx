@@ -2,7 +2,7 @@
 
 带页签的文件预览。宿主给出内容与文件名，组件负责格式识别、页签行、内容区标题行与正文。
 
-页签外壳、编辑流程与成功通知已实现；文件正文尚未接入渲染器，先以纯文本降级展示。
+当前是占位实现：页签外壳、编辑流程与成功通知已就位并可交互，文件正文尚未接入渲染器，先以纯文本降级展示。视图后续按本文契约重写。
 
 ## 基础用法
 
@@ -97,6 +97,35 @@ import '@openviking/react/components/file-preview/style.css';
 ## 无障碍
 
 页签行使用 `role="tablist"` 与 `role="tab"` 按钮并上报 `aria-selected`。图标按钮都带 `aria-label` 与 `title` 提示。路径面包屑只在传入 `operations.openParent` 时才可点击。
+
+## 类名
+
+类名带 `ov-` 前缀。块名为 `ov-file-preview`，元素使用 `ov-file-preview__<元素>`。
+
+| 类名                               | 元素     | 用途                           |
+| ---------------------------------- | -------- | ------------------------------ |
+| `ov-file-preview`                  | 根节点   | 纵向布局与基础排版。           |
+| `ov-file-preview__tab-row`         | 页签栏   | 可横向滚动的页签行。           |
+| `ov-file-preview__tab`             | 页签     | 单个页签，带 `aria-selected`。 |
+| `ov-file-preview__tab-title`       | 页签标题 | 截断的页签文本。               |
+| `ov-file-preview__header`          | 头部     | 路径行与操作区。               |
+| `ov-file-preview__breadcrumb`      | 面包屑   | 上级目录导航按钮。             |
+| `ov-file-preview__header-actions`  | 操作区   | 切换、按钮与扩展操作。         |
+| `ov-file-preview__action`          | 图标按钮 | 方形纯图标控件。               |
+| `ov-file-preview__button`          | 按钮     | 次要按钮。                     |
+| `ov-file-preview__button--primary` | 按钮     | 主要（保存）按钮。             |
+| `ov-file-preview__switch`          | 切换组   | 编辑与预览切换容器。           |
+| `ov-file-preview__switch-item`     | 切换项   | 单个切换，带 `data-active`。   |
+| `ov-file-preview__body`            | 滚动区域 | 内容滚动容器。                 |
+| `ov-file-preview__pre`             | 预览文本 | 只读文本内容。                 |
+| `ov-file-preview__textarea`        | 编辑器   | 可编辑文本域。                 |
+| `ov-file-preview__state`           | 状态面板 | 整高的加载、空态与错误视图。   |
+
+```css
+.my-workbench .ov-file-preview__tab {
+  max-width: 180px;
+}
+```
 
 ## 主题变量
 

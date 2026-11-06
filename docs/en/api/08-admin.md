@@ -28,6 +28,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Destroy/rotate GLOBAL or change its group membership | Y | N | N | N |
 | Change an existing role to or from GLOBAL | N | N | N | N |
 | Manage groups and membership | Y | Y (own account) | N | N |
+| Read/update User settings | Y | Y (own account, non-GLOBAL) | Y (self) | N |
 | Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) | N |
 | Change user role between USER and ADMIN | Y | Y (own account) | N | N |
 
@@ -189,7 +190,9 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 `enabled` resolves the Account runtime override, Cluster runtime override, then
 the startup value from `server.agent_evolution.enabled`.
 
-The existing endpoint remains as a deprecated compatibility adapter:
+The endpoint remains as a deprecated compatibility adapter in this release and
+is scheduled for removal in the next release. New callers use Account
+configuration; the SDKs no longer expose methods for this legacy endpoint.
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -200,8 +203,9 @@ Content-Type: application/json
 
 ### account_settings
 
-This endpoint is deprecated. ROOT can manage any account and ADMIN can manage
-only its own account. It preserves the original ACL and Agent Evolution request
+This endpoint is deprecated and remains compatible for this release, with
+removal planned for the next release. ROOT can manage any account and ADMIN can
+manage only its own account. It preserves the original ACL and Agent Evolution request
 and response semantics:
 
 ```http
@@ -224,6 +228,8 @@ original public behavior and ACL authorization is skipped. When enabled, newly
 created shared resources receive ACL fields and ACL-protected shared resources
 are authorized against them. Existing content without an ACL is not migrated or
 modified. Disabling the setting also stops enforcing existing ACLs.
+
+The CLI now calls Account configuration:
 
 ```bash
 ov --sudo admin set-account-settings acme --acl-enabled true
@@ -536,9 +542,13 @@ Content-Type: application/json
 {"settings": {"agent_evolution": {"enabled": true}}}
 ```
 
-`settings` always means explicit values at the addressed layer. PATCH is
-three-state: an absent key is unchanged, `null` deletes that layer's value, and
-a concrete value updates it.
+Cluster `settings` contains explicit runtime values. Account GET/PATCH responses
+also always include `settings.agent_evolution.enabled`, resolved from the Account
+override, Cluster runtime override, then startup default. Other fields remain
+explicit values; reads never persist defaults. PATCH is three-state: an absent
+key is unchanged, `null` removes that layer's value, and a concrete value updates
+it. Removing the Account `agent_evolution` override returns the newly resolved
+switch value in the response.
 
 The Cluster runtime surface currently contains `agent_evolution`. The Account
 surface contains `output_language_override`, `memory`, `feishu`, `parser_api`, `agent_evolution`, `github`, `acl`, `vlm`, and
@@ -749,8 +759,8 @@ then read and update it through the configuration endpoints:
 | Method | Path | Authorization | Return value |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/admin/accounts` | ROOT | New Account; accepts create-time `settings` |
-| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Explicit persisted `settings` for that Account |
-| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Merged explicit `settings` |
+| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Explicit Account `settings` plus effective `agent_evolution.enabled` |
+| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Updated `settings` plus effective `agent_evolution.enabled` |
 
 `vlm`, `query_planner`, `embedding`, `vectordb`, and `parser_api` are sensitive
 infrastructure settings. Only ROOT can create, read, or modify them. An ADMIN
@@ -824,14 +834,17 @@ curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5
+      },
+      "agent_evolution": {
+        "enabled": false
       }
     }
   }
 }
 ```
 
-The response does not expand Cluster values, defaults, or the effective
-Embedding/VectorDB composition. For example, when the response above has no
+Except for the Agent Evolution switch, the response does not expand Cluster
+values, defaults, or the effective Embedding/VectorDB composition. For example, when the response above has no
 Account model binding, actual calls still use the Cluster model binding.
 
 **Update dynamic Account configuration**
@@ -1050,9 +1063,11 @@ compatibility.
 
 ### user_settings
 
-ROOT can manage any User and ADMIN can manage Users in its own account. The
-User settings endpoint currently allowlists only `memory_policy`. The shared
-top-level `memory_types` filter controls which memory schemas may be extracted.
+ROOT can read and update any User's settings. ADMIN can read and update non-GLOBAL
+Users in its own account. USER callers can read and update only their own settings:
+both `account_id` and `user_id` in the URL must match the authenticated identity.
+The endpoint accepts `add_targets`, `memory_policy`, and `ttl`. The shared top-level
+`memory_types` filter controls which memory schemas may be extracted.
 User memories are routed to Self or Peer according to each message's `peer_id`;
 Agent memory types remain Self-only.
 
@@ -1071,14 +1086,42 @@ Content-Type: application/json
 The response contains the User-level `memory_policy`, expanded with its default
 memory types and Agent-memory dependencies. `experiences` expands to
 `cases`, `trajectories`, and `experiences`. The policy is independent of the
-account-level Agent Evolution switch, which is managed through the dedicated
-account endpoint. Updates are backed up to the User's
+account-level Agent Evolution switch, which is managed through Account
+configuration. Updates are backed up to the User's
 `settings/user_config.backup.json` before replacement. A Session without an
 explicit policy reads the latest User policy when it is committed; if the User
 has no override, it falls back to `server.user_config_defaults.memory_policy`
 and then to the kernel default. To clear a persisted User override and resume
 inheriting these defaults, PATCH `{"memory_policy": null}`. An empty object
 `{"memory_policy": {}}` is an explicit policy and does not clear the override.
+
+GET/PATCH responses include the User's effective `add_targets`. Each unset User
+field uses `server.user_config_defaults.add_targets`; `viking://~` resolves for
+the managed User. A field is `null` when neither layer sets it, leaving the add
+operation's own target defaults in control. Explicit `add_resource.to` / `parent`
+and `add_skill.target_uri` still take precedence.
+
+```http
+PATCH /api/v1/admin/accounts/acme/users/alice/settings
+Content-Type: application/json
+
+{"add_targets": {"resource_uri": "viking://~/resources/project-a", "skill_uri": "viking://~/skills"}}
+```
+
+`add_targets` supports sparse updates: omitted fields remain unchanged, a null
+field restores its default, and `add_targets: null` removes all User add-target
+overrides. Resolved defaults are never persisted. New callers use this endpoint;
+USER callers must target their own `account_id` and `user_id`. The following legacy
+endpoints continue to let ordinary users manage their own targets in this release.
+They are deprecated and scheduled for removal in the next release:
+
+```http
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`ttl` still returns explicit User values without filling defaults from other layers.
 
 ---
 
@@ -1120,9 +1163,8 @@ Create a new workspace with its first admin user.
 - `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
-- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
-- Legacy spellings `viking://user/resources[/...]` and `viking://user/skills` are still accepted here and normalized to the `viking://~/...` form (the server logs an info message). Everywhere else, the uid-less spelling is rejected at the request boundary — write new configs with `viking://~/...`.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`.
 
 #### 3. Usage Examples
 
@@ -1519,9 +1561,8 @@ Register a new user in a workspace.
 - ADMIN can only register users in their own account
 - `"global"` is creation-only. Only ROOT can create, delete, rotate, or modify group membership for a GLOBAL identity. No identity, including ROOT, can change an existing role to or from GLOBAL; delete and recreate instead. ADMIN and USER can observe that a GLOBAL identity exists in user listings, but never receive its credentials or management controls.
 - The `"root"` role cannot be minted through user registration
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
-- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
-- Legacy spellings `viking://user/resources[/...]` and `viking://user/skills` are still accepted here and normalized to the `viking://~/...` form (the server logs an info message). Everywhere else, the uid-less spelling is rejected at the request boundary — write new configs with `viking://~/...`.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`.
 
 #### 3. Usage Examples
 

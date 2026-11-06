@@ -2,7 +2,7 @@
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-The shell, editing flow and success notifications are implemented. The file body still falls back to plain text until FileViewer is wired in.
+This is a placeholder implementation: the shell, editing flow and success notifications are in place and interactive, and the file body falls back to plain text until FileViewer is wired in. The view will be rewritten against the contract described here.
 
 ## Basic usage
 
@@ -97,6 +97,35 @@ Copying is handled by the component. File tabs with `source.path` show the copy-
 ## Accessibility
 
 The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-selected`. Every icon-only control carries an accessible name through `aria-label` and a `title` tooltip. The path breadcrumb is enabled only when `operations.openParent` is supplied.
+
+## Class names
+
+Class names are prefixed with `ov-`. The block is `ov-file-preview`; elements use `ov-file-preview__<element>`.
+
+| Class name                         | Element      | Purpose                                |
+| ---------------------------------- | ------------ | -------------------------------------- |
+| `ov-file-preview`                  | Root         | Column layout and base typography.     |
+| `ov-file-preview__tab-row`         | Tab bar      | Scrollable row of tabs.                |
+| `ov-file-preview__tab`             | Tab          | One tab; carries `aria-selected`.      |
+| `ov-file-preview__tab-title`       | Tab label    | Truncated tab text.                    |
+| `ov-file-preview__header`          | Header       | Path row and action area.              |
+| `ov-file-preview__breadcrumb`      | Breadcrumb   | Parent navigation button.              |
+| `ov-file-preview__header-actions`  | Action area  | Switch, buttons, and extra actions.    |
+| `ov-file-preview__action`          | Icon button  | Square icon-only control.              |
+| `ov-file-preview__button`          | Button       | Secondary button.                      |
+| `ov-file-preview__button--primary` | Button       | Primary (save) button.                 |
+| `ov-file-preview__switch`          | Switch group | Edit/preview toggle container.         |
+| `ov-file-preview__switch-item`     | Switch item  | One toggle; carries `data-active`.     |
+| `ov-file-preview__body`            | Scroll body  | The scrolling content region.          |
+| `ov-file-preview__pre`             | Preview text | Read-only text content.                |
+| `ov-file-preview__textarea`        | Editor       | Editable text area.                    |
+| `ov-file-preview__state`           | State panel  | Full-height loading, empty, and error. |
+
+```css
+.my-workbench .ov-file-preview__tab {
+  max-width: 180px;
+}
+```
 
 ## Theme tokens
 

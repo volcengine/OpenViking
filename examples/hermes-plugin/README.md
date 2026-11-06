@@ -25,7 +25,7 @@ Setup saves a portable MCP entry. Restart Hermes after setup or a plugin update.
 The adapter rejects old saved-path launch commands. An adapter process started
 before the update must be replaced with `/reload-mcp` or a restart.
 
-Upgrading to 2.2 replaces the six `viking_*` tools. It requires Hermes >=0.22.7
+Upgrading to 2.2 replaces the native `viking_*` tools. It requires Hermes >=0.22.7
 and OpenViking >=0.4.23 with `/mcp` enabled. Upgrade Hermes and a separately
 managed server before upgrading this plugin. Setup checks the server version and MCP access and
 reports an error if either requirement is unmet. There is no native-tool fallback.
@@ -192,16 +192,30 @@ plugin's changes become available when that copy is removed.
 
 ## Tools
 
-Hermes calls these tools when needed. You do not need to run them yourself.
+Hermes discovers tools from the OpenViking server and calls them when needed.
+The names use Hermes's MCP namespace, for example `mcp__openviking__read`.
+Available tools and arguments follow the server's schemas.
 
-| Tool | What it does |
-|------|--------------|
-| `viking_search` | Search memories and knowledge. |
-| `viking_read` | Read content at a `viking://` address. |
-| `viking_browse` | List files and directories. |
-| `viking_remember` | Submit a fact for memory extraction. |
-| `viking_forget` | Delete one exact memory file. |
-| `viking_add_resource` | Add a URL or document to the knowledge base. |
+| Server tool | What it does |
+|-------------|--------------|
+| `find`, `search` | Search memories and knowledge. |
+| `rule_search` | Return complete Rules with conditions and exceptions. |
+| `read` | Read content at a `viking://` address. |
+| `list`, `tree` | List files and directories. |
+| `remember` | Submit messages for memory extraction. |
+| `write`, `edit` | Create or update content. |
+| `forget` | Delete one exact memory file. |
+| `add_resource` | Add a URL or document to the knowledge base. |
+
+Rule search is available when the server advertises `rule_search` through MCP.
+Pass `task_context` and optionally `rule_probability_threshold` (default `0.65`).
+Check each returned Rule's conditions and exceptions and comply with every
+applicable constraint. A failed or unavailable check does not mean that no Rules
+apply. Rule results are excluded from memory extraction. Older supported servers
+can provide their other MCP tools without Rule search.
+
+Hermes catalog releases pin the plugin commit, so the catalog must point at the
+updated code before a catalog update can deliver these changes.
 
 ## Remove
 
@@ -220,10 +234,11 @@ in `$HERMES_HOME/openviking/`.
 
 - Python 3.11 or newer in the Hermes environment.
 - OpenViking Service, Quick Local or a reachable OpenViking server.
-- OpenViking 0.2.14 or newer for Custom connections.
+- Hermes 0.22.7 or newer.
+- OpenViking 0.4.23 or newer with `/mcp` enabled for Custom connections.
 
-Tested with Hermes v2026.9.24 and the Hermes main commit used in
-[CI](../../.github/workflows/hermes-plugin-tests.yml).
+[CI](../../.github/workflows/hermes-plugin-tests.yml) tests the official
+Hermes v0.22.7 release, the minimum supported host.
 
 ## Config
 

@@ -16,7 +16,7 @@ Preserve the existing copyright and permission notice.
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
 Hermes catalog key remain `openviking`. Existing `memory.openviking`
 settings, environment variables, linked `ovcli.conf` files and data paths are
-retained. Version 2.2 replaces the six native `viking_*` tools with the server's
+retained. Version 2.2 replaces the native `viking_*` tools with the server's
 MCP tools. The memory provider continues to own recall, capture, commit and
 native memory mirroring.
 

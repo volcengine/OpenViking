@@ -38,17 +38,17 @@ import type {
 
 The table describes the published type contract. The placeholder does not accept these props yet.
 
-| Property      | Type                      | Default      | Description                                                                                                            |
-| ------------- | ------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| records       | readonly TuiRecord[]      | Required     | Currently displayed execution records in submission order; the host updates them on session or history changes.        |
-| value         | string                    | Required     | Controlled input value.                                                                                                |
-| disabled      | boolean                   | false        | Disables command input and submission; the message comes from `labels.unavailableMessage`.                             |
-| emptyState    | ReactNode                 | labels.empty | Complete empty state when no records are displayed; may include a heading, description and shortcuts. `null` hides it. |
-| labels        | TuiLabels                 | —            | Interface copy and guidance.                                                                                           |
-| onValueChange | (value: string) => void   | Required     | Reports input changes, including internally accepted completions and parameter hints; filling does not submit.         |
-| onSubmit      | (command: string) => void | Required     | Called after a command is sent successfully; not called on failure.                                                    |
-| onOpenUri     | (uri: string) => void     | —            | Called after a resource opens successfully, with its URI; not called on failure.                                       |
-| onCopy        | (text: string) => void    | —            | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.          |
+| Property      | Type                      | Default      | Description                                                                                                                                        |
+| ------------- | ------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| records       | readonly TuiRecord[]      | Required     | Currently displayed execution records in submission order; the host updates them on session or history changes.                                    |
+| value         | string                    | Required     | Controlled input value.                                                                                                                            |
+| disabled      | boolean                   | false        | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                         |
+| emptyState    | ReactNode                 | labels.empty | Complete empty state when no records are displayed; may include a heading, description and shortcuts. `null` hides it.                             |
+| labels        | TuiLabels                 | —            | Interface copy and guidance.                                                                                                                       |
+| onValueChange | (value: string) => void   | —            | Reports input changes, including internally accepted completions and parameter hints; filling does not submit. Omission makes the input read-only. |
+| onSubmit      | (command: string) => void | —            | Called after a command is sent successfully; not called on failure. Omission disables submission.                                                  |
+| onOpenUri     | (uri: string) => void     | —            | Called after a resource opens successfully, with its URI; not called on failure.                                                                   |
+| onCopy        | (text: string) => void    | —            | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                      |
 
 `onSubmit` notifies the host after a command is sent successfully, with the sent command text; it does not perform the send and is not invoked on failure. This notification does not mean that a background command has finished executing. Notification return values do not determine operation success. The host updates later results and errors through `records`; a pending background record does not prevent later submissions.
 

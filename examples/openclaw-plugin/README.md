@@ -45,6 +45,7 @@ Once installed, the plugin provides these agent tools:
 | `add_resource` | Import documents, URLs, or Git repos when explicitly enabled |
 | `add_skill` | Import OpenViking skills |
 | `ov_search` | Search imported resources and skills |
+| `ov_rule_search` | Check constraints before an action or response and return complete compiled Rules |
 | `ov_read` | Read the full original content of one exact OpenViking URI |
 | `ov_multi_read` | Read the full original content of multiple OpenViking URIs |
 | `ov_list` | List OpenViking directories after search to inspect sibling chunks and overview files |
@@ -270,6 +271,7 @@ Beyond automatic behavior, the plugin exposes these tools directly:
 - `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource when explicitly enabled
 - `add_skill`: import or register an OpenViking skill
 - `ov_search`: search OpenViking resources and skills, especially after importing them
+- `ov_rule_search`: send `task_context` and optional `rule_probability_threshold` (default `0.65`) to `POST /api/v1/rules/search`. Returns complete Rules with conditions and exceptions. Enabled by default; the `rules` group can select or disable it.
 - `ov_read`: read one exact `viking://` URI returned by `ov_search` or `ov_list`
 - `ov_multi_read`: read multiple exact `viking://` URIs, useful for an overview plus sibling chunks
 - `ov_list`: list a hit's parent directory after `ov_search` to recover sibling chunks, `.overview.md`, and related split-document context

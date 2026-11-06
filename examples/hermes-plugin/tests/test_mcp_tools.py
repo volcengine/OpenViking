@@ -28,21 +28,31 @@ def mcp_server(
     health_auth=False,
     mcp_status=200,
     call_statuses=(),
+    tool_schema=None,
+    tool_result=None,
 ):
     requests = []
     call_statuses = list(call_statuses)
     entered, release = threading.Event(), threading.Event()
     release.set()
-    schema = {
-        "name": "forget",
-        "description": "Server-owned description",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"uri": {"type": "string"}},
-            "required": ["uri"],
-        },
-        "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False},
-    }
+    schema = (
+        tool_schema
+        if tool_schema is not None
+        else {
+            "name": "forget",
+            "description": "Server-owned description",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"uri": {"type": "string"}},
+                "required": ["uri"],
+            },
+            "annotations": {
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "idempotentHint": False,
+            },
+        }
+    )
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -116,11 +126,15 @@ def mcp_server(
                 time.sleep(call_delay)
                 if call_statuses and (status := call_statuses.pop(0)) != 200:
                     return self.respond({"error": "synthetic failed operation"}, status)
-                result = {
-                    "content": [{"type": "text", "text": "server result"}],
-                    "structuredContent": {"uri": body["params"]["arguments"]["uri"]},
-                    "isError": False,
-                }
+                result = (
+                    tool_result
+                    if tool_result is not None
+                    else {
+                        "content": [{"type": "text", "text": "server result"}],
+                        "structuredContent": {"uri": body["params"]["arguments"]["uri"]},
+                        "isError": False,
+                    }
+                )
             else:
                 return self.respond(
                     {
@@ -521,6 +535,67 @@ module.run(argparse.Namespace(profile_bound=True))
         assert json.loads(receipt.read_text(encoding="utf-8"))["attempts"] == 1 + expected_retries
 
 
+@pytest.mark.parametrize("is_error", [False, True], ids=["complete-rules", "rule-error"])
+def test_rule_search_preserves_server_schema_and_complete_result(external_provider, is_error):
+    from mcp import types
+
+    home, _, module, _ = external_provider("mcp-rules")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    schema = {
+        "name": "rule_search",
+        "description": "Check applies_when and exception before applying each Rule.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_context": {"type": "string", "minLength": 1, "maxLength": 64000},
+                "rule_probability_threshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "default": 0.65,
+                },
+            },
+            "required": ["task_context"],
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+    }
+    rendered = "judge unavailable" if is_error else "完整规则\n" * 17000 + "LAST RULE"
+    response = {"content": [{"type": "text", "text": rendered}], "isError": is_error}
+    with mcp_server(tool_schema=schema, tool_result=response) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        connection = adapter.Connection(home, module)
+
+        async def exercise():
+            try:
+                tools = await connection.request("tools/list", None)
+                assert tools.model_dump(by_alias=True, exclude_none=True)["tools"] == [schema]
+                for arguments in (
+                    {"task_context": "deploy"},
+                    {"task_context": "deploy", "rule_probability_threshold": 0},
+                ):
+                    result = await connection.request(
+                        "tools/call",
+                        types.CallToolRequestParams(name="rule_search", arguments=arguments),
+                    )
+                    assert result.is_error is is_error
+                    assert result.content[0].text == rendered
+            finally:
+                await connection.aclose()
+
+        asyncio.run(exercise())
+        calls = [
+            body["params"] for _, _, body in requests if body and body["method"] == "tools/call"
+        ]
+        assert calls == [
+            {"name": "rule_search", "arguments": {"task_context": "deploy"}},
+            {
+                "name": "rule_search",
+                "arguments": {"task_context": "deploy", "rule_probability_threshold": 0},
+            },
+        ]
+        assert sum(1 for _, _, body in requests if body and body.get("method") == "initialize") == 1
+
+
 def test_connection_snapshot_survives_reload_and_next_call_uses_new_connection(external_provider):
     from mcp import types
 
@@ -641,6 +716,9 @@ def test_authenticated_health_challenge_keeps_existing_hosted_server_support(ext
     [
         "mcp__openviking__find",
         "mcp__openviking__search",
+        "mcp__openviking__rule_search",
+        "mcp_openviking_rule_search",
+        "viking_rule_search",
         "mcp__openviking__read",
         "mcp__openviking__list",
         "mcp__openviking__ls",

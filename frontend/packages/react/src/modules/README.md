@@ -1,135 +1,158 @@
-# 业务模块
+# Business modules
 
-`modules/` 按共同完成的交互流程组织 Hook 与组合视图，共享状态与联动在模块内维护。Hook 负责加载请求、适配数据与维护状态，组合视图把 Hook 返回的数据和操作接入 `components/`。完整页面由宿主组装。
+English / [中文](README_CN.md)
 
-## 当前可接入的占位组件
+`modules/` organises Hooks and composite views around interactions that are completed together, keeping shared state and coordination inside the module. Hooks load requests, adapt data and hold state; composite views wire the data and operations a Hook returns into `components/`. The host assembles full pages.
 
-五个模块已提供可导入的占位组件、Props / Labels 类型和独立样式入口，接入方可以先完成页面布局。当前组件只展示模块名称与占位文案，接受 `className`、`style` 和 `labels`；业务 Hook、共享 Client、Provider 与下文的业务交互仍待实现。
+## Placeholder components available today
 
-| 模块            | 组件           | 公开入口                                  |
-| --------------- | -------------- | ----------------------------------------- |
-| `file-browser`  | `FileBrowser`  | `@openviking/react/modules/file-browser`  |
-| `console`       | `Console`      | `@openviking/react/modules/console`       |
-| `agent-connect` | `AgentConnect` | `@openviking/react/modules/agent-connect` |
-| `task-center`   | `TaskCenter`   | `@openviking/react/modules/task-center`   |
-| `user-usage`    | `UserUsage`    | `@openviking/react/modules/user-usage`    |
+Four modules ship importable placeholder components, public Props / Labels / Slots types and standalone stylesheet entries, so an integrator can finish page layout first. The props are settled: each module declares its request options, controlled state, callbacks, slots and copy. The components themselves still render only a module name and placeholder copy, and consume none of those props yet; business Hooks and the interactions described below are still to come.
+
+Because a module loads its own data, no prop carries data. A host supplies configuration, the controlled value and the copy; the module reports changes through callbacks.
+
+| Module         | Component     | Public entry                             |
+| -------------- | ------------- | ---------------------------------------- |
+| `file-browser` | `FileBrowser` | `@openviking/react/modules/file-browser` |
+| `console`      | `Console`     | `@openviking/react/modules/console`      |
+| `task-center`  | `TaskCenter`  | `@openviking/react/modules/task-center`  |
+| `user-usage`   | `UserUsage`   | `@openviking/react/modules/user-usage`   |
 
 ```tsx
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser
-  labels={{ title: '文件浏览', description: '占位组件，业务能力待接入。' }}
-/>;
+<FileBrowser labels={{ title: 'File browser' }} />;
 ```
 
-五个组件与对应类型也从 `@openviking/react` 根入口导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
+The four components and their main Props types are also exported from the `@openviking/react` root entry; Labels, Slots and the enum types come from the module subpath. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
 
-## 职责
+## Responsibilities
 
-- 模块 Hook 默认通过共享 Client 调用开源原生 API，继承 Provider 的请求配置，管理加载、空态、错误、分页、刷新、重试和必要的连接清理。
-- Hook 返回视图可消费的数据、状态与操作；组合视图负责把这些能力接入组件，协调模块内的交互。
-- 宿主可以直接使用组合视图，也可以只复用模块 Hook，替换视图或调整组件组合。
-- 标准接入只配置服务地址与鉴权，不要求宿主逐模块实现数据 Adapter；非标准网关在宿主请求接入层适配。认证、账号作用域、路由、权限执行、页面布局及产品专属流程仍由宿主负责。
+- Module Hooks call the native open-source API through the shared Client by default, inherit the Provider's request configuration, and manage loading, empty, error, paging, refresh, retry and any connection cleanup.
+- Hooks return the data, state and operations a view can consume; composite views wire those capabilities into components and coordinate interactions inside the module.
+- Hosts can use a composite view directly, or reuse only the module Hook and replace the view or rearrange the components.
+- Standard integration configures only a service address and credentials, with no per-module data Adapter required; nonstandard gateways are adapted at the host's request boundary. Authentication, account scope, routing, permission enforcement, page layout and product-specific flows remain with the host.
 
-依赖方向为 `modules → components`。组件仍只负责视图与交互，可脱离业务模块独立使用。模块专属 Hook、类型、工具和私有视图留在模块目录；跨模块通用 Hook 有真实复用需求后再放入 `hooks/`。
+The dependency direction is `modules → components`. Components still own only view and interaction and remain usable without any business module. Module-specific Hooks, types, utilities and private views stay in the module directory; cross-module shared Hooks move to `hooks/` only once real reuse appears.
 
-## 个人终端的层级
+## Layers of the personal terminal
 
-当前按个人终端规划共享能力，管理后台不在本期范围内。层级表示职责与依赖方向，不对应新的 npm 包：
+Shared capability is planned for the personal terminal, with the admin console out of scope for this phase. The layers express responsibility and dependency direction and do not correspond to new npm packages:
 
-| 层级           | 职责                                                                                 |
-| -------------- | ------------------------------------------------------------------------------------ |
-| 宿主应用       | 页面布局、路由、登录与账号、当前库 / 数据空间 / User、权限与能力配置，以及模块间联动 |
-| `modules/`     | 一项可独立接入的业务能力：数据加载 Hook、业务状态与操作、可替换的组合视图            |
-| `components/`  | 通过 props 和事件复用的视图与交互，不自行取业务数据                                  |
-| 服务与基础能力 | 开源原生 API Client、资源类型与纯数据转换；按实际实现放入 `client/`、`lib/` 等边界   |
+| Layer                    | Responsibility                                                                                                                                                  |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host application         | Page layout, routing, sign-in and accounts, current library / data space / user, permission and capability configuration, and coordination between modules      |
+| `modules/`               | One independently integrable business capability: data-loading Hook, business state and operations, replaceable composite view                                  |
+| `components/`            | Views and interaction reused through props and events, loading no business data themselves                                                                      |
+| Services and foundations | Native open-source API Client, resource types and pure data transforms, placed in `client/`, `lib/` and similar boundaries according to the real implementation |
 
-宿主可以只使用组件、复用模块 Hook 自行组装，或使用模块提供的组合视图。每个业务模块独占一个目录，粒度以可独立接入的交互流程为准：目录、搜索和预览组成 `file-browser`；VikingBot 与 TUI 组成 `console`，在模块内切换模式。宿主组合这两个区域及其他模块，不按内部视图分别接入。
+Hosts can use components alone, reuse module Hooks and assemble the view themselves, or use the composite views the modules provide. Each business module owns one directory, with granularity set by an independently integrable interaction: directory, search and preview make up `file-browser`; conversation and TUI make up `console`, switching modes inside the module. Hosts compose these two areas and the other modules and do not integrate the internal views separately.
 
-## 请求契约与默认配置
+## Request conventions and default configuration
 
-共享 Client 以 OpenViking 原生 API 的 method、路径、query / body 和响应 DTO 为契约，统一维护在 `packages/client/` 的框架无关边界。迁入时复用现有 OpenAPI 生成 SDK 与 Axios Client；Bot 流式请求保留 Fetch / SSE，并与 REST 共用服务地址和鉴权头生成逻辑。模块 Hook 消费原生数据并派生视图所需的状态与操作，不要求宿主逐模块维护数据协议。以下是目标契约，尚未迁入共享库。
+The shared Client takes the native OpenViking API's method, path, query / body and response DTOs as its contract, maintained in `src/client/` and exported from `@openviking/react/client`. It ships a `fetch`-based `createOvClient` plus the contract modules depend on — request shape, configuration resolution, `OvClient` and `OvClientError`. The code has no React dependency, so it can move to its own package once a consumer outside React appears. Module Hooks consume native data and derive the state and operations a view needs, so hosts need not maintain a data protocol per module.
 
-React 接入由 `OpenVikingProvider` 通过 Context 下发通用配置，并在 Provider 实例内复用稳定的 Client。Context 不承担业务数据缓存；Provider 挂载本身不取数，也不读取浏览器中保存的凭证。
+React integration is provided by `OpenVikingProvider` from `@openviking/react/client`, which distributes common configuration through Context and reuses a stable Client within each Provider instance. A host passes identity values — `apiKey`, `accountId`, `userId`, `resourceId` — and the Client assembles the headers; modules read the client through an internal hook and never build a request themselves. The Context does not cache business data; mounting a Provider fetches nothing and reads no credentials saved in the browser.
 
-| 配置      | 约定                                                                                                                   |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `baseURL` | 服务地址及可选网关前缀，不包含原生接口的 `/api/v1`；默认空字符串，表示浏览器同源请求。服务端发起请求时显式提供绝对地址 |
-| `headers` | 请求头或每次请求时求值的请求头函数，可异步读取最新登录凭证；`X-API-Key`、Bearer 或身份头由宿主明确提供，不按域名猜测   |
+| Configuration | Convention                                                                                                                                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseURL`     | Service address with an optional gateway prefix, excluding the native `/api/v1`; defaults to an empty string meaning a same-origin browser request. Server-side requests supply an absolute address explicitly |
+| `apiKey`      | The credential. In the open-source edition it becomes `X-API-Key`; the commercial edition carries it in the browser cookie. A function is re-evaluated per request                                             |
+| `accountId`   | OpenViking account, which corresponds to the data space                                                                                                                                                        |
+| `userId`      | User within the account                                                                                                                                                                                        |
+| `resourceId`  | Current library; data-plane requests need it                                                                                                                                                                   |
+| `credentials` | `RequestCredentials` for `fetch`. Defaults to `same-origin`; the commercial edition sets `include` for cross-origin calls                                                                                      |
 
-模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；headers 按不区分大小写的名称合并，局部同名值优先。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。
+Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. Every module's `FileBrowserProps`, `ConsoleProps`, `TaskCenterProps` and `UserUsageProps` already declares this field.
 
-以下仅为拟定的请求接入方式，Provider 与业务 Hook 尚未实现，不能作为当前包的可运行示例：
+The Provider is implemented; the business Hooks are not, so a module does not request anything yet. The host configures it once at the application root:
 
 ```tsx
-<OpenVikingProvider baseURL={endpoint} headers={getAuthHeaders}>
-  <FileBrowser {...browserProps} />
-  <Console {...consoleProps} />
-</OpenVikingProvider>
+import { OpenVikingProvider } from '@openviking/react/client';
+
+<OpenVikingProvider
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>;
 ```
 
-独立使用 Hook 时同样传 `requestOptions`；未使用 Provider 时可显式提供完整配置，纯视图组件无需 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
+Inside a module, the client comes from an internal hook. A module passes only the fields it needs to override, for example when it addresses another library:
 
-- **路径只有一处拼接**：Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
-- **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。JSON 响应保留 `result` 及分页等外层元数据；上传、下载和流式响应按接口契约处理，不统一强转 JSON。
-- **配置与身份变化要隔离**：请求、缓存键和订阅以实际生效的服务地址及宿主当前连接 / 身份作用域隔离。切换服务或账号后取消旧请求并忽略过期结果；动态 headers 不代替身份切换信号，也不把 API Key 明文放入缓存键。
-- **适配集中在接入层**：原生接口只需配置地址和 headers；存量网关若有额外封装，由宿主在共享 Client 接入层统一适配，并保留取消信号、响应状态及流。无法等价表达的能力通过显式扩展契约接入，不在每个模块增加宿主分支。
+```ts
+const rows = await client.request<FsEntry[]>({
+  method: 'GET',
+  path: '/api/v1/fs/ls',
+  query: { uri },
+  options: { resourceId: libraryId },
+});
+```
 
-Provider 的继承遵循 [React Context](https://react.dev/reference/react/useContext)，请求层迁入参考[现有 Client 封装](../../../../../web-studio/src/shared/api/ov-client/client.ts)。这些约定在实际实现 Client、Provider 和首个模块时一起验证。
+That hook is not exported: a host never needs to know which requests a module sends. Pure view components need no Provider at all. The current identity may be distributed through Context, where `accountId` corresponds to the data space and `userId` to the user within it; identity scope and request configuration are maintained separately. Business parameters such as URI and query text are still passed as module / Hook inputs.
 
-## 业务模块划分
+- **Paths are joined in one place only**: the Client keeps the `baseURL` path prefix. For example `/gateway/openviking` plus `/api/v1/fs/ls` yields `/gateway/openviking/api/v1/fs/ls`, and a leading `/` in an API path never drops the gateway prefix. Modules join no domain or service prefix.
+- **Responses are parsed only in the Client**: HTTP failures are distinguished from a native `status: 'error'` response, preserving the server error code, status and request identifier. JSON responses keep `result` and outer metadata such as paging; upload, download and streaming responses follow the API contract and are not coerced to JSON uniformly.
+- **Configuration and identity changes must be isolated**: requests, cache keys and subscriptions are isolated by the effective service address and the host's current connection / identity scope. Switching service or account cancels old requests and ignores stale results; dynamic headers do not substitute for an identity-switch signal, and an API Key is never put into a cache key in plain text.
+- **Adaptation is centralised at the integration boundary**: native APIs need only an address and headers; any extra wrapping for existing gateways is adapted uniformly by the host at the shared Client boundary, preserving cancellation signals, response status and streams. Capabilities that cannot be expressed equivalently are integrated through an explicit extension of the contract, not a per-module host branch.
 
-五个模块目录及其占位组件已经建立，以下是各模块后续迁入的目标能力，尚未实现。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
+Provider inheritance follows [React Context](https://react.dev/reference/react/useContext); the request layer migration references the [existing Client wrapper](../../../../../web-studio/src/shared/api/ov-client/client.ts). The transport and the Provider follow these conventions; they are verified again when the first module Hook is implemented.
 
-| 模块            | Hook 与业务职责                                                                                         | 组合视图                                                                             |
-| --------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `file-browser`  | 统一管理目录、检索、当前 URI、预览加载与编辑保存；协调定位、刷新、历史与版本对比                        | 组合 `FileTree`、搜索交互与 `FilePreview`，提供目录和内容联动的文件浏览区域          |
-| `console`       | 统一管理 VikingBot / TUI 模式、公共上下文与工具栏；处理对话会话、消息流、附件、记忆提交及命令执行与记录 | 组合 `VikingBot`、`Tui` 与模式切换，提供完整的交互面板                               |
-| `agent-connect` | Agent 目录、接入说明、接入方式与连接状态；通过宿主提供的能力接入凭证或授权                              | 组合左侧 Agent 导航、右侧详情与接入步骤                                              |
-| `task-center`   | 当前身份可见任务的列表、筛选、详情、执行记录与允许的操作                                                | 任务列表和详情；个人终端本期聚焦资源导入与知识整理任务                               |
-| `user-usage`    | 当前 User 的统计查询、时间范围、加载与失败状态                                                          | 当前 User 的上下文数量、Token、检索与提交统计，不含库 / 空间统计、成员对比或账单费用 |
+## Business module breakdown
 
-历史列表与版本对比先作为 `file-browser` 的预览能力，编译确认作为 `console` 中的 Bot 动作流程；有独立消费需求后再拆公开模块，不为每个按钮或弹窗建模块。公共视图组件按真实复用需求补充，表中组合视图不要求提前新增组件占位。
+The four module directories and their placeholder components exist; below are the target capabilities each will take on, none implemented yet. The components these composite views build on are also placeholders today, so a module's real implementation depends on those views landing first. Product onboarding, the resource and Skill import flows and sync configuration belong to the host, with no corresponding business module.
 
-### 文件浏览模块
+| Module         | Hook and business responsibility                                                                                                                                              | Composite view                                                                                                                                             |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file-browser` | Manages directory, retrieval, current URI, preview loading and edit saving; coordinates positioning, refresh, history and version comparison                                  | Composes `FileTree`, the search interaction and `FilePreview` into a file browsing area that links directory and content                                   |
+| `console`      | Manages conversation / TUI mode, common context and toolbar; handles conversation sessions, message streams, attachments, memory submission and command execution and records | Composes the module's own conversation view, `Tui` and mode switching into a complete interaction panel                                                    |
+| `task-center`  | Lists, filters, details, execution records and permitted operations for tasks visible to the current identity                                                                 | Task list and detail; this phase of the personal terminal focuses on resource import and knowledge organisation tasks                                      |
+| `user-usage`   | Statistics queries, time ranges, loading and failure state for the current user                                                                                               | Context counts, tokens, retrieval and submission statistics for the current user, excluding library / space statistics, member comparison or billing costs |
 
-`file-browser` 计划覆盖目录导航、搜索与内容预览的整个联动区域，提供统一的 `useFileBrowser` Hook 与 `FileBrowser` 组合视图：
+History lists and version comparison start as preview capabilities of `file-browser`, and compile confirmation as a Bot action flow in `console`; they become public modules only once an independent consumer appears, and no module is created per button or dialog. Public view components are added when real reuse appears, and the composite views in the table do not require new component placeholders ahead of time.
 
-- Hook 统一返回目录、搜索、当前资源及预览的数据、状态与操作。内部可拆私有 Hook，宿主也可只使用统一 Hook 自行组装视图。
-- 点击目录节点或搜索结果后，模块协调当前 URI、目录定位与预览加载；切换资源时清理旧请求，避免过期内容覆盖当前预览。
-- 保存、重命名或删除资源后，模块刷新受影响的目录、搜索结果与预览；删除当前资源时同步清理选中状态和内容。
-- 组合视图负责区域内的搜索、目录与预览布局。`FileTree`、`FilePreview` 等纯视图组件保持独立，不承担数据加载或跨组件编排。
-- 连接 Agent、导入资源等操作入口通过宿主回调或插槽接入；模块不内置接入弹窗、导入流程或产品引导。配额提示等产品内容也通过宿主插槽接入。
+### File browser module
 
-以上交互与 `useFileBrowser` 仍为规划；当前仅导出 `FileBrowser` 占位组件和基础类型。
+`file-browser` is planned to cover the whole linked area of directory navigation, search and content preview, providing a unified `useFileBrowser` Hook and a `FileBrowser` composite view:
 
-### 交互面板模块
+- The Hook returns the data, state and operations for the directory, search, current resource and preview together. Private Hooks may be split out internally, and a host may use only the unified Hook and assemble the view itself.
+- Clicking a directory node or a search result makes the module coordinate the current URI, directory positioning and preview loading; switching resources clears stale requests so outdated content cannot overwrite the current preview.
+- After saving, renaming or deleting a resource, the module refreshes the affected directory, search results and preview; deleting the current resource clears the selection and content at the same time.
+- The composite view owns the search, directory and preview layout within the area. Pure view components such as `FileTree` and `FilePreview` stay independent and take on no data loading or cross-component coordination.
+- Entries such as connecting an agent or importing resources come in through host callbacks or slots; the module embeds no connection dialog, import flow or product onboarding. Product content such as quota hints also comes in through host slots.
 
-`console` 计划覆盖 VikingBot 与 TUI 共用的整个面板，提供统一的 `useConsole` Hook 与 `Console` 组合视图：
+The interactions above and `useFileBrowser` are still planned; only the `FileBrowser` placeholder component and base types are exported today.
 
-- Hook 统一返回当前模式、公共上下文、对话与命令的数据、状态和操作；模式切换与工具栏操作在模块内协调，宿主也可只使用 Hook 组装视图。
-- VikingBot 与 TUI 使用同一服务、身份与宿主传入的资源上下文；各自维护消息历史、命令记录与运行状态，切换模式时保留各自状态。
-- Bot 能力包括会话、消息流、附件、记忆提交与编译动作；TUI 能力包括命令定义、执行、取消与执行记录，可用命令遵循宿主提供的能力。
-- 组合视图负责模式切换、公共工具栏与内容区域，操作按当前模式分发。后续迁入 `VikingBot`、`Tui` 时保持为可独立消费的纯视图组件。
-- 打开资源、定位产物或刷新目录通过事件交给宿主，与 `file-browser` 的联动不依赖对方私有状态；登录、身份切换与产品引导仍由宿主负责。
+### Interaction panel module
 
-以上交互与 `useConsole` 仍为规划；当前仅导出 `Console` 占位组件和基础类型。
+`console` is planned to cover the whole panel shared by the conversation view and TUI, providing a unified `useConsole` Hook and a `Console` composite view:
 
-## 组合与扩展边界
+- The Hook returns the current mode, common context, conversation and command data, state and operations together; mode switching and toolbar actions are coordinated inside the module, and a host may also use only the Hook and assemble the view.
+- The conversation view and TUI use the same service, identity and host-supplied resource context; each keeps its own message history, command records and running state, preserved when switching modes.
+- Conversation capabilities include sessions, message streams, attachments, memory submission and compile actions; TUI capabilities include command definitions, execution, cancellation and execution records, with available commands following the capabilities the host provides.
+- The composite view owns mode switching, the common toolbar and the content area, dispatching operations by the current mode. `Tui` is consumed as an independently usable pure view component; the conversation view has no shared component yet and is implemented inside the module.
+- Opening a resource, locating an artifact or refreshing a directory is handed to the host through events, and coordination with `file-browser` does not depend on the other module's private state; sign-in, identity switching and product onboarding remain with the host.
 
-- **当前资源由文件浏览模块协调**：`file-browser` 默认维护选中 URI 并同步目录、搜索和预览。宿主可受控传入 URI，或通过模块公开操作打开任务产物与 Bot 链接；模块上报资源变化，不直接操作其他模块的 Store 或路由。
-- **预览页签属于同一资源**：个人终端不维护多个已打开文件的工作区页签。L0 / L1 / 目录内容以及经验看板等属于当前资源的内容视图；不据此收窄通用 `FilePreview` 的页签 API。
-- **特定内容通过扩展接入**：经验看板、会话内容及 Wiki 等视图有独立的取数与展示逻辑，通过预览扩展页签接入，留在业务扩展或宿主；不让通用 `FilePreview` 识别这些业务类型。Skill 浏览复用目录与目录内容。
-- **异步结果通过事件联动**：`console` 在产生任务或资源变更时上报任务标识、产物 URI 或受影响目录，由宿主决定刷新目录、打开任务或定位产物。任务状态归任务数据源，不在各模块复制维护。
-- **身份由宿主提供**：库 / 数据空间 / User 切换与登录账号切换是不同操作。作用域切换视图由宿主提供；登录、账号保存、API Key 管理与失效处理仍归宿主。模块按显式作用域隔离请求、缓存与订阅，切换后清理旧操作。
-- **可选能力由宿主接入**：删除、OAuth、OVPack、同步来源、隐私及境外提示由宿主提供服务能力、动作和文案。OVPack 使用独立的目录迁移服务契约，不混入普通资源上传；可作为目录操作扩展。当前不规划 TOS 导入、手写 Skill、独立编译页面或管理后台模块。
-- **布局按模块边界负责**：`file-browser` 负责目录、搜索与预览的内部布局，`console` 负责 VikingBot / TUI 模式切换及面板内部布局；宿主可通过插槽或独立 Hook 定制。两个区域的外部布局由宿主决定；引导、任务、帮助、账号等顶栏入口的位置也归宿主。
+The interactions above and `useConsole` are still planned; only the `Console` placeholder component and base types are exported today.
 
-## 当前状态与开发入口
+## Composition and extension boundaries
 
-每个模块使用独立的 kebab-case 目录，入口文件与目录同名，已同步提供占位组件、基础类型和独立构建入口。真实业务迁入后，从同一模块入口分别导出 Hook 与组合视图；当前不提供占位 Hook 或请求配置 API。
+- **The file browser module coordinates the current resource**: `file-browser` maintains the selected URI by default and keeps directory, search and preview in sync. A host can pass the URI in a controlled way, or open task artifacts and Bot links through the module's public operations; the module reports resource changes and never manipulates another module's Store or routing directly.
+- **Preview tabs belong to the same resource**: the personal terminal does not keep workspace tabs for multiple open files. L0 / L1 / directory content and experience dashboards are content views of the current resource; the generic `FilePreview` tab API is not narrowed on that basis.
+- **Specific content arrives through extensions**: experience dashboards, session content and Wiki views have their own loading and display logic and are integrated through preview extension tabs, staying in business extensions or the host; the generic `FilePreview` is never taught these business types. Skill browsing reuses the directory and its content.
+- **Async results coordinate through events**: when `console` produces a task or a resource change it reports the task identifier, artifact URI or affected directory, and the host decides whether to refresh a directory, open a task or locate an artifact. Task state belongs to the task data source and is not duplicated across modules.
+- **Identity comes from the host**: switching library / data space / user and switching sign-in accounts are different operations. The scope-switching view is provided by the host; sign-in, account storage, API Key management and expiry handling remain with the host. Modules isolate requests, caches and subscriptions by explicit scope and clear old operations after a switch.
+- **Optional capabilities are integrated by the host**: delete, OAuth, OVPack, sync sources, privacy and overseas notices are supplied by the host as service capabilities, actions and copy. OVPack uses a separate directory-migration service contract and is not mixed into ordinary resource upload; it can extend directory operations. TOS import, hand-written Skills, a standalone compile page and admin console modules are not planned for this phase.
+- **Layout follows module boundaries**: `file-browser` owns the internal layout of directory, search and preview, and `console` owns conversation / TUI mode switching and the panel's internal layout; hosts can customise them through slots or standalone Hooks. The outer layout of both areas is the host's decision, as is the placement of top-bar entries such as onboarding, tasks, help and account.
 
-开发命令和构建入口见 [前端工作区 README](../../../../README.md)，包结构见[包说明](../../README.md)，实施约束见本目录 [AGENTS.md](./AGENTS.md)。
+## Current state and development entry
 
-已开放 `@openviking/react/modules/<模块>`，不提供分类聚合 JS 入口。模块 CSS 同时提供 `@openviking/react/modules/style.css` 与 `@openviking/react/modules/<模块>/style.css`，整包 `@openviking/react/style.css` 也包含模块样式。单模块 CSS 当前包含占位视图样式，迁入组合视图后须同步包含所需组件样式；后续单独使用 Hook 无需导入 CSS。
+Each module uses its own kebab-case directory with `index.ts` as the single entry, and already ships a placeholder component, base types and an independent build entry. Once real business logic migrates, the Hook, the composite view and public types are exported from the same entry; no placeholder Hook or request-configuration API is provided today.
+
+Development commands and build entries are in the [UI workspace README](../../../../README.md), the package structure is in the [package README](../../README.md), and implementation constraints are in this directory's [AGENTS.md](./AGENTS.md).
+
+`@openviking/react/modules/<module>` is open, with no category-level aggregate JS entry. Module CSS provides both `@openviking/react/modules/style.css` and `@openviking/react/modules/<module>/style.css`, and the whole-package `@openviking/react/style.css` includes module styles too. Single-module CSS currently contains the placeholder view styles and must include the component styles it needs once the composite view migrates; using a Hook alone needs no CSS.

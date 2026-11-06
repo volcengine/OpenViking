@@ -104,7 +104,7 @@ export function memoryBlock(memory) {
 }
 
 /** Only full, client-owned histories have replayable message positions. */
-export function describeConversation(body, protocol) {
+export function describeConversation(body, protocol, { allowNativeContext = false } = {}) {
   if (!object(body)) return null;
   const encoded = JSON.stringify(body);
   if (Buffer.byteLength(encoded) > 2 * 1024 * 1024) return null;
@@ -122,7 +122,8 @@ export function describeConversation(body, protocol) {
   if (!Array.isArray(messages) || !messages.length || messages.length > 2000 || !messages.every(object)) return null;
   // Tool results and assistant quotations may contain docs describing these
   // markers. They are data, not evidence of an installed memory plugin.
-  if (hasNativeContext(body, protocol)) return null;
+  // Capture may parse native-owned history solely to resolve its cleanup scope.
+  if (!allowNativeContext && hasNativeContext(body, protocol)) return null;
   const exchanges = conversationExchanges(messages, protocol);
   const users = exchanges.filter((exchange) => !exchange.auxiliary).map((exchange) => exchange.start);
   if (!users.length) return null;

@@ -265,6 +265,11 @@ Setup saves `mcp_servers.openviking` in the active Hermes profile. Restart
 Hermes to load the server tools as `mcp__openviking__<tool>`. Tool names,
 arguments and results come from the server. All tools are exposed by default.
 
+When the server advertises `rule_search`, Hermes can check task-specific Rules
+through `mcp__openviking__rule_search`. Results preserve complete Rule content,
+conditions and exceptions and are excluded from memory extraction. Older supported
+servers can provide other MCP tools without this optional tool.
+
 A new connection uses `trust: untrusted`. Hermes v0.22.7, the minimum supported
 version, includes the read-only annotation support needed by this policy.
 Read-only tools such as `find`, `read` and `grep` do not ask for approval. `search`, `remember`,
@@ -484,7 +489,7 @@ after updating.
 
 Version 2.2 requires Hermes >=0.22.7 and OpenViking >=0.4.23 with `/mcp` enabled.
 Upgrade Hermes and a separately managed server before updating the plugin.
-The six native `viking_*` tools are removed; there is no native-tool fallback.
+The native `viking_*` tools are removed; there is no native-tool fallback.
 
 ## Recovery lock files
 
