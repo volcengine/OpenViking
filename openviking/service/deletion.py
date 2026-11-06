@@ -40,6 +40,17 @@ _TERMINAL_TASK_STATUSES = (
 )
 
 
+def _is_upload_bucket(name: str) -> bool:
+    """Return True for the ``YYYYMMDDHH`` (UTC) directory of a bucketed upload."""
+    if len(name) != 10 or not name.isdigit():
+        return False
+    try:
+        time.strptime(name, "%Y%m%d%H")
+    except ValueError:
+        return False
+    return True
+
+
 def _deletion_message(
     *,
     task_id: str,
@@ -476,18 +487,35 @@ class DeletionService:
         except NotFoundError:
             return
 
+        # New shared uploads live at ``upload/<YYYYMMDDHH>/<leaf>/`` while
+        # legacy uploads still use the flat ``upload/<upload_id>/`` layout.
+        # ls() is not recursive, so bucket entries are expanded one level.
+        upload_uris: list[str] = []
         for upload in uploads:
             uri = str(upload.get("uri") or "").rstrip("/")
-            if not uri or uri == _SHARED_UPLOAD_ROOT:
+            if not uri or uri == _SHARED_UPLOAD_ROOT or not upload.get("isDir"):
                 continue
-            upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/")
-            if (
-                not upload.get("isDir")
-                or not uri.startswith(f"{_SHARED_UPLOAD_ROOT}/")
-                or not upload_id
-                or "/" in upload_id
-            ):
+            name = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/")
+            if not name or "/" in name:
                 continue
+            if _is_upload_bucket(name):
+                try:
+                    leaves = await viking_fs.ls(
+                        uri,
+                        show_all_hidden=True,
+                        node_limit=LS_ALL_NODES,
+                        ctx=ctx,
+                    )
+                except NotFoundError:
+                    continue
+                for leaf in leaves:
+                    leaf_uri = str(leaf.get("uri") or "").rstrip("/")
+                    if leaf.get("isDir") and leaf_uri.startswith(f"{uri}/"):
+                        upload_uris.append(leaf_uri)
+            else:
+                upload_uris.append(uri)
+
+        for uri in upload_uris:
             meta_uri = f"{uri}/meta"
             try:
                 meta = json.loads(await viking_fs.read_file(meta_uri, ctx=ctx))
