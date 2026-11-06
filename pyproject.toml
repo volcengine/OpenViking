@@ -249,6 +249,7 @@ exclude = ["tests*", "docs*", "examples*"]
 openviking_gateway = ["client-rules.json", "lua/*.lua"]
 "openviking.scheduling.expiry" = ["lua/*.lua"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
+"openviking.parse.parsers.code.ast" = ["assets/parsers.ghproxy.json"]
 openviking = [
     "prompts/templates/**/*.yaml",
     "system_assets/**/*",
