@@ -6,8 +6,9 @@ export class OVTimerRepository {
   constructor(client, instanceId) {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(instanceId)) throw new Error('OV timers require a valid instance id');
     this.client = client;
-    const root = client.user ? `viking://user/${client.user}` : 'viking://~';
-    this.uri = `${root}/resources/vika/${instanceId}/timers-state.json`;
+    // OV resolves ~ using the authenticated identity, including API keys.
+    // Keep the instance directory even when two instances choose to share a user.
+    this.uri = `viking://~/resources/vika/${instanceId}/timers-state.json`;
     this.state = { timers: [], timer_occurrence_checks: [] };
     this.needsRefresh = false;
     this.barrier = Promise.resolve();

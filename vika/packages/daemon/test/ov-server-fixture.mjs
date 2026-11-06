@@ -21,7 +21,7 @@ function split(text, max = 6000) {
   return pieces;
 }
 
-export async function fakeOV(t, { failParse = [], slowParse = [] } = {}) {
+export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} } = {}) {
   const state = { files: new Map(), uploads: new Map(), tasks: new Map(), requests: [], down: false, slowParse: new Set(slowParse) };
   let next = 0;
   const server = http.createServer(async (request, response) => {
@@ -37,10 +37,16 @@ export async function fakeOV(t, { failParse = [], slowParse = [] } = {}) {
     const body = raw.length && String(request.headers['content-type']).startsWith('application/json') ? JSON.parse(raw.toString('utf8')) : null;
     state.requests.push({ route, query: Object.fromEntries(url.searchParams), body, headers: request.headers });
     if (state.down) return reply(503, 'unavailable');
-    const uri = url.searchParams.get('uri');
+    // Model OV's authenticated home alias: an API key overrides the user
+    // header, and stored files and returned URIs are always canonical.
+    const user = apiKeys[request.headers['x-api-key']] ?? request.headers['x-openviking-user'] ?? 'owner';
+    const canonical = (uri) => uri?.replace(/^viking:\/\/~(?=\/|$)/, `viking://user/${user}`);
+    const uri = canonical(url.searchParams.get('uri'));
+    if (route === 'GET /api/v1/system/status') return reply(200, { initialized: true, user });
     if (route === 'POST /api/v1/content/write') {
-      state.files.set(body.uri, body.content);
-      return reply(200, { uri: body.uri, semantic_status: 'skipped', vector_status: 'queued' });
+      const target = canonical(body.uri);
+      state.files.set(target, body.content);
+      return reply(200, { uri: target, semantic_status: 'skipped', vector_status: 'queued' });
     }
     if (route === 'POST /api/v1/resources/temp_upload') {
       const form = await new Response(raw, { headers: { 'content-type': request.headers['content-type'] } }).formData();
@@ -53,14 +59,15 @@ export async function fakeOV(t, { failParse = [], slowParse = [] } = {}) {
       const upload = state.uploads.get(body.temp_file_id);
       if (!upload) return reply(400, 'unknown upload');
       const id = `task-${next += 1}`;
-      state.tasks.set(id, { polls: 0, to: body.to, upload });
+      const target = canonical(body.to);
+      state.tasks.set(id, { polls: 0, to: target, upload });
       if (body.args?.parse_mode !== 'no_split') {
         const stem = path.basename(upload.name, path.extname(upload.name));
         const pieces = split(upload.data.toString('utf8'));
-        pieces.forEach((piece, index) => state.files.set(`${body.to}/${pieces.length > 1 ? `${stem}_${index + 1}` : stem}.md`, piece));
+        pieces.forEach((piece, index) => state.files.set(`${target}/${pieces.length > 1 ? `${stem}_${index + 1}` : stem}.md`, piece));
         state.tasks.get(id).landed = true;
       }
-      return reply(200, { status: 'success', task_id: id, root_uri: body.to });
+      return reply(200, { status: 'success', task_id: id, root_uri: target });
     }
     if (request.method === 'GET' && url.pathname.startsWith('/api/v1/tasks/')) {
       const task = state.tasks.get(decodeURIComponent(url.pathname.slice('/api/v1/tasks/'.length)));

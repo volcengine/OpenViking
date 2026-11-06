@@ -25,6 +25,27 @@ async function setup(context) {
 }
 
 describe('OV timer storage', () => {
+  it('uses the key identity and keeps shared users separated by instance', async (context) => {
+    const { state, url } = await fakeOV(context, { apiKeys: { 'asd-key': 'owner.asd', 'manbo-key': 'owner.manbo' } });
+    const asd = new OVConnection({ url, api_key: 'asd-key', user: 'owner' });
+    const manbo = new OVConnection({ url, api_key: 'manbo-key' });
+    const first = await new OVTimerRepository(asd, 'primary').load();
+    const otherUser = await new OVTimerRepository(manbo, 'primary').load();
+    const sharedUser = await new OVTimerRepository(asd, 'secondary').load();
+    await first.create(input);
+    await otherUser.create({ ...input, title: 'Another user' });
+    await sharedUser.create({ ...input, title: 'Another instance' });
+    assert.equal((await new OVTimerRepository(asd, 'primary').load()).get(input.timerId).title, 'Reminder');
+    assert.equal((await new OVTimerRepository(manbo, 'primary').load()).get(input.timerId).title, 'Another user');
+    assert.equal((await new OVTimerRepository(asd, 'secondary').load()).get(input.timerId).title, 'Another instance');
+    assert.deepEqual([...state.files.keys()].sort(), [
+      'viking://user/owner.asd/resources/vika/primary/timers-state.json',
+      'viking://user/owner.asd/resources/vika/secondary/timers-state.json',
+      'viking://user/owner.manbo/resources/vika/primary/timers-state.json',
+    ]);
+    assert.ok(state.requests.filter(({ body }) => body?.uri).every(({ body }) => body.uri.startsWith('viking://~/')));
+  });
+
   it('loads existing timers from the vika namespace', async (context) => {
     const server = await fakeOV(context);
     const client = new OVConnection({ url: server.url, user: 'alice' });

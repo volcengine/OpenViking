@@ -1243,7 +1243,10 @@ export class ActionService {
       }
       uri = entry ? entry.uri : archive.body;
     }
-    const found = /[%\\]/.test(uri) ? null : readTarget(mailArchiveRoot(client.user), uri);
+    // Search returns canonical URIs; accept only the authenticated user's
+    // archive as well as the ~ links emitted by the connector.
+    const root = mailArchiveRoot(uri?.startsWith('viking://user/') ? await client.authenticate() : null);
+    const found = /[%\\]/.test(uri) ? null : readTarget(root, uri);
     if (!found) throw blocked('outside_mail_archive', 'read_email reads only mail the daemon stored');
     return this.readArchived(client, found, input, caller, {
       missing: blocked('not_stored_yet', 'OpenViking has nothing there yet; an attachment may still be being read. Try again shortly.'),
@@ -1257,7 +1260,7 @@ export class ActionService {
     if (Boolean(input.meeting_id) === Boolean(input.uri)) throw blocked('invalid_input', 'Pass meeting_id or uri, not both');
     if (input.part && !input.meeting_id) throw blocked('invalid_input', 'part goes with meeting_id');
     const client = this.ovClient ?? new OVSessionClient(this.config.openVikingConfigPath);
-    const root = meetingNotesRoot(client.user);
+    const root = meetingNotesRoot(input.uri?.startsWith('viking://user/') ? await client.authenticate() : null);
     let uri = input.uri;
     if (input.meeting_id) {
       if (!/^\d{1,32}$/.test(input.meeting_id)) throw blocked('invalid_input', 'meeting_id is the meeting\'s long numeric id');
