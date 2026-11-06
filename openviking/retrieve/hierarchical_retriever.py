@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from openviking.core.context import ContextLevel
+from openviking.core.namespace import canonical_session_root
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
 from openviking.models.embedder.base import (
@@ -19,9 +20,10 @@ from openviking.models.embedder.base import (
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.rerank_scoring import RerankScores, finite_score, rerank_scores
 from openviking.retrieve.retrieval_stats import get_stats_collector
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
-from openviking.storage.expr import FilterExpr
+from openviking.storage.expr import FilterExpr, RawDSL
+from openviking.storage.scope_filter import merge_filters
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.tags import normalize_search_tags
@@ -198,6 +200,20 @@ class HierarchicalRetriever:
             and not _has_context_type_filter(scope_dsl)
         ):
             context_type = ContextType.RESOURCE.value
+
+        # Old indexes may still contain session transcripts and their L0/L1 rows.
+        if ctx.role != Role.ROOT:
+            scope_dsl = merge_filters(
+                scope_dsl,
+                RawDSL(
+                    {
+                        "op": "must_not",
+                        "field": "uri",
+                        "conds": [canonical_session_root(ctx)],
+                        "para": "-d=-1",
+                    }
+                ),
+            )
 
         search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit
         with telemetry.measure("search.vector_retrieval"):
