@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Compile output recovery and contract validation without real model calls."""
 
+import asyncio
+import json
+from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,6 +13,7 @@ from vikingbot.agent.tools.base import ToolContext
 from vikingbot.compile import entry
 from vikingbot.compile.ops import common
 from vikingbot.compile.ops.common import job
+from vikingbot.compile.ops.reduce import resolve_files
 from vikingbot.compile.pipeline_agent import agent_runner
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, ModelCallError
 from vikingbot.compile.plan import PlanProposal
@@ -134,3 +138,85 @@ def test_compile_rejects_misplaced_contract_settings_without_rejecting_extension
     with pytest.raises(ValueError, match="output_format -> contract.output_format"):
         PlanProposal.model_validate({**proposal, "output_format": "wiki"})
     assert PlanProposal.model_validate({**proposal, "comment": "planner note"}).contract
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_failure", [False, True])
+async def test_collision_retry_refreshes_reservations_after_output_exhaustion(
+    runtime, provider_failure
+):
+    pipeline, _ = runtime
+    await seed(runtime)
+    sources = dict(zip(("a", "b"), pipeline.records, strict=True))
+    pipeline.limits = pipeline.limits.model_copy(update={"merge_concurrency": 2})
+    a_started, b_reserved = asyncio.Event(), asyncio.Event()
+    calls = Counter()
+    original_put = pipeline.files.put
+
+    async def put(key, value):
+        result = await original_put(key, value)
+        if key.startswith("artifacts/") and value["path"] == "c.md":
+            b_reserved.set()
+        return result
+
+    pipeline.files.put = put
+    references = []
+    for group, source in sources.items():
+        for index in range(2):
+            ref = f"candidate-{group}-{index}"
+            references.append(ref)
+            await pipeline.files.put(
+                ref,
+                {
+                    "path": f"{group}.md",
+                    "content": f"{group} fact {index}",
+                    "content_base64": None,
+                    "owner": ref,
+                    "inputs": [source],
+                    "source_refs": [source],
+                    "base_hash": None,
+                },
+            )
+
+    async def respond(**kwargs):
+        request = json.loads(kwargs["messages"][1]["content"])
+        group = request["candidates"][0]["path"][0]
+        calls[group] += 1
+        if group == "a":
+            a_started.set()
+            await asyncio.wait_for(b_reserved.wait(), timeout=5)
+            if provider_failure:
+                raise OSError("provider unavailable")
+            path = "d.md" if "c.md" in request["reserved_paths"] else "c.md"
+        else:
+            await asyncio.wait_for(a_started.wait(), timeout=5)
+            path = "c.md"
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    "submit",
+                    "emit",
+                    {
+                        "files": [
+                            {"path": path, "content": f"{group} facts", "inputs": [sources[group]]}
+                        ]
+                    },
+                    0,
+                )
+            ],
+        )
+
+    pipeline.model.provider.chat.side_effect = respond
+    result = await resolve_files(pipeline, references)
+    paths = sorted(pipeline.files.values[ref]["path"] for ref in result)
+    if provider_failure:
+        assert paths == ["c.md"]
+        assert calls == {"a": 1, "b": 1}
+        assert pipeline.status[sources["a"]] == "failed"
+        assert "provider unavailable" in pipeline.failures[0]
+    else:
+        assert paths == ["c.md", "d.md"]
+        assert calls == {"a": 5, "b": 1}
+        assert all(pipeline.status[source] == "prepared" for source in sources.values())
+        assert pipeline.failures == []
