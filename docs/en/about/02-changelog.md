@@ -7,6 +7,32 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **`auto` falls back to local on any remote parser failure**: each configured remote
+  provider is tried in turn and the first success wins; a provider that raises is logged
+  and the next option is tried, so a remote outage degrades that document to local instead
+  of failing the import. The path actually taken is recorded in `pdf_strategy_effective`,
+  and whether any remote parser is configured is now `PDFConfig.remote_enabled`, expressed
+  over the provider list rather than one service.
+- **MinerU hosted API support (`mineru_token`)**: a new `pdf.mineru_token` setting carries
+  the bearer token for the hosted MinerU service and, because that service has no
+  `/file_parse` route, its presence also selects the hosted batch protocol:
+  `POST /file-urls/batch` to reserve an upload URL, `PUT` the PDF there, poll
+  `GET /extract-results/batch/{batch_id}` until it settles, then download `full_zip_url`
+  and take the markdown with its images. Without a token the endpoint keeps using the
+  existing self-hosted `/file_parse` contract, so current deployments are unaffected.
+  If the batch handshake is refused the parser retries once against `/file_parse`, which
+  keeps token-gated self-hosted deployments working.
+- **PDF `auto` strategy prefers the configured remote parser (behavior change)**: `auto` now
+  sends every PDF to the configured remote parser and uses the local parser only as a
+  fallback, where it previously tried local first and only used MinerU when local parsing
+  failed. With `pdf.mineru_endpoint` set, expect changes in latency, quota consumption and
+  rate-limit exposure; under throttling the fallback makes such imports slower, not faster.
+  Set `strategy: local` to keep the previous remote-as-last-resort behaviour, or
+  `strategy: mineru` to require the remote path and fail on its errors. A remote failure
+  degrades a single document instead of failing the batch, and `pdf_strategy_effective`
+  (`mineru` or `local`) records which converter actually ran. Service-specific settings
+  (`mineru_endpoint`, `mineru_token`, `mineru_bodys`) stay where they are, so a future
+  remote parser is added as a provider rather than as another `strategy` value.
 - **Legacy session migration removed (breaking change)**: Removed the legacy
   implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
   Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`

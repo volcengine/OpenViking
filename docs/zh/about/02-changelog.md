@@ -7,6 +7,9 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **`auto` 在任何远程解析失败时降级到本地**：依次尝试每个已配置的远程 provider 并使用第一个成功的；某个 provider 抛出异常时记录日志并尝试下一个，因此远程服务不可用时使该文档降级到本地解析，而不会使导入失败。实际走的路径记录在 `pdf_strategy_effective`；同时，“是否有远程解析服务在场”改用 `PDFConfig.remote_enabled` 判定，它以 provider 列表表达，而不绑定单一服务。
+- **MinerU 托管服务支持（`mineru_token`）**：新增 `pdf.mineru_token` 用于携带托管版 MinerU 服务的 Bearer token；由于该服务没有 `/file_parse` 路由，配置它同时会选中托管批处理协议：`POST /file-urls/batch` 预留上传 URL → `PUT` 上传 PDF → 轮询 `GET /extract-results/batch/{batch_id}` → 下载 `full_zip_url` 并取出 markdown 与其图片。未配置 token 时仍使用原有的自托管 `/file_parse` 协议，现有部署不受影响。若批处理握手被拒，解析器会再尝试一次 `/file_parse`，以保持带 token 的自托管部署仍然可用。
+- **PDF `auto` 策略改为优先使用已配置的远程解析器（行为变更）**：`auto` 现在会将每份 PDF 发往已配置的远程解析服务，本地解析器仅作兜底；而之前是先本地、本地失败才使用 MinerU。若配置了 `pdf.mineru_endpoint`，请预期延迟、额度消耗与限流风险发生变化；在限流情况下，回退机制会让导入变慢而不是变快。若希望保持原有行为请设为 `strategy: local`；若希望远程解析必须成功、失败即失败，请设为 `strategy: mineru`。远程失败会仅降级单份文档而不使整批导入失败，并由 `pdf_strategy_effective`（`mineru` 或 `local`）记录实际使用的转换器。服务类配置（`mineru_endpoint`、`mineru_token`、`mineru_bodys`）保持当前位置，未来接入新的远程解析服务时只需增加 provider，而无需新增 `strategy` 取值。
 - **移除旧会话迁移（不兼容变更）**：删除旧迁移实现、`ov admin migrate`（含 `--cleanup`）
   及 Python、TypeScript、Go SDK 的对应方法。保留仅 ROOT 可调用的
   `POST /api/v1/admin/migrate` 入口，当前返回 `400 / INVALID_ARGUMENT`，不创建任务。
