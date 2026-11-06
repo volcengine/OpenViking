@@ -297,6 +297,9 @@ export function getConfig() {
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('VIKA_STAGED_REPLIES', false),
+    // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
+    // search) inside the chats the bot has joined, read as the bot.
+    larkMessageAccess: enumEnv('VIKA_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
     meetingNotes: boolEnv('VIKA_MEETING_NOTES', false) && connectors.includes('lark'),

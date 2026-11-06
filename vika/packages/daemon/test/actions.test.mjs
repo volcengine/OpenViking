@@ -22,7 +22,7 @@ import { formatInboundLine } from '../src/runtime-input.mjs';
 import { Store } from '../src/store.mjs';
 import { LarkClient } from '../src/lark.mjs';
 import { chatEvent, mailEvent, subjectEvent } from './event-fixture.mjs';
-import { fakeConnectors } from './action-fixture.mjs';
+import { fakeConnectors, larkConnectors } from './action-fixture.mjs';
 
 const TOKEN = 'runtime-token';
 const OWNER = { id: 'ou_owner12345678', target: { user_id: 'ou_owner12345678' } };
@@ -31,17 +31,18 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
-  onNoProgress = null } = {}) {
+  larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
   const store = new Store(path.join(directory, 'state.sqlite3'), logger);
   store.initializeCognition('codex', TOKEN);
-  const connectors = fakeConnectors({ ids, run, owners });
+  const connectors = given ?? fakeConnectors({ ids, run, owners });
   const logs = [];
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
-    config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies },
+    config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
+      larkMessageAccess },
     store, connectors, roster, liveness, meetingEnabled, ovClient, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
@@ -70,6 +71,41 @@ describe('agent tools', () => {
     assert.deepEqual(names(setup(t, { ids: ['weixin'], explicitSilence: true }).service), [
       'send_message', 'notify_owner', 'reply_message', 'stay_silent', 'get_message_media', 'read_openviking_session_context',
     ]);
+  });
+
+  it('keeps a bot-only Lark instance inside the chats the bot has joined: no owner identity, and search as the bot', async (t) => {
+    const empty = async () => ({ messages: [], has_more: false });
+    const { service, call, connectors } = setup(t, { larkMessageAccess: 'bot', run: empty });
+    const tools = new Map(service.tools().map((tool) => [tool.name, tool]));
+    for (const name of ['list_chat_messages', 'list_thread_messages']) {
+      assert.deepEqual(tools.get(name).inputSchema.properties.as.enum, ['bot'], name);
+    }
+    assert.match(tools.get('search_messages').description, /^Search messages in the chats the bot has joined \(bot identity\)/);
+    await assert.rejects(call('list_chat_messages', { source: 'lark', chat_id: 'oc_test12345678', as: 'user' }),
+      { code: 'invalid_input', message: /as must be one of bot/ });
+    await call('list_chat_messages', { source: 'lark', chat_id: 'oc_test12345678' });
+    await call('search_messages', { query: 'release' });
+    assert.deepEqual(connectors.calls, [
+      { connector: 'lark', action: 'chat.messages', input: { chat_id: 'oc_test12345678' } },
+      { connector: 'lark', action: 'message.search', input: { query: 'release', as: 'bot' } },
+    ]);
+
+    // By default the owner's visibility is there, as before.
+    const owner = setup(t, { run: empty });
+    const offered = new Map(owner.service.tools().map((tool) => [tool.name, tool]));
+    assert.deepEqual(offered.get('list_chat_messages').inputSchema.properties.as.enum, ['bot', 'user']);
+    assert.match(offered.get('search_messages').description, /^Search messages across all chats visible to the user \(user identity\)/);
+    await owner.call('search_messages', { query: 'release' });
+    assert.deepEqual(owner.connectors.calls, [{ connector: 'lark', action: 'message.search', input: { query: 'release' } }]);
+
+    // The Lark Connector searches with the identity it is given, the owner's by default.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-lark-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const lark = larkConnectors({ tempDir: directory, run: async () => ({ code: 0, stdout: JSON.stringify({ ok: true, data: { messages: [] } }), stderr: '' }) });
+    const real = setup(t, { larkMessageAccess: 'bot', connectors: lark });
+    await real.call('search_messages', { query: 'release' });
+    const args = lark.calls.at(-1).args;
+    assert.deepEqual(args.slice(args.indexOf('+messages-search'), args.indexOf('+messages-search') + 3), ['+messages-search', '--as', 'bot']);
   });
 
   it('validates input against the tool schema before any connector call', async (t) => {

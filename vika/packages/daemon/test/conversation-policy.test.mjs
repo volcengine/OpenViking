@@ -148,6 +148,18 @@ describe('conversation policy assemble', () => {
     assert.equal(on.replace(`\n\n${substitutePromptPlaceholders(read('meeting-notes.md')).trim()}`, ''), off);
   });
 
+  it('reads with the owner\'s identity by default; a bot-only instance is told it reads only the chats the bot has joined', () => {
+    const owner = assembleConversationPolicy({ connectors: ['lark'] });
+    assert.equal(assembleConversationPolicy({ connectors: ['lark'], larkMessageAccess: 'owner' }), owner);
+    assert.match(owner, /`search_messages` searches with the owner's identity where the connector supports it\./);
+    assert.match(owner, /Anything read with the owner's identity \(`search_messages`, or `as: "user"`\) is the owner's private data/);
+    assert.match(owner, /take `as: "user"` to read chats the bot has not joined, with the owner's visibility\./);
+    const bot = assembleConversationPolicy({ connectors: ['lark'], larkMessageAccess: 'bot' });
+    assert.doesNotMatch(bot, /as: "user"|owner's identity where|owner's visibility|\{\{[A-Z_]+\}\}/);
+    assert.match(bot, /`search_messages` searches the chats the bot has joined\./);
+    assert.match(bot, /read only chats the bot has joined, as the bot: this instance never reads with the owner's identity/);
+  });
+
   it('adds the mail rules only when a mailbox is connected', () => {
     assert.doesNotMatch(assembleConversationPolicy({ connectors: ['lark'] }), /^## Email$/m);
     for (const connectors of [['lark', 'email'], ['weixin', 'email']]) {

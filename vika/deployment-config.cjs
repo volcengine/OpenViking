@@ -79,6 +79,7 @@ const AGENT_FIELDS = Object.freeze([
   'channel',
   'connectors',
   'profile',
+  'larkMessageAccess',
   'port',
   'dataDir',
   'tempDir',
@@ -99,6 +100,9 @@ const AGENT_FIELDS = Object.freeze([
 // The roles shipped with the release (packages/daemon/agent/roles/<name>.md).
 // An instance names one of them, or the absolute path of its own role file.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
+// agents[].larkMessageAccess: `owner` reads with the owner's visibility,
+// `bot` only in the chats the bot has joined.
+const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 // Each mailbox is its own email Connector instance; the id is how the model
 // and the logs tell them apart.
 const EMAIL_INSTANCE_ID = /^email-[a-z0-9][a-z0-9-]{0,39}$/;
@@ -280,6 +284,15 @@ function parseAgent(value, index, ignored) {
   if (!connectors.includes('lark') && value.profile !== undefined) {
     throw new Error(`${label}.profile is only used by the lark connector`);
   }
+  // Whose visibility Lark reads use: the owner's (search and history across
+  // their chats, the default) or only the bot's own chats. Chosen when the app
+  // is connected; the permissions it asks for follow it.
+  if (!connectors.includes('lark') && value.larkMessageAccess !== undefined) {
+    throw new Error(`${label}.larkMessageAccess is only used by the lark connector`);
+  }
+  if (value.larkMessageAccess !== undefined && !LARK_MESSAGE_ACCESS.includes(value.larkMessageAccess)) {
+    throw new Error(`${label}.larkMessageAccess must be ${LARK_MESSAGE_ACCESS.join(' or ')}`);
+  }
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
@@ -310,6 +323,7 @@ function parseAgent(value, index, ignored) {
     channel,
     connectors: Object.freeze(connectors),
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
+    larkMessageAccess: connectors.includes('lark') ? value.larkMessageAccess ?? 'owner' : null,
     port: value.port,
     dataDir: manifestAbsolutePath(value.dataDir, `${label}.dataDir`),
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
@@ -543,9 +557,11 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   if (agent.profile) {
     env.VIKA_LARK_PROFILE = agent.profile;
     env.LARKSUITE_CLI_PROFILE = agent.profile;
+    env.VIKA_LARK_MESSAGE_ACCESS = agent.larkMessageAccess;
   } else {
     delete env.VIKA_LARK_PROFILE;
     delete env.LARKSUITE_CLI_PROFILE;
+    delete env.VIKA_LARK_MESSAGE_ACCESS;
   }
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
