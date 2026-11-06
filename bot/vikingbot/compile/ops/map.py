@@ -101,6 +101,9 @@ Processing task:
 {instructions}
 
 Read every assigned input and submit its supported facts through emit.
+Keep facts relevant to this processing task and the downstream deliverables.
+For an input with no relevant facts (for example, a decorative asset), submit an
+empty records list. Do not invent a topic or a "no page needed" deliverable.
 Only the assigned source ranges belong to this job; other ranges have their own jobs.
 Requested fields may span different source types: omit facts unavailable in these inputs.
 An image URI cited by text is a citation, not assigned image evidence. Keep its URI;
@@ -111,7 +114,8 @@ Do not retrieve other source units, implement OCR, or inspect pipeline snapshots
 Use record_fields names for supported facts and include concise routing_text naming
 the subject, key information and relationships; Shuffle does not receive full payloads.
 Return records with payload, scope and supporting input IDs. Do not produce finished
-pages, ready files, a whole-document table or an index in this extraction job.
+pages, ready files or an index in this extraction job. Preserve assigned tables in
+payload; assembling facts across different sources belongs to later steps.
 For large results use your private scratch files and emit result_ref. Scratch files
 are optional for small results. A plain-text reply does not submit a result.
 

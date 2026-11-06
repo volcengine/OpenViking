@@ -28,11 +28,20 @@ Source-to-record extraction uses ranges. Describe work on assigned ranges rather
 than requiring the entire document. Preserve source identities, versions and
 applicability so later steps can combine evidence across ranges.
 Only file output can use input_unit=file to keep a document's ranges together.
+Source-to-record agents read only their assigned evidence and private scratch.
+They cannot execute scripts or publish ready files. Give them local extraction
+work; a source with no relevant facts may return an empty records list.
+Agent file-output Map and Reduce can use scripts for their assigned work.
 
 ### Shuffle
 
 Collects records into groups according to a grouping rule.
 Each group is a collection of records that Reduce will process together.
+Semantic groups are independent local assignments. If the requested deliverable
+needs collection-wide coordination, choose mode=all so one Reduce owns the whole
+collection. Examples include a complete navigational index, cross-page semantic
+deduplication or a coherent multi-file package. Do not give every local group the
+same global publication duty or expect them to see each other's unfinished files.
 
 ### Reduce
 
@@ -43,6 +52,9 @@ One group may produce multiple output files.
 ### Finalize
 
 Publishes the generated files to the requested destination and ends the flow.
+It does not author a missing index, combine differently named duplicate topics,
+or perform work left in an unused contract configuration. Assign every required
+global deliverable to a step that actually runs before Finalize.
 
 ## Plan Syntax
 
