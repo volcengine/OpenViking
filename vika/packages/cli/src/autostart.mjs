@@ -60,15 +60,15 @@ export function launchAgent({ homeDir, pathValue }) {
 `;
 }
 
-function targets(homeDir, platform) {
-  if (platform === 'win32') return { file: path.join(homeDir, 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Vika.vbs') };
+function targets(homeDir, platform, env = process.env) {
+  if (platform === 'win32') return { file: path.join(env.APPDATA || path.join(homeDir, 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Vika.vbs') };
   return platform === 'darwin'
     ? { file: path.join(homeDir, 'Library', 'LaunchAgents', `${LABEL}.plist`) }
     : { file: path.join(homeDir, '.config', 'systemd', 'user', 'vika.service') };
 }
 
-export function autostartEnabled({ homeDir = os.homedir(), platform = process.platform } = {}) {
-  return fs.existsSync(targets(homeDir, platform).file);
+export function autostartEnabled({ homeDir = os.homedir(), platform = process.platform, env = process.env } = {}) {
+  return fs.existsSync(targets(homeDir, platform, env).file);
 }
 
 export async function autostartCommand([action, ...extra], {
@@ -83,7 +83,7 @@ export async function autostartCommand([action, ...extra], {
     output.write('usage: vika autostart <enable|disable>\n');
     return 2;
   }
-  const { file } = targets(homeDir, platform);
+  const { file } = targets(homeDir, platform, env);
   if (action === 'disable') {
     if (platform === 'darwin') await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
     else if (platform !== 'win32') await execFileImpl('systemctl', ['--user', 'disable', '--now', 'vika.service']).catch(() => {});
