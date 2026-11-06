@@ -1878,16 +1878,11 @@ meaning are more important than brevity.
   and descriptions broad enough to retrieve the RULE record but narrow enough to avoid
   unrelated tasks.
 - A Scenario guides first-stage retrieval.
-- `scenario` belongs directly to each mutation, alongside `operation`, `target_ids`,
-  and `record`. Never put `scenario` or `scenario_id` inside `record`.
+- Put `scenario` alongside `record` on the mutation, never inside `record`;
+  use only the RuleRecord fields shown in the JSON shape below.
 - Only NEW may include a non-null `scenario`. Every other operation must set `scenario` to null.
-- NEW requires a non-null `scenario` object at the mutation level, alongside `record`.
-- A non-null `record` may contain only `name`, `description`, `confidence`, `content`,
-  `applies_when`, `exception`, and `body`. Scenario metadata is not a RuleRecord field.
 - UPDATE and REPLACE return complete final records, never deltas. Do not add schema
   fields. Return JSON only, with no Markdown or commentary.
-- Before returning the plan, check every mutation against the JSON shape below:
-  its `record` and `scenario` must be siblings, and NEW must include both objects.
 
 Return JSON only with this shape:
 {{
