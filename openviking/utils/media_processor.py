@@ -171,7 +171,10 @@ class UnifiedResourceProcessor:
         meta = resource.meta
         if resource.path.is_dir():
             extension = ""
-        elif resource.source_type == SourceType.HTTP:
+        elif resource.source_type == SourceType.HTTP or (
+            resource.source_type == SourceType.FEISHU
+            and meta.get("feishu_content_kind") == "file"
+        ):
             extension = str(meta.get("extension") or resource.path.suffix)
         else:
             extension = Path(source_name).suffix if source_name else ""
@@ -352,6 +355,38 @@ class UnifiedResourceProcessor:
             return await run_stage(
                 "parse_artifact", self._get_parser_router().parse(source, **parse_kwargs)
             )
+
+        if (
+            mode is ParseMode.DEFAULT
+            and prepared_resource is None
+            and not kwargs.get("_feishu_prepared_source")
+            and not kwargs.get("_feishu_resolved_type")
+        ):
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+            from openviking.parse.feishu_import import recursive_wiki
+
+            backend = normalize_parser_backend(kwargs.get("parser_backend"))
+            if (
+                FeishuAccessor._is_feishu_url(source)
+                and FeishuAccessor._parse_feishu_url(source)[0] == "wiki"
+                and not recursive_wiki(kwargs)
+                and backend is not ParserBackend.INTERNAL
+                and (
+                    backend is ParserBackend.UNDERSTANDING
+                    or self._get_parser_router().should_use_understanding_api(source)
+                )
+            ):
+                preflight = await FeishuAccessor().preflight_source(
+                    source,
+                    feishu_access_token=kwargs.get("feishu_access_token"),
+                    feishu_config=kwargs.get("feishu_config"),
+                    **(
+                        {"lark_file": kwargs["lark_file"]}
+                        if kwargs.get("lark_file") is not None
+                        else {}
+                    ),
+                )
+                kwargs["_feishu_resolved_type"] = preflight.doc_type
 
         if (
             mode is ParseMode.DEFAULT

@@ -250,9 +250,12 @@ async def test_media_prepare_enables_url_plan_only_for_correct_backend(monkeypat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind,recursive", [("folder", False), ("wiki", True), ("file", False)])
+@pytest.mark.parametrize("kind,recursive,backing", [
+    ("folder", False, "folder"), ("wiki", True, "wiki"), ("file", False, "file"),
+    ("wiki", False, "file"), ("wiki", False, "slides"), ("slides", False, "slides"),
+])
 async def test_async_source_plan_does_not_submit_collection_or_file_url(
-    monkeypatch, kind, recursive
+    monkeypatch, kind, recursive, backing
 ):
     from openviking.parse.mode import ParseMode
     from openviking.server.identity import RequestContext, Role
@@ -277,7 +280,7 @@ async def test_async_source_plan_does_not_submit_collection_or_file_url(
     )
     preflight = AsyncMock(
         return_value=SimpleNamespace(
-            doc_type=kind,
+            doc_type=backing,
             source_format="file" if kind == "file" else "directory",
             source_name="Root",
         )
@@ -323,7 +326,7 @@ async def test_direct_understanding_receives_effective_account_feishu_config(mon
     monkeypatch.setattr(
         FeishuAccessor,
         "preflight_source",
-        AsyncMock(return_value=SimpleNamespace(source_format="file", source_name="Doc")),
+        AsyncMock(return_value=SimpleNamespace(source_format="file", source_name="Doc", doc_type="docx")),
     )
     service = ResourceService(
         viking_fs=SimpleNamespace(),
@@ -617,7 +620,7 @@ async def test_single_feishu_file_no_split_uses_native_parser(monkeypatch, tmp_p
         meta={"feishu_content_kind": "file"},
         is_temporary=False,
     )
-    registry = SimpleNamespace(parse=AsyncMock(return_value=object()))
+    registry = SimpleNamespace(get_parser_for_file=Mock(return_value=object()), parse=AsyncMock(return_value=object()))
     api = SimpleNamespace(parse=AsyncMock(return_value=object()))
     processor = UnifiedResourceProcessor(vlm_processor=object())
     processor._accessor_registry = SimpleNamespace(access=AsyncMock(return_value=resource))
