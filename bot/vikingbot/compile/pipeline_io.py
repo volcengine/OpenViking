@@ -24,7 +24,6 @@ from vikingbot.compile.models import COMPILE_STAGING_ROOT, CompileFailure
 from vikingbot.compile.results import FileResponse, RouteBatchResponse
 from vikingbot.compile.schemas import result_schema
 from vikingbot.compile.skill_resources import EvidenceReader
-from vikingbot.sandbox.base import SandboxBackend
 from vikingbot.utils.helpers import cal_str_tokens
 
 T = TypeVar("T")
@@ -127,12 +126,7 @@ class TaskFiles:
         reference = f"{ROOT}/{path}.json"
         temporary = reference + "." + uuid.uuid4().hex + ".tmp"
         await self.sandbox.write_file(temporary, json.dumps(value, ensure_ascii=False))
-        replace = getattr(self.sandbox, "replace_file", None)
-        if replace is None:
-            # Preserve integrations implementing the older, duck-typed file interface.
-            await SandboxBackend.replace_file(self.sandbox, temporary, reference)
-        else:
-            await replace(temporary, reference)
+        await self.sandbox.replace_file(temporary, reference)
         return reference
 
     async def get(self, path: str) -> Any:

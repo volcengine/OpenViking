@@ -1,7 +1,6 @@
 """New shards avoid command sessions; overwrites retain complete atomic publication."""
 
 import asyncio
-import json
 import shlex
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -114,27 +113,16 @@ async def test_remote_replacement_rejects_paths_before_file_api(tmp_path, source
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_remote", [False, True])
-async def test_local_and_legacy_remote_state_keep_complete_values(tmp_path, legacy_remote):
+async def test_local_state_uses_native_replacement(tmp_path):
     config = Config(storage_workspace=str(tmp_path))
     backend = DirectBackend(config.sandbox, "state", tmp_path / "space in workspace")
     await backend.start()
-    if legacy_remote:
-        backend.local_file_path = lambda _path: None
-        backend.replace_file = None
-        backend.execute = AsyncMock(wraps=backend.execute)
-    else:
-        backend.execute = AsyncMock(side_effect=AssertionError("Local rename needs no shell"))
+    backend.execute = AsyncMock(side_effect=AssertionError("Local rename needs no shell"))
     try:
         files = TaskFiles(backend)
         await files.put("nested/state", {"generation": 1})
         await files.put("nested/state", {"generation": 2})
-        if legacy_remote:
-            saved = backend.workspace / "__compile_staging__/pipeline/nested/state.json"
-            assert json.loads(saved.read_text()) == {"generation": 2}
-            assert backend.execute.await_count == 2
-        else:
-            assert await files.get("nested/state") == {"generation": 2}
-            backend.execute.assert_not_awaited()
+        assert await files.get("nested/state") == {"generation": 2}
+        backend.execute.assert_not_awaited()
     finally:
         await backend.stop()
