@@ -56,6 +56,14 @@ It does not author a missing index, combine differently named duplicate topics,
 or perform work left in an unused contract configuration. Assign every required
 global deliverable to a step that actually runs before Finalize.
 
+## Output Content Format
+
+Transform.output selects the carrier: records or files. Contract.output_format
+separately selects content validation. Use wiki for Markdown knowledge pages,
+including a multi-page Wiki with a root index; use files for arbitrary file formats.
+A Reduce returning files can and should still select output_format=wiki for a Wiki
+task, so Markdown/YAML checks run. These two settings do not mean the same thing.
+
 ## Plan Syntax
 
 Write plan as a string of assignments and operator calls. The runtime provides
