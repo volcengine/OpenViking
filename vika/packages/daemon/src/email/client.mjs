@@ -7,11 +7,11 @@ import { eventMessage } from '../connectors/protocol.mjs';
 import { safeError } from '../logger.mjs';
 import { MailArchive, parsesAttachment } from './archive.mjs';
 import { ImapConnection } from './imap.mjs';
+import { mailboxIdentity, mailboxName } from './mailbox.mjs';
 import { buildReply, decodeCharset, isOwnMessageId, parseMail, replyMessageId } from './mime.mjs';
 import { sendMail, verifySmtp } from './smtp.mjs';
 import { EmailState } from './state.mjs';
 
-const MAILBOX = 'INBOX';
 // Servers may drop an IDLE after 29 minutes; renew it well before.
 const IDLE_MS = 9 * 60_000;
 const POLL_MS = 60_000;
@@ -56,7 +56,7 @@ export function loadAccount(file) {
     name: typeof value.name === 'string' ? value.name.trim() : '',
     user: typeof value.username === 'string' && value.username.trim() ? value.username.trim() : address,
     password: value.password,
-    imap: server('imap'),
+    imap: { ...server('imap'), mailbox: mailboxName(value.imap?.mailbox) },
     smtp: server('smtp'),
   });
 }
@@ -75,7 +75,7 @@ export async function verifyAccount(account, { connectTls } = {}) {
   try {
     await imap.connect();
     await imap.login(account.user, account.password);
-    await imap.examine(MAILBOX);
+    await imap.examine(account.imap.mailbox);
     idle = imap.capabilities.has('IDLE');
     await imap.logout();
   } finally {
@@ -125,10 +125,11 @@ function attachmentLine({ id, name, type, size, uri, status, reason }) {
 }
 
 // The mail as OV keeps it.
-function bodyMarkdown({ mail, messageId, mailbox, instance, attachments, inline }) {
+function bodyMarkdown({ mail, messageId, mailbox, imapMailbox, instance, attachments, inline }) {
   const lines = [`# ${mail.subject || '(no subject)'}`, '', ...headerLines(mail).map((line) => `- ${line}`)];
   if (mail.date) lines.push(`- Date: ${new Date(mail.date).toISOString()}`);
   lines.push(`- Mailbox: ${mailbox} (${instance})`, `- Message: ${messageId}`);
+  lines.push(`- IMAP folder: ${label(imapMailbox)}`);
   if (attachments.length || inline) {
     lines.push('', '## Attachments', '', ...attachments.map((attachment) => `- ${attachmentLine(attachment)}`));
     if (inline) lines.push(`- ${inline} inline image${inline === 1 ? '' : 's'} in the body, not stored`);
@@ -213,7 +214,7 @@ function sleep(ms, stopped) {
   });
 }
 
-// Watches one mailbox's INBOX read-only over IMAP and reports each new mail as
+// Watches one configured mailbox read-only over IMAP and reports each new mail as
 // an event; replies to a reported mail over SMTP. Never marks, moves or
 // deletes mail.
 export class EmailClient {
@@ -278,8 +279,8 @@ export class EmailClient {
     const imap = await this.open();
     this.imap = imap;
     try {
-      const box = await imap.examine(MAILBOX);
-      const key = `${this.tag}:${MAILBOX}`;
+      const box = await imap.examine(this.account.imap.mailbox);
+      const key = `${this.tag}:${this.account.imap.mailbox}`;
       let cursor = this.state.cursor(key);
       if (!cursor || cursor.uidValidity !== box.uidValidity) {
         // First start, or the server renumbered the mailbox: begin with what
@@ -304,7 +305,7 @@ export class EmailClient {
     }
   }
 
-  async catchUp(imap, key, cursor, onLine) {
+  async catchUp(imap, key, cursor, onLine, imapMailbox = this.account.imap.mailbox) {
     let uids = await imap.searchUids(cursor.lastUid + 1);
     if (uids.length > MAX_CATCH_UP) {
       this.logger.warn('email_catch_up_skipped', { skipped: uids.length - MAX_CATCH_UP });
@@ -325,7 +326,7 @@ export class EmailClient {
         // One mail that cannot be read is passed over, never retried: the
         // cursor moves on so the mail after it still arrives.
         try {
-          await this.report(item, cursor.uidValidity, onLine);
+          await this.report(item, cursor.uidValidity, onLine, imapMailbox);
         } catch (error) {
           this.logger.warn('email_unreadable', { uid: item.uid, error: safeError(error) });
         }
@@ -338,7 +339,7 @@ export class EmailClient {
     }
   }
 
-  async report(item, uidValidity, onLine) {
+  async report(item, uidValidity, onLine, imapMailbox = this.account.imap.mailbox) {
     if (!item.body) return;
     const mail = parseMail(item.body, { maxTextChars: STORED_TEXT_CHARS });
     if (mail.autoReplied || isOwnMessageId(mail.messageId)) {
@@ -346,14 +347,15 @@ export class EmailClient {
       return;
     }
     if (item.truncated) mail.text = `[mail body not fetched: ${Math.round(item.size / 1_048_576)} MiB]`;
-    const messageId = `mail:${this.tag}:${uidValidity}:${item.uid}`;
+    const identity = mailboxIdentity(this.tag, imapMailbox, uidValidity, item.uid);
+    const messageId = `mail:${identity}`;
     const recipients = replyRecipients(mail, this.account.address);
     const files = mail.attachments.filter((attachment) => !attachment.inline).slice(0, MAX_ATTACHMENTS);
     // undefined: no OV to store in; null: OV could not take this mail.
-    const archive = this.archive ? await this.store(mail, messageId, files) : undefined;
+    const archive = this.archive ? await this.store(mail, messageId, files, imapMailbox) : undefined;
     const line = JSON.stringify(eventMessage('email', {
       instance: this.config.instance ?? 'email',
-      id: `imap:${this.tag}:${uidValidity}:${item.uid}`,
+      id: `imap:${identity}`,
       kind: mail.bulk ? 'email.list' : 'email.received',
       occurred_at: item.internalDate ?? mail.date ?? Date.now(),
       subject: { type: 'thread', id: threadId(item, mail, messageId) },
@@ -366,7 +368,7 @@ export class EmailClient {
       message: { id: messageId, type: 'email' },
       // Who a reply goes to, in full, for the owner to check on the approval
       // card; past the limit only how many. `archive` is where read_email finds it.
-      data: { reply: { from: this.account.address, subject: replySubject(mail.subject),
+      data: { mailbox: imapMailbox, reply: { from: this.account.address, subject: replySubject(mail.subject),
         ...(recipients.length <= MAX_REPLY_RECIPIENTS ? { to: recipients } : { recipients: recipients.length }) },
       ...(archive ? { archive } : {}) },
     }));
@@ -384,13 +386,13 @@ export class EmailClient {
   // body, chars, attachments }. Null when OV could not take it; the event then
   // carries the text itself. A mail seen again (after a restart) is stored
   // again over the same paths.
-  async store(mail, messageId, files) {
+  async store(mail, messageId, files, imapMailbox = this.account.imap.mailbox) {
     try {
       const folder = this.archive.folder(messageId);
       const attachments = await this.archive.storeAttachments(folder, files.map(attachmentFile),
         { deadline: Date.now() + this.attachmentWaitMs });
       const markdown = bodyMarkdown({
-        mail, messageId, mailbox: this.account.address, instance: this.config.instance ?? 'email', attachments,
+        mail, messageId, mailbox: this.account.address, imapMailbox, instance: this.config.instance ?? 'email', attachments,
         inline: mail.attachments.filter((attachment) => attachment.inline).length,
       });
       const body = await this.archive.write(`${folder}/body.md`, markdown);

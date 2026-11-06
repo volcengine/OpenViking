@@ -21,8 +21,8 @@ export { chunkOffset, needsChunks, readStoredText } from '../ov-archive.mjs';
 // read_email always reads the whole text. `viking://resources/...` is shared
 // with the whole OV account; mail is not.
 
-const MAIL_ID = /^mail:([0-9a-f]{8}):(\d{1,10}):(\d{1,10})$/;
-const FOLDER = /^[0-9a-f]{8}-\d{1,10}-\d{1,10}$/;
+const MAIL_ID = /^mail:([0-9a-f]{8}):(?:([0-9a-f]{32}):)?(\d{1,10}):(\d{1,10})$/;
+const FOLDER = /^[0-9a-f]{8}-(?:[0-9a-f]{32}-)?\d{1,10}-\d{1,10}$/;
 // What OV's resource parsers turn into Markdown, by extension.
 const PARSED = new Set([
   'pdf', 'md', 'markdown', 'mdown', 'mkd', 'txt', 'text', 'html', 'htm',
@@ -55,7 +55,7 @@ export function mailArchiveRoot(user) {
 export function mailFolder(root, messageId) {
   const match = MAIL_ID.exec(String(messageId));
   if (!match) throw new Error('not a mail id');
-  return `${root}/${match[1]}-${match[2]}-${match[3]}`;
+  return `${root}/${match.slice(1).filter(Boolean).join('-')}`;
 }
 
 // What read_email reads for a uri in the archive: { target, anchor? }, the
