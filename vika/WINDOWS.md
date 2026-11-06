@@ -61,7 +61,7 @@ Validation from a checkout:
 ```powershell
 cd vika
 npm ci --ignore-scripts
-node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs
+node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
 ```
 
 The Windows CI job tests pipe transport, platform invocation, and autostart file
