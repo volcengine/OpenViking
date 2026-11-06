@@ -62,6 +62,11 @@ def _items(value: list[Any] | None) -> list[Any]:
     return value or []
 
 
+def _split_markdown_lines(text: str) -> list[str]:
+    lines = re.split(r"\r\n|\r|\n", text)
+    return lines[:-1] if not lines[-1] else lines
+
+
 class _AnyDocMarkdownRenderer:
     """Render AnyDoc's public Document model while materializing image assets."""
 
@@ -131,7 +136,9 @@ class _AnyDocMarkdownRenderer:
                 return ""
             if self.source_format in _PRESENTATION_FORMATS:
                 return f"### Speaker Notes\n\n{inner}"
-            return "\n".join(">" if not line else f"> {line}" for line in inner.splitlines())
+            return "\n".join(
+                ">" if not line else f"> {line}" for line in _split_markdown_lines(inner)
+            )
         if kind == "code_block":
             body = (block.text or "").rstrip("\n")
             fence = self._backtick_fence(body, 3)
@@ -389,7 +396,7 @@ class _AnyDocMarkdownRenderer:
             body = self._render_blocks(item.blocks)
             if len(item.blocks) > 1:
                 loose = True
-            lines = body.splitlines() or [""]
+            lines = _split_markdown_lines(body) or [""]
             indent = " " * len(marker)
             rendered = f"{marker}{lines[0]}"
             for line in lines[1:]:
@@ -478,7 +485,9 @@ class _AnyDocMarkdownRenderer:
                     parts.append(f"${source}$")
             elif kind != "rule":
                 raise RuntimeError(f"Unsupported AnyDoc table-cell block kind: {kind}")
-        return "<br>".join(line.strip() for line in "<br>".join(parts).splitlines() if line.strip())
+        return "<br>".join(
+            line.strip() for line in _split_markdown_lines("<br>".join(parts)) if line.strip()
+        )
 
     def _flatten_nested_table(self, table: Any) -> list[str]:
         lines: list[str] = []
@@ -500,7 +509,7 @@ class _AnyDocMarkdownRenderer:
             body = self._render_blocks(note.blocks)
             if not body:
                 continue
-            lines = body.splitlines()
+            lines = _split_markdown_lines(body)
             definition = f"[^{number}]: {lines[0]}"
             if len(lines) > 1:
                 definition += "\n" + "\n".join(f"    {line}" if line else "" for line in lines[1:])
