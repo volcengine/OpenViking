@@ -39,6 +39,16 @@ describe('configuration safety', { concurrency: false }, () => {
     }
   });
 
+  it('defaults timer storage to OV and accepts only OV or SQLite', () => {
+    setEnv('VIKA_TIMER_STORAGE', undefined);
+    assert.equal(getConfig().timerStorage, 'ov');
+    assert.equal(getConfig().instanceId, 'default');
+    setEnv('VIKA_TIMER_STORAGE', 'sqlite');
+    assert.equal(getConfig().timerStorage, 'sqlite');
+    setEnv('VIKA_TIMER_STORAGE', 'other');
+    assert.throws(() => getConfig(), /VIKA_TIMER_STORAGE/);
+  });
+
   it('accepts QQ as the primary channel without putting credentials in config', () => {
     setEnv('VIKA_CHANNEL', 'qq');
     setEnv('VIKA_CONNECTORS_JSON', '["qq","telegram"]');
@@ -109,6 +119,20 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('VIKA_STAGED_REPLIES', 'often');
     assert.throws(() => getConfig(), /VIKA_STAGED_REPLIES must be a boolean/);
     setEnv('VIKA_STAGED_REPLIES', undefined);
+  });
+  it('recalls from OV only on an instance that opts in, over every peer unless limited to the sender', () => {
+    setEnv('VIKA_OV_AUTO_RECALL', undefined);
+    setEnv('VIKA_OV_RECALL_SCOPE', undefined);
+    assert.equal(getConfig().ovAutoRecall, false);
+    assert.equal(getConfig().ovRecallScope, 'all');
+    setEnv('VIKA_OV_AUTO_RECALL', 'true');
+    setEnv('VIKA_OV_RECALL_SCOPE', 'actor');
+    assert.equal(getConfig().ovAutoRecall, true);
+    assert.equal(getConfig().ovRecallScope, 'actor');
+    setEnv('VIKA_OV_RECALL_SCOPE', 'everyone');
+    assert.throws(() => getConfig(), /VIKA_OV_RECALL_SCOPE/);
+    setEnv('VIKA_OV_AUTO_RECALL', undefined);
+    setEnv('VIKA_OV_RECALL_SCOPE', undefined);
   });
   it('stores meeting notes only on an instance that opts in and has Feishu/Lark', () => {
     setEnv('VIKA_MEETING_NOTES', undefined);

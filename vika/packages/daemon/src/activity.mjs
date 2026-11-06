@@ -10,6 +10,7 @@ const DEFINITIONS = Object.freeze({
   'agent.turn_started': { category: 'agent', severity: 'info', priority: 60, title: '开始一轮' },
   'agent.turn_completed': { category: 'agent', severity: 'info', priority: 62, title: '完成一轮' },
   'agent.steered': { category: 'agent', severity: 'info', priority: 58, title: '中途追加' },
+  'timer.completed': { category: 'system', severity: 'success', priority: 45, title: '定时任务完成' },
   'agent.note': { category: 'agent', severity: 'info', priority: 45, title: 'Agent 输出' },
   'agent.tool': { category: 'agent', severity: 'info', priority: 48, title: '工具调用' },
   'agent.tool_called': { category: 'agent', severity: 'info', priority: 46, title: '调用工具' },

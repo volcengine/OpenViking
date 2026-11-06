@@ -34,9 +34,11 @@ export async function detectOpenViking({ env = process.env, homeDir = os.homedir
       return { configPath: null, url: connection.url, usable: false, user: null, authMode: health.auth_mode ?? null,
         reason: t('OpenViking 服务已启动，请配置身份信息和凭据', 'OpenViking is running; configure identity and credentials') };
     }
-    // Under an API key the configured user is not who the server sees.
+    // Under an API key the configured user is not who the server sees. A
+    // server that knows the caller says its account and role on /health.
     return { configPath: selected, url: connection.url, usable: true,
       user: user ?? health.user_id ?? (health.auth_mode === 'api_key' ? null : config.user) ?? null,
+      account: health.account_id ?? null, role: health.role ?? null,
       authMode: health.auth_mode ?? null, reason: null };
   } catch (error) {
     let reason;
@@ -69,12 +71,142 @@ export async function detectOpenViking({ env = process.env, homeDir = os.homedir
   }
 }
 
-// The instance's own copy: the user's connection plus actor_peer_id = the
-// instance id, the agent identity OV keeps memories under (created on first use).
-export function writeInstanceOvConfig({ detected, instanceId, target, exclusive = false }) {
+// Fields that name a peer. A peer is someone the agent talks to, which the
+// daemon names per message; an instance is a user of its own, never a peer.
+export const PEER_FIELDS = Object.freeze(['actor_peer_id', 'peer_id', 'agent_id']);
+
+// Whether requests name their user (dev, trusted) instead of an API key
+// deciding it. A server that does not say goes by whether there is a key.
+export function requestNamesUser(authMode, config = {}) {
+  return authMode ? authMode === 'dev' || authMode === 'trusted' : !config.api_key;
+}
+
+// The user an instance is in OV: the connection's user, then the instance id.
+// Each instance keeps a memory of its own, and in an account several people
+// share, one owner's instances stay apart from another's. A name already for
+// this instance (its own config chosen again) is kept as it is.
+export function instanceUserName(base, instanceId) {
+  const owner = String(base ?? '').trim();
+  if (!owner || owner === instanceId || owner.endsWith(`.${instanceId}`)) return owner || instanceId;
+  return `${owner}.${instanceId}`;
+}
+
+// The instance's own connection: the chosen one, with this instance's identity
+// and no peer. Where requests name the user it is derived here. Under an API
+// key the key decides; with an administrator's key the owner may instead have
+// chosen a user of the instance's own (`identity.mode` 'register'), which is
+// created now and replaces the administrator's key, which is not kept.
+export async function instanceOvConfig({
+  detected, instanceId, fetchImpl = globalThis.fetch, registrations = new OVRegistrations(),
+}) {
   const source = detected.config ?? (detected.configPath ? readOVConfig(detected.configPath) : { url: detected.url });
-  const config = { ...source, actor_peer_id: instanceId };
-  delete config.agent_id;
+  const config = { ...source };
+  for (const field of PEER_FIELDS) delete config[field];
+  if (detected.identity?.mode === 'register') {
+    const user = instanceUserName(detected.user, instanceId);
+    return registrations.created({ url: config.url, account: detected.account, user })
+      ?? registrations.register({ admin: config, account: detected.account, user, fetchImpl });
+  }
+  if (requestNamesUser(detected.authMode, config)) config.user = instanceUserName(config.user, instanceId);
+  return config;
+}
+
+const TERMINAL_TASK = new Set(['completed', 'failed', 'cancelled']);
+
+// The users an administrator key created during one setup run. OV answers a
+// second registration of a name with 409, while the config holding the key is
+// a pending file setup removes when the owner goes back or cancels. So in one
+// run a user is created once and its key reused. When setup ends, the users
+// the saved instance does not use are deleted again. OV deletes in the
+// background; until it is done the name is still taken, so the wait is
+// bounded and an unfinished deletion is reported.
+export class OVRegistrations {
+  constructor({ deleteWaitMs = 15_000, pollMs = 500 } = {}) {
+    this.users = [];
+    this.deleteWaitMs = deleteWaitMs;
+    this.pollMs = pollMs;
+  }
+
+  // The instance config of a user created in this run, a copy.
+  created({ url, account, user }) {
+    const entry = this.users.find((other) => sameServer(other.url, url) && other.account === account && other.user === user);
+    return entry ? structuredClone(entry.config) : null;
+  }
+
+  async register({ admin, account, user, fetchImpl }) {
+    let result;
+    try {
+      ({ result } = await new OVConnection(admin, { fetch: fetchImpl })
+        .json(`/api/v1/admin/accounts/${encodeURIComponent(account)}/users`, { user_id: user, role: 'user' }));
+    } catch (error) {
+      throw new Error(error.httpStatus === 409
+        ? t(`OpenViking 里已有用户 ${user}。刚取消过 setup 的话，它可能还在删除中，稍等再试；如果它就是这个实例之前的身份，请改用它自己的 API Key`,
+          `OpenViking already has a user ${user}. After a cancelled setup it may still be being deleted, so retry in a moment; if it is this instance’s earlier identity, use that user’s own API key`)
+        : t(`无法在 OpenViking 里创建用户 ${user}（${error.httpStatus ? `HTTP ${error.httpStatus}` : '连不上或超时'}）`,
+          `Could not create the OpenViking user ${user} (${error.httpStatus ? `HTTP ${error.httpStatus}` : 'unreachable or timed out'})`));
+    }
+    if (typeof result?.user_key !== 'string' || !result.user_key) {
+      throw new Error(t(`OpenViking 创建了用户 ${user}，但没有返回它的 API Key`, `OpenViking created the user ${user} but returned no API key for it`));
+    }
+    const { account: _account, user: _user, api_key: _key, ...rest } = admin;
+    const config = { ...rest, api_key: result.user_key, user };
+    // The administrator key stays in memory only, to delete an unused user.
+    this.users.push({ url: admin.url, account, user, admin, config: structuredClone(config), kept: false });
+    return config;
+  }
+
+  // The saved instance's config file: a user created for it stays. With no
+  // user created in this run there is nothing to keep, or to read.
+  keep(file) {
+    if (!this.users.length) return;
+    const { api_key: key } = readOVConfig(file);
+    for (const entry of this.users) if (entry.config.api_key === key) entry.kept = true;
+  }
+
+  // Deletes the users nothing kept, with the administrator key that created
+  // each, and waits a while for OV to finish. Names what could not be
+  // deleted (failed) and what OV is still deleting (pending).
+  async discard({ fetchImpl = globalThis.fetch } = {}) {
+    const failed = [];
+    const pending = [];
+    for (const { admin, account, user, kept } of this.users.splice(0)) {
+      if (kept) continue;
+      const connection = new OVConnection(admin, { fetch: fetchImpl });
+      let task;
+      try {
+        ({ result: { task_id: task } = {} } = await connection.send(
+          `/api/v1/admin/accounts/${encodeURIComponent(account)}/users/${encodeURIComponent(user)}`,
+          { method: 'DELETE', headers: connection.headers }, connection.timeoutMs));
+      } catch (error) {
+        if (error.httpStatus !== 404) failed.push(user);
+        continue;
+      }
+      const outcome = task ? await this.settled(connection, task) : 'completed';
+      if (outcome === 'completed') continue;
+      (outcome === 'pending' ? pending : failed).push(user);
+    }
+    return { failed, pending };
+  }
+
+  async settled(connection, task) {
+    const deadline = Date.now() + this.deleteWaitMs;
+    for (;;) {
+      try {
+        const { result } = await connection.json(`/api/v1/tasks/${encodeURIComponent(task)}`);
+        if (TERMINAL_TASK.has(result?.status)) return result.status;
+      } catch {
+        // A status that could not be read is asked again until the deadline.
+      }
+      if (Date.now() >= deadline) return 'pending';
+      await new Promise((resolve) => { setTimeout(resolve, this.pollMs); });
+    }
+  }
+}
+
+const sameServer = (a, b) => String(a ?? '').replace(/\/+$/, '') === String(b ?? '').replace(/\/+$/, '');
+
+// Writes an instance config (see instanceOvConfig), private to the owner.
+export function writeInstanceOvConfig({ config, target, exclusive = false }) {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   if (exclusive) {
     fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600, flag: 'wx' });

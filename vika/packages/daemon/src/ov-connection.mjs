@@ -36,7 +36,7 @@ export class OVConnection {
     for (const [key, header] of [['account', 'X-OpenViking-Account'], ['user', 'X-OpenViking-User'], ['agent', 'X-OpenViking-Agent']]) {
       if (config[key]) this.headers[header] = config[key];
     }
-    // Names the owner's private area (viking://user/<user>/...).
+    // Configured user hint; an API key may authenticate a different user.
     this.user = String(config.user ?? '').trim();
     this.fetch = fetchImpl;
     this.timeoutMs = timeoutMs;
@@ -68,12 +68,14 @@ export class OVConnection {
       const data = JSON.parse(text);
       if (!response.ok || data.status !== 'ok') throw new Error();
       return data;
-    } catch {
-      // Never expose credentials, URLs, or response bodies.
-      throw new OVUnavailableError(
+    } catch (error) {
+      // Never expose credentials, URLs, or response bodies. A request that ran
+      // out of time says so: unlike a refused connection, it tells nothing
+      // about other requests.
+      throw Object.assign(new OVUnavailableError(
         `OpenViking request failed${response ? ` (HTTP ${response.status})` : ' or timed out'}`,
         response?.status,
-      );
+      ), { timedOut: error?.name === 'TimeoutError' });
     }
   }
 

@@ -205,11 +205,17 @@ export function getConfig() {
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
+    // Opt-in per instance (agents[].ovAutoRecall): the daemon recalls from OV
+    // for every line someone sends (ov-recall.mjs), over every peer or, with
+    // agents[].ovRecallScope "actor", only the sender's.
+    ovAutoRecall: boolEnv('VIKA_OV_AUTO_RECALL', false),
+    ovRecallScope: enumEnv('VIKA_OV_RECALL_SCOPE', 'all', ['all', 'actor']),
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).
     openVikingToolTimeoutMs: intEnv('VIKA_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
     agentName: process.env.VIKA_AGENT_NAME || process.env.VIKA_INSTANCE_ID || 'Agent',
-    instanceId: process.env.VIKA_INSTANCE_ID || '',
+    instanceId: process.env.VIKA_INSTANCE_ID || 'default',
+    timerStorage: enumEnv('VIKA_TIMER_STORAGE', 'ov', ['ov', 'sqlite']),
     upgradeTarget: process.env.VIKA_UPGRADE_TARGET || process.env.VIKA_INSTANCE_ID || '',
     channel,
     connectors: Object.freeze(connectors),

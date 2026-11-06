@@ -46,6 +46,7 @@
       "ovConfig": "/Users/you/.openviking/ovcli.conf.primary",
       "ovAutoRecall": false,
       "ovRemember": false,
+      "ovRecallScope": "all",
       "explicitSilence": true,
       "stagedReplies": false,
       "role": "assistant",

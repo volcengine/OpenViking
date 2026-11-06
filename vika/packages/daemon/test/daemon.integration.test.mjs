@@ -11,9 +11,51 @@ import { createLogger } from '../src/logger.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
 import { Harness } from '../src/harness.mjs';
 import { docComment, startMockEnv, textMessage } from './mock-env.mjs';
-import { OVUnavailableError } from '../src/ov-connection.mjs';
+import { OVConnection, OVUnavailableError } from '../src/ov-connection.mjs';
+import { fakeOV } from './ov-server-fixture.mjs';
 
 describe('daemon event path (mock env)', { concurrency: false }, () => {
+  it('loads OV timer state using the configured instance and persists MCP changes', async (context) => {
+    const server = await fakeOV(context);
+    const client = new OVConnection({ url: server.url, user: 'alice' });
+    const uri = 'viking://user/alice/resources/vika/work/timers-state.json';
+    server.state.files.set(uri, JSON.stringify({
+      timers: [{
+        timerId: 'tm_restored', title: 'Restored', text: 'Check PR', timezone: 'UTC',
+        schedule: { type: 'once' }, nextRunAtMs: Date.now() + 3_600_000,
+        maxRuns: 1, delivery: { mode: 'owner' }, createdAtMs: 1,
+        createdFromSource: 'lark', createdFromEventId: 'evt-restored',
+        lastRunAtMs: null, runCount: 0,
+      }],
+      timer_occurrence_checks: [],
+    }));
+    const env = await startMockEnv({
+      config: { timerStorage: 'ov', instanceId: 'work' },
+      ovClient: { user: 'alice', json: client.json.bind(client) },
+    });
+    try {
+      const authority = env.daemon.store.getCognitionState().authorityToken;
+      const listed = await env.daemon.actions.call('list_timers', {}, { authority });
+      assert.equal(listed.data.timers[0].timer_id, 'tm_restored');
+      await env.daemon.actions.call('cancel_timer', { timer_id: 'tm_restored' }, { authority });
+      assert.deepEqual(JSON.parse(server.state.files.get(uri)).timers, []);
+      env.daemon.store.ingest(chatEvent({ eventId: 'evt-ov-create' }));
+      const created = await env.daemon.actions.call('create_timer', {
+        decision_id: 'evt-ov-create', title: 'New reminder', text: 'Check PR',
+        schedule: { type: 'once', run_at_ms: Date.now() + 3_600_000 },
+        delivery: { mode: 'owner' },
+      }, { authority });
+      assert.equal(JSON.parse(server.state.files.get(uri)).timers[0].timerId, created.data.timer_id);
+      await env.daemon.timers.createOccurrenceCheck({
+        occurrenceId: 'tm_restored:1', eventId: 'timer:tm_restored:1', nextCheckAtMs: Date.now() + 300_000,
+        event: { data: { timer: { occurrence_id: 'tm_restored:1' } } },
+      });
+      await env.daemon.actions.call('finish_timer_occurrence', {
+        occurrence_id: 'tm_restored:1', reason: 'No delivery needed',
+      }, { authority });
+      assert.equal(JSON.parse(server.state.files.get(uri)).timer_occurrence_checks[0].status, 'completed');
+    } finally { await env.stop(); }
+  });
   it('starts without history when OV is not reachable yet, and says so in the activity', async () => {
     const env = await startMockEnv({ ovCheck: async () => { throw new OVUnavailableError('OpenViking request failed or timed out'); } });
     try {
@@ -22,6 +64,56 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
       assert.equal(degraded.status, 'DEGRADED');
       env.receive(textMessage({ messageId: 'om-ov-down', text: 'hello' }));
       await env.waitForCodexInput(/om-ov-down/);
+    } finally { await env.stop(); }
+  });
+
+  it('keeps messaging during an OV timer outage and restores timers before accepting operations', async (context) => {
+    const server = await fakeOV(context);
+    const client = new OVConnection({ url: server.url, user: 'alice' });
+    const uri = 'viking://user/alice/resources/vika/work/timers-state.json';
+    const saved = JSON.stringify({
+      timers: [{
+        timerId: 'tm_restored', title: 'Restored', text: 'Check PR', timezone: 'UTC',
+        schedule: { type: 'once' }, nextRunAtMs: Date.now() + 3_600_000,
+        maxRuns: 1, delivery: { mode: 'owner' }, createdAtMs: 1,
+        createdFromSource: 'lark', createdFromEventId: 'evt-restored',
+        lastRunAtMs: null, runCount: 0,
+      }],
+      timer_occurrence_checks: [],
+    });
+    server.state.files.set(uri, saved);
+    server.state.down = true;
+    const env = await startMockEnv({
+      config: { timerStorage: 'ov', instanceId: 'work' },
+      ovCheck: async () => { throw new OVUnavailableError('HTTP 503', 503); },
+      ovClient: { user: 'alice', json: client.json.bind(client) },
+    });
+    try {
+      assert.equal(env.daemon.ready, true);
+      assert.equal(env.daemon.timers.needsRefresh, true);
+      assert.notEqual(env.daemon.timerConnector.timer, null);
+      const authority = env.daemon.store.getCognitionState().authorityToken;
+      for (const [tool, input] of [
+        ['list_timers', {}],
+        ['create_timer', { decision_id: 'evt-unavailable', title: 'New', text: 'New', schedule: { type: 'once', run_at_ms: Date.now() + 3_600_000 }, delivery: { mode: 'owner' } }],
+        ['cancel_timer', { timer_id: 'tm_restored' }],
+        ['finish_timer_occurrence', { occurrence_id: 'tm_restored:1', reason: 'No delivery needed' }],
+      ]) {
+        await assert.rejects(env.daemon.actions.call(tool, input, { authority }),
+          (error) => error.code === 'timer_unavailable' && /temporarily unavailable/i.test(error.message));
+      }
+      env.receive(textMessage({ messageId: 'om-timers-down', text: 'hello' }));
+      await env.waitForCodexInput(/om-timers-down/);
+      await env.daemon.agentRuntime.whenIdle();
+      assert.equal(server.state.files.get(uri), saved);
+      assert.equal(server.state.requests.filter((request) => request.route === 'POST /api/v1/content/write').length, 0);
+      server.state.down = false;
+      await env.daemon.timerConnector.tick();
+      assert.equal(env.daemon.timers.needsRefresh, false);
+      const listed = await env.daemon.actions.call('list_timers', {}, { authority });
+      assert.equal(listed.data.timers[0].timer_id, 'tm_restored');
+      await env.daemon.actions.call('cancel_timer', { timer_id: 'tm_restored' }, { authority });
+      assert.deepEqual(JSON.parse(server.state.files.get(uri)).timers, []);
     } finally { await env.stop(); }
   });
 

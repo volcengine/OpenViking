@@ -161,7 +161,7 @@ describe('OpenViking tool client', () => {
 
   it('lists directory entries and reports has_more', async (t) => {
     const ov = await fakeOV(t);
-    ov.state.listings.set('viking://~/resources', {
+    ov.state.listings.set('viking://user/owner/resources', {
       entries: [
         { name: 'inbox', isDir: true, uri: 'viking://user/u/resources/inbox' },
         { name: 'doc.md', isDir: false, size: 120, uri: 'viking://user/u/resources/doc.md' },
@@ -195,7 +195,8 @@ describe('OpenViking tool client', () => {
       path: 'https://example.com/post', parent: OV_DEFAULT_PARENT, reason: 'worth keeping', wait: false, create_parent: true,
     });
     assert.equal(added.data.task_id, 'task-1');
-    assert.equal(added.data.root_uri, `${OV_DEFAULT_PARENT}/post`);
+    // The server answers with the canonical form of the private home alias.
+    assert.equal(added.data.root_uri, 'viking://user/owner/resources/inbox/post');
     assert.match(added.text, /processing in the background/);
 
     const placed = await client(ov).addResource({ url: 'https://example.com/x', to: 'viking://resources/wiki/x' });
@@ -222,7 +223,7 @@ describe('OpenViking tool client', () => {
     assert.equal(resource.body.wait, false);
     assert.equal(ov.state.uploads.get(resource.body.temp_file_id).name, 'report.md');
     assert.match(added.text, /report\.md|Resource accepted/);
-    assert.equal(added.data.root_uri, 'viking://~/resources/reports/report.md');
+    assert.equal(added.data.root_uri, 'viking://user/owner/resources/reports/report.md');
   });
 
   it('rejects add_resource input that is not exactly one URL or one workspace file', async (t) => {

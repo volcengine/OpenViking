@@ -301,6 +301,7 @@ function readLines(file) {
 export async function startMockEnv({
   codex = {},
   ovCheck = async () => {},
+  ovClient = {},
   config: configOverrides = {},
   prepare = null,
 } = {}) {
@@ -336,6 +337,7 @@ export async function startMockEnv({
     initialModel: '',
     claudeModel: '',
     openVikingConfigPath,
+    timerStorage: 'sqlite',
     ignoredSenderIds: new Set(),
     port: 0,
     httpEnabled: false,
@@ -346,11 +348,13 @@ export async function startMockEnv({
   const daemon = new PersonalAgentDaemon(config, createLogger('error', { test: 'mock-env' }), {
     ovClient: {
       check: ovCheck,
+      namespace: 'mock-namespace',
       messages: new Map(),
       async create(sessionId) { return { session_id: sessionId, uri: `viking://session/${sessionId}` }; },
       async append(id, message) { const rows = this.messages.get(id) || []; rows.push({ ...message, parts: [{ type: 'text', text: message.content }] }); this.messages.set(id, rows); },
       async context(id) { return { latest_archive_overview: '', messages: this.messages.get(id) || [], stats: { totalArchives: 0 } }; },
       async request() { return { pending_tokens: 0 }; },
+      ...ovClient,
     },
   });
 

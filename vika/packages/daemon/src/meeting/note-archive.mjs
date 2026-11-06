@@ -144,7 +144,8 @@ export class MeetingNoteArchive extends OVArchive {
 
   constructor(connection, options = {}) {
     super(connection, { ...options, kind: 'meeting_note' });
-    this.root = meetingNotesRoot(connection.user);
+    // The key may authenticate a different user than the configured header.
+    this.root = meetingNotesRoot();
   }
 
   folder(meetingId) {

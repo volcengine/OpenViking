@@ -27,7 +27,7 @@ function split(text, max = 6000) {
   return pieces;
 }
 
-export async function fakeOV(t, { failParse = [], slowParse = [] } = {}) {
+export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} } = {}) {
   const state = {
     files: new Map(), uploads: new Map(), tasks: new Map(), requests: [], down: false, slowParse: new Set(slowParse),
     errors: new Map(), searchResult: { memories: [], resources: [], skills: [], total: 0 },
@@ -52,10 +52,16 @@ export async function fakeOV(t, { failParse = [], slowParse = [] } = {}) {
       state.errors.delete(route);
       return reply(failing, `injected ${failing}`);
     }
-    const uri = url.searchParams.get('uri');
+    // Model OV's authenticated home alias: an API key overrides the user
+    // header, and stored files and returned URIs are always canonical.
+    const user = apiKeys[request.headers['x-api-key']] ?? request.headers['x-openviking-user'] ?? 'owner';
+    const canonical = (uri) => uri?.replace(/^viking:\/\/~(?=\/|$)/, `viking://user/${user}`);
+    const uri = canonical(url.searchParams.get('uri'));
+    if (route === 'GET /api/v1/system/status') return reply(200, { initialized: true, user });
     if (route === 'POST /api/v1/content/write') {
-      state.files.set(body.uri, body.content);
-      return reply(200, { uri: body.uri, semantic_status: 'skipped', vector_status: 'queued' });
+      const target = canonical(body.uri);
+      state.files.set(target, body.content);
+      return reply(200, { uri: target, semantic_status: 'skipped', vector_status: 'queued' });
     }
     if (route === 'POST /api/v1/search/find' || route === 'POST /api/v1/search/search') {
       return reply(200, state.searchResult);
@@ -75,18 +81,19 @@ export async function fakeOV(t, { failParse = [], slowParse = [] } = {}) {
       return reply(200, { temp_file_id: id });
     }
     if (route === 'POST /api/v1/resources') {
-      const target = body.to || body.parent;
-      const source = body.path || state.uploads.get(body.temp_file_id)?.name || 'resource';
+      const upload = state.uploads.get(body.temp_file_id);
+      const source = body.path || upload?.name || body.url || 'resource';
       const leaf = String(source).split('/').filter(Boolean).pop() || 'resource';
-      const root = body.to || `${target || 'viking://~/resources/inbox'}/${leaf}`;
+      const target = canonical(body.to || body.parent);
+      const root = canonical(body.to) || `${target ?? `viking://user/${user}/resources/inbox`}/${leaf}`;
+      const destination = target ?? root;
       const id = `task-${next += 1}`;
-      state.tasks.set(id, { polls: 0, to: body.to || target, upload: state.uploads.get(body.temp_file_id) ?? { name: source }, root });
-      if (body.temp_file_id && !state.uploads.has(body.temp_file_id)) return reply(400, 'unknown upload');
+      state.tasks.set(id, { polls: 0, to: destination, upload: upload ?? { name: source }, root });
+      if (body.temp_file_id && !upload) return reply(400, 'unknown upload');
       if (body.temp_file_id && body.args?.parse_mode !== 'no_split') {
-        const upload = state.uploads.get(body.temp_file_id);
         const stem = path.basename(upload.name, path.extname(upload.name));
         const pieces = split(upload.data.toString('utf8'));
-        pieces.forEach((piece, index) => state.files.set(`${body.to}/${pieces.length > 1 ? `${stem}_${index + 1}` : stem}.md`, piece));
+        pieces.forEach((piece, index) => state.files.set(`${destination}/${pieces.length > 1 ? `${stem}_${index + 1}` : stem}.md`, piece));
         state.tasks.get(id).landed = true;
       }
       return reply(200, { status: 'success', task_id: id, root_uri: root });

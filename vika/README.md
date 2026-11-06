@@ -132,7 +132,7 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 - 主渠道是飞书：草稿是一张卡片，正文可以直接在卡片上改，点"发送"按卡片上的内容发出，点"不发了"就作废。
 - 主渠道是微信、Telegram、Slack 或 QQ：草稿是一条带编号的消息，回复「发送 3」发出，「不发 3」作废，「修改 3 新的正文」把正文换成你写的内容（改完会把新草稿再发你一遍，还要回「发送 3」才发出）。也可以直接告诉 Agent 怎么改，它会重新起草一份，旧编号随之作废。这几句回复由 Core 处理，不经过 Agent，只认你本人在私聊里发的、整条消息正好是这个格式的回复。
 
-每封邮件在交给 Agent 之前先存进 OpenViking 里你的私有区（`viking://user/<你>/resources/emails/<邮件>/`）：`body.md` 是主题、收发件人、时间、附件清单和完整正文；附件全文在 `attachments/<编号>-<文件名>/full/` 下，PDF、Word、Excel、PPT、HTML、文本等由 OV 解析成 Markdown，转发的邮件和日历邀请这类文本附件原样存，图片、压缩包等不存，内嵌在正文里的图片也不存。OV 一个文件只建一条向量、只看开头约 4096 token，所以长正文和长附件另外由 OV 切成小块存一份（同级的 `chunks/`），只用于召回；Agent 读的永远是全文，召回命中某一块时从这一块在全文中的位置读起。OV 只为这些内容建向量（`vectors_only`），不调 LLM 生成摘要。Agent 收到的只有收发件人、存储位置、附件清单和正文开头 500 字，需要细看时用 `read_email` 读全文或某个附件。OV 暂时不可用时，这封邮件照旧把正文（前 6000 字）直接交给 Agent，附件打不开。
+每封邮件在交给 Agent 之前先存进当前实例的 OpenViking 私有区（`viking://~/resources/emails/<邮件>/`）：`body.md` 是主题、收发件人、时间、附件清单和完整正文；附件全文在 `attachments/<编号>-<文件名>/full/` 下，PDF、Word、Excel、PPT、HTML、文本等由 OV 解析成 Markdown，转发的邮件和日历邀请这类文本附件原样存，图片、压缩包等不存，内嵌在正文里的图片也不存。OV 一个文件只建一条向量、只看开头约 4096 token，所以长正文和长附件另外由 OV 切成小块存一份（同级的 `chunks/`），只用于召回；Agent 读的永远是全文，召回命中某一块时从这一块在全文中的位置读起。OV 只为这些内容建向量（`vectors_only`），不调 LLM 生成摘要。Agent 收到的只有收发件人、存储位置、附件清单和正文开头 500 字，需要细看时用 `read_email` 读全文或某个附件。OV 暂时不可用时，这封邮件照旧把正文（前 6000 字）直接交给 Agent，附件打不开。
 
 草稿只有你能确认，只认第一次，三天后过期。首次启动只从之后到达的邮件开始；订阅和群发邮件标为 `kind=email.list`，自动回复（含多数退信）和它自己的回信直接跳过；程序自动发出的通知（安全告警、任务失败等）照常交给 Agent 判断。
 
@@ -186,7 +186,7 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 - 每个实例有一个角色，决定它是谁、什么时候说话、怎么说：`config.json` 里该实例的 `agents[].role` 填 `colleague`（AI 同事：你的 AI 分身，在工作群里像你一样答疑、跟进，和同事及其他 bot 协作）、`assistant`（个人助理：只为你工作，记事、提醒，主动把值得知道的事告诉你）或 `qa`（答疑助手：在答疑群里查证后把问题讲明白，注意隐私，不接无关话题），也可以填一个 Markdown 文件的绝对路径，用你自己写的角色。`vika setup` 里可以选，选「自己写 prompt」时可以从任一个内置角色复制一份再改。内置角色随版本更新，自己的文件不会被改动；不填就只用内置的默认规则。关于主人和所答产品的信息不写在角色里，agent 会去 OpenViking 查，学到的存回去。改完 `vika restart <实例>` 生效，模型会开一次新会话。
 - 去 AI 味的写作规则默认开启，`agents[].naturalWriting` 设为 `false` 关闭。
 - 实例的开关都在 `vika setup` →修改实例→「其他设置」里：分段回复、自然写作、显式不回复、OpenViking 自动召回、OpenViking 主动记忆、会议纪要入库，逐个切换，保存后重启实例生效；新建实例时用默认值（开自然写作和显式不回复；第一个接飞书的 AI 同事或个人助理还开会议纪要入库），确认页会列出来。也可以直接改 `config.json` 里该实例的同名字段。
-- 会议纪要入库（`agents[].meetingNotes`）：你参加的飞书会议只要开了智能纪要，智能纪要和文字记录会存进该实例 OpenViking 的私有区 `viking://user/<OV user>/resources/meetings/<meeting_id>/`（`note.md` 是会议信息加纪要正文，`transcript.md` 是文字记录，长文另有 `chunks/` 供召回），agent 用 `read_meeting_note` 读全文。做法是定时补扫：实例启动时和之后每 15 分钟，以你的身份查一次最近的会议（第一次往前补 30 天），新会议和还没等到纪要的会议逐个问一下有没有纪要，有就入库；纪要一般在会后 1–4 分钟生成，所以会后大约 15–20 分钟内入库；会议结束 2 小时后还没有纪要就不再问。不订阅任何飞书事件，飞书应用不需要额外配置，入库不叫醒 agent，也不发消息。妙记没有读权限，不存；纪要里链接的文档也不复制，用到时 agent 现读。一台机器上只能有一个实例开这个开关（每个开着的实例都会把每份纪要再存一遍）：新建的第一个接飞书的 AI 同事或个人助理默认开，答疑助手默认关；想换到另一个实例，先在原来那个实例上关掉。状态在 `<dataDir>/meeting-notes/meetings.sqlite3`（每场会一行：waiting/pending/stored/none/skipped/failed）。
+- 会议纪要入库（`agents[].meetingNotes`）：你参加的飞书会议只要开了智能纪要，智能纪要和文字记录会存进该实例 OpenViking 的私有区 `viking://~/resources/meetings/<meeting_id>/`（`note.md` 是会议信息加纪要正文，`transcript.md` 是文字记录，长文另有 `chunks/` 供召回），agent 用 `read_meeting_note` 读全文。做法是定时补扫：实例启动时和之后每 15 分钟，以你的身份查一次最近的会议（第一次往前补 30 天），新会议和还没等到纪要的会议逐个问一下有没有纪要，有就入库；纪要一般在会后 1–4 分钟生成，所以会后大约 15–20 分钟内入库；会议结束 2 小时后还没有纪要就不再问。不订阅任何飞书事件，飞书应用不需要额外配置，入库不叫醒 agent，也不发消息。妙记没有读权限，不存；纪要里链接的文档也不复制，用到时 agent 现读。一台机器上只能有一个实例开这个开关（每个开着的实例都会把每份纪要再存一遍）：新建的第一个接飞书的 AI 同事或个人助理默认开，答疑助手默认关；想换到另一个实例，先在原来那个实例上关掉。状态在 `<dataDir>/meeting-notes/meetings.sqlite3`（每场会一行：waiting/pending/stored/none/skipped/failed）。
 - 显式不回复按实例可选，**默认开启**（`model` 为 `ark` 的实例除外，默认关闭）：`config.json` 里该实例的 `agents[].explicitSilence` 设为 `false` 关闭（或在「其他设置」里关掉），重启实例生效。开启后 Codex/TraeX/Claude/Pi/Durable/OpenCode 不回复时调用 `stay_silent`，每条聊天消息（各 IM 的私聊和群都算）都要有一个决定：投递或 `stay_silent`，记在 SQLite `decisions` 表；一轮结束还没表态的消息会带 `undecided=1` 再给模型一次，只提醒一次。关闭时 prompt、工具和 policyHash 与没有这个功能时完全一样；开关一改，该实例的 policyHash 就变，已存的 native thread 不再 resume；从默认关闭的旧版本升级时，没写这个字段的实例会变成开启，policyHash 随之改变，升级后第一轮开新会话（不想要就写 `"explicitSilence": false`）。Ark（Volc）没有 Core 工具，不支持这个功能：开着开关跑在 Ark 上时，daemon 启动时（以及 `/runtime` 切到 Ark 时）打一条 warn 日志 `explicit_silence_not_applied`。
 - 分段回复按实例可选，**默认关闭**：`agents[].stagedReplies` 设为 `true`（或在「其他设置」里打开）。打开后，能即答的问题仍只回一条；需要真正动手（查日志、读代码、跑命令）的任务，模型先贴 `OnIt` 表情表示在做（微信、Telegram 没有表情，改发一句短话），过程中只在拿到查实的阶段性结论时发消息，最后发一条能单独读懂的最终答复。需要对方确认才能继续时，提问就是这一轮的最终答复，对方的回答作为新消息进来再接着做，多久没回都不算同意。阶段性消息走 `send_message`/`reply_message` 的 `interim: true`：只能是文字、只能发到请求所在的会话（请求在话题里就发在同一话题），不算这个 decision 的最终投递（显式不回复开着时仍要求最后表态），也不会摘掉 `OnIt`。关闭时 prompt 用原来「一个 decision 一次最终投递」的规则，工具也没有 `interim`；开关一改 policyHash 就变。Ark（Volc）没有 Core 工具，不支持，开着跑 Ark 时打 warn `staged_replies_not_applied`。
 - 谁都可以让机器人干活，比如查资料、做行研、写文档。它的 `lark-cli` 只能以机器人或 owner 的身份操作，所以要在别人自己账号里做的事（给对方加日程、加任务、替对方拉会议）它做不了，会礼貌说明，并给出能做的替代，比如把要点整理好让对方自己加。
@@ -249,11 +249,11 @@ vika upgrade all
 
 ### 可横向扩展的多 Agent 部署
 
-OpenViking 是 Vika 的必需组件：setup 新建实例时，会在接入 IM 前列出已检测连接，并始终提供火山引擎 OpenViking 托管服务（只需填 API Key，在 OpenViking 控制台「用户管理 → API Key」获取）、手动填写地址与凭据、导入配置文件的入口，支持远端和自定义端口；验证通过才继续。用 API Key 的服务只按 key 认身份，实例配置里记下的 user 就是这把 key 登录的 user；手动换了地址时不会沿用之前的 Account、User。setup 修改已有实例时，直接进入实例设置菜单，选择与其他配置项并列的 `OpenViking` 才打开连接配置；修改保留原 actor，选择「保存」后生效，返回菜单或放弃修改不覆盖原配置。安装脚本不提问：终端里的首次安装直接进入 setup 配置 OV；其余安装（已有实例、`--no-setup` 或无终端）要求 OV 已经可用，否则不切换版本。daemon 启动时 OV 拒绝配置或凭据会退出；只是暂时连不上则先不带历史启动，恢复后自动同步。每个实例必须提供独立的 `ovConfig`。配置中的 `agents[].ovAutoRecall` 是布尔值，默认 `false`；改为 `true` 后启用 runtime OV 插件的自动召回，固定使用 `actor` 范围。自动 capture、compact 时 commit、daemon session 历史同步不受该开关影响。修改后重启实例生效，runtime 需已加载最新 OV 插件。
+OpenViking 是 Vika 的必需组件：setup 新建实例时，会在接入 IM 前列出已检测连接，并始终提供火山引擎 OpenViking 托管服务（只需填 API Key，在 OpenViking 控制台「用户管理 → API Key」获取）、手动填写地址与凭据、导入配置文件的入口，支持远端和自定义端口；验证通过才继续。用 API Key 的服务只按 key 认身份，实例配置里记下的 user 就是这把 key 登录的 user；手动换了地址时不会沿用之前的 Account、User。setup 修改已有实例时，直接进入实例设置菜单，选择与其他配置项并列的 `OpenViking` 才打开连接配置；选择「保存」后生效，返回菜单或放弃修改不覆盖原配置。安装脚本不提问：终端里的首次安装直接进入 setup 配置 OV；其余安装（已有实例、`--no-setup` 或无终端）要求 OV 已经可用，否则不切换版本。daemon 启动时 OV 拒绝配置或凭据会退出；只是暂时连不上则先不带历史启动，恢复后自动同步。每个实例必须提供独立的 `ovConfig`。配置中的 `agents[].ovAutoRecall` 是布尔值，默认 `false`；改为 `true` 后由 daemon 自动召回，所有 runtime 一样：私聊、@ 到它的群消息、文档评论和邮件等聊天以外的事件，在交给 runtime 前按发送者检索 OV（最多约 3 秒，失败或超时就不带召回），结果附在那一行后面，每条用 `who=` 标明是主人自己的、当前发送者的，还是别人的；发送者在 OV 里有 profile 时放在最前。`agents[].ovRecallScope` 默认 `"all"`（检索所有人的记忆，当前发送者的排在前面），面向外部人员、彼此的记忆不能互相看到的实例填 `"actor"`（只检索当前发送者和主人自己的）。对话只由 daemon 的 session 历史同步写进 OV，Vika 启动的 runtime 里插件的自动召回、自动 capture、compact 时 commit 和 Pi 压缩接管都关闭，不受该开关影响。修改后重启实例生效。
 
-实例配置了 OpenViking 时，Core 自带一组 `openviking_*` 工具，所有本地 runtime（Codex/TraeX/Claude/Pi/Durable/OpenCode）经同一个 ActionService 拿到完全相同的名称、schema 和行为，不再依赖各 runtime 自己的 OV 插件：`openviking_find`（语义检索）、`openviking_search`（更宽的检索）、`openviking_read`（读 `viking://` 文本）、`openviking_list`（浏览目录）、`openviking_add_resource`（把用户明确要保存的 URL 或 workspace 文件异步入库，默认落到私有 `viking://~/resources/inbox`）。`agents[].ovRemember` 是布尔值，**默认 `false`**；设为 `true` 才多出 `openviking_remember`（把值得长期记住的事实提交到独立 session 异步抽取）。这个开关只增删工具，不改 prompt、不换 policyHash；Ark（Volc）没有 Core 工具，拿不到这组工具，是唯一例外。用户装了 runtime 的 OV 插件时会出现同名工具：读工具无害，写工具可能重复入库，prompt 已写明优先用 `personal_agent` 这套、不要双写。
+实例配置了 OpenViking 时，Core 自带一组 `openviking_*` 工具，所有本地 runtime（Codex/TraeX/Claude/Pi/Durable/OpenCode）经同一个 ActionService 拿到完全相同的名称、schema 和行为，不再依赖各 runtime 自己的 OV 插件：`openviking_find`（语义检索）、`openviking_search`（更宽的检索）、`openviking_read`（读 `viking://` 文本）、`openviking_list`（浏览目录）、`openviking_add_resource`（把用户明确要保存的 URL 或 workspace 文件异步入库，默认落到私有 `viking://~/resources/inbox`）。`agents[].ovRemember` 是布尔值，**默认 `false`**；设为 `true` 才多出 `openviking_remember`（把值得长期记住的事实提交到独立 session 异步抽取，落进该实例自己的 OV user 空间，不涉及 peer）。这个开关只增删工具，不改 prompt、不换 policyHash；Ark（Volc）没有 Core 工具，拿不到这组工具，是唯一例外。用户自己给 runtime 另装 OV 插件时会出现同名工具：读工具无害，写工具可能重复入库，prompt 已写明优先用 `personal_agent` 这套、不要双写。
 
-新建实例的连接列表来自环境变量指定的配置、Vika 保存的连接和 OpenViking CLI 配置，不列出其他实例的配置；修改实例时额外提供该实例当前的配置。选定连接后，新实例会生成自己的配置文件，`actor_peer_id` 固定为新实例 ID。已有配置指向本机默认地址时，不再重复进行无身份探测。Trusted 模式需要填写 Account 和 User；缺少这些字段会提示服务已启动但需要配置身份，补齐后通过身份检查才能继续。
+新建实例的连接列表来自环境变量指定的配置、Vika 保存的连接和 OpenViking CLI 配置，不列出其他实例的配置；修改实例时额外提供该实例当前的配置。选定连接后，新实例会生成自己的配置文件，并且是 OV 里一个独立的 user：请求自带身份的服务（dev、Trusted）用「连接的 User.实例 ID」（如 `weihan.liu.asd`，连接没有 User 时就是实例 ID）；API Key 服务按 key 认身份，这把 key 已被其他实例或 OpenViking 命令行使用时，要明确选择共用（记忆不隔离）或换一把，用管理员 Key 时还可以为实例新建 user（管理员 Key 不保存）；同一次 setup 里退回重选会复用已创建的 user，setup 结束时（保存、取消或出错）会删掉创建了但没用上的 user，删不掉的会提示管理员处理。实例配置不带 peer：peer 是 agent 交互的对象，由 daemon 按消息标注。已有配置指向本机默认地址时，不再重复进行无身份探测。Trusted 模式需要填写 Account 和 User；缺少这些字段会提示服务已启动但需要配置身份，补齐后通过身份检查才能继续。
 
 运行中 OV 请求失败不会退出 daemon，也不主动向聊天发送故障通知。新原生会话可跳过 OV 历史继续处理消息；本地同步账本保留，后台恢复后重试。已有会话不会在恢复后突然补入历史；下次新会话可再次读取 OV。归档完整性错误仍会阻止不完整的历史交接，不回退到 SQLite 回放。
 
@@ -270,6 +270,20 @@ manifest 里当前版本不认识的字段（顶层、agent、`env` 等任何一
 代码升级先由维护者发布新版本（见 install.md），再调用 `vika upgrade <instance-id>`。升级承载当前 turn 的自身进程也由 updater 继续完成，但当前 CLI/模型连接可能随进程退出，结果应用 `/status` 或本机 health check 验收。
 
 ## Activity 页面
+
+定时任务通过 `finish_timer_occurrence` 交付最终结果并结束本次执行：传入 `occurrence_id` 和 `delivery: { tool, input }`，复用 `send_message`、`reply_message` 或 `notify_owner`，确认发送成功后由 Core 标记完成。按任务条件无需发送时，不传 `delivery`，填写 `reason`，本次直接完成。需要询问主人或发送中间进度时仍用普通发送工具，不结束本次任务。发送失败、结果不确定或 dry-run 模拟发送不会标记完成；完成后停止本次检查提醒，不取消后续定时触发。完成结果及无需发送的原因保留在活动账本中。
+
+定时任务及执行检查默认存到当前实例的 OV：`viking://~/resources/vika/<agents[].id>/timers-state.json`。`~` 由 OV 按实际认证用户展开；每个实例使用自己的 OV 用户时自然隔离，主动共用 OV 用户的实例仍由 id 分目录。复用实例的 `ovConfig` 和 id，启动时加载，仅在状态变化时写回。写入等待 OV 后台处理完成，再执行串行队列中的下一次修改。设置 `VIKA_TIMER_STORAGE=sqlite`（也可放在配置的 `env` 中）可使用原有本地 SQLite；其它数据仍保存在本地，不自动迁移两种存储之间的数据。OV 暂时不可用时机器人继续收发消息，定时器后台重试加载；恢复前定时器操作明确报暂时不可用，不会用空状态覆盖远端或静默切换到 SQLite。
+
+耗尽的执行检查从最后保存的检查时间起保留 7 天，超过期限自动清理（OV 和 SQLite 均适用）；即使没有活跃定时器也会执行清理。清理后该 occurrence 不再接受完成调用。OV 当前仍会为状态文件建立索引，`vectors_only` 不表示关闭索引。
+
+同一用户下的同一个实例只在一台机器运行。跨机器迁移时先停止旧机器上的实例，再用相同的 `ovConfig` 和实例 id 启动新机器；不支持两台机器同时读写同一份定时器状态。
+
+定时任务不保证最终消息只发送一次（exactly-once）。消息发送和 OV 完成状态写入不是一个事务；发送成功但完成状态未保存时，后续检查或跨机器恢复可能再次投递。
+
+OV 写入只以写请求成功响应为准。失败或超时时，在同一串行队列内重试同一份状态，最多 3 次；全部失败则向 AI 报错，不回读内容来判定成功。失败后，后续修改和定时执行必须先成功加载 OV 当前状态，不能用旧内存状态覆盖远端。调度器会继续检查，恢复后重新安排执行。
+
+主动调用 `cancel_timer` 会删除任务及其全部执行检查记录，停止后续触发和 heartbeat 补提醒；任务已经自然结束时，也可按原 timer id 清理剩余检查。一次性任务触发后或达到次数上限时，只移除任务，保留最后执行的完成检查。取消不会自动中断已经交给 AI 的执行。
 
 打开 [http://127.0.0.1:3737/](http://127.0.0.1:3737/) 可以查看本机活动账本：消息是否收到、Agent 每一轮做了什么（思考、工具调用）、选择了哪种投递方式，以及发送是否成功。
 

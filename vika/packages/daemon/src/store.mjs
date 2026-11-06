@@ -765,7 +765,9 @@ export class Store {
 
   // One event ledger for all sources. Chat columns are nullable indexes into the
   // canonical envelope, not a separate message ledger. No provider raw is stored.
-  ingest(event, filterReason = null, now = Date.now(), { journal = true } = {}) {
+  // `peer` is whom OpenViking attributes the line to (ov-peer.mjs): null for
+  // the owner, decided by the caller, which knows who the owner is.
+  ingest(event, filterReason = null, now = Date.now(), { journal = true, peer } = {}) {
     return this.transaction(() => {
       const existing = this.getInboundByEvent.get(event.connectorInstance, event.eventId);
       if (existing) return { inserted: false, inbound: rowToInbound(existing), filterReason: existing.filter_reason };
@@ -817,7 +819,8 @@ export class Store {
             actor: event.senderId || 'unknown',
             text: event.content,
             dedupeKey: `event:${eventIdentity(event)}`,
-            metadata: { source: event.source, connectorInstance: event.connectorInstance, event: envelope },
+            metadata: { source: event.source, connectorInstance: event.connectorInstance, event: envelope,
+              ...(peer === undefined ? {} : { peer }) },
           });
         }
         this.recordActivity({
@@ -1596,29 +1599,6 @@ export class Store {
   acceptedEvents(eventId, instance = null) {
     return this.db.prepare("SELECT * FROM connector_events WHERE event_id = ? AND status = 'DONE' ORDER BY seq")
       .all(eventId).filter((row) => instance === null || row.connector_instance === instance);
-  }
-
-  sentTimerOccurrenceDelivery(occurrenceId, { connector, target }) {
-    const rows = this.db.prepare(`
-      SELECT o.* FROM outbox o
-      JOIN connector_events e ON e.seq = o.inbound_seq
-      LEFT JOIN cognition_journal j ON j.dedupe_key = 'outbox:' || o.id
-      WHERE o.status = 'SENT'
-        AND o.action IN ('message.send', 'message.reply')
-        AND COALESCE(json_extract(j.detail_json, '$.interim'), 0) != 1
-        AND COALESCE(json_extract(j.detail_json, '$.approval'), 0) != 1
-        AND o.summary NOT LIKE '[mail reply draft for the owner to approve]%'
-        AND o.connector = ?
-        AND e.connector_instance = 'timer'
-        AND e.kind = 'reminder.due'
-        AND json_extract(e.event_json, '$.data.timer.occurrence_id') = ?
-      ORDER BY o.sent_at_ms DESC, o.id DESC
-    `).all(connector, occurrenceId);
-    return rows.find((row) => {
-      const payload = JSON.parse(row.payload_json);
-      return Object.entries(target).every(([key, value]) =>
-        (key === 'chat_id' ? row.chat_id ?? payload.chat_id : payload[key]) === value);
-    }) ?? null;
   }
 
   // Accepted inbound events that carried this message on one instance.
