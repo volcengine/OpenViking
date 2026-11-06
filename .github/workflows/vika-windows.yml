@@ -1,0 +1,45 @@
+name: Vika Windows native preview
+on:
+  push:
+    branches: [feat/vika]
+    paths: ['vika/**', '.github/workflows/vika-windows.yml']
+  pull_request:
+    branches: [feat/vika]
+    paths: ['vika/**', '.github/workflows/vika-windows.yml']
+jobs:
+  windows:
+    name: Windows (npm ${{ matrix.npm }})
+    strategy:
+      fail-fast: false
+      matrix:
+        npm: [bundled, '12']
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: vika
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: vika/package-lock.json
+      - name: Use npm 12 explicitly
+        if: matrix.npm == '12'
+        run: npm install --global npm@12 --ignore-scripts --no-audit --no-fund
+      - run: npm --version
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-lark-install.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
+      - name: Feishu events and OpenViking integration contracts
+        run: node --test packages/daemon/test/event.test.mjs packages/daemon/test/lark-preflight.test.mjs packages/daemon/test/ov-session-context.test.mjs packages/daemon/test/ov-session-lifecycle.test.mjs packages/daemon/test/ov-recall.test.mjs packages/cli/test/check-ov.test.mjs
+      - run: node packages/cli/bin/vika.mjs --help
+      - name: Parse PowerShell installer
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/install-windows.ps1'), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count) { throw ($errors | Out-String) }
+      - name: Install source into an isolated Unicode Windows home
+        shell: powershell
+        timeout-minutes: 15
+        run: .\scripts\test-install-windows.ps1

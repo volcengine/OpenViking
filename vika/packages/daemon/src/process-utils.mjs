@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn } from 'node:child_process';
+import { spawn } from './platform.mjs';
 import path from 'node:path';
 import { agentCliCommands } from './agent-clis.mjs';
 import { applyOpenVikingChildEnv } from './openviking.mjs';
@@ -59,6 +59,13 @@ function appendTail(current, chunk, limit) {
 
 export function terminateProcessTree(child, signal = 'SIGTERM') {
   if (!child?.pid) return;
+  if (process.platform === 'win32') {
+    // taskkill /T includes grandchildren, unlike ChildProcess.kill on Windows.
+    const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    killer.on('error', () => { try { child.kill(signal); } catch {} });
+    killer.unref();
+    return;
+  }
   if (process.platform !== 'win32') {
     try {
       // The group may outlive its leader, so always signal by the original pgid

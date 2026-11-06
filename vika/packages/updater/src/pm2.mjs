@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 // stop, status). Starting an app from the installed release never fetches or
 // publishes anything; that is the updater's job alone.
 
+import { normalizeEnvironment } from '../../daemon/src/platform.mjs';
 import { SHARED_WEB } from './targets.mjs';
 
 const require = createRequire(import.meta.url);
@@ -25,6 +26,17 @@ const WEB_FORBIDDEN_ENV_PREFIXES = Object.freeze([
 ]);
 const PM2_CONTROL_ENV_KEYS = Object.freeze([
   'HOME',
+  'USERPROFILE',
+  'SYSTEMROOT',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'TEMP',
+  'TMP',
+  'COMSPEC',
+  'PATHEXT',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'USERNAME',
   'USER',
   'LOGNAME',
   'PATH',
@@ -40,6 +52,13 @@ const PM2_CONTROL_ENV_KEYS = Object.freeze([
 ]);
 
 export function cleanPm2ControlEnv(source = process.env) {
+  source = normalizeEnvironment(source);
+  // Plain copied environments may retain Windows' mixed-case key spelling.
+  source = { ...source };
+  for (const key of Object.keys(source)) {
+    const canonical = key.toUpperCase();
+    if (PM2_CONTROL_ENV_KEYS.includes(canonical) && source[canonical] === undefined) source[canonical] = source[key];
+  }
   return Object.fromEntries(PM2_CONTROL_ENV_KEYS
     .filter((key) => typeof source[key] === 'string'
       && (source[key] !== '' || DAEMON_ENV_FIELD_SET.has(key)))
@@ -131,7 +150,10 @@ export async function verifyPm2App({
     throw new Error(message);
   }
   const execPath = await realpath(processInfo.pm2_env?.pm_exec_path || '');
-  if (!isInside(release, execPath)) {
+  // Windows may spell TEMP with an 8.3 alias; compare canonical paths on both
+  // sides, also handling a caller that supplied the current junction.
+  const canonicalRelease = await realpath(release);
+  if (!isInside(canonicalRelease, execPath)) {
     throw new Error(`${app} is running outside the current release`);
   }
   return processInfo;

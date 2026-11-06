@@ -30,7 +30,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
-import { CodingTools } from '@earendil-works/pi-durable/tools';
+import { durableCodingTools } from './coding-tools.mjs';
 import { availableChatModels, loadDurableModels } from './durable-models.mjs';
 import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
 import { DURABLE_PROTOCOL } from './durable-runtime.mjs';
@@ -352,7 +352,7 @@ class Host {
     // configured workspace"), and a delivery body may be a file in it. The
     // coding tools resolve their cwd from the same per-run NodeExecutionEnv as
     // the Core tools, so nothing else is wired here.
-    registry.install(CodingTools);
+    registry.install(durableCodingTools());
     const storage = await openNodeSqliteStorage(this.storagePath());
     const env = ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? this.workspace });
     this.harness = await Harness.open(storage, { models: this.models, registry, env }, context);

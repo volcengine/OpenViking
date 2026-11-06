@@ -60,14 +60,15 @@ export function launchAgent({ homeDir, pathValue }) {
 `;
 }
 
-function targets(homeDir, platform) {
+function targets(homeDir, platform, env = process.env) {
+  if (platform === 'win32') return { file: path.join(env.APPDATA || path.join(homeDir, 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Vika.vbs') };
   return platform === 'darwin'
     ? { file: path.join(homeDir, 'Library', 'LaunchAgents', `${LABEL}.plist`) }
     : { file: path.join(homeDir, '.config', 'systemd', 'user', 'vika.service') };
 }
 
-export function autostartEnabled({ homeDir = os.homedir(), platform = process.platform } = {}) {
-  return fs.existsSync(targets(homeDir, platform).file);
+export function autostartEnabled({ homeDir = os.homedir(), platform = process.platform, env = process.env } = {}) {
+  return fs.existsSync(targets(homeDir, platform, env).file);
 }
 
 export async function autostartCommand([action, ...extra], {
@@ -82,13 +83,21 @@ export async function autostartCommand([action, ...extra], {
     output.write('usage: vika autostart <enable|disable>\n');
     return 2;
   }
-  const { file } = targets(homeDir, platform);
+  const { file } = targets(homeDir, platform, env);
   if (action === 'disable') {
     if (platform === 'darwin') await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
-    else await execFileImpl('systemctl', ['--user', 'disable', '--now', 'vika.service']).catch(() => {});
+    else if (platform !== 'win32') await execFileImpl('systemctl', ['--user', 'disable', '--now', 'vika.service']).catch(() => {});
     fs.rmSync(file, { force: true });
-    if (platform !== 'darwin') await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});
+    if (platform !== 'darwin' && platform !== 'win32') await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});
     output.write(t('开机自启已关闭\n', 'Autostart is off\n'));
+    return 0;
+  }
+  if (platform === 'win32') {
+    const script = path.join(homeDir, '.vika', 'bin', 'vika-launch.mjs');
+    const command = `"${process.execPath}" "${script}" start`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `\uFEFFCreateObject("WScript.Shell").Run "${command.replaceAll('"', '""')}", 0, False\r\n`, 'utf16le');
+    output.write(`Autostart is on (${file})\n`);
     return 0;
   }
   const pathValue = env.PATH || '/usr/bin:/bin';
