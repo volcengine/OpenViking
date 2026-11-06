@@ -277,10 +277,14 @@ curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c&path
   -H "X-API-Key: your-key"
 ```
 
-Without `path`, the response is commit metadata JSON. With `path`, the response is a raw byte stream (`Content-Type: application/octet-stream`) plus two headers:
+Without `path`, the response is commit metadata JSON. With `path`, the response is a raw byte stream (`Content-Type: application/octet-stream`) with these headers:
 
 - `X-Snapshot-Oid`: the blob object's OID
-- `X-Snapshot-Size`: the blob size in bytes
+- `X-Snapshot-Size`: the returned body size in bytes
+- `X-Snapshot-Commit-Oid`: the full commit OID resolved from `target_ref`, distinct from the blob OID
+- `X-Snapshot-Time-Seconds`: the resolved commit's `committer.time_seconds`, an integer Unix timestamp in seconds
+
+The timestamp describes the requested snapshot, not the file's last modification or the run's completion time. Branches and tags are resolved once so the body and commit headers refer to the same snapshot. The commit headers also apply to `raw=false`; stripping memory fields only changes the body and its size.
 
 **CLI**
 

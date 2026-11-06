@@ -323,6 +323,26 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert history.json()["result"]["runs"][0]["task_id"] == failed.task_id
     assert history.json()["result"]["next_cursor"] is not None
 
+    # Output history distinguishes the frozen run from later edits to this file and other files.
+    uri = f"{TARGET}/page.md"
+    await service.viking_fs.write_file(uri, "manual update", ctx=ctx)
+    changed = await service.fs.commit(message="edit output", paths=[uri], ctx=ctx)
+    unrelated = f"{TARGET}/other.md"
+    await service.viking_fs.write_file(unrelated, "other file", ctx=ctx)
+    await service.fs.commit(message="edit other file", paths=[unrelated], ctx=ctx)
+    response = await client.get(
+        f"/api/v1/compile/runs/{first.task_id}/outputs", params={"compile_name": compile_name}
+    )
+    assert response.status_code == 200, response.text
+    (output,) = response.json()["result"]["outputs"]
+    assert output["uri"] == uri
+    assert output["snapshot_id"] == run["meta"]["finish_snapshot"]
+    assert output["latest_snapshot_id"] == changed["commit_oid"]
+    assert await service.fs.show(output["snapshot_id"], path=uri, ctx=ctx) == b"generated 1"
+    assert (
+        await service.fs.show(output["latest_snapshot_id"], path=uri, ctx=ctx) == b"manual update"
+    )
+
 
 async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, app, monkeypatch):
     ctx, _ = await prepare(service, app, monkeypatch)

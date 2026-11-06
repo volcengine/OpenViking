@@ -984,7 +984,7 @@ class CompileService:
         limit: int,
         cursor: str | None,
     ) -> dict[str, Any]:
-        """Derive changed output references from the run's frozen snapshots without an index file."""
+        """Page authorized run outputs with each file's latest commit, or null for no history."""
         run = await self.get_run(compile_name, task_id, ctx)
         target = run["params"]["to"]
         fs = self._require_lifecycle()._fs
@@ -1005,6 +1005,9 @@ class CompileService:
         allowed = await fs._can_access_many([item["uri"] for item in outputs], ctx)
         outputs = [item for item in outputs if allowed.get(item["uri"], False)]
         page = outputs[:limit]
+        for item in page:
+            history = await fs.log(ctx=ctx, paths=[item["uri"]], limit=1)
+            item["latest_snapshot_id"] = history[0]["oid"] if history else None
         return {"outputs": page, "next_cursor": page[-1]["uri"] if len(outputs) > limit else None}
 
     @staticmethod

@@ -2456,7 +2456,7 @@ class FSService:
         *,
         path: str,
     ) -> Dict[str, Any]:
-        """Forward to VikingFS.show_blob_raw. Returns ``{"oid", "size", "bytes"}``."""
+        """Return an authorized blob with its resolved commit ID and committer Unix seconds."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.show_blob_raw(target_ref, path=path, ctx=ctx)
 

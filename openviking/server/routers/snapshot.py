@@ -229,7 +229,11 @@ async def show(
     raw: bool = Query(True, description="Return raw stored content with memory fields"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Without ``path``: commit metadata JSON. With ``path``: raw blob bytes + X-Snapshot-* headers."""
+    """Return commit JSON without ``path``, or file bytes with blob/commit IDs and commit time.
+
+    The file response's X-Snapshot-Time-Seconds is the resolved commit's committer
+    Unix timestamp, including when raw=false strips memory fields from the body.
+    """
     service = get_service()
     canonical_path = (
         validate_request_viking_uri(path, _ctx, field_name="path") if path is not None else None
@@ -268,6 +272,8 @@ async def show(
         headers={
             "X-Snapshot-Oid": str(blob["oid"]),
             "X-Snapshot-Size": str(len(content)),
+            "X-Snapshot-Commit-Oid": str(blob["commit_oid"]),
+            "X-Snapshot-Time-Seconds": str(blob["commit_time_seconds"]),
         },
     )
 

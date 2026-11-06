@@ -592,27 +592,37 @@ class _SnapshotMixin:
         path: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
-        """Like ``show(target_ref, path=...)`` but returns the full envelope.
+        """Read an authorized path at a fixed commit, retaining blob and commit metadata.
 
-        Returns ``{"oid": str, "size": int, "bytes": bytes}`` without
-        stripping. Used by the HTTP snapshot router to populate
-        ``X-Snapshot-Oid`` / ``X-Snapshot-Size`` response headers.
+        ``target_ref`` accepts a commit, branch, or tag; ``path`` is a Viking URI.
+        Returns ``oid`` (blob ID), ``size``, ``bytes``, ``commit_oid``, and
+        ``commit_time_seconds`` (committer Unix seconds, not file modification time).
+        Access is checked before resolving the ref; missing commits or paths propagate.
         """
         real_ctx = self._ctx_or_default(ctx)
         await self._ensure_access(path, real_ctx)
         account = real_ctx.account_id
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
+        commit = await self._async_agfs.run(
+            "git_show", account=account, target_ref=target_ref, path=None
+        )
+        # Pin moving refs so the content and timestamp always describe the same commit.
+        commit_oid = commit["oid"]
         resp = await self._async_agfs.run(
             "git_show",
             account=account,
-            target_ref=target_ref,
+            target_ref=commit_oid,
             path=tree_path,
         )
         if not isinstance(resp, dict) or "bytes" not in resp:
             raise TypeError(
                 f"git_show returned unexpected shape for blob path: {type(resp).__name__}"
             )
-        return resp
+        return {
+            **resp,
+            "commit_oid": commit_oid,
+            "commit_time_seconds": commit["committer"]["time_seconds"],
+        }
 
     async def diff(
         self,

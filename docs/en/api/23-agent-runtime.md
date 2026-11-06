@@ -168,7 +168,7 @@ Configuration lookups, updates, executions and run queries use the current accou
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | One frozen run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
 
-List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id` and `change_type`; deleted files have no output blob.
+List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id`, `latest_snapshot_id` and `change_type`. `snapshot_id` is the frozen run snapshot; `latest_snapshot_id` is the file’s latest change commit at query time (null if no history). It may identify a later deletion, in which case reading that version returns 404. History errors propagate; only returned page items require history reads.
 
 Configuration updates require `compile_name`, `from`, `to`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. Enabling updates requires top-level `update_schedule`; disabling clears the schedule. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. Updates apply the same directory constraints and confirm that the target tag is queryable before publishing configuration. Updating configuration does not run Compile or reset invocation times.
 

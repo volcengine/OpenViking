@@ -277,10 +277,14 @@ curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c&path
   -H "X-API-Key: your-key"
 ```
 
-不带 `path` 时返回提交元数据 JSON；带 `path` 时返回原始字节流（`Content-Type: application/octet-stream`），并附带两个响应头：
+不带 `path` 时返回提交元数据 JSON；带 `path` 时返回原始字节流（`Content-Type: application/octet-stream`），并附带以下响应头：
 
 - `X-Snapshot-Oid`：blob 对象的 OID
-- `X-Snapshot-Size`：blob 字节数
+- `X-Snapshot-Size`：返回的正文字节数
+- `X-Snapshot-Commit-Oid`：`target_ref` 解析得到的完整 commit OID，与 blob OID 不同
+- `X-Snapshot-Time-Seconds`：该 commit 的 `committer.time_seconds`，整数 Unix 秒时间戳
+
+时间戳表示请求的快照提交时间，不是文件最后修改时间或 run 完成时间。分支和标签只解析一次，确保正文与 commit 响应头对应同一快照。`raw=false` 时也返回 commit 响应头，去除记忆字段仅影响正文及其字节数。
 
 **CLI**
 

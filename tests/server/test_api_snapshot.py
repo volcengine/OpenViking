@@ -358,12 +358,13 @@ async def test_show_commit_metadata(client_with_resource):
     assert "tree" in meta and "message" in meta
 
 
-async def test_show_blob_returns_binary_with_headers(client_with_resource_and_blob):
+@pytest.mark.parametrize("use_branch", [False, True])
+async def test_show_blob_returns_binary_with_headers(client_with_resource_and_blob, use_branch):
     """show?path=<file> must return raw bytes + X-Snapshot-* headers."""
     client, commit_oid, blob_uri, expected_bytes = client_with_resource_and_blob
     resp = await client.get(
         "/api/v1/snapshot/show",
-        params={"target_ref": commit_oid, "path": blob_uri},
+        params={"target_ref": "main" if use_branch else commit_oid, "path": blob_uri},
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/octet-stream")
@@ -371,6 +372,13 @@ async def test_show_blob_returns_binary_with_headers(client_with_resource_and_bl
     assert "x-snapshot-size" in {k.lower() for k in resp.headers}
     assert int(resp.headers["x-snapshot-size"]) == len(expected_bytes)
     assert resp.content == expected_bytes
+    metadata = await client.get("/api/v1/snapshot/show", params={"target_ref": commit_oid})
+    assert metadata.status_code == 200
+    assert resp.headers["x-snapshot-commit-oid"] == commit_oid
+    assert (
+        int(resp.headers["x-snapshot-time-seconds"])
+        == metadata.json()["result"]["committer"]["time_seconds"]
+    )
 
 
 async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypatch):
@@ -378,6 +386,7 @@ async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypa
 
     stored = b'visible content\n\n<!-- MEMORY_FIELDS\n{"version": 2}\n-->'
     show_mock = AsyncMock(return_value={"oid": "a" * 40, "size": len(stored), "bytes": stored})
+    show_mock.return_value.update(commit_oid="b" * 40, commit_time_seconds=1793951444)
     monkeypatch.setattr(
         snapshot,
         "get_service",
@@ -387,7 +396,7 @@ async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypa
     response = await snapshot_router_client.get(
         "/api/v1/snapshot/show",
         params={
-            "target_ref": "a" * 40,
+            "target_ref": "b" * 40,
             "path": "viking://user/default/memories/experiences/example.md",
             "raw": "false",
         },
@@ -396,6 +405,9 @@ async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypa
     assert response.status_code == 200, response.text
     assert response.content == b"visible content"
     assert response.headers["x-snapshot-size"] == str(len(response.content))
+    assert response.headers["x-snapshot-oid"] == "a" * 40
+    assert response.headers["x-snapshot-commit-oid"] == "b" * 40
+    assert response.headers["x-snapshot-time-seconds"] == "1793951444"
 
 
 async def test_show_path_not_found_returns_404(client_with_resource):
