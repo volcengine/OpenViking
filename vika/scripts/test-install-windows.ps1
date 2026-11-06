@@ -5,7 +5,22 @@ param()
 $ErrorActionPreference = 'Stop'
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 $installer = Join-Path $PSScriptRoot 'install-windows.ps1'
-$originalUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+# Environment.GetEnvironmentVariable(..., 'User') expands REG_EXPAND_SZ using
+# the current USERPROFILE. Compare the registry's raw value and kind so our
+# deliberately changed home cannot look like a persistent PATH mutation.
+function Get-RawUserPath {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+    try {
+        if ($null -eq $key -or $key.GetValueNames() -notcontains 'Path') {
+            return [pscustomobject]@{ Value = $null; Kind = $null }
+        }
+        return [pscustomobject]@{
+            Value = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            Kind = $key.GetValueKind('Path')
+        }
+    } finally { if ($null -ne $key) { $key.Dispose() } }
+}
+$originalUserPath = Get-RawUserPath
 $originalProcessPath = $env:Path
 $names = @('USERPROFILE', 'HOME', 'PM2_HOME', 'APPDATA', 'LOCALAPPDATA', 'NPM_CONFIG_CACHE', 'VIKA_CONFIG')
 $saved = @{}
@@ -47,7 +62,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Installed Windows Lark binary could not execute.' }
     if (Test-Path -LiteralPath $env:VIKA_CONFIG) { throw 'SkipSetup unexpectedly created a connector configuration.' }
     if (Test-Path -LiteralPath $env:PM2_HOME) { throw 'Install smoke unexpectedly started PM2.' }
-    if ([Environment]::GetEnvironmentVariable('Path', 'User') -cne $originalUserPath) { throw 'SkipPathUpdate changed the user PATH.' }
+    $currentUserPath = Get-RawUserPath
+    if ($currentUserPath.Value -cne $originalUserPath.Value -or $currentUserPath.Kind -ne $originalUserPath.Kind) { throw 'SkipPathUpdate changed the user PATH.' }
     if ($env:Path -cne $originalProcessPath) { throw 'SkipPathUpdate changed the process PATH.' }
 
     $refused = $false
