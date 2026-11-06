@@ -20,7 +20,8 @@ export function FileBrowser({ className, style, labels }: FileBrowserProps) {
         {labels?.title ?? 'File browser'}
       </p>
       <p className="ov-module-placeholder__description">
-        Placeholder. Functionality is not available yet.
+        {labels?.description ??
+          'Placeholder. Functionality is not available yet.'}
       </p>
     </div>
   );

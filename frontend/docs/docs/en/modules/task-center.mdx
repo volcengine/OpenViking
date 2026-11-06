@@ -80,7 +80,7 @@ The module exports `TaskCenterProps` from the subpath and the root entry. `TaskC
 | `onSaveCompileSchedule`  | `(row, schedule \| null) => Promise<void>`        | —        | Saves the schedule of a compile target. The argument matches the native `update_schedule` — `{ frequency: 'daily', hour, minute }` or `{ frequency: 'weekly', weekday, hour, minute }` — so a host can forward it as-is. `null` turns scheduling off. |
 | `onOpenResource`         | `(uri: string) => void`                           | —        | Called when a resource is opened, for example an import task's target path.                                                                                                                                                                           |
 | `slots`                  | `TaskCenterSlots`                                 | —        | `toolbar` and `emptyState`.                                                                                                                                                                                                                           |
-| `labels`                 | `TaskCenterLabels`                                | —        | Replaceable copy: tab and scope names, `empty`, `error`, `retry`, the schedule column and its states.                                                                                                                                                 |
+| `labels`                 | `TaskCenterLabels`                                | —        | Replaceable copy: tab and scope names, the placeholder `description`, `empty`, `error`, `retry`, the schedule column and its states.                                                                                                                  |
 | `className`              | `string`                                          | —        | Additional container class.                                                                                                                                                                                                                           |
 | `style`                  | `CSSProperties`                                   | —        | Container style overrides.                                                                                                                                                                                                                            |
 
@@ -88,4 +88,4 @@ Labels are plain text; the host maps its own translation system into these props
 
 Whether "others' tasks" appears depends on the current identity, which the module reads itself; there is no permission switch. A host that already resolved the identity does not need to pass it again.
 
-The placeholder component itself consumes `className`, `style` and `labels.title` only.
+The placeholder component itself consumes `className`, `style`, `labels.title` and `labels.description` only.

@@ -3,6 +3,12 @@ import type { HTMLAttributes, ReactNode } from 'react';
 
 /** 文件浏览模块的可替换文案。Replaceable copy of the file browser module. */
 export interface FileBrowserLabels {
+  /**
+   * 占位说明。缺省为 `Placeholder. Functionality is not available yet.`。
+   * Placeholder description. Defaults to "Placeholder. Functionality is not
+   * available yet.".
+   */
+  description?: string;
   /** 区域标题。Area title. */
   title?: string;
   /** 搜索框占位文案。Search placeholder. */

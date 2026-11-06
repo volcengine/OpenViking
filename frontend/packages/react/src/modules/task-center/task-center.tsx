@@ -27,7 +27,8 @@ export function TaskCenter({ className, style, labels }: TaskCenterProps) {
         {labels?.title ?? 'Task center'}
       </p>
       <p className="ov-module-placeholder__description">
-        Placeholder. Functionality is not available yet.
+        {labels?.description ??
+          'Placeholder. Functionality is not available yet.'}
       </p>
     </div>
   );

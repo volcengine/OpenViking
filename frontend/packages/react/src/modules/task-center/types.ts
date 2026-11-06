@@ -42,6 +42,12 @@ export interface TaskCenterSlots {
 
 /** 任务中心模块的可替换文案。Replaceable copy of the task center module. */
 export interface TaskCenterLabels {
+  /**
+   * 占位说明。缺省为 `Placeholder. Functionality is not available yet.`。
+   * Placeholder description. Defaults to "Placeholder. Functionality is not
+   * available yet.".
+   */
+  description?: string;
   /** 区域标题。Area title. */
   title?: string;
   /** 数据源导入页签名称。Label of the import tab. */

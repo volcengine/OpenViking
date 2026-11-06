@@ -32,6 +32,12 @@ export interface ConsoleSlots {
 
 /** 交互面板模块的可替换文案。Replaceable copy of the console module. */
 export interface ConsoleLabels {
+  /**
+   * 占位说明。缺省为 `Placeholder. Functionality is not available yet.`。
+   * Placeholder description. Defaults to "Placeholder. Functionality is not
+   * available yet.".
+   */
+  description?: string;
   /** 对话模式名称。Conversation mode label. */
   conversation?: string;
   /** 命令模式名称。Command mode label. */

@@ -80,7 +80,7 @@
 | `onSaveCompileSchedule`  | `(row, schedule \| null) => Promise<void>`        | —        | 保存编译目标的定时规则。参数与原生 `update_schedule` 同形——`{ frequency: 'daily', hour, minute }` 或 `{ frequency: 'weekly', weekday, hour, minute }`——宿主可直接转发。传 `null` 关闭定时。 |
 | `onOpenResource`         | `(uri: string) => void`                           | —        | 打开资源时触发，例如导入任务的目标路径。                                                                                                                                                    |
 | `slots`                  | `TaskCenterSlots`                                 | —        | `toolbar` 与 `emptyState`。                                                                                                                                                                 |
-| `labels`                 | `TaskCenterLabels`                                | —        | 可替换文案：页签与范围名称、`empty`、`error`、`retry`、定时列及其状态文案。                                                                                                                 |
+| `labels`                 | `TaskCenterLabels`                                | —        | 可替换文案：页签与范围名称、占位说明 `description`、`empty`、`error`、`retry`、定时列及其状态文案。                                                                                         |
 | `className`              | `string`                                          | —        | 容器附加类名。                                                                                                                                                                              |
 | `style`                  | `CSSProperties`                                   | —        | 容器样式覆盖。                                                                                                                                                                              |
 
@@ -88,4 +88,4 @@
 
 「其他成员任务」是否出现取决于当前身份，由模块自行读取，没有权限开关；宿主已解析过身份也不需要重复传入。
 
-占位组件当前只消费 `className`、`style` 与 `labels.title`。
+占位组件当前只消费 `className`、`style`、`labels.title` 与 `labels.description`。
