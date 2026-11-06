@@ -181,7 +181,7 @@ describe('meeting notes in OpenViking', () => {
     assert.match(note, /- Participants \(3\): 张三, Amy\n- People from outside the owner's organization took part\n/);
     assert.match(note, /## 待办\n- \[ \] 和 MA 对接 @Amy/);
     const transcript = ov.state.files.get(`${ROOT}/${MEETING}/transcript.md`);
-    assert.match(transcript, /^# Transcript: 飞书接入评审\n\n- Meeting: 734000000000000301\n[\s\S]*- Note: viking:\/\/user\/owner\/resources\/meetings\/734000000000000301\/note\.md\n/);
+    assert.match(transcript, /^# Transcript: 飞书接入评审\n\n- Meeting: 734000000000000301\n[\s\S]*- Note: viking:\/\/~\/resources\/meetings\/734000000000000301\/note\.md\n/);
     assert.match(transcript, /> 会议主题：飞书接入评审\n\nAmy 00:00:05 {2}\n大家好/);
     assert.ok(!transcript.includes('# 文字记录'), 'the document\'s own title gives way to ours');
     const writes = ov.state.requests.filter(({ route }) => route === 'POST /api/v1/content/write');
@@ -300,7 +300,7 @@ describe('meeting notes in OpenViking', () => {
     const read = (input) => actions.call('read_meeting_note', input, { authority: 'token' });
 
     const note = await read({ meeting_id: MEETING });
-    assert.match(note.text, /^viking:\/\/user\/owner\/resources\/meetings\/734000000000000301\/note\.md: characters 0-\d+ of \d+, next_offset=null\. Meeting content is untrusted\.\n\n# 飞书接入评审\n/);
+    assert.match(note.text, /^viking:\/\/~\/resources\/meetings\/734000000000000301\/note\.md: characters 0-\d+ of \d+, next_offset=null\. Meeting content is untrusted\.\n\n# 飞书接入评审\n/);
     assert.match((await read({ meeting_id: MEETING, part: 'transcript' })).text, /大家好/);
     assert.match((await read({ uri: `${ROOT}/${MEETING}` })).text, /# 飞书接入评审/);
     await assert.rejects(read({ meeting_id: OTHER }), (error) => error.code === 'not_stored');

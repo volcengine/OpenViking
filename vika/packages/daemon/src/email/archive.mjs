@@ -114,7 +114,8 @@ export class MailArchive extends OVArchive {
 
   constructor(connection, options = {}) {
     super(connection, { ...options, kind: 'email' });
-    this.root = mailArchiveRoot(connection.user);
+    // The key may authenticate a different user than the configured header.
+    this.root = mailArchiveRoot();
   }
 
   folder(messageId) {

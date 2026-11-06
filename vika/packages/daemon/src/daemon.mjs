@@ -27,6 +27,7 @@ import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
 import { OVUnavailableError } from './ov-connection.mjs';
 import { OVRecall } from './ov-recall.mjs';
 import { TimerConnector, TimerRepository } from './timers.mjs';
+import { OVTimerRepository } from './ov-timers.mjs';
 import { updateRuntimePreference } from './runtime-preference.mjs';
 import {
   MeetingPlugin,
@@ -133,7 +134,6 @@ export class PersonalAgentDaemon {
     this.lock.acquire();
     try {
       this.store = new Store(this.config.databasePath, this.logger.child({ component: 'store' }));
-      this.timers = new TimerRepository(this.store.db);
       const ovClient = this.ovClient ?? new OVSessionClient(this.config.openVikingConfigPath);
       this.ovContext = new OVSessionContext(this.store, ovClient, this.logger);
       this.recordSystemActivity('system.starting', {
@@ -141,6 +141,23 @@ export class PersonalAgentDaemon {
         status: 'STARTING',
       }, 'starting');
       await this.checkOpenViking(ovClient);
+      this.timers = this.config.timerStorage === 'sqlite'
+        ? new TimerRepository(this.store.db)
+        : new OVTimerRepository(ovClient, this.config.instanceId);
+      if (this.config.timerStorage !== 'sqlite') {
+        try {
+          await this.timers.load();
+        } catch (error) {
+          const status = error.httpStatus;
+          if (!(error instanceof OVUnavailableError)
+            || (status >= 400 && status < 500 && status !== 408 && status !== 429)) throw error;
+          this.logger.warn('timer_storage_unavailable_at_startup', { error: safeError(error) });
+          this.recordSystemActivity('system.timers_unavailable', {
+            summary: '定时器暂时不可用：继续收发消息，恢复后自动加载定时器',
+            status: 'DEGRADED',
+          });
+        }
+      }
       this.runMaintenance();
 
       this.connectors = new ConnectorManager(

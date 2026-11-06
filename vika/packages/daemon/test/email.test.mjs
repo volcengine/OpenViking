@@ -428,6 +428,7 @@ const file = (name, type, body, { inline = false, base64 = true } = {}) => ({
 describe('mail in OpenViking', () => {
   const ROOT = 'viking://user/owner/resources/emails';
   const FOLDER = `${ROOT}/${TAG}-1-1`;
+  const LINK_FOLDER = `viking://~/resources/emails/${TAG}-1-1`;
   const TEXT = 'Revenue grew twelve percent. '.repeat(30).trim();
   const q3 = () => multipartMail({ text: TEXT, parts: [
     file('report.pdf', 'application/pdf', '%PDF-1.4 revenue'),
@@ -465,18 +466,18 @@ describe('mail in OpenViking', () => {
     // The runtime gets who wrote, where the mail is, and the start of the text.
     const lines = event.content.split('\n');
     assert.deepEqual(lines.slice(0, 3), ['From: Alice <alice@example.com>', `To: ${ME}`,
-      `[mail stored: ${FOLDER}/body.md; the first 500 of its ${TEXT.length} characters are below]`]);
+      `[mail stored: ${LINK_FOLDER}/body.md; the first 500 of its ${TEXT.length} characters are below]`]);
     assert.deepEqual(lines.slice(3, 8).map((line) => line.replace(/ \([^)]*\)/, '')), [
-      `[attachment 01 report.pdf: ${FOLDER}/attachments/01-report.pdf]`,
-      `[attachment 02 invite.ics: ${FOLDER}/attachments/02-invite.ics]`,
-      `[attachment 03 forwarded.eml: ${FOLDER}/attachments/03-forwarded.eml]`,
+      `[attachment 01 report.pdf: ${LINK_FOLDER}/attachments/01-report.pdf]`,
+      `[attachment 02 invite.ics: ${LINK_FOLDER}/attachments/02-invite.ics]`,
+      `[attachment 03 forwarded.eml: ${LINK_FOLDER}/attachments/03-forwarded.eml]`,
       '[attachment 04 archive.zip: not stored, OpenViking does not read this type]',
       '[attachment 05 broken.pdf: not stored, OpenViking could not read it]',
     ]);
-    assert.equal(lines[3], `[attachment 01 report.pdf (application/pdf, 16 B): ${FOLDER}/attachments/01-report.pdf]`);
+    assert.equal(lines[3], `[attachment 01 report.pdf (application/pdf, 16 B): ${LINK_FOLDER}/attachments/01-report.pdf]`);
     assert.deepEqual(lines.slice(8), ['', `${TEXT.slice(0, 500)}…`]);
     assert.deepEqual(event.attachments, []);
-    assert.equal(event.data.archive.body, `${FOLDER}/body.md`);
+    assert.equal(event.data.archive.body, `${LINK_FOLDER}/body.md`);
     assert.deepEqual(event.data.archive.attachments.map(({ id, status }) => [id, status]),
       [['01', 'stored'], ['02', 'stored'], ['03', 'stored'], ['04', 'skipped'], ['05', 'failed']]);
 
@@ -484,7 +485,7 @@ describe('mail in OpenViking', () => {
     const body = ov.state.files.get(`${FOLDER}/body.md`);
     assert.match(body, /^# Q3 report\n\n- From: Alice <alice@example\.com>\n- To: me@example\.com\n- Date: 2026-10-13T08:10:00\.000Z\n/);
     assert.ok(body.includes(`- Message: mail:${TAG}:1:1`));
-    assert.ok(body.includes(`- 01 report.pdf (application/pdf, 16 B): ${FOLDER}/attachments/01-report.pdf`));
+    assert.ok(body.includes(`- 01 report.pdf (application/pdf, 16 B): ${LINK_FOLDER}/attachments/01-report.pdf`));
     assert.ok(body.includes('- 1 inline image in the body, not stored'));
     assert.ok(body.endsWith(`## Body\n\n${TEXT}\n`));
     assert.equal(ov.state.files.get(`${FOLDER}/attachments/01-report.pdf/full/report.md`), 'parsed report.pdf: %PDF-1.4 revenue');
@@ -494,15 +495,15 @@ describe('mail in OpenViking', () => {
 
     // Text first, then vectors only: nothing asks OV for an LLM summary.
     const writes = ov.state.requests.filter(({ route }) => route === 'POST /api/v1/content/write');
-    assert.deepEqual(writes.map(({ body: { uri, mode, wait, processing_mode: processing } }) => [uri.slice(FOLDER.length), mode, wait, processing]), [
+    assert.deepEqual(writes.map(({ body: { uri, mode, wait, processing_mode: processing } }) => [uri.slice(LINK_FOLDER.length), mode, wait, processing]), [
       ['/attachments/02-invite.ics/full/invite.txt', 'replace', false, 'vectors_only'],
       ['/attachments/03-forwarded.eml/full/message.md', 'replace', false, 'vectors_only'],
       ['/body.md', 'replace', false, 'vectors_only'],
     ]);
     const added = ov.state.requests.filter(({ route }) => route === 'POST /api/v1/resources').map(({ body: request }) => request);
     assert.deepEqual(added.map(({ to, source_name: name, wait, processing_mode: processing, args }) => [to, name, wait, processing, args]), [
-      [`${FOLDER}/attachments/01-report.pdf/full`, 'report.pdf', false, 'vectors_only', { parse_mode: 'no_split' }],
-      [`${FOLDER}/attachments/05-broken.pdf/full`, 'broken.pdf', false, 'vectors_only', { parse_mode: 'no_split' }],
+      [`${LINK_FOLDER}/attachments/01-report.pdf/full`, 'report.pdf', false, 'vectors_only', { parse_mode: 'no_split' }],
+      [`${LINK_FOLDER}/attachments/05-broken.pdf/full`, 'broken.pdf', false, 'vectors_only', { parse_mode: 'no_split' }],
     ]);
     assert.deepEqual([...ov.state.uploads.values()].map(({ name, type }) => [name, type]),
       [['report.pdf', 'application/pdf'], ['broken.pdf', 'application/pdf']]);
@@ -529,7 +530,7 @@ describe('mail in OpenViking', () => {
     const { service, actions, read } = reader(t, { ov, config, event: events[0] });
     assert.ok(actions.tools().some((tool) => tool.name === 'read_email'));
     assert.ok(!service(['lark']).tools().some((tool) => tool.name === 'read_email'));
-    assert.match(formatInboundLine(events[0]), /\[mail stored: viking:\/\/user\/owner\/resources\/emails\//);
+    assert.match(formatInboundLine(events[0]), /\[mail stored: viking:\/\/~\/resources\/emails\//);
 
     const messageId = `mail:${TAG}:1:1`;
     const first = await read({ message_id: messageId, max_chars: 1000 });
@@ -588,9 +589,9 @@ describe('mail in OpenViking', () => {
     // The whole text is imported once more, split by OV, for recall alone.
     const added = ov.state.requests.filter(({ route }) => route === 'POST /api/v1/resources').map(({ body: request }) => request);
     assert.deepEqual(added.map(({ to, source_name: name, processing_mode: processing, args }) => [to, name, processing, args]), [
-      [`${attachment}/full`, 'big.pdf', 'vectors_only', { parse_mode: 'no_split' }],
-      [`${attachment}/chunks`, 'big.md', 'vectors_only', undefined],
-      [`${FOLDER}/chunks`, 'body.md', 'vectors_only', undefined],
+      [`${LINK_FOLDER}/attachments/01-big.pdf/full`, 'big.pdf', 'vectors_only', { parse_mode: 'no_split' }],
+      [`${LINK_FOLDER}/attachments/01-big.pdf/chunks`, 'big.md', 'vectors_only', undefined],
+      [`${LINK_FOLDER}/chunks`, 'body.md', 'vectors_only', undefined],
     ]);
     const uploads = [...ov.state.uploads.values()];
     assert.deepEqual(uploads.map(({ name, type }) => [name, type]),
@@ -600,7 +601,7 @@ describe('mail in OpenViking', () => {
     const chunks = [...ov.state.files.keys()].filter((uri) => uri.startsWith(`${attachment}/chunks/`));
     assert.ok(chunks.length >= 2, 'the attachment is split');
     // The event and the read tool still name the whole attachment.
-    assert.equal(events[0].data.archive.attachments[0].uri, attachment);
+    assert.equal(events[0].data.archive.attachments[0].uri, `${LINK_FOLDER}/attachments/01-big.pdf`);
 
     const { read } = reader(t, { ov, config, event: events[0] });
     const second = ov.state.files.get(`${attachment}/chunks/big_2.md`);
@@ -624,8 +625,8 @@ describe('mail in OpenViking', () => {
     imap.deliver(multipartMail({ text: 'See the report.', parts: [file('report.pdf', 'application/pdf', '%PDF-1.4 revenue')] }));
     await until(() => events.length === 1);
     const [event] = events;
-    assert.ok(event.content.includes(`[attachment 01 report.pdf (application/pdf, 16 B): ${FOLDER}/attachments/01-report.pdf (OpenViking is still reading it)]`));
-    assert.deepEqual(event.content.split('\n').slice(2, 3), [`[mail stored: ${FOLDER}/body.md; all of its text is below]`]);
+    assert.ok(event.content.includes(`[attachment 01 report.pdf (application/pdf, 16 B): ${LINK_FOLDER}/attachments/01-report.pdf (OpenViking is still reading it)]`));
+    assert.deepEqual(event.content.split('\n').slice(2, 3), [`[mail stored: ${LINK_FOLDER}/body.md; all of its text is below]`]);
     assert.ok(event.content.endsWith('\n\nSee the report.'), event.content);
     assert.equal(event.data.archive.attachments[0].status, 'processing');
 

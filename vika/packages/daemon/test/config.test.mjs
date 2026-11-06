@@ -39,6 +39,16 @@ describe('configuration safety', { concurrency: false }, () => {
     }
   });
 
+  it('defaults timer storage to OV and accepts only OV or SQLite', () => {
+    setEnv('VIKA_TIMER_STORAGE', undefined);
+    assert.equal(getConfig().timerStorage, 'ov');
+    assert.equal(getConfig().instanceId, 'default');
+    setEnv('VIKA_TIMER_STORAGE', 'sqlite');
+    assert.equal(getConfig().timerStorage, 'sqlite');
+    setEnv('VIKA_TIMER_STORAGE', 'other');
+    assert.throws(() => getConfig(), /VIKA_TIMER_STORAGE/);
+  });
+
   it('accepts QQ as the primary channel without putting credentials in config', () => {
     setEnv('VIKA_CHANNEL', 'qq');
     setEnv('VIKA_CONNECTORS_JSON', '["qq","telegram"]');

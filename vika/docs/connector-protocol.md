@@ -197,7 +197,7 @@ carries `event=`. A non-chat event that can itself be answered (a mail) carries
 its reply target as `msg=` as well:
 
 ```text
-[source=email instance=email-gmail kind=email.received msg=mail:3f2a9c1b:1:18475 event=imap:3f2a9c1b:1:18475 subject=thread:gmail:1878… time=2026-10-13T08:17Z actor=email:alice@example.com] subject ⏎ From: … ⏎ [mail stored: viking://user/…/resources/emails/3f2a9c1b-1-18475/body.md; the first 500 of its 4210 characters are below] ⏎ [attachment 01 report.pdf (application/pdf, 1.2 MB): viking://…/attachments/01-report.pdf] ⏎ start of the body…
+[source=email instance=email-gmail kind=email.received msg=mail:3f2a9c1b:1:18475 event=imap:3f2a9c1b:1:18475 subject=thread:gmail:1878… time=2026-10-13T08:17Z actor=email:alice@example.com] subject ⏎ From: … ⏎ [mail stored: viking://~/resources/emails/3f2a9c1b-1-18475/body.md; the first 500 of its 4210 characters are below] ⏎ [attachment 01 report.pdf (application/pdf, 1.2 MB): viking://…/attachments/01-report.pdf] ⏎ start of the body…
 ```
 The email Connector stores each mail in the owner's private OpenViking area
 before it reports it, so a mail line carries links and the start of the text;
@@ -207,7 +207,7 @@ the future `sync` capability.
 
 The Lark Connector of the one instance that stores meeting notes
 (`agents[].meetingNotes`) likewise writes each AI note of the owner's meetings
-to OpenViking (`viking://user/<user>/resources/meetings/<meeting_id>/`), found
+to OpenViking (`viking://~/resources/meetings/<meeting_id>/`), found
 by scanning the owner's meetings every 15 minutes. Nothing of it becomes a
 protocol EVENT or reaches the Core; the Core's `read_meeting_note` tool reads
 the stored notes.

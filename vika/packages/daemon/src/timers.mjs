@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 
 const TIMER_ID_PREFIX = 'tm_';
 export const DEFAULT_OCCURRENCE_CHECK_DELAY_MS = 5 * 60 * 1000;
-const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
+export const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
+export const OCCURRENCE_CHECK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function number(value) {
   return typeof value === 'bigint' ? Number(value) : value;
@@ -259,11 +260,6 @@ export class TimerRepository {
       ORDER BY next_run_at_ms, created_at_ms LIMIT 1
     `);
     this.deleteTimer = this.db.prepare('DELETE FROM timers WHERE timer_id = ?');
-    this.deletePendingOccurrenceChecksForTimer = this.db.prepare(`
-      DELETE FROM timer_occurrence_checks
-      WHERE status IN ('pending', 'exhausted')
-        AND json_extract(event_json, '$.data.timer.id') = ?
-    `);
     this.advanceTimer = this.db.prepare(`
       UPDATE timers
       SET next_run_at_ms = ?, last_run_at_ms = ?, run_count = ?
@@ -335,8 +331,18 @@ export class TimerRepository {
   nextWakeAtMs() {
     const timer = this.nextActive();
     const check = this.nextOccurrenceCheck();
-    const values = [timer?.nextRunAtMs, check?.nextCheckAtMs].filter((value) => Number.isSafeInteger(value));
+    const values = [timer?.nextRunAtMs, check?.nextCheckAtMs, this.nextOccurrenceCleanupAtMs()].filter((value) => Number.isSafeInteger(value));
     return values.length === 0 ? null : Math.min(...values);
+  }
+
+  nextOccurrenceCleanupAtMs() {
+    const row = this.db.prepare("SELECT MIN(next_check_at_ms) AS next FROM timer_occurrence_checks WHERE status = 'exhausted'").get();
+    return row.next === null ? null : number(row.next) + OCCURRENCE_CHECK_RETENTION_MS + 1;
+  }
+
+  pruneOccurrenceChecks(nowMs) {
+    this.db.prepare("DELETE FROM timer_occurrence_checks WHERE status = 'exhausted' AND next_check_at_ms < ?")
+      .run(nowMs - OCCURRENCE_CHECK_RETENTION_MS);
   }
 
   create({
@@ -369,27 +375,34 @@ export class TimerRepository {
   }
 
   cancel(timerId) {
-    return number(this.deleteTimer.run(timerId).changes) > 0;
-  }
-
-  cancelWithOccurrenceChecks(timerId) {
-    const deletedTimers = number(this.deleteTimer.run(timerId).changes);
-    const deletedChecks = number(this.deletePendingOccurrenceChecksForTimer.run(timerId).changes);
-    return deletedTimers > 0 || deletedChecks > 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const removed = number(this.deleteTimer.run(timerId).changes);
+      const prefix = `${timerId}:`;
+      const checks = number(this.db.prepare(`
+        DELETE FROM timer_occurrence_checks WHERE substr(occurrence_id, 1, ?) = ?
+      `).run(prefix.length, prefix).changes);
+      this.db.exec('COMMIT');
+      return removed + checks > 0;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   finishOccurrence(timer, { scheduledTimeMs, completedAtMs, runCount }) {
     const remove = timer.maxRuns !== null && runCount >= timer.maxRuns;
     const nextRunAtMs = remove ? null : TimerSchedule.nextAfter(timer.schedule, completedAtMs);
     if (nextRunAtMs === null) {
-      this.cancel(timer.timerId);
+      this.deleteTimer.run(timer.timerId);
       return null;
     }
     this.advanceTimer.run(nextRunAtMs, scheduledTimeMs, runCount, timer.timerId);
     return this.get(timer.timerId);
   }
 
-  createOccurrenceCheck({ occurrenceId, eventId, nextCheckAtMs, event }) {
+  createOccurrenceCheck({ occurrenceId, eventId, nextCheckAtMs, event, timer = null }) {
+    if (timer && this.get(timer.timerId)?.nextRunAtMs !== timer.nextRunAtMs) return null;
     this.insertOccurrenceCheck.run(occurrenceId, eventId, nextCheckAtMs, JSON.stringify(event));
     return this.getOccurrenceCheck(occurrenceId);
   }
@@ -414,13 +427,13 @@ export class TimerRepository {
 function deliveryText(delivery) {
   if (delivery?.mode === 'chat') {
     const target = delivery.source === 'lark' ? `Lark chat ${delivery.chat_id}` : `${delivery.source ?? 'chat'} ${delivery.chat_id}`;
-    return `Delivery request: send this timer reminder to ${target}.`;
+    return `Delivery target: if this task requires a message, send its final result to ${target}.`;
   }
-  return 'Delivery request: send this timer reminder to the owner.';
+  return 'Delivery target: if this task requires a message, send its final result to the owner.';
 }
 
 function completionReceiptText(occurrenceId) {
-  return `Completion receipt: after completing this timer occurrence, call complete_timer_occurrence with occurrence_id=${occurrenceId}.`;
+  return `Finish this occurrence using finish_timer_occurrence with occurrence_id=${occurrenceId}. For a final result, include delivery with the existing delivery tool and its input; the daemon sends before marking completion. If no message is needed under the task's conditions, omit delivery and provide reason. For a question awaiting the owner, use an ordinary delivery tool and do not finish yet.`;
 }
 
 function eventForTimer(timer, nowMs) {
@@ -471,7 +484,7 @@ function eventForOccurrenceCheck(check, nowMs) {
     content: {
       ...original.content,
       text: [
-        'The previous timer task may not be complete. Confirm and complete it, then call complete_timer_occurrence.',
+        'The previous timer task may not be complete. Check what remains, then use finish_timer_occurrence to deliver its final result and finish, or explain why no delivery is needed. Do not finish while awaiting an answer.',
         original.content?.text,
       ].filter(Boolean).join('\n\n'),
     },
@@ -513,16 +526,16 @@ export class TimerConnector {
     this.wake();
   }
 
-  wake() {
+  wake(minDelayMs = 0) {
     if (this.stopped) return;
     clearTimeout(this.timer);
     const nextWakeAtMs = this.repository.nextWakeAtMs();
-    if (nextWakeAtMs === null) {
+    if (nextWakeAtMs === null && !this.repository.needsRefresh) {
       this.timer = null;
       return;
     }
     const nowMs = this.now();
-    const delay = Math.max(0, nextWakeAtMs - nowMs);
+    const delay = Math.max(minDelayMs, nextWakeAtMs === null ? this.idlePollMs : nextWakeAtMs - nowMs);
     this.timer = setTimeout(() => void this.tick(), Math.min(delay, this.idlePollMs));
     this.timer.unref?.();
   }
@@ -530,16 +543,23 @@ export class TimerConnector {
   async tick() {
     if (this.running || this.stopped) return;
     this.running = true;
+    let retryDelayMs = 0;
     try {
       while (!this.stopped && await this.fireDueOnce()) {}
+    } catch {
+      this.logger?.warn?.('timer_storage_failed', { retryInMs: this.idlePollMs });
+      retryDelayMs = this.idlePollMs;
     } finally {
       this.running = false;
-      this.wake();
+      this.wake(retryDelayMs);
     }
   }
 
   async fireDueOnce() {
+    if (this.repository.needsRefresh) await this.repository.load();
     const nowMs = this.now();
+    const cleanupAtMs = this.repository.nextOccurrenceCleanupAtMs();
+    if (cleanupAtMs !== null && cleanupAtMs <= nowMs) await this.repository.pruneOccurrenceChecks(nowMs);
     const check = this.repository.nextDueOccurrenceCheck(nowMs);
     const timer = this.repository.nextDue(nowMs);
     if (check && (!timer || check.nextCheckAtMs <= timer.nextRunAtMs)) {
@@ -548,12 +568,14 @@ export class TimerConnector {
     if (!timer) return false;
     const event = eventForTimer(timer, nowMs);
     const occurrenceId = event.data.timer.occurrence_id;
-    this.repository.createOccurrenceCheck({
+    const created = await this.repository.createOccurrenceCheck({
       occurrenceId,
       eventId: event.id,
       nextCheckAtMs: nowMs + this.occurrenceCheckDelayMs,
       event,
+      timer,
     });
+    if (!created) return true;
     try {
       await this.submitEvent(event);
     } catch (error) {
@@ -562,7 +584,7 @@ export class TimerConnector {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      this.repository.finishOccurrence(timer, {
+      await this.repository.finishOccurrence(timer, {
         scheduledTimeMs: timer.nextRunAtMs,
         completedAtMs: nowMs,
         runCount: timer.runCount + 1,
@@ -573,11 +595,11 @@ export class TimerConnector {
 
   async fireOccurrenceCheck(check, nowMs) {
     if (check.status === 'completed') {
-      this.repository.deleteOccurrenceCheck(check.occurrenceId);
+      await this.repository.deleteOccurrenceCheck(check.occurrenceId);
       return true;
     }
     if (check.attempt >= MAX_OCCURRENCE_CHECK_ATTEMPTS) {
-      this.repository.rescheduleOccurrenceCheck(check.occurrenceId, {
+      await this.repository.rescheduleOccurrenceCheck(check.occurrenceId, {
         attempt: check.attempt, nextCheckAtMs: nowMs,
       });
       return true;
@@ -592,7 +614,7 @@ export class TimerConnector {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      this.repository.rescheduleOccurrenceCheck(check.occurrenceId, {
+      await this.repository.rescheduleOccurrenceCheck(check.occurrenceId, {
         attempt,
         nextCheckAtMs: nowMs + this.occurrenceCheckDelayMs,
       });

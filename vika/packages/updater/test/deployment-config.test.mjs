@@ -95,6 +95,18 @@ test('loads any number of agents from one absolute deployment manifest', () => {
   });
 });
 
+test('passes timer storage selection from the manifest into the daemon environment', () => {
+  const manifest = validManifest();
+  manifest.env.VIKA_TIMER_STORAGE = 'sqlite';
+  withManifest(manifest, (manifestPath) => {
+    const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+    const env = {};
+    applyDeploymentDaemonEnv(env, deployment);
+    assert.equal(env.VIKA_TIMER_STORAGE, 'sqlite');
+    assert.equal(resolvedDeploymentDaemonEnv(deployment, { VIKA_TIMER_STORAGE: 'ov' }).VIKA_TIMER_STORAGE, 'ov');
+  });
+});
+
 test('defaults the manifest path under HOME and accepts an explicit absolute override', () => {
   assert.equal(
     resolveDeploymentManifestPath({ HOME: '/Users/test' }),

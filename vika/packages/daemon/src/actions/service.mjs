@@ -53,7 +53,7 @@ const HANDLERS = {
   create_timer: 'createTimer',
   list_timers: 'listTimers',
   cancel_timer: 'cancelTimer',
-  complete_timer_occurrence: 'completeTimerOccurrence',
+  finish_timer_occurrence: 'finishTimerOccurrence',
 };
 
 // A refusal the model can act on; `code` is what logs and activities record.
@@ -66,7 +66,7 @@ function blocked(code, message) {
 // timer occurrence done counts only when it was marked.
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
-  if (tool?.name === 'complete_timer_occurrence') return result?.data?.completed === true;
+  if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -208,6 +208,11 @@ export class ActionService {
       try { validateInput(this.definition(tool).inputSchema, input); } catch (error) { throw blocked('invalid_input', error.message); }
       this.assertAuthority(authority);
       trace.runtime = this.store.getCognitionState().runtime;
+      if (tool.timer && this.timers.needsRefresh) {
+        try { await this.timers.load(); } catch {
+          throw blocked('timer_unavailable', 'Timer state is temporarily unavailable. Try again after OpenViking recovers.');
+        }
+      }
       let result = await this[HANDLERS[name]](input, caller);
       // Only a call that changed nothing says STOP: a success after a refused
       // attempt (decision_ambiguous fixed with decision_instance) is a fix.
@@ -1238,7 +1243,10 @@ export class ActionService {
       }
       uri = entry ? entry.uri : archive.body;
     }
-    const found = /[%\\]/.test(uri) ? null : readTarget(mailArchiveRoot(client.user), uri);
+    // Search returns canonical URIs; accept only the authenticated user's
+    // archive as well as the ~ links emitted by the connector.
+    const root = mailArchiveRoot(uri?.startsWith('viking://user/') ? await client.authenticate() : null);
+    const found = /[%\\]/.test(uri) ? null : readTarget(root, uri);
     if (!found) throw blocked('outside_mail_archive', 'read_email reads only mail the daemon stored');
     return this.readArchived(client, found, input, caller, {
       missing: blocked('not_stored_yet', 'OpenViking has nothing there yet; an attachment may still be being read. Try again shortly.'),
@@ -1252,7 +1260,7 @@ export class ActionService {
     if (Boolean(input.meeting_id) === Boolean(input.uri)) throw blocked('invalid_input', 'Pass meeting_id or uri, not both');
     if (input.part && !input.meeting_id) throw blocked('invalid_input', 'part goes with meeting_id');
     const client = this.ovClient ?? new OVSessionClient(this.config.openVikingConfigPath);
-    const root = meetingNotesRoot(client.user);
+    const root = meetingNotesRoot(input.uri?.startsWith('viking://user/') ? await client.authenticate() : null);
     let uri = input.uri;
     if (input.meeting_id) {
       if (!/^\d{1,32}$/.test(input.meeting_id)) throw blocked('invalid_input', 'meeting_id is the meeting\'s long numeric id');
@@ -1357,8 +1365,12 @@ export class ActionService {
   async createTimer(input, caller) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
     const fence = this.fence(input, caller);
-    const existing = this.timers.findByDecision(fence.connector_instance, fence.event_id);
-    if (existing) return this.timerResult(existing, { duplicate: true });
+    const existing = this.timers.needsRefresh ? null
+      : this.timers.findByDecision(fence.connector_instance, fence.event_id);
+    if (existing) {
+      this.onTimersChanged?.();
+      return this.timerResult(existing, { duplicate: true });
+    }
     const maxRuns = input.max_runs === undefined || input.max_runs === null ? null : Number(input.max_runs);
     if (maxRuns !== null && (!Number.isSafeInteger(maxRuns) || maxRuns < 1)) {
       throw blocked('invalid_input', 'max_runs must be a positive integer or null');
@@ -1369,7 +1381,7 @@ export class ActionService {
       nowMs,
       timezone,
     });
-    const timer = this.timers.create({
+    const timer = await Promise.resolve().then(() => this.timers.create({
       title: input.title,
       text: input.text,
       timezone,
@@ -1380,8 +1392,7 @@ export class ActionService {
       createdFromEventId: fence.event_id,
       createdFromSource: fence.connector_instance,
       createdAtMs: nowMs,
-    });
-    this.onTimersChanged?.();
+    })).finally(() => this.onTimersChanged?.());
     return this.timerResult(timer, { duplicate: false });
   }
 
@@ -1424,40 +1435,73 @@ export class ActionService {
     return { text: `Active timers (${timers.length}):\n${lines.join('\n')}`, data: { timers } };
   }
 
-  cancelTimer(input) {
+  async cancelTimer(input) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
-    const cancelled = this.timers.cancelWithOccurrenceChecks(input.timer_id);
-    if (cancelled) this.onTimersChanged?.();
+    const cancelled = await Promise.resolve().then(() => this.timers.cancel(input.timer_id))
+      .finally(() => this.onTimersChanged?.());
     return {
       text: cancelled ? `Timer cancelled: timer_id=${input.timer_id}.` : `Timer was not active: timer_id=${input.timer_id}.`,
       data: { timer_id: input.timer_id, cancelled },
     };
   }
 
-  completeTimerOccurrence(input) {
+  async finishTimerOccurrence(input, caller) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
-    const pending = this.timers.getOccurrenceCheck(input.occurrence_id);
-    const delivery = pending?.event.data?.timer?.delivery;
-    const connector = delivery?.mode === 'owner' ? this.config.channel : delivery?.source;
-    const target = delivery?.mode === 'owner'
-      ? this.connectors.owner?.(connector)?.target
-      : delivery?.mode === 'chat' ? { chat_id: delivery.chat_id } : null;
-    if (!target || !this.store.sentTimerOccurrenceDelivery(input.occurrence_id, { connector, target })) {
+    if (this.timers.needsRefresh) await this.timers.load();
+    const check = this.timers.getOccurrenceCheck(input.occurrence_id);
+    if (!check) throw blocked('unknown_occurrence', 'This timer occurrence has no completion check.');
+    let delivery = null;
+    if (input.delivery) {
+      const tool = TOOLS.find((candidate) => candidate.name === input.delivery.tool);
+      if (!tool || !this.offered(tool)) throw blocked('unknown_tool', `unknown tool: ${input.delivery.tool}`);
+      try { validateInput(this.definition(tool).inputSchema, input.delivery.input); } catch (error) {
+        throw blocked('invalid_input', error.message);
+      }
+      if (input.delivery.input.interim || input.delivery.input.choices !== undefined) {
+        throw blocked('invalid_input', 'Use ordinary delivery tools for interim updates or questions with choices.');
+      }
+      const decision = this.resolveDecision(input.delivery.input, caller);
+      if (!this.isTimerReminder(decision)
+        || JSON.parse(decision.event_json).data?.timer?.occurrence_id !== input.occurrence_id) {
+        throw blocked('invalid_input', 'The delivery decision_id must belong to this timer occurrence.');
+      }
+    } else if (!input.reason?.trim()) {
+      throw blocked('invalid_input', 'reason is required when no delivery is needed.');
+    }
+    if (check.status === 'completed') {
       return {
-        text: `Timer occurrence is not complete: no successful delivery is recorded for occurrence_id=${input.occurrence_id}.`,
-        data: { occurrence_id: input.occurrence_id, completed: false },
+        text: `Timer occurrence already completed: occurrence_id=${input.occurrence_id}.`,
+        data: { occurrence_id: input.occurrence_id, completed: true, duplicate: true },
       };
     }
-    const check = this.timers.markOccurrenceCompleted(input.occurrence_id);
-    if (!check) {
-      return {
-        text: `Timer occurrence check was not pending: occurrence_id=${input.occurrence_id}.`,
-        data: { occurrence_id: input.occurrence_id, completed: false },
-      };
+    if (input.delivery) {
+      delivery = await this.call(input.delivery.tool, {
+        ...input.delivery.input,
+        decision_instance: 'timer',
+      }, { authority: caller.authority, via: caller.trace.via });
+      if (delivery.data?.dry_run) {
+        return {
+          text: `Timer occurrence is not complete: delivery was simulated for occurrence_id=${input.occurrence_id}.`,
+          data: { ...delivery.data, occurrence_id: input.occurrence_id, completed: false },
+        };
+      }
     }
+    await this.timers.markOccurrenceCompleted(input.occurrence_id);
+    this.store.recordActivity({
+      eventKey: `timer-completed:${input.occurrence_id}`,
+      kind: 'timer.completed',
+      status: 'COMPLETED',
+      summary: input.reason ?? 'Timer result delivered.',
+      metadata: {
+        occurrenceId: input.occurrence_id,
+        outcome: input.delivery ? 'delivered' : 'no_delivery_needed',
+        reason: input.reason ?? null,
+        runtime: caller.trace.runtime,
+      },
+    });
     return {
       text: `Timer occurrence completed: occurrence_id=${input.occurrence_id}.`,
-      data: { occurrence_id: input.occurrence_id, completed: true, status: check.status },
+      data: { ...delivery?.data, occurrence_id: input.occurrence_id, completed: true, status: 'completed' },
     };
   }
 }

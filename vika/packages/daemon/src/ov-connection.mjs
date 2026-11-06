@@ -36,7 +36,7 @@ export class OVConnection {
     for (const [key, header] of [['account', 'X-OpenViking-Account'], ['user', 'X-OpenViking-User'], ['agent', 'X-OpenViking-Agent']]) {
       if (config[key]) this.headers[header] = config[key];
     }
-    // Names the owner's private area (viking://user/<user>/...).
+    // Configured user hint; an API key may authenticate a different user.
     this.user = String(config.user ?? '').trim();
     this.fetch = fetchImpl;
     this.timeoutMs = timeoutMs;
