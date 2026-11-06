@@ -1684,6 +1684,7 @@ async def write(
       Markdown file in replace mode (including its create alias); defaults to false.
     - defer_processing: save content without semantic or vector processing. Run reindex
       for this URI before relying on search; defaults to false.
+    - A URI whose whitespace would change the storage target is rejected; rename the file or choose the intended target explicitly.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
