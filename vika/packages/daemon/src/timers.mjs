@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 const TIMER_ID_PREFIX = 'tm_';
 export const DEFAULT_OCCURRENCE_CHECK_DELAY_MS = 5 * 60 * 1000;
-const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
+export const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
 
 function number(value) {
   return typeof value === 'bigint' ? Number(value) : value;
@@ -607,9 +607,11 @@ export class TimerConnector {
       await this.repository.deleteOccurrenceCheck(check.occurrenceId);
       return true;
     }
+    // Keep its own time: rescheduling at `now` makes an exhausted check due
+    // again on the very next pass of tick()'s loop.
     if (check.attempt >= MAX_OCCURRENCE_CHECK_ATTEMPTS) {
       await this.repository.rescheduleOccurrenceCheck(check.occurrenceId, {
-        attempt: check.attempt, nextCheckAtMs: nowMs,
+        attempt: check.attempt, nextCheckAtMs: check.nextCheckAtMs,
       });
       return true;
     }

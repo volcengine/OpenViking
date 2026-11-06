@@ -113,4 +113,27 @@ describe('OV timer storage', () => {
     await connector.fireDueOnce();
     assert.equal(submitted.length, 1);
   });
+
+  it('exhausts a check at the attempt limit and stops waking for it', async (context) => {
+    const { repository } = await setup(context);
+    const occurrenceId = 'tm_test:1790000000000';
+    let clock = nowMs;
+    await repository.createOccurrenceCheck({
+      occurrenceId, eventId: 'timer:test', nextCheckAtMs: clock, event: {},
+    });
+    const connector = new TimerConnector({
+      repository, now: () => clock, autoStart: false, submitEvent: async () => {},
+    });
+    let passes = 0;
+    while (await connector.fireDueOnce()) {
+      passes += 1;
+      assert.ok(passes <= 5, 'an exhausted check must not stay due forever');
+      clock += 300_000;
+    }
+    const check = repository.getOccurrenceCheck(occurrenceId);
+    assert.equal(check.status, 'exhausted');
+    assert.equal(check.attempt, 5);
+    assert.equal(repository.nextDueOccurrenceCheck(clock), null);
+    assert.equal(repository.nextWakeAtMs(), null);
+  });
 });

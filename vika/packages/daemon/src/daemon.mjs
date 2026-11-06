@@ -126,6 +126,22 @@ export class PersonalAgentDaemon {
     }
   }
 
+  // OV timer state rides the same rule as history: an OV that is merely down
+  // must not keep the instance from starting. The repository keeps an empty
+  // in-memory state and starts persisting once OV answers again.
+  async loadOVTimers(client) {
+    try {
+      return await new OVTimerRepository(client, this.config.instanceId).load();
+    } catch (error) {
+      const status = error.httpStatus;
+      const rejected = !(error instanceof OVUnavailableError)
+        || (status >= 400 && status < 500 && status !== 408 && status !== 429);
+      if (rejected) throw error;
+      this.logger.warn('ov_timers_unavailable_at_startup', { error: safeError(error) });
+      return new OVTimerRepository(client, this.config.instanceId);
+    }
+  }
+
   async start() {
     fs.mkdirSync(this.config.dataDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.config.workspace, { recursive: true, mode: 0o700 });
@@ -141,7 +157,7 @@ export class PersonalAgentDaemon {
       await this.checkOpenViking(ovClient);
       this.timers = this.config.timerStorage === 'sqlite'
         ? new TimerRepository(this.store.db)
-        : await new OVTimerRepository(ovClient, this.config.instanceId).load();
+        : await this.loadOVTimers(ovClient);
       this.runMaintenance();
 
       this.connectors = new ConnectorManager(
