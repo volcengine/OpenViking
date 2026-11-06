@@ -266,6 +266,8 @@ class _AnyDocMarkdownRenderer:
             return text
         if code:
             flattened = core.replace("\n", " ")
+            if context == "table_cell":
+                flattened = flattened.replace("|", r"\|")
             fence = self._backtick_fence(flattened, 1)
             pad = " " if flattened.startswith("`") or flattened.endswith("`") else ""
             rendered = f"{fence}{pad}{flattened}{pad}{fence}"
@@ -469,6 +471,7 @@ class _AnyDocMarkdownRenderer:
             elif kind == "code_block":
                 text = (block.text or "").strip()
                 if text:
+                    text = text.replace("|", r"\|")
                     fence = self._backtick_fence(text, 1)
                     pad = " " if text.startswith("`") or text.endswith("`") else ""
                     parts.append(f"{fence}{pad}{text}{pad}{fence}")
