@@ -27,6 +27,14 @@ export function findExecutable(command, env = process.env, platform = process.pl
   return null;
 }
 
+// Recognize the Node invocation in npm's generated shim, including extensionless
+// JavaScript entrypoints. Do not interpret arbitrary batch scripts or select the
+// earlier node.exe existence check as the application entrypoint.
+export function npmShimEntrypoint(shim) {
+  const match = shim.match(/"(?:%_prog%|%dp0%[\\/]node\.exe|node(?:\.exe)?)"\s+"%dp0%[\\/]([^"\r\n]+)"\s+%\*/i);
+  return match?.[1] ?? null;
+}
+
 // Run npm's Node entrypoint directly. Never interpolate model/user arguments
 // into cmd.exe: its expansion rules differ from CreateProcess argument quoting.
 export function executableInvocation(command, args, { platform = process.platform, env = process.env } = {}) {
@@ -34,9 +42,9 @@ export function executableInvocation(command, args, { platform = process.platfor
   const resolved = findExecutable(command, env, platform) || command;
   if (/\.(?:cmd|bat)$/i.test(resolved)) {
     const shim = fs.readFileSync(resolved, 'utf8');
-    const match = shim.match(/"%dp0%[\\/]([^"\r\n]+\.(?:[cm]?js))"/i);
-    if (!match) throw new Error(`Unsupported Windows command shim: ${resolved}. Configure the native .exe or Node entrypoint.`);
-    const entrypoint = path.resolve(path.dirname(resolved), match[1].replaceAll('\\', path.sep));
+    const relativeEntrypoint = npmShimEntrypoint(shim);
+    if (!relativeEntrypoint) throw new Error(`Unsupported Windows command shim: ${resolved}. Configure the native .exe or Node entrypoint.`);
+    const entrypoint = path.resolve(path.dirname(resolved), relativeEntrypoint.replaceAll('\\', path.sep));
     if (!fs.statSync(entrypoint).isFile()) throw new Error(`Missing npm entrypoint: ${entrypoint}`);
     return { command: process.execPath, args: [entrypoint, ...args] };
   }

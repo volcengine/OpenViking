@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { findExecutable, executableInvocation, execFile, localSocketPath, isNamedPipe } from '../src/platform.mjs';
+import { findExecutable, executableInvocation, npmShimEntrypoint, execFile, localSocketPath, isNamedPipe } from '../src/platform.mjs';
 
 test('pipe identity is stable, case insensitive and scoped to the instance directory', () => {
   const one = localSocketPath('C:\\Users\\Alice\\.vika\\primary', 'actions', 'win32');
@@ -40,7 +40,18 @@ test('Windows npm shims run Node without a command shell', { skip: process.platf
     const args = ['& echo injected', 'a b', '%USERPROFILE%', '"quoted"', '中文'];
     const { stdout } = await promisify(execFile)(found, args, { env });
     assert.deepEqual(JSON.parse(stdout), args);
+    fs.copyFileSync(path.join(dir, 'node_modules', 'fixture', 'cli.js'), path.join(dir, 'node_modules', 'fixture', 'cli'));
+    fs.writeFileSync(path.join(dir, 'extensionless.cmd'), '"%_prog%" "%dp0%\\node_modules\\fixture\\cli" %*');
+    const extensionless = await promisify(execFile)(path.join(dir, 'extensionless.cmd'), args, { env });
+    assert.deepEqual(JSON.parse(extensionless.stdout), args);
     fs.writeFileSync(path.join(dir, 'other.cmd'), '@echo off\necho arbitrary script');
     assert.throws(() => executableInvocation(path.join(dir, 'other.cmd'), [], { env }), /Unsupported Windows command shim/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('npm shim parsing accepts extensionless Node entrypoints, not arbitrary batch scripts', () => {
+  const shim = 'IF EXIST "%dp0%\\node.exe" SET "_prog=%dp0%\\node.exe"\r\n"%_prog%" "%dp0%\\node_modules\\tool\\bin\\tool" %*';
+  assert.equal(npmShimEntrypoint(shim), 'node_modules\\tool\\bin\\tool');
+  assert.equal(npmShimEntrypoint('"cmd.exe" "%dp0%\\arbitrary.bat" %*'), null);
+  assert.equal(npmShimEntrypoint('echo "%dp0%\\tool.js"'), null);
 });

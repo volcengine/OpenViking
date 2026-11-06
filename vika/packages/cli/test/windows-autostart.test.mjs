@@ -6,14 +6,18 @@ import path from 'node:path';
 import { autostartCommand, autostartEnabled } from '../src/autostart.mjs';
 
 test('Windows login startup is enabled and disabled without systemctl', async () => {
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika login '));
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), '维京 用户 login '));
   const options = { homeDir, platform: 'win32', output: { write() {} }, execFileImpl: async () => { throw new Error('must not execute service managers'); } };
   try {
     assert.equal(autostartEnabled(options), false);
     assert.equal(await autostartCommand(['enable'], options), 0);
     assert.equal(autostartEnabled(options), true);
     const file = path.join(homeDir, 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Vika.vbs');
-    const content = fs.readFileSync(file, 'utf8');
+    const bytes = fs.readFileSync(file);
+    assert.deepEqual([...bytes.subarray(0, 2)], [0xff, 0xfe]);
+    const content = bytes.toString('utf16le');
+    assert.ok(content.includes(homeDir));
+    assert.ok(content.includes('维京 用户'));
     assert.match(content, /vika-launch\.mjs/);
     assert.match(content, /start".*, 0, False/);
     assert.equal(await autostartCommand(['disable'], options), 0);

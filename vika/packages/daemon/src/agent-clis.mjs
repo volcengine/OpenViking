@@ -14,12 +14,21 @@ export function agentCliCommands(config = {}) {
 }
 
 // Quote a single executable, not a shell command with arguments.
-export function cliShellCommand(bin) {
+export function cliShellCommand(bin, platform = process.platform) {
+  // PowerShell single-quoted strings preserve $, backticks and double quotes;
+  // a literal apostrophe is doubled. The call operator executes quoted paths.
+  if (platform === 'win32') return `& '${bin.replaceAll("'", "''")}'`;
   return /^[a-zA-Z0-9_@%+=:,./-]+$/.test(bin) ? bin : `'${bin.replaceAll("'", "'\\''")}'`;
 }
 
-export function cliCommandCode(bin, args = '') {
-  const command = cliShellCommand(bin) + args;
+export function cliCommandCode(bin, args = '', platform = process.platform) {
+  const command = cliShellCommand(bin, platform) + args;
   const fence = '`'.repeat(Math.max(0, ...(command.match(/`+/g) || []).map(run => run.length)) + 1);
   return `${fence}${command}${fence}`;
+}
+
+export function cliShellHint(platform = process.platform) {
+  return platform === 'win32'
+    ? 'The commands below use PowerShell syntax (including & before quoted executable paths). Run them in PowerShell, not cmd.exe or a POSIX shell; when using a direct process API, pass the executable path and arguments separately without shell quoting.'
+    : 'The commands below use POSIX shell syntax.';
 }

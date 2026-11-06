@@ -96,7 +96,7 @@ export async function autostartCommand([action, ...extra], {
     const script = path.join(homeDir, '.vika', 'bin', 'vika-launch.mjs');
     const command = `"${process.execPath}" "${script}" start`;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `CreateObject("WScript.Shell").Run "${command.replaceAll('"', '""')}", 0, False\r\n`);
+    fs.writeFileSync(file, `\uFEFFCreateObject("WScript.Shell").Run "${command.replaceAll('"', '""')}", 0, False\r\n`, 'utf16le');
     output.write(`Autostart is on (${file})\n`);
     return 0;
   }
