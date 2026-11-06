@@ -230,7 +230,7 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     connectors,
     channel: current?.channel ?? connectors[0],
     ovConfig: current?.ovConfig,
-    switches: Object.fromEntries(Object.entries(SWITCH_DEFAULTS).map(([key, value]) => [key, current?.[key] ?? value])),
+    switches: Object.fromEntries(Object.keys(SWITCH_DEFAULTS).map((key) => [key, current?.[key] ?? switchDefault(key, current?.model)])),
     larkApp: null,
     mail: { kept: current ? mailboxesOf(current) : [], added: [], updated: new Map(), removed: [] },
   };
@@ -515,7 +515,10 @@ async function askMailboxes(ctx, state) {
 
 // The instance's on/off settings, under 其他设置, and what each is when the
 // manifest does not say.
-const SWITCH_DEFAULTS = Object.freeze({ stagedReplies: false, naturalWriting: true, explicitSilence: false, ovAutoRecall: false, meetingNotes: false });
+const SWITCH_DEFAULTS = Object.freeze({ stagedReplies: false, naturalWriting: true, explicitSilence: true, ovAutoRecall: false, meetingNotes: false });
+// Explicit silence is on by default except on Ark, which has no Core tools to
+// offer stay_silent through (as the deployment manifest defaults it).
+const switchDefault = (key, model) => (key === 'explicitSilence' && model === 'ark' ? false : SWITCH_DEFAULTS[key]);
 // Switching one of these changes the model's policy: a new session.
 const POLICY_SWITCHES = new Set(['stagedReplies', 'naturalWriting', 'explicitSilence', 'meetingNotes']);
 
@@ -1799,7 +1802,7 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
   }
   if (before.model !== after.model) changes.push(`${t('运行时：', 'Runtime: ')}${before.model} → ${after.model}`);
   for (const { key, label } of SWITCHES()) {
-    const was = before[key] ?? SWITCH_DEFAULTS[key];
+    const was = before[key] ?? switchDefault(key, before.model);
     if (was === after[key]) continue;
     const arrow = `${onOff(was)} → ${onOff(after[key])}`;
     const policy = POLICY_SWITCHES.has(key);
