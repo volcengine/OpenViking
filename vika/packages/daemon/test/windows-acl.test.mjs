@@ -51,10 +51,14 @@ test('Windows existing broad ACL is refused without being modified', { skip: !wi
 test('Windows explicit third-party allow ACE is refused even with inheritance disabled', { skip: !windows }, (t) => {
   const directory = path.join(fixture(t), 'protected');
   preparePrivateDirectory(directory);
-  powershell(`$ErrorActionPreference='Stop'; $p=$env:TEST_PRIVATE_DIRECTORY; $a=Get-Acl -LiteralPath $p;
-    $sid=New-Object Security.Principal.SecurityIdentifier('S-1-1-0');
-    $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'ReadAndExecute','Allow');
-    $a.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $a`, directory);
+  // Author the ACE with icacls, which only writes the DACL. Rebuilding a
+  // protected ACL from Get-Acl and applying it with Set-Acl also attempts to
+  // write the SACL, so it fails with PrivilegeNotHeldException unless the shell
+  // holds SeSecurityPrivilege, as elevated CI runners do but developer shells
+  // normally do not.
+  powershell(`$ErrorActionPreference='Stop'; $p=$env:TEST_PRIVATE_DIRECTORY;
+    & icacls.exe $p /grant '*S-1-1-0:RX' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls failed with exit code $LASTEXITCODE" }`, directory);
   assert.throws(() => assertPrivateDirectory(directory), /ACL validation failed/);
 });
 
