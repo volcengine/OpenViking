@@ -213,16 +213,23 @@ impl MultiWriteRuntime {
                         }
                     }
                     tick += 1;
+                    let full_scan = force_full_scan || tick >= CATCH_UP_FULL_SCAN_TICKS;
+                    let scopes = take_dirty_scopes(&dirty_scopes);
+                    if !full_scan && scopes.is_empty() {
+                        continue;
+                    }
                     match status_store.protocol_status().await {
                         Ok(ProtocolStatus::Stable) => {}
-                        Ok(ProtocolStatus::Migrating) => continue,
+                        Ok(ProtocolStatus::Migrating) => {
+                            restore_dirty_scopes(&dirty_scopes, scopes);
+                            continue;
+                        }
                         Err(error) => {
+                            restore_dirty_scopes(&dirty_scopes, scopes);
                             debug!(error = %error, "multi-write catch-up status check failed");
                             continue;
                         }
                     }
-                    let full_scan = force_full_scan || tick >= CATCH_UP_FULL_SCAN_TICKS;
-                    let scopes = take_dirty_scopes(&dirty_scopes);
                     let result = if full_scan {
                         tick = 0;
                         worker.run_once().await

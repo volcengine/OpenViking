@@ -327,6 +327,7 @@ async fn backup_membership_change_resets_metadata_for_full_import() {
         store.protocol_status().await.unwrap(),
         ProtocolStatus::Migrating
     );
+    assert!(store.reset_import_pending().await.unwrap());
     assert!(matches!(
         primary.stat(&account_manifest).await.unwrap_err(),
         Error::NotFound(_)
