@@ -69,6 +69,57 @@ test('渲染层只用安全 DOM API', () => {
   assert.doesNotMatch(js, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 });
 
+test('定时列表显示任务周期和未完成执行，历史会话下仍刷新而不改变活动记录', async () => {
+  class Element {
+    constructor() { this.children = []; this.dataset = {}; }
+    addEventListener() {}
+    get options() { return this.children.flatMap((child) => child.children.length ? child.children : [child]); }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+  }
+  const elements = new Map();
+  const document = {
+    getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
+    createElement() { return new Element(); },
+    createDocumentFragment() { return new Element(); },
+  };
+  const { state, renderTimers, poll } = runInNewContext(
+    js.slice(0, js.indexOf('// ---------- 交互 ----------')) + '\n({ state, renderTimers, poll });',
+    {
+      document, Intl, Date, URL,
+      window: { location: { origin: 'http://localhost', href: 'http://localhost/?epoch=1' } },
+      setInterval() {}, IntersectionObserver: class { observe() {} disconnect() {} },
+      fetch: async () => ({ ok: true, json: async () => ({
+        timers: { active: [], pending: [] },
+        sessions: [{ epoch: 2, current: true }, { epoch: 1, current: false }],
+        activities: [{ id: 999, summary: '不能合并到历史记录' }],
+      }) }),
+    },
+  );
+  const text = (element) => [element.textContent ?? '', ...element.children.map(text)].join(' ');
+  renderTimers();
+  assert.match(text(elements.get('timers')), /正在读取/);
+  state.timers = {
+    active: [{ timerId: 'tm_one', title: '每日检查', text: '<script>不能执行</script>', timezone: 'Asia/Shanghai',
+      schedule: { type: 'daily', time: '10:00' }, nextRunAtMs: 1_800_000_000_000, runCount: 2, maxRuns: null }],
+    pending: [{ occurrenceId: 'tm_one:1700000000000', title: '每日检查', timezone: 'Asia/Shanghai',
+      scheduledTimeMs: 1_700_000_000_000, nextCheckAtMs: 1_700_000_300_000, attempt: 3 }],
+  };
+  renderTimers();
+  assert.match(text(elements.get('timers')), /每天 10:00/);
+  assert.match(text(elements.get('timers')), /已触发 2 次/);
+  assert.match(text(elements.get('pending-timers')), /已提醒 3 次/);
+  state.epoch = 1;
+  state.currentEpoch = 2;
+  state.loaded = true;
+  state.rows.set(1, { id: 1, summary: '历史记录' });
+  await poll();
+  assert.equal(state.rows.size, 1);
+  assert.equal(state.rows.has(999), false);
+  assert.match(text(elements.get('timers')), /暂无定时任务/);
+  assert.match(text(elements.get('pending-timers')), /暂无未完成执行/);
+});
+
 test('Core 已结算投递进入输出区，MCP 调用和未确认投递不会重复计作成功', () => {
   const { buildModel, deliveryOf } = runInNewContext(
     js.slice(0, js.indexOf('// ---------- 渲染：上下文流')) + '\n({ buildModel, deliveryOf });',

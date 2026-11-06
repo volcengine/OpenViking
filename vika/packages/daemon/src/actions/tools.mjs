@@ -315,8 +315,8 @@ export const TOOLS = [
   {
     name: 'create_timer',
     timer: true,
-    title: 'Create a local timer',
-    description: 'Create one local reminder timer. Use schedule only for fixed wake times: type once, interval, daily, or weekly. Dynamic conditions such as workdays, holidays, or makeup workdays belong in text for the AI to judge after wakeup, not in schedule. The decision_id is the event= of the user input that requested the timer; repeating the same decision_id returns the existing timer.',
+    title: 'Create a timer',
+    description: 'Create one reminder timer for this instance. Use schedule only for fixed wake times: type once, interval, daily, or weekly. Dynamic conditions such as workdays, holidays, or makeup workdays belong in text for the AI to judge after wakeup, not in schedule. The decision_id is the event= of the user input that requested the timer; repeating the same decision_id returns the existing timer.',
     inputSchema: schema({
       title: { type: 'string', minLength: 1, maxLength: 200 },
       text: { type: 'string', minLength: 1, maxLength: 4000 },
@@ -332,29 +332,34 @@ export const TOOLS = [
     name: 'list_timers',
     timer: true,
     title: 'List active timers',
-    description: 'List active local timers that can still fire. It does not show already fired once timers or cancelled timers.',
+    description: 'List active timers for this instance that can still fire. It does not show already fired once timers or cancelled timers.',
     inputSchema: schema({}),
     annotations: READ,
   },
   {
     name: 'cancel_timer',
     timer: true,
-    title: 'Cancel a local timer',
-    description: 'Cancel a local timer by timer_id. This deletes the active timer record.',
+    title: 'Cancel a timer',
+    description: 'Cancel a timer by timer_id. This deletes the active timer and all its completion checks, stopping future triggers and check reminders. It does not interrupt work already handed to the AI.',
     inputSchema: schema({
       timer_id: { type: 'string', pattern: '^tm_[A-Za-z0-9_-]{1,64}$' },
     }, ['timer_id']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: 'complete_timer_occurrence',
+    name: 'finish_timer_occurrence',
     timer: true,
-    title: 'Complete a timer occurrence',
-    description: 'Mark one timer occurrence as completed after you have handled its reminder. Use the occurrence_id shown in the timer reminder. This stops the daemon from sending completion-check reminders for that occurrence.',
+    title: 'Deliver a timer result and finish its occurrence',
+    description: 'Finish one timer occurrence. For a final result, supply delivery with an existing send_message, reply_message, or notify_owner tool and its input: the daemon sends first and completes only after confirmed success. If the task requires no delivery, omit delivery and provide reason. For questions awaiting the owner, use ordinary delivery tools instead and leave the occurrence unfinished. Never use this tool for interim updates or choices. Use the occurrence_id shown in the timer event.',
     inputSchema: schema({
       occurrence_id: { type: 'string', pattern: '^tm_[A-Za-z0-9_-]{1,64}:\\d{1,16}$' },
+      delivery: schema({
+        tool: { type: 'string', enum: ['send_message', 'reply_message', 'notify_owner'] },
+        input: { type: 'object', description: 'The existing delivery tool input, including this occurrence\'s event= as decision_id. Its normal schema and delivery restrictions apply.' },
+      }, ['tool', 'input']),
+      reason: { type: 'string', minLength: 1, maxLength: 1000, pattern: '\\S', description: 'Required when no delivery is needed: explain why the task requires silence or no message.' },
     }, ['occurrence_id']),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
 ];
 

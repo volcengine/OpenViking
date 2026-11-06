@@ -281,6 +281,15 @@ button, select {
 .stats dd.warn { color: var(--warn); }
 .stats dd.bad { color: var(--bad); }
 
+.timer-hint { margin: 0 0 8px; font-size: 11px; color: var(--ink-3); }
+.timer-list { padding: 0; margin: 0 0 18px; list-style: none; }
+.timer-list li { margin: 0 0 8px; padding: 6px 0 6px 8px; border-left: 2px solid var(--line); overflow-wrap: anywhere; }
+.timer-list li.warn { border-left-color: var(--warn); }
+.timer-list li.muted { color: var(--ink-3); border: 0; }
+.timer-list summary { cursor: pointer; }
+.timer-list pre { white-space: pre-wrap; font: inherit; margin: 6px 0; }
+.timer-meta { margin-top: 3px; color: var(--ink-3); font-size: 11px; }
+
 .system {
   margin: 0;
   padding: 0;
