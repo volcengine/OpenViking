@@ -114,16 +114,23 @@ async def test_long_markdown_default_mode_still_splits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_split_keeps_lower_level_headings_before_first_top_level_heading() -> None:
+async def test_split_preserves_preface_and_body_after_empty_headings() -> None:
     body = "\n\n".join(f"paragraph {index} " + "x" * 500 for index in range(10))
-    content = f"## Preface\n\nPREFACE {body}\n\n# Chapter 1\n\n{body}\n\n# Chapter 2\n\n{body}"
+    preface = (
+        "## Preface\n\nPREFACE\n\n"
+        "#\n\nThe first paragraph remains body text.\n\n"
+        "# \t\r\n\r\nThe second paragraph remains body text.\r\n\r\n"
+        "# \t\r\n\r\nThe third paragraph remains body text."
+    )
+    content = f"{preface}\n\n{body}\n\n# Chapter 1\n\n{body}\n\n# Chapter 2\n\n{body}"
     parser = MarkdownParser(config=ParserConfig(max_section_size=512, max_section_chars=2048))
 
     layout = await parser._compute_layout(content, "viking://temp/test", resource_name="book")
 
-    written = "".join(op.content for op in layout.ops if op.kind == "write")
-    assert "## Preface" in written
-    assert "PREFACE" in written
+    writes = [op for op in layout.ops if op.kind == "write"]
+    assert len(writes) > 1
+    assert len({op.uri for op in writes}) == len(writes)
+    assert preface in "".join(op.content for op in writes)
 
 
 @pytest.mark.asyncio

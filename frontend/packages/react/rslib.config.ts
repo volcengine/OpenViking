@@ -21,7 +21,6 @@ export default defineConfig({
           'modules/file-browser': './src/modules/file-browser/index.ts',
           'modules/console': './src/modules/console/index.ts',
           'modules/task-center': './src/modules/task-center/index.ts',
-          'modules/user-usage': './src/modules/user-usage/index.ts',
         },
       },
       output: { emitCss: false },
@@ -47,7 +46,6 @@ export default defineConfig({
       'modules/file-browser/style': './src/modules/file-browser/style.css',
       'modules/console/style': './src/modules/console/style.css',
       'modules/task-center/style': './src/modules/task-center/style.css',
-      'modules/user-usage/style': './src/modules/user-usage/style.css',
     }).map(([name, entry]) => ({
       id: name.replaceAll('/', '-'),
       format: 'esm' as const,

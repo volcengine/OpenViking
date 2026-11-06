@@ -75,10 +75,7 @@ export default defineConfig({
             },
             {
               text: 'Supporting capabilities',
-              items: [
-                { text: 'TaskCenter', link: '/modules/task-center' },
-                { text: 'UserUsage', link: '/modules/user-usage' },
-              ],
+              items: [{ text: 'TaskCenter', link: '/modules/task-center' }],
             },
           ],
         },
@@ -146,7 +143,6 @@ export default defineConfig({
                   text: 'TaskCenter 任务中心',
                   link: '/zh/modules/task-center',
                 },
-                { text: 'UserUsage 我的用量', link: '/zh/modules/user-usage' },
               ],
             },
           ],
