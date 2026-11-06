@@ -103,7 +103,7 @@ export class MessageInbox {
     const text = [
       `[Vika inbox notice] pending=${this.pending} scopes=${scopes.size}`,
       ...[...scopes.values()].map((scope) => JSON.stringify(scope)),
-      'These messages have not been read. Choose when to read them: message_check with scope_key reads one scope; message_check without scope_key reads all pending scopes, up to the requested limit.',
+      'Nothing above is a task and nothing was added to your context. Keep going with what you are doing. When you do look, message_check with peek=true shows the bodies and clears them from pending without marking them handled; message_check without peek is a real read that also marks them handled and lets you answer them.',
     ].join('\n');
     const accepted = this.submit([{ text, seq: null }], {
       admission: idle ? 'claim-if-idle' : 'enqueue',
