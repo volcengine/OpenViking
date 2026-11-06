@@ -58,6 +58,25 @@ for rollback. Do not run the Unix installer or `npm run setup` on Windows.
 
 Validation from a checkout:
 
+Run checkout validation in a normal, non-elevated PowerShell session. GitHub-hosted
+Windows runners run as administrators with UAC disabled, so passing CI does not
+replace validation under a non-elevated developer token. Investigate permission
+failures in the fixture or product code instead of rerunning as administrator to
+bypass them. See the [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges),
+GitHub Docs.
+
+Confirm the session is not elevated first:
+
+```powershell
+$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+$p = [Security.Principal.WindowsPrincipal]::new($id)
+if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Run validation in a non-elevated PowerShell session.'
+}
+```
+
+Then install dependencies and run the native test files:
+
 ```powershell
 cd vika
 npm ci --ignore-scripts
