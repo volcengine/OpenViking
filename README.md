@@ -326,7 +326,7 @@ Download:
 
 OpenViking SuperAgent brings a general-purpose agent into your everyday chats, with **OpenViking as its long-term memory and context foundation**. Connect your preferred agent runtime to Feishu/Lark, WeChat, Telegram, Slack, or QQ to research, write documents, work on code, and follow up on tasks across conversations and days.
 
-<img src="docs/images/superagent-overview.png" alt="OpenViking SuperAgent: chat anywhere, remember context with OpenViking, and get work done." width="100%" />
+<img src="docs/images/superagent-overview.png" alt="Messaging apps connect through SuperAgent to personal work context stored in OpenViking: conversations, meeting notes, emails, tasks and knowledge." width="100%" />
 
 Install on macOS or Linux:
 
