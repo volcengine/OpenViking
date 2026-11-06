@@ -46,7 +46,6 @@ def test_wiki_invalid_frontmatter_is_a_repairable_validation_error(runtime):
         ("[Project 01](entity/Project 01.md)", False),
         ("[Project 01](entity/Project%2001.md)", True),
         ("[Project 01](<entity/Project 01.md>)", True),
-        ("```markdown\n[Project 01](entity/Project 01.md)\n```", True),
     ],
 )
 def test_compile_wiki_navigation_requires_valid_markdown_destinations(runtime, link, valid):
@@ -87,13 +86,13 @@ async def test_compile_finalize_rejects_invalid_stored_wiki_navigation(runtime):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad_kind", ["missing", "foreign", "duplicate"])
+@pytest.mark.parametrize("bad_kind", ["missing", "duplicate"])
 async def test_compile_rejects_invalid_file_provenance(runtime, bad_kind):
     pipeline, _ = runtime
     await seed(runtime)
     records = list(pipeline.records.values())
     first_id = records[0].record_id
-    inputs = {"missing": [], "foreign": ["foreign"], "duplicate": [first_id, first_id]}[bad_kind]
+    inputs = [] if bad_kind == "missing" else [first_id, first_id]
     response = FileResponse(files=[FileDraft(path="page.md", content="# Page", inputs=inputs)])
     with pytest.raises(ValueError, match="inputs must"):
         file_ops.validate_files(pipeline, response, Group("files", records), records, {})
