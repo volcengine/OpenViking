@@ -535,6 +535,39 @@ test('staged replies are opt-in per instance and always pinned in the daemon env
   });
 });
 
+test('Lark message access is the owner\'s unless an instance keeps to the bot\'s chats, and only a Lark instance has it', () => {
+  const manifest = validManifest();
+  manifest.agents[1].larkMessageAccess = 'bot';
+  manifest.agents[2].channel = 'weixin';
+  manifest.agents[2].connectors = ['weixin'];
+  delete manifest.agents[2].profile;
+  withManifest(manifest, (manifestPath) => {
+    const env = { VIKA_CONFIG: manifestPath, VIKA_LARK_MESSAGE_ACCESS: 'bot' };
+    const deployment = loadDeploymentManifest(env);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').larkMessageAccess, 'owner');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, 'owner');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, 'bot');
+    applyDeploymentAgentEnv(env, deployment, 'gamma');
+    assert.equal(selectDeploymentAgent(deployment, 'gamma').larkMessageAccess, null);
+    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, undefined);
+  });
+  const wrong = validManifest();
+  wrong.agents[0].larkMessageAccess = 'everyone';
+  withManifest(wrong, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.larkMessageAccess must be owner or bot/);
+  });
+  const elsewhere = validManifest();
+  elsewhere.agents[2].channel = 'weixin';
+  elsewhere.agents[2].connectors = ['weixin'];
+  delete elsewhere.agents[2].profile;
+  elsewhere.agents[2].larkMessageAccess = 'bot';
+  withManifest(elsewhere, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[2\]\.larkMessageAccess is only used by the lark connector/);
+  });
+});
+
 test('meeting notes are opt-in for one Feishu/Lark instance at most, and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].meetingNotes = true;
