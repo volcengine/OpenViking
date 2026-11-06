@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowUpRightIcon,
@@ -205,7 +205,7 @@ export function AgentExperienceRoute() {
   const { connection, identityScopeKey } = useAppConnection()
   const [keyword, setKeyword] = React.useState('')
   const [searchKeyword, setSearchKeyword] = React.useState('')
-  const [page, setPage] = React.useState(1)
+  const [requestedPage, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(10)
   const [previewExperience, setPreviewExperience] =
     React.useState<ExperienceFileItem | null>(null)
@@ -218,24 +218,32 @@ export function AgentExperienceRoute() {
     }, 300)
     return () => window.clearTimeout(timeout)
   }, [keyword])
-  const experiencesQuery = useQuery({
-    queryFn: ({ signal }) =>
+  const experiencesQuery = useInfiniteQuery({
+    queryFn: ({ pageParam, signal }) =>
       searchKeyword
         ? searchExperiences({ experiencesUri, keyword: searchKeyword, signal })
-        : fetchExperiences({ experiencesUri, page, pageSize, signal }),
+        : fetchExperiences({
+            experiencesUri,
+            offset: pageParam,
+            pageSize,
+            signal,
+          }),
     queryKey: [
       'agent-experience-list',
       identityScopeKey,
       experiencesUri,
-      page,
       pageSize,
       searchKeyword,
     ],
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.nextOffset,
     staleTime: 30_000,
   })
 
-  const pageItems = experiencesQuery.data?.items ?? []
-  const hasMore = experiencesQuery.data?.hasMore ?? false
+  const pages = experiencesQuery.data?.pages ?? []
+  const page = Math.min(requestedPage, pages.length || 1)
+  const pageItems = pages[page - 1]?.items ?? []
+  const hasMore = pages[page - 1]?.nextOffset !== undefined
   const experiences = pageItems
 
   // Snapshot "updated since last visit" badges when the list settles, then
@@ -543,7 +551,11 @@ export function AgentExperienceRoute() {
               hasMore={hasMore}
               disabled={experiencesQuery.isFetching}
               pageSize={pageSize}
-              onPageChange={setPage}
+              onPageChange={(nextPage) => {
+                setPage(nextPage)
+                if (nextPage > pages.length)
+                  void experiencesQuery.fetchNextPage()
+              }}
               onPageSizeChange={(nextPageSize) => {
                 setPageSize(nextPageSize)
                 setPage(1)
