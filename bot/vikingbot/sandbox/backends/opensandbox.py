@@ -12,7 +12,12 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
+from vikingbot.sandbox.base import (
+    CommandResult,
+    SandboxBackend,
+    SandboxFileInfo,
+    SandboxNotStartedError,
+)
 from vikingbot.sandbox.managed_server import WORKSPACE_GID_LABEL, WORKSPACE_UID_LABEL
 
 
@@ -150,6 +155,11 @@ class OpenSandboxBackend(SandboxBackend):
             if error:
                 stderr_text = "\n".join(filter(None, [stderr_text, f"{error.name}: {error.value}"]))
                 exit_code = exit_code or 1
+                if error.name == "CommandExecError":
+                    try:
+                        exit_code = int(error.value) or 1
+                    except (TypeError, ValueError):
+                        pass
 
             if stdout_text:
                 output_parts.append(stdout_text)
@@ -165,7 +175,7 @@ class OpenSandboxBackend(SandboxBackend):
                 result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"
 
             logger.info("[OpenSandbox] Output:\n{}", result)
-            return result
+            return CommandResult(result, exit_code)
 
         except Exception as e:
             logger.error("[OpenSandbox] Error: {}", e)
