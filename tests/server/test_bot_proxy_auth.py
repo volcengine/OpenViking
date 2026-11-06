@@ -694,8 +694,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert queried_task == current_task
     assert queried.result["meta"]["request"].get("args", {}) == public_args
 
-    await queue.dequeue()  # Same target rotates, including across users.
-    assert (await state(waiting)).status == TaskStatus.PENDING
+    # Admitted work stays running while the same target rotates across users.
+    await queue.dequeue()
+    assert (await state(waiting)).status == TaskStatus.RUNNING
     assert waiting.task_id not in submitted
     assert await tracker.has_work(
         waiting.task_id,
@@ -731,7 +732,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
 
     await queue.dequeue()
     assert waiting.task_id not in submitted
-    assert (await state(waiting)).status == TaskStatus.PENDING
+    assert (await state(waiting)).status == TaskStatus.RUNNING
     if finish == "restart_cancel":
         await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
     release.set()
