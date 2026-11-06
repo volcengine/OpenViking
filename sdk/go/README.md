@@ -220,6 +220,8 @@ an empty string that the server rejects.
 `AddResource` and `AddSkill` accept local files and directories. Directory
 uploads are zipped by the SDK, symlinks are skipped, and the resulting archive
 is uploaded to `/api/v1/resources/temp_upload` before the final API call.
+`AddSkill` and `UpdateSkill` also accept inline Markdown strings, including
+content that exceeds local filename limits.
 
 ```go
 skill, err := client.AddSkill(ctx, "./skills/search-web", nil)
