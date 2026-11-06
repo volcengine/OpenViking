@@ -5,6 +5,7 @@ import { bypassedSession } from "./scope.mjs";
 import { isAuxiliaryRequest } from "./conversation.mjs";
 
 export async function onRequest(body, ctx) {
+  const startedAt = performance.now();
   if (isAuxiliaryRequest(body, ctx)) { ctx.report?.("skipped", 0); return; }
   try {
     const cfg = await loadConfig(process.env, ctx.options || {});
@@ -13,7 +14,7 @@ export async function onRequest(body, ctx) {
     try { await prepareCapture(body, ctx, cfg, ctx.options); }
     catch { delete ctx.state.capture; }
     if (ctx.state.nativeOwner) { ctx.report?.("skipped", 0); return; }
-    return await recallRequest(body, ctx, process.env, cfg);
+    return await recallRequest(body, ctx, process.env, cfg, startedAt);
   } catch { ctx.report?.("unavailable", 0); }
 }
 

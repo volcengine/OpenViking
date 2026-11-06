@@ -57,6 +57,7 @@ export default defineConfig({
                 { text: 'FilePreview', link: '/components/file-preview' },
                 { text: 'Tui', link: '/components/tui' },
                 { text: 'ScopeSwitcher', link: '/components/scope-switcher' },
+                { text: 'AgentConnect', link: '/components/agent-connect' },
               ],
             },
           ],
@@ -75,7 +76,6 @@ export default defineConfig({
             {
               text: 'Supporting capabilities',
               items: [
-                { text: 'AgentConnect', link: '/modules/agent-connect' },
                 { text: 'TaskCenter', link: '/modules/task-center' },
                 { text: 'UserUsage', link: '/modules/user-usage' },
               ],
@@ -117,6 +117,10 @@ export default defineConfig({
                   text: 'ScopeSwitcher 作用域选择',
                   link: '/zh/components/scope-switcher',
                 },
+                {
+                  text: 'AgentConnect Agent 接入',
+                  link: '/zh/components/agent-connect',
+                },
               ],
             },
           ],
@@ -138,10 +142,6 @@ export default defineConfig({
             {
               text: '辅助能力',
               items: [
-                {
-                  text: 'AgentConnect Agent 接入',
-                  link: '/zh/modules/agent-connect',
-                },
                 {
                   text: 'TaskCenter 任务中心',
                   link: '/zh/modules/task-center',

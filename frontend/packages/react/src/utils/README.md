@@ -1,7 +1,11 @@
-# 跨模块工具
+# Cross-module Utilities
 
-预留多个模块实际共用的纯工具，按真实复用需求增加实现。
-模块私有的类型与工具留在各模块内，不提前提升到此目录。
-当前仅提供目录说明，没有工具实现或公开入口。
+English / [中文](README_CN.md)
 
-开发与构建入口见 [UI workspace README](../../../../README.md)，模块约定见[包说明](../../README.md)。
+Reserved for pure utilities genuinely shared by more than one module; implementations are added when real reuse appears.
+
+Types and utilities private to a module stay inside that module and are not promoted here ahead of time.
+
+This directory currently holds only this description; there are no utility implementations or public entries.
+
+Development and build entry points are in the [UI workspace README](../../../../README.md); module conventions are in the [package README](../../README.md).

@@ -1,0 +1,85 @@
+# AgentConnect
+
+An agent connection view. The host supplies the tabs, the items of the active tab and the detail body; the component renders the list and the detail, and reports switch and copy intent.
+
+This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can integrate against the published package before the view is migrated. The props contract below is the agreed shape; the placeholder implementation will be replaced.
+
+## Basic usage
+
+```tsx file="../../_demos/agent-connect-basic.tsx" preview
+
+```
+
+The placeholder is 960 × 640, matching the full-page view.
+
+## Structure
+
+The view has three parts:
+
+- **Tabs** across the top, declared by the host through `tabs` and `activeTabId`.
+- **List** on the left, the items of the active tab through `items`.
+- **Detail** on the right, the selected item's body through `detail`.
+
+The component holds no catalog and no body content. Where the items come from, how the body is rendered and what a copy means all belong to the host.
+
+## Props
+
+### AgentConnectProps
+
+| Property      | Type                             | Default  | Description                                                                                                                                 |
+| ------------- | -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs`        | `readonly AgentConnectTab[]`     | Required | Tabs at the top.                                                                                                                            |
+| `activeTabId` | `string`                         | Required | Active tab id, owned by the host.                                                                                                           |
+| `items`       | `readonly AgentConnectItem[]`    | Required | Items of the active tab.                                                                                                                    |
+| `selectedId`  | `string`                         | —        | Selected item id, owned by the host.                                                                                                        |
+| `detail`      | `AgentConnectDetail`             | —        | Detail of the selected item; no body when omitted.                                                                                          |
+| `labels`      | `AgentConnectLabels`             | English  | Replaceable copy.                                                                                                                           |
+| `onTabChange` | `(tabId: string) => void`        | —        | Invoked when a tab is selected.                                                                                                             |
+| `onSelect`    | `(item) => void`                 | —        | Invoked when an item is selected.                                                                                                           |
+| `onCopy`      | `(text: string) => void`         | —        | Invoked after a successful copy, for analytics or extra feedback; the component performs the write. The control still renders when omitted. |
+| Other props   | `HTMLAttributes<HTMLDivElement>` | —        | Standard div attributes; `children` is excluded.                                                                                            |
+
+### AgentConnectTab
+
+| Property | Type     | Description     |
+| -------- | -------- | --------------- |
+| `id`     | `string` | Unique tab key. |
+| `label`  | `string` | Tab label.      |
+
+### AgentConnectItem
+
+| Property      | Type        | Description                               |
+| ------------- | ----------- | ----------------------------------------- |
+| `id`          | `string`    | Unique item key.                          |
+| `name`        | `string`    | Item name.                                |
+| `description` | `string`    | One-line summary shown in the list.       |
+| `icon`        | `ReactNode` | Item icon, which can be an image or node. |
+
+### AgentConnectDetail
+
+| Property      | Type                | Description                                                     |
+| ------------- | ------------------- | --------------------------------------------------------------- |
+| `title`       | `string`            | Detail title, usually the selected item's name.                 |
+| `icon`        | `ReactNode`         | Icon shown next to the title.                                   |
+| `description` | `string`            | Description under the title.                                    |
+| `tags`        | `readonly string[]` | Tags under the title, for example "SDK" or "Overseas".          |
+| `content`     | `ReactNode`         | Body content, which can be the rendered Markdown node.          |
+| `copyText`    | `string`            | Plain text the copy control writes; no copy control without it. |
+
+### AgentConnectLabels
+
+| Property       | Description                            |
+| -------------- | -------------------------------------- |
+| `instructions` | Heading of the body area.              |
+| `copy`         | Copy control label.                    |
+| `copied`       | Message shown after a successful copy. |
+| `empty`        | Message shown when there are no items. |
+
+```tsx
+import { AgentConnect } from '@openviking/react/components/agent-connect';
+import '@openviking/react/components/agent-connect/style.css';
+```
+
+## Implementation scope
+
+The component renders the view and reports intent. Catalog loading, Markdown rendering, permissions, analytics and any network connection belong to the host.

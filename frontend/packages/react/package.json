@@ -26,49 +26,49 @@
       "import": "./dist/index.js"
     },
     "./components/file-tree": {
-      "types": "./dist/components/file-tree/file-tree.d.ts",
+      "types": "./dist/components/file-tree/index.d.ts",
       "import": "./dist/components/file-tree.js"
     },
     "./components/file-tree/style.css": "./dist/components/file-tree/style.css",
     "./components/file-preview": {
-      "types": "./dist/components/file-preview/file-preview.d.ts",
+      "types": "./dist/components/file-preview/index.d.ts",
       "import": "./dist/components/file-preview.js"
     },
     "./components/file-preview/style.css": "./dist/components/file-preview/style.css",
     "./components/tui": {
-      "types": "./dist/components/tui/tui.d.ts",
+      "types": "./dist/components/tui/index.d.ts",
       "import": "./dist/components/tui.js"
     },
     "./components/tui/style.css": "./dist/components/tui/style.css",
     "./components/scope-switcher": {
-      "types": "./dist/components/scope-switcher/scope-switcher.d.ts",
+      "types": "./dist/components/scope-switcher/index.d.ts",
       "import": "./dist/components/scope-switcher.js"
     },
     "./components/scope-switcher/style.css": "./dist/components/scope-switcher/style.css",
+    "./components/agent-connect": {
+      "types": "./dist/components/agent-connect/index.d.ts",
+      "import": "./dist/components/agent-connect.js"
+    },
+    "./components/agent-connect/style.css": "./dist/components/agent-connect/style.css",
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./modules/file-browser": {
-      "types": "./dist/modules/file-browser/file-browser.d.ts",
+      "types": "./dist/modules/file-browser/index.d.ts",
       "import": "./dist/modules/file-browser.js"
     },
     "./modules/file-browser/style.css": "./dist/modules/file-browser/style.css",
     "./modules/console": {
-      "types": "./dist/modules/console/console.d.ts",
+      "types": "./dist/modules/console/index.d.ts",
       "import": "./dist/modules/console.js"
     },
     "./modules/console/style.css": "./dist/modules/console/style.css",
-    "./modules/agent-connect": {
-      "types": "./dist/modules/agent-connect/agent-connect.d.ts",
-      "import": "./dist/modules/agent-connect.js"
-    },
-    "./modules/agent-connect/style.css": "./dist/modules/agent-connect/style.css",
     "./modules/task-center": {
-      "types": "./dist/modules/task-center/task-center.d.ts",
+      "types": "./dist/modules/task-center/index.d.ts",
       "import": "./dist/modules/task-center.js"
     },
     "./modules/task-center/style.css": "./dist/modules/task-center/style.css",
     "./modules/user-usage": {
-      "types": "./dist/modules/user-usage/user-usage.d.ts",
+      "types": "./dist/modules/user-usage/index.d.ts",
       "import": "./dist/modules/user-usage.js"
     },
     "./modules/user-usage/style.css": "./dist/modules/user-usage/style.css",
@@ -77,6 +77,10 @@
     "./icons": {
       "types": "./dist/icons/index.d.ts",
       "import": "./dist/icons.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client.js"
     }
   },
   "scripts": {

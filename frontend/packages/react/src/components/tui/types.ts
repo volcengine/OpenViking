@@ -481,22 +481,19 @@ export interface TuiProps extends Omit<
    */
   emptyState?: ReactNode;
   /**
-   * 统一的界面文案与引导提示；仅替换展示内容，不改变可用性。
-   * Interface copy and guidance; replaces display content without changing
-   * availability.
+   * 输入值变化时触发，包括接受补全或参数提示；填入不提交命令。省略时输入框
+   * 只读，用于展示历史记录。
+   * Invoked when the input changes, including accepted completions and parameter
+   * hints; filling the input does not submit a command. Omission makes the input
+   * read-only, for showing history.
    */
-  labels?: TuiLabels;
+  onValueChange?: (value: string) => void;
   /**
-   * 输入值变化时触发，包括接受补全或参数提示；填入不提交命令。
-   * Invoked when the input changes, including accepted completions
-   * and parameter hints; filling the input does not submit a command.
+   * 命令发送成功后触发，失败时不触发。省略时不能提交命令。
+   * Called after a command is sent successfully; not called on failure. Omission
+   * disables submission.
    */
-  onValueChange: (value: string) => void;
-  /**
-   * 命令发送成功后触发，失败时不触发。
-   * Called after a command is sent successfully; not called on failure.
-   */
-  onSubmit: (command: string) => void;
+  onSubmit?: (command: string) => void;
   /**
    * 资源成功打开后触发，参数为已打开的资源 URI；失败时不触发。
    * Called after a resource opens successfully, with its URI; not called on failure.
@@ -507,4 +504,10 @@ export interface TuiProps extends Omit<
    * Called after copying succeeds, with the copied text; not called on failure.
    */
   onCopy?: (text: string) => void;
+  /**
+   * 统一的界面文案与引导提示；仅替换展示内容，不改变可用性。
+   * Interface copy and guidance; replaces display content without changing
+   * availability.
+   */
+  labels?: TuiLabels;
 }

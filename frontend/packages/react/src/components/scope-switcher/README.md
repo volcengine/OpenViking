@@ -1,43 +1,45 @@
 # ScopeSwitcher
 
-头部作用域面包屑。宿主声明有几个层级、各自叫什么、选项从哪来；组件渲染面包屑触发器、下拉面板与选项列表，并上报搜索与切换意图。
+English / [中文](README_CN.md)
 
-`scope-switcher.tsx` 对应 `@openviking/react/components/scope-switcher`。当前是占位组件：只渲染固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API。真实实现按本文与类型声明重写，接口以源码为准，本文不重复列举。
+A scope breadcrumb for the header. The host declares how many levels exist, what each is called and where the options come from; the component renders the breadcrumb triggers, the dropdown panels and the option list, and reports search and switch intent.
 
-## 职责边界
+`scope-switcher.tsx` maps to `@openviking/react/components/scope-switcher`. It is currently a placeholder: it renders a fixed-size empty shell and consumes no props, so the package can be published for hosts to compare against the API. The real implementation will be rewritten against this document and the type declarations; the source is the source of truth and this document does not repeat the field list.
 
-- 组件不认识「库 / 数据空间 / 账号 / 用户」的语义。宿主用层级数组声明有几个层级、各自叫什么、选项从哪来；差异只体现在层级的数量与顺序，组件本身不变。
-- 层数可以随登录方式变化：宿主解析不到某一层时不声明该层，组件不渲染、不占位，也不提供显隐开关。
-- 搜索关键字、分页、选中项、加载与失败全部受控；切换只上报选中项，持久化与路由同步由宿主完成。组件不内置分页规则：首屏由宿主在 `visible` 打开时准备，是否加载下一页由宿主的 `onScroll` 自己判断。
-- 组件只渲染作用域选择本身：触发器、面板、选项列表与搜索框。面板里除列表以外的内容（标题、顶部入口、底部管理入口、说明文字）由宿主的 `renderPanel` 实现，组件不定义动作结构、不判断能否点击，也不接管跳转。
+## Responsibilities
 
-## 可选能力
+- The component knows nothing about "library / data space / account / user". The host declares how many levels exist, what each is called and where the options come from; the only difference is the number and order of levels, the component itself does not change.
+- The level count can vary with the sign-in method: when the host cannot resolve a level it simply does not declare it, and the component neither renders nor reserves space for it, with no separate visibility switch.
+- The search keyword, paging, selection, loading and failure are all controlled; switching only reports the selected option, and persistence and route sync belong to the host. The component has no built-in paging rule: the first screen is prepared by the host when `visible` opens, and whether to load the next page is the host's call inside `onScroll`.
+- The component renders the scope selection only: triggers, panels, option list and search box. Everything in a panel except the list — heading, top entries, bottom management entries and explanatory text — is implemented by the host's `renderPanel`; the component defines no action shape, decides nothing about what is clickable and takes over no navigation.
 
-部分字段表达的是宿主能力，不传即降级为对应表现：
+## Optional capabilities
 
-| 字段     | 不传时           | 传值时的表现                                       |
-| -------- | ---------------- | -------------------------------------------------- |
-| 搜索     | 不渲染搜索框     | 面板内提供搜索并高亮命中片段                       |
-| 分页     | 只展示已给的选项 | 组件上报 `onScroll` 位置，由宿主决定是否追加下一页 |
-| 固定层级 | 渲染下拉         | 只展示当前值，不渲染下拉                           |
-| 禁用     | 正常可点         | 该层暂不可切换，触发器置灰                         |
-| 面板外壳 | 只渲染列表块     | 由宿主实现标题、顶部与底部内容                     |
-| 行尾内容 | 不渲染           | 由宿主渲染「更多」等行内控件                       |
-| 忙碌     | 正常可点         | 有变更正在进行，组件禁用整个列表                   |
-| 状态兜底 | 使用内置文案     | 用宿主的节点替换空态或失败态                       |
-| 面板事件 | 组件不关心       | 面板开合时通知宿主按需取数                         |
+Some fields express host capabilities; omitting one degrades to the corresponding behaviour:
 
-## 内部约定
+| Field           | When omitted                | When provided                                                |
+| --------------- | --------------------------- | ------------------------------------------------------------ |
+| Search          | No search box               | The panel offers search and highlights matches               |
+| Paging          | Only the given items        | The component reports `onScroll` position; the host appends  |
+| Fixed level     | Renders a dropdown          | Shows the current value only, no dropdown                    |
+| Disabled        | Clickable                   | The level cannot be switched; the trigger is dimmed          |
+| Panel shell     | Renders the list block only | The host implements heading, top and bottom content          |
+| Row trailing    | Nothing rendered            | The host renders row controls such as "more"                 |
+| Busy            | Clickable                   | A change is in flight; the component disables the whole list |
+| State fallbacks | Built-in copy               | The host's own nodes replace the empty and failed states     |
+| Panel events    | The component ignores them  | Panel open and close notify the host to load on demand       |
 
-- 搜索框可见性由组件判断：已加载条数或 `total` 超过 `SCOPE_SWITCHER_SEARCH_THRESHOLD`（10），或 `searchKeyword` 非空时显示。宿主不传开关。
-- 命中高亮按 `searchKeyword` 在组件内部计算，不额外接收高亮字段。
-- 选项行内容（`renderOption(content, option)`）可在组件渲染好的默认内容上追加或整块替换；行本身的点击、选中态与键盘交互始终由组件处理。
-- 面板内容（`renderPanel`）收到 `{ search, list }`：`search` 是搜索框，`list` 是列表与三态。面板可见性受控，宿主用 `visible` 决定开合。
-- 选中项统一用 `role="listbox"` + `role="option"` + `aria-selected` 表达，触发器带 `aria-haspopup="listbox"` 与 `aria-expanded`。
-- 面板可见性受控：宿主用 `visible` 决定开合，`onVisibleChange` 回调时写回。「打开才取数」「异步切换成功后才关」都由宿主决定。
+## Internal conventions
 
-## 开发入口
+- Search visibility is decided by the component: shown when the loaded count or `total` exceeds `SCOPE_SWITCHER_SEARCH_THRESHOLD` (10), or when `searchKeyword` is non-empty. The host passes no switch.
+- Hit highlighting is computed inside the component from `searchKeyword`; no separate highlight field is accepted.
+- Option row content (`renderOption(content, option)`) can append to or replace the default content the component rendered; the row's click, selection state and keyboard interaction always stay with the component.
+- Panel content (`renderPanel`) receives `{ search, list }`: `search` is the search box, `list` is the list with its states. Panel visibility is controlled, and the host drives it through `visible`.
+- Selection is expressed with `role="listbox"` + `role="option"` + `aria-selected`; the trigger carries `aria-haspopup="listbox"` and `aria-expanded`.
+- Panel visibility is controlled: the host drives open and close through `visible` and writes the new state back in `onVisibleChange`. Both "load when the panel opens" and "close only after an async switch succeeds" are the host's call.
 
-开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
+## Development entry
 
-独立样式入口为 `@openviking/react/components/scope-switcher/style.css`，当前只含占位壳的样式。
+Development and build commands are in the [frontend workspace README](../../../../../README.md); module conventions are in the [package guide](../../../README.md).
+
+The standalone style entry is `@openviking/react/components/scope-switcher/style.css`, which currently contains only the placeholder shell styles.

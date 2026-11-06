@@ -11,18 +11,17 @@ export default defineConfig({
         entry: {
           index: './src/index.ts',
           icons: './src/icons/index.tsx',
-          'components/file-tree': './src/components/file-tree/file-tree.tsx',
-          'components/file-preview':
-            './src/components/file-preview/file-preview.tsx',
-          'components/tui': './src/components/tui/tui.tsx',
+          client: './src/client/index.ts',
+          'components/file-tree': './src/components/file-tree/index.ts',
+          'components/file-preview': './src/components/file-preview/index.ts',
+          'components/tui': './src/components/tui/index.ts',
           'components/scope-switcher':
-            './src/components/scope-switcher/scope-switcher.tsx',
-          'modules/file-browser': './src/modules/file-browser/file-browser.tsx',
-          'modules/console': './src/modules/console/console.tsx',
-          'modules/agent-connect':
-            './src/modules/agent-connect/agent-connect.tsx',
-          'modules/task-center': './src/modules/task-center/task-center.tsx',
-          'modules/user-usage': './src/modules/user-usage/user-usage.tsx',
+            './src/components/scope-switcher/index.ts',
+          'components/agent-connect': './src/components/agent-connect/index.ts',
+          'modules/file-browser': './src/modules/file-browser/index.ts',
+          'modules/console': './src/modules/console/index.ts',
+          'modules/task-center': './src/modules/task-center/index.ts',
+          'modules/user-usage': './src/modules/user-usage/index.ts',
         },
       },
       output: { emitCss: false },
@@ -42,10 +41,11 @@ export default defineConfig({
       'components/tui/style': './src/components/tui/style.css',
       'components/scope-switcher/style':
         './src/components/scope-switcher/style.css',
+      'components/agent-connect/style':
+        './src/components/agent-connect/style.css',
       'modules/style': './src/modules/style.css',
       'modules/file-browser/style': './src/modules/file-browser/style.css',
       'modules/console/style': './src/modules/console/style.css',
-      'modules/agent-connect/style': './src/modules/agent-connect/style.css',
       'modules/task-center/style': './src/modules/task-center/style.css',
       'modules/user-usage/style': './src/modules/user-usage/style.css',
     }).map(([name, entry]) => ({
