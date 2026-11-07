@@ -22,6 +22,8 @@ _BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
 )
 
+_BOMLESS_UNICODE_ENCODINGS = {"utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"}
+
 _DETECTION_ENCODINGS = (
     "gb18030",
     "gbk",
@@ -83,6 +85,10 @@ def _normalize_text_bytes(content: bytes, file_path: Union[str, Path] = "") -> b
     if bom_normalized is not None:
         return bom_normalized
 
+    bomless_unicode = _decode_bomless_unicode(content)
+    if bomless_unicode is not None:
+        return bomless_unicode
+
     try:
         content.decode("utf-8")
         return content
@@ -111,6 +117,36 @@ def _decode_known_bom(content: bytes) -> Optional[bytes]:
                 return content.decode(encoding).encode("utf-8")
             except UnicodeDecodeError:
                 return None
+    return None
+
+
+def _decode_bomless_unicode(content: bytes) -> Optional[bytes]:
+    """Decode a detector-identified UTF-16/UTF-32 file that has no BOM."""
+    if b"\x00" not in content:
+        return None
+
+    match = from_bytes(content).best()
+    if match is None or not match.encoding:
+        return None
+
+    try:
+        encoding = codecs.lookup(match.encoding).name
+    except LookupError:
+        return None
+
+    if encoding not in _BOMLESS_UNICODE_ENCODINGS:
+        return None
+
+    width = 4 if encoding.startswith("utf-32") else 2
+    if len(content) < width * 2 or len(content) % width:
+        return None
+
+    try:
+        decoded = content.decode(encoding)
+    except UnicodeDecodeError:
+        return None
+    if _is_valid_text(decoded):
+        return decoded.encode("utf-8")
     return None
 
 
