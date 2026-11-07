@@ -409,3 +409,17 @@ test("extractCaptureTurns honours the role scope of a capture rule", () => {
   const turns = extractCaptureTurns(entries, cfg)
   assert.deepEqual(turns.map((turn) => turn.role), ["user"])
 })
+
+test("extractCaptureTurns maps each turn to its source entry without serializing it", () => {
+  const turns = extractCaptureTurns(
+    [
+      { role: "developer", content: "host note" },
+      { role: "user", content: "question" },
+      { role: "system", content: "ignored" },
+      { role: "assistant", content: "answer" },
+    ],
+    CAPTURE_CONFIG,
+  )
+  assert.deepEqual(turns.map((turn) => turn.entryIndex), [1, 3])
+  assert.equal(JSON.stringify(turns).includes("entryIndex"), false)
+})

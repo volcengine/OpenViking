@@ -24,6 +24,7 @@ _SYSTEM_HIDDEN_FIELDS = {
     "source_extraction_id",
     "source_extraction_ids",
     "last_update_trace_id",
+    "usage_feedback",
 }
 _MAX_EXTRA_CANDIDATE_FILES = 10
 _PATCH_METADATA_KEYS = ("confidence",)
