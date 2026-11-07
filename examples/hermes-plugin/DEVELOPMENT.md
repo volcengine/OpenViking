@@ -15,8 +15,52 @@ Preserve the existing copyright and permission notice.
 
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
 Hermes catalog key remain `openviking`. Existing `memory.openviking`
-settings, environment variables, linked `ovcli.conf` files, data paths, and
-`viking_*` tools keep their current behavior.
+settings, environment variables, linked `ovcli.conf` files and data paths are
+retained. Version 2.2 replaces the native `viking_*` tools with the server's
+MCP tools. The memory provider continues to own recall, capture, commit and
+native memory mirroring.
+
+`mcp_tools.py` is a stdio-to-HTTP adapter. Hermes owns discovery, filtering and
+approval. The adapter owns profile connection resolution and forwards the
+server's schemas and results. It does not own server lifecycle or retry tool
+calls. New entries use a guarded command and omit saved `HERMES_HOME`; the
+host must bind that home at spawn. Legacy commands and missing home binding
+fail before profile reads or HTTP. Existing old-code processes require a
+reload or restart after upgrade.
+
+Setup uses Hermes's `installation_command()` helper from the loaded host's
+`pm.paths.repo_root()`. Managed installs save their durable source launcher;
+external installs use the base interpreter and Hermes bootstrap. Do not save
+a dependency generation's interpreter or a profile home. Initialization repairs
+known source and bootstrap adapter entries after an installation move, while
+leaving custom MCP commands and connection policy intact. Discovery keeps a
+shorter deadline than the host so errors can reach the CLI before cancellation.
+The stdio path shares that budget with Hermes's initial retry count and deducts
+child startup time. Direct SDK connections keep one discovery budget.
+
+One task owns each reusable HTTP/MCP connection's SDK context managers. Parallel
+calls share that session. A configuration change retires the old connection
+after its active calls finish; shutdown closes all connection tasks. Preserve
+anonymous managed-listener checks and the no-replay rule during reconnect.
+
+Acceptance must cover real installation, read-only and write approval, cloned
+and imported profiles, routed profiles, missing host binding, cold startup,
+retained-provider recovery and concurrent local embeddings. Preserve the
+Windows installation check and reviewed native package pins.
+
+Version 2.2 requires Hermes v0.22.7 or newer. That release includes MCP launch-time
+profile binding from [Hermes PR #148129](https://github.com/NousResearch/hermes-agent/pull/148129).
+CI uses the official release commit `b200f5bc60e31588ba2cb60e288029c4a54ba5fa`.
+Keep real installation, configured stdio launch, missing-home refusal and
+approval checks on the minimum supported release before publication.
+
+MCP capture is opt-in by tool name. Only reviewed `remember`, `write`, `edit`
+and `forget` acknowledgements enter the capture batch. Review both the inputs
+and results before adding a tool to this set. A read-only annotation controls
+approval and does not authorize memory capture. Unknown tools and all privacy
+tools remain excluded even when the server adds them without a plugin release.
+The adapter process test removes `HERMES_HOME` and asserts the stderr message
+and exit status before provider imports or network requests.
 
 The active-session commit lifecycle was ported from
 [KoNit-K's Hermes PR #112533](https://github.com/NousResearch/hermes-agent/pull/112533),
@@ -127,11 +171,11 @@ the installed runtime without clearing pending validation. Local status reports
 
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
-It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
-The release-host job runs the complete provider suite on Hermes v2026.9.24
-with Python 3.13, selected explicitly by `uv sync --python` rather than the
-release checkout's `.python-version`. Legacy autostart uses Hermes's profile
-environment helper and credential scrubber on both hosts. Unrelated process and
+It uses Python 3.14 and the official Hermes v0.22.7 commit, with test retries
+disabled. The Linux release-host job also runs the complete provider suite.
+Platform jobs run the lifecycle and MCP tests plus real Quick Local services;
+Windows also runs the real plugin installation check. Legacy autostart uses
+Hermes's profile environment helper and credential scrubber. Unrelated process and
 profile secrets are removed; missing helpers or secret-scope errors prevent spawning.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
@@ -139,10 +183,10 @@ These regression tests use mock responses and local test servers; live-service
 validation remains part of release testing.
 The reviewed current host builds its test environment through Hermes PM.
 Fixtures use the host's YAML implementation, so they do not need a separate
-PyYAML install on current Hermes. The older release retains its uv installer.
-Native edit tests select the action advertised by the host tool schema:
-`patch` on current Hermes and `replace` on the release baseline. Both must
-update the same mapped file. Patch-specific tests also check that text outside
+PyYAML install.
+Native edit tests select the action advertised by the host tool schema;
+Hermes v0.22.7 uses `patch`. Legacy compatibility tests also cover `replace`.
+Both must update the same mapped file. Patch-specific tests check that text outside
 the edited span is preserved in the native entry and its remote copy.
 
 CI also runs `scripts/check-hermes-plugin-install.py` through the real Hermes
@@ -167,7 +211,7 @@ mutations. Do not substitute a guessed match in tests or production.
 From that checkout, run its canonical test runner against this directory:
 
 ```bash
-PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" HERMES_TEST_FILE_RETRIES=0 \
+HERMES_TEST_FILE_RETRIES=0 \
   scripts/run_tests.sh /path/to/OpenViking/examples/hermes-plugin/tests \
   --confcutdir=/path/to/OpenViking/examples/hermes-plugin/tests -q
 ```
