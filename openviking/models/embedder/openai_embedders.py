@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, cast
 import httpx
 import openai
 
+import openviking
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbeddingInput,
@@ -26,6 +27,16 @@ from openviking.utils.embedding_input import truncate_embedding_input
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _with_openviking_user_agent(
+    extra_headers: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Add OpenViking's transport identity unless the operator supplied one."""
+    headers = dict(extra_headers or {})
+    if not any(name.lower() == "user-agent" for name in headers):
+        headers["User-Agent"] = f"openviking/{openviking.__version__}"
+    return headers
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -110,7 +121,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                            Only supported by OpenAI-compatible third-party models.
             config: Additional configuration dict
             extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
-                          {'HTTP-Referer': 'https://your-site.com', 'X-Title': 'Your App'})
+                          {'HTTP-Referer': 'https://your-site.com', 'X-Title': 'Your App'}).
+                          OpenViking adds its product User-Agent by default; a case-insensitive
+                          User-Agent entry here overrides it.
             input_type: OpenViking embedding input mode ('text' or 'multimodal'). This controls
                         whether content parts are passed through, and is distinct from
                         query_param/document_param values sent as extra_body.input_type.
@@ -149,6 +162,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self._client_kwargs: Dict[str, Any] = {
             "api_key": self.api_key or "no-key",
             "max_retries": 0,
+            "default_headers": _with_openviking_user_agent(extra_headers),
         }
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
@@ -160,8 +174,6 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 raise ValueError("api_base (Azure endpoint) is required for Azure provider")
             self._client_kwargs["azure_endpoint"] = self.api_base
             self._client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
-            if extra_headers:
-                self._client_kwargs["default_headers"] = extra_headers
             sync_kwargs = dict(self._client_kwargs)
             http_client = create_optional_sync_httpx_client(
                 self.api_base,
@@ -175,8 +187,6 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         else:
             if self.api_base:
                 self._client_kwargs["base_url"] = self.api_base
-            if extra_headers:
-                self._client_kwargs["default_headers"] = extra_headers
             sync_kwargs = dict(self._client_kwargs)
             http_client = create_optional_sync_httpx_client(
                 self.api_base,
