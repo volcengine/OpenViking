@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime
 
 import httpx
 import pytest
@@ -38,6 +39,121 @@ def adapter_client(monkeypatch, tmp_path):
         )
 
     return build
+
+
+@pytest.mark.parametrize("message_count", [20, 21, 100, 101, 205])
+@pytest.mark.parametrize("content_type", ["text", "coding", "multimodal"])
+async def test_add_preserves_long_histories_with_one_commit(
+    adapter_client, message_count, content_type
+):
+    batches = []
+    paths = []
+    messages = []
+    for index in range(message_count):
+        text = (
+            f"def cache_key_{index}(value):\n    return value\n"
+            if content_type == "coding"
+            else f"  Remember history turn {index}.\n"
+        )
+        content = (
+            [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": IMAGES[index % 2]}},
+            ]
+            if content_type == "multimodal"
+            else text
+        )
+        messages.append(
+            {
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": content,
+                "timestamp": index * 1000,
+            }
+        )
+
+    def handle(request):
+        paths.append(request.url.path)
+        assert request.headers["X-OpenViking-User"] == "alice"
+        if request.url.path == "/api/v1/sessions/session-1/messages/batch":
+            batch = json.loads(request.content)["messages"]
+            assert 1 <= len(batch) <= 100
+            batches.append(batch)
+            result = {"added": len(batch)}
+        elif request.url.path == "/api/v1/sessions/session-1/commit":
+            assert sum(map(len, batches)) == message_count
+            assert json.loads(request.content) == {"keep_recent_count": 0}
+            result = {"status": "accepted", "task_id": "task-1"}
+        else:
+            assert request.url.path == "/api/v1/tasks/task-1"
+            result = {"status": "completed"}
+        return httpx.Response(200, json={"status": "ok", "result": result})
+
+    payload = {
+        "request_id": "long-history",
+        "user_id": "alice",
+        "session_id": "session-1",
+        "messages": messages,
+    }
+    async with adapter_client(handle) as client:
+        response = await client.post("/add", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        **{k: v for k, v in payload.items() if k != "messages"},
+    }
+    assert paths == ["/api/v1/sessions/session-1/messages/batch"] * len(batches) + [
+        "/api/v1/sessions/session-1/commit",
+        "/api/v1/tasks/task-1",
+    ]
+    stored = [message for batch in batches for message in batch]
+    assert len(stored) == len(messages)
+    for actual, original in zip(stored, messages, strict=True):
+        assert actual["role"] == original["role"]
+        assert actual["parts" if content_type == "multimodal" else "content"] == original["content"]
+        assert (
+            round(
+                datetime.fromisoformat(actual["created_at"].replace("Z", "+00:00")).timestamp()
+                * 1000
+            )
+            == original["timestamp"]
+        )
+
+
+@pytest.mark.parametrize("failure", ["short-write", "http-error"])
+async def test_add_does_not_commit_or_append_later_batches_after_failure(adapter_client, failure):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        assert request.url.path == "/api/v1/sessions/session-1/messages/batch"
+        batch = json.loads(request.content)["messages"]
+        assert len(batch) == 100
+        if len(requests) == 2:
+            if failure == "http-error":
+                return httpx.Response(
+                    400,
+                    json={
+                        "status": "error",
+                        "error": {"code": "INVALID_ARGUMENT", "message": "batch rejected"},
+                    },
+                )
+            added = 99
+        else:
+            added = len(batch)
+        return httpx.Response(200, json={"status": "ok", "result": {"added": added}})
+
+    async with adapter_client(handle) as client:
+        response = await client.post(
+            "/add",
+            json={
+                "request_id": "failed-history",
+                "user_id": "alice",
+                "session_id": "session-1",
+                "messages": [{"role": "user", "content": f"History turn {i}"} for i in range(205)],
+            },
+        )
+    assert response.status_code == 503
+    assert len(requests) == 2
 
 
 async def test_search_uses_native_find_and_preserves_user_scope_and_aml_response(adapter_client):
