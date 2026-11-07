@@ -103,30 +103,36 @@ class _AnyDocMarkdownRenderer:
         markdown = "\n\n".join(parts)
         return f"{markdown}\n" if markdown else ""
 
-    def _render_blocks(self, blocks: list[Any] | None) -> str:
+    def _render_blocks(self, blocks: list[Any] | None, *, context: str = "block") -> str:
         return "\n\n".join(
-            rendered for block in _items(blocks) if (rendered := self._render_block(block))
+            rendered
+            for block in _items(blocks)
+            if (rendered := self._render_block(block, context=context))
         )
 
-    def _render_block(self, block: Any) -> str:
+    def _render_block(self, block: Any, *, context: str = "block") -> str:
         kind = _kind(block)
         if kind == "heading":
-            text = self._render_inlines(block.content, context="heading").strip()
+            text = self._render_inlines(
+                block.content, context="table_cell" if context == "table_cell" else "heading"
+            ).strip()
             if not text:
                 return ""
             level = min(max(int(block.level or 1), 1), 6)
             return f"{'#' * level} {text}"
         if kind == "paragraph":
-            return self._render_inlines(block.content, context="block").strip()
+            return self._render_inlines(block.content, context=context).strip()
         if kind == "list":
-            return self._render_list(block.list)
+            return self._render_list(block.list, context=context)
         if kind == "table":
             if block.table.kind == "layout" and self._table_is_single_cell(block.table):
                 cell = block.table.grid[0][0].cell
-                return self._render_blocks(cell.blocks if cell else [])
+                return self._render_blocks(cell.blocks if cell else [], context=context)
+            if context == "table_cell":
+                return "<br>".join(self._flatten_nested_table(block.table))
             return self._render_table(block.table)
         if kind == "block_quote":
-            inner = self._render_blocks(block.blocks)
+            inner = self._render_blocks(block.blocks, context=context)
             if not inner:
                 return ""
             if self.source_format in _PRESENTATION_FORMATS:
@@ -134,12 +140,16 @@ class _AnyDocMarkdownRenderer:
             return "\n".join(">" if not line else f"> {line}" for line in inner.splitlines())
         if kind == "code_block":
             body = (block.text or "").rstrip("\n")
+            if context == "table_cell":
+                body = body.replace("|", r"\|")
             fence = self._backtick_fence(body, 3)
             return f"{fence}{block.lang or ''}\n{body}\n{fence}"
         if kind == "rule":
             return "---"
         if kind == "math":
-            source = self._escape_math_source(block.text or "", context=None)
+            source = self._escape_math_source(
+                block.text or "", context=context if context == "table_cell" else None
+            )
             return f"$$\n{source}\n$$" if source else ""
         raise RuntimeError(f"Unsupported AnyDoc block kind: {kind}")
 
@@ -266,6 +276,8 @@ class _AnyDocMarkdownRenderer:
             return text
         if code:
             flattened = core.replace("\n", " ")
+            if context == "table_cell":
+                flattened = flattened.replace("|", r"\|")
             fence = self._backtick_fence(flattened, 1)
             pad = " " if flattened.startswith("`") or flattened.endswith("`") else ""
             rendered = f"{fence}{pad}{flattened}{pad}{fence}"
@@ -378,7 +390,7 @@ class _AnyDocMarkdownRenderer:
         self.asset_paths[reference] = relative
         return relative
 
-    def _render_list(self, list_model: Any) -> str:
+    def _render_list(self, list_model: Any, *, context: str = "block") -> str:
         if list_model is None or not list_model.items:
             return ""
         rendered_items: list[str] = []
@@ -386,7 +398,7 @@ class _AnyDocMarkdownRenderer:
         for index, item in enumerate(list_model.items):
             ordinal = int(list_model.start) + index
             marker = self._list_marker(list_model, item, ordinal)
-            body = self._render_blocks(item.blocks)
+            body = self._render_blocks(item.blocks, context=context)
             if len(item.blocks) > 1:
                 loose = True
             lines = body.splitlines() or [""]
@@ -457,18 +469,25 @@ class _AnyDocMarkdownRenderer:
                 if text.strip():
                     parts.append(text)
             elif kind == "list":
-                text = self._render_list(block.list).replace("\n", " ").strip()
+                text = (
+                    self._render_list(block.list, context="table_cell").replace("\n", " ").strip()
+                )
                 if text:
                     parts.append(text)
             elif kind == "table":
                 parts.extend(self._flatten_nested_table(block.table))
             elif kind == "block_quote":
-                text = self._render_blocks(block.blocks).replace("\n", " ").strip()
+                text = (
+                    self._render_blocks(block.blocks, context="table_cell")
+                    .replace("\n", " ")
+                    .strip()
+                )
                 if text:
                     parts.append(text)
             elif kind == "code_block":
                 text = (block.text or "").strip()
                 if text:
+                    text = text.replace("|", r"\|")
                     fence = self._backtick_fence(text, 1)
                     pad = " " if text.startswith("`") or text.endswith("`") else ""
                     parts.append(f"{fence}{pad}{text}{pad}{fence}")
