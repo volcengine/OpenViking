@@ -144,16 +144,9 @@ function DirectoryPermissions() {
         <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[36%] pl-4">
-                {t('acl.page.directoryColumn')}
-              </TableHead>
-              <TableHead className="w-[28%]">
-                {t('acl.page.accessColumn')}
-              </TableHead>
-              <TableHead className="w-[18%]">
-                {t('acl.page.permissionColumn')}
-              </TableHead>
-              <TableHead className="w-[18%] pr-4">
+              <TableHead className="pl-4">{t('acl.page.nameColumn')}</TableHead>
+              <TableHead className="w-44">{t('acl.page.ruleColumn')}</TableHead>
+              <TableHead className="w-28 pr-4 text-right">
                 {t('acl.page.actionsColumn')}
               </TableHead>
             </TableRow>
@@ -162,7 +155,7 @@ function DirectoryPermissions() {
             {directories.isPending ? (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={3}
                   className="py-10 text-center text-muted-foreground"
                 >
                   {t('loading')}
@@ -170,7 +163,7 @@ function DirectoryPermissions() {
               </TableRow>
             ) : directories.isError ? (
               <TableRow>
-                <TableCell colSpan={4} className="py-8 text-center">
+                <TableCell colSpan={3} className="py-8 text-center">
                   {isOvClientError(directories.error) &&
                   (directories.error.statusCode === 403 ||
                     directories.error.code === 'PERMISSION_DENIED') ? (
@@ -201,7 +194,7 @@ function DirectoryPermissions() {
             ) : directories.data.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={3}
                   className="py-10 text-center text-muted-foreground"
                 >
                   {t('acl.page.emptyDirectory')}
@@ -278,54 +271,20 @@ function DirectoryRow({
         <button type="button" className={styles.directoryLink} onClick={onOpen}>
           <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="truncate" title={name}>
-            {entry.uri
-              .replace(/^viking:\/\//, '')
-              .replace(/\/$/, '')
-              .split('/')
-              .join(' / ')}
+            {name}
           </span>
         </button>
       </TableCell>
       <TableCell>
-        <div className={styles.grants}>
+        <span className="text-muted-foreground">
           {report.isPending
             ? t('loading')
             : report.isError
               ? t('acl.page.unreadable')
-              : report.data.effective_entries.length > 0
-                ? report.data.effective_entries.map((grant) => (
-                    <span key={grant.principal}>
-                      {grant.principal === 'user:*'
-                        ? t('acl.everyone')
-                        : grant.principal.startsWith('group:')
-                          ? t('acl.page.groupName', {
-                              name: grant.principal.slice(6),
-                            })
-                          : grant.principal.replace(/^user:/, '')}
-                    </span>
-                  ))
-                : t('acl.page.noGrantees')}
-        </div>
+              : t(`acl.modes.${report.data.acl_mode}`)}
+        </span>
       </TableCell>
-      <TableCell>
-        <div
-          className={styles.grants}
-          title={
-            report.data ? t(`acl.modes.${report.data.acl_mode}`) : undefined
-          }
-        >
-          {report.isPending ||
-          report.isError ||
-          report.data.effective_entries.length === 0
-            ? '—'
-            : report.data.effective_entries.map((grant) => (
-                <span key={grant.principal}>
-                  {t(`acl.levels.${grant.level}`)}
-                </span>
-              ))}
-        </div>
-      </TableCell>
-      <TableCell className="pr-4">
+      <TableCell className="pr-4 text-right">
         <Button
           variant="ghost"
           size="sm"

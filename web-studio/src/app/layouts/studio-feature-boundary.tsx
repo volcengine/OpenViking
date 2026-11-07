@@ -12,6 +12,7 @@ import {
   resolveStudioManagementCapabilities,
 } from '#/features/connection/lib/studio-permissions'
 import { featureForPath } from '#/shared/lib/studio-service'
+import { Skeleton } from '#/shared/ui/skeleton'
 import { Button } from '#/shared/ui/button'
 import { Link, useRouterState } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
@@ -119,6 +120,21 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
   )
     reason = 'managementRequired'
   if (!reason) return children
+  if (reason === 'checking')
+    return (
+      <div
+        role="status"
+        aria-label={t('providers.checking')}
+        className="flex w-full min-w-0 flex-col gap-6"
+      >
+        <div aria-hidden="true" className="flex flex-col gap-6">
+          <Skeleton className="h-7 w-32" />
+          <Skeleton className="h-5 w-48 max-w-full" />
+          <Skeleton className="h-9 w-64 max-w-full" />
+          <Skeleton className="h-56 w-full rounded-xl" />
+        </div>
+      </div>
+    )
   return (
     <section
       className="mx-auto grid w-full max-w-xl gap-4 rounded-xl border bg-card p-6"
