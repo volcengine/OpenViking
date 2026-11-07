@@ -72,7 +72,7 @@
 
 `labels.info.description` 与 `triggerBehavior` 都是 `Partial<Record<FileTreeInfoKey, string>>`，只写要改的键。传空字符串表示该键不显示。
 
-判定与文案也以纯函数形式从包根入口导出，宿主可以复用同一套规则组装自己的视图：
+判定与文案也以纯函数形式从组件子路径导出，宿主可以复用同一套规则组装自己的视图：
 
 ```ts
 import {

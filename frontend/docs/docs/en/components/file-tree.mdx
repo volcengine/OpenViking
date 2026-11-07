@@ -78,7 +78,7 @@ The nine long-term-memory keys describe themselves in the tooltip only: the dire
 
 Both `labels.info.description` and `triggerBehavior` are `Partial<Record<FileTreeInfoKey, string>>`, so only the keys you change need writing. An empty string hides that key.
 
-The matching rules and copy are also exported as plain functions from the package root, so a host can assemble its own view on the same rules:
+The matching rules and copy are also exported as plain functions from the component subpath, so a host can assemble its own view on the same rules:
 
 ```ts
 import {

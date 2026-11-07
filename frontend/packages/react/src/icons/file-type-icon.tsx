@@ -1,5 +1,7 @@
 import type { ComponentType, SVGProps } from 'react';
 
+import { NextjsIcon } from './nextjs-icon.js';
+
 import rules from '../../../icons/file-type-rules.json';
 import audio from '../../../icons/svg/audio.svg?react';
 import astro from '../../../icons/svg/file-type/astro.svg?react';
@@ -31,7 +33,6 @@ import javascript from '../../../icons/svg/file-type/javascript.svg?react';
 import json from '../../../icons/svg/file-type/json.svg?react';
 import markdown from '../../../icons/svg/file-type/markdown.svg?react';
 import mcp from '../../../icons/svg/file-type/mcp.svg?react';
-import nextjs from '../../../icons/svg/file-type/nextjs.svg?react';
 import npm from '../../../icons/svg/file-type/npm.svg?react';
 import oxc from '../../../icons/svg/file-type/oxc.svg?react';
 import postcss from '../../../icons/svg/file-type/postcss.svg?react';
@@ -96,7 +97,7 @@ const ICONS: Record<string, FileTypeIconComponent> = {
   json,
   markdown,
   mcp,
-  nextjs,
+  nextjs: NextjsIcon,
   npm,
   oxc,
   postcss,

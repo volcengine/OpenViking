@@ -124,6 +124,7 @@ const COPY = {
     experience: 'Contains an experience board',
     wiki: 'Open the Wiki board',
     conflict: 'Pending conflicts',
+    treeLabel: 'File tree',
   },
   zh: {
     loading: '加载中…',
@@ -134,6 +135,7 @@ const COPY = {
     experience: '含经验看板',
     wiki: '打开 Wiki 看板',
     conflict: '存在待确认冲突',
+    treeLabel: '文件树',
   },
 };
 
@@ -425,7 +427,7 @@ export default function FileTreeBasic() {
   const rows = flatten(TREE, 0, { open, loaded, loading });
 
   return (
-    <div style={BOX}>
+    <div role="tree" aria-label={t.treeLabel} style={BOX}>
       {rows.map((row) => {
         const pad = 8 + row.depth * INDENT;
         if (row.kind !== 'entry') {
@@ -523,6 +525,7 @@ function EntryRow({
     <div
       role="treeitem"
       tabIndex={0}
+      aria-level={row.depth + 1}
       aria-selected={isSelected}
       aria-expanded={row.hasChildren ? isOpen : undefined}
       data-selected={isSelected || undefined}
@@ -530,9 +533,39 @@ function EntryRow({
       onClick={onSelect}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        onSelect();
+        const rows = event.currentTarget
+          .closest('[role="tree"]')
+          ?.querySelectorAll<HTMLElement>('[role="treeitem"]');
+        const index = rows ? Array.from(rows).indexOf(event.currentTarget) : -1;
+        switch (event.key) {
+          case 'ArrowDown':
+            event.preventDefault();
+            rows?.[index + 1]?.focus();
+            break;
+          case 'ArrowUp':
+            event.preventDefault();
+            rows?.[index - 1]?.focus();
+            break;
+          case 'ArrowRight':
+            if (row.type === 'directory' && !isOpen) {
+              event.preventDefault();
+              onToggle();
+            }
+            break;
+          case 'ArrowLeft':
+            if (row.type === 'directory' && isOpen) {
+              event.preventDefault();
+              onToggle();
+            }
+            break;
+          case 'Enter':
+          case ' ':
+            event.preventDefault();
+            onSelect();
+            break;
+          default:
+            break;
+        }
       }}
       style={{
         ...ROW,
