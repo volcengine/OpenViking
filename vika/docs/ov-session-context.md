@@ -20,51 +20,58 @@ discarded on that failure; transport cursors and uncertain writes remain durable
 and the idle checkpoint retries. Recovery does not inject history into an
 already-running native transcript.
 
-`agents[].ovAutoRecall` defaults to `false`. When enabled the daemon recalls
-(`ov-recall.mjs`), the same for every runtime: for a direct chat, a line that
-@mentions the agent, a document comment, or an event outside chats such as
-mail, one context search (`/api/v1/search/search`, mode `context`) runs on the
-ingress path before the line reaches the runtime, with the sender's peer as
-the actor peer (none for the owner). `agents[].ovRecallScope` `all` (default)
-searches every peer and ranks the sender's first; `actor` searches only the
-sender's and the owner's own. The sender's peer profile, which search never
-returns, goes first. Each `<memory>` says whose it is (`who=` owner, sender,
-or another person). Once OV has this epoch's session the search names it, so
-OV's dedup ledger (a file of its own, not a session message) keeps entries
-from coming back turn after turn. The search is bounded at 3 s; on a timeout
-or a failure the line goes on without recall. It does not control this
-session transport.
+Recall (`ov-recall.mjs`) is the same for every runtime. For a direct chat, a
+line that @mentions the agent, a document comment, or an event outside chats
+such as mail, the daemon reads OV on the ingress path before the line reaches
+the runtime and appends what it found: the owner's preferences (the owner's
+standing instructions, which govern the agent everywhere), and when someone
+else wrote the line, that person's preferences and their section of
+`profile.md`. Preferences live under each person's name
+(`memories/preferences/<name>/`), the name the line's `from=` shows; the
+owner's name is taken from the newest line the owner sent. With
+`agents[].ovAutoRecall` (default `false`, a config-file option) one context
+search (`/api/v1/search/search`, mode `context`) on the line also runs; once
+OV has this epoch's session the search names it, so OV's dedup ledger (a file
+of its own, not a session message) keeps entries from coming back turn after
+turn. Everything else the model looks up with the Core's `openviking_*`
+tools. Reads are cached ten minutes and bounded at 3 s together; on a timeout
+or a failure the line goes on with what arrived. No request carries a peer.
 
-This session transport is the only writer of the conversation. In a runtime
-the daemon starts, the OpenViking plugin writes nothing and recalls nothing on
-its own: auto-recall, auto-capture, commit-on-compact, Pi's compaction
-takeover (Pi compacts natively) and the workspace-derived peer are off, and its
-session state, queued writes and recall ledger live under
-`<dataDir>/openviking/`, so its session-start sweep never commits or replays
-sessions of the owner's own Codex / Claude Code / Pi through this instance's
-identity. All of it is process environment of the instance
-(`openVikingAgentEnv` in `deployment-config.cjs`), which the plugins rank
-above their config files; the owner's own clients are unaffected. Their
-session-start injection and MCP tools stay.
+Vika owns OpenViking for the agents it runs. This session transport writes
+the conversation; `openviking_remember` submits one message for extraction
+at once, rendered exactly as this transport renders it; nothing else writes
+memory. A runtime's own OpenViking plugin is switched off where the runtime
+is launched (`ov-isolation.mjs`; each runtime declares its mechanism as
+`ovIsolation` in `runtime-catalog.mjs`): Codex and TraeX get config overrides
+that disable the plugin, any MCP server that runs OpenViking and their own
+memory feature; Claude Code gets one `--settings` layer that disables the
+plugin and denies those servers; Pi runs with extension discovery off and its
+built-ins and the owner's other extensions loaded by path; OpenCode reads a
+Vika-owned config home with the plugin and servers left out. The OPENVIKING_*
+process variables of the instance (`openVikingAgentEnv` in
+`deployment-config.cjs`) are the second line: a plugin that loads anyway is
+inert, and its state lives under `<dataDir>/openviking/`. The owner's own
+clients are unaffected. How to add a runtime, and how to verify its switch
+against the real CLI, is in [OpenViking belongs to Vika](openviking-ownership.md).
 
 Each cognition epoch owns a stable, private-to-this-daemon OV session. Switching
 providers keeps that session; `/new` starts a new epoch. Existing local ledger rows
 are uploaded on first use, in sequence. Only observable inbound Connector events,
 outbound actions (including uncertain outcomes), and controls are mirrored.
-Each message says who said it, because memory extraction files what a `user`
-message says under its speaker (`ovAttribution`). The instance is an OV user of
-its own and its owner speaks as that user: the owner's messages are `user`
-messages without a peer. Anyone else, people and other bots alike, is a peer:
-their messages are `user` messages with a message-level `peer_id` named after
-the channel identity they came with (`ov-peer.mjs`, decided at ingest, when the
-Connector's owner is known), such as `lark-ou_…`, `slack-<team>-<user>` or
-`email-<address>`. A mail's From address is not verified, so a forged one only
-writes under that address's own peer. The same person on two channels is two
-peers. Outbound rows, control rows and the agent's own reminders (events
-without a sender) are `assistant` messages: context, never the owner's words.
-Rows recorded before peers were are mirrored as plain `user` messages. The
-server must keep peer memory on (`memory_policy.peer`, the default); with it
-off, OV skips a peer's messages rather than filing them under the owner.
+Every line someone sent is a `user` message, whoever sent it: its `from=`
+names the speaker, and extraction files a person's preferences under that
+name. No message carries a peer: the instance is an OV user of its own, and
+everything it took part in is its own memory, so an event is kept once, not
+once per participant. Outbound rows and the agent's own reminders (events
+without a sender) are `assistant` messages: context, never anyone's words.
+Control rows (slash commands and their notices) are not mirrored. Each session
+is created with `memory_policy.memory_types` of `profile`, `preferences`,
+`entities` and `events`, types every release with memory policies has:
+extraction never writes the agent's own `soul` or `identity`, which a line
+that talks the agent into a new name or a global rule would otherwise
+rewrite. The agent's name and role come from its configuration; the owner's
+standing rules are the owner's preferences. Sessions created before this
+kept the server's default policy until `/new`.
 Native reasoning and arbitrary tool results are not session archives.
 An outbound row still `PENDING` holds the sync cursor until it settles; a
 handoff prepared meanwhile carries the rows before it.
