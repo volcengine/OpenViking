@@ -65,6 +65,8 @@ back to native compaction instead of waiting for its timeout.
 
 ## What history APIs return
 
+When WM is enabled, the `Files & Context` guard normally preserves previously listed paths. Once the section exceeds 25 bullets or 1,500 estimated tokens, a model-generated `UPDATE` may prune historical paths if the replacement is smaller in estimated tokens and retains at least one existing path. Empty or entirely unrelated replacements remain rejected. This permits consolidation; it is not a hard token cap and does not modify raw archived messages.
+
 `GET /sessions/{id}/context` is a bounded prompt view, not a complete transcript.
 An existing eligible summary can still be read after the generation policy is
 turned off. Once a newer WM-off archive completes, its boundary stops the view:
