@@ -74,9 +74,10 @@ export class FailurePolicy {
     // but never retry or notify inputs that already have a durable decision.
     // Filter per input so unanswered scopes in the same turn are not lost.
     const pending = this.unsettledSeqs(info.inboundSeqs);
+    const decided = (info.inboundSeqs ?? []).filter((seq) => !pending.includes(seq));
+    if (decided.length) await this.notifyTurnFailure({ ...info, inboundSeqs: decided });
     if (Array.isArray(info.inboundSeqs) && info.inboundSeqs.length > 0 && pending.length === 0) {
       this.logger.info('turn_failure_after_decision', { error: safeError(info.error) });
-      await this.notifyTurnFailure(info);
       return false;
     }
     try {
@@ -84,7 +85,7 @@ export class FailurePolicy {
     } catch (error) {
       this.logger.warn('model_fallback_failed', { error: safeError(error) });
     }
-    await this.notifyTurnFailure(info);
+    await this.notifyTurnFailure({ ...info, inboundSeqs: pending });
     return false;
   }
 

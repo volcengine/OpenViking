@@ -1691,6 +1691,12 @@ export class Store {
         AND e.scope_key = ? AND e.seq >= ? LIMIT 1`).get(scopeKey, seq));
   }
 
+  linkFinalDecisionDelivery(outboxId, seq) {
+    this.db.prepare(`UPDATE cognition_journal
+      SET detail_json = json_set(detail_json, '$.finalDecisionSeq', ?)
+      WHERE dedupe_key = ?`).run(seq, `outbox:${outboxId}`);
+  }
+
   // Which connector a message or chat id belongs to, as far as this daemon has
   // seen it: an authenticated inbound or one of its own deliveries.
   connectorForMessage(messageId) {

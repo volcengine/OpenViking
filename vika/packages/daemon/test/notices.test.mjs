@@ -270,6 +270,17 @@ describe('failures after durable decisions', () => {
     assert.deepEqual(replies, [1]);
   });
 
+  it('notifies uncertain delivery separately before retrying an unanswered scope', async () => {
+    const { policy, replies, transitions } = fixture({ 2: 'delivered' });
+    policy.store.successfulDecisionDelivery = () => false;
+    let submitted;
+    policy.runtime.submit = (items) => { submitted = items; };
+    await policy.onTurnFailed({ inboundSeqs: [1, 2], error: 'upstream error' });
+    assert.deepEqual(replies, [2, 1]);
+    assert.equal(transitions.length, 1);
+    assert.deepEqual(submitted.map((item) => item.seq), [1]);
+  });
+
   it('still retries unanswered inputs without redelivering completed ones', async () => {
     const { policy, replies, transitions } = fixture({ 2: 'delivered' });
     let submitted;

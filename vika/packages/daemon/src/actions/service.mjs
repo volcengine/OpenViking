@@ -686,6 +686,7 @@ export class ActionService {
     caller.trace.outboxId = reservation.id;
     if (!reservation.claimed) {
       if (reservation.status === 'SENT') {
+        if (final && fence) this.store.linkFinalDecisionDelivery(reservation.id, fence.seq);
         this.settleDecision(caller, fence, final);
         return { ...reservation.result, duplicate: true };
       }
