@@ -1,30 +1,55 @@
-# Agent 接入
+# AgentConnect
 
-Agent 选择、接入步骤、配置说明及连接状态视图。配置内容、凭证展示状态及连接结果由上层传入；组件通过事件回调上报用户意图，不创建凭证、执行鉴权或建立连接。
+English / [中文](README_CN.md)
 
-`agent-connect.tsx` 对应 `@openviking/react/components/agent-connect`。当前是占位组件：只渲染固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API。真实实现按本文与类型声明重写，接口以源码为准，本文不重复列举。
+An agent connection view. The host supplies the tabs, the items of the active tab and the selected item's detail; the component renders the list and the detail, copies the body when asked, and reports switch intent.
 
-## 职责边界
+```tsx
+import { AgentConnect } from '@openviking/react/components/agent-connect';
+import '@openviking/react/components/agent-connect/style.css';
 
-- 接入内容（条目、步骤文案、代码片段、文档地址）全部由宿主提供，组件只负责渲染与复制交互。
-- 敏感片段可声明初始脱敏，复制文本与展示文本可以不同，真实凭证由宿主拼装后传入。
-- 连接状态由宿主维护，组件只展示状态与说明，并上报连接与断开意图。
-- 列表与详情可分别使用，也可由单组件形态在两者之间切换；切换只上报意图，路由由宿主决定。
+<AgentConnect
+  tabs={tabs}
+  activeTabId={activeTabId}
+  items={items}
+  selectedId={selectedId}
+  detail={detail}
+  onTabChange={setActiveTabId}
+  onSelect={setSelectedId}
+  onCopy={trackCopy}
+/>;
+```
 
-## 可选能力
+Where the catalog comes from and how the body is rendered are the host's business — the component does not touch them. Copying the body is the component's own job.
 
-部分字段表达的是宿主能力，不传即降级为对应表现：
+## Why the body is a host-supplied node
 
-| 字段     | 不传时         | 传值时的表现                   |
-| -------- | -------------- | ------------------------------ |
-| 搜索     | 不显示搜索框   | 列表上方提供搜索               |
-| 分类     | 不显示分类筛选 | 提供分类切换                   |
-| 页签     | 按步骤顺序渲染 | 按页签分组渲染步骤或自定义内容 |
-| 连接状态 | 不显示状态区   | 展示状态文案与连接入口         |
-| 文档链接 | 不显示文档入口 | 展示外部文档入口               |
+Connection instructions are naturally Markdown with code blocks, and hosts do not share one catalog source: one fetches a remote JSON document, another may read local files. If the component fetched the catalog and rendered Markdown itself, it would have to know the host's catalog address, caching strategy and Markdown dialect, and end up tied to one documentation site.
 
-## 开发入口
+This component goes the other way: **the host provides the items and the body, and the component lays them out, copies the body and reports intent.**
 
-开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
+- The body is a node, so the host can pass rendered Markdown, plain text or any component.
+- The plain text for copying is separate from the body used for display: display can be formatted, while copying must be clean text.
+- Tabs and the selected item are controlled; the component caches no catalog.
 
-独立样式入口为 `@openviking/react/components/agent-connect/style.css`，当前只含占位壳的样式。
+## What the component owns
+
+- Rendering the tab row and highlighting the active tab.
+- Rendering the left item list: icon, name, one-line summary and selected state.
+- Rendering the right detail: title, icon, description, tags, body and the copy control.
+- Copying: done by the component, notifying the copied text on success.
+
+## What the component does not own
+
+- It does not fetch the catalog, render Markdown or judge whether an item is connectable.
+- It does not own the tabs, the selected item or the body — all controlled.
+- It does not take over routing or analytics: switching tabs and selecting an item report intent, and `onCopy` is only a success notification.
+- It does not embed any specific agent name or access method; items are entirely declared by the host.
+
+## Docs and development
+
+- The props table and runnable examples are in the [component docs](../../../../../docs/docs/en/components/agent-connect.mdx) ([Chinese](../../../../../docs/docs/zh/components/agent-connect.mdx)).
+- Development and build commands are in the [UI workspace README](../../../../../README.md); module conventions are in the [package README](../../../README.md).
+- The standalone stylesheet entry is `@openviking/react/components/agent-connect/style.css`, separate from the JS entry and imported on demand.
+
+This is currently a placeholder component: it renders a fixed-size empty shell and consumes no props. The above describes the target behavior.

@@ -1,4 +1,5 @@
-import styles from './file-preview.module.css';
+import { useId } from 'react';
+
 import type {
   FilePreviewContentTab,
   FilePreviewFileTab,
@@ -12,6 +13,8 @@ export interface FilePreviewBodyProps {
   editing: boolean;
   loadingEdit: boolean;
   editFailed: boolean;
+  saving: boolean;
+  saveFailed: boolean;
   draft: string;
   onDraftChange: (value: string) => void;
 }
@@ -24,9 +27,12 @@ export function FilePreviewBody({
   editing,
   loadingEdit,
   editFailed,
+  saving,
+  saveFailed,
   draft,
   onDraftChange,
 }: FilePreviewBodyProps) {
+  const errorId = useId();
   if (contentTab) return contentTab.content;
   if (!fileTab) return null;
 
@@ -34,25 +40,37 @@ export function FilePreviewBody({
 
   if (loadingEdit) {
     return (
-      <div className={styles.state}>
-        <span className={styles.muted}>{text.loading}</span>
+      <div className="ov-file-preview__state">
+        <span className="ov-file-preview__muted">{text.loading}</span>
       </div>
     );
   }
 
   if (editFailed) {
     return (
-      <div className={styles.state} data-tone="error">
-        <span className={styles.muted}>{text.loadFailed}</span>
+      <div className="ov-file-preview__state" data-tone="error">
+        <span className="ov-file-preview__muted">{text.loadFailed}</span>
       </div>
     );
   }
 
   if (editing && fileTab.editing) {
     return (
-      <div className={styles.editor}>
+      <div className="ov-file-preview__editor" aria-busy={saving || undefined}>
+        {saveFailed ? (
+          <div
+            id={errorId}
+            role="alert"
+            className="ov-file-preview__save-error"
+          >
+            {text.saveFailed}
+          </div>
+        ) : null}
         <textarea
-          className={styles.textarea}
+          className="ov-file-preview__textarea"
+          aria-label={text.edit}
+          aria-describedby={saveFailed ? errorId : undefined}
+          readOnly={saving}
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
         />
@@ -62,9 +80,9 @@ export function FilePreviewBody({
 
   if (typeof source.content !== 'string') {
     return (
-      <div className={styles.state}>
+      <div className="ov-file-preview__state">
         {fileTab.slots?.unsupportedFallback ?? (
-          <span className={styles.muted}>
+          <span className="ov-file-preview__muted">
             {source.file || source.url
               ? text.binaryUnsupported
               : text.unsupported}
@@ -75,8 +93,8 @@ export function FilePreviewBody({
   }
 
   return (
-    <div className={styles.textBody}>
-      <pre className={styles.pre}>{source.content}</pre>
+    <div className="ov-file-preview__text-body">
+      <pre className="ov-file-preview__pre">{source.content}</pre>
     </div>
   );
 }

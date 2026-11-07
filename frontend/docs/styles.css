@@ -9,9 +9,30 @@
 .dark {
   --rp-c-brand: #f18b97;
   --rp-c-brand-light: #ffa2ad;
-  --ov-ui-status-ready: #78d3a3;
-  --ov-ui-status-processing: #8ab8ff;
   --ov-ui-status-error: #ff9595;
+}
+
+/* Rspress's large hero buttons have no padding around longer labels. */
+.rp-home-hero__actions .rp-home-hero__action {
+  display: inline-flex;
+  width: auto;
+  height: auto;
+  min-height: 48px;
+  padding: 10px 28px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.rp-home-hero__actions .rp-home-hero__action:hover {
+  text-decoration: none;
+}
+
+@media (width <= 768px) {
+  .rp-home-hero__actions .rp-home-hero__action {
+    min-height: 42px;
+    padding: 10px 20px;
+  }
 }
 
 .ov-demo-row {
@@ -19,6 +40,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
+}
+
+.ov-demo-modules {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
 }
 
 .ov-demo-controls {

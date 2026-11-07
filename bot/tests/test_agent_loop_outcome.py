@@ -1,5 +1,9 @@
 import asyncio
+import base64
 import copy
+import random
+import struct
+import zlib
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -207,6 +211,90 @@ class _ImageRegistry:
             effective_params=params,
             preserve_complete_result=self.preserve_complete_result,
         )
+
+
+@pytest.fixture
+def large_png_url():
+    # A reproducible, valid PNG whose encoded payload exceeds the text budget
+    # while its decoded size remains well below the existing media byte limit.
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    pixels = random.Random(0).randbytes(300 * 300 * 3)
+    rows = b"".join(b"\0" + pixels[offset : offset + 900] for offset in range(0, len(pixels), 900))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 300, 300, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+    assert 240_000 < len(png) < loop_module.MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["user", "tool"])
+@pytest.mark.parametrize("budget", [None, 240_000])
+async def test_agent_loop_accepts_large_png_with_text_budget(
+    make_loop, large_png_url, source, budget
+):
+    image = {"type": "image_url", "image_url": {"url": large_png_url}}
+    user: dict = {"role": "user", "content": "Describe the image."}
+    if source == "user":
+        user["content"] = [{"type": "text", "text": "Describe the image."}, image]
+    provider = _MediaProvider([[_image_call("image")]] if source == "tool" else [])
+    loop = make_loop(provider=provider, max_iterations=2)
+    final, *_ = await loop._run_agent_loop(
+        messages=[user],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="large-png"),
+        publish_events=False,
+        tool_registry=_ImageRegistry([{"type": "text", "text": "Image source."}, image]),
+        context_compact_budget=budget,
+    )
+    assert final == "done"
+    assert len(provider.calls) == (2 if source == "tool" else 1)
+    sent = provider.calls[-1]
+    media_message = next(message for message in sent if message["role"] == source)
+    assert image in media_message["content"]
+    assert loop_module._inline_media_bytes(sent) < loop_module.MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+    assert loop_module._compact_msg_chars(sent) < 240_000
+
+
+@pytest.mark.parametrize("image_type", ["image_url", "input_image"])
+def test_text_budget_counts_multimodal_text_but_not_base64(large_png_url, image_type):
+    image = {
+        "type": image_type,
+        "image_url": {"url": large_png_url} if image_type == "image_url" else large_png_url,
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "x" * 250_000}, image],
+        }
+    ]
+    original = copy.deepcopy(messages)
+    size = loop_module._compact_msg_chars(messages)
+    assert 250_000 <= size < 251_000
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_final_fallback_bounds_context_even_without_compaction_setting(make_loop):
+    provider = _MediaProvider([[_image_call("call-1", "source " * 1_000)]])
+    loop = make_loop(provider=provider, max_iterations=1)
+    task = {"role": "user", "content": "Original task " + "x" * 239_000}
+    final, *_ = await loop._run_agent_loop(
+        messages=[task],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="budget-fallback"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(),
+    )
+    assert final == "done"
+    assert len(provider.calls) == 2
+    assert all(loop_module._compact_msg_chars(messages) <= 240_000 for messages in provider.calls)
+    assert task in provider.calls[-1]
 
 
 class _SteerProvider(LLMProvider):

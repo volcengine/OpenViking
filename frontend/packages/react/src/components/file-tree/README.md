@@ -1,6 +1,10 @@
 # FileTree
 
-面向资源浏览的目录树。宿主把树状态展平成有序行列表传进来，组件负责渲染、键盘交互与意图回传。
+English / [中文](README_CN.md)
+
+A directory tree for resource browsing. The host flattens its tree state into an ordered list of rows and supplies async execution through `operations`; the component renders, handles keyboard interaction and notifies after an operation succeeds.
+
+> **This is currently a placeholder implementation.** It renders every documented row type and honours the public props, so consumers can integrate against the API, but styling, iconography and interaction details will change. The view is expected to be rewritten against this contract.
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -9,65 +13,67 @@ import '@openviking/react/components/file-tree/style.css';
 <FileTree
   rows={rows}
   selectedId={selectedId}
-  onSelect={(row) => setSelectedId(row.id)}
-  onToggleExpand={(row) => toggle(row.id)}
+  operations={{
+    select: async (row) => setSelectedId(row.id),
+    toggleExpand: async (row) => toggle(row.id),
+  }}
 />;
 ```
 
-`rows` 从哪来、分页怎么取、权限怎么判，都由宿主决定——组件不碰这些。
+Where `rows` come from, how pages are fetched and how permissions are decided are all up to the host — the component does not touch them.
 
-## 为什么是「展平行列表」
+## Why a flattened row list
 
-目录树最常见的做法是让组件接收嵌套结构，自己递归渲染、自己维护展开集合、自己决定何时请求子节点。这样组件就得知道宿主的分页策略、错误重试方式、账号作用域切换时机，最后变成一个什么都懂一点、又和某个后端绑死的东西。
+The usual approach is to hand the tree a nested structure and let it recurse, keep its own expansion set and decide when to request children. Such a component then has to know the host's paging strategy, retry behavior and account-scope switching timing, and ends up knowing a little about everything while being welded to one backend.
 
-这里反过来：**宿主负责把树状态压平成一维数组，组件只按顺序渲染**。
+This component inverts that: **the host flattens tree state into a one-dimensional array and the component only renders it in order.**
 
 ```ts
 type FileTreeRow =
-  | FileTreeEntryRow // 目录或文件
-  | FileTreeLoadingRow // 子节点加载中
-  | FileTreeLoadMoreRow // 还有下一页
-  | FileTreeErrorRow // 子节点加载失败
-  | FileTreeEmptyRow; // 展开后是空的
+  | FileTreeEntryRow // directory or file
+  | FileTreeLoadingRow // children loading
+  | FileTreeLoadMoreRow // another page exists
+  | FileTreeErrorRow // children failed
+  | FileTreeEmptyRow; // expanded but empty
 ```
 
-带来的直接结果：
+What that gives you:
 
-- 分页、懒加载、失败重试都由宿主在自己那侧实现，组件不需要知道「怎么取下一页」。
-- 只返回全部子节点的数据源不会产出 `load-more` 行，行为自然等价，不用传开关。
-- 行是普通对象，宿主可以在传进来之前做任何加工（排序、过滤、权限收敛）。
+- Paging, lazy loading and retries are implemented on the host side; the component never needs to know "how to fetch the next page".
+- A data source that returns all children emits no `load-more` row, which is naturally equivalent without a switch.
+- Rows are plain objects, so the host can process them before passing them in (sorting, filtering, permission trimming).
 
-代价是宿主需要写一个「树状态 → 行数组」的转换函数。这份成本换的是组件可以同时服务分页数据源与全量数据源、服务不同的鉴权模型，而 UI 完全一致。
+The cost is that the host writes a "tree state → row array" transform. What that buys is a component that serves paged and full data sources and different auth models with identical UI.
 
-## 组件负责什么
+## What the component owns
 
-- 渲染行：图标、缩进、层级标记、副标题、写入中指示。
-- 键盘交互：方向键移动、左右键展开折叠、Enter/Space 选中，`role="tree"` 与 `aria-*` 完整。
-- 交互意图：选中、展开、加载更多、重试、打开保留策略设置——只上报，不执行。
-- 三类整树级状态的展示位：加载中、加载失败、空树，内容由宿主给。
-- 悬停浮层的延迟、定位与抑制。
+- Rendering rows: icon, indentation, level marker, subtitle and writing indicator.
+- Keyboard interaction: arrow keys to move, left/right to collapse and expand, Enter/Space to select, with complete `role="tree"` and `aria-*`.
+- Selection, expansion, load-more, retry and opening retention settings run through `operations`, and the matching `on…` success notification fires only after they complete; nothing fires on failure. Omitting an executor disables that operation; omitting a notification does not affect execution.
+- Presentation slots for the three tree-level states: loading, failed and empty, with content from the host.
+- Delay, positioning and suppression of the hover tooltip.
 
-## 组件不负责什么
+## What the component does not own
 
-- 不请求任何数据，不建连接，不做权限判断。
-- 不维护展开集合与选中项——两者都是受控的。
-- 不区分「选中」与「打开」：点击目录与点击文件走同一个 `onSelect`，由宿主按 `row.type` 分流。
-- 工具栏、搜索、导入来源、权限流程属于页面层，通过 `slots.toolbar` 注入。
+- It requests no data, opens no connections and judges no permissions.
+- It does not own the expansion set or the selection — both are controlled.
+- Clicking a directory and clicking a file share `operations.select`; the host branches on `row.type`, and `onSelect` notifies after a successful selection.
+- Toolbars, search, import sources and permission flows belong to the page layer and are injected through `slots.toolbar`.
 
-## 扩展点
+## Extension points
 
-**行尾与悬停**：`renderDashboard` 放行尾指示器（例如看板入口），`renderRowTooltip` 放悬停内容。两者返回 `null` 即不显示；看板判定属于产品语义，组件不内置路径规则。
+**Row end and hover**: `renderDashboard` places a row-end indicator (for example a dashboard entry) and `renderRowTooltip` places hover content. Returning `null` hides either; dashboard detection is product semantics, so the component ships no path rules.
 
-**行级一次性效果**：高亮、闪烁、临时描边不属于树的属性。组件给每条行元素设置 `data-file-tree-row-id`（常量 `FILE_TREE_ROW_ATTRIBUTE`），页面层可直接查询该元素，也可以用 `getRowAttributes` 按行数据追加属性，或用 `ref` 句柄的 `getRowElement` / `scrollToRow`。三种方式可组合，都不改变组件状态。
+**Per-row one-off effects**: highlighting, flashing and temporary outlines are not tree properties. The component sets `data-file-tree-row-id` (constant `FILE_TREE_ROW_ATTRIBUTE`) on every row element, so the page layer can query it directly, or use `getRowAttributes` to add per-row attributes, or use the `ref` handle's `getRowElement` / `scrollToRow`. The three combine freely and none changes component state.
 
-**ref**：按 `forwardRef` 契约定义（类型 `FileTreeComponent`），React 18 与 19 都能拿到句柄。不要把它声明成 `FileTreeProps` 的字段——React 18 会把 `ref` 从 props 中剥离。
+**ref**: defined as a `forwardRef` contract (type `FileTreeComponent`), so React 18 and 19 both get the handle. Do not declare it as a `FileTreeProps` field — React 18 strips `ref` from props.
 
-## 主题
+## Theme
 
-样式局部化，不修改应用的全局样式。颜色、圆角、焦点环通过 `--ov-ui-*` 变量覆盖，完整清单见组件文档的主题变量表。
+Styles are scoped and never modify the application's global styles. Colors, radii and focus rings are overridable through `--ov-ui-*` variables; the full list is in the component docs' theme variable table.
 
-## 文档与开发
+## Docs and development
 
-- 属性表、可运行示例、主题变量见[组件文档](../../../../../docs/docs/en/components/file-tree.mdx)（[中文](../../../../../docs/docs/zh/components/file-tree.mdx)）。
-- 开发与构建命令见[前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
-- 独立样式入口 `@openviking/react/components/file-tree/style.css`，与 JS 入口分离，可按需引入。
+- The props table, runnable examples and theme variables are in the [component docs](../../../../../docs/docs/en/components/file-tree.mdx) ([Chinese](../../../../../docs/docs/zh/components/file-tree.mdx)).
+- Development and build commands are in the [UI workspace README](../../../../../README.md); module conventions are in the [package README](../../../README.md).
+- The standalone stylesheet entry `@openviking/react/components/file-tree/style.css` is separate from the JS entry and can be imported on demand.

@@ -171,6 +171,8 @@ class _AccessMixin:
         self, ctx: RequestContext, targets: Sequence[str], *, recursive: bool = True
     ) -> RequestContext:
         """Derive one owner scope, preserving actor identity and public ACLs."""
+        if ctx.role != Role.GLOBAL:
+            return ctx
         canonical = tuple(
             dict.fromkeys((t if t == "viking://" else t.rstrip("/")) for t in targets)
         )
@@ -179,10 +181,8 @@ class _AccessMixin:
             parts = self._safe_uri_parts(target)
             if parts[:1] == ["user"] and len(parts) >= 2:
                 owners.add(parts[1])
-            elif parts == ["user"] and ctx.role == Role.GLOBAL:
+            elif parts == ["user"]:
                 raise PermissionDeniedError("GLOBAL_ACCESS_DENIED: explicit owner required")
-        if ctx.role != Role.GLOBAL:
-            return ctx
         if ctx.bypass_acl or len(owners) > 1:
             raise PermissionDeniedError(
                 "GLOBAL_ACCESS_DENIED: one owner and no ACL bypass required"
@@ -196,19 +196,13 @@ class _AccessMixin:
         owner = next(iter(owners))
         service = getattr(self, "_global_policy_service", None)
         policy = service.for_owner(ctx, owner) if service is not None else None
-        if policy is None or policy.status != "valid":
-            raise PermissionDeniedError("GLOBAL_ACCESS_DENIED: owner policy unavailable")
         from openviking.core.global_policy import (
             GlobalPolicyError,
-            PolicyPathScope,
             PolicyScopePlan,
         )
 
         root = f"viking://user/{owner}"
-        plan = policy.restrict_scope()
-        plan = PolicyScopePlan(
-            plan.status, plan.includes, (*plan.excludes, PolicyPathScope("GLOBAL_POLICY.md", True))
-        )
+        plan = DataAccessScope.read_plan(policy)
         effective = []
         scoped_includes = []
         for target in canonical:
@@ -246,7 +240,7 @@ class _AccessMixin:
                 owner,
                 AclAction.READ,
                 plan,
-                policy.policy_hash,
+                policy.policy_hash if policy is not None else None,
                 root,
                 canonical,
                 tuple(dict.fromkeys(effective)),
