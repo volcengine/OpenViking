@@ -1645,36 +1645,3 @@ async def test_trusted_mode_admin_api_http_route_without_identity():
     assert response.json()["result"]["role"] == "root"
     assert response.json()["result"]["account_id"] == "trusted"
     assert response.json()["result"]["user_id"] == "trusted"
-
-
-@pytest.mark.parametrize("pagination", [None, "cursor"])
-async def test_account_admin_tasks_cover_account_without_crossing_accounts(pagination):
-    set_task_tracker(None)
-    _set_fake_task_tracker()
-    tracker = get_task_tracker()
-    account_id = _uid()
-    alice_task = await tracker.create("session_commit", account_id=account_id, user_id="alice")
-    bob_task = await tracker.create("session_commit", account_id=account_id, user_id="bob")
-    other_task = await tracker.create("session_commit", account_id=_uid(), user_id="alice")
-    app = _build_task_http_test_app(
-        ResolvedIdentity(role=Role.ADMIN, account_id=account_id, user_id="admin")
-    )
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-        ) as client:
-            params = {"pagination": pagination} if pagination else {}
-            response = await client.get("/api/v1/tasks", params=params)
-            assert response.status_code == 200
-            result = response.json()["result"]
-            tasks = result["items"] if pagination else result
-            assert {task["task_id"] for task in tasks} == {alice_task.task_id, bob_task.task_id}
-            details = await client.get(
-                f"/api/v1/tasks/{alice_task.task_id}", params={"include_events": True}
-            )
-            assert details.status_code == 200
-            assert details.json()["result"]["execution_events"]["items"]
-            denied = await client.get(f"/api/v1/tasks/{other_task.task_id}")
-            assert denied.status_code == 404
-    finally:
-        set_task_tracker(None)

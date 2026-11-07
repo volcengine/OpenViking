@@ -50,7 +50,7 @@ async def get_task(
         task = await get_task_record(
             task_id,
             account_id=_ctx.account_id,
-            user_id=None if _ctx.role == Role.ADMIN else _ctx.user.user_id,
+            user_id=_ctx.user.user_id,
         )
     if not task:
         raise OpenVikingError(
@@ -134,7 +134,7 @@ async def list_tasks(
             if _ctx.role == Role.ROOT
             else tracker.list_tasks(
                 account_id=_ctx.account_id,
-                user_id=None if _ctx.role == Role.ADMIN else _ctx.user.user_id,
+                user_id=_ctx.user.user_id,
                 limit=limit + 1,
                 before=decode_cursor(cursor, scope),
                 task_type=task_type,
@@ -182,7 +182,7 @@ async def list_tasks(
             resource_id=resource_id,
             limit=limit,
             account_id=_ctx.account_id,
-            user_id=None if _ctx.role == Role.ADMIN else _ctx.user.user_id,
+            user_id=_ctx.user.user_id,
             include_internal=include_internal,
         )
     return Response(status="ok", result=[t.to_dict() for t in tasks])

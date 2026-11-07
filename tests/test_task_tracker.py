@@ -1575,14 +1575,3 @@ async def test_processing_time_persists_and_restored_active_tasks_are_unknown(mo
         task.task_id, **_owner_kwargs()
     )
     assert restored.processing_seconds == 22
-
-
-async def test_account_scoped_detail_loads_other_users_durable_tasks_without_cache():
-    agfs = _FakeAgfs()
-    writer = TaskTracker(store=PersistentTaskStore(agfs))
-    task = await writer.create("session_commit", account_id="acme", user_id="alice")
-    other_task = await writer.create("session_commit", account_id="other", user_id="bob")
-    reader = TaskTracker(store=PersistentTaskStore(agfs))
-    assert await reader.get(task.task_id, account_id="acme") is not None
-    assert await reader.get(other_task.task_id, account_id="acme") is None
-    assert await reader.get_with_events(task.task_id, account_id="acme") is not None
