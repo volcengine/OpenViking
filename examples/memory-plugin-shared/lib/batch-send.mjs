@@ -19,7 +19,7 @@ function makeResult() {
   };
 }
 
-async function enqueueRemainder(sessionId, payloads, startIndex, result, retryable, lastError) {
+async function enqueueRemainder(sessionId, payloads, startIndex, result, retryable, lastError, opts) {
   result.retryable = retryable;
   result.lastError = lastError ?? null;
 
@@ -32,6 +32,7 @@ async function enqueueRemainder(sessionId, payloads, startIndex, result, retryab
   for (let i = startIndex; i < payloads.length; i++) {
     const queued = await enqueue("addMessage", sessionId, payloads[i], {
       createdAt: baseCreatedAt + (i - startIndex),
+      dedupSalt: opts.dedupSalts?.[i],
     });
     if (!queued.ok) {
       // Stop at the first enqueue failure so queued entries stay a contiguous
@@ -61,7 +62,7 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
 
     const retryable = isRetryableSendFailure(res);
     if (opts.enqueueOnRetryable) {
-      return enqueueRemainder(sessionId, payloads, i, result, retryable, res?.error ?? res);
+      return enqueueRemainder(sessionId, payloads, i, result, retryable, res?.error ?? res, opts);
     }
     result.retryable = retryable;
     result.lastError = res?.error ?? res ?? null;
@@ -79,6 +80,7 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
  * @param {Array<object>} payloads - sanitized add-message request bodies
  * @param {object} opts
  * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after a retryable failure
+ * @param {string[]} opts.dedupSalts - optional source identities parallel to payloads
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
  * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
  */
@@ -108,7 +110,7 @@ export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts =
 
     const retryable = isRetryableSendFailure(res);
     if (opts.enqueueOnRetryable) {
-      return enqueueRemainder(sessionId, messages, start, result, retryable, res?.error ?? res);
+      return enqueueRemainder(sessionId, messages, start, result, retryable, res?.error ?? res, opts);
     }
     result.retryable = retryable;
     result.lastError = res?.error ?? res ?? null;

@@ -27,6 +27,7 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
     || Boolean(syncedEntryId && entries[previousCount - 1]?.id !== syncedEntryId);
   const start = resetWatermark ? 0 : Math.min(previousCount, entries.length);
   const payloads = [];
+  const payloadEntryIds = [];
 
   for (const entry of entries.slice(start)) {
     const payload = entryPayload(entry);
@@ -55,10 +56,12 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
       : { role, content: shaped.text };
     if (cfg.peerId) body.peer_id = cfg.peerId;
     payloads.push(body);
+    payloadEntryIds.push(typeof entry.id === "string" && entry.id ? entry.id : null);
   }
 
   return {
     payloads,
+    payloadEntryIds,
     nextEntryCount: entries.length,
     nextEntryId: entries.at(-1)?.id || "",
     observedEntryCount: entries.length,

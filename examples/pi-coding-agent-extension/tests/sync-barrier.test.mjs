@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SyncManager, describeCommitError } from "../sync.ts";
@@ -59,6 +59,79 @@ test("syncBranch returns added token accounting and delivered status", async () 
     assert.ok(result.tokens > 0);
     assert.equal(result.allDelivered, true);
     assert.equal(sync.syncedCount, 1);
+  });
+});
+
+test("queue-only capture durably records a turn without racing startup replay", async () => {
+  await withPendingDir(async () => {
+    let requests = 0;
+    const c = client({ fetchJSON: async () => { requests++; return { ok: true, result: {} }; } });
+    const sync = new SyncManager(c, config({ takeoverEnabled: false }));
+    await sync.ensureSession("pi-session");
+    const result = await sync.syncBranch([
+      { id: "u-1", type: "message", message: { role: "user", content: "Durably capture this turn before replay completes." } },
+    ], { queueOnly: true });
+    assert.equal(result.added, 1);
+    assert.equal(result.queued, 1);
+    assert.equal(result.allDelivered, false);
+    assert.equal(result.permanentFailures, 0);
+    assert.equal(sync.syncedCount, 1);
+    assert.equal(requests, 0);
+    assert.equal((await listPending()).length, 1);
+  });
+});
+
+test("queue-only turns keep their order when the clock has the same millisecond", async () => {
+  await withPendingDir(async () => {
+    const sync = new SyncManager(client(), config());
+    await sync.ensureSession("pi-session");
+    const originalNow = Date.now;
+    Date.now = () => 1_000_000;
+    try {
+      const first = { id: "u-1", type: "message", message: { role: "user", content: "The first queued turn is older." } };
+      const second = { id: "u-2", type: "message", message: { role: "user", content: "The second queued turn is newer." } };
+      await sync.syncBranch([first], { queueOnly: true });
+      await sync.syncBranch([first, second], { queueOnly: true });
+    } finally {
+      Date.now = originalNow;
+    }
+    const pending = await listPending();
+    assert.equal(pending.length, 2);
+    assert.ok(pending[0].entry.createdAt < pending[1].entry.createdAt);
+    assert.match(JSON.stringify(pending[0].entry.payload), /first queued turn/);
+    assert.match(JSON.stringify(pending[1].entry.payload), /second queued turn/);
+  });
+});
+
+test("queue-only capture keeps distinct Pi entries with identical content", async () => {
+  await withPendingDir(async () => {
+    const sync = new SyncManager(client(), config({ takeoverEnabled: false }));
+    await sync.ensureSession("pi-same-content");
+    const first = { id: "u-1", type: "message", message: { role: "user", content: "continue" } };
+    const second = { id: "u-2", type: "message", message: { role: "user", content: "continue" } };
+
+    assert.equal((await sync.syncBranch([first, second], { queueOnly: true })).queued, 2);
+    assert.equal((await listPending()).length, 2);
+
+    sync.restoreWatermark(0, []);
+    assert.equal((await sync.syncBranch([first, second], { queueOnly: true })).queued, 2);
+    assert.equal((await listPending()).length, 2, "retrying the same Pi entries must deduplicate");
+  });
+});
+
+test("retryable HTTP failure queues distinct Pi entries with identical content", async () => {
+  await withPendingDir(async () => {
+    const c = client({ fetchJSON: async () => ({ ok: false, status: 503, error: { message: "offline" } }) });
+    const sync = new SyncManager(c, config());
+    await sync.ensureSession("pi-identical-offline");
+    const branch = ["u-1", "u-2"].map((id) => ({
+      id, type: "message", message: { role: "user", content: "continue" },
+    }));
+
+    const result = await sync.syncBranch(branch);
+    assert.equal(result.queued, 2);
+    assert.equal(result.permanentFailures, 0);
+    assert.equal((await listPending()).length, 2);
   });
 });
 
@@ -365,7 +438,10 @@ test("non-retryable batch failure drops the payloads but still advances the sync
 
 test("retry queue write failure records a permanent capture gap", async () => {
   const previous = process.env.OPENVIKING_PENDING_DIR;
-  process.env.OPENVIKING_PENDING_DIR = "/dev/null/unwritable";
+  const dir = await mkdtemp(join(tmpdir(), "ov-pi-unwritable-queue-"));
+  const file = join(dir, "not-a-directory");
+  await writeFile(file, "");
+  process.env.OPENVIKING_PENDING_DIR = join(file, "unwritable");
   try {
     const { c } = batchClient({ respond: () => ({ ok: false, status: 500, error: { message: "offline" } }) });
     const sync = new SyncManager(c, config());
@@ -380,6 +456,7 @@ test("retry queue write failure records a permanent capture gap", async () => {
   } finally {
     if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
     else process.env.OPENVIKING_PENDING_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

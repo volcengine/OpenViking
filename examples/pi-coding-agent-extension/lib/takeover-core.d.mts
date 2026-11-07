@@ -138,6 +138,8 @@ export class TakeoverCore {
   /** `branch` is pi's `getBranch()`; the boundary is located on its context projection. */
   transformContext(messages: TakeoverMessage[], branch?: any[] | (() => any[])): TakeoverMessage[];
   onTurnSynced(estTokens: number, branch?: any[] | (() => any[]), opts?: HandlerDeadline): Promise<boolean>;
+  /** Count a durably queued turn without committing or advancing takeover. */
+  recordQueuedTokens(estTokens: number): void;
   /** One check of a pending archive, e.g. before a prompt; true when the boundary advanced. */
   resumePending(branch?: any[] | (() => any[]), opts?: HandlerDeadline): Promise<boolean>;
   commitAndAdvance(branch?: any[] | (() => any[]), opts?: HandlerDeadline): Promise<boolean>;
