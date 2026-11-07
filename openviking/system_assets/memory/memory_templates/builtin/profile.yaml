@@ -73,6 +73,10 @@ description: |
 
   # Required Markdown format
   - One H1 heading with only the participant's name, followed directly by bullet statements.
+    If the transcript supplies a stable participant identifier in sender metadata
+    (for example, from=person-<hash>), use that exact identifier as the H1 instead.
+    A display= label can describe the person but must not replace this identifier
+    or merge participants with the same display name.
   - Repeat the H1 + bullet structure for each participant in the same profile.md.
   - Do not output H2/H3 headings, JSON, prose paragraphs, tables, labels, or category names.
   - Every bullet MUST end with the latest confirmation date in the exact form

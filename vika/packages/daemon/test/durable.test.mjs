@@ -558,8 +558,8 @@ describe('DurableAgent against the real host', () => {
               description: 'Fast semantic search of the OpenViking long-term memory.',
               inputSchema: {
                 type: 'object',
-                properties: { query: { type: 'string', minLength: 1, maxLength: 1000 } },
-                required: ['query'], additionalProperties: false,
+                properties: { query: { type: 'string', minLength: 1, maxLength: 1000 }, decision_id: { type: 'string' } },
+                required: ['query', 'decision_id'], additionalProperties: false,
               },
               annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
             },
@@ -586,14 +586,14 @@ describe('DurableAgent against the real host', () => {
     });
     process.env.DURABLE_FAUX = '1';
     process.env.DURABLE_FAUX_RESPONSES = JSON.stringify([
-      { toolCall: { name: 'openviking_find', arguments: { query: 'what do I already know' } } },
+      { toolCall: { name: 'openviking_find', arguments: { query: 'what do I already know', decision_id: 'message:om_request' } } },
       { text: 'nothing stored yet' },
     ]);
     try {
       await agent.start();
       agent.deliver('look in memory', 7);
       await waitFor(() => successes.length === 1, 15_000);
-      assert.deepEqual(calls, [{ tool: 'openviking_find', input: { query: 'what do I already know' } }]);
+      assert.deepEqual(calls, [{ tool: 'openviking_find', input: { query: 'what do I already know', decision_id: 'message:om_request' } }]);
       const completed = store.activities.find((activity) => activity.kind === 'agent.tool_completed');
       assert.equal(completed.status, 'COMPLETED');
       assert.ok(store.activities.some((activity) => activity.kind === 'agent.note' && activity.summary === 'nothing stored yet'));

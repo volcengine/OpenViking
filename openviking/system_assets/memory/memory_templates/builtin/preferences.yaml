@@ -28,6 +28,10 @@ fields:
     type: string
     description: |
       Username for the preference owner
+      If the transcript supplies a stable participant identifier in its sender
+      metadata (for example, from=person-<hash>), use that identifier verbatim.
+      A display= label is only descriptive: do not substitute it for the
+      identifier or merge participants because their display names match.
     merge_op: immutable
 
   - name: topic

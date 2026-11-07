@@ -3,12 +3,13 @@
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { normalizeEvent } from './event.mjs';
-import { senderLabel } from './runtime-input.mjs';
+import { personKey, memoryPersonKey } from './ov-person.mjs';
+import { mailAncestorUri, privateMailFilter, visibleWithoutMail } from './ov-path.mjs';
 
 // What the daemon shows of OpenViking memory after a line someone sent, the
 // same for every runtime. The instance is one OV user; everything it took part
 // in is its own memory, and a person's preferences sit under that person's
-// name (preferences/<name>/), the name the line's `from=` shows.
+// stable key (preferences/person-<hash>/), the OV line's `from=` token.
 //
 // Always, when OV holds them:
 // - the owner's preferences: the owner's standing instructions, which govern
@@ -36,19 +37,18 @@ const PROFILE = 'viking://~/memories/profile.md';
 const escapeAttribute = (value) => String(value).replace(/[&"<>]/g, (char) => (
   { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]));
 
-// One person's key across the forms a name takes: extraction lowercases the
-// directory, and a `from=` name has `_` where the display name had spaces.
-export const personKey = (name) => String(name ?? '').toLowerCase().replace(/[\s_]+/g, '');
+// Only connector-scoped person keys can identify owner/sender preferences.
+export { personKey } from './ov-person.mjs';
 
 const clip = (text) => (text.length > PERSON_CHARS ? `${text.slice(0, PERSON_CHARS)}…` : text);
 const leaf = (uri) => String(uri).replace(/\/+$/, '').split('/').pop() ?? '';
 
 // The section of a multi-person profile.md under one person's H1 heading.
 export function profileSection(profile, name) {
-  const key = personKey(name);
+  const key = memoryPersonKey(name);
   if (!key) return null;
   const sections = String(profile ?? '').split(/^(?=# )/m);
-  const found = sections.find((section) => personKey(section.split('\n', 1)[0].replace(/^#\s*/, '')) === key);
+  const found = sections.find((section) => memoryPersonKey(section.split('\n', 1)[0].replace(/^#\s*/, '')) === key);
   const body = found?.split('\n').slice(1).join('\n').trim();
   return body || null;
 }
@@ -78,8 +78,8 @@ export class OVRecall {
   // Never rejects.
   async forEvent(event, { owner = false } = {}) {
     const query = String(event.content ?? '').trim();
-    const sender = senderLabel(event);
-    const ownerName = owner ? sender : this.ownerName();
+    const sender = personKey(event);
+    const ownerKey = owner ? sender : this.ownerKey();
     const settled = (promise) => Promise.resolve().then(() => promise).catch((error) => {
       this.logger.debug('ov_recall_skipped', { status: error.httpStatus ?? null });
       return null;
@@ -89,37 +89,39 @@ export class OVRecall {
     const bounded = (promise) => (promise ? Promise.race([settled(promise), deadline.then(() => null)]) : null);
     try {
       const [ownerPreferences, senderPreferences, senderProfile, entries] = await Promise.all([
-        ownerName ? bounded(this.preferences(ownerName)) : null,
+        ownerKey ? bounded(this.preferences(ownerKey)) : null,
         !owner && sender ? bounded(this.preferences(sender)) : null,
         !owner && sender ? bounded(this.profile().then((text) => profileSection(text, sender))) : null,
-        this.autoRecall && query.length >= MIN_QUERY_CHARS ? bounded(this.search(query)) : null,
+        this.autoRecall && query.length >= MIN_QUERY_CHARS ? bounded(this.search(query, { owner })) : null,
       ]);
-      return this.render(event, { ownerName, sender: owner ? null : sender, ownerPreferences, senderPreferences,
+      return this.render(event, { ownerKey, sender: owner ? null : sender, ownerPreferences, senderPreferences,
         senderProfile, entries: entries ?? [] });
     } finally {
       clearTimeout(timer);
     }
   }
 
-  // The name the owner's lines carry, from the newest line the owner sent.
-  ownerName() {
+  // The stable identity on the latest authenticated owner input.
+  ownerKey() {
     try {
       const envelope = this.store?.latestOwnerEnvelope?.();
-      return envelope ? senderLabel(normalizeEvent(envelope)) : null;
+      return envelope ? personKey(normalizeEvent(envelope)) : null;
     } catch {
       return null;
     }
   }
 
-  async search(query) {
+  async search(query, { owner = false } = {}) {
     const session = this.sessionId();
     const body = {
       query, mode: 'context', score_threshold: SCORE_THRESHOLD, max_tokens: MAX_TOKENS,
       ...(session ? { session_id: session, dedup_turns: DEDUP_TURNS, query_expansion: 'off' } : {}),
     };
+    if (!owner) body.filter = privateMailFilter(await this.connection.authenticate());
     const { result } = await this.connection.send('/api/v1/search/search',
       { method: 'POST', headers: this.connection.headers, body: JSON.stringify(body) }, this.timeoutMs);
-    return Array.isArray(result?.entries) ? result.entries : [];
+    const entries = Array.isArray(result?.entries) ? result.entries : [];
+    return owner ? entries : entries.filter((entry) => visibleWithoutMail(entry.uri) && !mailAncestorUri(entry.uri));
   }
 
   // The OV session this daemon mirrors the conversation into, once OV has it:
@@ -164,11 +166,11 @@ export class OVRecall {
 
   // One person's preferences, every topic file under their directory joined.
   preferences(name) {
-    const key = personKey(name);
+    const key = memoryPersonKey(name);
     if (!key) return Promise.resolve(null);
     return this.cached(`preferences:${key}`, async () => {
       const people = await this.cached('preferences:', () => this.list(PREFERENCES));
-      const directory = people.find((entry) => entry?.isDir && personKey(leaf(entry.uri)) === key);
+      const directory = people.find((entry) => entry?.isDir && memoryPersonKey(leaf(entry.uri)) === key);
       if (!directory) return null;
       const files = (await this.list(directory.uri))
         .filter((entry) => !entry?.isDir && /\.md$/.test(entry?.uri ?? '') && !leaf(entry.uri).startsWith('.'));
@@ -183,16 +185,16 @@ export class OVRecall {
 
   // Whose a searched memory is, where its path says: a person's preferences
   // name them; everything else is the agent's own record.
-  who(uri, { ownerName, sender }) {
+  who(uri, { ownerKey, sender }) {
     const match = /\/memories\/preferences\/([^/]+)\//.exec(String(uri));
     if (!match) return null;
-    const key = personKey(match[1]);
-    if (ownerName && key === personKey(ownerName)) return 'owner';
-    if (sender && key === personKey(sender)) return 'sender';
+    const key = memoryPersonKey(match[1]);
+    if (ownerKey && key === memoryPersonKey(ownerKey)) return 'owner';
+    if (sender && key === memoryPersonKey(sender)) return 'sender';
     return match[1];
   }
 
-  render(event, { ownerName, sender, ownerPreferences, senderPreferences, senderProfile, entries }) {
+  render(event, { ownerKey, sender, ownerPreferences, senderPreferences, senderProfile, entries }) {
     const memories = [];
     if (ownerPreferences) {
       memories.push(`<memory who="owner" type="preferences">\n${ownerPreferences}\n</memory>`);
@@ -205,7 +207,7 @@ export class OVRecall {
     }
     for (const entry of entries) {
       if (!entry.uri) continue;
-      const who = this.who(entry.uri, { ownerName, sender });
+      const who = this.who(entry.uri, { ownerKey, sender });
       const attributes = `${who ? `who="${escapeAttribute(who)}" ` : ''}type="${escapeAttribute(entry.category ?? '')}"`
         + ` uri="${escapeAttribute(entry.uri)}"`;
       const text = String(entry.text ?? '').trim();

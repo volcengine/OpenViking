@@ -39,7 +39,7 @@ function eventContent(event) {
   ].filter(Boolean).join('\n');
 }
 
-export function formatEventLine(event) {
+export function formatEventLine(event, { memorySender = null } = {}) {
   const fields = [
     `source=${metadataTag(event.source)}`,
     ...(event.connectorInstance !== event.source ? [`instance=${metadataTag(event.connectorInstance)}`] : []),
@@ -49,6 +49,8 @@ export function formatEventLine(event) {
     `event=${metadataTag(event.eventId)}`,
     `subject=${metadataTag(event.subject.type)}:${metadataTag(event.subject.id)}`,
     `time=${isoMinute(event.createTimeMs)}`,
+    ...(memorySender ? [`from=${metadataTag(memorySender)}`] : []),
+    ...(memorySender && event.senderName ? [`display=${metadataTag(event.senderName)}`] : []),
     ...(event.actor ? [`actor=${metadataTag(event.actor.type)}:${metadataTag(event.actor.id)}`] : []),
   ];
   return `[${fields.join(' ')}] ${oneLine(eventContent(event))}`;
@@ -95,9 +97,7 @@ export const BOT_SENDERS = new Set(['bot', 'app']);
 // Lark names come from the chat roster, or from the event where there is no
 // roster (a document comment); other connectors name the sender in the event
 // itself.
-// The name a line's `from=` shows for its sender, as the OV sync writes it
-// (formatCognitionJournalLine): OV memory files a person's preferences under
-// this name.
+// Human-readable label for live input; OV attribution uses ov-person.mjs.
 export function senderLabel(event) {
   return fromLabel(event.chatId, event.senderId, null, event.source, event.senderName);
 }
@@ -164,7 +164,7 @@ function renderInboundContent(message) {
 
 export function formatInboundLine(message, resolveName = null, authenticated = {}) {
   if (message.kind && (!message.kind.startsWith('message.') || !message.chatId || !message.messageId)) {
-    return formatEventLine(message);
+    return formatEventLine(message, authenticated);
   }
   const idleForMs = Number(authenticated?.idleForMs);
   const idleTag = Number.isFinite(idleForMs) && idleForMs >= 0
@@ -190,7 +190,8 @@ export function formatInboundLine(message, resolveName = null, authenticated = {
     + (message.connectorInstance && message.connectorInstance !== message.source ? ` instance=${metadataTag(message.connectorInstance)}` : '')
     + ` msg=${metadataTag(message.messageId)} event=${metadataTag(message.eventId)}`
     + (message.messageType === 'card_action' ? ` card=${message.parentId}` : '')
-    + ` time=${isoMinute(message.createTimeMs)} from=${fromLabel(message.chatId, message.senderId, resolveName, message.source, message.senderName)}${ownerTag}`
+    + ` time=${isoMinute(message.createTimeMs)} from=${authenticated.memorySender ?? fromLabel(message.chatId, message.senderId, resolveName, message.source, message.senderName)}${ownerTag}`
+    + (authenticated.memorySender ? ` display=${metadataTag(fromLabel(message.chatId, message.senderId, resolveName, message.source, message.senderName))}` : '')
     + `${BOT_SENDERS.has(message.senderType) ? ' sender=bot' : ''}${botsTag}${replyTag}${mentionTag}${idleTag}${undecidedTag}] ${renderInboundContent(message)}`;
   return line;
 }

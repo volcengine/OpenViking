@@ -12,6 +12,7 @@ import { MeetingNoteArchive } from '../src/meeting/note-archive.mjs';
 import { OVConnection } from '../src/ov-connection.mjs';
 import { OVSessionClient } from '../src/ov-session-context.mjs';
 import { Store } from '../src/store.mjs';
+import { chatEvent } from './event-fixture.mjs';
 import { fakeConnectors } from './action-fixture.mjs';
 import { fakeOV } from './ov-server-fixture.mjs';
 
@@ -37,10 +38,11 @@ for (const user of [undefined, 'old-owner']) {
     const store = new Store(path.join(dir, 'vika.sqlite3'), quiet);
     t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     store.initializeCognition('codex', 'token');
+    store.ingest(chatEvent({ messageId: 'om_lookup', senderId: 'ou_owner' }));
     const actions = new ActionService({ config: { meetingNotes: true }, store,
-      connectors: fakeConnectors({ ids: ['lark', 'email'] }),
+      connectors: fakeConnectors({ ids: ['lark', 'email'], owners: { lark: { id: 'ou_owner' } } }),
       ovClient: new OVSessionClient(configPath), logger: quiet });
-    const call = (tool, input) => actions.call(tool, input, { authority: 'token' });
+    const call = (tool, input) => actions.call(tool, tool === 'read_email' ? { decision_id: 'message:om_lookup', ...input } : input, { authority: 'token' });
 
     for (const [tool, uri, text, code] of [
       ['read_email', mailUri, /Private mail/, 'outside_mail_archive'],

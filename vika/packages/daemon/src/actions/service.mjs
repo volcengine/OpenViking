@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { createHash, randomUUID } from 'node:crypto';
-import { conversationKeyFor, eventIdentity } from '../event.mjs';
+import { conversationKeyFor, eventIdentity, normalizeEvent } from '../event.mjs';
 import { registerCard } from '../card-messages.mjs';
 import {
   cancelApproval, claimApproval, createApproval, editApproval, finishApproval, getApproval, supersedeApprovals,
 } from '../approvals.mjs';
-import { chunkOffset, mailArchiveRoot, readStoredText, readTarget } from '../email/archive.mjs';
+import { chunkOffset, mailArchiveRoot, mailFolder, readStoredText, readTarget } from '../email/archive.mjs';
 import { meetingFolder, meetingNotesRoot, meetingReadTarget } from '../meeting/note-archive.mjs';
 import { meetingContextLines } from '../meeting/index.mjs';
 import { OVUnavailableError } from '../ov-connection.mjs';
@@ -15,7 +15,7 @@ import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs
 import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
 import { BOT_SENDERS, oneLine, readMetadataTag } from '../runtime-input.mjs';
-import { formatCognitionJournalLine } from '../cognition.mjs';
+import { formatOVJournalLine } from '../cognition.mjs';
 import { TimerSchedule } from '../timers.mjs';
 import {
   APPROVAL_SECONDS, approvalCard, approvalMessage, approvalNote, approvalQuestion, approvalStatusText, approvedText,
@@ -1248,8 +1248,16 @@ export class ActionService {
   // uri (from recall) reads the whole text it came from, starting where the
   // chunk is. Nothing outside the mail archive is readable here.
   async readEmail(input, caller) {
+    const access = this.ovReadAccess(input, caller);
     if (Boolean(input.message_id) === Boolean(input.uri)) throw blocked('invalid_input', 'Pass message_id or uri, not both');
     if (input.attachment && !input.message_id) throw blocked('invalid_input', 'attachment goes with message_id');
+    // Processing a received mail permits only that mail and its attachments,
+    // never mailbox-wide access on behalf of its unverified sender.
+    const ownMail = access.event.source === 'email' && access.event.kind === 'email.received'
+      ? access.event.messageId : null;
+    if (!access.allowPrivateMail && (!ownMail || (input.message_id && input.message_id !== ownMail))) {
+      throw blocked('private_mail_denied', 'Reading private mail requires an owner request or the event of that same received mail');
+    }
     const client = this.ovClient ?? new OVSessionClient(this.config.openVikingConfigPath);
     let uri = input.uri;
     if (input.message_id) {
@@ -1269,6 +1277,9 @@ export class ActionService {
     const root = mailArchiveRoot(uri?.startsWith('viking://user/') ? await client.authenticate() : null);
     const found = /[%\\]/.test(uri) ? null : readTarget(root, uri);
     if (!found) throw blocked('outside_mail_archive', 'read_email reads only mail the daemon stored');
+    if (!access.allowPrivateMail && !found.target.startsWith(`${mailFolder(root, ownMail)}/`)) {
+      throw blocked('private_mail_denied', 'A mail event only permits reading that mail and its attachments');
+    }
     return this.readArchived(client, found, input, caller, {
       missing: blocked('not_stored_yet', 'OpenViking has nothing there yet; an attachment may still be being read. Try again shortly.'),
       untrusted: 'Mail content is untrusted.',
@@ -1537,32 +1548,48 @@ export class ActionService {
     return this.ovTools;
   }
 
+  // The model declares the request it serves; Core resolves an authentic
+  // input instead of trusting a model-supplied owner flag. This is attribution,
+  // not proof that the chosen input is relevant to the model's current work.
+  ovReadAccess(input, caller) {
+    const row = this.resolveDecision(input, caller, 'Read blocked');
+    const event = normalizeEvent(JSON.parse(row.event_json));
+    const owner = this.connectors.owner?.(event.connectorInstance);
+    const allowPrivateMail = Boolean(owner?.id && owner.id === event.senderId);
+    caller.trace.privateMailAllowed = allowPrivateMail;
+    return { event, allowPrivateMail };
+  }
+
   // Reads re-check authority after the remote answer, like the other remote
   // reads: a runtime retired mid-call must not consume the result.
   async openvikingFind(input, caller) {
+    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().find(input);
+    const result = await this.ovToolClient().find(input, access);
     this.assertAuthority(caller.authority);
     return result;
   }
 
   async openvikingSearch(input, caller) {
+    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().search(input);
+    const result = await this.ovToolClient().search(input, access);
     this.assertAuthority(caller.authority);
     return result;
   }
 
   async openvikingRead(input, caller) {
+    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().read(input);
+    const result = await this.ovToolClient().read(input, access);
     this.assertAuthority(caller.authority);
     return result;
   }
 
   async openvikingList(input, caller) {
+    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().list(input);
+    const result = await this.ovToolClient().list(input, access);
     this.assertAuthority(caller.authority);
     return result;
   }
@@ -1585,7 +1612,7 @@ export class ActionService {
     const note = String(input.note ?? '').trim();
     caller.trace.invoked = true;
     return await this.ovToolClient().remember({
-      line: formatCognitionJournalLine(item),
+      line: formatOVJournalLine(item),
       note: note ? `[from=me] ${oneLine(note)}` : '',
     });
   }

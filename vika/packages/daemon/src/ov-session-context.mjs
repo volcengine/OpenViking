@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { createHash, randomUUID } from 'node:crypto';
-import { formatCognitionJournalLine } from './cognition.mjs';
+import { formatOVJournalLine } from './cognition.mjs';
 import { safeError } from './logger.mjs';
 import { OVConnection, OVUnavailableError, readOVConfig } from './ov-connection.mjs';
 
@@ -299,7 +299,7 @@ export class OVSessionContext {
         state.pending_seq = row.seq;
         await this.client.append(state.session_id, {
           ...ovAttribution(item),
-          content: formatCognitionJournalLine(item),
+          content: formatOVJournalLine(item),
           created_at: new Date(item.atMs).toISOString(),
           source_message_ids: [sourceId],
         });

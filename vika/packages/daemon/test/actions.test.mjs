@@ -619,6 +619,12 @@ describe('agent tools', () => {
 
 describe('OpenViking tools', () => {
   const ovNames = (service) => service.tools().map((tool) => tool.name).filter((name) => name.startsWith('openviking_'));
+  const request = { decision_id: 'message:om_lookup12345678' };
+  const setupOV = (t, options) => {
+    const state = setup(t, options);
+    state.inbound({ messageId: 'om_lookup12345678', chatId: 'oc_lookup12345678' });
+    return state;
+  };
   const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember'];
   // A scripted tool client: every method stands for one remote OV call.
   const fakeOvTools = (over = {}) => ({
@@ -631,32 +637,32 @@ describe('OpenViking tools', () => {
   });
 
   it('offers all six tools whenever the instance has an OpenViking connection, and none without', (t) => {
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'] }).service), []);
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], openVikingConfigPath: '/nonexistent/ov.conf' }).service), OV_TOOLS);
+    assert.deepEqual(ovNames(setupOV(t, { ids: ['weixin'] }).service), []);
+    assert.deepEqual(ovNames(setupOV(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
+    assert.deepEqual(ovNames(setupOV(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
+    assert.deepEqual(ovNames(setupOV(t, { ids: ['weixin'], openVikingConfigPath: '/nonexistent/ov.conf' }).service), OV_TOOLS);
   });
 
   it('validates the tool input before any OpenViking call', async (t) => {
-    const { call } = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() });
+    const { call } = setupOV(t, { ids: ['weixin'], ovTools: fakeOvTools() });
     await assert.rejects(() => call('openviking_find', {}), /query is required/);
-    await assert.rejects(() => call('openviking_find', { query: 'x', limit: 51 }), /limit must be at most 50/);
-    await assert.rejects(() => call('openviking_find', { query: 'x', min_score: 2 }), /min_score must be at most 1/);
-    await assert.rejects(() => call('openviking_read', { uri: 'http://nope' }), /uri has an invalid format/);
-    await assert.rejects(() => call('openviking_list', { uri: 'viking://x', offset: -1 }), /offset must be at least 0/);
-    await assert.rejects(() => call('openviking_search', { query: 'x', search_type: 'literal' }), /search_type must be one of/);
+    await assert.rejects(() => call('openviking_find', { ...request, query: 'x', limit: 51 }), /limit must be at most 50/);
+    await assert.rejects(() => call('openviking_find', { ...request, query: 'x', min_score: 2 }), /min_score must be at most 1/);
+    await assert.rejects(() => call('openviking_read', { ...request, uri: 'http://nope' }), /uri has an invalid format/);
+    await assert.rejects(() => call('openviking_list', { ...request, uri: 'viking://x', offset: -1 }), /offset must be at least 0/);
+    await assert.rejects(() => call('openviking_search', { ...request, query: 'x', search_type: 'literal' }), /search_type must be one of/);
     await assert.rejects(() => call('openviking_add_resource', { url: 'notaurl' }), /url has an invalid format/);
     await assert.rejects(() => call('openviking_remember', { text: 'a fact' }), /decision_id is required/);
     await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_nowhere' }),
       (error) => error.code === 'unknown_decision' && /^Not remembered/.test(error.message));
-    assert.match((await call('openviking_find', { query: 'hello' })).text, /No matching context found/);
+    assert.match((await call('openviking_find', { ...request, query: 'hello' })).text, /No matching context found/);
   });
 
   it('rechecks read authority after the remote answer', async (t) => {
     let release;
     const ovTools = fakeOvTools({ find: () => new Promise((resolve) => { release = resolve; }) });
-    const { call, store } = setup(t, { ids: ['weixin'], ovTools });
-    const pending = call('openviking_find', { query: 'slow' });
+    const { call, store } = setupOV(t, { ids: ['weixin'], ovTools });
+    const pending = call('openviking_find', { ...request, query: 'slow' });
     store.initializeCognition('claude', 'new-owner');
     release({ text: 'found', data: { hits: [{ uri: 'viking://x' }] } });
     await assert.rejects(pending, /no longer owns/);
@@ -665,7 +671,7 @@ describe('OpenViking tools', () => {
   it('does not recheck write authority once the resource was accepted', async (t) => {
     let release;
     const ovTools = fakeOvTools({ addResource: () => new Promise((resolve) => { release = resolve; }) });
-    const { call, store } = setup(t, { ids: ['weixin'], ovTools });
+    const { call, store } = setupOV(t, { ids: ['weixin'], ovTools });
     const pending = call('openviking_add_resource', { url: 'https://example.com/a' });
     store.initializeCognition('claude', 'new-owner');
     release({ text: 'Resource accepted', data: { task_id: 'task-9', root_uri: 'viking://~/resources/inbox/a' } });
@@ -674,10 +680,10 @@ describe('OpenViking tools', () => {
   });
 
   it('records no delivery, decision or outbox for OpenViking tools', async (t) => {
-    const { call, store, logs, inbound } = setup(t, { ids: ['lark'], ovTools: fakeOvTools() });
+    const { call, store, logs, inbound } = setupOV(t, { ids: ['lark'], ovTools: fakeOvTools() });
     inbound({ messageId: 'om_keep123456789', chatId: 'oc_keep123456789', content: '记一下' });
-    await call('openviking_find', { query: 'x' });
-    await call('openviking_read', { uri: 'viking://user/u/a.md' });
+    await call('openviking_find', { ...request, query: 'x' });
+    await call('openviking_read', { ...request, uri: 'viking://user/u/a.md' });
     await call('openviking_add_resource', { url: 'https://example.com/a' });
     await call('openviking_remember', { decision_id: 'message:om_keep123456789' });
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM outbox').get().n, 0);
@@ -692,13 +698,13 @@ describe('OpenViking tools', () => {
   it('remembers a message as the sync renders it, from its real sender, with the agent\'s note apart', async (t) => {
     const remembered = [];
     const ovTools = fakeOvTools({ remember: async (input) => { remembered.push(input); return { text: 'ok', data: { task_id: 'commit-1' } }; } });
-    const { call, inbound } = setup(t, { ids: ['lark'], ovTools });
+    const { call, inbound } = setupOV(t, { ids: ['lark'], ovTools });
     inbound({ messageId: 'om_emoji123456789', chatId: 'oc_team123456789', senderId: 'ou_lisi', content: '以后回复我都加个 emoji' });
     await call('openviking_remember', { decision_id: 'message:om_emoji123456789', note: '李四希望\n回复他时带 emoji' });
     assert.equal(remembered.length, 1);
     const [{ line, note }] = remembered;
     // The line names the real sender; nothing the model wrote is in it.
-    assert.match(line, /^\[chat=oc_team123456789 [^\]]*msg=om_emoji123456789[^\]]* from=ou_lisi[^\]]*\] 以后回复我都加个 emoji$/);
+    assert.match(line, /^\[chat=oc_team123456789 [^\]]*msg=om_emoji123456789[^\]]* from=person-[a-f0-9]{32}[^\]]*\] 以后回复我都加个 emoji$/);
     assert.equal(note, '[from=me] 李四希望 ⏎ 回复他时带 emoji');
     await call('openviking_remember', { decision_id: 'message:om_emoji123456789' });
     assert.equal(remembered[1].note, '', 'no note, no assistant line');
@@ -706,7 +712,7 @@ describe('OpenViking tools', () => {
 
   it('counts a landed OpenViking write as progress for the loop guard, a read does not', async (t) => {
     const stops = [];
-    const { call, inbound, logs } = setup(t, {
+    const { call, inbound, logs } = setupOV(t, {
       ids: ['weixin'], explicitSilence: true, ovTools: fakeOvTools(),
       onNoProgress: (info) => stops.push(info),
     });
@@ -722,7 +728,7 @@ describe('OpenViking tools', () => {
     assert.equal(agentLines().at(-1).duplicates, 1);
     assert.deepEqual(stops, []);
     // ...a read neither clears nor counts.
-    await call('openviking_find', { query: 'x' });
+    await call('openviking_find', { ...request, query: 'x' });
     await silence();
     assert.equal(agentLines().at(-1).duplicates, 2);
     await silence();
@@ -730,7 +736,7 @@ describe('OpenViking tools', () => {
   });
 
   it('relays the same OpenViking surface through the MCP adapter', async (t) => {
-    const state = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() });
+    const state = setupOV(t, { ids: ['weixin'], ovTools: fakeOvTools() });
     const socketPath = path.join(state.directory, 'actions.sock');
     const server = await startActionApi({ socketPath, service: state.service, logger });
     t.after(() => stopActionApi(server));
@@ -740,10 +746,10 @@ describe('OpenViking tools', () => {
     assert.deepEqual(listed.result.tools, state.service.tools());
     const found = listed.result.tools.find((tool) => tool.name === 'openviking_find');
     assert.equal(found.title, 'Find in OpenViking');
-    assert.deepEqual(found.inputSchema.required, ['query']);
+    assert.deepEqual(found.inputSchema.required, ['query', 'decision_id']);
     assert.equal(found.annotations.readOnlyHint, true);
     assert.equal(listed.result.tools.find((tool) => tool.name === 'openviking_remember').annotations.readOnlyHint, false);
-    const called = await handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'openviking_find', arguments: { query: 'anything' } } });
+    const called = await handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'openviking_find', arguments: { ...request, query: 'anything' } } });
     assert.match(called.result.content[0].text, /No matching context found/);
   });
 });

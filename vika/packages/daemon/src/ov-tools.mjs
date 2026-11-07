@@ -8,7 +8,7 @@
 // It speaks as the instance's OV user, the identity the daemon's session sync
 // uses (one connection, built from the instance's ovConfig on first use and
 // kept), and attaches no peer: everything the instance took part in is its own
-// memory, and a person's preferences sit under their name. It never retries a
+// memory, and a person's preferences sit under their stable person key. It never retries a
 // write and maps every failure to one model-readable code without echoing
 // URLs, keys or response bodies.
 
@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_MEMORY_TYPES } from './ov-session-context.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
+import { assertMailAccess, mailAncestorUri, normalizeOVUri, privateMailFilter, visibleWithoutMail } from './ov-path.mjs';
 
 // Where add_resource lands when the caller names no target: the instance's
 // private inbox, never the account-shared viking://resources/ root.
@@ -56,7 +57,8 @@ function toolError(error) {
 
 // A target uri add_resource may not write into, or null when it may.
 export function reservedTarget(uri) {
-  const own = String(uri ?? '').replace(/^viking:\/\/user\/[^/]+\//, 'viking://~/');
+  if (!uri) return null;
+  const own = normalizeOVUri(uri).replace(/^viking:\/\/user\/[^/]+\//, 'viking://~/');
   const rest = own.startsWith('viking://~/') ? own.slice('viking://~/'.length) : null;
   if (rest === null) return null;
   return RESERVED.find((prefix) => rest === prefix || rest.startsWith(`${prefix}/`)) ?? null;
@@ -83,12 +85,13 @@ function truncate(text, max) {
 
 // find and search share one answer: the ranked hits as short lines plus the
 // abstracts, deduplicated by the uri the agent would read.
-function formatHits(result) {
+function formatHits(result, access) {
   const hits = [];
   const seen = new Map();
   for (const [type, category] of [['memory', 'memories'], ['resource', 'resources'], ['skill', 'skills']]) {
     for (const entry of result?.[category] ?? []) {
       if (!entry?.uri) continue;
+      if (!access?.allowPrivateMail && (!visibleWithoutMail(entry.uri) || mailAncestorUri(entry.uri))) continue;
       const uri = hitTypeUri(type, String(entry.uri));
       const hit = {
         type, uri,
@@ -112,7 +115,7 @@ function formatHits(result) {
     const note = '\n\n(Result truncated; narrow the query or lower the limit.)';
     text = `${text.slice(0, FIND_TEXT_MAX_CHARS - note.length - 1)}…${note}`;
   }
-  return { text, data: { hits, total: Number(result?.total ?? hits.length) } };
+  return { text, data: { hits, total: access?.allowPrivateMail ? Number(result?.total ?? hits.length) : hits.length } };
 }
 
 export class OVToolClient {
@@ -158,20 +161,34 @@ export class OVToolClient {
     return body;
   }
 
-  async find(input = {}) {
-    return formatHits((await this.call('/api/v1/search/find', this.searchBody(input))).result);
+  async scopedSearchBody(input, access) {
+    const body = this.searchBody(input);
+    if (body.target_uri) body.target_uri = assertMailAccess(body.target_uri, access);
+    if (!access?.allowPrivateMail) {
+      // Use the API key's authenticated user, not the optional config hint.
+      // List-mode search supports the native path filter, not exclude_uris.
+      let user;
+      try { user = await this.conn().authenticate(); } catch (error) { throw toolError(error); }
+      body.filter = privateMailFilter(user);
+    }
+    return body;
+  }
+
+  async find(input = {}, access = {}) {
+    return formatHits((await this.call('/api/v1/search/find', await this.scopedSearchBody(input, access))).result, access);
   }
 
   // The wider search, in list mode: `peer_scope` and the other context-mode
   // arguments are refused there.
-  async search(input = {}) {
-    return formatHits((await this.call('/api/v1/search/search', this.searchBody(input))).result);
+  async search(input = {}, access = {}) {
+    return formatHits((await this.call('/api/v1/search/search', await this.scopedSearchBody(input, access))).result, access);
   }
 
   // One page of a stored text: `offset` is a 0-based line, `limit` the page
   // size in lines. One extra line tells "more" from "end". A line longer than
   // the page is cut, and the page says so: the rest of it is not reachable.
-  async read({ uri, offset = 0, limit = 200 } = {}) {
+  async read({ uri, offset = 0, limit = 200 } = {}, access = {}) {
+    uri = assertMailAccess(uri, access);
     const start = Math.max(0, Number(offset) || 0);
     const size = Math.max(1, Number(limit) || 200);
     const raw = String((await this.call(
@@ -204,13 +221,18 @@ export class OVToolClient {
   }
 
   // One page of directory entries; entries keep the endpoint's own shapes.
-  async list({ uri, limit = 100, offset = 0, recursive = false } = {}) {
+  async list({ uri, limit = 100, offset = 0, recursive = false } = {}, access = {}) {
+    uri = assertMailAccess(uri, access);
     const data = await this.call(`/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&recursive=${recursive ? 'true' : 'false'}`
       + `&node_limit=${Number(limit) || 100}&offset=${Math.max(0, Number(offset) || 0)}&output=original`,
     undefined, this.readTimeoutMs);
-    const page = (Array.isArray(data.result) ? data.result : []).slice(0, 200);
+    const rawPage = (Array.isArray(data.result) ? data.result : []).slice(0, 200);
+    const page = access?.allowPrivateMail ? rawPage : rawPage.filter((entry) => visibleWithoutMail(entry?.uri))
+      .map((entry) => mailAncestorUri(entry.uri) ? { uri: entry.uri, isDir: true } : entry);
     const hasMore = Boolean(data.has_more);
-    if (page.length === 0) return { text: `(no entries under ${uri})`, data: { uri, entries: [], has_more: hasMore } };
+    // Cursor advances by the server page, including entries removed locally.
+    const nextOffset = hasMore ? Math.max(0, Number(offset) || 0) + rawPage.length : null;
+    if (page.length === 0) return { text: `(no visible entries under ${uri})`, data: { uri, entries: [], has_more: hasMore, next_offset: nextOffset } };
     const lines = page.map((entry) => {
       const leaf = String(entry?.uri ?? '').split('/').filter(Boolean).pop() ?? '';
       const name = String(entry?.name ?? entry?.rel_path ?? leaf);
@@ -221,7 +243,7 @@ export class OVToolClient {
     return {
       text: `Entries under ${uri} (${page.length}):\n${lines.join('\n')}`
         + (hasMore ? '\nMore entries exist; repeat with a larger offset.' : ''),
-      data: { uri, entries: page, has_more: hasMore },
+      data: { uri, entries: page, has_more: hasMore, next_offset: nextOffset },
     };
   }
 
@@ -231,7 +253,11 @@ export class OVToolClient {
   async addResource({ url, file_path, to, parent, description, workspace } = {}) {
     if (Boolean(url) === Boolean(file_path)) throw ovError('invalid_input', 'Pass exactly one of url or file_path');
     if (to && parent) throw ovError('invalid_input', 'Pass at most one of to or parent');
-    const reserved = reservedTarget(to || parent);
+    if (to) to = normalizeOVUri(to);
+    if (parent) parent = normalizeOVUri(parent);
+    const ownTarget = to?.replace(/^viking:\/\/user\/[^/]+\//, 'viking://~/');
+    // An exact sync to an ancestor could replace daemon-owned descendants.
+    const reserved = reservedTarget(to || parent) || (ownTarget === 'viking://~/resources' ? 'resources' : null);
     if (reserved) {
       throw ovError('openviking_reserved_target', `${reserved}/ is kept by the daemon; store resources elsewhere, such as under ${OV_DEFAULT_PARENT}`);
     }
@@ -268,7 +294,7 @@ export class OVToolClient {
 
   // Memory extraction of one message now, on an independent one-shot session:
   // the message exactly as the session sync writes it (a user line whose
-  // from= is its real sender, so a preference is filed under that person),
+  // from= is its real sender, so a preference is filed under that person's stable key),
   // plus the agent's optional note as an assistant line. Same memory types as
   // the sync. Never retried: a commit that timed out may already have landed.
   async remember({ line, note = '' } = {}) {
@@ -294,7 +320,7 @@ export class OVToolClient {
     const taskId = trimmed(committed?.task_id) || null;
     if (!taskId) throw ovError('openviking_failed', 'OpenViking committed nothing for memory extraction');
     return {
-      text: `Submitted for memory extraction (task_id=${taskId}); it runs in the background and files what the sender asked for under their name. Find it with openviking_find shortly.`,
+      text: `Submitted for memory extraction (task_id=${taskId}); it runs in the background and files what the sender asked for under their stable person key. Find it with openviking_find shortly.`,
       data: { task_id: taskId, session_id: sessionId },
     };
   }

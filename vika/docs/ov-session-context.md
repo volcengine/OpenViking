@@ -23,17 +23,20 @@ already-running native transcript.
 Recall (`ov-recall.mjs`) is the same for every runtime. For a direct chat, a
 line that @mentions the agent, a document comment, or an event outside chats
 such as mail, the daemon reads OV on the ingress path before the line reaches
-the runtime and appends what it found: the owner's preferences (the owner's
-standing instructions, which govern the agent everywhere), and when someone
+the runtime and appends what it found: the owner's preferences (remembered
+guidance within the agent's policy, never proof of permission), and when someone
 else wrote the line, that person's preferences and their section of
-`profile.md`. Preferences live under each person's name
-(`memories/preferences/<name>/`), the name the line's `from=` shows; the
-owner's name is taken from the newest line the owner sent. With
+`profile.md`. Preferences live under a stable connector-scoped identity
+(`memories/preferences/person-<hash>/`), the key the OV line's `from=` shows;
+the owner's key is taken from the newest authenticated owner input. Display
+names remain labels, and legacy name-only directories are not automatically
+promoted to owner guidance. With
 `agents[].ovAutoRecall` (default `false`, a config-file option) one context
 search (`/api/v1/search/search`, mode `context`) on the line also runs; once
 OV has this epoch's session the search names it, so OV's dedup ledger (a file
 of its own, not a session message) keeps entries from coming back turn after
-turn. Everything else the model looks up with the Core's `openviking_*`
+turn. Non-owner searches exclude private mail resources and their ancestor
+summaries. Everything else the model looks up with the Core's `openviking_*`
 tools. Reads are cached ten minutes and bounded at 3 s together; on a timeout
 or a failure the line goes on with what arrived. No request carries a peer.
 

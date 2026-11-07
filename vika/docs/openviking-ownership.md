@@ -11,10 +11,24 @@ Vika owns OpenViking memory for every agent it runs:
 
 Keep these rules when you change any of it:
 
-- **No peers.** Synced lines carry no `peer_id`. A line's `from=` names its speaker, and extraction files a person's preferences under that name (`memories/preferences/<name>/`). Events are kept once, in the instance's own memory.
+- **No peers.** Synced lines carry no `peer_id`. An OV line's `from=` is a stable `person-<hash>` derived from source, connector instance, tenant, actor type and the complete actor ID. Chat and non-chat events use the same attribution. Extraction uses that key in `memories/preferences/<person-key>/` and profile headings; `display=` is only a readable label. Events are kept once, in the instance's own memory.
 - **Extraction never writes the agent itself.** Every session (sync and `openviking_remember`) is created with `memory_policy.memory_types` = `OV_MEMORY_TYPES` (profile, preferences, entities, events). Never add `soul` or `identity`: a line that talks the agent into a new name or a global rule would rewrite who it is. Its name and role come from the configuration, and its standing rules are the owner's preferences.
-- **No words in anyone's mouth.** `openviking_remember` submits a real inbound message, rendered exactly as the sync renders it (`formatCognitionJournalLine`), never text the model wrote as a user line.
-- **What the daemon keeps is not a tool target.** `add_resource` refuses mail, meeting notes, timer state, memories, sessions, peers and skills (`reservedTarget`).
+- **No words in anyone's mouth.** `openviking_remember` submits a real inbound message, rendered exactly as the sync renders it (`formatOVJournalLine`), never text the model wrote as a user line.
+- **What the daemon keeps is not a tool target.** `add_resource` refuses mail, meeting notes, timer state, memories, sessions, peers and skills (`reservedTarget`). Normalize repeated slashes before checking either `to` or `parent`; reject traversal and ambiguous encodings before uploads. An exact replacement of their resource ancestor is also refused.
+
+## Request attribution and private mail
+
+The four `openviking_*` read tools and `read_email` require `decision_id`, with `decision_instance` to disambiguate connector instances. The model declares the input it is serving. Core resolves it to one accepted event, compares its authenticated sender to that connector instance's owner, and logs the event sequence and resulting mail access. Reads neither settle a decision nor apply the outbound freshness fence.
+
+For a non-owner request, find/search use an OV path exclusion filter for the authenticated user's mail archive and discard private mail and ancestor-summary hits before returning either text or structured data. Direct read/list calls cannot target that archive; recursive listings filter its entries and advance pagination by the original server page. Optional semantic auto-recall uses the same exclusion. Resolve the OV user through the API key's authenticated identity, not the configuration's user hint.
+
+An incoming `email.received` event may use `read_email` for its own mail and attachments only. It grants no general mailbox access, even if its From header claims to be the owner. Owner requests can read mail; disclosure remains limited by the prompt to the owner's direct chat.
+
+This association is a model declaration, not an isolation boundary: a model can select a genuine but unrelated owner event. Prompts explicitly forbid borrowing another request's authority in a mixed turn. Already-loaded context, session history and memories derived from mail are shared and are governed by disclosure prompts; this change does not add provenance-based access control to them or isolate turns.
+
+### Existing memories
+
+Old name-only preference directories and profile headings remain available as historical memory, but are never automatically identified as owner/sender preferences. No migration guesses identity from a display name. New sync and explicit remember calls use stable keys. Built-in extraction templates preserve these keys; installations with custom profile/preference templates must adopt the same rule. Extraction is model-based, so a malformed or name-based output is not promoted to owner guidance.
 
 ## Every runtime keeps its own OpenViking plugin out
 

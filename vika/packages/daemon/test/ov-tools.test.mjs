@@ -22,10 +22,17 @@ function configFile(fields) {
 // The client against the scripted server, as the instance's own OV user, with
 // a small timeout budget and an injectable fetch.
 function client(ov, options = {}, config = {}) {
-  return new OVToolClient({
+  const instance = new OVToolClient({
     configPath: configFile({ url: ov.url, api_key: 'test-key', ...config }),
     timeoutMs: 2_000, readTimeoutMs: 1_000, ...options,
   });
+  // Existing transport/format tests exercise an authenticated owner request.
+  // Privacy tests below pass an explicit restricted access object instead.
+  for (const method of ['find', 'search', 'read', 'list']) {
+    const run = instance[method].bind(instance);
+    instance[method] = (input, access = { allowPrivateMail: true }) => run(input, access);
+  }
+  return instance;
 }
 
 function requests(ov, route) {
@@ -189,7 +196,7 @@ describe('OpenViking tool client', () => {
     assert.equal(listed.data.entries.length, 2);
 
     const empty = await client(ov).list({ uri: 'viking://nowhere' });
-    assert.equal(empty.text, '(no entries under viking://nowhere)');
+    assert.equal(empty.text, '(no visible entries under viking://nowhere)');
   });
 
   it('adds a URL resource to the private inbox by default', async (t) => {
@@ -278,7 +285,7 @@ describe('OpenViking tool client', () => {
     assert.equal(session.commits, 1);
     assert.match(remembered.data.task_id, /^commit-/);
     assert.equal(remembered.data.session_id, created.body.session_id);
-    assert.match(remembered.text, /under their name/);
+    assert.match(remembered.text, /under their stable person key/);
 
     await client(ov).remember({ line });
     assert.deepEqual(requests(ov, /messages/).at(-1).body, { role: 'user', content: line }, 'no note, no assistant line');
