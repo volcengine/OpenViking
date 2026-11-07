@@ -8,8 +8,11 @@ import xml.etree.ElementTree as ET
 import httpx
 from starlette.requests import Request
 
+from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import webdav as webdav_router
 from openviking.server.routers.webdav import _ensure_exposed_path, _exposed_child_entries
+from openviking.storage.expr import And, Eq
+from openviking.utils.content_hash import content_md5
 from openviking_cli.exceptions import NotFoundError
 
 
@@ -140,7 +143,10 @@ def test_webdav_unit_filters_multiwrite_internal_files_from_children():
     assert [entry["name"] for entry in filtered] == [".obsidian", "notes.md"]
 
 
-async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncClient):
+async def test_webdav_put_create_get_and_replace_text_file(
+    client: httpx.AsyncClient,
+    service,
+):
     mkcol_resp = await client.request("MKCOL", "/webdav/resources/scratch")
     assert mkcol_resp.status_code == 201
 
@@ -168,48 +174,17 @@ async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncCl
     assert get_resp.text == "# Notes\n\nupdated"
     assert get_resp.headers["content-length"] == str(len(get_resp.content))
 
-
-async def test_webdav_put_replace_reuses_direct_write_path(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    assert (await client.request("MKCOL", "/webdav/resources/replace-space")).status_code == 201
-    assert (
-        await client.request(
-            "PUT",
-            "/webdav/resources/replace-space/notes.md",
-            content="first version".encode("utf-8"),
-        )
-    ).status_code == 201
-
-    calls: list[tuple[str, object]] = []
-
-    async def _unexpected_fs_write(*args, **kwargs):
-        raise AssertionError("WebDAV replace should not use service.fs.write")
-
-    async def _tracked_write_file(uri, content, ctx=None):
-        calls.append(("write_file", uri, content))
-
-    async def _tracked_summarize(resource_uris, ctx=None, **kwargs):
-        calls.append(("summarize", tuple(resource_uris)))
-        return {"status": "success"}
-
-    monkeypatch.setattr(service.fs, "write", _unexpected_fs_write)
-    monkeypatch.setattr(service.viking_fs, "write_file", _tracked_write_file)
-    monkeypatch.setattr(service.resources, "summarize", _tracked_summarize)
-
-    replace_resp = await client.request(
-        "PUT",
-        "/webdav/resources/replace-space/notes.md",
-        content="second version".encode("utf-8"),
+    await service.resources.wait_processed()
+    file_uri = "viking://resources/scratch/notes.md"
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    records = await service.vikingdb_manager.filter(
+        filter=And([Eq("uri", file_uri), Eq("level", 2)]),
+        limit=10,
+        output_fields=["uri", "level", "md5"],
+        ctx=ctx,
     )
-
-    assert replace_resp.status_code == 204
-    assert calls == [
-        ("write_file", "viking://resources/replace-space/notes.md", "second version"),
-        ("summarize", ("viking://resources/replace-space/notes.md",)),
-    ]
+    assert len(records) == 1
+    assert records[0]["md5"] == content_md5(b"# Notes\n\nupdated")
 
 
 async def test_webdav_put_rejects_non_utf8_content(client: httpx.AsyncClient):
