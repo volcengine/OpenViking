@@ -43,6 +43,26 @@ class _SyncMixin:
     ``.image_mappings.json``) do so explicitly after the sync.
     """
 
+    async def _sync_move(
+        self,
+        source: str,
+        target: str,
+        *,
+        ctx: Optional["RequestContext"],
+        lease_ref: Optional[Dict[str, Any]],
+    ) -> None:
+        """Move one entry, propagating failures.
+
+        The caller deletes the staging tree after ``sync_tree`` returns, so a
+        swallowed move failure would destroy the only remaining copy of the
+        file.  Propagating keeps the staging tree alive for a retry.
+        """
+        try:
+            await self.mv(source, target, ctx=ctx, lease_ref=lease_ref)
+        except Exception as e:
+            logger.error(f"[SyncDiff] Failed to move {source} -> {target}: {e}")
+            raise
+
     async def sync_tree(
         self,
         root_uri: str,
@@ -186,40 +206,25 @@ class _SyncMixin:
                             )
                             changed = False
                     if changed:
-                        diff.updated_files.append(target_file)
                         try:
                             await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
                         except Exception as e:
-                            logger.error(
+                            # Keep going: mv copies the new content over the
+                            # target. If that also fails, the error below is
+                            # raised and the source stays in the staging tree.
+                            logger.warning(
                                 f"[SyncDiff] Failed to remove old file before update: {target_file}, error={e}"
                             )
-                        try:
-                            await self.mv(
-                                root_file,
-                                target_file,
-                                ctx=ctx,
-                                lease_ref=lease_ref,
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
-                            )
+                        await self._sync_move(root_file, target_file, ctx=ctx, lease_ref=lease_ref)
+                        diff.updated_files.append(target_file)
                     continue
 
                 if root_file and not target_file:
                     target_file_uri = VikingURI(target_dir).join(name).uri
+                    await self._sync_move(
+                        root_file, target_file_uri, ctx=ctx, lease_ref=lease_ref
+                    )
                     diff.added_files.append(target_file_uri)
-                    try:
-                        await self.mv(
-                            root_file,
-                            target_file_uri,
-                            ctx=ctx,
-                            lease_ref=lease_ref,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to move added file: {root_file} -> {target_file_uri}, error={e}"
-                        )
 
             dir_names = set(root_dirs.keys()) | set(target_dirs.keys())
             for name in sorted(dir_names):
@@ -259,18 +264,10 @@ class _SyncMixin:
 
                 if root_subdir and not target_subdir:
                     target_subdir_uri = VikingURI(target_dir).join(name).uri
+                    await self._sync_move(
+                        root_subdir, target_subdir_uri, ctx=ctx, lease_ref=lease_ref
+                    )
                     diff.added_dirs.append(target_subdir_uri)
-                    try:
-                        await self.mv(
-                            root_subdir,
-                            target_subdir_uri,
-                            ctx=ctx,
-                            lease_ref=lease_ref,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to move added directory: {root_subdir} -> {target_subdir_uri}, error={e}"
-                        )
                     continue
 
                 if root_subdir and target_subdir:
