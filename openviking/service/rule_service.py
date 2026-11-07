@@ -337,6 +337,27 @@ class RuleMutation(BaseModel):
     reason_code: str = Field(default="", max_length=128)
     reason: str = Field(default="", max_length=2_000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_misplaced_new_scenario(cls, value: Any) -> Any:
+        """Accept a scenario nested in a compiler's NEW record before strict validation."""
+        if not isinstance(value, dict) or value.get("scenario") is not None:
+            return value
+
+        operation = value.get("operation")
+        record = value.get("record")
+        if (
+            not isinstance(operation, str)
+            or operation.strip().upper() != "NEW"
+            or not isinstance(record, dict)
+            or "scenario" not in record
+        ):
+            return value
+
+        normalized_record = record.copy()
+        scenario = normalized_record.pop("scenario")
+        return {**value, "record": normalized_record, "scenario": scenario}
+
     @model_validator(mode="after")
     def _validate_operation(self) -> "RuleMutation":
         self.operation = self.operation.strip().upper()
@@ -1857,6 +1878,8 @@ meaning are more important than brevity.
   and descriptions broad enough to retrieve the RULE record but narrow enough to avoid
   unrelated tasks.
 - A Scenario guides first-stage retrieval.
+- Put `scenario` alongside `record` on the mutation, never inside `record`;
+  use only the RuleRecord fields shown in the JSON shape below.
 - Only NEW may include a non-null `scenario`. Every other operation must set `scenario` to null.
 - UPDATE and REPLACE return complete final records, never deltas. Do not add schema
   fields. Return JSON only, with no Markdown or commentary.
