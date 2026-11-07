@@ -101,6 +101,26 @@ test("no api_key anywhere reports no source", () => {
   });
 });
 
+// The digest spawns a host CLI from inside the prompt hook, and that hook has a
+// 60-second ceiling. Left on by default it spends a model round-trip on every
+// prompt before recall is even rendered, so it stays an explicit opt-in.
+test("digest compression is off until the user opts in", () => {
+  withConfigs({
+    ov: { server: {} },
+    cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli" },
+  }, () => {
+    assert.equal(loadConfig().recallRewrite, "off");
+  });
+
+  withConfigs({
+    ov: { server: {} },
+    cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli" },
+    env: { OPENVIKING_RECALL_COMPRESS: "client" },
+  }, () => {
+    assert.equal(loadConfig().recallRewrite, "client", "an explicit mode still wins");
+  });
+});
+
 // `recallRewrite` is a tri-state this harness reads from the shared on/off
 // switch, so a mode the switch cannot express still has to survive the trip.
 test("the digest mode is this harness's own tri-state, under either env name", () => {
@@ -115,7 +135,7 @@ test("the digest mode is this harness's own tri-state, under either env name", (
     ov: { server: {} },
     cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli", plugin: { recallCompress: "louder" } },
   }, () => {
-    assert.equal(loadConfig().recallRewrite, "auto", "an unreadable mode falls back to auto");
+    assert.equal(loadConfig().recallRewrite, "off", "an unreadable mode falls back to the harness default");
   });
 
   withConfigs({
