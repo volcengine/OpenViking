@@ -433,11 +433,25 @@ class CompileStateStore:
         return runs if limit is None else runs[: max(limit, 0)]
 
     async def _history_candidates(self) -> AsyncIterator[tuple[str, str, str, str]]:
+        """Yield run IDs from filenames so cleanup reads each candidate under its lock."""
         for account_id in await self.list_accounts():
             async for compile_name, record in self.iter_records(account_id):
                 owner_user_id = record["execution_context"]["owner_user_id"]
-                for run in await self.list_runs(account_id, owner_user_id, compile_name):
-                    yield account_id, owner_user_id, compile_name, run["task_id"]
+                root = self.root(account_id, owner_user_id)
+                directory = f"{root}/{self._name_segment(compile_name)}/runs"
+                try:
+                    entries = await self._agfs.ls(directory)
+                except (AGFSNotFoundError, FileNotFoundError):
+                    continue
+                for entry in entries:
+                    name = entry["name"]
+                    if not name.endswith(".json") or entry.get("isDir", entry.get("is_dir", False)):
+                        continue
+                    try:
+                        task_id = validate_task_id(name[:-5])
+                    except InvalidArgumentError:
+                        continue
+                    yield account_id, owner_user_id, compile_name, task_id
 
     async def delete_expired(self, *, now: float, limit: int) -> int:
         """Resume bounded history cleanup, retaining every unsettled Task's recovery run."""

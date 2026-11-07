@@ -570,9 +570,14 @@ async def test_cleanup_resumes_past_new_runs_and_retains_pending_recovery(setup)
     # The oldest run still owns unsettled Work and must remain available for recovery.
     setup.tracker.tasks[tasks[0].task_id].status = TaskStatus.RUNNING
     now = 7 * 24 * 3600 + 250
-    assert await setup.store.delete_expired(now=now, limit=1) == 0
-    assert await setup.store.delete_expired(now=now, limit=1) == 1
-    assert await setup.store.delete_expired(now=now, limit=1) == 0
+    reads = setup.files.read = AsyncMock(wraps=setup.files.read)
+    removed = 0
+    for checked in range(1, len(tasks) + 1):
+        removed += await setup.store.delete_expired(now=now, limit=1)
+        paths = [call.args[0] for call in reads.await_args_list if "/runs/" in call.args[0]]
+        assert len(paths) == checked
+        assert len(set(paths)) == checked
+    assert removed == 1
     other_id = await setup.store.create("acme", "bob", record, compile_name="wiki-other")
     old_run = dict(run, finished_at=100)
     await setup.store.put_run("acme", "bob", other_id, old_run)
