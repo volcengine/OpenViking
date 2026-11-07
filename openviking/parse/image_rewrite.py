@@ -285,8 +285,8 @@ async def rewrite_image_uris(
 
     root_prefix = root_uri.rstrip("/")
 
-    # Find all .md files recursively
-    glob_result = await viking_fs.glob("**/*.md", uri=root_uri, ctx=ctx)
+    # Newly persisted sections may not be present in the vector index yet.
+    glob_result = await viking_fs.glob("**/*.md", uri=root_uri, ctx=ctx, force_fs=True)
     md_uris = glob_result.get("matches", [])
 
     if not md_uris:
