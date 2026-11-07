@@ -179,6 +179,38 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
     return {field: normalized[field] for field in _METADATA_ORDER if field in normalized}
 
 
+_BRACE_SCALAR_RE = re.compile(
+    r"^(?P<prefix>\s*(?:-\s+|[A-Za-z0-9_.\- ]+:\s+)?)(?P<value>\{\{.*)$"
+)
+
+
+def _quote_brace_leading_scalars(text: str) -> str:
+    """Single-quote legacy preview scalars whose value starts with ``{{``.
+
+    Privacy references are rendered as ``{{ov_privacy:...}}``, and YAML reads a
+    node that starts with ``{`` as a flow mapping, which makes the whole preview
+    unparsable. Only nodes that actually start with a reference are touched:
+    sequence items (``- {{...}}``) and mapping values (``key: {{...}}``).
+    Values already quoted and folded-scalar continuation lines carrying a
+    reference mid-string are left byte-identical.
+    """
+
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.rstrip("\r\n")
+        ending = line[len(stripped) :]
+        match = _BRACE_SCALAR_RE.match(stripped)
+        if not match:
+            out.append(line)
+            continue
+        value = match.group("value")
+        if value[0] in {"'", '"'}:
+            out.append(line)
+            continue
+        out.append(f"{match.group('prefix')}'{value.replace(chr(39), chr(39) * 2)}'{ending}")
+    return "".join(out)
+
+
 def parse_abstract_overview(raw: str | bytes) -> AbstractOverviewDocument:
     """Parse OKF Markdown while accepting frontmatter-free legacy content.
 
@@ -198,7 +230,13 @@ def parse_abstract_overview(raw: str | bytes) -> AbstractOverviewDocument:
 
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].rstrip("\r\n") != "---":
-        return AbstractOverviewDocument(metadata={}, body=text, legacy=True)
+        # Privacy references are rendered as `{{ov_privacy:...}}`; a YAML node
+        # whose value starts with `{` is read as a flow mapping, so a legacy
+        # preview carrying one is unparsable and every consumer that parses it
+        # (semantic vectorization of a skill) fails. Quote those scalars.
+        return AbstractOverviewDocument(
+            metadata={}, body=_quote_brace_leading_scalars(text), legacy=True
+        )
 
     closing_index: Optional[int] = None
     for index in range(1, len(lines)):
