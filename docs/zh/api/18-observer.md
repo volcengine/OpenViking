@@ -10,7 +10,7 @@ Observer API 提供队列、向量库、模型、锁、检索和文件系统等�
 
 #### 1. API 实现介绍
 
-获取队列系统状态（embedding 和语义处理队列）。显示各队列的待处理、进行中、已完成和错误数量。
+获取队列系统状态，包括 embedding、语义处理和会话提交队列。显示各队列的待处理、进行中、已处理投递、重新入队和投递错误数量。
 
 **代码入口**:
 - `openviking/server/routers/observer.py:observer_queue` - HTTP 路由
@@ -79,6 +79,45 @@ ov observer queue
 ```
 
 ---
+
+### 排查会话提交失败
+
+队列计数描述投递，不代表所属任务的最终结果。`Processed` 包括重新入队和取消的投递；`Errors` 记录投递失败。例如，恢复带有 `.failed.json` 标记的归档时，`SessionCommit` 可以在将任务标记为 `failed` 后成功结算这次投递。因此，`Errors: 0` 或 `is_healthy: true` 都不能证明所有归档已成功产出记忆。
+
+通过已有的 [Task API](17-tasks.md) 或 CLI 查询失败任务：
+
+```bash
+ov task list --task-type session_commit --status failed
+```
+
+需要查询多页时，在 HTTP 任务列表中传入 `task_type=session_commit`、`status=failed` 和 `pagination=cursor`。当 `has_more` 为 true 时，保持筛选条件，将返回的 `next_cursor` 作为 `cursor` 继续查询。单页结果数不是失败总数。任务查询受调用者访问范围和任务保留期约束，不会统计磁盘上的全部归档标记。
+
+已有的 `openviking_task_failed{task_type="session_commit"}` Gauge 可辅助排查，但需结合[指标说明](../concepts/12-metrics.md)中的任务存储快照限制解读。
+
+### GET /api/v1/observer/session-archives
+
+统计当前用户会话命名空间中的持久归档标记，不受任务列表分页、任务记录保留期或进程内任务缓存影响。ROOT 调用者同样使用当前账号和用户的命名空间；这不是跨账号或全部用户的统计。
+
+```bash
+curl http://localhost:1933/api/v1/observer/session-archives \
+  -H "X-API-Key: your-key"
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "total": 65,
+    "completed": 10,
+    "failed": 54,
+    "pending": 1
+  }
+}
+```
+
+每个现存的 `archive_NNN` 目录只计一次：存在 `.done` 为 `completed`；否则存在 `.failed.json` 为 `failed`；两种标记均无则为 `pending`。两种标记同时存在时，与会话恢复一致，优先按 `.done` 计入。任务记录过期后，失败归档仍可被统计；归档被删除后则移出计数。完成标记不衡量记忆质量或实际提取的记忆数量。
+
+该接口按需读取全部可见归档，历史较多时成本可能较高。并发提交或删除期间，结果不是事务快照。存储异常会导致请求失败，不会返回误导性的零失败结果。可使用 `result.failed` 进行归档失败告警；队列投递计数及其健康状态语义保持不变。
 
 ### observer.vikingdb
 

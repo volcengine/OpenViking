@@ -10,7 +10,7 @@ Python examples below use `SyncHTTPClient`. Observer accessors are properties re
 
 #### 1. API Implementation Overview
 
-Get queue system status (embedding and semantic processing queues). Shows pending, in-progress, completed, and error counts for each queue.
+Get queue system status, including embedding, semantic processing, and session commit queues. Shows pending and in-progress work, processed deliveries, requeues, and delivery errors for each queue.
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_queue` - HTTP route
@@ -79,6 +79,45 @@ ov observer queue
 ```
 
 ---
+
+### Diagnosing failed session commits
+
+Queue counts describe deliveries, not the outcome of the owning task. `Processed` includes requeued and cancelled deliveries; `Errors` records failed deliveries. A `SessionCommit` delivery can settle successfully after its task was marked `failed`, for example when recovering an archive with a `.failed.json` marker. Neither `Errors: 0` nor `is_healthy: true` proves that all archives produced memories.
+
+Query failed tasks through the existing [Task API](17-tasks.md) or CLI:
+
+```bash
+ov task list --task-type session_commit --status failed
+```
+
+For more than one page, use the HTTP task list with `task_type=session_commit`, `status=failed`, and `pagination=cursor`. When `has_more` is true, send `next_cursor` as `cursor` with the same filters. The size of one result page is not a failure total. Task queries follow the caller's access scope and task retention; they do not count all archive markers on disk.
+
+The existing `openviking_task_failed{task_type="session_commit"}` Gauge can supplement these checks, subject to the task-store snapshot limits described in [Metrics](../concepts/12-metrics.md).
+
+### GET /api/v1/observer/session-archives
+
+Count persisted archive markers in the current user's session namespace, independently of task-list pagination, task-record retention, and process-local task caches. ROOT callers use their current account and user namespace too; this is not a cross-account or all-user census.
+
+```bash
+curl http://localhost:1933/api/v1/observer/session-archives \
+  -H "X-API-Key: your-key"
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "total": 65,
+    "completed": 10,
+    "failed": 54,
+    "pending": 1
+  }
+}
+```
+
+Each existing `archive_NNN` directory counts once: `.done` means `completed`, otherwise `.failed.json` means `failed`, and neither marker means `pending`. If both markers exist, `.done` takes precedence, as in session recovery. A failed archive remains visible after its task record expires. Removing archives removes them from this count; completion markers do not measure memory quality or the number of memories extracted.
+
+This on-demand scan reads every visible archive and can be expensive for large histories. It is not a transactional snapshot of concurrent commits or deletions. Storage errors fail the request instead of returning a misleading zero-failure result. Use `result.failed` for archive-failure alerts; queue delivery counters and their health semantics are unchanged.
 
 ### observer.vikingdb
 
