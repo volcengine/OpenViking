@@ -156,6 +156,51 @@ async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recursive", [False, True])
+async def test_delete_uris_keeps_exact_and_recursive_native_path_scopes_distinct(
+    vector_backend_factory, tmp_path, recursive
+):
+    ctx = _ctx()
+    other = RequestContext(user=UserIdentifier("other-account", "alice"), role=Role(Role.USER))
+    target = "viking://user/alice/resources/missing"
+    uris = [target, target + "/child.md", target + "/nested/leaf.md", target + "-other/keep.md"]
+    backend = vector_backend_factory(
+        VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path / "vectors")
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        for owner in (ctx, other):
+            await backend._upsert_many_raw(
+                [
+                    {
+                        "id": f"{owner.account_id}-{i}",
+                        "uri": uri,
+                        "account_id": owner.account_id,
+                        "context_type": "resource",
+                        "level": 2,
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                    }
+                    for i, uri in enumerate(uris)
+                ],
+                ctx=owner,
+            )
+
+        await backend.delete_uris(ctx, [target], recursive=recursive)
+
+        expected_own = uris[3:] if recursive else uris[1:]
+        for owner, expected in ((ctx, expected_own), (other, uris)):
+            records, cursor = await backend.scroll(ctx=owner, limit=10)
+            assert cursor is None
+            assert sorted(record["uri"] for record in records) == sorted(expected)
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("mode", "allowed"), [("restricted", False), ("inherit", True)])
 async def test_acl_resolution_preserves_revocation_and_inheritance(
     vector_backend_factory, tmp_path, mode, allowed
