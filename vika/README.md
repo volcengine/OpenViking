@@ -11,9 +11,9 @@ Vika supports runtimes such as Codex, Claude Code, and Pi, and connects to Feish
 ## Why Vika
 
 - **Bring Your Own Machine.** Your agent works with your software and projects, connected to OV and IM through Vika.
-- **Use your agent.** Connect an authenticated local coding agent or use the bundled Pi / Durable runtime. See [runtime setup](docs/installation-reference.md#准备).
+- **Use your agent.** Connect an authenticated local coding agent or use the bundled Pi / Durable runtime. See [runtime setup](docs/installation-reference.md#prerequisites).
 - **Keep context across sessions.** OpenViking stores session history for new sessions and runtime switches, and provides long-term memory and resource search. See [session context](docs/ov-session-context.md).
-- **Connect multiple channels.** One instance can serve several chat channels; separate instances have their own workspaces, data directories, and OV configuration. See [multiple instances](docs/installation-reference.md#多个-agent).
+- **Connect multiple channels.** One instance can serve several chat channels; separate instances have their own workspaces, data directories, and OV configuration. See [multiple instances](docs/installation-reference.md#multiple-agents).
 
 ## Quick start
 
@@ -46,20 +46,20 @@ vika upgrade primary
 
 The console at `http://127.0.0.1:3737` shows message processing and tool activity.
 
-**Connect trusted chats only.** The agent can operate on its configured workspace, and chats served by one instance share runtime context. Feishu setup asks whether to authorize searching and reading messages as your user; review the scope before granting access. See [message access](docs/usage-reference.md#机器人能读到哪些消息).
+**Connect trusted chats only.** The agent can operate on its configured workspace, and chats served by one instance share runtime context. Feishu setup asks whether to authorize searching and reading messages as your user; review the scope before granting access. See [message access](docs/usage-reference.md#message-access).
 
 ## Documentation
 
-Some linked reference documents are currently in Chinese.
+The release-process guide is currently in Chinese.
 
 | Topic | Guide |
 |---|---|
 | Installation, model sign-in, first connection | [Installation](install.md) |
-| Chat channels, email, attachments, and cards | [Feature reference](docs/usage-reference.md#聊天渠道与邮箱) |
+| Chat channels, email, attachments, and cards | [Feature reference](docs/usage-reference.md#chat-channels-and-email) |
 | Permissions, sign-in, upgrades, rollback, and development | [Configuration and operations](docs/installation-reference.md) |
 | Context archival and recovery | [OV session context](docs/ov-session-context.md) |
 | Adding message sources | [Connector protocol](docs/connector-protocol.md) |
 | Durable models and recovery | [Durable runtime](docs/pi-durable-runtime.md) |
-| Reliability and acceptance checks | [Reliability limits](docs/usage-reference.md#可靠性边界) · [Feishu acceptance](docs/usage-reference.md#飞书端验收) |
+| Reliability and acceptance checks | [Reliability limits](docs/usage-reference.md#reliability-limits) · [Feishu acceptance](docs/usage-reference.md#feishu-acceptance-checks) |
 
 Features in the source tree may not yet be published. Check your installed release.
