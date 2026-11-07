@@ -201,7 +201,7 @@ export default {
   sourcePlaceholder: 'viking://resources/…',
   compileName: '配置名称',
   nameRequired: '保存配置前请填写配置名称。',
-  nameInvalid: '请输入 1–64 位 ASCII 字母、数字、下划线或连字符。',
+  nameInvalid: '请输入 1–64 位 ASCII 字母、数字、下划线或连字符。首字符不能是连字符。',
   nameHint:
     '保存配置时必填，一次性执行可留空。名称区分大小写，在同一 account 的同一用户内唯一。',
   nameFixed: '该名称用于引用配置，不能修改。',

@@ -65,7 +65,7 @@ pub(crate) enum CompileCommands {
     /// Save a persistent configuration without executing it; scheduling controls belong in --args
     Create {
         /// Configuration name unique to the current user within the account
-        #[arg(long, value_name = "name", allow_hyphen_values = true)]
+        #[arg(long, value_name = "name", allow_hyphen_values = true, value_parser = super::parse_compile_name)]
         compile_name: String,
         #[arg(
             long = "from",

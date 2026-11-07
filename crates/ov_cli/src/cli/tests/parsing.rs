@@ -782,7 +782,8 @@ fn append_time_filter_params_only_emits_after_and_before() {
 
 #[test]
 fn compile_creation_and_named_execution_are_distinct() {
-    for name in ["research-summary", "-summary", "-"] {
+    assert!(Cli::try_parse_from(["ov", "compile", "--compile-name=-demo"]).is_err());
+    for name in ["research-summary", "_summary"] {
         let parsed = Cli::try_parse_from(["ov", "compile", "--compile-name", name]).unwrap();
         assert!(
             matches!(parsed.command, Commands::Compile { compile_name: Some(value), .. } if value == name)

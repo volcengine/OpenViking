@@ -4,7 +4,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 
 ## Compile 配置与执行
 
-`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
+`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，首字符不能是连字符，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
 
 普通 Compile 在创建或更新配置、手动或定时提交新执行时，统一校验规范化后的目录 URI：
 
@@ -12,7 +12,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 - `to` 的任何严格祖先或后代目录带有 `compile_target=true` 时拒绝请求；`to` 自身已有该 tag 时允许复用。
 - `to` 不能是 `viking://user/{user_id}/memories/experiences` 或其任意层级子目录。`~/` 别名和末尾斜杠不能绕过限制；`experiences2` 等相似名称不被这条规则拒绝。
 
-嵌套检查遵循当前请求的租户和权限范围，采用基于索引标签的无锁检查。后台补标完成并在索引可查询前存在空窗，快速连续或并发提交的父子目标可能被同时接受；该检查不提供原子排他性。不传 `from` 的独立 `skill="memory"` 就地整理模式不应用这些目录约束或目标打标流程。
+创建时先取得按账号隔离的 Compile 专用虚拟树锁，再检查可见索引标签。补标期间，严格父子目标拒绝创建；相同目标共享独立持有凭证，执行仍按现有流程串行处理。锁竞争最多等待 1 秒，不等待 Compile 或索引完成。锁不覆盖真实产物路径，由现有补标队列接管，直到 tag 可查询或目标路径消失。服务中断期间租约可能过期，恢复前仍可能出现受理空窗；租约不提供永久占位。索引检查遵循当前请求的租户和权限范围。不传 `from` 的独立 `skill="memory"` 就地整理模式不应用这些目录约束或目标打标流程。
 
 ### 创建配置
 
@@ -85,7 +85,7 @@ POST /api/v1/compile
 
 传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标开始/结束快照、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
 
-两种普通执行形式都先完成目标校验、必要的目录创建及独立补标任务持久入队，再提交 Compile 执行任务。后台索引或 tag 延迟不阻塞 Compile 提交、产物写入或收尾，也不使 Compile 因补标失败而失败。受理成功不代表 tag 已可查询，父子目录检查仍有上述空窗。Compile 的显式开始/结束快照、产物 `snapshot_id`、Outputs 和回滚流程保持原有语义。该 tag 是目录检索标记，任务完成、失败或取消不会自动移除它。
+两种普通执行形式都先完成目标校验、必要的目录创建及独立补标任务持久入队，再提交 Compile 执行任务。后台索引或 tag 延迟不阻塞 Compile 提交、产物写入或收尾，也不使 Compile 因补标失败而失败。受理成功不代表 tag 已可查询，补标期间由上述虚拟树锁保护目标。Compile 的显式开始/结束快照、产物 `snapshot_id`、Outputs 和回滚流程保持原有语义。该 tag 是目录检索标记，任务完成、失败或取消不会自动移除它。
 
 执行接口拒绝调度控制。`args.mode`、`last_compile_time`、`changes` 和 `operation_id` 不是公开执行参数；执行计划由 OpenViking 生成。
 
@@ -203,9 +203,9 @@ Compile 业务文件仅有：
 
 `configuration_directory` 为名称 ASCII 字节的小写十六进制编码（`compile_name.encode("ascii").hex()`），不添加前缀，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
 
-目录中的 `user_id` 是创建配置时认证上下文中的 OV 用户 ID；使用用户 API key 时，它是该 key 对应的用户。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含其创建的配置；共享目标目录仍按现有 ACL 授权。公开 API 只需传入 `compile_name`，在当前认证用户目录内定位；拥有共享目标的权限不代表可以访问其他用户的配置。
+目录中的 `user_id` 取创建请求的 `args.owner_id`，省略时取当前认证用户的 ID。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含归属于该用户的配置；共享目标目录仍按现有 ACL 授权。公开 API 只需传入 `compile_name`，在当前认证用户目录内定位；拥有共享目标的权限不代表可以访问其他用户的配置。
 
-state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存固定的配置创建者 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
+state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存配置归属用户 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
 
 `conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在产物快照收尾后统计，不等待目标补标；失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
 

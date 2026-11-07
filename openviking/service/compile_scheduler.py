@@ -114,16 +114,8 @@ class CompileScheduler:
         self._group_resolver = group_resolver
 
     async def save_credential(self, ctx: RequestContext) -> tuple[Dict[str, Any], Dict[str, str]]:
-        """Return ``(executor, credential)``; a trusted-mode root key is saved as ``key_type=root``."""
-        key_type = "user"
-        if self._identity_resolver is not None and ctx.api_key:
-            try:
-                identity = await self._identity_resolver(ctx.api_key)
-            except Exception:
-                identity = None
-            if identity is not None and identity.role == Role.ROOT and identity.account_id is None:
-                key_type = "root"
-        executor = {"account_id": ctx.account_id, "user_id": ctx.user.user_id, "key_type": key_type}
+        """Return the request's execution identity and encrypted API key for scheduled runs."""
+        executor = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
         return executor, await encrypt_credential(self.credential_encryptor, ctx)
 
     def install_expiry(self, scheduler: Any) -> None:
@@ -294,8 +286,7 @@ class CompileScheduler:
     async def _executor(self, record: Dict[str, Any]) -> tuple[RequestContext, Dict[str, Any]]:
         """Verify the saved key and load the executor's current account groups.
 
-        A user key must resolve to the same user; a root key must still be the
-        root key, and the run acts as the saved user (as trusted requests do).
+        A user key must match the saved identity. A root key acts as the saved user.
         """
         context = record["execution_context"]
         executor, credential = context.get("executor"), context.get("credential")
@@ -318,10 +309,9 @@ class CompileScheduler:
             except Exception as exc:
                 raise invalid from exc
             root_key = identity.role == Role.ROOT and identity.account_id is None
-            if root_key != (executor.get("key_type") == "root") or (
-                not root_key
-                and (identity.account_id, identity.user_id)
-                != (executor["account_id"], executor["user_id"])
+            if not root_key and (identity.account_id, identity.user_id) != (
+                executor["account_id"],
+                executor["user_id"],
             ):
                 raise invalid
             group_ids = tuple(

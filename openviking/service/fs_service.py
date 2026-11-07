@@ -7,6 +7,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 """
 
 import asyncio
+import hashlib
 import time
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
@@ -2151,7 +2152,6 @@ class FSService:
 
         The target itself is reusable. This read-only check propagates index errors.
         """
-        # shortcut: concurrent submissions can admit nested targets; lock admission if required.
         namespace = classify_uri(uri)
         boundary = (namespace.content_index or 0) + 1
         parts = list(namespace.parts[:-1])
@@ -2159,7 +2159,7 @@ class FSService:
             parent = "viking://" + "/".join(parts)
             if await self._directory_has_compile_tag(parent, ctx):
                 raise InvalidArgumentError(
-                    f"Compile target must not be inside another compile target: {parent}"
+                    "Parent directory is already a Compile target. Choose another directory."
                 )
             parts.pop()
         store = self._ensure_initialized()._get_vector_store()
@@ -2180,41 +2180,80 @@ class FSService:
         )
         if records:
             raise InvalidArgumentError(
-                f"Compile target must not contain another compile target: {records[0]['uri']}"
+                "Child directory is already a Compile target. Choose another directory."
             )
+
+    def _compile_target_lock_scope(
+        self, uri: str, ctx: RequestContext
+    ) -> tuple[list[dict[str, str]], str]:
+        """Derive the exclusive virtual scope and shared owner for one canonical target."""
+        account_root = f"/local/{ctx.account_id}/"
+        target = (
+            self._ensure_initialized()
+            ._uri_to_path(validate_safe_viking_uri_path(uri), ctx=ctx)
+            .removeprefix(account_root)
+        )
+        # Account-root initialization must not overlap the virtual admission lease.
+        path = f"/local/_system/compile_locks/{ctx.account_id}/{target}"
+        owner = "compile-target-" + hashlib.sha256(path.encode()).hexdigest()
+        return [{"path": path, "kind": "tree"}], owner
 
     async def ensure_compile_target(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Validate/materialize the target and durably enqueue independent tagging.
 
-        Existing files and indexed nested targets are rejected. Only directory and
-        queue writes precede the response; index visibility belongs to the worker.
+        A Compile-only tree lease excludes nested targets until tags are visible.
+        The canonical target determines the owner, allowing independent holders
+        for the same target. Lock contention waits at most one second; indexing
+        belongs to the worker. The admission lease covers no actual output files.
         """
         viking_fs = self._ensure_initialized()
         uri = validate_safe_viking_uri_path(uri)
         self._reject_storage_internal_target(uri)
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
-        await self._validate_compile_target_nesting(uri, ctx)
+        requests, owner = self._compile_target_lock_scope(uri, ctx)
+        guard = PathLockGuard(viking_fs._async_agfs)
         try:
-            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                raise
-            async with self._hold_watch_scope(
-                [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
-            ) as lease:
-                try:
-                    stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
-                except Exception as exc:
-                    if not is_not_found_error(exc):
-                        raise
-                    await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
-                    stat = {"isDir": True}
-        if not stat.get("isDir"):
-            raise InvalidArgumentError(f"Compile target must be a directory: {uri}")
-        return await self._enqueue_compile_target_tag(uri, ctx)
+            try:
+                # Only this trusted target-derived owner may share this exact virtual scope.
+                await guard.acquire(
+                    lambda: viking_fs._async_agfs.pathlock_reacquire_batch(
+                        requests, owner, timeout_secs=1.0
+                    )
+                )
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    "Compile target is busy or its parent/child is already a Compile target. "
+                    "Choose another directory or retry later.",
+                    uri=uri,
+                    conflict_type="compile_target_busy",
+                ) from exc
+            await self._validate_compile_target_nesting(uri, ctx)
+            try:
+                stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                async with self._hold_watch_scope(
+                    [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
+                ) as lease:
+                    try:
+                        stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+                    except Exception as exc:
+                        if not is_not_found_error(exc):
+                            raise
+                        await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+                        stat = {"isDir": True}
+            if not stat.get("isDir"):
+                raise InvalidArgumentError(f"Compile target must be a directory: {uri}")
+            return await self._enqueue_compile_target_tag(uri, ctx, guard)
+        finally:
+            await guard.close()
 
-    async def _enqueue_compile_target_tag(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def _enqueue_compile_target_tag(
+        self, uri: str, ctx: RequestContext, guard: PathLockGuard
+    ) -> Dict[str, Any]:
         """Persist a separate internal Task/Work; failed admission fails the request."""
+        handoff = await guard.to_handoff()
 
         async def enqueue() -> Dict[str, Any]:
             manager = get_queue_manager()
@@ -2228,21 +2267,25 @@ class FSService:
                     "group_ids": list(ctx.group_ids),
                     "actor_peer_id": ctx.actor_peer_id,
                     "bypass_acl": ctx.bypass_acl,
+                    "target_lock": handoff,
                 },
             )
             return {"directory_count": 1}
 
-        with detach_task_context():
-            result, _ = await run_tracked_operation(
-                "compile_target_tag",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                operation=enqueue,
-                resource_id=uri,
-                meta={"internal": True},
-                wait=False,
-            )
-        return result
+        async def dispatch() -> Dict[str, Any]:
+            with detach_task_context():
+                result, _ = await run_tracked_operation(
+                    "compile_target_tag",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    operation=enqueue,
+                    resource_id=uri,
+                    meta={"internal": True},
+                    wait=False,
+                )
+            return result
+
+        return await guard.handoff_and_dispatch(handoff, dispatch)
 
     async def finalize_compile_directories(
         self, uri: str, ctx: RequestContext, *, progress: Dict[str, Any]

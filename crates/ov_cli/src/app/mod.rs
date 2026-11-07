@@ -4,8 +4,9 @@ mod dispatch;
 
 use crate::CliContext;
 use crate::cli::preprocess::{
-    first_command_token, is_config_agent_command_request, plain_help_misuse,
-    pre_parse_output_options, pre_parse_requires_cli_config_file, preprocess_cli_args,
+    first_command_token, is_config_agent_command_request, named_compile_conflict,
+    plain_help_misuse, pre_parse_output_options, pre_parse_requires_cli_config_file,
+    preprocess_cli_args,
 };
 use crate::cli::{Cli, Commands, UploadCliOptions, legacy_upload_option_error};
 use crate::config::Config;
@@ -139,6 +140,23 @@ pub(crate) async fn run() {
     if let Some(help) = help_ui::render_command_help_request(&args) {
         print!("{help}");
         return;
+    }
+    if let Some(flag) = named_compile_conflict(&args) {
+        let (title, message, guidance) = match i18n::Language::current() {
+            i18n::Language::ZhCn => (
+                "命令错误",
+                format!("--compile-name 不能与 {flag} 同时使用。"),
+                "运行已有配置：ov compile --compile-name <名称>\n一次性编译：省略 --compile-name，传入执行参数。\n详见编译指南：https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
+            ),
+            i18n::Language::En => (
+                "Command Error",
+                format!("--compile-name cannot be combined with {flag}."),
+                "Run a saved configuration: ov compile --compile-name <name>\nFor a one-off compile, omit --compile-name and supply the execution inputs.\nSee https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
+            ),
+        };
+        error_ui::print_report(&error_ui::ErrorReport::new(title, message), false);
+        eprintln!("\n{guidance}");
+        std::process::exit(2);
     }
     if let Some(misuse) = plain_help_misuse(&args) {
         let report = error_ui::report_for_plain_help_error(&command_display, misuse.help_command);

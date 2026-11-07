@@ -1,5 +1,6 @@
 """Persistent configuration, full execution, and shared scheduling contracts."""
 
+import asyncio
 import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -19,6 +20,10 @@ from openviking.service.compile_service import (
     CompileSessionStatus,
 )
 from openviking.service.task_tracker import get_task_tracker
+from openviking.storage.errors import ResourceBusyError
+from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs.compile_target_tag_processor import CompileTargetTagProcessor
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -38,6 +43,7 @@ SAVED_INPUTS = {**INPUTS, "compile_name": "research-summary"}
     [
         {},
         {"compile_name": "../state"},
+        {"compile_name": "-demo"},
         {"compile_name": "research-summary", "to": TARGET},
         {"compile_name": "research-summary", "args": None},
         {"compile_id": "research-summary"},
@@ -56,6 +62,34 @@ SAVED_INPUTS = {**INPUTS, "compile_name": "research-summary"}
 def test_execution_request_rejects_ambiguous_or_legacy_controls(payload):
     with pytest.raises(ValidationError):
         CompileRequest.model_validate(payload)
+
+
+def test_named_execution_guides_mixed_requests_before_validating_inputs():
+    with pytest.raises(ValidationError, match="send only compile_name to POST /api/v1/compile"):
+        CompileRequest.model_validate({"compile_name": "jj", "from": None})
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"auto_update": False},
+        {"update_schedule": None},
+        {"auto_update": True, "update_schedule": {"frequency": "daily", "hour": 10}},
+    ],
+)
+async def test_execution_reports_misplaced_scheduling_options(client, args):
+    response = await client.post("/api/v1/compile", json={**INPUTS, "args": args})
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert error["details"]["validation_errors"][0]["loc"] == ["body"]
+    message = error["message"]
+    assert message.startswith("ov compile (POST /api/v1/compile)")
+    assert ", ".join(sorted(args)) in message
+    assert "ov compile create --compile-name <name>" in message
+    assert "POST /api/v1/compile/create" in message
+    assert "POST /api/v1/compile/config/update" in message
+    assert "https://docs.openviking.ai/en/api/23-agent-runtime" in message
 
 
 async def prepare(service, app, monkeypatch):
@@ -235,7 +269,10 @@ async def test_compile_admission_rejects_invalid_targets_before_publication(
 async def test_configuration_runs_full_isolation_and_failure_recovery(
     service, app, client, monkeypatch
 ):
+    ensure_target = service.fs.ensure_compile_target
     ctx, runtime = await prepare(service, app, monkeypatch)
+    monkeypatch.setattr(service.fs, "ensure_compile_target", AsyncMock(wraps=ensure_target))
+    service.fs.finalize_compile_directories.return_value = False
     owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
     store = service.compile.lifecycle.store
     tracker = get_task_tracker()
@@ -250,6 +287,11 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert runtime.calls == []
     service.fs.ensure_compile_target.assert_awaited_once_with(TARGET, ctx)
     assert state["conflict_num"] is None
+
+    nested = await client.post("/api/v1/compile", json={**INPUTS, "to": TARGET + "/child"})
+    assert nested.status_code == 409, nested.text
+    assert "Choose another directory" in nested.json()["error"]["message"]
+    assert runtime.calls == []
 
     async def execute(payload, key):
         response = await client.post(
@@ -388,18 +430,22 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
         await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
         == "not_due"
     )
-    other = RequestContext(user=UserIdentifier(ctx.account_id, "another-owner"), role=Role.USER)
+    other_owner = "another-owner"
     await service.compile.create_compile_task(
         CompileCreateRequest.model_validate(
-            {**SAVED_INPUTS, "args": {"update_schedule": before["update_schedule"]}}
+            {
+                **SAVED_INPUTS,
+                "args": {"owner_id": other_owner, "update_schedule": before["update_schedule"]},
+            }
         ),
-        ctx=other,
+        ctx=ctx,
     )
+    assert scheduler._expiry.report.await_args.args[0].identity.user_id == other_owner
     assert (
-        await scheduler.trigger_if_due(ctx.account_id, other.user.user_id, compile_name, due)
+        await scheduler.trigger_if_due(ctx.account_id, other_owner, compile_name, due)
         == "submitted"
     )
-    other_runs = await store.list_runs(ctx.account_id, other.user.user_id, compile_name)
+    other_runs = await store.list_runs(ctx.account_id, other_owner, compile_name)
     assert len(other_runs) == 1 and other_runs[0]["task_id"] != runs[0]["task_id"]
     assert other_runs[0]["actor"] == executor.user.user_id
     with monkeypatch.context() as patch:
@@ -554,3 +600,53 @@ async def test_run_queries_check_frozen_target_permissions(service, app, monkeyp
         "runs": [],
         "next_cursor": None,
     }
+
+
+@pytest.mark.parametrize(
+    "target,nested", [(TARGET, TARGET + "/child"), (TARGET + "/child", TARGET)]
+)
+async def test_pending_compile_target_survives_tag_retry(service, monkeypatch, target, nested):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    ensure = service.fs.ensure_compile_target
+    queue = get_queue_manager().get_queue("CompileTargetTag")
+    deliveries = []
+
+    async def capture(enqueue_ctx):
+        deliveries.append(dict(enqueue_ctx.payload))
+        enqueue_ctx.committed = True
+        return str(len(deliveries))
+
+    monkeypatch.setattr(queue, "_enqueue", capture)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.compile_target_tag_processor.sleep", AsyncMock()
+    )
+    monkeypatch.setattr(
+        service.fs, "finalize_compile_directories", AsyncMock(side_effect=[True, False, True])
+    )
+    try:
+        await asyncio.gather(ensure(target, ctx), ensure(target + "/", ctx))
+        first, second = deliveries
+        assert first["target_lock"]["holder_id"] != second["target_lock"]["holder_id"]
+        assert (await queue.process_dequeued(first)).outcome is ProcessOutcome.SUCCESS
+        assert (await queue.process_dequeued(second)).outcome is ProcessOutcome.REQUEUED
+
+        with pytest.raises(ResourceBusyError, match="Choose another directory"):
+            await asyncio.wait_for(ensure(nested, ctx), timeout=1.75)
+        retry = deliveries[2]
+        assert retry["_task_work_id"] == second["_task_work_id"]
+        assert (await queue.process_dequeued(retry)).outcome is ProcessOutcome.SUCCESS
+        await ensure(nested, ctx)
+    finally:
+        worker = CompileTargetTagProcessor(service.fs)
+        for delivery in deliveries:
+            await worker.on_cancelled(delivery)
+
+
+async def test_failed_tag_enqueue_releases_compile_target(service, monkeypatch):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    queue = get_queue_manager().get_queue("CompileTargetTag")
+    monkeypatch.setattr(queue, "_enqueue", AsyncMock(side_effect=OSError("queue unavailable")))
+    with pytest.raises(OSError, match="queue unavailable"):
+        await service.fs.ensure_compile_target(TARGET, ctx)
+    requests, _ = service.fs._compile_target_lock_scope(TARGET, ctx)
+    assert not await service.viking_fs._async_agfs.pathlock_is_locked(requests[0]["path"])

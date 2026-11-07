@@ -8,13 +8,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.crypto.encryptor import FileEncryptor
+from openviking.crypto.providers import LocalFileProvider
 from openviking.scheduling.expiry import CallbackRequest, CallbackStatus, ItemIdentity
+from openviking.server.identity import RequestContext, ResolvedIdentity, Role
 from openviking.service.compile_scheduler import TZ, CompileScheduler, _ExpiryHandler
 from openviking.service.compile_targets import CompileLifecycle, new_record
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskRecord
 from openviking.storage.queuefs import QueueManager
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import FailedPreconditionError, InvalidArgumentError, NotFoundError
+from openviking_cli.session.user_id import UserIdentifier
 
 COMPILE_NAME = "daily-Wiki_1"
 ACCOUNT = "account"
@@ -75,6 +79,25 @@ async def test_callback_retries_submission_failures(
         scheduler.trigger_if_due.assert_not_awaited()
     else:
         scheduler.trigger_if_due.assert_awaited_once_with(ACCOUNT, OWNER, COMPILE_NAME)
+
+
+async def test_scheduled_credential_uses_current_key_identity():
+    scheduler = CompileScheduler(None, None)
+    scheduler.credential_encryptor = FileEncryptor(LocalFileProvider(root_key="ab" * 32))
+    caller = RequestContext(user=UserIdentifier(ACCOUNT, OWNER), role=Role.USER, api_key="test-key")
+    executor, credential = await scheduler.save_credential(caller)
+    assert executor == {"account_id": ACCOUNT, "user_id": OWNER}
+    record = {"execution_context": {"executor": executor, "credential": credential}}
+
+    resolve = AsyncMock()
+    scheduler.set_identity_resolver(resolve, AsyncMock(return_value=[]))
+    for identity in (ResolvedIdentity(Role.ROOT), ResolvedIdentity(Role.USER, ACCOUNT, OWNER)):
+        resolve.return_value = identity
+        ctx, _ = await scheduler._executor(record)
+        assert (ctx.user, ctx.role) == (caller.user, Role.USER)
+    resolve.return_value = ResolvedIdentity(Role.USER, ACCOUNT, "other")
+    with pytest.raises(FailedPreconditionError):
+        await scheduler._executor(record)
 
 
 class LockedConfiguration:

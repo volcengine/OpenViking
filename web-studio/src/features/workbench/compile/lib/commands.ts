@@ -70,11 +70,9 @@ export function tokenize(input: string): string[] {
   if (result[0]?.startsWith('/')) result[0] = result[0].slice(1)
   return result
 }
-/** Return whether an unmodified name has 1–64 ASCII letters, digits, underscores, or hyphens. */
+/** Check the raw configuration name, including the leading-character and length constraints. */
 export function isValidCompileName(value: string): boolean {
-  return (
-    value.length >= 1 && value.length <= 64 && !/[^A-Za-z0-9_-]/.test(value)
-  )
+  return /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(value)
 }
 
 export function parseCompile(

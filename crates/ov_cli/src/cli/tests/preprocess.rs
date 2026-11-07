@@ -1,9 +1,19 @@
 use crate::cli::preprocess::{
-    find_command_index, first_command_token, plain_help_misuse, pre_parse_output_options,
-    pre_parse_requires_cli_config_file, preprocess_privacy_args,
+    find_command_index, first_command_token, named_compile_conflict, plain_help_misuse,
+    pre_parse_output_options, pre_parse_requires_cli_config_file, preprocess_privacy_args,
 };
 use crate::cli::tests::os_args;
 use crate::output::OutputFormat;
+
+#[test]
+fn named_compile_conflicts_even_when_option_values_are_missing() {
+    for args in [
+        os_args(&["ov", "compile", "--compile-name", "--from"]),
+        os_args(&["ov", "compile", "--compile-name", "jj", "--from"]),
+    ] {
+        assert_eq!(named_compile_conflict(&args), Some("--from"));
+    }
+}
 
 #[test]
 fn pre_parse_output_options_preserve_json_config_errors() {

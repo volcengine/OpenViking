@@ -113,7 +113,7 @@ class CompileCreateRequest(CompileInputs):
 
     compile_name: str = Field(
         pattern=COMPILE_NAME_PATTERN,
-        description="Case-sensitive configuration name: 1–64 ASCII letters, digits, underscores or hyphens.",
+        description="Case-sensitive configuration name: 1–64 ASCII letters, digits, underscores or hyphens. The first character cannot be a hyphen.",
     )
 
 
@@ -137,25 +137,35 @@ class CompileRequest(BaseModel):
     def is_memory_mode(self) -> bool:
         return self.skill == MEMORY_COMPILE_SKILL
 
-    @model_validator(mode="after")
-    def _normalize(self) -> "CompileRequest":
-        """Reject overrides and validate full inputs before any execution side effects."""
-        if "compile_name" in self.model_fields_set:
-            if self.compile_name is None:
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize(cls, data: Any) -> Any:
+        """Check the request shape before parsing fields and normalize one-off execution inputs."""
+        if not isinstance(data, Mapping):
+            return data
+        if "compile_name" in data:
+            if len(data) != 1:
+                raise ValueError(
+                    "To run a saved configuration, send only compile_name to POST /api/v1/compile. "
+                    "For a one-off compile, omit compile_name and supply the execution inputs. "
+                    "See https://docs.openviking.ai/en/api/23-agent-runtime"
+                )
+            if data["compile_name"] is None:
                 raise ValueError("compile_name must not be null")
-            if self.model_fields_set != {"compile_name"}:
-                raise ValueError("compile_name cannot be combined with execution inputs")
-            return self
-        inputs = CompileInputs.model_validate(
-            self.model_dump(by_alias=True, exclude={"compile_name"})
-        )
-        if {"auto_update", "update_schedule"}.intersection(inputs.args or {}):
+            return data
+        inputs = CompileInputs.model_validate(data)
+        scheduling = {"auto_update", "update_schedule"}.intersection(inputs.args or {})
+        if scheduling:
             raise ValueError(
-                "Scheduling controls require /compile/create or /compile/config/update"
+                f"ov compile (POST /api/v1/compile) does not accept scheduling options "
+                f"{', '.join(sorted(scheduling))}. Remove them from args for a one-off run. "
+                "To schedule a new configuration, use 'ov compile create --compile-name <name>' "
+                "or POST /api/v1/compile/create with these options in args. "
+                "For an existing configuration, send them as top-level fields "
+                "to POST /api/v1/compile/config/update. "
+                "See https://docs.openviking.ai/en/api/23-agent-runtime"
             )
-        for name in ("from_", "to", "skill", "instruction", "args"):
-            setattr(self, name, getattr(inputs, name))
-        return self
+        return inputs.model_dump(by_alias=True)
 
 
 class CompileConfigUpdate(CompileCreateRequest):
@@ -514,8 +524,7 @@ class CompileService:
         public, private = self._split_payload(normalized)
         control, runtime_args = split_control_args(public.get("args"))
         public["args"] = runtime_args
-        # Storage belongs to the creator; the scheduled execution identity can change.
-        record = new_record(public, {"owner_user_id": ctx.user.user_id})
+        record = new_record(public)
         if private:
             record["execution_context"]["private_args"] = await self._encrypt_private_args(
                 ctx.account_id, private
@@ -532,18 +541,19 @@ class CompileService:
         """Save configuration and enqueue target tagging without executing Compile or snapshots."""
         lifecycle = self._require_lifecycle()
         compile_name = validate_compile_name(request.compile_name)
+        owner_user_id = (request.args or {}).get("owner_id", ctx.user.user_id)
         record = await self._settings(request, ctx)
 
         async def prepare_target_and_schedule() -> None:
             await self._fs.ensure_compile_target(record["to"], ctx)
             if self._scheduler is not None:
                 await self._scheduler.reschedule(
-                    ctx.account_id, ctx.user.user_id, compile_name, record, raise_on_error=True
+                    ctx.account_id, owner_user_id, compile_name, record, raise_on_error=True
                 )
 
         await lifecycle.store.create(
             ctx.account_id,
-            ctx.user.user_id,
+            owner_user_id,
             record,
             compile_name=compile_name,
             before_publish=prepare_target_and_schedule,

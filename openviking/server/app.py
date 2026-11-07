@@ -257,6 +257,9 @@ def _validation_error_message(errors: list[dict]) -> str:
     first = errors[0]
     location = _format_error_location(first.get("loc"))
     message = first.get("message") or "Invalid value"
+    if location == "body" and first.get("type") == "value_error":
+        # Model validators describe the constraint across fields in their own message.
+        return message.removeprefix("Value error, ")
     return f"Invalid request parameters: {location}: {message}"
 
 

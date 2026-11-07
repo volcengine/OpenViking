@@ -66,7 +66,7 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 LOCK_TIMEOUT_SECONDS = 30.0
-COMPILE_NAME_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+COMPILE_NAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 GIT_RETRIES = 3
 SNAPSHOT_BUSY_SECONDS = 30.0

@@ -230,7 +230,7 @@ export default {
   sourcePlaceholder: 'viking://resources/…',
   compileName: 'Configuration name',
   nameRequired: 'Enter a configuration name before saving.',
-  nameInvalid: 'Use 1–64 ASCII letters, digits, underscores, or hyphens.',
+  nameInvalid: 'Use 1–64 ASCII letters, digits, underscores, or hyphens. The first character cannot be a hyphen.',
   nameHint:
     'Required when saving configuration; optional for one-off execution. Names are case-sensitive and unique to the current user within this account.',
   nameFixed: 'This name identifies the configuration and cannot be changed.',

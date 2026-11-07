@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -18,6 +18,11 @@ from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 def snapshot_service():
     store = SimpleNamespace(scroll=AsyncMock(return_value=([], None)))
     vfs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(
+            pathlock_reacquire_batch=AsyncMock(return_value={"owner_id": "target"}),
+            pathlock_release=AsyncMock(),
+        ),
+        _uri_to_path=lambda uri, ctx: f"/local/{ctx.account_id}/{uri.removeprefix('viking://')}",
         _get_vector_store=lambda: store,
         _ensure_access=AsyncMock(),
         commit=AsyncMock(return_value={"commit_oid": "b" * 40, "result": "created"}),
@@ -155,7 +160,7 @@ async def test_ensure_compile_target_preserves_existing_directory(snapshot_servi
         service._enqueue_compile_target_tag.assert_not_awaited()
     else:
         await service.ensure_compile_target(uri, ctx)
-        service._enqueue_compile_target_tag.assert_awaited_once_with(uri, ctx)
+        service._enqueue_compile_target_tag.assert_awaited_once_with(uri, ctx, ANY)
     service.finalize_compile_directories.assert_not_awaited()
     assert vfs.mkdir.await_count == (kind == "missing")
     vfs.commit.assert_not_awaited()
@@ -201,7 +206,9 @@ async def test_compile_target_nesting_uses_directory_tags(
             ctx=ctx,
         )
         if rejected:
-            with pytest.raises(InvalidArgumentError):
+            with pytest.raises(
+                InvalidArgumentError, match="already a Compile target.*Choose another"
+            ):
                 await service.ensure_compile_target("viking://resources/parent/output", ctx)
             vfs.mkdir.assert_not_awaited()
         else:

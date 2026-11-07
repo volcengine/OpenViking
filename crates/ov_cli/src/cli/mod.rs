@@ -31,6 +31,21 @@ use clap::{ArgAction, Parser, Subcommand};
 
 const MAX_TIME_DECAY_DURATION_DAYS: u128 = 3000 * 365;
 
+/// Return the unchanged configuration name or a CLI usage error before contacting the server.
+fn parse_compile_name(value: &str) -> Result<String, &'static str> {
+    if (1..=64).contains(&value.len())
+        && !value.starts_with('-')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+    {
+        return Ok(value.to_owned());
+    }
+    Err(
+        "Use 1–64 ASCII letters, digits, underscores or hyphens. The first character cannot be a hyphen.",
+    )
+}
+
 fn parse_event_time_decay_protection(value: &str) -> std::result::Result<String, String> {
     if value == "0" {
         return Ok(value.to_string());
@@ -1102,7 +1117,7 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: Option<CompileCommands>,
         /// Execute this persistent configuration without overriding its inputs
-        #[arg(long, value_name = "name", allow_hyphen_values = true, conflicts_with_all = ["from_uris", "to", "skill", "instruction", "args"])]
+        #[arg(long, value_name = "name", allow_hyphen_values = true, value_parser = parse_compile_name, conflicts_with_all = ["from_uris", "to", "skill", "instruction", "args"])]
         compile_name: Option<String>,
         /// Source file or directory; repeat the flag or separate entries with commas.
         /// Omitted with `--skill memory`, which consolidates `--to` in place.

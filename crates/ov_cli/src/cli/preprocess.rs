@@ -36,6 +36,23 @@ pub(crate) struct PlainHelpMisuse {
     pub(crate) help_command: String,
 }
 
+/// Returns the conflicting execution flag even when either value is missing.
+pub(crate) fn named_compile_conflict(args: &[OsString]) -> Option<&str> {
+    let flags = args.iter().take_while(|arg| *arg != "--").map(|arg| {
+        let token = arg.to_str().unwrap_or_default();
+        token.split_once('=').map_or(token, |(flag, _)| flag)
+    });
+    let name = flags.clone().position(|flag| flag == "--compile-name")?;
+    let (input, flag) = flags.enumerate().find(|(_, flag)| {
+        matches!(
+            *flag,
+            "--from" | "--to" | "--skill" | "--instruction" | "--args"
+        )
+    })?;
+    let command = command_tokens_for_plain_help(&args[..name.min(input)]);
+    (command == ["compile"]).then_some(flag)
+}
+
 pub(crate) fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
     let tokens = command_tokens_for_plain_help(args);
     let help_index = tokens.iter().position(|token| token == "help")?;
