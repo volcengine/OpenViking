@@ -73,4 +73,8 @@ def result_schema(schema, data):
                 },
                 "additionalProperties": value,
             }
+        if data.get("assignment_kind") == "source_records":
+            for name in list(properties):
+                if name.startswith("ready_") or name == "target_uri":
+                    properties.pop(name)
     return result
