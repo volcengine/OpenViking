@@ -121,7 +121,7 @@ class RestoreRequest(BaseModel):
         None, pattern=r"^[0-9a-f]{40}$", description="Full commit ID supplying content at path"
     )
     current_commit_id: Optional[str] = Field(
-        None, pattern=r"^[0-9a-f]{40}$", description="Expected last commit changing path"
+        None, pattern=r"^[0-9a-f]{40}$", description="Optional expected last commit changing path"
     )
     branch: str = "main"
     dry_run: bool = False
@@ -134,8 +134,8 @@ class RestoreRequest(BaseModel):
         if self.path is not None:
             if self.project_dir is not None or self.source_commit is not None:
                 raise ValueError("path cannot be combined with project_dir or source_commit")
-            if not self.restore_commit_id or not self.current_commit_id:
-                raise ValueError("path requires restore_commit_id and current_commit_id")
+            if not self.restore_commit_id:
+                raise ValueError("path requires restore_commit_id")
         elif not self.source_commit:
             raise ValueError("source_commit is required")
         return self

@@ -586,7 +586,7 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o
 
 ---
 
-### 单文件版本恢复（HTTP API）
+### 单文件版本恢复
 
 `POST /api/v1/snapshot/restore` 可恢复任意有权限文件路径的历史内容，不要求 Compile 配置或产物归属。该模式接受以下字段，不与 `project_dir`、`source_commit` 混用：
 
@@ -594,8 +594,13 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o
 |------|------|------|
 | path | str | 文件 URI，同时用作历史快照中的读取路径 |
 | restore_commit_id | str | 来源 commit ID，40 位小写十六进制 |
-| current_commit_id | str | 调用方观察到的该文件在 `main` 上最后一次变更的 commit ID；不匹配时返回 `409 CONFLICT`，resource 为 `VERSION_CONFLICT` |
+| current_commit_id | str | 可选。省略时直接恢复；传入时须匹配该文件在 `main` 上最后一次变更的 commit ID，否则返回 `409 CONFLICT`，resource 为 `VERSION_CONFLICT` |
 | dry_run | bool | 可选；仅校验，不修改内容或创建快照 |
+
+```bash
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md --current-commit-id <current_commit_id>
+```
 
 `GET /api/v1/snapshot/versions?uri=<文件 URI>&limit=20` 返回原生 Git 历史，从新到旧排列：
 
@@ -623,9 +628,9 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
   }'
 ```
 
-响应包含 `uri`、`snapshot_id` 和 `result`（`created`、`noop` 或 `dry_run`）。内容变化会生成新的 forward snapshot，并执行正常索引维护；内容相同时可返回已有快照和 `noop`。dry run 不写内容、不创建快照。
+响应包含 `uri`、`snapshot_id` 和 `result`（`created`、`noop` 或 `dry_run`）。内容变化会生成新的 forward snapshot，并执行正常索引维护；内容相同时可返回已有快照和 `noop`。dry run 不写内容、不创建快照。省略 `current_commit_id` 时，dry run 返回的 `snapshot_id` 为 null。
 
-恢复前校验文件最新 commit，在内容写锁内再次校验。过期请求返回 `409`，缺失历史或路径返回 `404`。保留 ACL 和索引维护，按同一路径恢复，不自动追踪重命名。文件及目录回滚都不写 Compile state/run；目录回滚已经产生 forward commit，不额外重复提交。
+传入 `current_commit_id` 时，恢复前校验文件最新 commit，在内容写锁内再次校验。过期请求返回 `409`，缺失历史或路径返回 `404`。保留 ACL 和索引维护，按同一路径恢复，不自动追踪重命名。文件及目录回滚都不写 Compile state/run；目录回滚已经产生 forward commit，不额外重复提交。
 
 ---
 

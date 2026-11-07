@@ -255,6 +255,12 @@ class TaskRecord:
         public_meta = deepcopy(self.meta)
         public_meta.pop("submission_hash", None)
         public_meta.pop("submission_token", None)
+        request = public_meta.get("request")
+        if self.task_type == "compile" and isinstance(request, dict):
+            compile_meta = request.get("compile")
+            if isinstance(compile_meta, dict):
+                compile_meta.pop("input_signature", None)
+                compile_meta.pop("owner_user_id", None)
         return {
             **({"execution_events": deepcopy(self.execution_events)} if include_events else {}),
             "task_id": self.task_id,

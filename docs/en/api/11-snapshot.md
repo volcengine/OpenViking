@@ -586,16 +586,21 @@ With `dry_run=true`, only the planned diff is returned and nothing is written. D
 
 ---
 
-### Single-file version restore (HTTP API)
+### Single-file version restore
 
-`POST /api/v1/snapshot/restore` restores historical content at any permitted file path. No Compile configuration or output ownership is required. This mode requires the following fields and cannot be combined with `project_dir` or `source_commit`:
+`POST /api/v1/snapshot/restore` restores historical content at any permitted file path. No Compile configuration or output ownership is required. This mode accepts the following fields and cannot be combined with `project_dir` or `source_commit`:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | path | str | File URI, also used as the historical snapshot path |
 | restore_commit_id | str | Source commit ID, 40 lowercase hexadecimal characters |
-| current_commit_id | str | Last commit changing this file on `main`, as observed by the caller; a mismatch returns `409 CONFLICT` with resource `VERSION_CONFLICT` |
+| current_commit_id | str | Optional. Omit to restore unconditionally, or pass the last commit observed for this file on `main`. A mismatch returns `409 CONFLICT` with resource `VERSION_CONFLICT` |
 | dry_run | bool | Optional; checks the request without changing content or creating a snapshot |
+
+```bash
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md --current-commit-id <current_commit_id>
+```
 
 `GET /api/v1/snapshot/versions?uri=<file URI>&limit=20` returns native Git history, newest first:
 
@@ -623,9 +628,9 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
   }'
 ```
 
-The response contains `uri`, `snapshot_id`, and `result` (`created`, `noop`, or `dry_run`). Changed content produces a forward snapshot and normal index maintenance. Identical content may return the existing snapshot as `noop`. Dry runs do not write content or create a snapshot.
+The response contains `uri`, `snapshot_id`, and `result` (`created`, `noop`, or `dry_run`). Changed content produces a forward snapshot and normal index maintenance. Identical content may return the existing snapshot as `noop`. Dry runs do not write content or create a snapshot. The dry-run `snapshot_id` is null when `current_commit_id` is omitted.
 
-The last file commit is checked before reading historical content and again under the content write lock. Stale requests return `409`; missing history or paths return `404`. ACL checks and index maintenance still apply. Restore uses the same path and does not follow renames. Neither file nor directory restore writes Compile state or run history; directory restore already produces its own forward commit.
+When `current_commit_id` is supplied, the last file commit is checked before reading historical content and again under the content write lock. Stale requests return `409`; missing history or paths return `404`. ACL checks and index maintenance still apply. Restore uses the same path and does not follow renames. Neither file nor directory restore writes Compile state or run history; directory restore already produces its own forward commit.
 
 ---
 

@@ -84,8 +84,9 @@ async def test_log_returns_recent_commits(client_with_resource):
     assert "oid" in log[0] and "message" in log[0]
 
 
+@pytest.mark.parametrize("guarded", [False, True])
 async def test_native_file_versions_and_restore_without_compile_config(
-    client_with_resource_and_blob, service
+    client_with_resource_and_blob, service, guarded
 ):
     """Ordinary files use commit cursors and restore snapshots without a Compile registration."""
     client, first_oid, uri, first_bytes = client_with_resource_and_blob
@@ -107,7 +108,9 @@ async def test_native_file_versions_and_restore_without_compile_config(
     assert previous.status_code == 200, previous.text
     assert previous.json()["result"]["versions"][0]["oid"] == first_oid
 
-    payload = {"path": uri, "restore_commit_id": first_oid, "current_commit_id": second_oid}
+    payload = {"path": uri, "restore_commit_id": first_oid}
+    if guarded:
+        payload["current_commit_id"] = second_oid
     dry_run = await client.post("/api/v1/snapshot/restore", json={**payload, "dry_run": True})
     assert dry_run.status_code == 200, dry_run.text
     assert dry_run.json()["result"]["result"] == "dry_run"
@@ -118,8 +121,11 @@ async def test_native_file_versions_and_restore_without_compile_config(
     assert set(result) == {"uri", "snapshot_id", "result"}
     assert result["result"] == "created"
     assert await service.viking_fs.read_file_bytes(uri, ctx=ctx) == first_bytes
-    stale = await client.post("/api/v1/snapshot/restore", json=payload)
+    stale = await client.post(
+        "/api/v1/snapshot/restore", json={**payload, "current_commit_id": second_oid}
+    )
     assert stale.status_code == 409, stale.text
+    assert stale.json()["error"]["details"]["resource"] == "VERSION_CONFLICT"
 
 
 async def test_log_empty_repo_returns_404(client_with_no_repo):

@@ -93,19 +93,31 @@ pub struct SnapshotCommitReq {
     pub author_email: Option<String>,
 }
 
+/// Wire formats accepted by the snapshot restore endpoint for a tree or a single file.
 #[derive(serde::Serialize)]
-pub struct SnapshotRestoreReq {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_dir: Option<String>,
-    pub source_commit: String,
-    pub branch: String,
-    pub dry_run: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author_email: Option<String>,
+#[serde(untagged)]
+pub enum SnapshotRestoreReq {
+    Tree {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project_dir: Option<String>,
+        source_commit: String,
+        branch: String,
+        dry_run: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        author_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        author_email: Option<String>,
+    },
+    File {
+        path: String,
+        restore_commit_id: String,
+        /// Last observed file commit on main. Omission permits an unconditional restore.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_commit_id: Option<String>,
+        dry_run: bool,
+    },
 }
 
 pub enum SnapshotShowResult {

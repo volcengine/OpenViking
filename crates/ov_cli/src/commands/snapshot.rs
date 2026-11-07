@@ -35,6 +35,8 @@ pub async fn dispatch(
         }
         SnapshotCmd::Restore {
             project_dir,
+            file,
+            current_commit_id,
             source_commit,
             branch,
             dry_run,
@@ -42,14 +44,22 @@ pub async fn dispatch(
             author_name,
             author_email,
         } => {
-            let req = SnapshotRestoreReq {
-                project_dir,
-                source_commit,
-                branch,
-                dry_run,
-                message,
-                author_name,
-                author_email,
+            let req = match file {
+                Some(path) => SnapshotRestoreReq::File {
+                    path,
+                    restore_commit_id: source_commit,
+                    current_commit_id,
+                    dry_run,
+                },
+                None => SnapshotRestoreReq::Tree {
+                    project_dir,
+                    source_commit,
+                    branch,
+                    dry_run,
+                    message,
+                    author_name,
+                    author_email,
+                },
             };
             let value = client.snapshot_restore(&req).await?;
             print_restore(&value, output_format, compact);

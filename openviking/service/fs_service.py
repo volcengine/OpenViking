@@ -2484,16 +2484,18 @@ class FSService:
         self,
         uri: str,
         restore_commit_id: str,
-        current_commit_id: str,
+        current_commit_id: Optional[str],
         ctx: RequestContext,
         *,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        """Restore a file through normal indexing and a forward snapshot; stale commits fail under lock."""
+        """Restore historical file content, checking the last file commit only when supplied."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
         async def check_current_commit():
+            if current_commit_id is None:
+                return
             history = await viking_fs.log(paths=[uri], limit=1, ctx=ctx)
             current = history[0]["oid"] if history else None
             if current != current_commit_id:
