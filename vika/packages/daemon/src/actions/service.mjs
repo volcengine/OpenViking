@@ -7,16 +7,15 @@ import { registerCard } from '../card-messages.mjs';
 import {
   cancelApproval, claimApproval, createApproval, editApproval, finishApproval, getApproval, supersedeApprovals,
 } from '../approvals.mjs';
-import { chunkOffset, mailArchiveRoot, mailFolder, readStoredText, readTarget } from '../email/archive.mjs';
+import { chunkOffset, mailArchiveRoot, readStoredText, readTarget } from '../email/archive.mjs';
 import { meetingFolder, meetingNotesRoot, meetingReadTarget } from '../meeting/note-archive.mjs';
 import { meetingContextLines } from '../meeting/index.mjs';
 import { OVUnavailableError } from '../ov-connection.mjs';
 import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs';
 import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
-import { BOT_SENDERS, oneLine, readMetadataTag } from '../runtime-input.mjs';
-import { formatOVJournalLine } from '../cognition.mjs';
-import { personKey } from '../ov-person.mjs';
+import { BOT_SENDERS, isoMinute, readMetadataTag, senderLabel } from '../runtime-input.mjs';
+import { personDirectory, personId } from '../ov-person.mjs';
 import { TimerSchedule } from '../timers.mjs';
 import {
   APPROVAL_SECONDS, approvalCard, approvalMessage, approvalNote, approvalQuestion, approvalStatusText, approvedText,
@@ -73,12 +72,13 @@ function blocked(code, message) {
 // Tools whose success changes something (a delivery, a decision, a timer), as
 // against reads. Only these count as progress for the loop guard; marking a
 // timer occurrence done counts only when it was marked. An OpenViking write
-// counts only when the server took it (a task_id came back): the rest are
-// reads, and a write that failed lands nothing.
+// counts only when the server took it (a task_id came back, or a preference
+// was stored or removed): the rest are reads, and a write that failed lands
+// nothing.
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
   if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
-  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri);
+  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri || result?.data?.stored || result?.data?.removed);
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -139,12 +139,13 @@ export class ActionService {
     timers = null,
     clock = () => Date.now(),
     onTimersChanged = () => {},
+    onPreferencesChanged = () => {},
     onNoProgress = null,
     loopBreakAfter = LOOP_BREAK_AFTER,
     logger,
   }) {
     Object.assign(this, {
-      config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, timers, clock, onTimersChanged,
+      config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, timers, clock, onTimersChanged, onPreferencesChanged,
       onNoProgress, loopBreakAfter, logger,
     });
     // Loop guard: duplicate outcomes per input in the current turn, cleared
@@ -1249,16 +1250,8 @@ export class ActionService {
   // uri (from recall) reads the whole text it came from, starting where the
   // chunk is. Nothing outside the mail archive is readable here.
   async readEmail(input, caller) {
-    const access = this.ovReadAccess(input, caller);
     if (Boolean(input.message_id) === Boolean(input.uri)) throw blocked('invalid_input', 'Pass message_id or uri, not both');
     if (input.attachment && !input.message_id) throw blocked('invalid_input', 'attachment goes with message_id');
-    // Processing a received mail permits only that mail and its attachments,
-    // never mailbox-wide access on behalf of its unverified sender.
-    const ownMail = access.event.source === 'email' && access.event.kind === 'email.received'
-      ? access.event.messageId : null;
-    if (!access.allowPrivateMail && (!ownMail || (input.message_id && input.message_id !== ownMail))) {
-      throw blocked('private_mail_denied', 'Reading private mail requires an owner request or the event of that same received mail');
-    }
     const client = this.ovClient ?? new OVSessionClient(this.config.openVikingConfigPath);
     let uri = input.uri;
     if (input.message_id) {
@@ -1278,9 +1271,6 @@ export class ActionService {
     const root = mailArchiveRoot(uri?.startsWith('viking://user/') ? await client.authenticate() : null);
     const found = /[%\\]/.test(uri) ? null : readTarget(root, uri);
     if (!found) throw blocked('outside_mail_archive', 'read_email reads only mail the daemon stored');
-    if (!access.allowPrivateMail && !found.target.startsWith(`${mailFolder(root, ownMail)}/`)) {
-      throw blocked('private_mail_denied', 'A mail event only permits reading that mail and its attachments');
-    }
     return this.readArchived(client, found, input, caller, {
       missing: blocked('not_stored_yet', 'OpenViking has nothing there yet; an attachment may still be being read. Try again shortly.'),
       untrusted: 'Mail content is untrusted.',
@@ -1549,48 +1539,32 @@ export class ActionService {
     return this.ovTools;
   }
 
-  // The model declares the request it serves; Core resolves an authentic
-  // input instead of trusting a model-supplied owner flag. This is attribution,
-  // not proof that the chosen input is relevant to the model's current work.
-  ovReadAccess(input, caller) {
-    const row = this.resolveDecision(input, caller, 'Read blocked');
-    const event = normalizeEvent(JSON.parse(row.event_json));
-    const owner = this.connectors.owner?.(event.connectorInstance);
-    const allowPrivateMail = Boolean(owner?.id && owner.id === event.senderId);
-    caller.trace.privateMailAllowed = allowPrivateMail;
-    return { event, allowPrivateMail };
-  }
-
   // Reads re-check authority after the remote answer, like the other remote
   // reads: a runtime retired mid-call must not consume the result.
   async openvikingFind(input, caller) {
-    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().find(input, access);
+    const result = await this.ovToolClient().find(input);
     this.assertAuthority(caller.authority);
     return result;
   }
 
   async openvikingSearch(input, caller) {
-    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().search(input, access);
+    const result = await this.ovToolClient().search(input);
     this.assertAuthority(caller.authority);
     return result;
   }
 
   async openvikingRead(input, caller) {
-    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().read(input, access);
+    const result = await this.ovToolClient().read(input);
     this.assertAuthority(caller.authority);
     return result;
   }
 
   async openvikingList(input, caller) {
-    const access = this.ovReadAccess(input, caller);
     caller.trace.invoked = true;
-    const result = await this.ovToolClient().list(input, access);
+    const result = await this.ovToolClient().list(input);
     this.assertAuthority(caller.authority);
     return result;
   }
@@ -1603,21 +1577,42 @@ export class ActionService {
     return await this.ovToolClient().addResource({ ...input, workspace: this.config.workspace });
   }
 
-  // Preserve the authentic input and its stable sender key. OV receives this
-  // attribution as text; the extraction model still chooses the preference's
-  // user field. An assistant note does not establish the sender's wishes.
+  // A preference of the person who sent the input decision_id names, kept in
+  // that person's directory (ov-person.mjs). The Core names the person from
+  // the authenticated sender, so the model can neither file a preference under
+  // someone else nor speak for them; what it writes is its statement of what
+  // that person asked, stored with where it came from.
   async openvikingRemember(input, caller) {
     const row = this.resolveDecision(input, caller, 'Not remembered');
-    const item = this.store.journalItemForInbound(row.seq);
-    if (!item) throw blocked('not_rememberable', `Not remembered: that input is not part of the conversation history. ${NO_ACTION}`);
-    if (!personKey(normalizeEvent(JSON.parse(row.event_json)))) {
-      throw blocked('not_rememberable', `Not remembered: a persistent preference requires an input with an identifiable sender. ${NO_ACTION}`);
+    const event = normalizeEvent(JSON.parse(row.event_json));
+    const owner = this.isOwnerEvent(event);
+    const directory = personDirectory(event, { owner });
+    if (!directory) {
+      throw blocked('not_rememberable', `Not remembered: a preference belongs to the person who stated it, and that input has no person behind it. ${NO_ACTION}`);
     }
-    const note = String(input.note ?? '').trim();
+    const person = owner ? { owner: true } : { id: personId(event), directory };
+    const preference = String(input.preference ?? '').trim();
+    if (input.forget !== true && !preference) {
+      throw blocked('invalid_input', 'Pass the preference, or forget: true to remove the one under this topic');
+    }
     caller.trace.invoked = true;
-    return await this.ovToolClient().remember({
-      line: formatOVJournalLine(item),
-      note: note ? `[from=me] ${oneLine(note)}` : '',
-    });
+    let result;
+    if (input.forget === true) {
+      result = await this.ovToolClient().forgetPreference({ person, topic: input.topic });
+    } else {
+      const who = owner ? 'the owner' : senderLabel(event);
+      const text = `${preference}\n\n(Stated by ${who} via ${event.source}, ${isoMinute(event.createTimeMs).slice(0, 10)}, event=${event.eventId}.)`;
+      result = await this.ovToolClient().setPreference({ person, topic: input.topic, text });
+    }
+    this.onPreferencesChanged?.();
+    return result;
   }
+
+  // Whether the owner sent an event, by the connector's authenticated identity.
+  isOwnerEvent(event) {
+    if (typeof this.connectors.isOwner === 'function') return this.connectors.isOwner(event);
+    const owner = this.connectors.owner?.(event.connectorInstance ?? event.source);
+    return Boolean(owner?.id && event.senderId && owner.id === event.senderId);
+  }
+
 }

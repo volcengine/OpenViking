@@ -57,10 +57,12 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
     const user = apiKeys[request.headers['x-api-key']] ?? request.headers['x-openviking-user'] ?? 'owner';
     const canonical = (uri) => uri?.replace(/^viking:\/\/~(?=\/|$)/, `viking://user/${user}`);
     const uri = canonical(url.searchParams.get('uri'));
-    if (route === 'GET /health') return reply(200, { user_id: user });
     if (route === 'GET /api/v1/system/status') return reply(200, { initialized: true, user });
     if (route === 'POST /api/v1/content/write') {
       const target = canonical(body.uri);
+      // Like OV 0.5: replace writes whether or not the file exists, create
+      // refuses one that does.
+      if (body.mode === 'create' && state.files.has(target)) return reply(409, 'already exists');
       state.files.set(target, body.content);
       return reply(200, { uri: target, semantic_status: 'skipped', vector_status: 'queued' });
     }
@@ -69,6 +71,17 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
     }
     if (route === 'GET /api/v1/fs/ls') {
       const listing = state.listings.get(uri);
+      // The preference tree lists what is stored, directories first-level.
+      if (!listing && /\/memories\/preferences(?:\/|$)/.test(uri ?? '')) {
+        const children = new Map();
+        for (const key of state.files.keys()) {
+          if (!key.startsWith(`${uri}/`)) continue;
+          const [first, ...rest] = key.slice(uri.length + 1).split('/');
+          children.set(`${uri}/${first}`, rest.length > 0);
+        }
+        if (!children.size) return reply(404, 'not found');
+        return reply(200, [...children].map(([child, isDir]) => ({ uri: child, isDir })), { has_more: false });
+      }
       if (!listing) return reply(200, [], { has_more: false });
       const offset = Number(url.searchParams.get('offset') ?? 0);
       const limit = Number(url.searchParams.get('node_limit') ?? 1000);
@@ -110,6 +123,10 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
       state.files.set(`${task.to}/${stem}.md`, `parsed ${task.upload.name}: ${task.upload.data.toString('latin1')}`);
       return reply(200, { status: 'running', stage: 'processing_queue' });
     }
+    if (route === 'DELETE /api/v1/fs') {
+      if (!state.files.delete(uri)) return reply(404, 'not found');
+      return reply(200, { uri, estimated_deleted_count: 1 });
+    }
     if (route === 'GET /api/v1/fs/stat') {
       if (state.files.has(uri)) return reply(200, { uri, isDir: false });
       if ([...state.files.keys()].some((key) => key.startsWith(`${uri}/`))) return reply(200, { uri, isDir: true });
@@ -130,18 +147,10 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
     }
     if (route === 'POST /api/v1/sessions') {
       const id = body?.session_id ?? `session-${next += 1}`;
-      state.sessions.set(id, { policy: body?.auto_commit_policy ?? null, memoryPolicy: body?.memory_policy ?? null,
-        messages: [], commits: 0, pendingTokens: 0 });
+      state.sessions.set(id, { policy: body?.auto_commit_policy ?? null, messages: [], commits: 0 });
       return reply(200, { session_id: id, uri: `viking://user/testuser/sessions/${id}` });
     }
-    const session = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)(?:\/(messages|commit|context))?$/);
-    if (session && request.method === 'GET') {
-      const record = state.sessions.get(decodeURIComponent(session[1]));
-      if (!record) return reply(404, 'no such session');
-      return reply(200, session[2] === 'context'
-        ? { messages: record.messages, stats: { totalArchives: record.commits } }
-        : { pending_tokens: record.pendingTokens });
-    }
+    const session = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/(messages|commit)$/);
     if (session && request.method === 'POST') {
       const record = state.sessions.get(decodeURIComponent(session[1]));
       if (!record) return reply(404, 'no such session');
@@ -150,7 +159,6 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
         return reply(200, { session_id: session[1], message_count: record.messages.length });
       }
       record.commits += 1;
-      record.pendingTokens = 0;
       return reply(200, { status: 'completed', task_id: `commit-${next += 1}` });
     }
     return reply(404, `no route ${route}`);

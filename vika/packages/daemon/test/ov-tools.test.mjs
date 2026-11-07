@@ -22,17 +22,10 @@ function configFile(fields) {
 // The client against the scripted server, as the instance's own OV user, with
 // a small timeout budget and an injectable fetch.
 function client(ov, options = {}, config = {}) {
-  const instance = new OVToolClient({
+  return new OVToolClient({
     configPath: configFile({ url: ov.url, api_key: 'test-key', ...config }),
     timeoutMs: 2_000, readTimeoutMs: 1_000, ...options,
   });
-  // Existing transport/format tests exercise an authenticated owner request.
-  // Privacy tests below pass an explicit restricted access object instead.
-  for (const method of ['find', 'search', 'read', 'list']) {
-    const run = instance[method].bind(instance);
-    instance[method] = (input, access = { allowPrivateMail: true }) => run(input, access);
-  }
-  return instance;
 }
 
 function requests(ov, route) {
@@ -196,7 +189,7 @@ describe('OpenViking tool client', () => {
     assert.equal(listed.data.entries.length, 2);
 
     const empty = await client(ov).list({ uri: 'viking://nowhere' });
-    assert.equal(empty.text, '(no visible entries under viking://nowhere)');
+    assert.equal(empty.text, '(no entries under viking://nowhere)');
   });
 
   it('adds a URL resource to the private inbox by default', async (t) => {
@@ -252,6 +245,21 @@ describe('OpenViking tool client', () => {
       await assert.rejects(() => one.addResource({ url: 'https://a.example', parent: target }),
         (error) => error.code === 'openviking_reserved_target');
     }
+    // The server collapses repeated slashes; `.`, `..` and escapes are refused.
+    for (const target of ['viking://~/resources//emails/replaced', 'viking://~//resources/vika/asd/timers-state.json',
+      'viking://user/owner//memories/preferences/owner/x.md']) {
+      await assert.rejects(() => one.addResource({ url: 'https://a.example', to: target }),
+        (error) => error.code === 'openviking_reserved_target');
+    }
+    for (const target of ['viking://~/resources/./emails/x', 'viking://~/inbox/../resources/emails/x', 'viking://~/resources/%65mails']) {
+      await assert.rejects(() => one.addResource({ url: 'https://a.example', to: target }), (error) => error.code === 'invalid_input');
+    }
+    // A `to` replaces its target: never the root or resources/ around what the daemon keeps.
+    for (const target of ['viking://~', 'viking://~/', 'viking://~/resources', 'viking://user/owner/resources/']) {
+      await assert.rejects(() => one.addResource({ url: 'https://a.example', to: target }),
+        (error) => error.code === 'openviking_reserved_target');
+    }
+    assert.equal(reservedTarget('viking://~/resources', { replaces: false }), null, 'adding under resources/ is fine');
     assert.equal(reservedTarget('viking://~/resources/emailsandmore'), null);
     assert.equal(reservedTarget('viking://resources/emails'), null, 'the shared root is not the daemon\'s');
     await assert.rejects(() => one.addResource({ url: 'ftp://example.com/f' }), /must be an http\(s\) address/);
@@ -267,46 +275,56 @@ describe('OpenViking tool client', () => {
     assert.equal(requests(ov, 'POST /api/v1/resources').length, 0);
   });
 
-  it('remembers one message on an independent session with preferences-only extraction, committed once', async (t) => {
+  it('keeps a preference in the directory the Core names, one file per topic, replaced on change', async (t) => {
     const ov = await fakeOV(t);
-    const line = '[chat=oc-1 source=lark msg=om-1 time=2026-11-07T09:00Z from=李四] 以后回复我都加个 emoji';
-    const remembered = await client(ov).remember({ line, note: '[from=me] 李四希望回复他时带 emoji' });
-    const created = requests(ov, 'POST /api/v1/sessions').at(-1);
-    assert.match(created.body.session_id, /^vika-remember-/);
-    assert.deepEqual(created.body.auto_commit_policy, {
-      pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
-    });
-    assert.deepEqual(created.body.memory_policy, { memory_types: ['preferences'] });
-    assert.deepEqual(requests(ov, /messages/).map((request) => request.body), [
-      { role: 'user', content: line },
-      { role: 'assistant', content: '[from=me] 李四希望回复他时带 emoji' },
+    const tools = client(ov);
+    const home = 'viking://user/owner/memories/preferences';
+    const zhang = { id: 'aaaaaaaaaaaa', directory: '张三~aaaaaaaaaaaa' };
+    // An older release refuses replace on a new file: create makes it then.
+    ov.state.errors.set('POST /api/v1/content/write', 404);
+    const stored = await tools.setPreference({ person: zhang, topic: 'Reply language', text: '- 用法语回复' });
+    assert.deepEqual(requests(ov, 'POST /api/v1/content/write').map(({ body }) => body), [
+      { uri: 'viking://~/memories/preferences/张三~aaaaaaaaaaaa/reply-language.md', content: '- 用法语回复', mode: 'replace', wait: false },
+      { uri: 'viking://~/memories/preferences/张三~aaaaaaaaaaaa/reply-language.md', content: '- 用法语回复', mode: 'create', wait: false },
     ]);
-    const session = ov.state.sessions.get(created.body.session_id);
-    assert.equal(session.commits, 1);
-    assert.match(remembered.data.task_id, /^commit-/);
-    assert.equal(remembered.data.session_id, created.body.session_id);
-    assert.match(remembered.text, /preference extraction/);
-
-    await client(ov).remember({ line });
-    assert.deepEqual(requests(ov, /messages/).at(-1).body, { role: 'user', content: line }, 'no note, no assistant line');
+    assert.equal(stored.data.stored, true);
+    assert.match(stored.text, /takes effect from the next line/);
+    // The same person under a new name, and the same topic spelled anew, land
+    // in the same file; it is replaced, not added to.
+    await tools.setPreference({ person: { ...zhang, directory: '张三丰~aaaaaaaaaaaa' }, topic: 'reply  LANGUAGE', text: '- 用英语回复' });
+    assert.equal(requests(ov, 'POST /api/v1/content/write').at(-1).body.mode, 'replace');
+    // A namesake, the owner, and someone whose name is "owner" each get their own.
+    await tools.setPreference({ person: { id: 'bbbbbbbbbbbb', directory: '张三~bbbbbbbbbbbb' }, topic: 'reply language', text: '- 用德语回复' });
+    await tools.setPreference({ person: { id: 'cccccccccccc', directory: 'owner~cccccccccccc' }, topic: '信息披露', text: '- 都可以说' });
+    await tools.setPreference({ person: { owner: true }, topic: '信息披露', text: '- 外部群不透露内部信息' });
+    assert.deepEqual(Object.fromEntries([...ov.state.files].filter(([uri]) => uri.startsWith(home))), {
+      [`${home}/张三~aaaaaaaaaaaa/reply-language.md`]: '- 用英语回复',
+      [`${home}/张三~bbbbbbbbbbbb/reply-language.md`]: '- 用德语回复',
+      [`${home}/owner~cccccccccccc/信息披露.md`]: '- 都可以说',
+      [`${home}/owner/信息披露.md`]: '- 外部群不透露内部信息',
+    });
+    for (const topic of ['', ' ', '///', '..']) {
+      await assert.rejects(() => tools.setPreference({ person: zhang, topic, text: 'x' }), (error) => error.code === 'invalid_input');
+    }
   });
 
-  it('does not retry a remember commit that timed out', async (t) => {
+  it('withdraws a preference by topic, and names what is stored when the topic is not', async (t) => {
     const ov = await fakeOV(t);
-    const calls = [];
-    const through = async (input, init) => {
-      calls.push(String(input));
-      if (String(input).includes('/commit')) return hangingFetch()(input, init);
-      return fetch(input, init);
-    };
-    const slow = client(ov, { fetch: through, timeoutMs: 80 });
-    await assert.rejects(() => slow.remember({ line: 'might land anyway' }), (error) =>
-      error.code === 'openviking_unavailable' && /may already have landed/.test(error.message));
-    assert.equal(calls.filter((url) => url.includes('/commit')).length, 1);
-    const sessions = [...ov.state.sessions.values()];
-    assert.equal(sessions.length, 1);
-    assert.deepEqual(sessions[0].messages, [{ role: 'user', content: 'might land anyway' }]);
-    assert.equal(sessions[0].commits, 0);
+    const tools = client(ov);
+    const zhang = { id: 'aaaaaaaaaaaa', directory: '张三~aaaaaaaaaaaa' };
+    assert.match((await tools.forgetPreference({ person: zhang, topic: '称呼' })).text, /No preference is stored for this person/);
+    await tools.setPreference({ person: zhang, topic: '称呼', text: '- 叫他老张' });
+    await tools.setPreference({ person: zhang, topic: '回复语言', text: '- 用英语' });
+    const missing = await tools.forgetPreference({ person: zhang, topic: '昵称' });
+    assert.deepEqual(missing.data, { removed: false, topics: ['称呼', '回复语言'] });
+    assert.match(missing.text, /No preference under topic "昵称"; this person has: 称呼, 回复语言/);
+    const removed = await tools.forgetPreference({ person: zhang, topic: '称呼' });
+    assert.equal(removed.data.removed, true);
+    assert.equal(requests(ov, 'DELETE /api/v1/fs').at(-1).query.uri, 'viking://~/memories/preferences/张三~aaaaaaaaaaaa/称呼.md');
+    assert.deepEqual([...ov.state.files.keys()].filter((uri) => uri.includes('/preferences/')),
+      ['viking://user/owner/memories/preferences/张三~aaaaaaaaaaaa/回复语言.md']);
+    assert.match((await tools.forgetPreference({ person: { id: 'bbbbbbbbbbbb', directory: '张三~bbbbbbbbbbbb' }, topic: '回复语言' })).text,
+      /No preference is stored for this person/, 'a namesake cannot withdraw it');
   });
 
   it('maps every failure to one code without leaking the URL, the key or the body', async (t) => {

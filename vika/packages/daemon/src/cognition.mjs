@@ -4,7 +4,6 @@
 import { lookupMemberName } from './roster.mjs';
 import { chatTag, isoMinute, oneLine, shortenId, formatInboundLine, metadataTag } from './runtime-input.mjs';
 import { normalizeEvent } from './event.mjs';
-import { personKey } from './ov-person.mjs';
 
 const HISTORY_SEPARATOR = '--- history above, new messages below ---';
 
@@ -15,12 +14,9 @@ export class CognitionLimitError extends Error {
   }
 }
 
-export function formatCognitionJournalLine(item, { memory = false } = {}) {
+export function formatCognitionJournalLine(item) {
   if (item.kind === 'inbound') {
-    if (item.metadata?.event) {
-      const event = normalizeEvent(item.metadata.event);
-      return formatInboundLine(event, null, memory ? { memorySender: personKey(event) } : {});
-    }
+    if (item.metadata?.event) return formatInboundLine(normalizeEvent(item.metadata.event));
     const from = lookupMemberName(item.chatId, item.actor) ?? shortenId(item.actor);
     return `[chat=${chatTag(item.chatId, item.threadId)} source=${item.metadata?.source || 'lark'} msg=${item.messageId}`
       + ` time=${isoMinute(item.atMs)} from=${from}] ${oneLine(item.text)}`;
@@ -47,10 +43,6 @@ export function formatCognitionJournalLine(item, { memory = false } = {}) {
   }
   return `[daemon time=${isoMinute(item.atMs)} kind=${oneLine(item.kind)}] ${oneLine(item.text)}`;
 }
-
-// Legacy rows without a canonical envelope remain history; do not invent a
-// scoped owner/preference identity for them.
-export const formatOVJournalLine = (item) => formatCognitionJournalLine(item, { memory: true });
 
 // Native sessions already own their live transcript. Only a fresh session gets
 // OV's recent history; no SQL journal/history fallback, including on failure.

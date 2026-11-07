@@ -8,18 +8,21 @@
 // It speaks as the instance's OV user, the identity the daemon's session sync
 // uses (one connection, built from the instance's ovConfig on first use and
 // kept), and attaches no peer: everything the instance took part in is its own
-// memory, and a person's preferences sit under their stable person key. It never retries a
-// write and maps every failure to one model-readable code without echoing
-// URLs, keys or response bodies.
+// memory. People's preferences are the one memory the Core writes itself, into
+// the directory of the person who stated them (ov-person.mjs). It never
+// retries a write and maps every failure to one model-readable code without
+// echoing URLs, keys or response bodies.
 
-import { randomUUID } from 'node:crypto';
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
+import { OWNER_DIRECTORY, directoryPerson, topicFile } from './ov-person.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
-import { assertMailAccess, mailAncestorUri, normalizeOVUri, privateMailFilter, visibleWithoutMail } from './ov-path.mjs';
 
 // Where add_resource lands when the caller names no target: the instance's
 // private inbox, never the account-shared viking://resources/ root.
 export const OV_DEFAULT_PARENT = 'viking://~/resources/inbox';
+
+// People's preferences, one directory per person, one file per topic.
+export const OV_PREFERENCES = 'viking://~/memories/preferences';
 
 // What add_resource never writes into: material the daemon itself keeps
 // (mail, meeting notes, timer state) and the memory, session and skill trees,
@@ -32,8 +35,6 @@ const FIND_TEXT_MAX_CHARS = 20_000;
 const READ_TEXT_MAX_CHARS = 16_000;
 const URL_MAX_CHARS = 4_096;
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
-// Kept separate from history sync: this tool only submits lasting preferences.
-const REMEMBER_MEMORY_TYPES = Object.freeze(['preferences']);
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -56,19 +57,38 @@ function toolError(error) {
   return ovError('openviking_failed', `OpenViking request failed (HTTP ${status})`);
 }
 
-// A target uri add_resource may not write into, or null when it may.
-export function reservedTarget(uri) {
+// A viking:// uri the way the server reads it: repeated slashes collapse, so
+// a policy check must see them collapsed too. A `.` or `..` segment, an
+// escape or a query is refused rather than guessed at.
+export function normalizeOVUri(uri) {
+  const value = String(uri ?? '');
+  const parts = value.slice('viking://'.length).split('/').filter(Boolean);
+  if (!value.startsWith('viking://') || /[\s%\\?#\u0000-\u001f\u007f]/.test(value)
+    || parts.some((part) => part === '.' || part === '..')) {
+    throw ovError('invalid_input', 'Not a plain viking:// address');
+  }
+  return `viking://${parts.join('/')}`;
+}
+
+// A target uri add_resource may not write into, or null when it may. A path
+// under the user's own root is checked in both spellings (~ and user/<id>).
+// `replaces` is a `to`: the resource replaces that directory, so its
+// ancestors (the root, resources/) are kept too.
+export function reservedTarget(uri, { replaces = false } = {}) {
   if (!uri) return null;
-  const own = normalizeOVUri(uri).replace(/^viking:\/\/user\/[^/]+\//, 'viking://~/');
-  const rest = own.startsWith('viking://~/') ? own.slice('viking://~/'.length) : null;
-  if (rest === null) return null;
-  return RESERVED.find((prefix) => rest === prefix || rest.startsWith(`${prefix}/`)) ?? null;
+  const own = /^viking:\/\/(?:~|user\/[^/]+)(?:\/(.*))?$/.exec(normalizeOVUri(uri));
+  if (!own) return null;
+  const rest = own[1] ?? '';
+  const inside = RESERVED.find((prefix) => rest === prefix || rest.startsWith(`${prefix}/`));
+  if (inside || !replaces) return inside ?? null;
+  return RESERVED.find((prefix) => rest === '' || prefix.startsWith(`${rest}/`)) ?? null;
 }
 
 // Whose a hit is, where its path says: a person's preferences name them.
 function personOf(uri) {
   const match = /\/memories\/preferences\/([^/]+)\//.exec(String(uri));
-  return match ? match[1] : null;
+  if (!match) return null;
+  return directoryPerson(match[1])?.owner ? 'the owner' : match[1];
 }
 
 // One search result, the way the endpoint reports it, as one model-facing
@@ -86,13 +106,12 @@ function truncate(text, max) {
 
 // find and search share one answer: the ranked hits as short lines plus the
 // abstracts, deduplicated by the uri the agent would read.
-function formatHits(result, access) {
+function formatHits(result) {
   const hits = [];
   const seen = new Map();
   for (const [type, category] of [['memory', 'memories'], ['resource', 'resources'], ['skill', 'skills']]) {
     for (const entry of result?.[category] ?? []) {
       if (!entry?.uri) continue;
-      if (!access?.allowPrivateMail && (!visibleWithoutMail(entry.uri) || mailAncestorUri(entry.uri))) continue;
       const uri = hitTypeUri(type, String(entry.uri));
       const hit = {
         type, uri,
@@ -116,7 +135,7 @@ function formatHits(result, access) {
     const note = '\n\n(Result truncated; narrow the query or lower the limit.)';
     text = `${text.slice(0, FIND_TEXT_MAX_CHARS - note.length - 1)}…${note}`;
   }
-  return { text, data: { hits, total: access?.allowPrivateMail ? Number(result?.total ?? hits.length) : hits.length } };
+  return { text, data: { hits, total: Number(result?.total ?? hits.length) } };
 }
 
 export class OVToolClient {
@@ -162,34 +181,20 @@ export class OVToolClient {
     return body;
   }
 
-  async scopedSearchBody(input, access) {
-    const body = this.searchBody(input);
-    if (body.target_uri) body.target_uri = assertMailAccess(body.target_uri, access);
-    if (!access?.allowPrivateMail) {
-      // Use the API key's authenticated user, not the optional config hint.
-      // List-mode search supports the native path filter, not exclude_uris.
-      let user;
-      try { user = await this.conn().authenticate(); } catch (error) { throw toolError(error); }
-      body.filter = privateMailFilter(user);
-    }
-    return body;
-  }
-
-  async find(input = {}, access = {}) {
-    return formatHits((await this.call('/api/v1/search/find', await this.scopedSearchBody(input, access))).result, access);
+  async find(input = {}) {
+    return formatHits((await this.call('/api/v1/search/find', this.searchBody(input))).result);
   }
 
   // The wider search, in list mode: `peer_scope` and the other context-mode
   // arguments are refused there.
-  async search(input = {}, access = {}) {
-    return formatHits((await this.call('/api/v1/search/search', await this.scopedSearchBody(input, access))).result, access);
+  async search(input = {}) {
+    return formatHits((await this.call('/api/v1/search/search', this.searchBody(input))).result);
   }
 
   // One page of a stored text: `offset` is a 0-based line, `limit` the page
   // size in lines. One extra line tells "more" from "end". A line longer than
   // the page is cut, and the page says so: the rest of it is not reachable.
-  async read({ uri, offset = 0, limit = 200 } = {}, access = {}) {
-    uri = assertMailAccess(uri, access);
+  async read({ uri, offset = 0, limit = 200 } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const size = Math.max(1, Number(limit) || 200);
     const raw = String((await this.call(
@@ -222,18 +227,13 @@ export class OVToolClient {
   }
 
   // One page of directory entries; entries keep the endpoint's own shapes.
-  async list({ uri, limit = 100, offset = 0, recursive = false } = {}, access = {}) {
-    uri = assertMailAccess(uri, access);
+  async list({ uri, limit = 100, offset = 0, recursive = false } = {}) {
     const data = await this.call(`/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&recursive=${recursive ? 'true' : 'false'}`
       + `&node_limit=${Number(limit) || 100}&offset=${Math.max(0, Number(offset) || 0)}&output=original`,
     undefined, this.readTimeoutMs);
-    const rawPage = (Array.isArray(data.result) ? data.result : []).slice(0, 200);
-    const page = access?.allowPrivateMail ? rawPage : rawPage.filter((entry) => visibleWithoutMail(entry?.uri))
-      .map((entry) => mailAncestorUri(entry.uri) ? { uri: entry.uri, isDir: true } : entry);
+    const page = (Array.isArray(data.result) ? data.result : []).slice(0, 200);
     const hasMore = Boolean(data.has_more);
-    // Cursor advances by the server page, including entries removed locally.
-    const nextOffset = hasMore ? Math.max(0, Number(offset) || 0) + rawPage.length : null;
-    if (page.length === 0) return { text: `(no visible entries under ${uri})`, data: { uri, entries: [], has_more: hasMore, next_offset: nextOffset } };
+    if (page.length === 0) return { text: `(no entries under ${uri})`, data: { uri, entries: [], has_more: hasMore } };
     const lines = page.map((entry) => {
       const leaf = String(entry?.uri ?? '').split('/').filter(Boolean).pop() ?? '';
       const name = String(entry?.name ?? entry?.rel_path ?? leaf);
@@ -244,7 +244,7 @@ export class OVToolClient {
     return {
       text: `Entries under ${uri} (${page.length}):\n${lines.join('\n')}`
         + (hasMore ? '\nMore entries exist; repeat with a larger offset.' : ''),
-      data: { uri, entries: page, has_more: hasMore, next_offset: nextOffset },
+      data: { uri, entries: page, has_more: hasMore },
     };
   }
 
@@ -256,9 +256,7 @@ export class OVToolClient {
     if (to && parent) throw ovError('invalid_input', 'Pass at most one of to or parent');
     if (to) to = normalizeOVUri(to);
     if (parent) parent = normalizeOVUri(parent);
-    const ownTarget = to?.replace(/^viking:\/\/user\/[^/]+\//, 'viking://~/');
-    // An exact sync to an ancestor could replace daemon-owned descendants.
-    const reserved = reservedTarget(to || parent) || (ownTarget === 'viking://~/resources' ? 'resources' : null);
+    const reserved = to ? reservedTarget(to, { replaces: true }) : reservedTarget(parent);
     if (reserved) {
       throw ovError('openviking_reserved_target', `${reserved}/ is kept by the daemon; store resources elsewhere, such as under ${OV_DEFAULT_PARENT}`);
     }
@@ -293,35 +291,80 @@ export class OVToolClient {
     };
   }
 
-  // Preference extraction from one authenticated input on a one-shot session.
-  // Its from= key is source attribution in text, not an enforced target-person
-  // constraint on OV's extraction model. An optional assistant note is separate
-  // from the sender's words. Never retry an ambiguously completed commit.
-  async remember({ line, note = '' } = {}) {
-    const sessionId = `vika-remember-${randomUUID().slice(0, 12)}`;
-    await this.call('/api/v1/sessions', {
-      session_id: sessionId,
-      auto_commit_policy: { pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0 },
-      memory_policy: { memory_types: [...REMEMBER_MEMORY_TYPES] },
-    });
-    const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
-    await this.call(`${route}/messages`, { role: 'user', content: String(line) });
-    if (trimmed(note)) await this.call(`${route}/messages`, { role: 'assistant', content: String(note) });
-    let committed;
+  // The directory a person's preferences are in, found by its key (their
+  // digits, or `owner`), or null when none is stored yet.
+  async preferenceDirectory(person) {
+    let entries;
     try {
-      committed = (await this.call(`${route}/commit`, {})).result;
+      entries = (await this.conn().json(`/api/v1/fs/ls?uri=${encodeURIComponent(OV_PREFERENCES)}&output=original`,
+        undefined, { timeoutMs: this.readTimeoutMs })).result;
     } catch (error) {
-      if (error?.code === 'openviking_unavailable') {
-        throw ovError('openviking_unavailable',
-          'OpenViking did not confirm the memory commit; it may already have landed. Check with openviking_find before submitting it again.');
-      }
-      throw error;
+      if (error?.httpStatus === 404) return null;
+      throw toolError(error);
     }
-    const taskId = trimmed(committed?.task_id) || null;
-    if (!taskId) throw ovError('openviking_failed', 'OpenViking committed nothing for memory extraction');
-    return {
-      text: `Submitted for preference extraction (task_id=${taskId}); processing runs in the background. Check the extracted preference and its attribution with openviking_find before treating it as stored.`,
-      data: { task_id: taskId, session_id: sessionId },
-    };
+    const leafOf = (uri) => String(uri ?? '').replace(/\/+$/, '').split('/').pop();
+    const found = (Array.isArray(entries) ? entries : []).find((entry) => {
+      const whose = entry?.isDir ? directoryPerson(leafOf(entry.uri)) : null;
+      return whose && (person.owner ? whose.owner : whose.id === person.id);
+    });
+    return found ? leafOf(found.uri) : null;
   }
+
+  // The topics stored for a person, to name when the model asked for another.
+  async preferenceTopics(directory) {
+    try {
+      const { result } = await this.conn().json(
+        `/api/v1/fs/ls?uri=${encodeURIComponent(`${OV_PREFERENCES}/${directory}`)}&output=original`,
+        undefined, { timeoutMs: this.readTimeoutMs });
+      return (Array.isArray(result) ? result : []).map((entry) => String(entry?.uri ?? '').split('/').pop())
+        .filter((name) => name.endsWith('.md') && !name.startsWith('.')).map((name) => name.slice(0, -3));
+    } catch {
+      return [];
+    }
+  }
+
+  // One person's preference on one topic, written as given: the file is
+  // replaced, so a changed preference supersedes the old one. `person` is
+  // { owner } or { id, directory } from the Core, never from the model. OV
+  // indexes the file in the background; it is readable at once. `replace`
+  // first: releases before create became an upsert refuse `create` on a file
+  // that exists (409) and `replace` on one that does not (404), so a new
+  // topic falls back to `create`. Either write is whole, so trying both is safe.
+  async setPreference({ person, topic, text }) {
+    const file = topicFile(topic);
+    if (!file) throw ovError('invalid_input', 'topic must name what the preference is about');
+    const directory = (await this.preferenceDirectory(person)) ?? (person.owner ? OWNER_DIRECTORY : person.directory);
+    const uri = `${OV_PREFERENCES}/${directory}/${file}`;
+    const write = (mode) => this.conn().json('/api/v1/content/write', { uri, content: String(text), mode, wait: false });
+    try {
+      await write('replace');
+    } catch (error) {
+      if (error?.httpStatus !== 404) throw toolError(error);
+      try { await write('create'); } catch (again) { throw toolError(again); }
+    }
+    return { text: `Stored at ${uri}. It takes effect from the next line this person sends.`, data: { stored: true, uri, directory } };
+  }
+
+  // Remove one person's preference on one topic, when they withdraw it.
+  async forgetPreference({ person, topic }) {
+    const file = topicFile(topic);
+    if (!file) throw ovError('invalid_input', 'topic must name the preference to remove');
+    const directory = await this.preferenceDirectory(person);
+    const missing = async () => {
+      const topics = directory ? await this.preferenceTopics(directory) : [];
+      return { text: topics.length ? `No preference under topic "${topic}"; this person has: ${topics.join(', ')}.`
+        : 'No preference is stored for this person; nothing to remove.', data: { removed: false, topics } };
+    };
+    if (!directory) return missing();
+    const uri = `${OV_PREFERENCES}/${directory}/${file}`;
+    try {
+      await this.conn().send(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`,
+        { method: 'DELETE', headers: this.conn().headers }, this.timeoutMs);
+    } catch (error) {
+      if (error?.httpStatus === 404) return missing();
+      throw toolError(error);
+    }
+    return { text: `Removed ${uri}.`, data: { removed: true, uri } };
+  }
+
 }

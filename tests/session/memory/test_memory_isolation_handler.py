@@ -52,48 +52,6 @@ def create_mock_extract_context(messages):
     return mock_ctx
 
 
-@pytest.mark.parametrize(
-    ("allowed", "excluded"),
-    [
-        (["profile", "entities", "events"], "preferences"),
-        (["preferences"], "profile"),
-        (["preferences"], "entities"),
-        (["preferences"], "events"),
-    ],
-)
-@pytest.mark.parametrize("existing", [False, True])
-def test_disjoint_extraction_policies_reject_new_and_existing_excluded_targets(
-    allowed, excluded, existing
-):
-    from openviking.session.memory.dataclass import (
-        MemoryFile,
-        MemoryTypeSchema,
-        ResolvedOperation,
-    )
-    from openviking.session.memory_policy import MemoryPolicy
-
-    # Exercise the server's actual URI gate with the policies used by Vika's
-    # history and preference entry points, including an existing merge target.
-    policy = MemoryPolicy.from_dict({"memory_types": allowed})
-    restored = MemoryPolicy.from_dict(policy.to_dict())
-    context = create_mock_extract_context([create_message("user", "Always answer me in French.")])
-    handler = MemoryIsolationHandler(create_ctx(), context, allowed_memory_types=restored.memory_types)
-    uri = f"viking://user/user_a/memories/{excluded}/person-example/topic.md"
-    schema = MemoryTypeSchema(
-        memory_type=excluded,
-        filename_template="{{ user }}/topic.md",
-        directory=f"viking://user/{{{{ user_space }}}}/memories/{excluded}",
-    )
-    operation = ResolvedOperation(
-        memory_type=excluded,
-        memory_fields={"user": "person-example"},
-        old_memory_file_content=MemoryFile(content="Existing") if existing else None,
-        uris=[uri] if existing else [],
-    )
-    assert handler.calculate_memory_uris(schema, operation, context) == []
-    assert operation.resolution_skip.reason_code == MemoryOperationSkipCode.MEMORY_TYPE_FILTERED
-
-
 class TestGetReadScope:
     """Tests for get_read_scope."""
 

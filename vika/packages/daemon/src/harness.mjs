@@ -120,9 +120,8 @@ export class Harness {
     const handler = this.eventHandler(event);
     let result;
     try {
-      // OV memory treats the owner's lines as the user's own (ov-recall.mjs).
       result = this.store.ingest(event, command ? 'slash_command' : approval ? 'approval_reply' : filterReason,
-        Date.now(), { journal: !handler, owner: this.isOwner(event) });
+        Date.now(), { journal: !handler });
     } catch (error) {
       this.logger.error('event_persist_failed', { error: safeError(error) });
       this.recordActivity('system.persist_failed', {

@@ -23,29 +23,31 @@ already-running native transcript.
 Recall (`ov-recall.mjs`) is the same for every runtime. For a direct chat, a
 line that @mentions the agent, a document comment, or an event outside chats
 such as mail, the daemon reads OV on the ingress path before the line reaches
-the runtime and appends what it found: the owner's preferences (remembered
-guidance within the agent's policy, never proof of permission), and when someone
-else wrote the line, that person's preferences and their section of
-`profile.md`. Preferences live under a stable connector-scoped identity
-(`memories/preferences/person-<hash>/`), the key the OV line's `from=` shows;
-the owner's key is taken from the newest authenticated owner input. Display
-names remain labels, and legacy name-only directories are not automatically
-promoted to owner guidance. With
+the runtime and appends what it found: the owner's preferences (the owner's
+standing instructions, which govern the agent everywhere), and when someone
+else wrote the line, that person's preferences. Each person's preferences are
+a directory the Core names and finds by key (`ov-person.mjs`), never by a
+display name: `memories/preferences/owner/` for the owner on every channel,
+`memories/preferences/<name>~<id>/` for anyone else, where `<id>` is 12 hex
+digits of a hash of the channel identity, so namesakes stay apart and a
+renamed person keeps theirs. With
 `agents[].ovAutoRecall` (default `false`, a config-file option) one context
 search (`/api/v1/search/search`, mode `context`) on the line also runs; once
 OV has this epoch's session the search names it, so OV's dedup ledger (a file
 of its own, not a session message) keeps entries from coming back turn after
-turn. Non-owner searches exclude private mail resources and their ancestor
-summaries. Everything else the model looks up with the Core's `openviking_*`
-tools. Reads are cached ten minutes and bounded at 3 s together; on a timeout
-or a failure the line goes on with what arrived. No request carries a peer.
+turn. Everything else the model looks up with the Core's `openviking_*`
+tools. Reads are cached ten minutes (dropped as soon as `openviking_remember`
+changes a preference) and bounded at 3 s together; on a timeout or a failure
+the line goes on with what arrived. No request carries a peer.
 
 Vika owns OpenViking for the agents it runs. This session transport writes
-the conversation; `openviking_remember` submits one sender's persistent preference
-for preferences-only extraction, rendered exactly as this transport renders it.
-History sync extracts only profile, entities and events. Sender attribution is
-still interpreted by the extraction model; it is not a target-person constraint.
-A runtime's own OpenViking plugin is switched off where the runtime
+the conversation, and its extraction keeps profile, entities and events, never
+preferences: extraction decides whose a preference is from names, so it merges
+namesakes and edits one person's file with another's request. Preferences are
+written by `openviking_remember` alone, a file per topic in the directory of
+the person who sent the message `decision_id` names (`/api/v1/content/write`,
+removed with `DELETE /api/v1/fs`); the model gives the topic and the words,
+never the person. Nothing else writes memory. A runtime's own OpenViking plugin is switched off where the runtime
 is launched (`ov-isolation.mjs`; each runtime declares its mechanism as
 `ovIsolation` in `runtime-catalog.mjs`): Codex and TraeX get config overrides
 that disable the plugin, any MCP server that runs OpenViking and their own
@@ -64,18 +66,19 @@ providers keeps that session; `/new` starts a new epoch. Existing local ledger r
 are uploaded on first use, in sequence. Only observable inbound Connector events,
 outbound actions (including uncertain outcomes), and controls are mirrored.
 Every line someone sent is a `user` message, whoever sent it: its `from=`
-carries the speaker's stable person key as text for extraction. No message carries a peer: the instance is an OV user of its own, and
+names the speaker, and extraction files a person's preferences under that
+name. No message carries a peer: the instance is an OV user of its own, and
 everything it took part in is its own memory, so an event is kept once, not
 once per participant. Outbound rows and the agent's own reminders (events
 without a sender) are `assistant` messages: context, never anyone's words.
 Control rows (slash commands and their notices) are not mirrored. Each session
-is created with `memory_policy.memory_types` of `profile`, `entities` and
-`events`. Preferences are submitted only through the explicit remember tool:
+is created with `memory_policy.memory_types` of `profile`, `preferences`,
+`entities` and `events`, types every release with memory policies has:
 extraction never writes the agent's own `soul` or `identity`, which a line
 that talks the agent into a new name or a global rule would otherwise
 rewrite. The agent's name and role come from its configuration; the owner's
-standing rules are the owner's preferences. Both threshold and epoch-finalization
-commits inherit the history session's policy; neither extracts preferences.
+standing rules are the owner's preferences. Sessions created before this
+kept the server's default policy until `/new`.
 Native reasoning and arbitrary tool results are not session archives.
 An outbound row still `PENDING` holds the sync cursor until it settles; a
 handoff prepared meanwhile carries the rows before it.

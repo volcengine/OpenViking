@@ -220,6 +220,8 @@ export class PersonalAgentDaemon {
         ovClient,
         timers: this.timers,
         onTimersChanged: () => this.timerConnector?.wake(),
+        // A stored or removed preference shows from the person's next line.
+        onPreferencesChanged: () => this.harness?.recall?.forgetPreferences(),
         // A model that keeps redoing a settled decision: end its turn so the
         // inputs it holds go on (AgentRuntime.breakLoop).
         onNoProgress: (info) => this.agentRuntime?.breakLoop(info),

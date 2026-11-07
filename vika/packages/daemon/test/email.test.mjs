@@ -690,7 +690,7 @@ describe('mail in OpenViking', () => {
     const service = (ids) => new ActionService({ config: {}, store, connectors: fakeConnectors({ ids }),
       ovClient: new OVSessionClient(ovConfig), logger: quiet });
     const actions = service(['lark', 'email']);
-    return { service, actions, read: (input) => actions.call('read_email', { decision_id: event.eventId, ...input }, { authority: 'token' }) };
+    return { service, actions, read: (input) => actions.call('read_email', input, { authority: 'token' }) };
   };
 
   it('stores the mail and its attachments before reporting where they are', async (t) => {
@@ -782,7 +782,7 @@ describe('mail in OpenViking', () => {
       'Attachment 04 (archive.zip) was not stored: OpenViking does not read this type.');
 
     await assert.rejects(read({ message_id: messageId, attachment: '09' }), (error) => error.code === 'unknown_attachment');
-    await assert.rejects(read({ message_id: `mail:${TAG}:1:99` }), (error) => error.code === 'private_mail_denied');
+    await assert.rejects(read({ message_id: `mail:${TAG}:1:99` }), (error) => error.code === 'unknown_mail');
     await assert.rejects(read({ message_id: messageId, uri: `${FOLDER}/body.md` }), (error) => error.code === 'invalid_input');
     for (const uri of ['viking://user/owner/memories/identity.md', 'viking://resources/emails/x/body.md', `${FOLDER}/../../../memories/x.md`]) {
       await assert.rejects(read({ uri }), (error) => error.code === 'outside_mail_archive', uri);

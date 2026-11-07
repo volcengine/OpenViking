@@ -9,7 +9,6 @@ it('read_email accepts both legacy and folder-scoped message IDs', () => {
   const tool = TOOLS.find(({ name }) => name === 'read_email');
   for (const folder of ['INBOX', 'Projects', '收件箱']) {
     assert.doesNotThrow(() => validateInput(tool.inputSchema, {
-      decision_id: 'message:om_owner',
       message_id: `mail:${mailboxIdentity('12345678', folder, 1, 2)}`,
     }));
   }
