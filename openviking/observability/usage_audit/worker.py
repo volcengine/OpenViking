@@ -126,10 +126,20 @@ class UsageAuditWorker:
         """Wait until every event already accepted by this worker is handled."""
         if self._queue is None or self._task is None or self._closed:
             raise RuntimeError("Usage/Audit worker is not running")
+
+        # A foreign-thread enqueue reaches this loop through call_soon_threadsafe.
+        # Yield before checking the queue so callbacks queued by a caller that
+        # already returned become visible to join().
+        await asyncio.sleep(0)
+        if self._queue is None or self._task is None or self._closed:
+            raise RuntimeError("Usage/Audit worker is not running")
         await self._queue.join()
 
     async def close(self, *, timeout_seconds: float = 3.0) -> None:
         """Stop the worker and flush remaining queued events."""
+        if not self._closed and self._loop is not None:
+            # Preserve foreign-thread events admitted before shutdown began.
+            await asyncio.sleep(0)
         self._closed = True
         task = self._task
         if task is not None:
