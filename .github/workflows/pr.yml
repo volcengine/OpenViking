@@ -168,10 +168,11 @@ jobs:
           fi
       - name: Test packaging and CI selection contracts
         run: |
-          python3 -m pip install pytest
+          python3 -m pip install pytest PyYAML
           python3 -m pytest --noconftest -q -o addopts='' \
             tests/misc/test_abi3_packaging_config.py \
-            tests/misc/test_release_tag_selection.py
+            tests/misc/test_release_tag_selection.py \
+            tests/misc/test_linux_runner.py
 
   build:
     needs: check-deps

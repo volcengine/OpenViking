@@ -145,8 +145,15 @@ jobs:
         contains(inputs.os_json, '"ubuntu-24.04"') ||
         contains(inputs.os_json, 'ubuntu-24.04-arm')
       )
-    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: >-
+      ${{ fromJSON(matrix.arch == 'aarch64' && '["ubuntu-24.04-arm"]' ||
+          github.repository == 'volcengine/OpenViking' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
+          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
+          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
+          '["self-hosted","Linux","X64","ov-ci-runner"]' || '["ubuntu-24.04"]') }}
     container: ubuntu:20.04
+    timeout-minutes: 60
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
@@ -165,6 +172,7 @@ jobs:
         for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done
         apt-get install -y \
           git ca-certificates cmake build-essential clang tzdata curl \
+          pkg-config unzip xz-utils python3 libicu66 \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
           libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
           libncursesw5-dev tk-dev uuid-dev libexpat1-dev
@@ -183,6 +191,8 @@ jobs:
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
+
+    - uses: ./.github/actions/linux-test-env
 
     - name: Fetch all tags
       run: |

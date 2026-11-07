@@ -18,12 +18,25 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-Builds and ordinary tests use GitHub-hosted runners to measure build reuse and
-cache behavior independently of self-hosted machine capacity. There is no
-`ov-ci-runner` scheduling or manual selection in these workflows.
-The existing P0 Memory Tests remain on their original ECS environment, selected
-with `[self-hosted, Linux, X64, openviking-ecs]`. That runner must have the
-`openviking-ecs` custom label; its display name alone does not select it.
+Only Linux x86_64 wheels use `[self-hosted, Linux, X64, ov-ci-runner]` for official repository
+PRs and branch pushes. Release/tag events, schedules, manual runs, fork PRs and
+other repositories use GitHub-hosted. Labels are selected directly in `runs-on`;
+no selector job or token is needed.
+Studio, the shared API native runtime, both musl CLI targets, tests, checks and
+source packaging use hosted runners and can run in parallel without competing
+for ov-ci-runner. Native ARM, macOS and Windows assignments are unchanged.
+
+Self-hosted builds require Docker access and use disposable containers with
+job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
+Wheels retain Ubuntu 20.04/glibc 2.31. The Linux wheel execution timeout is
+60 minutes. It starts when execution begins, not while queued; there is no
+automatic queue fallback.
+
+If ov-ci-runner is offline or stuck, set repository Actions variable
+`CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.
+New jobs use hosted runners; already queued jobs retain their original labels.
+After repairing/updating the runner, remove the variable to resume PR/push
+acceleration. Release builds remain hosted regardless of the variable.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the
@@ -54,9 +67,11 @@ select API tests, including newly introduced runtime paths.
 Local checks:
 
 ```sh
+python3 -m pip install pytest PyYAML
 python3 -m pytest --noconftest -q -o addopts='' \
   tests/misc/test_abi3_packaging_config.py \
-  tests/misc/test_release_tag_selection.py
+  tests/misc/test_release_tag_selection.py \
+  tests/misc/test_linux_runner.py
 actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
   .github/workflows/_build.yml .github/workflows/_test_lite.yml \
   .github/workflows/_test_full.yml .github/workflows/rust-cli.yml
