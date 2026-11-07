@@ -622,7 +622,7 @@ _streaming_policy_trainer_registry_lock = threading.RLock()
 async def get_streaming_policy_trainer(
     *,
     key: StreamingPolicyTrainerKey | Hashable,
-    policy_set: ExperienceSet,
+    policy_set: ExperienceSet | Callable[[], Awaitable[ExperienceSet]],
     rollout_analyzer: RolloutAnalyzer,
     gradient_estimator: GradientEstimator,
     policy_optimizer: PolicyOptimizer,
@@ -630,8 +630,17 @@ async def get_streaming_policy_trainer(
     context: PipelineContext | Any = None,
     config: StreamingPolicyTrainerConfig | None = None,
 ) -> StreamingPolicyTrainer:
-    """Get or create the process-global streaming trainer for one policy key."""
+    """Get or create a trainer, loading an initial snapshot only on a registry miss."""
 
+    with _streaming_policy_trainer_registry_lock:
+        existing = _streaming_policy_trainer_registry.get(key)
+        if existing is not None:
+            return existing
+
+    if callable(policy_set):
+        policy_set = await policy_set()
+
+    # Another caller may have registered a trainer while the snapshot was loading.
     with _streaming_policy_trainer_registry_lock:
         existing = _streaming_policy_trainer_registry.get(key)
         if existing is not None:
