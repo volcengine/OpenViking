@@ -224,12 +224,21 @@ def test_cursor_is_bound_to_identity_and_filters():
         decode_cursor("broken", scope)
 
 
-async def test_concurrent_submission_retry_and_restart(monkeypatch):
+@pytest.mark.parametrize(
+    ("stage", "auth", "waiting_config"),
+    [
+        ("polling", {"external_task_id": "submitted"}, {}),
+        ("queued", {"compile_execution": {"phase": "planning"}}, {"compile_name": "wiki-other"}),
+    ],
+)
+async def test_concurrent_submission_retry_and_restart(monkeypatch, stage, auth, waiting_config):
     import ragfs_python
 
     import openviking.service.external_task_service as module
+    from openviking.service.compile_service import CompileService
     from openviking.service.external_task_service import ExternalTaskSnapshot
     from openviking.storage.queuefs.queue_manager import QueueManager
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -242,24 +251,25 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
     manager.get_queue(manager.EXTERNAL_TASK, allow_create=True)
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
 
-    provider = SimpleNamespace(
-        task_type="compile",
-        task_id_prefix="cmp_",
-        serialization_key=lambda payload: payload["to"],
-        poll_interval_seconds=0.001,
-        poll_max_attempts=1,
-        submit=AsyncMock(return_value="external-task"),
-        get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"done": True})),
-        on_start=AsyncMock(return_value=None),
-        on_finish=AsyncMock(side_effect=lambda task, snapshot: snapshot),
-        submission_meta=lambda external_task_id: {},
-    )
     service = ExternalTaskService()
+    provider = CompileService(
+        CompileApiConfig(base_url="http://runtime"), service, SimpleNamespace()
+    )
+    provider.submit = AsyncMock(return_value="external-task")
+    provider.get = AsyncMock(
+        return_value=ExternalTaskSnapshot(status="completed", result={"done": True})
+    )
+    provider.on_start = AsyncMock(return_value=None)
+    provider.on_finish = AsyncMock(side_effect=lambda task, snapshot: snapshot)
     service.register(provider)
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
     params = {
         "resource_id": None,
-        "payload": {"from": ["viking://resources/a"], "to": "viking://resources/b"},
+        "payload": {
+            "from": ["viking://resources/a"],
+            "to": "viking://resources/b",
+            "compile": {"compile_name": "wiki"},
+        },
         "connection": {},
         "ctx": ctx,
         "idempotency_key": "test-submission-123",
@@ -273,15 +283,17 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         with pytest.raises(ConflictError):
             await service.create("compile", **{**params, "payload": {"to": "different"}})
         other = RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER)
-        waiting = await service.create("compile", **{**params, "ctx": other})
+        waiting_payload = {**params["payload"], "compile": waiting_config}
+        waiting = await service.create(
+            "compile", **{**params, "ctx": other, "payload": waiting_payload}
+        )
         assert waiting.task_id != again.task_id
 
         owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
-        await tracker.start(again.task_id, stage="polling", **owner)
-        await tracker.patch_task(
-            again.task_id,
-            TaskPatch(auth={"external_task_id": "submitted"}),
-            **owner,
+        await tracker.start(again.task_id, stage=stage, **owner)
+        await tracker.patch_task(again.task_id, TaskPatch(auth=auth), **owner)
+        await tracker.start(
+            waiting.task_id, stage="queued", account_id=other.account_id, user_id="bob"
         )
         tracker = TaskTracker(PersistentTaskStore(agfs))
         service = ExternalTaskService()
@@ -291,6 +303,9 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         assert {task.task_id for task in recovered} == {again.task_id, waiting.task_id}
         await service.restore_tasks(recovered)
 
+        assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        provider.on_start.side_effect = ["busy", None, None]
+        assert not await service.execute(again.task_id, **owner)
         assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
         provider.submit.assert_not_awaited()
         assert await service.execute(again.task_id, ctx.account_id, ctx.user.user_id)

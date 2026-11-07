@@ -4,7 +4,7 @@
 
 Only registered configurations and their runs live in ``_system/compile/tasks``.
 Transient executions keep recovery checkpoints in the ordinary Task private state.
-Output admission uses an AGFS mutex and durable Task claims, without a target registry.
+The external task queue groups Compile runs by account and output target for serialization.
 """
 
 from __future__ import annotations
@@ -677,7 +677,7 @@ class CompileLifecycle:
 
     @asynccontextmanager
     async def _admission(self, task: Any) -> AsyncIterator[None]:
-        """Serialize claims for a target using a lock key only; no target state file exists."""
+        """Serialize checkpoint and snapshot transitions for this output target."""
         target = task.meta["request"]["to"]
         path = f"/local/{task.account_id}/_system/task_locks/compile/{quote(target, safe='')}"
         lease = await self._fs._async_agfs.pathlock_acquire_exact(
@@ -687,28 +687,6 @@ class CompileLifecycle:
             yield
         finally:
             await self._fs._async_agfs.pathlock_release(lease)
-
-    async def _claim(self, task: Any) -> bool:
-        """Inspect shared Task claims while the caller holds the output admission mutex."""
-        from openviking.service.task_tracker import get_task_tracker
-
-        tasks = await get_task_tracker()._store.list_durable(task.account_id, task_type="compile")
-        for other in tasks:
-            if other.task_id == task.task_id:
-                task.auth = {
-                    **(task.auth or {}),
-                    "compile_execution": deepcopy(self._checkpoint(other)),
-                }
-                continue
-            if other.is_terminal() or other.result is not None or other.error is not None:
-                continue
-            if other.meta.get("request", {}).get("to") == task.meta["request"][
-                "to"
-            ] and self._checkpoint(other).get("phase") not in {None, "finished"}:
-                return False
-        if not self._checkpoint(task).get("phase"):
-            await self._save_checkpoint(task, {"phase": "planning"})
-        return True
 
     async def _refresh_checkpoint(self, task: Any) -> None:
         """Read the latest private checkpoint without trusting another worker's cache."""
@@ -743,8 +721,9 @@ class CompileLifecycle:
             await self.record_queued(task)
         try:
             async with self._admission(task):
-                if not await self._claim(task):
-                    return "busy"
+                await self._refresh_checkpoint(task)
+                if not self._checkpoint(task).get("phase"):
+                    await self._save_checkpoint(task, {"phase": "planning"})
                 run = await self._read_run(task)
                 if run["status"] in TERMINAL and run["finished_at"] is not None:
                     return ExternalTaskSnapshot(

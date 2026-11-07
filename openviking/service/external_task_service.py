@@ -193,8 +193,16 @@ class ExternalTaskService:
         key = self._provider(task.task_type).serialization_key(task.meta["request"])
         return (task.account_id, task.task_type, key) if key is not None else None
 
+    @staticmethod
+    def _has_target_claim(task: TaskRecord, auth: Mapping[str, Any]) -> bool:
+        """Return whether Runtime submission or unfinished Compile preparation reserves the target."""
+        if auth.get("external_task_id"):
+            return True
+        checkpoint = auth.get("compile_execution") or {}
+        return task.task_type == "compile" and checkpoint.get("phase") not in (None, "finished")
+
     async def restore_tasks(self, tasks: Iterable[TaskRecord]) -> None:
-        """Reserve submitted work before any recovered queue delivery can run."""
+        """Restore target owners from unacknowledged deliveries before queue consumers start."""
         for task in tasks:
             if task.task_type not in self._providers or (
                 task.status != TaskStatus.CANCELLED
@@ -210,7 +218,7 @@ class ExternalTaskService:
             # Queue admission can mark waiting work running before Runtime submission.
             if task.stage in {None, "queued"}:
                 auth = await self._task_auth(task.task_id, task.account_id, task.user_id)
-                if not auth.get("external_task_id"):
+                if not self._has_target_claim(task, auth):
                     continue
             key = self._serialization_key(task)
             if key is not None:
@@ -513,7 +521,8 @@ class ExternalTaskService:
                     raise
                 started = "busy"
             if started == "busy":
-                self._release(task)
+                if not self._has_target_claim(task, task.auth):
+                    self._release(task)
                 return False
             if isinstance(started, ExternalTaskSnapshot):
                 finished = await self._apply_snapshot(

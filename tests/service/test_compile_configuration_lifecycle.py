@@ -487,24 +487,6 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(s
     assert outcome.error_message == run["error"]
 
 
-async def test_restart_preserves_target_claim_across_configurations_and_full_runs(
-    setup, registered
-):
-    record, _, first = registered
-    other_id = await setup.store.create(
-        "acme", "alice", new_record(PARAMS), compile_name="wiki-other"
-    )
-    other = make_task(setup, compile_name=other_id, record=record)
-    transient = make_task(setup)
-    assert await setup.lifecycle.on_start(first) == "proceed"
-    replacement = CompileLifecycle(setup.store, setup.fs)
-    assert await replacement.on_start(other) == "busy"
-    assert await replacement.on_start(transient) == "busy"
-    await replacement.on_finish(first, ExternalTaskSnapshot(status="completed"))
-    assert await replacement.on_start(transient) == "proceed"
-    assert await setup.lifecycle.on_start(other) == "busy"
-
-
 async def test_duplicate_start_reuses_exact_snapshots_and_plan(setup, registered):
     record, compile_name, task = registered
     duplicate = deepcopy(task)
@@ -522,7 +504,8 @@ def test_execution_mode_and_forged_plan_controls_are_rejected(args):
         split_control_args(args)
 
 
-async def test_checkpoint_refresh_reads_only_its_task_despite_stale_cache(setup):
+@pytest.mark.parametrize("hook", ["on_start", "_refresh_checkpoint"])
+async def test_checkpoint_refresh_reads_only_its_task_despite_stale_cache(setup, hook):
     files = _FakeAgfs()
     reader = setup.tracker._store = PersistentTaskStore(files)
     writer = PersistentTaskStore(files)
@@ -543,7 +526,7 @@ async def test_checkpoint_refresh_reads_only_its_task_despite_stale_cache(setup)
     reads = reader._agfs.read = AsyncMock(wraps=reader._agfs.read)
     listings = reader._agfs.ls = AsyncMock(wraps=reader._agfs.ls)
     task.auth["external_task_id"] = "runtime-session"
-    await setup.lifecycle._refresh_checkpoint(task)
+    await getattr(setup.lifecycle, hook)(task)
 
     reads.assert_awaited_once_with(f"/local/acme/_system/tasks/alice/{task.task_id}.json")
     listings.assert_not_awaited()
@@ -825,7 +808,6 @@ async def test_cancelled_unstarted_run_does_not_count_another_runs_live_target(s
     running = make_task(setup, compile_name=compile_name, record=record)
     queued = make_task(setup, compile_name=compile_name, record=record, created_at=200)
     await setup.lifecycle.on_start(running)
-    assert await setup.lifecycle.on_start(queued) == "busy"
     result = await setup.lifecycle.on_finish(queued, ExternalTaskSnapshot(status="cancelled"))
     assert result.status == "cancelled"
     assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
