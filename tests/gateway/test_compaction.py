@@ -9,7 +9,7 @@ from aiohttp import web
 from conftest import make_due, replay_records
 from test_review_regressions import worker_for
 
-from openviking_gateway.blocks import block, history_hint
+from openviking_gateway.blocks import block, history_hint, token_estimate
 from openviking_gateway.client import VikingClient
 from openviking_gateway.compaction import (
     HEADER,
@@ -19,6 +19,7 @@ from openviking_gateway.compaction import (
     UNFINISHED,
     estimate,
     opening_block,
+    user_quote_section,
 )
 from openviking_gateway.protocols import text_content, usage_of
 from openviking_gateway.state_store import get_state
@@ -279,6 +280,40 @@ async def test_hidden_tool_records_cross_cuts_and_earlier_summaries_fold_in(
         '<openviking-context source="gateway-compaction">'
     )
     assert request.body["messages"][1:] == [visible[4]]
+
+
+@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
+async def test_user_text_survives_two_compactions_when_model_summaries_omit_it(
+    setup_kernel, credential, policy, protocol
+):
+    kernel, _, _, _ = setup_kernel
+    policy.update(context_window=10000, recall=False)
+    fact = "FACT-ALPHA-use-blue"
+    messages = [{"role": "user", "content": fact}]
+    first = await prepare(kernel, protocol, messages, credential, policy)
+    reply = {"role": "assistant", "content": "Working."}
+    await answered(kernel, first, credential, reply, tokens=9500)
+    messages += [reply, {"role": "user", "content": "CURRENT-ONE"}]
+    summarize = Summarizer(protocol, summary_response(protocol, "The model omitted the fact."))
+    second = await prepare(kernel, protocol, messages, credential, policy, summarize=summarize)
+    assert fact in text_content(second.body[FIELD[protocol]][0])
+
+    reply = {"role": "assistant", "content": "Still working."}
+    await answered(kernel, second, credential, reply, tokens=9500)
+    messages += [reply, {"role": "user", "content": "CURRENT-TWO"}]
+    third = await prepare(kernel, protocol, messages, credential, policy, summarize=summarize)
+    assert fact in text_content(third.body[FIELD[protocol]][0])
+    assert third.body[FIELD[protocol]][-1] == messages[-1]
+
+
+def test_user_quote_section_keeps_long_tail_deduplicates_and_stays_bounded():
+    long = "FACT-HEAD " + "界" * 30000 + " FACT-TAIL"
+    messages = [{"role": "user", "content": text} for text in ("keep draft", long, "keep draft")]
+    section = user_quote_section(messages, 1_000_000)
+    assert section.count("> keep draft") == 1
+    assert "FACT-HEAD" in section and "FACT-TAIL" in section
+    assert "middle omitted by OpenViking Gateway" in section
+    assert token_estimate(section) <= 6000
 
 
 async def test_concurrent_compactions_share_the_first_written_cut(setup_kernel, credential, policy):
