@@ -560,6 +560,15 @@ export interface FileTreeProps extends Omit<
    */
   renderDashboard?: (row: FileTreeEntryRow) => ReactNode;
   /**
+   * 渲染文件行的行首图标，例如按扩展名区分的类型图标。返回 `null` 或省略时用
+   * 内置的通用文件图标；目录行始终用内置的文件夹图标。
+   *
+   * Renders the leading icon of a file row, for example a type icon chosen by
+   * extension. Returning `null` or omitting it uses the built-in generic file
+   * icon; directory rows always use the built-in folder icon.
+   */
+  renderRowIcon?: (row: FileTreeEntryRow) => ReactNode;
+  /**
    * 渲染行的悬停浮层内容。返回 `null` 时不展示；延迟、定位与悬停抑制
    * 由组件处理。
    * Renders the hover content of a row. Returning `null` shows nothing; the

@@ -1,7 +1,19 @@
 import { forwardRef, useImperativeHandle, useRef } from 'react';
 
+import { FileTreeBody } from './file-tree-body.js';
+import { handleRowKeyDown } from './file-tree-keyboard.js';
+import type {
+  FileTreeRowContext,
+  ResolvedLabels,
+} from './file-tree-row-context.js';
+import { useRowTooltip } from './file-tree-tooltip.js';
+import type {
+  FileTreeComponent,
+  FileTreeHandle,
+  FileTreeProps,
+} from './types.js';
 import { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
-import type { FileTreeHandle, FileTreeProps } from './types.js';
+import { useFileTreeActions } from './use-file-tree-actions.js';
 
 export { FileTreeSpinner } from './file-tree-spinner.js';
 export {
@@ -33,71 +45,137 @@ export type {
   FileTreeSlots,
 } from './types.js';
 
+const DEFAULT_LABELS: ResolvedLabels = {
+  empty: 'No files yet',
+  error: 'Failed to load',
+  retry: 'Retry',
+  loadMore: 'Load more',
+  loading: 'Loading…',
+  expand: 'Expand {name}',
+  collapse: 'Collapse {name}',
+};
+
+/** 按行 id 找到行元素。Finds a row element by id. */
+function findRow(root: HTMLElement | null, id: string) {
+  return (
+    root?.querySelector<HTMLElement>(
+      `[${FILE_TREE_ROW_ATTRIBUTE}="${CSS.escape(id)}"]`,
+    ) ?? null
+  );
+}
+
 /**
- * 占位组件：只渲染固定尺寸的空壳，真实视图按 types.ts 的契约重写。
- * 保留 `FileTreeProps` 与 `forwardRef` 契约，消费者可以照文档里的用法写
- * JSX 并拿到句柄；还没有行可查，`getRowElement` 返回 `null`、
- * `scrollToRow` 返回 `false`。
+ * 目录树。宿主把树状态展平成有序行列表传进来，组件负责渲染、键盘交互，
+ * 并在操作成功后通知。
  *
- * Placeholder: renders a fixed shell until the real view lands against the
- * contract in types.ts. It keeps the `FileTreeProps` and `forwardRef` contracts
- * so consumers can write the JSX the docs show and receive a handle; with no
- * rows yet, `getRowElement` returns `null` and `scrollToRow` returns `false`.
+ * A file tree. The host flattens its tree state into an ordered row list; the
+ * component renders it, handles keyboard interaction and reports successful
+ * operations.
  */
-export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(
-  function FileTree(
-    {
-      rows: _rows,
-      operations: _operations,
-      selectedId: _selectedId,
-      isReady: _isReady,
-      loadingFallback: _loading,
-      errorFallback: _error,
-      emptyFallback: _empty,
-      slots: _slots,
-      labels: _labels,
-      getRowAttributes: _getRowAttributes,
-      renderDashboard: _renderDashboard,
-      renderRowTooltip: _renderRowTooltip,
-      onSelect: _onSelect,
-      onToggleExpand: _onToggleExpand,
-      onLoadMore: _onLoadMore,
-      onRetry: _onRetry,
-      onOpenRetentionSettings: _onRetention,
-      className,
-      ...rest
-    },
-    ref,
-  ) {
-    const rootRef = useRef<HTMLDivElement>(null);
-
-    useImperativeHandle(
-      ref,
-      () => ({
-        getRowElement: (id) =>
-          rootRef.current?.querySelector<HTMLElement>(
-            `[${FILE_TREE_ROW_ATTRIBUTE}="${CSS.escape(id)}"]`,
-          ) ?? null,
-        scrollToRow: (id, options) => {
-          const element = rootRef.current?.querySelector<HTMLElement>(
-            `[${FILE_TREE_ROW_ATTRIBUTE}="${CSS.escape(id)}"]`,
-          );
-          if (!element) return false;
-          element.scrollIntoView({ block: 'nearest', ...options });
-          return true;
-        },
-      }),
-      [],
-    );
-
-    return (
-      <div
-        {...rest}
-        ref={rootRef}
-        className={['ov-file-tree', className].filter(Boolean).join(' ')}
-      >
-        FileTree
-      </div>
-    );
+export const FileTree: FileTreeComponent = forwardRef<
+  FileTreeHandle,
+  FileTreeProps
+>(function FileTree(
+  {
+    rows,
+    operations,
+    selectedId,
+    isReady = true,
+    loadingFallback,
+    errorFallback,
+    emptyFallback,
+    slots,
+    labels,
+    getRowAttributes,
+    renderDashboard,
+    renderRowTooltip,
+    renderRowIcon,
+    onSelect,
+    onToggleExpand,
+    onLoadMore,
+    onRetry,
+    onOpenRetentionSettings,
+    className,
+    ...rest
   },
-);
+  ref,
+) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const text: ResolvedLabels = {
+    ...DEFAULT_LABELS,
+    ...labels,
+    info: labels?.info ?? DEFAULT_LABELS.info,
+  };
+  const tooltip = useRowTooltip();
+  const actions = useFileTreeActions({
+    operations,
+    onSelect,
+    onToggleExpand,
+    onLoadMore,
+    onRetry,
+    onOpenRetentionSettings,
+  });
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      getRowElement: (id) => findRow(rootRef.current, id),
+      scrollToRow: (id, options) => {
+        const element = findRow(rootRef.current, id);
+        if (!element) return false;
+        element.scrollIntoView({ block: 'nearest', ...options });
+        return true;
+      },
+    }),
+    [],
+  );
+
+  const ctx: FileTreeRowContext = {
+    text,
+    infoLabels: labels?.info,
+    selectedId,
+    tooltipRowId: tooltip.tooltipRowId,
+    getRowAttributes,
+    renderDashboard,
+    renderRowTooltip,
+    renderRowIcon,
+    renderSpinner: slots?.spinner ? () => slots.spinner : undefined,
+    ...actions,
+    onRowKeyDown: (event, row) =>
+      handleRowKeyDown(event, {
+        root: rootRef.current,
+        row,
+        onSelect: actions.onSelect,
+        onToggleExpand: actions.onToggleExpand,
+      }),
+    onRowEnter: tooltip.show,
+    onRowLeave: tooltip.hide,
+  };
+
+  return (
+    <div
+      {...rest}
+      ref={rootRef}
+      className={['ov-file-tree', className].filter(Boolean).join(' ')}
+    >
+      {slots?.toolbar ? (
+        <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
+      ) : null}
+      <div
+        role="tree"
+        aria-label={rest['aria-label']}
+        className="ov-file-tree__body"
+      >
+        <FileTreeBody
+          rows={rows}
+          isReady={isReady}
+          text={text}
+          loadingFallback={loadingFallback}
+          errorFallback={errorFallback}
+          emptyFallback={emptyFallback}
+          ctx={ctx}
+        />
+      </div>
+    </div>
+  );
+});

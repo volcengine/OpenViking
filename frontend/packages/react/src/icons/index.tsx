@@ -31,15 +31,40 @@ export type IconProps = Omit<ComponentPropsWithoutRef<'svg'>, 'children'>;
  */
 export type IconComponent = ComponentType<IconProps>;
 
-export const AudioIcon: IconComponent = AudioSvg;
-export const ChevronRightIcon: IconComponent = ChevronRightSvg;
-export const DocumentIcon: IconComponent = DocumentSvg;
-export const FolderIcon: IconComponent = FolderSvg;
-export const FolderOpenIcon: IconComponent = FolderOpenSvg;
-export const PdfIcon: IconComponent = PdfSvg;
-export const PptIcon: IconComponent = PptSvg;
-export const VideoIcon: IconComponent = VideoSvg;
-export const WordIcon: IconComponent = WordSvg;
+/**
+ * 装饰性图标的无障碍默认值：调用方没有给可访问名称时隐藏，给了就保留在可访问性
+ * 树中。基线的 `<img alt="">` 默认就是装饰性图片，这里保持一致，同时允许调用方
+ * 显式覆盖 `aria-hidden`。
+ *
+ * The accessible default for a decorative icon: hidden when the caller supplies
+ * no name, kept in the accessibility tree when it does. The baseline `<img
+ * alt="">` was decorative by default; this keeps that behaviour while letting a
+ * caller override `aria-hidden` explicitly.
+ */
+function createIcon(Svg: IconComponent, name: string): IconComponent {
+  function Icon({ 'aria-label': ariaLabel, ...props }: IconProps) {
+    return (
+      <Svg
+        aria-hidden={ariaLabel ? undefined : true}
+        aria-label={ariaLabel}
+        {...props}
+      />
+    );
+  }
+
+  Icon.displayName = name;
+  return Icon;
+}
+
+export const AudioIcon = createIcon(AudioSvg, 'AudioIcon');
+export const ChevronRightIcon = createIcon(ChevronRightSvg, 'ChevronRightIcon');
+export const DocumentIcon = createIcon(DocumentSvg, 'DocumentIcon');
+export const FolderIcon = createIcon(FolderSvg, 'FolderIcon');
+export const FolderOpenIcon = createIcon(FolderOpenSvg, 'FolderOpenIcon');
+export const PdfIcon = createIcon(PdfSvg, 'PdfIcon');
+export const PptIcon = createIcon(PptSvg, 'PptIcon');
+export const VideoIcon = createIcon(VideoSvg, 'VideoIcon');
+export const WordIcon = createIcon(WordSvg, 'WordIcon');
 
 export {
   getFileTypeColor,
