@@ -1,0 +1,370 @@
+.ov-file-preview {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.ov-file-preview__tab-row {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  scrollbar-width: thin;
+}
+
+.ov-file-preview__tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+  max-width: 200px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ov-ui-text-muted, #8f959e);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-file-preview__tab:hover:not(:disabled) {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.ov-file-preview__tab--active {
+  border-bottom-color: var(--ov-ui-accent, #2563c5);
+  color: inherit;
+}
+
+.ov-file-preview__tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ov-file-preview__tab:focus-visible,
+.ov-file-preview__action:focus-visible,
+.ov-file-preview__button:focus-visible,
+.ov-file-preview__switch-item:focus-visible,
+.ov-file-preview__breadcrumb-link:focus-visible {
+  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline-offset: 1px;
+}
+
+.ov-file-preview__tab-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.ov-file-preview__tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-preview__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ov-file-preview__header {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+}
+
+.ov-file-preview__path-row,
+.ov-file-preview__header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.ov-file-preview__path-row {
+  flex: 1 1 auto;
+}
+
+.ov-file-preview__header-actions {
+  flex: none;
+}
+
+.ov-file-preview__breadcrumb {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.ov-file-preview__breadcrumb-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.ov-file-preview__breadcrumb-part {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.ov-file-preview__breadcrumb-link {
+  max-width: 172px;
+  overflow: hidden;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--ov-ui-text-muted, #8f959e);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ov-file-preview__breadcrumb-link:hover:not(:disabled) {
+  color: var(--ov-ui-accent, #2563c5);
+  text-decoration: underline;
+}
+
+.ov-file-preview__breadcrumb-link:disabled {
+  cursor: default;
+}
+
+.ov-file-preview__breadcrumb-separator {
+  flex: none;
+  color: var(--ov-ui-text-muted, #8f959e);
+}
+
+.ov-file-preview__breadcrumb-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-preview__breadcrumb-more {
+  position: relative;
+  flex: none;
+}
+
+.ov-file-preview__breadcrumb-more > summary {
+  padding: 0 4px;
+  border: 0;
+  color: var(--ov-ui-text-muted, #8f959e);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ov-file-preview__breadcrumb-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ov-file-preview__breadcrumb-menu {
+  position: absolute;
+  z-index: 1;
+  top: 100%;
+  left: 0;
+  min-width: 160px;
+  margin: 4px 0 0;
+  padding: 4px;
+  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-radius: var(--ov-ui-radius, 6px);
+  background: var(--ov-ui-surface, canvas);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+  list-style: none;
+}
+
+.ov-file-preview__breadcrumb-menu button {
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: calc(var(--ov-ui-radius, 6px) - 2px);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ov-file-preview__breadcrumb-menu button:hover:not(:disabled) {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.ov-file-preview__action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-radius: var(--ov-ui-radius, 6px);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-file-preview__action:hover:not(:disabled) {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.ov-file-preview__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.ov-file-preview__switch {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-radius: var(--ov-ui-radius, 6px);
+}
+
+.ov-file-preview__switch-item {
+  padding: 2px 8px;
+  border: 0;
+  background: none;
+  color: var(--ov-ui-text-muted, #8f959e);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-file-preview__switch-item[data-active] {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  color: inherit;
+  font-weight: 500;
+}
+
+.ov-file-preview__button {
+  flex: none;
+  padding: 2px 10px;
+  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-radius: var(--ov-ui-radius, 6px);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-file-preview__button:hover:not(:disabled) {
+  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+}
+
+.ov-file-preview__button--primary {
+  border-color: var(--ov-ui-accent, #2563c5);
+  background: var(--ov-ui-accent, #2563c5);
+  color: #fff;
+}
+
+.ov-file-preview__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/*
+ * 正文容器只负责布局，不负责滚动：各格式渲染器自带滚动容器（代码视图是
+ * `__scroll`，Markdown 是内容区），这里再套一层会让内容把容器撑宽，右侧被裁掉。
+ * 内容页签由宿主渲染，同样按这个约束布局。
+ */
+.ov-file-preview__body {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ov-file-preview__viewer {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ov-file-preview__state {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 120px;
+  padding: 24px;
+  color: var(--ov-ui-text-muted, #8f959e);
+  text-align: center;
+}
+
+.ov-file-preview__state-title {
+  margin: 0;
+}
+
+.ov-file-preview__state-description {
+  margin: 0;
+  word-break: break-word;
+}
+
+.ov-file-preview__editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+}
+
+.ov-file-preview__textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 240px;
+  padding: 8px;
+  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-radius: var(--ov-ui-radius, 6px);
+  background: none;
+  color: inherit;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  line-height: 20px;
+  resize: none;
+}
+
+.ov-file-preview__notice {
+  flex: none;
+  margin: 0;
+  padding: 4px 10px;
+  color: var(--ov-ui-text-muted, #8f959e);
+  font-size: 12px;
+}
+
+.ov-file-preview__footer {
+  flex: none;
+  padding: 4px 10px;
+  border-top: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  color: var(--ov-ui-text-muted, #8f959e);
+  font-size: 12px;
+}

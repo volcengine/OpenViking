@@ -6,6 +6,15 @@
   --rp-c-brand-darker: #8e2030;
 }
 
+/*
+ * 组件示例需要接近真实使用的宽度，默认 1000px 会把全屏预览类组件压得太窄。
+ * 用 `html:root` 提高优先级：Rspress 主题在更靠后的样式表里用 `:root`
+ * 重新声明了该变量，同优先级下会被它覆盖。
+ */
+html:root {
+  --rp-content-max-width: 1400px;
+}
+
 .dark {
   --rp-c-brand: #f18b97;
   --rp-c-brand-light: #ffa2ad;
