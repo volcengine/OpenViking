@@ -334,6 +334,61 @@ class TestMergeWmSections:
         assert "existing issue" in result
         assert "new issue found" in result
 
+    @pytest.mark.parametrize("keyword", ["KEEP", "keep", " UPDATE ", "APPEND"])
+    def test_bare_keyword_is_keep(self, keyword):
+        old = _make_wm(current_state="Idle")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Current State"] = keyword
+        result = wm.merge_wm_sections(old, ops)
+        assert wm.parse_wm_sections(result)["## Current State"] == "Idle"
+
+    def test_bare_string_body_is_update(self):
+        old = _make_wm(current_state="Idle")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Current State"] = "Active debugging"
+        result = wm.merge_wm_sections(old, ops)
+        assert wm.parse_wm_sections(result)["## Current State"] == "Active debugging"
+
+    def test_bare_string_body_still_goes_through_guards(self):
+        """A bare-string body on an append-only section is demoted like a real UPDATE."""
+        old = _make_wm(errors_and_corrections="- old error")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Errors & Corrections"] = "- new error"
+        result = wm.merge_wm_sections(old, ops)
+        body = wm.parse_wm_sections(result)["## Errors & Corrections"]
+        assert "old error" in body
+        assert "new error" in body
+
+    def test_content_without_op_is_update(self):
+        old = _make_wm(current_state="Old state")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Current State"] = {"content": "New state"}
+        result = wm.merge_wm_sections(old, ops)
+        assert wm.parse_wm_sections(result)["## Current State"] == "New state"
+
+    def test_items_without_op_is_append(self):
+        old = _make_wm(open_issues="- existing issue")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Open Issues"] = {"items": ["new issue found"]}
+        result = wm.merge_wm_sections(old, ops)
+        body = wm.parse_wm_sections(result)["## Open Issues"]
+        assert "existing issue" in body
+        assert "new issue found" in body
+
+    def test_object_without_op_or_payload_is_keep(self):
+        old = _make_wm(current_state="Old state")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Current State"] = {"note": "nothing usable"}
+        result = wm.merge_wm_sections(old, ops)
+        assert wm.parse_wm_sections(result)["## Current State"] == "Old state"
+
+    def test_blank_bare_string_is_keep(self):
+        old = _make_wm(current_state="Idle")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Current State"] = "   "
+        result = wm.merge_wm_sections(old, ops)
+        assert wm.parse_wm_sections(result)["## Current State"] == "Idle"
+
     def test_missing_section_defaults_to_keep(self):
         old = _make_wm(session_title="Original Title")
         ops = {}
