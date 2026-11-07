@@ -29,6 +29,11 @@ jobs:
       - run: npm --version
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-lark-install.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
+      - name: Review isolation and runtime PATH regressions
+        run: |
+          node --test packages/daemon/test/platform-isolation.test.mjs packages/updater/test/windows-review-regression.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test --test-name-pattern 'Windows runtime PATH' packages/daemon/test/process-utils.test.mjs
       - name: Setup home expansion regression
         run: node --test --test-name-pattern expandHome packages/cli/test/setup.test.mjs
       - name: Feishu events and OpenViking integration contracts

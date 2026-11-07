@@ -26,3 +26,11 @@ test('Windows cancellation terminates a runtime and its grandchild', { skip: pro
     }
   }
 });
+
+test('Windows termination never targets a ChildProcess already known to have exited', { skip: process.platform !== 'win32' }, () => {
+  // Use this test process PID: a regression would terminate the test runner.
+  // A real exited child may have had its PID reused by an unrelated process.
+  for (const state of [{ exitCode: 0, signalCode: null }, { exitCode: null, signalCode: 'SIGTERM' }]) {
+    terminateProcessTree({ pid: process.pid, ...state, kill() { assert.fail('must not kill exited child'); } });
+  }
+});

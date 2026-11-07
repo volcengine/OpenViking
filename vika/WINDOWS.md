@@ -5,7 +5,7 @@ not port the separate OpenViking server's Python/native dependencies. Connect
 to an existing OpenViking server if local server installation is unavailable.
 No WSL, Git Bash, or Unix shell is required for the steps below.
 
-Prerequisites: Windows 10/11, PowerShell 5.1 or later, Git, Node.js 24 LTS
+Prerequisites: Windows 10/11 x64, PowerShell 5.1 or later, Git, Node.js 24 LTS
 (including npm). Install and log in to a supported agent runtime, or use the
 bundled Pi runtime with provider credentials. Prefer native `.exe` binaries;
 Pi and Durable use their native PowerShell tools on Windows. Standard npm `.cmd` wrappers are resolved to their JavaScript entrypoints and
@@ -131,3 +131,21 @@ Existing installations need the updated installer-generated launchers as well
 as updated source; a Git checkout change alone does not update installed files.
 This compatibility entry is fork installation support, not part of the minimal
 upstream Windows adapter PR.
+
+### Review scope and remaining native gates
+
+See [review resolution and acceptance handoff](docs/windows-review-resolution.md)
+for C-1–C-3 and W-1–W-12 dispositions. The upstream minimal preview and this
+installed fork have different startup, PM2, ACL and shell-tool contracts.
+
+Windows has a finite command-line length. Durable host communication uses stdin,
+but long Lark markdown passed to the CLI still needs native validation; argv-based
+prompts in other runtimes can also exceed the limit. File attachments are an
+alternative for large documents, not proof of long-text parity.
+
+Action-pipe names are deterministic and use Windows default pipe access control.
+Multi-user/RDP isolation, pipe squatting, orphan cleanup after leader crashes
+and PID-reuse behavior remain unverified acceptance gates. The exited-child
+guard only prevents taskkill for an already-exited leader. Do not deploy on an
+untrusted shared workstation. Localhost Web binding is not per-user
+authentication. Keep state/SQLite directories off OneDrive and network shares.

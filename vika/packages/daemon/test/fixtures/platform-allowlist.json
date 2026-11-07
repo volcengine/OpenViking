@@ -1,0 +1,163 @@
+{
+  "ecosystem.config.cjs": [
+    "...(process.platform === 'win32' ? { shutdown_with_message: true } : {}),",
+    "const inheritedPath = sourceEnv.PATH || (process.platform === 'win32' ? sourceEnv.Path : '') || '';",
+    "PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,",
+    "PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,",
+    "...(process.platform === 'win32' ? [] : [{",
+    "PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,"
+  ],
+  "packages/cli/src/autostart.mjs": [
+    "import { execFile as execFileCallback } from 'node:child_process';",
+    "if (platform === 'win32') return { file: path.join(env.APPDATA || path.join(homeDir, 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Vika.vbs') };",
+    "export function autostartEnabled({ homeDir = os.homedir(), platform = process.platform, env = process.env } = {}) {",
+    "platform = process.platform,",
+    "else if (platform !== 'win32') await execFileImpl('systemctl', ['--user', 'disable', '--now', 'vika.service']).catch(() => {});",
+    "if (platform !== 'darwin' && platform !== 'win32') await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});",
+    "if (platform === 'win32') {"
+  ],
+  "packages/cli/src/control.mjs": [
+    "const releasePm2 = process.platform === 'win32' ? path.join(RELEASE_ROOT, 'scripts', 'pm2-windows.cjs') : path.join(RELEASE_ROOT, 'bin', 'pm2');",
+    "if (target === undefined) return [...instances, web, ...(process.platform === 'win32' ? [] : [updater])];",
+    "if (target === 'updater' && process.platform === 'win32') throw new Error('Windows source installations do not support the release updater.');"
+  ],
+  "packages/cli/src/qr.mjs": [
+    "import { spawn } from 'node:child_process';",
+    "export function opener(env = process.env, platform = process.platform) {",
+    "if (platform === 'win32') return 'explorer.exe';",
+    "export function openUrl(url, { env = process.env, platform = process.platform } = {}) {"
+  ],
+  "packages/cli/src/runtime-probe.mjs": [
+    "detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],"
+  ],
+  "packages/cli/src/setup.mjs": [
+    "import { spawn } from 'node:child_process';",
+    "if (process.platform === 'win32') {",
+    "].filter(choice => process.platform !== 'win32' || choice.value !== 'email');",
+    "...(process.platform === 'win32' ? [] : [['start', 'updater', t('\u81ea\u52a8\u5347\u7ea7\u670d\u52a1', 'Auto-upgrade service')]]),"
+  ],
+  "packages/cli/src/upgrade.mjs": [
+    "if (process.platform === 'win32') {"
+  ],
+  "packages/daemon/src/agent-clis.mjs": [
+    "export function cliShellCommand(bin, platform = process.platform) {",
+    "if (platform === 'win32') return `& '${bin.replaceAll(\"'\", \"''\")}'`;",
+    "export function cliCommandCode(bin, args = '', platform = process.platform) {",
+    "export function cliShellHint(platform = process.platform) {",
+    "return platform === 'win32'"
+  ],
+  "packages/daemon/src/claude.mjs": [
+    "detached: process.platform !== 'win32',",
+    "detached: process.platform !== 'win32',"
+  ],
+  "packages/daemon/src/codex.mjs": [
+    "detached: process.platform !== 'win32',"
+  ],
+  "packages/daemon/src/coding-tools.mjs": [
+    "export function durableCodingTools(platform = process.platform) {",
+    "return platform === 'win32' ? defineExtension({"
+  ],
+  "packages/daemon/src/config.mjs": [
+    "if (process.platform === 'win32') throw new Error('Email account ACL validation is not implemented on Windows; remove the email connector.');"
+  ],
+  "packages/daemon/src/connectors/process.mjs": [
+    "import { spawn } from 'node:child_process';",
+    "detached: process.platform !== 'win32',",
+    "windowsHide: process.platform === 'win32',"
+  ],
+  "packages/daemon/src/durable.mjs": [
+    "import { spawn as nodeSpawn } from 'node:child_process';",
+    "detached: process.platform !== 'win32',",
+    "windowsHide: process.platform === 'win32',"
+  ],
+  "packages/daemon/src/lark-cli-bin.mjs": [
+    "const bin = path.join(packageDir, 'bin', process.platform === 'win32' ? 'lark-cli.exe' : 'lark-cli');"
+  ],
+  "packages/daemon/src/lark.mjs": [
+    "detached: this.config.connectorWorker ? false : process.platform !== 'win32',"
+  ],
+  "packages/daemon/src/main.mjs": [
+    "if (process.platform === 'win32') {"
+  ],
+  "packages/daemon/src/opencode.mjs": [
+    "detached: process.platform !== 'win32',"
+  ],
+  "packages/daemon/src/pi-runtime.mjs": [
+    "export function piPlatformTools(platform = process.platform) {",
+    "return platform === 'win32' ? ['--tools', '+powershell,-bash'] : [];"
+  ],
+  "packages/daemon/src/pi.mjs": [
+    "detached: process.platform !== 'win32',",
+    "detached: process.platform !== 'win32',"
+  ],
+  "packages/daemon/src/platform.mjs": [
+    "import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process';",
+    "export function normalizeEnvironment(env = process.env, platform = process.platform) {",
+    "if (platform !== 'win32') return env;",
+    "export function findExecutable(command, env = process.env, platform = process.platform) {",
+    "const windows = platform === 'win32';",
+    "const paths = windows ? path.win32 : path.posix;",
+    "export function executableInvocation(command, args, { platform = process.platform, env = process.env } = {}) {",
+    "if (platform !== 'win32') return { command, args };",
+    "if (process.platform !== 'win32') return nodeSpawn(...arguments);",
+    "if (process.platform !== 'win32') return nodeExecFile(...arguments);",
+    "export function localSocketPath(directory, name = 'actions', platform = process.platform) {",
+    "if (platform !== 'win32') return path.posix.join(directory, `${name}.sock`);",
+    "const identity = path.win32.resolve(directory).toLowerCase();",
+    "execFile[promisify.custom] = process.platform !== 'win32' ? promisify(nodeExecFile) : (command, args, options = {}) => {"
+  ],
+  "packages/daemon/src/private-temp.mjs": [
+    "if (process.platform === 'win32') {",
+    "if (process.platform === 'win32') {"
+  ],
+  "packages/daemon/src/process-utils.mjs": [
+    "if (process.platform === 'win32') {",
+    "if (process.platform !== 'win32') {",
+    "constructor(logger, { detached = process.platform !== 'win32' } = {}) {"
+  ],
+  "packages/daemon/src/slack/cli.mjs": [
+    "import { execFile } from 'node:child_process';",
+    "export const bundledSlackCli = () => process.platform === 'win32' ? 'slack.exe' : fileURLToPath(new URL('../../../../bin/slack', import.meta.url));"
+  ],
+  "packages/daemon/src/windows-acl.mjs": [
+    "import { execFileSync } from 'node:child_process';",
+    "if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw new Error('Windows SystemRoot is unavailable');",
+    "const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');"
+  ],
+  "packages/updater/src/artifacts.mjs": [
+    "const id = `${process.platform}-${process.arch}`;"
+  ],
+  "packages/updater/src/publisher.mjs": [
+    "import { execFile as execFileCallback } from 'node:child_process';"
+  ],
+  "packages/updater/src/server.mjs": [
+    "import { execFile as execFileCallback, spawn } from 'node:child_process';"
+  ],
+  "packages/web/src/main.mjs": [
+    "if (process.platform === 'win32') {"
+  ],
+  "scripts/build-release.mjs": [
+    "import { execFileSync } from 'node:child_process';"
+  ],
+  "scripts/ensure-windows-lark-cli.mjs": [
+    "import { execFileSync } from 'node:child_process';",
+    "platform = process.platform,",
+    "if (platform !== 'win32') throw new Error('This Lark CLI bootstrap is Windows-only.');",
+    "platform = process.platform,",
+    "if (platform !== 'win32') throw new Error('This Lark CLI validator is Windows-only.');"
+  ],
+  "scripts/pm2-windows.cjs": [
+    "const identity = path.win32.resolve(home).toLowerCase();",
+    "if (process.platform === 'win32') {",
+    "const childProcess = require('node:child_process');"
+  ],
+  "scripts/release/lark-cli.mjs": [
+    "import { execFileSync } from 'node:child_process';"
+  ],
+  "scripts/release/slack-cli.mjs": [
+    "import { execFileSync } from 'node:child_process';"
+  ],
+  "scripts/windows-pm2-launch.mjs": [
+    "import { spawn } from 'node:child_process';"
+  ]
+}

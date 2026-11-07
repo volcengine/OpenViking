@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn } from './platform.mjs';
+import { spawn, normalizeEnvironment } from './platform.mjs';
 import path from 'node:path';
 import { agentCliCommands } from './agent-clis.mjs';
 import { applyOpenVikingChildEnv } from './openviking.mjs';
@@ -26,7 +26,7 @@ export function sanitizeAgentChildEnv(environment, {
   cliBins = agentCliCommands().map(({ bin }) => bin),
 } = {}) {
   const safeEnv = {
-    ...sanitizeNonArkChildEnv(environment),
+    ...sanitizeNonArkChildEnv(normalizeEnvironment(environment)),
     FORCE_COLOR: '0',
     NO_COLOR: '1',
   };
@@ -60,6 +60,9 @@ function appendTail(current, chunk, limit) {
 export function terminateProcessTree(child, signal = 'SIGTERM') {
   if (!child?.pid) return;
   if (process.platform === 'win32') {
+    // Never target an exited leader: Windows can reuse its PID. Unlike POSIX
+    // process groups, taskkill cannot safely address its former descendants.
+    if (child.exitCode != null || child.signalCode != null) return;
     // taskkill /T includes grandchildren, unlike ChildProcess.kill on Windows.
     const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
     killer.on('error', () => { try { child.kill(signal); } catch {} });

@@ -68,3 +68,27 @@ test('Windows environment normalization makes lookup and child overrides consist
   assert.deepEqual(normalizeEnvironment({ Path: 'C:\\only', Pathext: '.CMD' }, 'win32'), { PATH: 'C:\\only', PATHEXT: '.CMD' });
   assert.equal(normalizeEnvironment(inherited, 'linux'), inherited);
 });
+
+test('POSIX process wrappers preserve native overloads and Promise child handle', { skip: process.platform === 'win32' }, async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-overloads-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const command = path.join(directory, 'fixture');
+  fs.writeFileSync(command, `#!${process.execPath}\nprocess.stdout.write('ok');`, { mode: 0o700 });
+  const native = await import('node:child_process');
+  const { spawn } = await import('../src/platform.mjs');
+  const options = { env: { PATH: process.env.PATH }, timeout: 2000 };
+  for (const args of [[], [options], [undefined, options], [[], options], [['-e', 'process.stdout.write("ok")'], options]]) {
+    const expected = await promisify(native.execFile)(command, ...args);
+    const pending = promisify(execFile)(command, ...args);
+    assert.ok(pending.child?.pid);
+    assert.deepEqual(await pending, expected);
+    const callbackResult = await new Promise((resolve, reject) => execFile(command, ...args,
+      (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr })));
+    assert.deepEqual(callbackResult, expected);
+  }
+  const { once } = await import('node:events');
+  for (const invoke of [native.spawn, spawn]) {
+    const child = invoke(command, { stdio: 'ignore' });
+    assert.deepEqual(await once(child, 'exit'), [0, null]);
+  }
+});

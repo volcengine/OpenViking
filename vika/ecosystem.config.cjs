@@ -44,7 +44,7 @@ function buildEcosystem(sourceEnv = process.env) {
   const homeDir = sourceEnv.HOME || sourceEnv.USERPROFILE;
   if (!homeDir || !path.isAbsolute(homeDir)) throw new Error('HOME must be an absolute path');
   const baseDir = path.join(homeDir, '.vika');
-  const inheritedPath = sourceEnv.PATH || '';
+  const inheritedPath = sourceEnv.PATH || (process.platform === 'win32' ? sourceEnv.Path : '') || '';
   const deployment = loadDeploymentManifest(sourceEnv);
   if (deployment.agents.some((agent) => agent.port === 3737)) {
     throw new Error('agent port 3737 conflicts with the shared Web port');
@@ -136,7 +136,7 @@ function buildEcosystem(sourceEnv = process.env) {
           PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,
         },
       },
-      {
+      ...(process.platform === 'win32' ? [] : [{
         ...common,
         name: 'vika-updater',
         script: path.join(updaterDir, 'src', 'main.mjs'),
@@ -157,7 +157,7 @@ function buildEcosystem(sourceEnv = process.env) {
           PM2_BIN: path.join(releaseDir, 'bin', 'pm2'),
           PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,
         },
-      },
+      }]),
     ],
   };
 }

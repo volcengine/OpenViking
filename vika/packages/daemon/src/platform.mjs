@@ -71,11 +71,17 @@ export function executableInvocation(command, args, { platform = process.platfor
 }
 
 export function spawn(command, args = [], options = {}) {
+  if (process.platform !== 'win32') return nodeSpawn(...arguments);
+  if (!Array.isArray(args)) { options = args ?? {}; args = []; }
   const invocation = executableInvocation(command, args, { env: options.env });
   return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 }
 
 export function execFile(command, args, options, callback) {
+  if (process.platform !== 'win32') return nodeExecFile(...arguments);
+  if (typeof args === 'function') { callback = args; args = []; options = {}; }
+  else if (!Array.isArray(args)) { callback = typeof options === 'function' ? options : callback; options = args ?? options ?? {}; args = []; }
+  if (typeof options === 'function') { callback = options; options = {}; }
   const invocation = executableInvocation(command, args, { env: options?.env });
   return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) }, callback);
 }
@@ -91,7 +97,8 @@ export function isNamedPipe(value) {
   return typeof value === 'string' && value.startsWith('\\\\.\\pipe\\');
 }
 
-execFile[promisify.custom] = (command, args, options = {}) => {
+execFile[promisify.custom] = process.platform !== 'win32' ? promisify(nodeExecFile) : (command, args, options = {}) => {
+  if (!Array.isArray(args)) { options = args ?? options; args = []; }
   const invocation = executableInvocation(command, args, { env: options.env });
   return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 };
