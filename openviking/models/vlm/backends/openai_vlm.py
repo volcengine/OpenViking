@@ -47,7 +47,7 @@ _OPENAI_REASONING_MODEL_PATTERN = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d)|o[134])"
 
 def _build_openai_client_kwargs(
     provider: str,
-    api_key: str,
+    api_key: str | None,
     api_base: str,
     api_version: str | None,
     extra_headers: Dict[str, str] | None,
@@ -64,7 +64,9 @@ def _build_openai_client_kwargs(
             "timeout": timeout,
         }
     else:
-        kwargs = {"api_key": api_key, "base_url": api_base}
+        # The OpenAI SDK requires a non-empty value even when a custom endpoint
+        # authenticates through default_headers or does not require a key.
+        kwargs = {"api_key": api_key or "no-key", "base_url": api_base}
     kwargs["timeout"] = timeout
     # RetryVLM owns retry/backoff; the SDK performs exactly one request.
     kwargs["max_retries"] = 0
