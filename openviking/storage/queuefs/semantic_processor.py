@@ -545,6 +545,7 @@ class SemanticProcessor(DequeueHandlerBase):
         queue_wait_ms = 0.0
         execute_status = "ok"
         breaker = None
+        syncing_source = False
         try:
             breaker = self._account_breaker(msg.account_id)
             work = self._message_work(msg, lock)
@@ -712,6 +713,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                         "Syncing semantic source into target before processing: "
                                         f"{msg.uri} -> {msg.target_uri}"
                                     )
+                                    syncing_source = True
                                     diff = await work.run_write(
                                         lambda: self._sync_topdown_recursive(
                                             msg.uri,
@@ -720,6 +722,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                             lock=semantic_lock.lock,
                                         )
                                     )
+                                    syncing_source = False
                                     logger.info(
                                         "[SyncDiff] Diff computed: "
                                         f"added_files={len(diff.added_files)}, "
@@ -813,7 +816,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 await work.cancel()
             raise
         except Exception as e:
-            if isinstance(e, LockAcquisitionError):
+            # A move-based sync may already have consumed part of its source.
+            if isinstance(e, LockAcquisitionError) and not syncing_source:
                 execute_status = "requeued"
                 logger.warning(
                     "Lock error processing semantic message, re-enqueueing without "
@@ -1394,7 +1398,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 "output_language": output_language,
             }
         prompt = render_prompt(prompt_id, prompt_variables)
-
 
         async with llm_sem:
             with bind_telemetry_stage("semantic_execute"):
