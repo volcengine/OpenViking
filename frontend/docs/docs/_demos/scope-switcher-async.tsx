@@ -14,5 +14,9 @@ const api = {
 
 export default function ScopeSwitcherAsync() {
   const controller = useScopeCascade(api);
-  return <ScopeCascade controller={controller} />;
+  return (
+    <div style={{ minHeight: 380 }}>
+      <ScopeCascade controller={controller} />
+    </div>
+  );
 }
