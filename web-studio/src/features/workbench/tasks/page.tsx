@@ -1,0 +1,1019 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
+import {
+  CheckCircle2Icon,
+  CheckIcon,
+  ChevronRightIcon,
+  CircleDashedIcon,
+  CircleXIcon,
+  ClipboardListIcon,
+  LayersIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+  RotateCcwIcon,
+  XIcon,
+} from 'lucide-react'
+import * as React from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+
+import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { QueueStatusCard } from '#/features/workbench/monitoring/components/queue-status-card'
+import { commitSession } from '#/features/workbench/sessions/lib/api'
+import { TaskDetailSheet } from '#/features/workbench/tasks/components/task-detail-sheet'
+import { localizeSkippedCommit } from '#/features/workbench/tasks/lib/localize-commit-result'
+import type {
+  TaskStatusFilter,
+  TaskTypeFilter,
+} from '#/features/workbench/tasks/lib/task-list'
+import { fetchTasks, MAX_TASKS } from '#/features/workbench/tasks/lib/task-list'
+import { getTaskPipelineGroups } from '#/features/workbench/tasks/lib/task-pipeline'
+import type { TaskRecord } from '#/features/workbench/tasks/lib/task-record'
+import { normalizeTaskStatus } from '#/features/workbench/tasks/lib/task-record'
+import {
+  formatTaskDuration,
+  formatTaskProcessingDuration,
+  getAverageTaskDurationSeconds,
+  getTaskDate,
+} from '#/features/workbench/tasks/lib/task-time'
+import { postResources } from '#/gen/ov-client'
+import { getOvResult, ovClient } from '#/shared/api/ov-client/index'
+import { cn } from '#/shared/lib/utils'
+import { Badge } from '#/shared/ui/badge'
+import { Button } from '#/shared/ui/button'
+import { Card } from '#/shared/ui/card'
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '#/shared/ui/pagination'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '#/shared/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '#/shared/ui/table'
+
+const DEFAULT_PAGE_SIZE = 20
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
+const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
+  'compile',
+  'session_commit',
+  'add_resource',
+  'add_skill',
+  'connector_import',
+  'admin_reindex',
+  'snapshot_restore_reindex',
+]
+const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
+  'pending',
+  'running',
+  'cancelling',
+  'completed',
+  'failed',
+  'cancelled',
+]
+
+export function TasksRoute() {
+  const navigate = useNavigate()
+  const { t } = useTranslation('tasksPage')
+  const { identityScopeKey } = useAppConnection()
+  const queryClient = useQueryClient()
+  const [page, setPage] = React.useState(1)
+  const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
+  const [taskType, setTaskType] = React.useState<TaskTypeFilter>('all')
+  const [statusFilter, setStatusFilter] =
+    React.useState<TaskStatusFilter>('all')
+  const [dedupByResource, setDedupByResource] = React.useState<boolean>(true)
+  const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
+    null,
+  )
+  const tasksQuery = useQuery({
+    queryFn: () => fetchTasks(taskType, statusFilter),
+    queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
+    refetchInterval: 10_000,
+  })
+  const rawTasks = tasksQuery.data ?? []
+  const allTasks = React.useMemo(() => {
+    if (!dedupByResource) return rawTasks
+    const map = new Map<string, TaskRecord>()
+    for (const t of rawTasks) {
+      const key =
+        t.resource_id && t.task_type !== 'compile'
+          ? `res:${t.resource_id}`
+          : `task:${t.task_id}`
+      if (!map.has(key)) {
+        map.set(key, t)
+      }
+    }
+    return Array.from(map.values())
+  }, [rawTasks, dedupByResource])
+  const pageOffset = (page - 1) * pageSize
+  const tasks = allTasks.slice(pageOffset, pageOffset + pageSize)
+  const totalPages = Math.max(1, Math.ceil(allTasks.length / pageSize))
+  const hasNext = page < totalPages
+  const hasActiveFilters = taskType !== 'all' || statusFilter !== 'all'
+
+  const retryMutation = useMutation({
+    mutationFn: async (task: TaskRecord) => {
+      if (task.task_id?.startsWith('mock_task_')) {
+        return { res: { ok: true }, task }
+      }
+      if (!task.resource_id) {
+        throw new Error(t('labels.missingResource'))
+      }
+
+      // ── 1. task_type 精确匹配优先（不受 URI 前缀干扰）──────────────────────
+      if (task.task_type === 'session_commit') {
+        const res = await commitSession(task.resource_id)
+        if (res.status === 'skipped' || res.reason === 'no_messages') {
+          return { res, task, skippedReason: res.reason ?? 'skipped' }
+        }
+        return { res, task }
+      }
+      const resourceUri = task.resource_id || ''
+
+      if (resourceUri.startsWith('viking://')) {
+        const resp = await ovClient.instance.post('/api/v1/content/reindex', {
+          uri: resourceUri,
+          wait: false,
+        })
+        const json = resp.data
+        if (json.status === 'error' || json.error) {
+          throw new Error(
+            json.error?.message || json.message || t('labels.requeueFailed'),
+          )
+        }
+        return { res: json, task }
+      }
+
+      if (
+        resourceUri.startsWith('http://') ||
+        resourceUri.startsWith('https://')
+      ) {
+        const res = await getOvResult(
+          postResources({
+            body: {
+              path: resourceUri,
+              reason: `Re-queued task: ${task.task_id}`,
+            },
+          }),
+        )
+        return { res, task }
+      }
+
+      const resp = await ovClient.instance.post('/api/v1/content/reindex', {
+        uri: resourceUri,
+        wait: false,
+      })
+      const json = resp.data
+      if (json.status === 'error' || json.error) {
+        throw new Error(
+          json.error?.message || json.message || t('labels.requeueFailed'),
+        )
+      }
+      return { res: json, task }
+    },
+    onError: (error) => {
+      showErrorToast(error)
+    },
+    onSuccess: async (result) => {
+      if ('skippedReason' in result && result.skippedReason) {
+        toast.info(localizeSkippedCommit(result.skippedReason, t))
+        return
+      }
+      toast.success(t('labels.requeueSubmitted'))
+      await queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+
+  React.useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [page, totalPages])
+
+  const formatTime = (task: TaskRecord) => {
+    const date = getTaskDate(task)
+    if (!date) return '-'
+    const y = date.getFullYear()
+    const m = date.getMonth() + 1
+    const d = date.getDate()
+    const hh = String(date.getHours()).padStart(2, '0')
+    const mm = String(date.getMinutes()).padStart(2, '0')
+    const ss = String(date.getSeconds()).padStart(2, '0')
+    return `${y}/${m}/${d} ${hh}:${mm}:${ss}`
+  }
+
+  const getTaskProgressPct = (task: TaskRecord): number => {
+    const status = normalizeTaskStatus(task.status)
+    if (status === 'completed') return 100
+    if (status === 'failed') return 35
+    if (status === 'pending') return 0
+
+    // Extract real queue metrics from task.result
+    const resObj =
+      task.result && typeof task.result === 'object'
+        ? (task.result as Record<string, any>)
+        : {}
+    const qStatus = resObj.queue_status
+    const embeddingProcessed = qStatus?.Embedding?.processed
+    const semanticProcessed = qStatus?.Semantic?.processed
+
+    if (typeof embeddingProcessed === 'number') {
+      const totalEmbedding = 20
+      const embedRatio = Math.min(1, embeddingProcessed / totalEmbedding)
+      // Step 1 (20%) + Step 2 (30%) + Step 3 (50% * embedRatio)
+      return Math.round(20 + 30 + 50 * embedRatio)
+    }
+
+    if (typeof semanticProcessed === 'number') {
+      const totalSemantic = 5
+      const semRatio = Math.min(1, semanticProcessed / totalSemantic)
+      // Step 1 (20%) + Step 2 (30% * semRatio)
+      return Math.round(20 + 30 * semRatio)
+    }
+
+    const stage = task.stage?.toLowerCase()
+    if (stage === 'completed') return 95
+    if (stage === 'extracting') return 65
+    if (stage === 'started') return 25
+    return 45
+  }
+
+  const getTaskTotalSteps = (taskType?: string): number => {
+    if (taskType === 'session_commit') return 1
+    if (taskType === 'admin_reindex' || taskType === 'snapshot_restore_reindex')
+      return 2
+    if (taskType === 'connector_import') return 4
+    return 3
+  }
+
+  const renderStatus = (task: TaskRecord) => {
+    const taskId = task.task_id
+    const status = normalizeTaskStatus(task.status)
+    const pct = getTaskProgressPct(task)
+    const isRetrying =
+      retryMutation.isPending && retryMutation.variables.task_id === taskId
+    const Icon =
+      status === 'completed'
+        ? CheckCircle2Icon
+        : status === 'failed' || status === 'cancelled'
+          ? CircleXIcon
+          : status === 'running' || status === 'cancelling'
+            ? LoaderCircleIcon
+            : CircleDashedIcon
+
+    return (
+      <Badge
+        variant={
+          status === 'failed'
+            ? 'destructive'
+            : status === 'completed'
+              ? 'secondary'
+              : 'outline'
+        }
+        className="gap-1.5 font-normal select-none"
+      >
+        <Icon
+          className={
+            status === 'running' || status === 'cancelling'
+              ? 'size-3.5 animate-spin'
+              : 'size-3.5'
+          }
+        />
+        <span>{t(`status.${status}`)}</span>
+        {status === 'running' && (
+          <span className="font-mono font-semibold ml-0.5">{pct}%</span>
+        )}
+        {status === 'failed' && (
+          <button
+            type="button"
+            disabled={isRetrying}
+            className="ml-1 inline-flex items-center justify-center rounded p-0.5 hover:bg-white/25 active:scale-95 transition-all cursor-pointer text-destructive-foreground disabled:opacity-50"
+            title={t('actions.retrigger')}
+            onClick={(e) => {
+              e.stopPropagation()
+              retryMutation.mutate(task)
+            }}
+          >
+            {isRetrying ? (
+              <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+            ) : (
+              <RotateCcwIcon className="size-3 shrink-0" />
+            )}
+          </button>
+        )}
+      </Badge>
+    )
+  }
+
+  const renderQueuePipeline = (task: TaskRecord) => {
+    const status = normalizeTaskStatus(task.status)
+    const type = task.task_type
+
+    interface StepItem {
+      name: string
+      state: 'completed' | 'running' | 'pending' | 'failed'
+    }
+
+    type PipelineGroup =
+      | { type: 'serial'; step: StepItem }
+      | { type: 'parallel'; steps: StepItem[] }
+
+    const groups = getTaskPipelineGroups(task, t)
+
+    return (
+      <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 min-w-[210px]">
+        {groups.map((grp: PipelineGroup, i: number) => {
+          const stepsInGroup = grp.type === 'serial' ? [grp.step] : grp.steps
+
+          return (
+            <React.Fragment key={i}>
+              {i > 0 && (
+                <span
+                  title={t('labels.serialFlow')}
+                  className="inline-flex shrink-0"
+                >
+                  <ChevronRightIcon className="size-3 text-muted-foreground/40" />
+                </span>
+              )}
+              <span
+                className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium leading-none shrink-0 border border-border/60 bg-secondary/80 text-foreground shadow-2xs transition-all"
+                title={t(
+                  grp.type === 'parallel'
+                    ? 'labels.parallelBatch'
+                    : 'labels.serialBatch',
+                )}
+              >
+                {stepsInGroup.map((st: StepItem, j: number) => {
+                  const isDone = st.state === 'completed'
+                  const isRun = st.state === 'running'
+                  const isFail = st.state === 'failed'
+                  const isPend = st.state === 'pending'
+
+                  return (
+                    <span
+                      key={j}
+                      className="inline-flex items-center gap-1 shrink-0 transition-colors text-foreground/90 font-medium"
+                    >
+                      {isDone && (
+                        <CheckIcon className="size-3 text-foreground/75 shrink-0" />
+                      )}
+                      {isRun && (
+                        <LoaderCircleIcon className="size-3 text-foreground/75 animate-spin shrink-0" />
+                      )}
+                      {isPend && (
+                        <CircleDashedIcon className="size-3 text-foreground/75 shrink-0" />
+                      )}
+                      {isFail && (
+                        <XIcon className="size-3 text-foreground/75 shrink-0" />
+                      )}
+                      <span>{st.name}</span>
+                    </span>
+                  )
+                })}
+              </span>
+            </React.Fragment>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const queueRows = React.useMemo(() => {
+    const map: Record<
+      string,
+      { processing: number; pending: number; completed: number; errors: number }
+    > = {
+      Embedding: { processing: 0, pending: 0, completed: 0, errors: 0 },
+      Semantic: { processing: 0, pending: 0, completed: 0, errors: 0 },
+      ExternalParse: { processing: 0, pending: 0, completed: 0, errors: 0 },
+      SessionCommit: { processing: 0, pending: 0, completed: 0, errors: 0 },
+      'Semantic-Nodes': { processing: 0, pending: 0, completed: 0, errors: 0 },
+    }
+
+    for (const item of allTasks) {
+      const st = normalizeTaskStatus(item.status)
+      const qStatus = (item.result as any)?.queue_status
+
+      if (item.task_type === 'session_commit') {
+        if (st === 'running') map.SessionCommit.processing++
+        else if (st === 'pending') map.SessionCommit.pending++
+        else if (st === 'completed') map.SessionCommit.completed++
+        else if (st === 'failed') map.SessionCommit.errors++
+      } else if (
+        item.task_type === 'admin_reindex' ||
+        item.task_type === 'snapshot_restore_reindex'
+      ) {
+        if (st === 'pending') map.ExternalParse.pending++
+        else map.ExternalParse.completed++
+
+        if (st === 'running') map.Embedding.processing++
+        else if (st === 'pending') map.Embedding.pending++
+        else if (st === 'completed') map.Embedding.completed++
+        else if (st === 'failed') map.Embedding.errors++
+      } else {
+        // add_resource / add_skill / connector_import 包含：解析 (ExternalParse) -> 语义提炼 (Semantic) + 向量落库 (Embedding)
+        if (st === 'running') {
+          map.ExternalParse.processing++
+          map.Semantic.processing++
+          map.Embedding.processing++
+        } else if (st === 'pending') {
+          map.ExternalParse.pending++
+          map.Semantic.pending++
+          map.Embedding.pending++
+        } else if (st === 'completed') {
+          map.ExternalParse.completed++
+          map.Semantic.completed++
+          map.Embedding.completed++
+        } else if (st === 'failed') {
+          map.ExternalParse.errors++
+          map.Semantic.errors++
+          map.Embedding.errors++
+        }
+      }
+    }
+
+    let totProc = 0
+    let totPend = 0
+    let totComp = 0
+    let totErr = 0
+    const rows = Object.entries(map).map(([name, data]) => {
+      totProc += data.processing
+      totPend += data.pending
+      totComp += data.completed
+      totErr += data.errors
+      return {
+        name,
+        processing: data.processing,
+        pending: data.pending,
+        completed: data.completed,
+        errors: data.errors,
+        total: data.processing + data.pending + data.completed,
+      }
+    })
+
+    rows.push({
+      name: 'TOTAL',
+      processing: totProc,
+      pending: totPend,
+      completed: totComp,
+      errors: totErr,
+      total: totProc + totPend + totComp,
+    })
+
+    return rows
+  }, [allTasks])
+
+  const kpiData = React.useMemo(() => {
+    const total = allTasks.length
+    const completed = allTasks.filter(
+      (item) => normalizeTaskStatus(item.status) === 'completed',
+    ).length
+    const rawRunning = allTasks.filter(
+      (item) => normalizeTaskStatus(item.status) === 'running',
+    ).length
+    const rawPending = allTasks.filter(
+      (item) => normalizeTaskStatus(item.status) === 'pending',
+    ).length
+    const failed = allTasks.filter(
+      (item) => normalizeTaskStatus(item.status) === 'failed',
+    ).length
+
+    // Reflect API statuses; do not invent pending from an 8-slot running cap.
+    const running = rawRunning
+    const pending = rawPending
+
+    const successRate = total > 0 ? (completed / total) * 100 : 100
+
+    const avgDurationSec = getAverageTaskDurationSeconds(allTasks)
+
+    const ALL_TASK_TYPES = [
+      'add_resource',
+      'session_commit',
+      'admin_reindex',
+      'snapshot_restore_reindex',
+      'add_skill',
+      'connector_import',
+    ]
+
+    const typeCounts: Record<string, number> = {}
+    for (const typeKey of ALL_TASK_TYPES) {
+      typeCounts[typeKey] = 0
+    }
+    for (const item of allTasks) {
+      if (item.task_type) {
+        typeCounts[item.task_type] = (typeCounts[item.task_type] || 0) + 1
+      }
+    }
+    let topType = '--'
+    let topCount = 0
+    for (const [typeKey, count] of Object.entries(typeCounts)) {
+      if (count > topCount) {
+        topCount = count
+        topType = typeKey
+      }
+    }
+
+    const baseTypeRows = Object.entries(typeCounts)
+      .map(([typeKey, count]) => {
+        const matchingTasks = allTasks.filter(
+          (taskItem) => taskItem.task_type === typeKey,
+        )
+        const processing = matchingTasks.filter(
+          (taskItem) => normalizeTaskStatus(taskItem.status) === 'running',
+        ).length
+        const pending = matchingTasks.filter(
+          (taskItem) => normalizeTaskStatus(taskItem.status) === 'pending',
+        ).length
+        const completed = matchingTasks.filter(
+          (taskItem) => normalizeTaskStatus(taskItem.status) === 'completed',
+        ).length
+        const errors = matchingTasks.filter(
+          (taskItem) => normalizeTaskStatus(taskItem.status) === 'failed',
+        ).length
+        return {
+          name: t(`types.${typeKey}` as any, { defaultValue: typeKey }),
+          processing,
+          pending,
+          completed,
+          errors,
+          total: count,
+        }
+      })
+      .sort((a, b) => b.total - a.total)
+
+    const typeRows = [
+      ...baseTypeRows,
+      {
+        name: 'TOTAL',
+        processing: baseTypeRows.reduce(
+          (sum, item) => sum + item.processing,
+          0,
+        ),
+        pending: baseTypeRows.reduce((sum, item) => sum + item.pending, 0),
+        completed: baseTypeRows.reduce((sum, item) => sum + item.completed, 0),
+        errors: baseTypeRows.reduce((sum, item) => sum + item.errors, 0),
+        total: baseTypeRows.reduce((sum, item) => sum + item.total, 0),
+      },
+    ]
+
+    return {
+      total,
+      completed,
+      running,
+      pending,
+      failed,
+      successRate,
+      avgDurationSec,
+      topType,
+      topCount,
+      typeRows,
+    }
+  }, [allTasks, t])
+
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid gap-1.5">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t('title')}
+          </h1>
+          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+            {t('description')}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={tasksQuery.isFetching}
+            onClick={() => void tasksQuery.refetch()}
+          >
+            <RefreshCwIcon
+              className={tasksQuery.isFetching ? 'animate-spin' : undefined}
+            />
+            {t('refresh')}
+          </Button>
+        </div>
+      </header>
+
+      {/* 4 大 Task 核心运行 KPI 观察行 */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-medium">{t('labels.successRate')}</span>
+          </div>
+          <div className="flex items-baseline gap-1">
+            <span className="font-mono text-xl font-bold tabular-nums text-foreground">
+              {kpiData.successRate.toFixed(1)}%
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground truncate">
+            {t('labels.taskSummary', {
+              total: kpiData.total,
+              failed: kpiData.failed,
+            })}
+          </p>
+        </Card>
+
+        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-medium">{t('labels.avgDuration')}</span>
+          </div>
+          <div className="flex items-baseline gap-1">
+            <span className="font-mono text-xl font-bold tabular-nums text-foreground">
+              {kpiData.avgDurationSec === undefined
+                ? '-'
+                : kpiData.avgDurationSec < 1
+                  ? t('studio:duration.milliseconds', {
+                      value: (kpiData.avgDurationSec * 1000).toFixed(0),
+                    })
+                  : t('studio:duration.seconds', {
+                      value: kpiData.avgDurationSec.toFixed(1),
+                    })}
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground truncate">
+            {t('labels.avgProcessingTime')}
+          </p>
+        </Card>
+
+        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-medium">{t('labels.totalTasks')}</span>
+          </div>
+          <div className="flex items-baseline gap-1">
+            <span className="font-mono text-xl font-bold tabular-nums text-foreground">
+              {t('labels.taskCount', { count: kpiData.total })}
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground truncate">
+            {t('labels.completedTasks', { count: kpiData.completed })}
+          </p>
+        </Card>
+
+        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-medium">{t('labels.activePending')}</span>
+          </div>
+          <div className="flex items-baseline gap-1">
+            <span className="font-mono text-xl font-bold tabular-nums text-foreground">
+              {kpiData.running} / {kpiData.pending}
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground truncate">
+            {t('labels.runningPending')}
+          </p>
+        </Card>
+      </div>
+
+      {/* 任务队列 (上层) 与 工序队列 (下层) 50/50 并排观测行 */}
+      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-2">
+        {/* 左侧 (50% 宽度 - 优先看上层任务): 任务队列状态 (Task Queues) */}
+        <div>
+          <QueueStatusCard
+            title={t('labels.taskQueueStatus')}
+            customRows={kpiData.typeRows}
+            isHealthy={kpiData.failed === 0}
+          />
+        </div>
+
+        {/* 右侧 (50% 宽度 - 拆分出的下层工序): 工序队列状态 (Process Queues) */}
+        <div>
+          <QueueStatusCard
+            title={t('labels.processQueueStatus')}
+            customRows={queueRows}
+            isHealthy={kpiData.failed === 0}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/60 p-2 shadow-xs">
+        <span className="px-1 text-xs font-medium text-muted-foreground">
+          {t('filters.label')}
+        </span>
+        <Select
+          value={taskType}
+          onValueChange={(value) => {
+            setTaskType(value as TaskTypeFilter)
+            setPage(1)
+          }}
+        >
+          <SelectTrigger
+            size="sm"
+            className="min-w-40 bg-background"
+            aria-label={t('filters.type')}
+          >
+            <SelectValue>
+              {taskType === 'all'
+                ? t('filters.allTypes')
+                : t(`types.${taskType}`)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('filters.allTypes')}</SelectItem>
+            {TASK_TYPE_OPTIONS.map((option) => (
+              <SelectItem key={option} value={option}>
+                {t(`types.${option}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={statusFilter}
+          onValueChange={(value) => {
+            setStatusFilter(value as TaskStatusFilter)
+            setPage(1)
+          }}
+        >
+          <SelectTrigger
+            size="sm"
+            className="min-w-32 bg-background"
+            aria-label={t('filters.status')}
+          >
+            <SelectValue>
+              {statusFilter === 'all'
+                ? t('filters.allStatuses')
+                : t(`status.${statusFilter}`)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('filters.allStatuses')}</SelectItem>
+            {TASK_STATUS_OPTIONS.map((option) => (
+              <SelectItem key={option} value={option}>
+                {t(`status.${option}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {hasActiveFilters ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            onClick={() => {
+              setTaskType('all')
+              setStatusFilter('all')
+              setPage(1)
+            }}
+          >
+            {t('filters.clear')}
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant={dedupByResource ? 'secondary' : 'outline'}
+          size="sm"
+          className="h-8 text-xs font-normal transition-all gap-1.5"
+          onClick={() => setDedupByResource((prev) => !prev)}
+        >
+          <LayersIcon className="size-3.5 text-muted-foreground" />
+          {t(
+            dedupByResource
+              ? 'labels.latestPerResource'
+              : 'labels.individualTasks',
+          )}
+        </Button>
+      </div>
+
+      {tasksQuery.isLoading ? (
+        <Card className="min-h-56 items-center justify-center">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <LoaderCircleIcon className="size-4 animate-spin" />
+            {t('loading')}
+          </div>
+        </Card>
+      ) : tasksQuery.isError ? (
+        <Card className="min-h-56 items-center justify-center px-6 text-center">
+          <CircleXIcon className="size-8 text-destructive/70" />
+          <div className="grid gap-1">
+            <p className="font-medium">{t('loadFailed')}</p>
+            <p className="max-w-xl text-sm text-muted-foreground">
+              {tasksQuery.error instanceof Error
+                ? tasksQuery.error.message
+                : String(tasksQuery.error)}
+            </p>
+          </div>
+        </Card>
+      ) : tasks.length === 0 ? (
+        <Card className="min-h-56 items-center justify-center px-6 text-center">
+          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <ClipboardListIcon className="size-5" />
+          </div>
+          <div className="grid max-w-md gap-1">
+            <p className="font-medium">
+              {t(hasActiveFilters ? 'emptyFiltered' : 'empty')}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {t(
+                hasActiveFilters
+                  ? 'emptyFilteredDescription'
+                  : 'emptyDescription',
+              )}
+            </p>
+          </div>
+        </Card>
+      ) : (
+        <Card className="gap-0 overflow-hidden py-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/20 hover:bg-muted/20">
+                  <TableHead>{t('table.task')}</TableHead>
+                  <TableHead>{t('table.type')}</TableHead>
+                  <TableHead>{t('table.resource')}</TableHead>
+                  <TableHead>{t('labels.queuePipeline')}</TableHead>
+                  <TableHead>{t('table.status')}</TableHead>
+                  <TableHead title={t('labels.processingDurationHelp')}>
+                    {t('labels.timing')}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t('table.createdAt')}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {tasks.map((task, index) => {
+                  const taskId = task.task_id
+                  return (
+                    <TableRow
+                      key={taskId || String(index)}
+                      tabIndex={taskId ? 0 : undefined}
+                      aria-label={
+                        taskId ? t('detail.openLabel', { taskId }) : undefined
+                      }
+                      className={cn(
+                        taskId &&
+                          'cursor-pointer outline-none hover:bg-muted/35 focus-visible:bg-muted/35 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
+                      )}
+                      onClick={() => {
+                        if (taskId) {
+                          if (task.task_type === 'compile') {
+                            void navigate({
+                              to: '/compile/tasks/$taskId',
+                              params: { taskId },
+                            })
+                          } else setSelectedTaskId(taskId)
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          taskId &&
+                          (event.key === 'Enter' || event.key === ' ')
+                        ) {
+                          event.preventDefault()
+                          if (task.task_type === 'compile') {
+                            void navigate({
+                              to: '/compile/tasks/$taskId',
+                              params: { taskId },
+                            })
+                          } else setSelectedTaskId(taskId)
+                        }
+                      }}
+                    >
+                      <TableCell>
+                        <span className="flex items-center gap-2">
+                          <code className="min-w-0 truncate text-xs">
+                            {taskId || `#${pageOffset + index + 1}`}
+                          </code>
+                          {taskId ? (
+                            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          ) : null}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-xs font-medium text-foreground/90 whitespace-nowrap">
+                        {task.task_type
+                          ? t(`types.${task.task_type}`, {
+                              defaultValue: task.task_type,
+                            })
+                          : '-'}
+                      </TableCell>
+                      <TableCell className="max-w-72 truncate text-muted-foreground">
+                        {task.resource_id || '-'}
+                      </TableCell>
+                      <TableCell>{renderQueuePipeline(task)}</TableCell>
+                      <TableCell>{renderStatus(task)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                        <div>
+                          {t('labels.processingDuration')}:{' '}
+                          <span>
+                            {task.status === 'pending' &&
+                            (task.processing_seconds == null ||
+                              task.processing_seconds === 0)
+                              ? t('labels.processingNotStarted')
+                              : (formatTaskProcessingDuration(task) ??
+                                t('labels.timingUnavailable'))}
+                          </span>
+                        </div>
+                        <div className="text-muted-foreground">
+                          {t('labels.totalDuration')}:{' '}
+                          <span>{formatTaskDuration(task)}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-right text-muted-foreground">
+                        {formatTime(task)}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col items-center gap-1.5 sm:items-start">
+              <div className="flex items-center justify-center gap-3 sm:justify-start">
+                <p className="text-sm text-muted-foreground">
+                  {t('pagination.page', { page })}
+                </p>
+                <Select
+                  value={String(pageSize)}
+                  onValueChange={(value) => {
+                    setPageSize(Number(value))
+                    setPage(1)
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label={t('pagination.pageSize')}
+                  >
+                    <SelectValue>
+                      {t('pagination.pageSizeValue', { count: pageSize })}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAGE_SIZE_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={String(option)}>
+                        {t('pagination.pageSizeValue', { count: option })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('pagination.scope', {
+                  count: allTasks.length,
+                  limit: MAX_TASKS,
+                })}
+              </p>
+            </div>
+            <Pagination className="mx-0 w-auto justify-center sm:justify-end">
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href="#"
+                    text={t('pagination.previous')}
+                    aria-disabled={page <= 1}
+                    className={cn(
+                      page <= 1 && 'pointer-events-none opacity-50',
+                    )}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      if (page > 1) setPage((current) => current - 1)
+                    }}
+                  />
+                </PaginationItem>
+                <PaginationItem>
+                  <PaginationNext
+                    href="#"
+                    text={t('pagination.next')}
+                    aria-disabled={!hasNext}
+                    className={cn(!hasNext && 'pointer-events-none opacity-50')}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      if (hasNext) setPage((current) => current + 1)
+                    }}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          </div>
+        </Card>
+      )}
+
+      <TaskDetailSheet
+        identityScopeKey={identityScopeKey}
+        open={Boolean(selectedTaskId)}
+        taskId={selectedTaskId}
+        onOpenChange={(open) => {
+          if (!open) setSelectedTaskId(null)
+        }}
+      />
+    </div>
+  )
+}

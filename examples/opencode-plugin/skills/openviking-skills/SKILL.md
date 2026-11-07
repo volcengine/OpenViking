@@ -88,7 +88,7 @@ when the `ov` CLI is installed, otherwise tell the user.
      survive in the frontmatter. Put anything else (version, author, ...)
      under `metadata:` or it is dropped.
 2. Check the name on the target root with
-   `read(uris="<root>/<name>/SKILL.md")`, where `<root>` is
+   `read(uri="<root>/<name>/SKILL.md")`, where `<root>` is
    `viking://~/skills`, or `viking://agent/skills` when sharing. If it
    exists, `add_skill` replaces it without asking: show the user what would
    change and install only after they confirm, or pick another name.

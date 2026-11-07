@@ -36,6 +36,9 @@ class MockLocalAGFS:
     def mkdir(self, path, ctx=None, parents=True, exist_ok=True):
         self._resolve(path).mkdir(parents=parents, exist_ok=exist_ok)
 
+    def ensure_parent_dirs(self, path, ctx=None):
+        self._resolve(path).parent.mkdir(parents=True, exist_ok=True)
+
     def ls(self, path, ctx=None, **kwargs):
         """List test entries with the same sorting and pagination contract as RagFS."""
         p = self._resolve(path)

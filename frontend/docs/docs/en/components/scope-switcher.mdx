@@ -1,0 +1,71 @@
+# ScopeSwitcher
+
+Compose independent selectors. `ScopeSwitcher` owns layout only; each host level owns its data requests, options, loading/error and search state, and renders a `ScopeSelector`.
+
+For three-API integration with automatic cascading and request state, use [ScopeCascade](../modules/scope-cascade). The examples below show the lower-level view API.
+
+## Basic usage
+
+```tsx file="../../_demos/scope-switcher-basic.tsx" preview
+
+```
+
+```tsx
+<ScopeSwitcher>
+  <LibrarySelector />
+  <SpaceSelector />
+  <UserSelector />
+</ScopeSwitcher>
+```
+
+Each host renders one `ScopeSelector` without an extra DOM wrapper. CSS adds separators between adjacent selectors. Fixed/selectable levels can be mixed; omit a level to hide it. Narrow layouts wrap; phones use bottom panels.
+
+## Update boundaries
+
+The former `levels` array has been replaced by `children`. The root has no shared state, data subscription or changing Context value. A selector owns open/closed state unless `visible` is supplied; selection closes its panel. Its host owns search, options and requests. No `memo` is used.
+
+The static example creates an identity source per instance. Each host subscribes to its own channel with `useSyncExternalStore`; snapshots stay stable until its selection or ancestors change. Library selection updates the library and clears both descendants; space selection updates the space and clears the user; user selection affects only the user. All affected snapshots are written before notifications. Selecting the same identity is a no-op. Requests, search and visibility never enter the shared source.
+
+This source is a **host example**, not a mandatory library store or global singleton. Existing host data layers can supply equivalent subscriptions. Keying a dependent host subtree by ancestor identities resets stale options, search, errors and visibility and cancels its old request. Changing a level's own selection does not reload its options. Arbitrary ancestor renders outside this boundary can still trigger normal React rendering.
+
+## Three asynchronous APIs
+
+```tsx file="../../_demos/scope-switcher-async.tsx" preview
+
+```
+
+This example now uses `useScopeCascade` and `ScopeCascade`: only three API adapters are supplied. Cascading resets, requests, cancellation, local search and retry are built in. See [ScopeCascade](../modules/scope-cascade) for the complete API and custom-view example.
+
+## Props
+
+`ScopeSwitcherProps` extends `HTMLAttributes<HTMLDivElement>` with `children`, `className`, `style`, etc. It no longer accepts `levels` or shared labels.
+
+`ScopeSelectorProps` contains required `level: ScopeSwitcherLevel` and optional `labels: ScopeSwitcherLabels`.
+
+Common level fields: `kind`, `key`, `selectedLabel`, optional `ariaLabel`, `icon`, `tag`. `kind: 'fixed'` shows a noninteractive label. `kind: 'selectable'` additionally accepts:
+
+| Field                                    | Behavior                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------- |
+| `options`, `selectedId`                  | Required host-owned data and selection; use `''` before selecting.              |
+| `disabled`, `busy`                       | Disable the trigger or all option rows.                                         |
+| `loading`, `error`                       | Replace the list with loading/error content.                                    |
+| `visible`, `onVisibleChange`             | Optional controlled visibility and notification; omitted visibility is local.   |
+| `onSelect(option)`                       | Closes the panel and reports intent; the host updates identities.               |
+| `searchKeyword`, `onSearchKeywordChange` | Host-controlled search; no input without its callback.                          |
+| `total`                                  | Search appears when loaded count or total exceeds 10, or a keyword is nonempty. |
+| `onScroll(metrics)`                      | Receives `scrollTop`, `scrollHeight`, `clientHeight`; host owns pagination.     |
+| `renderPanel({ search, list })`          | Compose with headings, controls and footer links.                               |
+| `renderOption(content, option)`          | Extend/replace rows; nested buttons/links do not select the row.                |
+| `emptyFallback`, `errorFallback`         | Custom empty/error content, including retry actions.                            |
+
+Options require `id`, `label`; optional fields are `icon`, `description`, `disabled`. Labels include `loading`, `searchPlaceholder`, `empty`, `noMatch`, `error`, with English defaults. Pass localized labels to each selector.
+
+Arrow keys and Home/End navigate; Enter/Space select; Escape closes and returns focus. Outside clicks and focus leaving dismiss the panel. Trigger geometry, icons, and the 4px option gap are preserved.
+
+```tsx
+import {
+  ScopeSwitcher,
+  ScopeSelector,
+} from '@openviking/react/components/scope-switcher';
+import '@openviking/react/components/scope-switcher/style.css';
+```

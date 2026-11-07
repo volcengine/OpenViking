@@ -191,7 +191,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 <summary><strong>エージェントにインストールしてもらう</strong></summary>
 
 ```text
-OpenViking メモリプラグインをインストールして、使い始めるところまで手伝ってください。OpenViking は Volcengine がオープンソースで公開している AI エージェント向けのコンテキストデータベースです（https://github.com/volcengine/OpenViking、AGPL-3.0）。下のコマンドとリンクは公式ドキュメントに載っているものです。
+OpenViking メモリプラグインをインストールして、使い始めるところまで手伝ってください。OpenViking は AI エージェント向けのコンテキストデータベースです（https://github.com/volcengine/OpenViking）。下のコマンドとリンクは公式ドキュメントに載っているものです。
 
 1. 公式インストーラーを実行してください。ネットワークに接続し、私のホームディレクトリに書き込みます。サンドボックスでブロックされたら、私に承認を求めてください：
    curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang en --url <SERVER_URL> --api-key <API_KEY>

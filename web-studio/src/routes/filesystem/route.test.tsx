@@ -13,7 +13,7 @@ import {
   vi,
 } from 'vitest'
 
-import { Route } from './route'
+import { Route } from '#/routes/filesystem/route'
 
 const mocks = vi.hoisted(() => ({
   provider: 'opensource',
@@ -33,6 +33,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal()
   return {
     ...actual,
+    getRouteApi: () => ({ useSearch: () => mocks.search }),
     createFileRoute: () => (options: Record<string, unknown>) => ({
       ...options,
       fullPath: '/filesystem',
@@ -47,23 +48,23 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 
-vi.mock('#/hooks/use-studio-service', () => ({
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({ provider: mocks.provider, ready: true }),
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
 }))
 
-vi.mock('#/routes/resources/-hooks/viking-fm', () => ({
+vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
   useInvalidateVikingFs: () => ({ invalidateList: mocks.invalidateList }),
   useVikingFsList: () => ({ data: { entries: [] }, isFetching: false }),
 }))
 
-vi.mock('#/routes/resources/-lib/api', () => ({
+vi.mock('#/features/workbench/resources/lib/api', () => ({
   fetchFsStat: mocks.fetchFsStat,
 }))
 
-vi.mock('#/routes/resources/-hooks/use-resource-upload', () => ({
+vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
   ResourceUploadProvider: ({
     children,
     enabled,
@@ -80,7 +81,7 @@ vi.mock('#/routes/resources/-hooks/use-resource-upload', () => ({
   }),
 }))
 
-vi.mock('#/routes/resources/-components/lazy-file-preview', () => ({
+vi.mock('#/features/workbench/resources/components/lazy-file-preview', () => ({
   LazyFilePreview: (props: {
     file: { uri: string } | null
     readOnly?: boolean
@@ -91,7 +92,7 @@ vi.mock('#/routes/resources/-components/lazy-file-preview', () => ({
   },
 }))
 
-vi.mock('./-components/context-explorer', () => ({
+vi.mock('#/features/workbench/filesystem/components/context-explorer', () => ({
   ContextExplorerHeader: ({ onRefresh }: { onRefresh: () => void }) => (
     <button type="button" aria-label={mocks.refreshLabel} onClick={onRefresh} />
   ),
@@ -104,17 +105,22 @@ vi.mock('./-components/context-explorer', () => ({
   FilesystemResizeHandle: () => null,
 }))
 
-vi.mock('./-components/agent-panel', () => ({ AgentPanel: mocks.agent }))
-vi.mock('./-components/terminal-panel', () => ({
+vi.mock('#/features/workbench/filesystem/components/agent-panel', () => ({
+  AgentPanel: mocks.agent,
+}))
+vi.mock('#/features/workbench/filesystem/components/terminal-panel', () => ({
   TerminalPanel: mocks.terminal,
 }))
-vi.mock('./-components/data-management-dialog', () => ({
-  DataManagementDialog: (props: { uri: string; isDirectory: boolean }) => {
-    mocks.dataManagement(props)
-    return <div data-testid="data-management-uri">{props.uri}</div>
-  },
-}))
-vi.mock('#/routes/resources/-components/find-palette', () => ({
+vi.mock(
+  '#/features/workbench/filesystem/components/data-management-dialog',
+  () => ({
+    DataManagementDialog: (props: { uri: string; isDirectory: boolean }) => {
+      mocks.dataManagement(props)
+      return <div data-testid="data-management-uri">{props.uri}</div>
+    },
+  }),
+)
+vi.mock('#/features/workbench/resources/components/find-palette', () => ({
   FindPalette: () => null,
 }))
 

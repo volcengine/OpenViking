@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -15,9 +16,11 @@ from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
-from openviking.service.compile_targets import CompileLifecycle, UpdateSchedule
+from openviking.service.compile_targets import CompileLifecycle, UpdateSchedule, split_control_args
 from openviking.service.external_task_service import (
+    ExternalTaskCancellation,
     ExternalTaskError,
+    ExternalTaskRetryExhaustedError,
     ExternalTaskService,
     ExternalTaskSnapshot,
 )
@@ -25,7 +28,9 @@ from openviking.service.fs_service import FSService
 from openviking.service.memory_compile import MemoryCompileRunner
 from openviking.service.task_tracker import SENSITIVE_TASK_KEYS, TaskRecord
 from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
+from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import (
+    ConflictError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -33,6 +38,9 @@ from openviking_cli.exceptions import (
     UnavailableError,
 )
 from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"accepted", "pending", "running", "committing"})
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -319,6 +327,8 @@ class CompileService:
         self._local_endpoint: _CompileEndpoint | None = None
         self._memory_runner: MemoryCompileRunner | None = None
         self._lifecycle: CompileLifecycle | None = None
+        # Keep submission history tasks alive until their storage operations finish.
+        self._history_tasks: set[asyncio.Task[None]] = set()
 
     def configure_lifecycle(self, lifecycle: CompileLifecycle) -> None:
         """Enable target registry, incremental planning and scheduled updates."""
@@ -328,9 +338,20 @@ class CompileService:
     def lifecycle(self) -> CompileLifecycle | None:
         return self._lifecycle
 
-    def configure_memory_runner(self, vikingdb: Any = None) -> None:
+    def configure_memory_runner(
+        self,
+        vikingdb: Any = None,
+        *,
+        runtime_config_manager: Any = None,
+        vlm_resolver=None,
+    ) -> None:
         """Install the in-process memory-consolidation runner for `--skill memory`."""
-        self._memory_runner = MemoryCompileRunner(self._fs, vikingdb=vikingdb)
+        self._memory_runner = MemoryCompileRunner(
+            self._fs,
+            vikingdb=vikingdb,
+            runtime_config_manager=runtime_config_manager,
+            vlm_resolver=vlm_resolver,
+        )
 
     @property
     def poll_interval_seconds(self) -> float:
@@ -384,8 +405,13 @@ class CompileService:
         connection: Mapping[str, Any],
         ctx: RequestContext,
         idempotency_key: str | None = None,
-    ) -> TaskRecord:
+    ) -> TaskRecord | dict[str, Any]:
+        """Save explicit update settings synchronously, or queue one immediate Compile run."""
+        control, _ = split_control_args(request.args)
+        configures_schedule = "auto_update" in control or "update_schedule" in control
         if request.is_memory_mode:
+            if configures_schedule:
+                raise InvalidArgumentError("Scheduled updates do not support --skill memory")
             if self._memory_runner is None:
                 raise UnavailableError(
                     "memory compile", "memory consolidation runner is not configured"
@@ -396,14 +422,23 @@ class CompileService:
                 ctx=ctx,
             )
         request = self._normalize_request_uris(request, ctx)
+        CompileLifecycle.validate_layout(request.to, request.from_)
+        if configures_schedule:
+            lifecycle = self._require_lifecycle()
+            normalized = await self._normalize_request(request, ctx)
+            submitted, _ = self._split_payload(normalized)
+            control, runtime_args = split_control_args(submitted.get("args"))
+            record = await lifecycle.save_submission(
+                submitted, control, runtime_args, request._instruction_sent, ctx
+            )
+            return self._config_view(record)
         if idempotency_key:
             payload, private_payload = self._split_payload(request)
             existing = await self._tasks.recover_submission(
                 self.task_type, payload, private_payload, ctx, idempotency_key
             )
             if existing is not None:
-                if self._lifecycle is not None:
-                    await self._lifecycle.record_created(existing)
+                self._schedule_history(existing)
                 return existing
         endpoint = self._endpoint()
         if not endpoint.local and not str(connection.get("api_key") or "").strip():
@@ -411,16 +446,29 @@ class CompileService:
         normalized = await self._normalize_request(request, ctx)
         submitted, private_payload = self._split_payload(normalized)
         payload = submitted
+        preparation = None
         if self._lifecycle is not None:
-            payload = await self._lifecycle.prepare(
-                submitted, ctx, instruction_set=request._instruction_sent
+            control, runtime_args = split_control_args(submitted.get("args"))
+            payload = {key: value for key, value in submitted.items() if key != "args"}
+            if runtime_args:
+                payload["args"] = runtime_args
+            payload["compile"] = {
+                "mode": control.get("mode", "incremental"),
+                "trigger": "manual",
+            }
+            preparation = asyncio.create_task(
+                self._lifecycle.prepare(submitted, ctx, instruction_set=request._instruction_sent)
             )
-        task = await self._create_task(
-            payload, submitted, private_payload, normalized, connection, ctx, idempotency_key
+        return await self._create_task(
+            payload,
+            submitted,
+            private_payload,
+            normalized,
+            connection,
+            ctx,
+            idempotency_key,
+            preparation=preparation,
         )
-        if self._lifecycle is not None:
-            await self._lifecycle.record_created(task)
-        return task
 
     async def create_scheduled(
         self,
@@ -444,7 +492,7 @@ class CompileService:
         normalized = await self._normalize_request(self._normalize_request_uris(request, ctx), ctx)
         submitted, private_payload = self._split_payload(normalized)
         payload = await self._lifecycle.prepare(
-            submitted, ctx, instruction_set=False, scheduled_target_id=record["id"]
+            submitted, ctx, instruction_set=False, scheduled_record=record
         )
         return await self._create_task(
             payload,
@@ -468,7 +516,9 @@ class CompileService:
         idempotency_key: str | None,
         *,
         locked_record: dict[str, Any] | None = None,
+        preparation: asyncio.Task[Any] | None = None,
     ) -> TaskRecord:
+        """Enqueue work, recording scheduled history before releasing its caller-owned state lock."""
         task = await self._tasks.create(
             self.task_type,
             resource_id=", ".join(normalized.from_),
@@ -476,25 +526,54 @@ class CompileService:
             private_payload=private_payload,
             connection=connection,
             ctx=ctx,
-            **(
-                {"idempotency_key": idempotency_key, "submission_payload": submitted}
-                if idempotency_key
-                else {}
-            ),
+            idempotency_key=idempotency_key,
+            submission_payload=submitted if idempotency_key else None,
         )
-        if self._lifecycle is not None:
-            await self._lifecycle.record_queued(task, locked_record=locked_record)
+        if locked_record is not None:
+            await self._require_lifecycle().record_queued(task, locked_record=locked_record)
+        else:
+            self._schedule_history(task, preparation=preparation)
         return task
 
-    async def on_start(self, task: TaskRecord) -> Any:
+    def _schedule_history(
+        self, task: TaskRecord, *, preparation: asyncio.Task[Any] | None = None
+    ) -> None:
+        """Record history after optional preparation, logging background failures."""
+        lifecycle = self._lifecycle
+        if lifecycle is None:
+            return
+
+        async def record_history() -> None:
+            try:
+                if preparation is not None:
+                    await preparation
+                await lifecycle.record_queued(task)
+            except Exception:
+                logger.exception(
+                    "Failed to record Compile submission history task_id=%s", task.task_id
+                )
+
+        background = asyncio.create_task(record_history())
+        self._history_tasks.add(background)
+        background.add_done_callback(self._history_tasks.discard)
+
+    async def on_start(self, task: TaskRecord) -> str | ExternalTaskSnapshot | None:
         if self._lifecycle is None:
             return "proceed"
         return await self._lifecycle.on_start(task)
 
-    async def on_finish(self, task: TaskRecord, snapshot: ExternalTaskSnapshot) -> Any:
+    async def on_finish(
+        self,
+        task: TaskRecord,
+        snapshot: ExternalTaskSnapshot,
+    ) -> ExternalTaskSnapshot:
         if self._lifecycle is None:
             return snapshot
         return await self._lifecycle.on_finish(task, snapshot)
+
+    @staticmethod
+    def submission_meta(_external_task_id: str) -> dict[str, Any]:
+        return {}
 
     async def submit(
         self,
@@ -555,6 +634,55 @@ class CompileService:
             )
         )
 
+    async def on_cancel(
+        self,
+        task: TaskRecord,
+        *,
+        external_task_id: str | None,
+        payload: Mapping[str, Any],
+        private_payload: Mapping[str, Any],
+        connection: Mapping[str, Any],
+        failure: Exception | None,
+    ) -> ExternalTaskCancellation:
+        """Recover an uncertain Compile submission, then stop its Runtime session."""
+        outcome = (
+            ExternalTaskSnapshot(
+                status="failed",
+                error_code=getattr(failure, "code", None) or "INTERNAL",
+                error_message=str(failure) or type(failure).__name__,
+            )
+            if failure is not None
+            else ExternalTaskSnapshot(status="cancelled")
+        )
+        rejected = (
+            task.stage == "submitting"
+            and isinstance(failure, ExternalTaskError)
+            and not isinstance(failure, ExternalTaskRetryExhaustedError)
+            and not failure.transient
+            and failure.code
+            in {"INVALID_ARGUMENT", "NOT_FOUND", "PERMISSION_DENIED", "UNAUTHENTICATED"}
+        )
+        if external_task_id is None and (task.stage in {None, "queued"} or rejected):
+            return ExternalTaskCancellation(None, outcome)
+        if external_task_id is None:
+            external_task_id = await self.submit(
+                task.task_id,
+                payload,
+                private_payload,
+                connection,
+            )
+        snapshot = await self.cancel(
+            external_task_id,
+            connection,
+            payload=payload,
+            private_payload=private_payload,
+        )
+        return ExternalTaskCancellation(
+            external_task_id,
+            snapshot,
+            terminal_snapshot=outcome if failure is not None else None,
+        )
+
     # ---------- update settings and run history ----------
 
     def _require_lifecycle(self) -> CompileLifecycle:
@@ -563,11 +691,17 @@ class CompileService:
         return self._lifecycle
 
     async def _target(
-        self, to: str, ctx: RequestContext, *, include_deleted: bool = False
+        self,
+        to: str,
+        ctx: RequestContext,
+        *,
+        include_deleted: bool = False,
+        action: AclAction = AclAction.READ,
     ) -> dict[str, Any]:
+        """Resolve an account's registered target after checking the requested ACL action."""
         lifecycle = self._require_lifecycle()
         target = validate_request_viking_uri(resolve_path_variables(to), ctx, field_name="to")
-        await self._fs.ensure_write_access(target.rstrip("/"), ctx)
+        await lifecycle._fs._ensure_access(target.rstrip("/"), ctx, action=action)
         record = await lifecycle.store.get_by_to(
             ctx.account_id, target.rstrip("/"), include_deleted=include_deleted
         )
@@ -580,10 +714,10 @@ class CompileService:
         from openviking.service.compile_scheduler import next_run_at
 
         return {
-            "target_id": record["id"],
             "status": record["status"],
             "to": record["to"],
             "initialized": record["initialized"],
+            "initial_actor": record.get("initial_actor"),
             "from": record["from"],
             "skill": record["skill"],
             "instruction": record["instruction"],
@@ -603,7 +737,8 @@ class CompileService:
 
     async def update_config(self, body: "CompileConfigUpdate", ctx: RequestContext) -> dict:
         lifecycle = self._require_lifecycle()
-        record = await self._target(body.to, ctx)
+        record = await self._target(body.to, ctx, action=AclAction.WRITE)
+        identity = (record["to"], record["deleted_at"])
         request = await self._normalize_request(
             self._normalize_request_uris(
                 CompileRequest.model_validate(
@@ -613,8 +748,12 @@ class CompileService:
             ),
             ctx,
         )
-        await lifecycle.validate_layout(ctx.account_id, record["to"], request.from_)
-        async with lifecycle.store.edit(ctx.account_id, record["id"]) as record:
+        lifecycle.validate_layout(record["to"], request.from_)
+        async with lifecycle.store.edit(ctx.account_id, record["to"]) as record:
+            if record["status"] != "active" or (record["to"], record["deleted_at"]) != identity:
+                raise ConflictError(
+                    "Compile target changed during configuration", resource="COMPILE_TARGET"
+                )
             lifecycle.apply_sources(record, request.from_, request.skill)
             if body.instruction_sent:
                 record["instruction"] = (body.instruction or "").strip() or None
@@ -624,23 +763,20 @@ class CompileService:
                 body.auto_update,
                 body.update_schedule.model_dump() if body.update_schedule is not None else None,
             )
-        if lifecycle.reschedule is not None:
-            await lifecycle.reschedule(ctx.account_id, record)
+            if lifecycle.reschedule is not None:
+                await lifecycle.reschedule(ctx.account_id, record, raise_on_error=True)
         return self._config_view(record)
 
     async def list_configs(
         self, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        """Page accessible targets by immutable ID, checking one extra visible item for continuation."""
+        """Read active target states lazily in SHA256(to) order, with one readable lookahead."""
         from openviking.service.compile_scheduler import next_run_at
 
         lifecycle = self._require_lifecycle()
         items = []
-        summaries = sorted(
-            await lifecycle.store.list_summaries(ctx.account_id), key=lambda item: item["id"]
-        )
-        for item in summaries:
-            if cursor and item["id"] <= cursor:
+        async for item in lifecycle.store.iter_summaries(ctx.account_id, cursor=cursor):
+            if item["status"] == "deleted":
                 continue
             try:
                 await lifecycle._fs._ensure_access(item["to"], ctx)
@@ -648,7 +784,6 @@ class CompileService:
                 continue
             items.append(
                 {
-                    "target_id": item["id"],
                     "status": item["status"],
                     "to": item["to"],
                     "initialized": item["initialized"],
@@ -667,7 +802,7 @@ class CompileService:
         page = items[:limit]
         return {
             "targets": page,
-            "next_cursor": page[-1]["target_id"] if len(items) > limit else None,
+            "next_cursor": page[-1]["to"] if len(items) > limit else None,
         }
 
     async def list_operations(
@@ -680,46 +815,62 @@ class CompileService:
         """
         record = await self._target(to, ctx, include_deleted=True)
         operations = await self._require_lifecycle().store.list_operations(
-            ctx.account_id, record["id"], limit=limit + 1, cursor=cursor
+            ctx.account_id, record["to"], limit=limit + 1, cursor=cursor
         )
         page = operations[:limit]
-        public = [
-            {
-                key: operation[key]
-                for key in (
-                    "operation_id",
-                    "operation_type",
-                    "actor",
-                    "created_at",
-                    "status",
-                    "started_at",
-                    "finished_at",
-                    "params",
-                    "result",
-                    "conflicts_num",
-                    "error",
-                )
-            }
-            | {
-                "meta": {
-                    key: operation["meta"][key]
-                    for key in (
-                        "task_id",
-                        "trigger",
-                        "execution",
-                        "skill_snapshot",
-                        "base",
-                        "head",
-                        "changes",
-                        "reindex_task_id",
-                    )
-                    if key in operation["meta"]
-                },
-            }
-            for operation in page
-        ]
+        public = [self._operation_view(operation) for operation in page]
         next_cursor = page[-1]["operation_id"] if len(operations) > limit else None
         return {"operations": public, "next_cursor": next_cursor}
+
+    @staticmethod
+    def _operation_view(operation: Mapping[str, Any]) -> dict[str, Any]:
+        """Expose operation fields and public metadata while excluding private checkpoints."""
+        return {
+            key: operation[key]
+            for key in (
+                "operation_id",
+                "operation_type",
+                "actor",
+                "created_at",
+                "status",
+                "started_at",
+                "finished_at",
+                "params",
+                "result",
+                "error",
+            )
+        } | {
+            "meta": {
+                key: operation["meta"][key]
+                for key in (
+                    "task_id",
+                    "trigger",
+                    "execution",
+                    "skill_snapshot",
+                    "base",
+                    "head",
+                    "changes",
+                )
+                if key in operation["meta"]
+            },
+        }
+
+    async def get_operation(
+        self,
+        to: str,
+        operation_id: str,
+        ctx: RequestContext,
+    ) -> dict[str, Any]:
+        """Read one authorized operation, including deleted targets and public metadata only."""
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}", operation_id):
+            raise InvalidArgumentError("Invalid operation_id")
+        record = await self._target(to, ctx, include_deleted=True)
+        operation = await self._require_lifecycle().store.get_operation(
+            ctx.account_id, record["to"], operation_id
+        )
+        if operation is None:
+            raise NotFoundError(operation_id, "operation")
+        return self._operation_view(operation)
 
     async def operation_outputs(
         self,
@@ -735,9 +886,9 @@ class CompileService:
             raise InvalidArgumentError("Invalid operation_id")
         record = await self._target(to, ctx)
         store = self._require_lifecycle().store
-        if await store.get_operation(ctx.account_id, record["id"], operation_id) is None:
+        if await store.get_operation(ctx.account_id, record["to"], operation_id) is None:
             raise NotFoundError(operation_id, "operation")
-        manifest = await store.get_outputs(ctx.account_id, record["id"], operation_id)
+        manifest = await store.get_outputs(ctx.account_id, record["to"], operation_id)
         if manifest is None:
             raise NotFoundError(operation_id, "operation outputs not recorded")
         outputs = sorted(manifest["outputs"], key=lambda item: item["uri"])
@@ -754,12 +905,9 @@ class CompileService:
         )
 
     async def restore_file_version(
-        self, uri: str, restore_version: str, current_version: str, ctx: RequestContext
+        self, uri: str, restore_commit_id: str, current_commit_id: str, ctx: RequestContext
     ) -> dict[str, Any]:
-        """Restore a file version, retaining current metadata for memory files.
-
-        Return version metadata after refresh; mismatches or active Compile raise ConflictError.
-        """
+        """Return restored version metadata; stale file commits or active Compile raise ConflictError."""
 
         async def write(content: bytes, commit_content: Any) -> None:
             # Use normal refresh while recording a restore version.
@@ -774,14 +922,13 @@ class CompileService:
                 body,
                 ctx,
                 edit_source="compile",
-                record_version=False,
                 commit_content=commit_content,
             )
 
         return await self._require_lifecycle().versions.restore(
             uri=uri,
-            restore_version=restore_version,
-            current_version=current_version,
+            restore_commit_id=restore_commit_id,
+            current_commit_id=current_commit_id,
             ctx=ctx,
             write=write,
         )
@@ -817,6 +964,9 @@ class CompileService:
                 for index, source in enumerate(request.from_)
             )
         )
+        for source in sources:
+            if classify_uri(source).is_system:
+                raise InvalidArgumentError("Compile source must not be in the system namespace")
         skill = request.skill.removesuffix("/SKILL.md")
         skill = validate_request_viking_uri(
             resolve_path_variables(skill), ctx, field_name="skill"
@@ -834,18 +984,18 @@ class CompileService:
     ) -> CompileRequest:
         request = self._normalize_request_uris(request, ctx)
         for uri in request.from_:
-            stat = await self._fs.stat(uri, ctx)
+            stat = await self._fs.stat(uri, ctx, skip_count=True)
             if not stat.get("isDir"):
                 raise InvalidArgumentError(f"Compile source must be a directory: {uri}")
-        skill_stat = await self._fs.stat(request.skill, ctx)
+        skill_stat = await self._fs.stat(request.skill, ctx, skip_count=True)
         if not skill_stat.get("isDir"):
             raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
-        skill_file = await self._fs.stat(f"{request.skill}/SKILL.md", ctx)
+        skill_file = await self._fs.stat(f"{request.skill}/SKILL.md", ctx, skip_count=True)
         if skill_file.get("isDir"):
             raise InvalidArgumentError("Skill directory must contain a SKILL.md file")
         await self._fs.ensure_write_access(request.to, ctx)
         try:
-            target_stat = await self._fs.stat(request.to, ctx)
+            target_stat = await self._fs.stat(request.to, ctx, skip_count=True)
         except NotFoundError:
             pass
         else:

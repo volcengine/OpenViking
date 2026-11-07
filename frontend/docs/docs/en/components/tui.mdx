@@ -1,0 +1,111 @@
+# Tui
+
+A command console body: current command records, results and input, including the empty state, suggestions and input help. The host owns execution; callbacks report successful command sending, resource opening and copying, and do not fire on failure.
+
+This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can prepare against the published types before the view is migrated. The types below describe the intended view API; the placeholder implementation will be replaced.
+
+## Basic usage
+
+```tsx file="../../_demos/tui-basic.tsx" preview
+
+```
+
+The placeholder is 360 × 560 and represents the records and input area.
+
+## Component boundary
+
+Tui contains the current command records and results, the empty state, and command input with its suggestions and help. Session creation, history panels, view and user switching, surrounding toolbars and the footer shortcut legend are composed separately by the host through independent components.
+
+The host handles session and history actions, then updates `records` and `value`. Historical results use the same records view; Tui has no history list, history-preview state, or surrounding toolbar/action slots.
+
+Command matching, suggestions, highlighting, keyboard selection, parameter hints and help are internal component behavior. Command names, parameters, descriptions and examples use the same metadata as the CLI; hosts do not configure suggestions or render help command by command. Accepting a completion or hint updates the input through `onValueChange`; `onSubmit` is invoked only after an explicitly submitted command is sent successfully.
+
+This update defines the public type contract. Completion, help and shared CLI metadata integration are not implemented yet. A shared adapter layer owns metadata loading and transport; the component does not fetch data itself.
+
+## Props
+
+The public props are published as types from the same subpath. Read them from the source of truth:
+
+```tsx
+import type {
+  TuiLabels,
+  TuiProps,
+  TuiRecord,
+  TuiRecordContent,
+  TuiSearchResultItem,
+} from '@openviking/react/components/tui';
+```
+
+The table describes the published type contract. The placeholder does not accept these props yet.
+
+| Property      | Type                      | Default      | Description                                                                                                                                        |
+| ------------- | ------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| records       | readonly TuiRecord[]      | Required     | Currently displayed execution records in submission order; the host updates them on session or history changes.                                    |
+| value         | string                    | Required     | Controlled input value.                                                                                                                            |
+| disabled      | boolean                   | false        | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                         |
+| emptyState    | ReactNode                 | labels.empty | Complete empty state when no records are displayed; may include a heading, description and shortcuts. `null` hides it.                             |
+| labels        | TuiLabels                 | —            | Interface copy and guidance.                                                                                                                       |
+| onValueChange | (value: string) => void   | —            | Reports input changes, including internally accepted completions and parameter hints; filling does not submit. Omission makes the input read-only. |
+| onSubmit      | (command: string) => void | —            | Called after a command is sent successfully; not called on failure. Omission disables submission.                                                  |
+| onOpenUri     | (uri: string) => void     | —            | Called after a resource opens successfully, with its URI; not called on failure.                                                                   |
+| onCopy        | (text: string) => void    | —            | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                      |
+
+`onSubmit` notifies the host after a command is sent successfully, with the sent command text; it does not perform the send and is not invoked on failure. This notification does not mean that a background command has finished executing. Notification return values do not determine operation success. The host updates later results and errors through `records`; a pending background record does not prevent later submissions.
+
+`emptyState` is the single entry for a complete custom empty view. The host composes any heading, description, shortcuts and their interactions inside this node. Omitting it shows `labels.empty`; passing `null` hides empty-state content.
+
+### Result content
+
+`TuiRecordContent` contains one general text result and six structured results:
+
+| variant          | Data            | Description                               |
+| ---------------- | --------------- | ----------------------------------------- |
+| text             | text, format?   | General output; format defaults to plain. |
+| search-list      | items, summary? | Search results and summary.               |
+| resource-preview | title, content  | A resource body preview.                  |
+| resource-tree    | items, title?   | Resource entries and their details.       |
+| status           | rows, title?    | Key/value status rows.                    |
+| write-result     | lines, title?   | Write operation results.                  |
+| command-help     | sections        | Available commands grouped by section.    |
+
+For `text`, `format` accepts `plain` or `markdown` and defaults to `plain`. Format JSON as a string and display it through `text`. Failures use `TuiRecord.status: 'error'`, with the error body in a text result; there is no separate error content variant.
+
+Command help is generated from shared command definitions. A shared adapter layer converts other results so hosts reuse the same conversion. These variants define the target shared view contract; shared result conversion and rendering are not implemented yet.
+
+### Copy and guidance
+
+General interface copy is configured through `labels` and defaults to English. Command-specific parameter hints and descriptions come from shared command metadata.
+
+| Property                  | Type   | Description                                                                                 |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------------- |
+| labels.unavailableMessage | string | Message shown when `disabled` is `true`; changing this copy does not disable the component. |
+| labels.pending            | string | Text for the pending state.                                                                 |
+| labels.empty              | string | Default message shown when there are no records and `emptyState` is omitted.                |
+
+`disabled` defaults to `false`. To disable command input and submission, set it to `true`. `labels.unavailableMessage` customizes the resulting message.
+
+### Search result details
+
+`TuiSearchResultItem` supports these optional display fields:
+
+| Property     | Type      | Description                                                                          |
+| ------------ | --------- | ------------------------------------------------------------------------------------ |
+| levelLabel   | string    | Content level label next to the title.                                               |
+| typeLabel    | string    | Result type label next to the score.                                                 |
+| scoreLabel   | string    | Host-formatted score.                                                                |
+| scoreDetails | ReactNode | Host-rendered details shown on score hover or keyboard focus; requires `scoreLabel`. |
+
+### Loading records
+
+For a pending `TuiRecord`, the component matches `command` against shared command definitions to select the skeleton. Unrecognized commands use the generic skeleton. `content` can be omitted while pending; the host does not specify a skeleton variant.
+
+Import the placeholder and its scoped stylesheet:
+
+```tsx
+import { Tui } from '@openviking/react/components/tui';
+import '@openviking/react/components/tui/style.css';
+```
+
+## Implementation scope
+
+The component renders the view and reports completed interactions and successful operations. Execution, data access, persistence, permissions and network connections belong to the integration layer; success notifications do not perform these operations. The placeholder does not implement operation execution or success notifications yet.
