@@ -1,248 +1,50 @@
+/**
+ * 文件树的主题变量。默认值取自对齐的宿主实现，宿主可按自己的主题整组覆盖；
+ * 逐条覆盖时只需重设对应变量。
+ *
+ * Theme variables of the file tree. Defaults come from the host implementation
+ * this component aligns with; a host overrides the whole set or any single
+ * variable.
+ */
 .ov-file-tree {
+  --ov-ui-file-tree-row-height: 32px;
+  --ov-ui-file-tree-row-radius: 4px;
+  --ov-ui-file-tree-icon: #3f3f51;
+  --ov-ui-file-tree-row-hover: #f7f8fa;
+  --ov-ui-file-tree-row-selected: #f5f5fb;
+  --ov-ui-file-tree-guide: #e5e6eb;
+  --ov-ui-file-tree-spinner-track: rgb(88 85 255 / 24%);
+  --ov-ui-file-tree-spinner: #5855ff;
+  --ov-ui-file-tree-action: #5855ff;
+
   display: flex;
-  flex-direction: column;
   box-sizing: border-box;
-  min-width: 0;
-  min-height: 0;
-  color: inherit;
+  width: 280px;
+  height: 320px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ov-ui-radius, 6px);
+  background: var(--ov-ui-placeholder, #f3f4f7);
+  color: var(--ov-ui-text-muted, #8f959e);
   font-family: inherit;
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.ov-file-tree__toolbar {
-  flex: none;
-  padding: 4px 0 8px;
-}
-
-.ov-file-tree__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
-
-.ov-file-tree__rows {
-  display: flex;
-  flex-direction: column;
-}
-
-.ov-file-tree__row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  box-sizing: border-box;
-  height: 28px;
-  padding-right: 8px;
-  border-radius: var(--ov-ui-radius, 6px);
-  color: inherit;
-  cursor: default;
-  outline: none;
-  user-select: none;
-}
-
-.ov-file-tree__row:hover {
-  background: var(
-    --ov-ui-row-hover,
-    color-mix(in srgb, currentColor 6%, transparent)
-  );
-}
-
-.ov-file-tree__row:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
-  outline-offset: -2px;
-}
-
-.ov-file-tree__row[data-selected] {
-  background: var(--ov-ui-row-selected, rgb(37 99 197 / 10%));
-}
-
-.ov-file-tree__row[data-disabled] {
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  cursor: not-allowed;
-}
-
-.ov-file-tree__toggle,
-.ov-file-tree__toggle-spacer {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-}
-
-.ov-file-tree__toggle {
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  cursor: pointer;
-}
-
-.ov-file-tree__toggle:hover {
-  background: color-mix(in srgb, currentColor 10%, transparent);
-}
-
-.ov-file-tree__chevron {
-  transition: transform 120ms ease;
-}
-
-.ov-file-tree__chevron[data-expanded] {
-  transform: rotate(90deg);
-}
-
-.ov-file-tree__icon-slot {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  color: var(--ov-ui-icon, color-mix(in srgb, currentColor 62%, transparent));
-}
-
-.ov-file-tree__icon {
-  display: block;
-}
-
-.ov-file-tree__label-group {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.ov-file-tree__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ov-file-tree__description {
-  overflow: hidden;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ov-file-tree__level {
-  flex: none;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: var(
-    --ov-ui-chip,
-    color-mix(in srgb, currentColor 10%, transparent)
-  );
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.ov-file-tree__expiry {
-  flex: none;
-  color: var(--ov-ui-warning, #b26a00);
   font-size: 12px;
 }
 
-.ov-file-tree__expiry-action {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.ov-file-tree__dashboard {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-}
-
-.ov-file-tree__tooltip {
-  position: absolute;
-  z-index: 1;
-  top: calc(100% + 4px);
-  left: 0;
-  max-width: 320px;
-  padding: 6px 8px;
-  border-radius: var(--ov-ui-radius, 6px);
-  background: var(--ov-ui-tooltip-bg, #1f2329);
-  color: var(--ov-ui-tooltip-text, #fff);
-  font-size: 12px;
-  line-height: 18px;
-  pointer-events: none;
-}
-
-.ov-file-tree__child-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  box-sizing: border-box;
-  height: 28px;
-  padding-right: 8px;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-}
-
-.ov-file-tree__child-row[data-tone='error'] {
-  color: var(--ov-ui-status-error, #c43838);
-}
-
-.ov-file-tree__child-action {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.ov-file-tree__child-action:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.ov-file-tree__state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  min-height: 120px;
-  padding: 24px;
-}
-
-.ov-file-tree__muted {
-  color: inherit;
-}
-
+/**
+ * 展开目录加载子节点时，替换展开箭头显示的转圈。
+ * 由纯 CSS 画环，不依赖图标资源。
+ *
+ * The spinner shown in place of the expand chevron while a directory loads its
+ * children. Drawn with CSS alone, so it needs no icon asset.
+ */
 .ov-file-tree__spinner {
-  display: inline-block;
-  flex: none;
   box-sizing: border-box;
   width: 12px;
   height: 12px;
-  border: 1.5px solid currentColor;
-  border-right-color: transparent;
+  border: 1px solid var(--ov-ui-file-tree-spinner-track, rgb(88 85 255 / 24%));
+  border-top-color: var(--ov-ui-file-tree-spinner, #5855ff);
   border-radius: 50%;
-  animation: ov-file-tree-spin 720ms linear infinite;
+  animation: ov-file-tree-spin 900ms linear infinite;
 }
 
 @keyframes ov-file-tree-spin {
@@ -251,11 +53,52 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .ov-file-tree__chevron {
-    transition: none;
-  }
+/**
+ * 一条可见的行。悬停整行铺浅底色，选中行常驻选中底色；悬停不覆盖选中态，
+ * 与宿主的树一致。
+ *
+ * One visible row. Hover tints the whole row; a selected row keeps its selected
+ * background, and hover never overrides it — the same precedence the host uses.
+ */
+.ov-file-tree__row {
+  transition: background-color 120ms;
+}
 
+.ov-file-tree__row:hover {
+  background-color: var(--ov-ui-file-tree-row-hover, #f7f8fa);
+}
+
+.ov-file-tree__row[data-selected] {
+  background-color: var(--ov-ui-file-tree-row-selected, #f5f5fb);
+}
+
+/**
+ * 行内文字操作，例如「加载更多」「加载失败，点击重试」。次要文字色，
+ * 悬停转主色；不加下划线，与宿主的树一致。
+ *
+ * A text action inside a row, such as "Load more" or a retry hint. Secondary
+ * text that turns into the primary colour on hover, with no underline — the same
+ * treatment the host's tree uses.
+ */
+.ov-file-tree__action {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: color 120ms;
+}
+
+.ov-file-tree__action:hover:not(:disabled) {
+  color: var(--ov-ui-file-tree-action, #5855ff);
+}
+
+.ov-file-tree__action:disabled {
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
   .ov-file-tree__spinner {
     animation-duration: 2s;
   }

@@ -1,5 +1,14 @@
 export { FileTree } from './components/file-tree/index.js';
 export type { FileTreeProps } from './components/file-tree/index.js';
+export {
+  resolveFileTreeInfoKey,
+  showsInlineDescription,
+  splitVikingUri,
+} from './components/file-tree/index.js';
+export {
+  DEFAULT_INFO_LABELS,
+  resolveInfoCopy,
+} from './components/file-tree/index.js';
 export { Tui } from './components/tui/index.js';
 export type { TuiProps } from './components/tui/index.js';
 export {
