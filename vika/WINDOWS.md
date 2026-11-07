@@ -28,7 +28,11 @@ npm postinstall being enabled. Windows includes `tar.exe` for ZIP extraction.
 
 Setup saves your configuration before attempting managed-release startup. That
 startup can report failure in a source checkout; after confirming configuration
-was saved, start only your configured instance and Web using your own PM2:
+was saved, stay in the checkout’s `vika` directory and start only your configured
+instance and Web using your own PM2. The ecosystem file resolves script paths and
+child working directories relative to itself. It reads `$env:HOME/.vika/config.json`
+by default, just like setup. If you used a different manifest, keep its absolute
+path in `$env:VIKA_CONFIG` for both commands (`VIKA_CONFIG_FILE` is not used):
 
 ```powershell
 # Replace primary if setup used a different instance ID.
