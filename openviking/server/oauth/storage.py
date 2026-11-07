@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_refresh_expires ON oauth_refresh_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oauth_refresh_user ON oauth_refresh_tokens(account_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_client ON oauth_refresh_tokens(client_id);
 
 CREATE TABLE IF NOT EXISTS oauth_pending_authorizations (
     pending_id TEXT PRIMARY KEY,
@@ -129,6 +130,7 @@ CREATE TABLE IF NOT EXISTS oauth_access_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_access_expires ON oauth_access_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oauth_access_user ON oauth_access_tokens(account_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_access_client ON oauth_access_tokens(client_id);
 """
 
 
@@ -265,6 +267,38 @@ class OAuthStore:
             record["grant_types"] = json.loads(record["grant_types"])
             record["response_types"] = json.loads(record["response_types"])
             return record
+
+        async with self._lock:
+            return await asyncio.to_thread(_query)
+
+    async def list_clients(self, *, offset: int, limit: int) -> dict[str, Any]:
+        """List public registration metadata and currently live token counts."""
+        now = int(time.time())
+
+        def _query() -> dict[str, Any]:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "SELECT c.client_id, c.client_name, c.redirect_uris, c.scope, "
+                "c.token_endpoint_auth_method, c.created_at, "
+                "(SELECT COUNT(*) FROM oauth_access_tokens a WHERE a.client_id = c.client_id "
+                "AND a.revoked = 0 AND a.expires_at > ?) AS active_access_tokens, "
+                "(SELECT COUNT(*) FROM oauth_refresh_tokens r WHERE r.client_id = c.client_id "
+                "AND r.consumed = 0 AND r.expires_at > ?) AS active_refresh_tokens "
+                "FROM oauth_clients c ORDER BY c.created_at DESC, c.client_id "
+                "LIMIT ? OFFSET ?",
+                (now, now, limit, offset),
+            )
+            items = [_row_to_dict(cur, row) for row in cur.fetchall()]
+            for item in items:
+                item["redirect_uris"] = json.loads(item["redirect_uris"])
+            total = self._conn.execute("SELECT COUNT(*) FROM oauth_clients").fetchone()[0]
+            return {
+                "items": items,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + len(items) < total,
+            }
 
         async with self._lock:
             return await asyncio.to_thread(_query)
@@ -568,38 +602,60 @@ class OAuthStore:
         async with self._lock:
             return await asyncio.to_thread(_revoke)
 
-    async def revoke_tokens(self, *, account_id: str, user_id: str | None = None) -> dict[str, int]:
-        """Revoke OAuth grants for one account, or for one user within it."""
+    async def revoke_tokens(
+        self,
+        *,
+        account_id: str | None = None,
+        user_id: str | None = None,
+        client_id: str | None = None,
+    ) -> dict[str, int]:
+        """Revoke grants for an account/user and/or client, keeping registrations."""
+        if not account_id and not client_id:
+            raise ValueError("Revocation requires an account_id or client_id")
+        predicates, pending_predicates, params = [], [], []
+        for column, pending_column, value in (
+            ("account_id", "verified_account_id", account_id),
+            ("user_id", "verified_user_id", user_id),
+            ("client_id", "client_id", client_id),
+        ):
+            if value is not None:
+                predicates.append(f"{column} = ?")
+                pending_predicates.append(f"{pending_column} = ?")
+                params.append(value)
+        predicate = " AND ".join(predicates)
+        pending_predicate = " AND ".join(pending_predicates)
 
         def _revoke() -> dict[str, int]:
             assert self._conn is not None
-            predicate = "account_id = ?" + (" AND user_id = ?" if user_id is not None else "")
-            pending_predicate = "verified_account_id = ?" + (
-                " AND verified_user_id = ?" if user_id is not None else ""
-            )
-            params = (account_id, user_id) if user_id is not None else (account_id,)
-            access = self._conn.execute(
-                f"UPDATE oauth_access_tokens SET revoked = 1 WHERE {predicate} AND revoked = 0",
-                params,
-            ).rowcount
-            refresh = self._conn.execute(
-                f"UPDATE oauth_refresh_tokens SET consumed = 1 WHERE {predicate} AND consumed = 0",
-                params,
-            ).rowcount
-            codes = self._conn.execute(
-                f"UPDATE oauth_codes SET used = 1 WHERE {predicate} AND used = 0",
-                params,
-            ).rowcount
-            pending = self._conn.execute(
-                f"DELETE FROM oauth_pending_authorizations WHERE {pending_predicate}",
-                params,
-            ).rowcount
-            return {
-                "access_tokens_revoked": access,
-                "refresh_tokens_revoked": refresh,
-                "codes_revoked": codes,
-                "pending_authorizations_revoked": pending,
-            }
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                access = self._conn.execute(
+                    f"UPDATE oauth_access_tokens SET revoked = 1 WHERE {predicate} AND revoked = 0",
+                    params,
+                ).rowcount
+                refresh = self._conn.execute(
+                    f"UPDATE oauth_refresh_tokens SET consumed = 1 WHERE {predicate} AND consumed = 0",
+                    params,
+                ).rowcount
+                codes = self._conn.execute(
+                    f"UPDATE oauth_codes SET used = 1 WHERE {predicate} AND used = 0",
+                    params,
+                ).rowcount
+                pending = self._conn.execute(
+                    f"DELETE FROM oauth_pending_authorizations WHERE {pending_predicate}",
+                    params,
+                ).rowcount
+                self._conn.commit()
+                return {
+                    "access_tokens_revoked": access,
+                    "refresh_tokens_revoked": refresh,
+                    "codes_revoked": codes,
+                    "pending_authorizations_revoked": pending,
+                }
+
+            except BaseException:
+                self._conn.rollback()
+                raise
 
         async with self._lock:
             return await asyncio.to_thread(_revoke)
