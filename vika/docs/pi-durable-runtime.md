@@ -63,7 +63,10 @@ model (`off` … `max` for reasoning models, `off` otherwise; default from
   a call goes to `POST /v1/call`, through the same authority, freshness and
   outbox checks as the MCP adapter of the other runtimes. Image media from a
   tool result (`get_message_media`) reaches the model as an image block, up to
-  10 MB. A host without the socket refuses to start.
+  10 MB. A host without the socket refuses to start. When the instance has an
+  OpenViking connection, the `openviking_*` tools are part of that same list —
+  there is no Durable-specific OpenViking bridge, and a durable turn sees
+  exactly the tools the other local runtimes see.
 - **Coding tools.** pi-durable's `CodingTools` (`bash`, `read`, `write`, `edit`)
   run in the instance workspace.
 

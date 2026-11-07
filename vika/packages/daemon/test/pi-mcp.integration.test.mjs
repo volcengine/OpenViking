@@ -34,7 +34,7 @@ function completion(response, index, tool = null) {
   response.end('data: [DONE]\n\n');
 }
 
-async function fixture(t, { conflict = false, dialogs = false } = {}) {
+async function fixture(t, { conflict = false, dialogs = false, openviking = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-mcp-'));
   const workspace = path.join(root, 'workspace');
   const agentDir = path.join(root, 'pi-config');
@@ -55,6 +55,16 @@ async function fixture(t, { conflict = false, dialogs = false } = {}) {
           ];
           fs.writeFileSync(process.env.PI_CODING_AGENT_DIR + '/dialog-results.json', JSON.stringify(results));
         });
+      }
+    `);
+  }
+  if (openviking) {
+    // OpenViking's own Pi extension, installed by the owner: never loaded.
+    fs.mkdirSync(path.join(agentDir, 'extensions', 'openviking'), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'extensions', 'openviking', 'index.js'), `
+      import fs from 'node:fs';
+      export default function(pi) {
+        fs.writeFileSync(process.env.PI_CODING_AGENT_DIR + '/openviking-loaded', 'yes');
       }
     `);
   }
@@ -135,6 +145,11 @@ async function fixture(t, { conflict = false, dialogs = false } = {}) {
       PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: '1', PI_TELEMETRY: '0',
     } }),
   };
+  // The daemon and its Pi share PI_CODING_AGENT_DIR, as in production: the
+  // launcher reads the same agent directory to load the owner's extensions.
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   agent = new PiAgent(config, store, logger, options);
   return { agent, config, options, store, connectors, logs, requests, incoming, failures, agentDir, workspace, mcpContents };
 }
@@ -191,6 +206,16 @@ test('real Pi cancels user-extension dialogs and can still complete a tool turn'
     .map(({ summary }) => summary), ['extension confirm', 'extension select', 'extension input', 'extension editor']);
   assert.deepEqual(f.failures, []);
   assert.equal(f.connectors.calls.filter(({ action }) => action === 'message.reply').length, 1);
+});
+
+test('real Pi runs without OpenViking\'s own extension while the owner\'s others still load', { timeout: 30_000 }, async (t) => {
+  const f = await fixture(t, { dialogs: true, openviking: true });
+  await f.agent.start();
+  f.agent.deliver('inspect the image and reply', f.incoming.seq);
+  await f.agent.whenIdle();
+  assert.ok(fs.existsSync(path.join(f.agentDir, 'dialog-results.json')), 'the owner\'s extension ran');
+  assert.equal(fs.existsSync(path.join(f.agentDir, 'openviking-loaded')), false, 'OpenViking\'s did not');
+  assert.deepEqual(f.failures, []);
 });
 
 test('real Pi fails startup explicitly when an extension asks before its RPC input reader exists', { timeout: 5_000 }, async (t) => {

@@ -45,7 +45,7 @@ export function mailEvent(fields = {}) {
     ...(fields.instance ? { instance: fields.instance } : {}),
     id: `imap:1:${uid}`, kind: fields.kind ?? 'email.received', occurred_at: fields.createTimeMs ?? Date.now(),
     subject: { type: 'thread', id: fields.thread ?? 'gmail:100' },
-    actor: { type: 'email', id: fields.from ?? 'alice@example.com' },
+    actor: { type: 'email', id: fields.from ?? 'alice@example.com', ...(fields.name ? { name: fields.name } : {}) },
     content: { title: fields.title ?? '周四开会？', text: fields.text ?? 'From: alice@example.com\n\n周四下午能开会吗？' },
     message: { id: `mail:1:${uid}`, type: 'email' },
     data: { reply: fields.reply ?? { to: [{ name: '', address: fields.from ?? 'alice@example.com' }], subject: `Re: ${fields.title ?? '周四开会？'}` } },

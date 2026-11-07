@@ -765,9 +765,9 @@ export class Store {
 
   // One event ledger for all sources. Chat columns are nullable indexes into the
   // canonical envelope, not a separate message ledger. No provider raw is stored.
-  // `peer` is whom OpenViking attributes the line to (ov-peer.mjs): null for
-  // the owner, decided by the caller, which knows who the owner is.
-  ingest(event, filterReason = null, now = Date.now(), { journal = true, peer } = {}) {
+  // `owner` records whether the owner sent the line, decided by the caller,
+  // which knows who the owner is (ov-recall.mjs reads the owner's name back).
+  ingest(event, filterReason = null, now = Date.now(), { journal = true, owner } = {}) {
     return this.transaction(() => {
       const existing = this.getInboundByEvent.get(event.connectorInstance, event.eventId);
       if (existing) return { inserted: false, inbound: rowToInbound(existing), filterReason: existing.filter_reason };
@@ -820,7 +820,7 @@ export class Store {
             text: event.content,
             dedupeKey: `event:${eventIdentity(event)}`,
             metadata: { source: event.source, connectorInstance: event.connectorInstance, event: envelope,
-              ...(peer === undefined ? {} : { peer }) },
+              ...(owner === undefined ? {} : { owner: Boolean(owner) }) },
           });
         }
         this.recordActivity({
@@ -1088,6 +1088,20 @@ export class Store {
       return number(this.db.prepare('SELECT seq FROM cognition_journal WHERE dedupe_key = ?').get(dedupeKey)?.seq);
     }
     return number(this.db.prepare('SELECT last_insert_rowid() AS seq').get().seq);
+  }
+
+  // The journal line an accepted inbound event became, or null.
+  journalItemForInbound(inboundSeq) {
+    return rowToCognitionJournal(this.db.prepare(`SELECT * FROM cognition_journal
+      WHERE kind = 'inbound' AND inbound_seq = ? ORDER BY seq DESC LIMIT 1`).get(inboundSeq));
+  }
+
+  // The newest line the owner sent, as its canonical envelope, or null.
+  latestOwnerEnvelope() {
+    const row = this.db.prepare(`SELECT detail_json FROM cognition_journal
+      WHERE kind = 'inbound' AND json_extract(detail_json, '$.owner') = 1
+      ORDER BY seq DESC LIMIT 1`).get();
+    return row ? parseJsonObject(row.detail_json).event ?? null : null;
   }
 
   cognitionJournal(

@@ -120,19 +120,14 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /VIKA_STAGED_REPLIES must be a boolean/);
     setEnv('VIKA_STAGED_REPLIES', undefined);
   });
-  it('recalls from OV only on an instance that opts in, over every peer unless limited to the sender', () => {
+  it('searches OV per line only on an instance that opts in; preferences need no switch', () => {
     setEnv('VIKA_OV_AUTO_RECALL', undefined);
-    setEnv('VIKA_OV_RECALL_SCOPE', undefined);
     assert.equal(getConfig().ovAutoRecall, false);
-    assert.equal(getConfig().ovRecallScope, 'all');
     setEnv('VIKA_OV_AUTO_RECALL', 'true');
-    setEnv('VIKA_OV_RECALL_SCOPE', 'actor');
     assert.equal(getConfig().ovAutoRecall, true);
-    assert.equal(getConfig().ovRecallScope, 'actor');
-    setEnv('VIKA_OV_RECALL_SCOPE', 'everyone');
-    assert.throws(() => getConfig(), /VIKA_OV_RECALL_SCOPE/);
+    assert.equal('ovRecallScope' in getConfig(), false);
+    assert.equal('ovRemember' in getConfig(), false);
     setEnv('VIKA_OV_AUTO_RECALL', undefined);
-    setEnv('VIKA_OV_RECALL_SCOPE', undefined);
   });
   it('reads Lark messages with the owner\'s visibility unless the instance keeps to the bot\'s chats', () => {
     setEnv('VIKA_LARK_MESSAGE_ACCESS', undefined);

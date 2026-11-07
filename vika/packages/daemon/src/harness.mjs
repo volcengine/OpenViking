@@ -7,9 +7,8 @@ import { GroupBurstRouter } from './group-burst.mjs';
 import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem } from './runtime-input.mjs';
 import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
-import { peerForEvent } from './ov-peer.mjs';
 
-// Recall (ov-recall.mjs) runs a search on the ingress path, which every later
+// Recall (ov-recall.mjs) reads OV on the ingress path, which every later
 // line waits behind, so only where the agent is likely to answer: direct
 // chats, lines that @mention it, document comments, and events outside chats
 // such as mail. Never for another bot's line or a card click.
@@ -121,9 +120,9 @@ export class Harness {
     const handler = this.eventHandler(event);
     let result;
     try {
-      // The owner is the OV user itself; anyone else is a peer of it.
+      // OV memory treats the owner's lines as the user's own (ov-recall.mjs).
       result = this.store.ingest(event, command ? 'slash_command' : approval ? 'approval_reply' : filterReason,
-        Date.now(), { journal: !handler, peer: this.isOwner(event) ? null : peerForEvent(event) });
+        Date.now(), { journal: !handler, owner: this.isOwner(event) });
     } catch (error) {
       this.logger.error('event_persist_failed', { error: safeError(error) });
       this.recordActivity('system.persist_failed', {

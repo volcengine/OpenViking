@@ -48,7 +48,13 @@ export default function personalAgentMcp(pi) {
     while (!stopped && Date.now() < deadline) {
       const active = new Set(pi.getActiveTools());
       const direct = new Set(pi.getAllTools().filter((tool) => tool.exposure === 'direct').map((tool) => tool.name));
-      if (names.every((name) => active.has(name) && direct.has(name))) return;
+      if (names.every((name) => active.has(name) && direct.has(name))) {
+        // Vika owns OpenViking: the extension of Pi's own registers bare
+        // openviking_* tools, which must not be here (ov-isolation.mjs).
+        const foreign = pi.getAllTools().map((tool) => tool.name).filter((name) => /^openviking_/.test(name));
+        if (foreign.length) throw new Error(`Pi loaded OpenViking's own extension (${foreign.join(', ')}); Vika runs Pi without it`);
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     throw new Error('Pi did not expose the Core MCP tools directly');

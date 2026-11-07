@@ -95,6 +95,13 @@ export const BOT_SENDERS = new Set(['bot', 'app']);
 // Lark names come from the chat roster, or from the event where there is no
 // roster (a document comment); other connectors name the sender in the event
 // itself.
+// The name a line's `from=` shows for its sender, as the OV sync writes it
+// (formatCognitionJournalLine): OV memory files a person's preferences under
+// this name.
+export function senderLabel(event) {
+  return fromLabel(event.chatId, event.senderId, null, event.source, event.senderName);
+}
+
 function fromLabel(chatId, senderId, resolveName = null, source = 'lark', senderName = null) {
   if (source !== 'lark') return sanitizeMemberName(senderName) ?? shortenId(senderId);
   if (resolveName) {
