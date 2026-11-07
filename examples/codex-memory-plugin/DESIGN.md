@@ -18,7 +18,8 @@ events imply "context for a particular codex `session_id` is gone".
   memory extractor) at session-end-equivalent moments. `/messages`
   auto-creates the OV session, so the plugin does not call session create.
 - **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
-  shape `{ codexSessionId, ovSessionId, transcriptPath, capturedTurnCount, captureFormatVersion, createdAt, lastUpdatedAt }`.
+  shape `{ codexSessionId, ovSessionId, transcriptPath, capturedTurnCount, transcriptCursors, captureFormatVersion, createdAt, lastUpdatedAt }`.
+  `capturedTurnCount` belongs to `transcriptPath`; `transcriptCursors` maps up to eight other rollout paths to their own cursors.
 - **End marker** — `<safe-codex-session-id>.ended.<timestamp>`, a sidecar written by the
   `SessionEnd` parent hook, containing the timestamp at which it was
   written. Its presence means "the thread ended and its commit has not been
@@ -273,6 +274,19 @@ tool results onto the user role as well, so `findLastHumanTurnIndex()`
 additionally requires a `text` part. If the rewrite left no human turn at
 all (index `-1`), we fall back to capturing the whole transcript and log
 `fallback: "full_transcript"`; replaying beats losing the interaction.
+
+### Several rollout files per session
+
+One Codex session id can reach the hooks with more than one `transcript_path`
+(for example the cumulative thread rollout and a separate compaction window).
+A single cursor shared by both files reads each one from the other's offset:
+the shorter file looks like a shrink and replays from its first human turn, and
+the longer one replays everything past the shorter file's length. In production
+this re-sent the same history on every switch and drove one session's commits
+to tens of megabytes. The cursor is therefore kept per path: switching to a
+known path restores its cursor, and a path first seen in a session that has
+already captured turns resumes at its latest human turn, as for a shrink. Only
+a readable rollout takes over the cursor.
 
 **Trade-off**: turns older than that human turn are assumed captured. If
 earlier `Stop` hooks failed to reach OV and compaction happened before they

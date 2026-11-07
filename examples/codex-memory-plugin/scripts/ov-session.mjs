@@ -83,6 +83,52 @@ export function hasCaptureKeyword(turns) {
   );
 }
 
+// Cursors kept for rollout files other than the current one; the oldest are
+// dropped first so a long-lived session cannot grow its state file unbounded.
+const MAX_TRANSCRIPT_CURSORS = 8;
+
+/**
+ * Point `state.capturedTurnCount` at the cursor for `transcriptPath`.
+ *
+ * One Codex session can reach the hooks with more than one rollout file (for
+ * example the cumulative thread rollout and a separate compaction window). A
+ * single shared cursor then reads each file from the other file's offset:
+ * the shorter file looks like a shrink and replays from its first human turn,
+ * the longer one replays everything past the shorter file's length. Keeping
+ * one cursor per path makes every file advance independently.
+ *
+ * Returns true when `transcriptPath` is new to a session that has already
+ * captured turns elsewhere; the caller then resumes at the latest human turn,
+ * as for a shrink, instead of replaying the new file from its start.
+ */
+function switchTranscriptCursor(state, transcriptPath, log) {
+  const previousPath = state.transcriptPath;
+  state.transcriptPath = transcriptPath;
+  if (!previousPath || previousPath === transcriptPath) return false;
+
+  const cursors = state.transcriptCursors && typeof state.transcriptCursors === "object"
+    ? { ...state.transcriptCursors }
+    : {};
+  cursors[previousPath] = Math.max(0, Number(state.capturedTurnCount) || 0);
+  const known = Object.prototype.hasOwnProperty.call(cursors, transcriptPath);
+  state.capturedTurnCount = known ? Math.max(0, Number(cursors[transcriptPath]) || 0) : 0;
+  delete cursors[transcriptPath];
+
+  const paths = Object.keys(cursors);
+  for (const path of paths.slice(0, Math.max(0, paths.length - MAX_TRANSCRIPT_CURSORS))) {
+    delete cursors[path];
+  }
+  state.transcriptCursors = cursors;
+  const capturedElsewhere = Object.values(cursors).some((count) => Number(count) > 0);
+  log?.("transcript_switched", {
+    from: previousPath,
+    to: transcriptPath,
+    resumeFrom: state.capturedTurnCount,
+    known,
+  });
+  return !known && capturedElsewhere;
+}
+
 /**
  * Append every transcript turn past `state.capturedTurnCount`.
  *
@@ -109,11 +155,14 @@ export async function catchUpTurns({
   heartbeat,
   shouldSend,
 }) {
-  // Remember the rollout path so the SessionStart sweep can catch up turns for
-  // a session whose Stop/SessionEnd workers never ran.
-  if (transcriptPath) state.transcriptPath = transcriptPath;
-
   const { turns, excludedLegacyTurnIndices, ok } = await readTranscriptTurns(transcriptPath, cfg, logError);
+
+  // Remember the rollout path so the SessionStart sweep can catch up turns for
+  // a session whose Stop/SessionEnd workers never ran. Only a readable file
+  // takes over the cursor: an unreadable path must leave capture state alone.
+  const unseenTranscript = ok && transcriptPath
+    ? switchTranscriptCursor(state, transcriptPath, log)
+    : false;
 
   if (ok && state.captureFormatVersion !== CAPTURE_FORMAT_VERSION) {
     const oldCursor = Math.max(0, Number(state.capturedTurnCount) || 0);
@@ -139,8 +188,13 @@ export async function catchUpTurns({
 
   // Post-compact transcript-shrink defense: codex's /compact may rewrite or
   // truncate transcript_path. Resume at the latest human turn so the current
-  // interaction is captured without replaying compacted history.
-  if (turns.length < state.capturedTurnCount) {
+  // interaction is captured without replaying compacted history. A rollout
+  // file first seen mid-session gets the same treatment.
+  if (unseenTranscript) {
+    const humanIndex = findLastHumanTurnIndex(turns);
+    log?.("transcript_unseen_resume", { observed: turns.length, resumeFrom: Math.max(0, humanIndex) });
+    state.capturedTurnCount = Math.max(0, humanIndex);
+  } else if (turns.length < state.capturedTurnCount) {
     const humanIndex = findLastHumanTurnIndex(turns);
     log?.("transcript_shrink_detected", {
       cached: state.capturedTurnCount,
