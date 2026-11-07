@@ -15,6 +15,12 @@ PATCH_CONTEXT_RULES = """
 ## Patch Context Rules
 - When copying numbered memory context into SEARCH/REPLACE or DELETE operations, copy only the exact text after `line_number<TAB>`. Never include the line-number prefix itself in `search`, `replace`, or `delete`.
 """
+EXTRACTION_REFERENCE_RULES = """
+## Extraction-only Reference Rules
+- Treat JSON `page_id` values, Python object variable names (for example `preferences_1` or `canonical`), and SDK expressions as extraction-only control references when they come from the current extraction.
+- Use them only to target, link, replace, or delete memory objects. Never write or cite them inside natural-language memory fields.
+- Preserve real identifiers from the conversation or existing memory when they are domain facts, including commit SHAs, issue or PR numbers, file paths, URLs, and user-domain IDs.
+"""
 
 PYTHON_FORMAT_RULES = (
     "## Output Format: restricted Python memory SDK",
