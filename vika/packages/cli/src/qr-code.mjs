@@ -28,23 +28,37 @@ export function qrMatrix(text) {
 // GPU, macOS Terminal). Seams through dark modules cut the finder patterns
 // apart and WeChat cannot scan the code; seams through light ones it ignores.
 // So dark modules are always background, and only light modules are glyphs.
-// One character carries two vertically adjacent modules. With colour, a cell
-// of two light modules is a white space and every other cell is black, its
-// light half a white half block; without, the terminal is assumed dark.
-export function terminalQr(matrix, depth = 1) {
+// pack=1 is one column per module (half-blocks); pack=2 is a 2×2 of modules
+// (Unicode quadrants) so a Feishu-sized code can fit an 80-column window.
+// Height is the same either way. With colour, an all-light cell is a white
+// space and every other cell is black, its light parts white glyphs; without,
+// the terminal is assumed dark.
+const QUAD = ' ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█';
+
+export function terminalQr(matrix, depth = 1, pack = 2) {
   const color = depth >= 4;
   const [paper, ink] = depth >= 24 ? ['48;2;255;255;255', '48;2;0;0;0;38;2;255;255;255']
     : depth >= 8 ? ['48;5;231', '48;5;16;38;5;231'] : ['107', '40;97'];
+  const step = pack >= 2 ? 2 : 1;
   const lines = [];
   for (let y = 0; y < matrix.length; y += 2) {
     let line = '', style = null;
-    for (let x = 0; x < matrix.length; x += 1) {
-      const top = matrix[y][x], bottom = matrix[y + 1]?.[x] ?? false;
-      const light = top ? (bottom ? ' ' : '▄') : (bottom ? '▀' : '█');
-      if (!color) { line += light; continue; }
-      const next = top || bottom ? ink : paper;
+    for (let x = 0; x < matrix.length; x += step) {
+      let glyph, dark;
+      if (step === 1) {
+        const top = matrix[y][x], bottom = matrix[y + 1]?.[x] ?? false;
+        glyph = top ? (bottom ? ' ' : '▄') : (bottom ? '▀' : '█');
+        dark = top || bottom;
+      } else {
+        const tl = matrix[y][x], tr = matrix[y][x + 1] ?? false;
+        const bl = matrix[y + 1]?.[x] ?? false, br = matrix[y + 1]?.[x + 1] ?? false;
+        glyph = QUAD[(tl ? 0 : 1) | (tr ? 0 : 2) | (bl ? 0 : 4) | (br ? 0 : 8)];
+        dark = tl || tr || bl || br;
+      }
+      if (!color) { line += glyph; continue; }
+      const next = dark ? ink : paper;
       if (next !== style) { line += `\x1b[0;${next}m`; style = next; }
-      line += next === paper ? ' ' : light;
+      line += next === paper ? ' ' : glyph;
     }
     lines.push(color ? `${line}\x1b[0m` : line);
   }
