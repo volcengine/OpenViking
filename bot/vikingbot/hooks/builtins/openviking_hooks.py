@@ -29,7 +29,32 @@ except Exception:
     VikingClient = None
     ov = None
 
-_global_clients: dict[tuple[str, int, int], Any] = {}
+_global_clients: dict[tuple[str, int, tuple | None], Any] = {}
+
+# Attributes ``VikingClient.create`` copies onto the client it builds. Two configs that
+# differ in any of them must not share a client: the client pins the endpoint, the
+# credential and the account it acts as.
+_CLIENT_IDENTITY_FIELDS = (
+    "server_url",
+    "api_key",
+    "account_id",
+    "admin_user_id",
+    "effective_auth_mode",
+    "api_key_type",
+)
+
+
+def _config_cache_key(config: Any) -> tuple | None:
+    """Value fingerprint of *config*, or ``None`` when no config was supplied.
+
+    ``id(config)`` is unusable here: the hooks rebuild the config object on every
+    request, so a key built from object identity grows the cache without bound. Keying on
+    the values the client actually binds returns the same client for the same logical
+    config, and a different one whenever the endpoint or the credentials differ.
+    """
+    if config is None:
+        return None
+    return tuple(str(getattr(config, name, "") or "") for name in _CLIENT_IDENTITY_FIELDS)
 
 
 async def get_global_client(workspace_id: str | None, config: Any = None) -> VikingClient:
@@ -43,7 +68,7 @@ async def get_global_client(workspace_id: str | None, config: Any = None) -> Vik
     cache_key = (
         str(workspace_id or "__default__"),
         id(asyncio.get_running_loop()),
-        id(config),
+        _config_cache_key(config),
     )
     client = _global_clients.get(cache_key)
     if client is None:
