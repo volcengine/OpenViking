@@ -120,7 +120,7 @@ Create `~/.config/opencode/openviking-config.json`:
   "enabled": true,
   "mcp": { "enabled": true },
   "timeoutMs": 30000,
-  "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
+  "repoContext": { "enabled": true, "cacheTtlMs": 60000, "repos": ["OpenViking"] },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
@@ -141,6 +141,15 @@ Create `~/.config/opencode/openviking-config.json`:
 Explicit values from 1 through 5 produce an effective total quota of 6 because
 each coding category keeps one retrieval slot. Use Context `quotas` directly
 when exact category ceilings are required.
+
+`repoContext.repos` is an allow-list of glob patterns matched against the repo
+name (the path after `viking://resources/`). When it is empty or absent, every
+indexed repository under `viking://resources/` is appended to the system prompt;
+when set, only matching repos are listed. Patterns support `*` (no path
+separators) and `**` (anything). For example, `["OpenViking"]` lists a single
+repo, `["volcengine/**"]` lists everything under the `volcengine/` namespace.
+A repo's own config (`<repo>/.opencode/openviking-config.json`) can narrow this
+per project directory.
 
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty

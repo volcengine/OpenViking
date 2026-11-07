@@ -1,6 +1,7 @@
 import { effectivePeerId, log, makeRequest, unwrapResponse } from "./utils.mjs"
 
 export function createRepoContext({ config }) {
+  const reposAllowList = (config.repoContext?.repos ?? []).map(String).filter(Boolean)
   let cachedRepos = null
   let lastFetchTime = 0
 
@@ -24,6 +25,7 @@ export function createRepoContext({ config }) {
       const items = Array.isArray(result) ? result : []
       const repos = items
         .filter((item) => item?.uri?.startsWith("viking://resources/") && item.uri !== "viking://resources/")
+        .filter((item) => repoAllowed(item, reposAllowList))
         .map(formatRepoLine)
 
       cachedRepos = repos.length > 0 ? repos.join("\n") : ""
@@ -65,4 +67,29 @@ function formatRepoLine(item) {
   const name = item.uri.replace("viking://resources/", "").replace(/\/$/, "") || "resources"
   const abstract = item.abstract || item.overview
   return abstract ? `- **${name}** (${item.uri})\n  ${abstract}` : `- **${name}** (${item.uri})`
+}
+
+// Glob -> RegExp. Supports `*` (no path separators), `**`, and literals.
+function globToRe(glob) {
+  let re = "^"
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]
+    if (c === "*") {
+      if (glob[i + 1] === "*") { re += ".*"; i++; }
+      else re += "[^/]*"
+    } else if (/[.+?^${}()|[\]\\]/.test(c)) {
+      re += "\\" + c
+    } else {
+      re += c
+    }
+  }
+  re += "$"
+  return new RegExp(re)
+}
+
+// Empty allow-list keeps the legacy behavior: every indexed repo is listed.
+export function repoAllowed(item, patterns) {
+  if (patterns.length === 0) return true
+  const name = item.uri.replace("viking://resources/", "").replace(/\/$/, "")
+  return patterns.some((pat) => globToRe(pat).test(name))
 }

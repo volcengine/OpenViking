@@ -31,6 +31,7 @@ const DEFAULT_CONFIG = {
   repoContext: {
     enabled: true,
     cacheTtlMs: 60000,
+    repos: [],
   },
   autoRecall: {
     enabled: true,
@@ -252,6 +253,12 @@ function normalizeConfig(config) {
     1000,
     60 * 60 * 1000,
   )
+  if (!Array.isArray(config.repoContext.repos)) {
+    config.repoContext.repos = String(config.repoContext.repos ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
   config.autoRecall.limit = Math.max(1, Math.min(50, Math.round(Number(config.autoRecall.limit) || 10)))
   config.autoRecall.scoreThreshold = Math.max(0, Math.min(1, Number(config.autoRecall.scoreThreshold) || 0))
   config.autoRecall.maxContentChars = Math.max(100, Math.min(5000, Math.round(Number(config.autoRecall.maxContentChars) || 500)))
