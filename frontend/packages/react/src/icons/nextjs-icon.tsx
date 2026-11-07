@@ -6,10 +6,17 @@ import type { SVGProps } from 'react';
  * 编译进组件，同页多个实例共用同一个 ID，后面的实例会解析到先出现实例的渐变，
  * 取到别人的 `currentColor`。这里手写这个图标，用 `useId` 生成实例级唯一 ID。
  *
+ * 图形数据与 `packages/icons/svg/file-type/nextjs.svg` 保持一致，那份源文件仍是
+ * 该图标的 canonical 来源；差别只有 ID 由 `useId` 生成，以及属性写成 JSX。
+ *
  * The `nextjs` slash fades out through a gradient referenced by a fragment ID.
  * SVGR compiles that `id` verbatim, so instances on one page share it and a later
  * instance resolves to an earlier one's gradient, picking up its `currentColor`.
  * This icon is written by hand so `useId` can give each instance its own ID.
+ *
+ * The artwork matches `packages/icons/svg/file-type/nextjs.svg`, which stays the
+ * canonical source for this icon; the only differences are the ID coming from
+ * `useId` and the attributes being written as JSX.
  */
 export function NextjsIcon(props: SVGProps<SVGSVGElement>) {
   const gradientId = `ov-ft-nextjs-${useId().replaceAll(':', '')}`;

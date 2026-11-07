@@ -1,14 +1,14 @@
-import type { ComponentPropsWithoutRef } from 'react';
+import type { ComponentPropsWithoutRef, ComponentType } from 'react';
 
-import AudioIcon from '../../../icons/svg/audio.svg?react';
-import ChevronRightIcon from '../../../icons/svg/chevron-right.svg?react';
-import DocumentIcon from '../../../icons/svg/file.svg?react';
-import FolderIcon from '../../../icons/svg/folder.svg?react';
-import FolderOpenIcon from '../../../icons/svg/folder-open.svg?react';
-import PdfIcon from '../../../icons/svg/pdf.svg?react';
-import PptIcon from '../../../icons/svg/ppt.svg?react';
-import VideoIcon from '../../../icons/svg/video.svg?react';
-import WordIcon from '../../../icons/svg/word.svg?react';
+import AudioSvg from '../../../icons/svg/audio.svg?react';
+import ChevronRightSvg from '../../../icons/svg/chevron-right.svg?react';
+import DocumentSvg from '../../../icons/svg/file.svg?react';
+import FolderSvg from '../../../icons/svg/folder.svg?react';
+import FolderOpenSvg from '../../../icons/svg/folder-open.svg?react';
+import PdfSvg from '../../../icons/svg/pdf.svg?react';
+import PptSvg from '../../../icons/svg/ppt.svg?react';
+import VideoSvg from '../../../icons/svg/video.svg?react';
+import WordSvg from '../../../icons/svg/word.svg?react';
 
 /**
  * 图标的属性。渲染为内联 SVG，接收标准 SVG 属性；`width` 与 `height` 默认 16，
@@ -20,14 +20,27 @@ import WordIcon from '../../../icons/svg/word.svg?react';
  */
 export type IconProps = Omit<ComponentPropsWithoutRef<'svg'>, 'children'>;
 
-export {
-  AudioIcon,
-  ChevronRightIcon,
-  DocumentIcon,
-  FolderIcon,
-  FolderOpenIcon,
-};
-export { PdfIcon, PptIcon, VideoIcon, WordIcon };
+/**
+ * 图标组件的公开类型。声明里只出现这个类型，不出现 `*.svg?react` 模块引用——
+ * 发布包不含 SVG 源文件，声明若引用它们，独立消费者会报 TS2307。
+ *
+ * The public type of an icon component. Declarations mention only this type,
+ * never a `*.svg?react` module: the published package ships no SVG sources, so a
+ * declaration that referenced them would fail with TS2307 for a standalone
+ * consumer.
+ */
+export type IconComponent = ComponentType<IconProps>;
+
+export const AudioIcon: IconComponent = AudioSvg;
+export const ChevronRightIcon: IconComponent = ChevronRightSvg;
+export const DocumentIcon: IconComponent = DocumentSvg;
+export const FolderIcon: IconComponent = FolderSvg;
+export const FolderOpenIcon: IconComponent = FolderOpenSvg;
+export const PdfIcon: IconComponent = PdfSvg;
+export const PptIcon: IconComponent = PptSvg;
+export const VideoIcon: IconComponent = VideoSvg;
+export const WordIcon: IconComponent = WordSvg;
+
 export {
   getFileTypeColor,
   getFileTypeIcon,
