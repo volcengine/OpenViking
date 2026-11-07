@@ -536,3 +536,65 @@ class TestEmbeddingTextConstruction:
         memory_context = mock_from_context.call_args[0][0]
         assert len(memory_context.abstract.encode("utf-8")) <= 50_000
         assert memory_context.abstract.encode("utf-8").decode("utf-8") == memory_context.abstract
+
+    @pytest.mark.asyncio
+    async def test_memory_abstract_uses_extracted_summary_while_embedding_keeps_body(self):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry._types["events"] = registry._parse_memory_type(
+            {
+                "memory_type": "events",
+                "directory": "viking://user/{{ user_space }}/memories/events",
+                "filename_template": "{{ event_name }}.md",
+                "embedding_template": "EventName: {{ event_name }}\n{{ content }}",
+                "fields": [
+                    {"name": "event_name", "type": "string"},
+                    {"name": "summary", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            }
+        )
+
+        uri = "viking://user/alice/memories/events/rollout_completed.md"
+        body = (
+            "# Summary\nThe rollout of the sync feature was completed later.\n"
+            "# ChatLog\n... long transcript body"
+        )
+        updater = MemoryUpdater(registry=registry, vikingdb=Mock())
+        updater._viking_fs = Mock()
+        updater._viking_fs.read_file = AsyncMock(
+            return_value=MemoryFileUtils.write(
+                MemoryFile(
+                    uri=uri,
+                    memory_type="events",
+                    content=body,
+                    extra_fields={
+                        "event_name": "rollout_completed",
+                        "summary": "  The sync feature rollout completed on 2026-02-11.  ",
+                    },
+                )
+            )
+        )
+        updater._vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+
+        result = MemoryUpdateResult()
+        result.add_written(uri)
+        ctx = SimpleNamespace(user=None, account_id="default")
+
+        with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
+            mock_from_context.side_effect = lambda context: SimpleNamespace(
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
+            )
+            await updater._vectorize_memories(
+                result,
+                ctx,
+                extract_context=None,
+                uri_memory_type_map={uri: "events"},
+            )
+
+        memory_context = mock_from_context.call_args[0][0]
+        assert memory_context.abstract == "The sync feature rollout completed on 2026-02-11."
+        assert memory_context.get_vectorization_text().startswith("EventName: rollout_completed")
+        assert "long transcript body" in memory_context.get_vectorization_text()
