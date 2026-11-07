@@ -120,7 +120,7 @@ def _create_ragas_llm_from_config() -> Optional[Any]:
     if env_config:
         api_key = env_config["api_key"]
         api_base = env_config["api_base"]
-        model_name = env_config["model"] or "gpt-4o-mini"
+        model_name = env_config["model"] or "gpt-6-luna"
 
         logger.info("Using RAGAS LLM from environment variables")
 
@@ -154,7 +154,7 @@ def _create_ragas_llm_from_config() -> Optional[Any]:
         )
         return None
 
-    model_name = vlm_config.model or "gpt-4o-mini"
+    model_name = vlm_config.model or "gpt-6-luna"
     openai_model = ChatOpenAI(
         model=model_name,
         api_key=vlm_config.api_key,
