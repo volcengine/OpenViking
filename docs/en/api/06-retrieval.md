@@ -681,6 +681,8 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 **L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until`, and the optional `events_time_decay_protection` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the sum of the per-category quotas is the candidate ceiling. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
 
+`resource_uris` optionally limits resource retrieval to 1–50 Viking resource URIs and their descendants. Supply it alongside a query, an image, or a metadata filter. The scope applies before candidate selection, including with quotas and query expansion, and combines with existing filters and access controls. Memories and skills keep their usual retrieval scope. Omit the field to search the usual resource scope.
+
 **Optional rerank**: with `retrieval.apply_rerank_to_context` on and a usable `rerank` config, text queries make one rerank call per request over the merged, deduplicated candidates, scored against the original `query` joined with its expanded queries, so a hit only an expansion recalled is judged on the topic that expansion named. Quota-free retrieval recalls `2 × limit` candidates for it; bucketed retrieval reranks up to `2 × quota` per bucket, giving room a short bucket leaves to the others. A Skill is scored on its package abstract. A reranked candidate's `score` becomes its rerank score, and `other_peer_penalty` still applies on top. `score_threshold` then filters the final scores instead of recall; without it, `rerank.threshold` filters only model scores. Candidates the model did not score (empty text, or a failed rerank call) keep their vector scores. Image queries skip rerank. `stats.rerank` reports `used`, `candidates` (sent to the model) and `capped` (left out by the per-bucket cap)
 
 **L1 query understanding**
@@ -741,7 +743,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{"query":"what changed on this branch","mode":"context","max_tokens":1600}'
 
-# Session-aware: query expansion plus cross-turn dedup
+# Project-scoped context with query expansion and cross-turn dedup
 curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
@@ -751,6 +753,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     "session_id":"cc-1a2b3c",
     "query_expansion":"auto",
     "dedup_turns":5,
+    "resource_uris":["viking://resources/my-project"],
     "purpose":"coding",
     "max_tokens":3000
   }'
@@ -761,6 +764,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{"query":"tier design","mode":"context","max_tokens":3000,"rewrite":true}'
 ```
+
+The Python SDK accepts the same scope via `search_context(query, options={"resource_uris": ["viking://resources/my-project"]})`.
 
 **Response excerpt**
 

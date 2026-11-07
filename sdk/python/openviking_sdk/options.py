@@ -57,6 +57,7 @@ class SearchContextOptions(_ExtraOptions, total=False):
     detail: Union[str, Dict[str, str]]
     dedup_turns: int
     exclude_uris: List[str]
+    resource_uris: List[str]
     peer_scope: Literal["actor", "all"]
     other_peer_penalty: Union[float, Dict[str, float]]
     rewrite: Union[bool, Literal["auto"]]
