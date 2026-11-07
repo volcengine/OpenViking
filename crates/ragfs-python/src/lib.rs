@@ -319,6 +319,7 @@ struct RagfsCacheConfig {
     runtime_enabled: bool,
     provider: CacheProviderKind,
     service_name: String,
+    shared_redis_ttl_seconds: u64,
     redis: RedisCacheConfig,
     dynamic: DynamicCacheConfig,
 }
@@ -365,6 +366,7 @@ impl Default for RagfsCacheConfig {
             runtime_enabled: false,
             provider: CacheProviderKind::Redis,
             service_name: String::new(),
+            shared_redis_ttl_seconds: 0,
             redis: RedisCacheConfig::default(),
             dynamic: DynamicCacheConfig::default(),
         }
@@ -438,6 +440,8 @@ impl RagfsCacheConfig {
             cachefs: CacheFsConfig {
                 enabled: self.enabled,
                 service_name: self.service_name.clone(),
+                shared_redis_ttl: (self.shared_redis_ttl_seconds > 0)
+                    .then(|| Duration::from_secs(self.shared_redis_ttl_seconds)),
             },
         })
     }
@@ -638,9 +642,14 @@ fn cache_config_from_canonical_ov_conf_with_runtime(
     config.enabled = cachefs_backend == "cache";
     config.runtime_enabled = config.enabled || queuefs_backend == "cache" || force_runtime;
     if let Some(cachefs) = cachefs {
-        cachefs
+        let cachefs = cachefs
             .as_object()
             .ok_or_else(|| "storage.agfs.cachefs must be an object".to_string())?;
+        config.shared_redis_ttl_seconds = u64_field_allow_zero(
+            cachefs,
+            "shared_redis_ttl_seconds",
+            config.shared_redis_ttl_seconds,
+        )?;
     }
 
     if !config.runtime_enabled {
@@ -715,6 +724,11 @@ fn cache_config_from_value(
     config.service_name = service_name.to_string();
     config.enabled = bool_field(cache, "enabled", config.enabled)?;
     config.runtime_enabled = bool_field(cache, "runtime_enabled", config.enabled)?;
+    config.shared_redis_ttl_seconds = u64_field_allow_zero(
+        cache,
+        "shared_redis_ttl_seconds",
+        config.shared_redis_ttl_seconds,
+    )?;
     let provider = string_field(cache, "provider", "redis")?;
     config.provider = provider_kind(provider)?;
 
@@ -3885,6 +3899,51 @@ mod tests {
         assert_eq!(cache_config.redis.command_timeout_ms, 750);
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn binding_cache_config_carries_the_shared_redis_ttl() {
+        let config = serde_json::json!({
+            "enabled": true,
+            "runtime_enabled": true,
+            "provider": "redis",
+            "shared_redis_ttl_seconds": 600,
+            "redis": {"endpoints": ["redis://127.0.0.1:6379"]}
+        });
+
+        let cache_config = cache_config_from_value(&config, "runtime-prod").unwrap();
+
+        assert_eq!(cache_config.shared_redis_ttl_seconds, 600);
+        let stack_config = cache_config.stack_config().unwrap();
+        assert_eq!(
+            stack_config.cachefs.shared_redis_ttl,
+            Some(Duration::from_secs(600))
+        );
+    }
+
+    #[test]
+    fn binding_cache_config_without_a_shared_redis_ttl_keeps_the_default() {
+        let config = serde_json::json!({
+            "enabled": true,
+            "runtime_enabled": true,
+            "provider": "redis",
+            "redis": {"endpoints": ["redis://127.0.0.1:6379"]}
+        });
+
+        let cache_config = cache_config_from_value(&config, "runtime-prod").unwrap();
+
+        assert_eq!(cache_config.shared_redis_ttl_seconds, 0);
+        let stack_config = cache_config.stack_config().unwrap();
+        assert_eq!(stack_config.cachefs.shared_redis_ttl, None);
+    }
+
+    #[test]
+    fn binding_cache_config_rejects_a_negative_shared_redis_ttl() {
+        let config = serde_json::json!({"shared_redis_ttl_seconds": -1});
+
+        let error = cache_config_from_value(&config, "runtime-prod").unwrap_err();
+
+        assert!(error.contains("shared_redis_ttl_seconds"));
     }
 
     #[test]

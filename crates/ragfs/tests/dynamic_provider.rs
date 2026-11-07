@@ -86,6 +86,7 @@ async fn cachefs_rejects_dynamic_provider_without_query_cache_operations() {
             cachefs: CacheFsConfig {
                 enabled: true,
                 service_name: "query-cache-test".to_string(),
+                shared_redis_ttl: None,
             },
         }),
     )
@@ -109,6 +110,7 @@ async fn cachefs_rejects_dynamic_provider_without_zrangebyscore() {
             cachefs: CacheFsConfig {
                 enabled: true,
                 service_name: "query-cache-test".to_string(),
+                shared_redis_ttl: None,
             },
         }),
     )

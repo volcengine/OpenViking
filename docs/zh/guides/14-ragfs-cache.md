@@ -147,6 +147,9 @@ Cache PathLock 和 cache-backed 多写 metadata 提供 Redis namespace。
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `backend` | str | `"local"` | `local` 沿用原逻辑；`cache` 启用 CachedFileSystem |
+| `shared_redis_ttl_seconds` | int | `0` | 当 CacheFS 与 QueueFS、cache PathLock 或 expiry 调度共用同一个 Redis 服务时，统一覆盖查询 bucket 的 TTL；`0` 表示沿用 Provider 默认 TTL |
+
+`shared_redis_ttl_seconds` 统一作用于 `stat`、`read_dir`、`tree_directory`、`glob_directory` 和 `grep` bucket，不再表达文件级优先级：改用 query-driven CacheFS 后，缓存对象是查询结果，而不是文件正文或目录项。共享 Redis 时可将该值设为低于 Provider 的 `default_ttl_seconds`，以缩短缓存保留时间。CacheFS 使用独立 Redis 服务时，OpenViking 会忽略该选项。
 
 `storage.agfs.pathlock` 控制 PathLock 存储：
 
@@ -320,6 +323,15 @@ CacheFS 只缓存 `stat`、`read_dir`、`tree_directory`、`glob_directory` 和 
 - provider get / put / delete 延迟
 - cache set / delete 失败
 - backend fallback 次数
+
+## 共享 Redis 部署
+
+CacheFS 查询 bucket 可以与 QueueFS、cache PathLock 和 expiry 调度共用同一个 Redis 服务。Redis 的 `maxmemory` 和淘汰策略作用于整个服务，因此 `shared_redis_ttl_seconds` 只是缓存保留时间的上限，不是容量预留，也不能保证有状态 key 一定不被淘汰。
+
+- 当缓存应为有状态负载让出容量时，将 `shared_redis_ttl_seconds` 设为低于 `cache.redis.default_ttl_seconds`。
+- 保持 `shared_redis_ttl_seconds=0` 可沿用 Provider 默认 TTL。
+- 如果需要硬性的容量隔离，请使用独立 Redis 服务；仅切换逻辑 database 不会隔离 `maxmemory` 或淘汰策略。
+- 共用同一个服务时，应同时观察 `used_memory`、`evicted_keys` 和缓存 hit/miss 指标。
 
 ## 推荐使用顺序
 

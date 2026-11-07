@@ -9,6 +9,8 @@
 //! When pathlock is enabled, `PathLockWrappedFS` sits between `StatsWrappedFS` and `MountableFS`.
 
 use std::sync::Arc;
+#[cfg(feature = "cache")]
+use std::time::Duration;
 
 use super::filesystem::FileSystem;
 use super::mountable::MountableFS;
@@ -79,6 +81,8 @@ pub struct CacheFsConfig {
     pub enabled: bool,
     /// OpenViking instance name used by CacheFS keys.
     pub service_name: String,
+    /// Optional TTL override for query buckets on a shared Redis service.
+    pub shared_redis_ttl: Option<Duration>,
 }
 
 #[cfg(feature = "cache")]
@@ -87,6 +91,7 @@ impl Default for CacheFsConfig {
         Self {
             enabled: false,
             service_name: String::new(),
+            shared_redis_ttl: None,
         }
     }
 }
@@ -193,12 +198,13 @@ pub async fn build_configured_stack(
             .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
     }
     let mountable = if cache.cachefs.enabled {
-        Arc::new(MountableFS::with_cache_runtime(
+        Arc::new(MountableFS::with_cache_runtime_and_shared_redis_ttl(
             runtime
                 .as_ref()
                 .expect("cache provider is validated")
                 .clone(),
             cache.cachefs.service_name,
+            cache.cachefs.shared_redis_ttl,
         ))
     } else if let Some(runtime) = runtime.as_ref() {
         Arc::new(MountableFS::with_shared_cache_runtime(runtime.clone()))
