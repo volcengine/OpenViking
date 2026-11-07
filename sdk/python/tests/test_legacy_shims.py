@@ -114,3 +114,26 @@ async def test_legacy_clients_preserve_server_error_details(sync, code):
         assert {key: raised.value.details[key] for key in details} == details
     finally:
         await async_client.close()
+
+
+@pytest.mark.parametrize("user", ["config-user", "中文用户"])
+def test_legacy_async_http_client_respects_utf8_config(tmp_path, monkeypatch, user):
+    import json
+
+    from openviking_cli.client.http import AsyncHTTPClient as LegacyAsyncHTTPClient
+
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {"url": "http://config-host:1933", "user": user, "timeout": 12.5},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    for name in ("OPENVIKING_URL", "OPENVIKING_USER", "OPENVIKING_TIMEOUT"):
+        monkeypatch.delenv(name, raising=False)
+
+    client = LegacyAsyncHTTPClient()
+    assert client._user_id == user
+    assert client._timeout == 12.5
