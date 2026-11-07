@@ -23,7 +23,6 @@ export function qrLines(url) {
 
 // The program that opens a link on this machine's desktop; none on a server.
 export function opener(env = process.env, platform = process.platform) {
-  if (platform === 'win32') return 'explorer.exe';
   if (platform === 'darwin') return 'open';
   if (platform === 'linux' && (env.DISPLAY || env.WAYLAND_DISPLAY)) return 'xdg-open';
   return null;

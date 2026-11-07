@@ -1,100 +1,53 @@
-# Windows native source preview
+# Windows source preview
 
-This branch adds native Windows support for the SuperAgent (`vika/`). It does
-not port the separate OpenViking server's Python/native dependencies. Connect
-to an existing OpenViking server if local server installation is unavailable.
-No WSL, Git Bash, or Unix shell is required for the steps below.
+This PR adds platform adapters for a Windows x64 source checkout. It does not
+ship a Windows installer, release package, CI certification, or automatic
+upgrade. Real-machine acceptance is separate. Linux/macOS retain their existing
+installation and process behavior.
 
-Prerequisites: Windows 10/11, PowerShell 5.1 or later, Git, Node.js 24 LTS
-(including npm). Install and log in to a supported agent runtime, or use the
-bundled Pi runtime with provider credentials. Prefer native `.exe` binaries;
-Pi and Durable use their native PowerShell tools on Windows. Standard npm `.cmd` wrappers are resolved to their JavaScript entrypoints and
-run with Node, without passing prompts through a command shell.
+Install Node.js 24 LTS, Git for Windows (including Git Bash), and PM2 yourself.
+Git Bash is required by the bundled Pi/Durable coding tools and POSIX command
+examples in agent prompts. Install/login to other desired agent runtimes too.
+Use an existing OpenViking server; this preview does not port its native server.
+Keep the checkout and data under your own Windows account, with private NTFS
+permissions. Windows skips Unix mode-bit checks; it does not create/verify ACLs.
 
-```powershell
-git clone --branch feat/vika https://github.com/volcengine/OpenViking.git
-cd OpenViking
-powershell -NoProfile -ExecutionPolicy Bypass -File .\vika\scripts\install-windows.ps1
-# Open a new terminal after installation:
-vika setup
-vika start
-vika status
-vika logs primary
-vika stop
-vika autostart enable
-vika autostart disable
-```
-
-The installer copies source into `%USERPROFILE%\.vika\releases`, installs npm
-dependencies there and creates a `current` directory junction. Existing
-installations are refused; the installer never removes data/configuration or
-replaces a running installation. `-SkipSetup` installs without the interactive
-wizard. `-SkipPathUpdate` also leaves both user and process PATH untouched
-(useful for isolated installations and CI). No Administrator permission is
-needed. Login startup uses the user's
-Startup folder (Windows Script Host must be enabled), not a system service;
-logging out may stop the processes.
-
-PM2 is invoked through its Node entrypoint and uses a dedicated `.vika\pm2`
-directory and per-installation named pipes. Runtime termination uses `taskkill /T /F` on Windows, which forcefully
-stops the selected process tree. Action API connections use Windows named pipes
-and retain runtime authority checks; Unix socket permissions are not applied to
-pipes. Media staging directories use a protected current-user-only Windows ACL; pre-existing shared directories are rejected without changing their permissions. Windows provides the pipe's default access control, so this preview is
-intended for a trusted single-user workstation.
-
-The installer explicitly ensures the Lark CLI from the pinned npm package is
-present even when npm 12 blocks dependency postinstall scripts. It invokes that
-package's checksum-verifying installer only if the `.exe` is missing, then
-runs the actual `.exe --version` and verifies its version before creating the
-`current` junction. Download, execution, or version errors stop installation;
-it does not approve unrelated npm scripts. Slack's CLI is
-not bundled for Windows: install the official `slack.exe` on PATH or configure
-`SLACK_CLI_BIN`. Email accounts still require POSIX mode-0600 checks and are not supported in this
-Windows preview; do not add the email connector. Other connector integrations
-and runtimes need end-to-end
-validation on Windows. Nonstandard `.cmd`/`.bat` wrappers are rejected with an
-explicit error; configure a native executable or JavaScript entrypoint instead.
-
-Automatic release upgrades are disabled on Windows because published Vika
-artifacts are currently Unix-only. To update: `vika stop`, close other Vika
-commands, remove only the `current` junction (not its target or configuration),
-update your checkout, and run the installer again. Keep the previous release
-for rollback. Do not run the Unix installer or `npm run setup` on Windows.
-
-Validation from a checkout:
-
-Run checkout validation in a normal, non-elevated PowerShell session. GitHub-hosted
-Windows runners run as administrators with UAC disabled, so passing CI does not
-replace validation under a non-elevated developer token. Investigate permission
-failures in the fixture or product code instead of rerunning as administrator to
-bypass them. See the [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges),
-GitHub Docs.
-
-Confirm the session is not elevated first:
+From PowerShell in the checkout's `vika` directory:
 
 ```powershell
-$id = [Security.Principal.WindowsIdentity]::GetCurrent()
-$p = [Security.Principal.WindowsPrincipal]::new($id)
-if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw 'Run validation in a non-elevated PowerShell session.'
-}
+$env:HOME = $env:USERPROFILE
+npm ci --ignore-scripts --no-audit --no-fund
+node scripts/install-lark-cli.mjs
+node packages/daemon/scripts/check-pi.mjs
+node packages/cli/bin/vika.mjs setup
 ```
 
-Then install dependencies and run the native test files:
+The existing Lark download helper selects the Windows ZIP from the platform map
+and checks it against the pinned npm package's checksums. It does not depend on
+npm postinstall being enabled. Windows includes `tar.exe` for ZIP extraction.
+
+Setup saves your configuration before attempting managed-release startup. That
+startup can report failure in a source checkout; after confirming configuration
+was saved, start only your configured instance and Web using your own PM2:
 
 ```powershell
-cd vika
-npm ci --ignore-scripts
-node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-lark-install.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
+# Replace primary if setup used a different instance ID.
+pm2 start ecosystem.config.cjs --only vika-primary,vika-web
+pm2 logs vika-primary
+pm2 stop vika-primary
+pm2 stop vika-web
 ```
 
-The Windows CI job tests pipe transport, platform invocation, and autostart file
-creation/removal. It also runs the real PowerShell installer in a disposable
-Unicode home with npm lifecycle scripts deliberately disabled, checks the
-installed Pi and Lark executables, tests both generated launchers, and verifies
-that an existing installation is refused. The matrix covers both the bundled
-npm and npm 12. It does not log in to external services or validate
-interactive setup or real connector deliveries. Linux unit tests alone
-are not proof that the full Windows workflow works.
+Do not start the updater. PM2 ownership, installation, autostart and isolation
+are prerequisites managed by the user: Windows PM2 versions may share global
+named pipes even with different PM2_HOME directories. Do not assume this preview
+isolates an existing PM2 installation. Run from Git Bash when executing the
+agent prompt's POSIX shell command examples; PowerShell uses different quoting.
 
-Before accepting a real deployment, verify interactive setup, a managed runtime turn, Feishu receive/reply and attachment delivery, OV writes and recall after restart, and stop/start under an ordinary user token. Component tests do not establish full connector/runtime parity.
+Standard npm Node shims and native executables are supported. Arbitrary batch
+wrappers are rejected. Use explicit runtime executable paths when necessary.
+Automatic upgrades, Vika-managed autostart, and email account permissions are
+not supported on Windows here. Slack CLI provisioning is external; configure
+`SLACK_CLI_BIN` if needed. The action API uses Windows named pipes and retains
+runtime authority checks. Actual connector delivery, multimedia, permissions,
+and user-account behavior must still be validated on the target machine.

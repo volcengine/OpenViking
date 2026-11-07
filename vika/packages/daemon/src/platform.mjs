@@ -29,11 +29,11 @@ export function findExecutable(command, env = process.env, platform = process.pl
   env = normalizeEnvironment(env, platform);
   const extensions = windows && !paths.extname(command)
     ? [...String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), ''] : [''];
-  const directories = paths.isAbsolute(command) || command.includes(paths.sep)
+  const directories = windows && (paths.isAbsolute(command) || command.includes(paths.sep))
     ? [''] : String(env.PATH || '').split(windows ? ';' : ':').filter(Boolean);
   for (const directory of directories) {
     for (const extension of extensions) {
-      const candidate = paths.join(directory.replace(/^"|"$/g, ''), command + extension);
+      const candidate = paths.join(windows ? directory.replace(/^"|"$/g, '') : directory, command + extension);
       try {
         fs.accessSync(candidate, windows ? fs.constants.F_OK : fs.constants.X_OK);
         if (fs.statSync(candidate).isFile()) return candidate;
@@ -71,11 +71,13 @@ export function executableInvocation(command, args, { platform = process.platfor
 }
 
 export function spawn(command, args = [], options = {}) {
+  if (process.platform !== 'win32') return nodeSpawn(command, args, options);
   const invocation = executableInvocation(command, args, { env: options.env });
   return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 }
 
 export function execFile(command, args, options, callback) {
+  if (process.platform !== 'win32') return nodeExecFile(command, args, options, callback);
   const invocation = executableInvocation(command, args, { env: options?.env });
   return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) }, callback);
 }
@@ -92,6 +94,7 @@ export function isNamedPipe(value) {
 }
 
 execFile[promisify.custom] = (command, args, options = {}) => {
+  if (process.platform !== 'win32') return promisify(nodeExecFile)(command, args, options);
   const invocation = executableInvocation(command, args, { env: options.env });
   return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 };

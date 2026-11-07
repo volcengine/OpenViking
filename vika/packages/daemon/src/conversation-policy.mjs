@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentCliCommands, cliCommandCode, cliShellHint } from './agent-clis.mjs';
+import { agentCliCommands, cliCommandCode } from './agent-clis.mjs';
 
 // The conversation policy is the Core's markdown under agent/ (how inputs,
 // decisions and deliveries work, one section per connector the instance
@@ -145,7 +145,6 @@ function bundledCliSection(config) {
     '',
     'These CLIs are installed with Vika and available in your shell. Use the configured commands below, including when a login shell resets PATH. Follow the connector rules for their use; messages still go through the Core tools.',
     'Use only the identities configured by the daemon; do not log in, configure accounts, or change profiles.',
-    ...(process.platform === 'win32' ? [cliShellHint()] : []),
     ...agentCliCommands(config).map(({ name, bin }) => `- ${name}: ${cliCommandCode(bin)}`),
   ].join('\n');
 }

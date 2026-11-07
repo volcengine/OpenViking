@@ -68,3 +68,13 @@ test('Windows environment normalization makes lookup and child overrides consist
   assert.deepEqual(normalizeEnvironment({ Path: 'C:\\only', Pathext: '.CMD' }, 'win32'), { PATH: 'C:\\only', PATHEXT: '.CMD' });
   assert.equal(normalizeEnvironment(inherited, 'linux'), inherited);
 });
+
+test('POSIX executable lookup preserves the original PATH-relative slash behavior', { skip: process.platform === 'win32' }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-posix-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'nested'));
+  const candidate = path.join(root, 'nested', 'tool');
+  fs.writeFileSync(candidate, '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(findExecutable('nested/tool', { PATH: root }), candidate);
+  assert.equal(findExecutable('nested/tool', { PATH: '' }), null);
+});

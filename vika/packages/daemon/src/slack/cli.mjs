@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { SlackError, validToken } from './api.mjs';
 
 export const SLACK_CLI_VERSION = '4.10.0';
-export const bundledSlackCli = () => process.platform === 'win32' ? 'slack.exe' : fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
+export const bundledSlackCli = () => fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
 const READ_METHODS = new Set(['users.conversations', 'conversations.history', 'conversations.replies',
   'conversations.members', 'users.info']);
 
@@ -26,7 +26,7 @@ export class SlackCli {
     signal.throwIfAborted();
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-slack-cli-'));
     const env = {};
-    for (const key of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+    for (const key of ['PATH', 'HOME', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
       'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy']) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
