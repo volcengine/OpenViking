@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -379,6 +379,35 @@ test("the skill catalog is on by default and its budget clamps to the declared r
     const overridden = buildPluginConfig("codex", { cwd: otherDir });
     assert.equal(overridden.skillCatalog, false);
     assert.equal(overridden.skillCatalogTokenBudget, 20000);
+  });
+});
+
+test("usage cards are on by default and the off switch reaches every layer", () => {
+  withFixture({}, ({ workspaceDir, otherDir }) => {
+    assert.equal(buildPluginConfig("claude-code", { cwd: otherDir }).usageCards, true);
+
+    process.env.OPENVIKING_USAGE_CARDS = "off";
+    assert.equal(buildPluginConfig("claude-code", { cwd: otherDir }).usageCards, false);
+    delete process.env.OPENVIKING_USAGE_CARDS;
+
+    const cliPath = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    const cli = JSON.parse(readFileSync(cliPath, "utf-8"));
+    writeFileSync(cliPath, JSON.stringify({
+      ...cli,
+      plugin: { ...cli.plugin, claude_code: { usageCards: false } },
+    }));
+    assert.equal(buildPluginConfig("claude-code", { cwd: otherDir }).usageCards, false);
+
+    // Env outranks the file layer, and the workspace file reaches the same knob.
+    process.env.OPENVIKING_USAGE_CARDS = "true";
+    assert.equal(buildPluginConfig("claude-code", { cwd: otherDir }).usageCards, true);
+    delete process.env.OPENVIKING_USAGE_CARDS;
+
+    writeFileSync(join(workspaceDir, ".openviking", "config.json"), JSON.stringify({
+      version: 1,
+      usage: { cards: false },
+    }));
+    assert.equal(buildPluginConfig("claude-code", { cwd: workspaceDir }).usageCards, false);
   });
 });
 

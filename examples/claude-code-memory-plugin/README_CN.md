@@ -396,6 +396,8 @@ Claude's own lookups
 - 没用到任何 OpenViking 内容的回答不显示卡片。
 - 用卡片上的按钮展开或折叠单张卡片；用 `/openviking-usage expand` 或 `/openviking-usage collapse` 展开或折叠全部卡片。界面文字只有英文。
 
+**关闭卡片。** 设置 `OPENVIKING_USAGE_CARDS=off`（或在 `ovcli.conf` 的 `plugin.claude_code` 下配 `usageCards: false`，或在工作区 `.openviking/config.json` 配 `usage.cards: false`）。此时模块不再注册任何 handler：不渲染卡片、没有 `/openviking-usage` 命令，也不会再触发宿主拦截模块事件时打印的 skip 提示——例如 Claude Code 的 Team/Enterprise 会话中，内置插件会把模块的 `classic.UserPromptSubmit` 和 `session.append` 事件直接放行跳过。
+
 **前提。** 卡片是一个 Claude Code hooks 模块（`hooks/hooks.json` 里的 `modules`，代码在 `mods/usage/`），需要 Claude Code 2.1.286 或更高版本，并启用 hooks 模块。下面这些情况下，Claude Code 会忽略这个模块，命令 hook 照常运行：
 
 - 版本不支持模块。
