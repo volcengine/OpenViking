@@ -448,6 +448,8 @@ Claude's own lookups
 - An answer that used nothing from OpenViking gets no card.
 - Expand or collapse one card with its button. Expand or collapse every card with `/openviking-usage expand` or `/openviking-usage collapse`.
 
+**Turning the cards off.** Set `OPENVIKING_USAGE_CARDS=off` (or `usageCards: false` under `plugin.claude_code` in `ovcli.conf`, or `usage.cards: false` in the workspace `.openviking/config.json`). The module then registers no handlers: no cards, no `/openviking-usage` command, and none of the skip notices hosts print for events they intercept — Claude Code's Team/Enterprise sessions, where a bundled plugin sends the module's `classic.UserPromptSubmit` and `session.append` events past it.
+
 **Requirements.** Cards are a Claude Code hooks module (`modules` in `hooks/hooks.json`, code in `mods/usage/`). They need Claude Code 2.1.286 or newer with hooks modules enabled. Claude Code ignores the module and runs the command hooks as before in these cases:
 
 - On versions without modules.

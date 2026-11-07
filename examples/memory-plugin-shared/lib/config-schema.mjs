@@ -212,6 +212,10 @@ export const KNOBS = [
   // several spellings case-insensitively (off/false/0/disabled, expanded/full/details).
   { name: "usageView", type: "string", default: "summary", env: "OPENVIKING_USAGE_VIEW", workspace: "usage.view", capability: "session" },
   { name: "usageOutput", type: "string", default: "auto", env: "OPENVIKING_USAGE_OUTPUT", workspace: "usage.output", capability: "session" },
+  // Claude Code's usage cards (mods/usage). Off means the module registers no
+  // handlers at all, which also silences the per-event skip notices hosts
+  // print when they intercept its events (Team/Enterprise sessions).
+  { name: "usageCards", type: "bool", default: true, env: "OPENVIKING_USAGE_CARDS", workspace: "usage.cards", capability: "session" },
 
   // ── debug ─────────────────────────────────────────────────────────────
   { name: "debug", type: "bool", default: false, env: "OPENVIKING_DEBUG", capability: "debug" },
