@@ -30,7 +30,7 @@ const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return 
 const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url));
 
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
-  ovTools = null, ovRemember = false, openVikingConfigPath = undefined,
+  ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
   larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
@@ -43,7 +43,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
-      larkMessageAccess, ovRemember, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
+      larkMessageAccess, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
     store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
@@ -619,7 +619,7 @@ describe('agent tools', () => {
 
 describe('OpenViking tools', () => {
   const ovNames = (service) => service.tools().map((tool) => tool.name).filter((name) => name.startsWith('openviking_'));
-  const DEFAULT_FIVE = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource'];
+  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember'];
   // A scripted tool client: every method stands for one remote OV call.
   const fakeOvTools = (over = {}) => ({
     find: over.find ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
@@ -630,19 +630,11 @@ describe('OpenViking tools', () => {
     remember: over.remember ?? (async () => ({ text: 'Submitted for memory extraction (task_id=commit-9).', data: { task_id: 'commit-9', session_id: 'vika-remember-1' } })),
   });
 
-  it('offers the five default tools only with a connection, and remember only when opted in', (t) => {
+  it('offers all six tools whenever the instance has an OpenViking connection, and none without', (t) => {
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'] }).service), []);
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), DEFAULT_FIVE);
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), DEFAULT_FIVE);
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], openVikingConfigPath: '/nonexistent/ov.conf' }).service), DEFAULT_FIVE);
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools(), ovRemember: true }).service),
-      [...DEFAULT_FIVE, 'openviking_remember']);
-    // The switch alone offers nothing without a connection.
-    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovRemember: true }).service), []);
-    // And it takes away nothing but the remember tool.
-    const without = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service.tools().map((tool) => tool.name);
-    const with_ = setup(t, { ids: ['weixin'], ovTools: fakeOvTools(), ovRemember: true }).service.tools().map((tool) => tool.name);
-    assert.deepEqual(with_.filter((name) => !name.startsWith('openviking_')), without.filter((name) => !name.startsWith('openviking_')));
+    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
+    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
+    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], openVikingConfigPath: '/nonexistent/ov.conf' }).service), OV_TOOLS);
   });
 
   it('validates the tool input before any OpenViking call', async (t) => {
@@ -654,7 +646,9 @@ describe('OpenViking tools', () => {
     await assert.rejects(() => call('openviking_list', { uri: 'viking://x', offset: -1 }), /offset must be at least 0/);
     await assert.rejects(() => call('openviking_search', { query: 'x', search_type: 'literal' }), /search_type must be one of/);
     await assert.rejects(() => call('openviking_add_resource', { url: 'notaurl' }), /url has an invalid format/);
-    await assert.rejects(() => call('openviking_remember', { text: 'a fact' }), /unknown tool: openviking_remember/);
+    await assert.rejects(() => call('openviking_remember', { text: 'a fact' }), /decision_id is required/);
+    await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_nowhere' }),
+      (error) => error.code === 'unknown_decision' && /^Not remembered/.test(error.message));
     assert.match((await call('openviking_find', { query: 'hello' })).text, /No matching context found/);
   });
 
@@ -680,11 +674,12 @@ describe('OpenViking tools', () => {
   });
 
   it('records no delivery, decision or outbox for OpenViking tools', async (t) => {
-    const { call, store, logs } = setup(t, { ids: ['weixin'], ovTools: fakeOvTools(), ovRemember: true });
+    const { call, store, logs, inbound } = setup(t, { ids: ['lark'], ovTools: fakeOvTools() });
+    inbound({ messageId: 'om_keep123456789', chatId: 'oc_keep123456789', content: '记一下' });
     await call('openviking_find', { query: 'x' });
     await call('openviking_read', { uri: 'viking://user/u/a.md' });
     await call('openviking_add_resource', { url: 'https://example.com/a' });
-    await call('openviking_remember', { text: 'a fact' });
+    await call('openviking_remember', { decision_id: 'message:om_keep123456789' });
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM outbox').get().n, 0);
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM decisions').get().n, 0);
     assert.ok(!logs.some((line) => line.message === 'delivery.blocked'));
@@ -692,6 +687,21 @@ describe('OpenViking tools', () => {
       const line = logs.filter((entry) => entry.message === 'agent_tool').find((entry) => entry.tool === tool);
       assert.equal(line.outcome, 'ok', `${tool} logged one clean call`);
     }
+  });
+
+  it('remembers a message as the sync renders it, from its real sender, with the agent\'s note apart', async (t) => {
+    const remembered = [];
+    const ovTools = fakeOvTools({ remember: async (input) => { remembered.push(input); return { text: 'ok', data: { task_id: 'commit-1' } }; } });
+    const { call, inbound } = setup(t, { ids: ['lark'], ovTools });
+    inbound({ messageId: 'om_emoji123456789', chatId: 'oc_team123456789', senderId: 'ou_lisi', content: '以后回复我都加个 emoji' });
+    await call('openviking_remember', { decision_id: 'message:om_emoji123456789', note: '李四希望\n回复他时带 emoji' });
+    assert.equal(remembered.length, 1);
+    const [{ line, note }] = remembered;
+    // The line names the real sender; nothing the model wrote is in it.
+    assert.match(line, /^\[chat=oc_team123456789 [^\]]*msg=om_emoji123456789[^\]]* from=ou_lisi[^\]]*\] 以后回复我都加个 emoji$/);
+    assert.equal(note, '[from=me] 李四希望 ⏎ 回复他时带 emoji');
+    await call('openviking_remember', { decision_id: 'message:om_emoji123456789' });
+    assert.equal(remembered[1].note, '', 'no note, no assistant line');
   });
 
   it('counts a landed OpenViking write as progress for the loop guard, a read does not', async (t) => {
@@ -720,7 +730,7 @@ describe('OpenViking tools', () => {
   });
 
   it('relays the same OpenViking surface through the MCP adapter', async (t) => {
-    const state = setup(t, { ids: ['weixin'], ovTools: fakeOvTools(), ovRemember: true });
+    const state = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() });
     const socketPath = path.join(state.directory, 'actions.sock');
     const server = await startActionApi({ socketPath, service: state.service, logger });
     t.after(() => stopActionApi(server));

@@ -558,9 +558,9 @@ async function askMailboxes(ctx, state) {
 }
 
 // The instance's on/off settings, under 其他设置, and what each is when the
-// manifest does not say. ovRemember is not a policy switch: it only adds or
-// removes the openviking_remember tool, so toggling it keeps the session.
-const SWITCH_DEFAULTS = Object.freeze({ stagedReplies: false, naturalWriting: true, explicitSilence: true, ovAutoRecall: false, ovRemember: false, meetingNotes: false });
+// manifest does not say. OpenViking memory has no switch here: Vika always
+// owns it (agents[].ovAutoRecall stays a config-file-only option).
+const SWITCH_DEFAULTS = Object.freeze({ stagedReplies: false, naturalWriting: true, explicitSilence: true, meetingNotes: false });
 // Explicit silence is on by default except on Ark, which has no Core tools to
 // offer stay_silent through (as the deployment manifest defaults it).
 const switchDefault = (key, model) => (key === 'explicitSilence' && model === 'ark' ? false : SWITCH_DEFAULTS[key]);
@@ -592,10 +592,6 @@ const SWITCHES = () => [
     hint: t('写得像人，去掉 AI 腔', 'writes like a person, without the AI tone') },
   { key: 'explicitSilence', label: t('显式不回复', 'Explicit silence'),
     hint: t('每条消息都要模型表态：回复，或记下不回；漏了提醒一次', 'the model decides on every message: a reply, or a note that it stays silent; a miss gets one reminder') },
-  { key: 'ovAutoRecall', label: t('OpenViking 自动召回', 'OpenViking auto-recall'),
-    hint: t('别人找它时，先按发送者召回 OpenViking 里的相关记忆', 'recalls related OpenViking memory, by sender, when someone turns to it') },
-  { key: 'ovRemember', label: t('OpenViking 主动记忆', 'OpenViking proactive memory'),
-    hint: t('多一个 openviking_remember 工具：模型可主动把值得长期记住的事实提交抽取', 'adds the openviking_remember tool: the model can proactively submit a durable fact for extraction') },
   { key: 'meetingNotes', label: t('会议纪要入库', 'Meeting notes'),
     hint: t('你参加的飞书会议，智能纪要和文字记录存进 OpenViking；一台机器上只有一个实例能开',
       'the Feishu/Lark AI notes and transcripts of your meetings go into OpenViking; one instance per machine') },
@@ -1601,6 +1597,9 @@ async function setupFlow({
     if (state.connectors.includes('lark') && access === 'bot') agent.larkMessageAccess = 'bot';
     else delete agent.larkMessageAccess;
     agent.ovConfig = state.ovConfig;
+    // Retired OpenViking options: peers are gone, and remember is always on.
+    delete agent.ovRecallScope;
+    delete agent.ovRemember;
     Object.assign(agent, state.switches);
     if (emailAccounts.length) agent.emailAccounts = emailAccounts;
     else delete agent.emailAccounts;

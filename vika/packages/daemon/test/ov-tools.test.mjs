@@ -5,15 +5,25 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
-import { OV_DEFAULT_PARENT, OVToolClient, resolveOvConfig } from '../src/ov-tools.mjs';
+import { after, describe, it } from 'node:test';
+import { OV_DEFAULT_PARENT, OVToolClient, reservedTarget } from '../src/ov-tools.mjs';
 import { fakeOV } from './ov-server-fixture.mjs';
 
-// The client against the scripted server: a dev-mode environment by default,
-// a small timeout budget, an injectable fetch.
-function client(ov, environment = {}, options = {}) {
+// The instance's ovConfig files, one per client.
+const CONFIGS = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-tools-'));
+after(() => fs.rmSync(CONFIGS, { recursive: true, force: true }));
+let configs = 0;
+function configFile(fields) {
+  const file = path.join(CONFIGS, `ov-${++configs}.json`);
+  fs.writeFileSync(file, typeof fields === 'string' ? fields : JSON.stringify(fields));
+  return file;
+}
+
+// The client against the scripted server, as the instance's own OV user, with
+// a small timeout budget and an injectable fetch.
+function client(ov, options = {}, config = {}) {
   return new OVToolClient({
-    environment: { OPENVIKING_URL: ov.url, OPENVIKING_API_KEY: 'test-key', ...environment },
+    configPath: configFile({ url: ov.url, api_key: 'test-key', ...config }),
     timeoutMs: 2_000, readTimeoutMs: 1_000, ...options,
   });
 }
@@ -31,55 +41,47 @@ function hangingFetch() {
 }
 
 describe('OpenViking tool client', () => {
-  it('resolves the instance config file, the dev-mode URL, and refuses a broken config', async (t) => {
+  it('speaks as the instance from its ovConfig with no peer, and refuses a missing or broken config', async (t) => {
     const ov = await fakeOV(t);
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-config-'));
-    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-    const configFile = path.join(directory, 'ov.conf');
-    fs.writeFileSync(configFile, JSON.stringify({
-      url: ov.url, api_key: 'file-key', account: 'acct', user: 'someone',
-      agent: 'bot', actor_peer_id: 'instance-a',
-    }));
-    const fromFile = new OVToolClient({ environment: { OPENVIKING_CLI_CONFIG_FILE: configFile } });
-    await fromFile.find({ query: 'hello' });
-    const request = ov.state.requests.at(-1);
-    assert.equal(request.headers['x-api-key'], 'file-key');
-    assert.equal(request.headers['x-openviking-account'], 'acct');
-    assert.equal(request.headers['x-openviking-user'], 'someone');
-    assert.equal(request.headers['x-openviking-agent'], 'bot');
-    assert.equal(request.headers['x-openviking-actor-peer'], 'instance-a');
+    // A config from before peers were dropped still names one: never sent.
+    const instance = client(ov, {}, { api_key: 'file-key', account: 'acct', user: 'someone', agent: 'bot', actor_peer_id: 'instance-a' });
+    await instance.find({ query: 'hello' });
+    await instance.list({ uri: 'viking://' });
+    for (const request of ov.state.requests) {
+      assert.equal(request.headers['x-api-key'], 'file-key');
+      assert.equal(request.headers['x-openviking-account'], 'acct');
+      assert.equal(request.headers['x-openviking-user'], 'someone');
+      assert.equal(request.headers['x-openviking-agent'], 'bot');
+      assert.equal(request.headers['x-openviking-actor-peer'], undefined);
+    }
 
-    assert.deepEqual(resolveOvConfig({}), {});
-    const dev = resolveOvConfig({
-      OPENVIKING_URL: 'http://127.0.0.1:1933', OPENVIKING_API_KEY: 'k', OPENVIKING_ACCOUNT: 'a', OPENVIKING_USER: 'u',
-    });
-    assert.deepEqual(dev, { config: { url: 'http://127.0.0.1:1933', api_key: 'k', account: 'a', user: 'u' } });
-
-    const broken = resolveOvConfig({ OPENVIKING_CLI_CONFIG_FILE: path.join(directory, 'missing.conf') });
-    assert.equal(broken.config, null);
-    assert.match(broken.error, /missing or invalid/);
-    fs.writeFileSync(path.join(directory, 'bad.conf'), '{ nope');
-    assert.equal(resolveOvConfig({ OPENVIKING_CLI_CONFIG_FILE: path.join(directory, 'bad.conf') }).config, null);
-  });
-
-  it('lets the environment override the actor peer', async (t) => {
-    const ov = await fakeOV(t);
-    await client(ov, { OPENVIKING_PEER_ID: 'peer-env' }).find({ query: 'x' });
-    assert.equal(ov.state.requests.at(-1).headers['x-openviking-actor-peer'], 'peer-env');
-    await client(ov).list({ uri: 'viking://' });
-    assert.equal(ov.state.requests.at(-1).headers['x-openviking-actor-peer'], undefined);
+    const unconfigured = new OVToolClient({ configPath: '' });
+    await assert.rejects(() => unconfigured.find({ query: 'x' }),
+      (error) => error.code === 'openviking_unavailable' && /not configured/.test(error.message));
+    const later = path.join(CONFIGS, 'later.json');
+    const missing = new OVToolClient({ configPath: later });
+    await assert.rejects(() => missing.find({ query: 'x' }),
+      (error) => error.code === 'openviking_unavailable' && /missing or invalid/.test(error.message));
+    // Fixed later, the same client connects: a failure is never kept.
+    fs.writeFileSync(later, JSON.stringify({ url: ov.url, api_key: 'test-key' }));
+    assert.equal((await missing.find({ query: 'x' })).text, 'No matching context found.');
+    await assert.rejects(() => new OVToolClient({ configPath: configFile('{ nope') }).find({ query: 'x' }),
+      (error) => error.code === 'openviking_unavailable');
+    await assert.rejects(() => new OVToolClient({ configPath: configFile({ url: 'ftp://nope' }) }).find({ query: 'x' }),
+      (error) => error.code === 'openviking_unavailable');
   });
 
   it('finds and searches with one ranked, deduplicated answer', async (t) => {
     const ov = await fakeOV(t);
     ov.state.searchResult = {
-      memories: [{ uri: 'viking://user/u/memories/a.md', score: 0.8123, abstract: 'the first fact' }],
+      memories: [{ uri: 'viking://user/u/memories/a.md', score: 0.8123, abstract: 'the first fact' },
+        { uri: 'viking://user/u/memories/preferences/李四/保密.md', score: 0.7, abstract: '不要透露项目进度' }],
       resources: [{ uri: 'viking://resources/doc.md', score: 0.6, abstract: 'a doc' }],
       skills: [
         { uri: 'viking://user/u/skills/pkg/.abstract.md', score: 0.4, abstract: 'pkg summary' },
         { uri: 'viking://user/u/skills/pkg/SKILL.md', score: 0.75, abstract: 'the skill itself' },
       ],
-      total: 4,
+      total: 5,
     };
     const found = await client(ov).find({ query: 'what do I know', limit: 20, target_uri: 'viking://resources', context_type: 'resource', min_score: 0.3 });
     const request = requests(ov, 'POST /api/v1/search/find').at(-1);
@@ -87,10 +89,13 @@ describe('OpenViking tool client', () => {
       query: 'what do I know', limit: 20, target_uri: 'viking://resources', context_type: 'resource', score_threshold: 0.3,
     });
     assert.match(found.text, /\[memory 81%\] viking:\/\/user\/u\/memories\/a\.md/);
+    // A person's preference says whose it is.
+    assert.match(found.text, /\[memory, preferences of 李四 70%\] viking:\/\/user\/u\/memories\/preferences\/李四\/保密\.md/);
+    assert.equal(found.data.hits.find((hit) => hit.person).person, '李四');
     // Both skill files collapse onto the package's SKILL.md, keeping the better hit.
     assert.equal(found.data.hits.filter((hit) => hit.uri.endsWith('SKILL.md')).length, 1);
     assert.equal(found.data.hits.find((hit) => hit.type === 'skill').score, 0.75);
-    assert.match(found.text, /Use the openviking_read tool to expand a URI/);
+    assert.match(found.text, /Use openviking_read to expand a URI/);
 
     await client(ov).search({ query: 'exact words', search_type: 'keywords' });
     assert.deepEqual(requests(ov, 'POST /api/v1/search/search').at(-1).body, {
@@ -232,37 +237,51 @@ describe('OpenViking tool client', () => {
     await assert.rejects(() => one.addResource({}), (error) => error.code === 'invalid_input' && /exactly one of url or file_path/.test(error.message));
     await assert.rejects(() => one.addResource({ url: 'https://a.example', file_path: 'a.md' }), /exactly one of url or file_path/);
     await assert.rejects(() => one.addResource({ url: 'https://a.example', to: 'viking://t/a', parent: 'viking://p' }), /at most one of to or parent/);
+    // What the daemon keeps is out of reach, in either spelling of the own root.
+    for (const target of ['viking://~/resources/vika/asd/timers-state.json', 'viking://~/resources/emails', 'viking://user/owner/resources/meetings/1/note.md',
+      'viking://~/memories/preferences/x', 'viking://user/owner/sessions/s', 'viking://~/peers/p']) {
+      await assert.rejects(() => one.addResource({ url: 'https://a.example', to: target }),
+        (error) => error.code === 'openviking_reserved_target');
+      await assert.rejects(() => one.addResource({ url: 'https://a.example', parent: target }),
+        (error) => error.code === 'openviking_reserved_target');
+    }
+    assert.equal(reservedTarget('viking://~/resources/emailsandmore'), null);
+    assert.equal(reservedTarget('viking://resources/emails'), null, 'the shared root is not the daemon\'s');
     await assert.rejects(() => one.addResource({ url: 'ftp://example.com/f' }), /must be an http\(s\) address/);
     await assert.rejects(() => one.addResource({ url: `https://example.com/${'a'.repeat(5000)}` }), /must be an http\(s\) address/);
 
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-reject-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     fs.writeFileSync(path.join(directory, 'ok.md'), 'fine');
-    const bounded = client(ov, {}, { uploadMaxBytes: 3 });
+    const bounded = client(ov, { uploadMaxBytes: 3 });
     await assert.rejects(() => bounded.addResource({ file_path: 'ok.md', workspace: directory }), /at most .* MiB/);
     await assert.rejects(() => one.addResource({ file_path: '../escape.md', workspace: directory }), /file_path/);
     await assert.rejects(() => one.addResource({ file_path: '/abs/escape.md', workspace: directory }), /file_path/);
     assert.equal(requests(ov, 'POST /api/v1/resources').length, 0);
   });
 
-  it('submits remember through an independent session and commits once', async (t) => {
+  it('remembers one message on an independent session with the sync\'s memory types, committed once', async (t) => {
     const ov = await fakeOV(t);
-    const remembered = await client(ov).remember({ text: 'the owner prefers plain text', role: 'user' });
+    const line = '[chat=oc-1 source=lark msg=om-1 time=2026-11-07T09:00Z from=李四] 以后回复我都加个 emoji';
+    const remembered = await client(ov).remember({ line, note: '[from=me] 李四希望回复他时带 emoji' });
     const created = requests(ov, 'POST /api/v1/sessions').at(-1);
     assert.match(created.body.session_id, /^vika-remember-/);
     assert.deepEqual(created.body.auto_commit_policy, {
       pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
     });
-    const message = requests(ov, /messages/).at(-1);
-    assert.deepEqual(message.body, { role: 'user', content: 'the owner prefers plain text' });
+    assert.deepEqual(created.body.memory_policy, { memory_types: ['profile', 'preferences', 'entities', 'events'] });
+    assert.deepEqual(requests(ov, /messages/).map((request) => request.body), [
+      { role: 'user', content: line },
+      { role: 'assistant', content: '[from=me] 李四希望回复他时带 emoji' },
+    ]);
     const session = ov.state.sessions.get(created.body.session_id);
     assert.equal(session.commits, 1);
     assert.match(remembered.data.task_id, /^commit-/);
     assert.equal(remembered.data.session_id, created.body.session_id);
-    assert.match(remembered.text, /extraction runs in the background/);
+    assert.match(remembered.text, /under their name/);
 
-    await client(ov).remember({ text: 'I concluded this', role: 'assistant' });
-    assert.deepEqual(requests(ov, /messages/).at(-1).body, { role: 'assistant', content: 'I concluded this' });
+    await client(ov).remember({ line });
+    assert.deepEqual(requests(ov, /messages/).at(-1).body, { role: 'user', content: line }, 'no note, no assistant line');
   });
 
   it('does not retry a remember commit that timed out', async (t) => {
@@ -273,11 +292,8 @@ describe('OpenViking tool client', () => {
       if (String(input).includes('/commit')) return hangingFetch()(input, init);
       return fetch(input, init);
     };
-    const slow = new OVToolClient({
-      environment: { OPENVIKING_URL: ov.url, OPENVIKING_API_KEY: 'test-key' },
-      fetch: through, timeoutMs: 80,
-    });
-    await assert.rejects(() => slow.remember({ text: 'might land anyway' }), (error) =>
+    const slow = client(ov, { fetch: through, timeoutMs: 80 });
+    await assert.rejects(() => slow.remember({ line: 'might land anyway' }), (error) =>
       error.code === 'openviking_unavailable' && /may already have landed/.test(error.message));
     assert.equal(calls.filter((url) => url.includes('/commit')).length, 1);
     const sessions = [...ov.state.sessions.values()];
@@ -304,28 +320,18 @@ describe('OpenViking tool client', () => {
     await assert.rejects(() => client(ov).read({ uri: 'viking://user/u/gone.md' }),
       (error) => error.code === 'openviking_not_found');
 
-    const offline = new OVToolClient({ environment: { OPENVIKING_URL: 'http://127.0.0.1:1', OPENVIKING_API_KEY: 'test-key' } });
+    const offline = new OVToolClient({ configPath: configFile({ url: 'http://127.0.0.1:1', api_key: 'test-key' }) });
     await assert.rejects(() => offline.find({ query: 'x' }), (error) => {
       assert.equal(error.code, 'openviking_unavailable');
-      assert.match(error.message, /unreachable/);
+      assert.ok(!error.message.includes('127.0.0.1'));
       return true;
     });
 
-    const hanging = new OVToolClient({
-      environment: { OPENVIKING_URL: ov.url, OPENVIKING_API_KEY: 'test-key' },
-      fetch: hangingFetch(), timeoutMs: 60,
-    });
+    const hanging = client(ov, { fetch: hangingFetch(), timeoutMs: 60 });
     await assert.rejects(() => hanging.find({ query: 'x' }), (error) => {
       assert.equal(error.code, 'openviking_unavailable');
       assert.match(error.message, /timed out/);
       return true;
     });
-
-    const unconfigured = new OVToolClient({ environment: {} });
-    await assert.rejects(() => unconfigured.find({ query: 'x' }),
-      (error) => error.code === 'openviking_unavailable' && /configuration/.test(error.message));
-    const badUrl = new OVToolClient({ environment: { OPENVIKING_URL: 'ftp://nope' } });
-    await assert.rejects(() => badUrl.find({ query: 'x' }),
-      (error) => error.code === 'openviking_unavailable' && /invalid/.test(error.message));
   });
 });

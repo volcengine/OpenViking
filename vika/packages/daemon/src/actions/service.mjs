@@ -14,7 +14,8 @@ import { OVUnavailableError } from '../ov-connection.mjs';
 import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs';
 import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
-import { BOT_SENDERS, readMetadataTag } from '../runtime-input.mjs';
+import { BOT_SENDERS, oneLine, readMetadataTag } from '../runtime-input.mjs';
+import { formatCognitionJournalLine } from '../cognition.mjs';
 import { TimerSchedule } from '../timers.mjs';
 import {
   APPROVAL_SECONDS, approvalCard, approvalMessage, approvalNote, approvalQuestion, approvalStatusText, approvedText,
@@ -76,7 +77,7 @@ function blocked(code, message) {
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
   if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
-  if (tool?.openviking || tool?.remember) return Boolean(result?.data?.task_id || result?.data?.root_uri);
+  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri);
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -186,11 +187,6 @@ export class ActionService {
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);
     if (tool.meeting) return this.meetingEnabled;
     if (tool.meetingNotes) return Boolean(this.config.meetingNotes);
-    // The remember branch comes first: the tool carries `remember` alone, and
-    // it must never be offered on the bare OpenViking connection.
-    if (tool.remember) {
-      return Boolean(this.config.ovRemember) && Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
-    }
     if (tool.openviking) return Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
@@ -1531,11 +1527,13 @@ export class ActionService {
   }
 
   // OpenViking long-term memory, the same six tools for every runtime. The
-  // client is built lazily from the instance's own OV settings, never at
+  // client is built from the instance's own ovConfig on first use, never at
   // boot, so a daemon without a usable config still starts; tests inject
   // their own. The tools are not deliveries: no decision, no outbox.
   ovToolClient() {
-    this.ovTools ??= new OVToolClient({ timeoutMs: this.config.openVikingToolTimeoutMs ?? 20_000 });
+    this.ovTools ??= new OVToolClient({
+      configPath: this.config.openVikingConfigPath, timeoutMs: this.config.openVikingToolTimeoutMs ?? 20_000,
+    });
     return this.ovTools;
   }
 
@@ -1577,8 +1575,18 @@ export class ActionService {
     return await this.ovToolClient().addResource({ ...input, workspace: this.config.workspace });
   }
 
+  // The message is the one decision_id names, rendered exactly as the session
+  // sync renders it: its from= is the real sender, so whatever it asks for is
+  // filed under that person, and the model cannot put words in anyone's mouth.
   async openvikingRemember(input, caller) {
+    const row = this.resolveDecision(input, caller, 'Not remembered');
+    const item = this.store.journalItemForInbound(row.seq);
+    if (!item) throw blocked('not_rememberable', `Not remembered: that input is not part of the conversation history. ${NO_ACTION}`);
+    const note = String(input.note ?? '').trim();
     caller.trace.invoked = true;
-    return await this.ovToolClient().remember(input);
+    return await this.ovToolClient().remember({
+      line: formatCognitionJournalLine(item),
+      note: note ? `[from=me] ${oneLine(note)}` : '',
+    });
   }
 }

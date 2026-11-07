@@ -69,20 +69,24 @@ test('uncertain successful append reconciles source ID after restart', async (t)
   assert.equal(store.db.prepare('SELECT pending_seq FROM ov_session_sync').get().pending_seq, null);
 });
 
-test('each line reaches OV attributed to who said it: the owner as the user, others as their peers, the agent and daemon as assistant', async (t) => {
+test('each line reaches OV as its speaker\'s words with no peer; agent lines are assistant; control lines stay out', async (t) => {
   const { store, epoch, client, service } = setup(t);
-  const inbound = (actor, peer, text) => store.appendCognitionJournal({ kind: 'inbound', actor, chatId: 'oc-chat', messageId: text, text,
-    metadata: { event: chatEvent({ senderId: actor, messageId: text, content: text }).envelope, peer } });
-  inbound('ou_owner', null, 'owner line');
-  inbound('ou_zhiheng', 'lark-ou_zhiheng', 'peer line');
+  const inbound = (actor, owner, text) => store.appendCognitionJournal({ kind: 'inbound', actor, chatId: 'oc-chat', messageId: text, text,
+    metadata: { event: chatEvent({ senderId: actor, messageId: text, content: text }).envelope, owner } });
+  inbound('ou_owner', true, 'owner line');
+  inbound('ou_zhiheng', false, 'someone else');
+  // A line journaled before #7092 dropped peers still carries one: never sent.
+  store.appendCognitionJournal({ kind: 'inbound', actor: 'ou_old', chatId: 'oc-chat', messageId: 'old', text: 'old line',
+    metadata: { event: chatEvent({ senderId: 'ou_old', messageId: 'old', content: 'old line' }).envelope, peer: 'lark-ou_old' } });
   store.appendCognitionJournal({ kind: 'outbound', text: 'agent reply' });
   store.appendCognitionJournal({ kind: 'control', actor: 'ou_owner', text: 'slash command /new' });
   // A reminder the agent set: an event without a sender.
   store.appendCognitionJournal({ kind: 'inbound', actor: 'unknown', text: 'reminder', metadata: { event: subjectEvent().envelope } });
   await service.prepare(epoch);
   assert.deepEqual(client.messages.map(({ role, peer_id: peer }) => [role, peer ?? null]), [
-    ['user', null], ['user', 'lark-ou_zhiheng'], ['assistant', null], ['assistant', null], ['assistant', null],
+    ['user', null], ['user', null], ['user', null], ['assistant', null], ['assistant', null],
   ]);
+  assert.doesNotMatch(client.messages.map((message) => message.content).join('\n'), /slash command/);
 });
 
 test('cancelled journal rows are skipped while syncing to OV', async (t) => {
@@ -190,6 +194,8 @@ test('OV HTTP client pins auth, disables auto commits, retains a token tail, and
   assert.deepEqual(JSON.parse(request.options.body).auto_commit_policy, {
     pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
   });
+  // Extraction never writes the agent's own soul or identity.
+  assert.deepEqual(JSON.parse(request.options.body).memory_policy, { memory_types: ['profile', 'preferences', 'entities', 'events'] });
   await client.commit('test');
   assert.deepEqual(JSON.parse(request.options.body), {
     retention_mode: 'turn_budget', keep_recent_turn_count: 10_000, retained_message_token_budget: 24_000,

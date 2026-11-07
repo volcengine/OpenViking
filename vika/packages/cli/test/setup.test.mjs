@@ -99,8 +99,6 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     dataDir: path.join(h.home, '.vika', 'data', 'primary'),
     workspace: path.join(h.home, 'vika-workspace', 'primary'),
     ovConfig: path.join(h.home, '.vika', 'ov', 'primary.json'),
-    ovAutoRecall: false,
-    ovRemember: false,
     stagedReplies: false,
     naturalWriting: true,
     // On by default for every runtime but Ark.
@@ -540,7 +538,7 @@ test('mailboxes come with an IM, are checked before the scans and saved with the
 function existing(h, agent) {
   fs.mkdirSync(path.join(h.home, '.vika'), { recursive: true });
   const full = { id: 'asd', displayName: 'ASD', channel: 'lark', connectors: ['lark'], profile: 'vika-asd', port: 3738,
-    dataDir: path.join(h.home, '.vika', 'data', 'asd'), workspace: path.join(h.home, 'ws'), ovConfig: path.join(h.home, '.vika', 'ov', 'asd.json'), ovAutoRecall: false, ovRemember: false,
+    dataDir: path.join(h.home, '.vika', 'data', 'asd'), workspace: path.join(h.home, 'ws'), ovConfig: path.join(h.home, '.vika', 'ov', 'asd.json'), ovAutoRecall: false,
     stagedReplies: false, naturalWriting: true, explicitSilence: false, meetingNotes: false, model: 'codex:', ...agent };
   fs.writeFileSync(path.join(h.home, '.vika', 'config.json'),
     JSON.stringify({ version: 1, defaultInstance: full.id, env: {}, agents: [full] }));
@@ -633,28 +631,26 @@ test('changing an instance runtime saves the setup selector before restarting it
 
 test('其他设置 switches each setting where it is, says what changes, and saves it in the manifest', async (t) => {
   //                    change  other  staged  natural  staged  silence  done  save
-  const h = harness(t, ['2',    '10',  '1',    '2',     '1',    '3',     '7',  '11']);
+  const h = harness(t, ['2',    '10',  '1',    '2',     '1',    '3',     '5',  '11']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, naturalWriting: false, explicitSilence: true }]);
   const text = h.written();
-  assert.match(text, /1\) 分段回复\s+关 · 复杂任务先表态，做的过程中发阶段性结论；简单问题仍只回一条\n  2\) 自然写作\s+开 · [^\n]+\n  3\) 显式不回复\s+关 · [^\n]+\n  4\) OpenViking 自动召回\s+关 · [^\n]+\n  5\) OpenViking 主动记忆\s+关 · [^\n]+\n  6\) 会议纪要入库\s+关 · [^\n]+\n  7\) 完成/);
+  assert.match(text, /1\) 分段回复\s+关 · 复杂任务先表态，做的过程中发阶段性结论；简单问题仍只回一条\n  2\) 自然写作\s+开 · [^\n]+\n  3\) 显式不回复\s+关 · [^\n]+\n  4\) 会议纪要入库\s+关 · [^\n]+\n  5\) 完成/);
   assert.match(text, /1\) 分段回复\s+开 · /, 'a switch shows its new value at once');
   assert.match(text, /10\) 其他设置\s+开着：显式不回复（已改）/);
   assert.match(text, /将修改 ASD（asd）：\n  自然写作：开 → 关（模型会开一次新的会话）\n  显式不回复：关 → 开（模型会开一次新的会话）\n/);
   assert.doesNotMatch(text, /分段回复：/, 'switched on and off again is no change');
   assert.deepEqual(h.calls, [['restart', 'asd']]);
 
-  // A switch the manifest never had starts from its default; recall and
-  // remember are not policy changes, so neither rotates the session.
-  const recall = harness(t, ['2', '10', '4', '5', '7', '11']);
-  const old = existing(recall, {});
-  for (const key of ['stagedReplies', 'naturalWriting', 'explicitSilence', 'ovRemember']) delete old[key];
-  fs.writeFileSync(path.join(recall.home, '.vika', 'config.json'), JSON.stringify({ version: 1, defaultInstance: old.id, env: {}, agents: [old] }));
+  // OpenViking memory has no switch: a manifest's own ovAutoRecall stays as
+  // written, and the retired peer-scope and remember options are dropped on save.
+  const recall = harness(t, ['2', '10', '1', '5', '11']);
+  const old = existing(recall, { ovAutoRecall: true, ovRemember: true, ovRecallScope: 'actor' });
   assert.equal(await setupCommand(recall.options), 0);
-  assert.deepEqual(recall.manifest().agents, [{ ...old, stagedReplies: false, naturalWriting: true, explicitSilence: true, ovAutoRecall: true, ovRemember: true }]);
-  assert.match(recall.written(), /将修改 ASD（asd）：\n  OpenViking 自动召回：关 → 开\n  OpenViking 主动记忆：关 → 开\n/);
-  assert.doesNotMatch(recall.written(), /主动记忆：[^\n]*模型会开一次新的会话/);
+  const { ovRemember: _remember, ovRecallScope: _scope, ...kept } = old;
+  assert.deepEqual(recall.manifest().agents, [{ ...kept, stagedReplies: true }]);
+  assert.doesNotMatch(recall.written(), /OpenViking 自动召回|OpenViking 主动记忆/);
 });
 
 test('a new instance takes a shipped role by what it is for', async (t) => {
@@ -1655,19 +1651,19 @@ test('meeting notes: on for the first assistant or colleague on Feishu, off for 
 
 test('会议纪要入库 is one instance\'s: refused while another has it, switched on like any other setting', async (t) => {
   //                    change asd  other  notes  done  discard
-  const h = harness(t, ['2',        '10',  '6',   '7',  '12']);
+  const h = harness(t, ['2',        '10',  '4',   '5',  '12']);
   const asd = existing(h, {});
   const bee = { ...asd, id: 'bee', displayName: 'BEE', profile: 'vika-bee', port: 3739, dataDir: path.join(h.home, '.vika', 'data', 'bee'),
     workspace: path.join(h.home, 'ws-bee'), ovConfig: path.join(h.home, '.vika', 'ov', 'bee.json'), meetingNotes: true };
   const two = { version: 1, defaultInstance: 'asd', env: {}, agents: [asd, bee] };
   fs.writeFileSync(path.join(h.home, '.vika', 'config.json'), JSON.stringify(two));
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /会议纪要已经由 BEE（bee）入库：一台机器上只有一个实例能开，先修改 bee 把它关掉\n[\s\S]*6\) 会议纪要入库\s+关 · /);
+  assert.match(h.written(), /会议纪要已经由 BEE（bee）入库：一台机器上只有一个实例能开，先修改 bee 把它关掉\n[\s\S]*4\) 会议纪要入库\s+关 · /);
   assert.deepEqual(h.manifest(), two);
   assert.deepEqual(h.calls, []);
 
   //                     change asd  other  notes  done  save
-  const on = harness(t, ['2',        '10',  '6',   '7',  '11']);
+  const on = harness(t, ['2',        '10',  '4',   '5',  '11']);
   const before = existing(on, {});
   assert.equal(await setupCommand(on.options), 0);
   assert.deepEqual(on.manifest().agents, [{ ...before, meetingNotes: true }]);

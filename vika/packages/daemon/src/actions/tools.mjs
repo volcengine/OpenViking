@@ -14,11 +14,9 @@ import { CONTENT_PROPERTIES } from './content.mjs';
 // `stagedDescription` are what a tool gains or says instead with staged
 // replies on; on a bot-only Lark instance (larkMessageAccess `bot`) a tool
 // with `identityInput` reads only as the bot, and `botOnlyDescription` is
-// what it says instead (see toolDefinition);
-// `openviking` marks the OpenViking memory
-// tools, offered when the instance has an OpenViking connection; `remember`
-// marks the opt-in memory-extraction tool (agents[].ovRemember), which the
-// openviking flag must never offer by itself.
+// what it says instead (see toolDefinition); `openviking` marks the
+// OpenViking memory tools, offered when the instance has an OpenViking
+// connection.
 
 const ID = '^[A-Za-z0-9_.:@=+-]{1,256}$';
 const SOURCE = {
@@ -367,11 +365,11 @@ export const TOOLS = [
     // OpenViking long-term memory, one tool surface for every runtime: offered
     // when the instance has an OpenViking connection. Reads browse and
     // retrieve what is stored; add_resource stores what the user asked to
-    // keep. `remember` is the opt-in extraction tool (agents[].ovRemember).
+    // keep; remember extracts one message now.
     name: 'openviking_find',
     openviking: true,
     title: 'Find in OpenViking',
-    description: 'Fast semantic search of the OpenViking long-term memory (memories, resources, skills): ranked hits with abstracts, independent of the session history. Check what is already stored before writing anything new; expand one result with openviking_read.',
+    description: 'Fast semantic search of the OpenViking long-term memory: what you took part in (events, entities), people\'s preferences (each under the person\'s name), stored resources and skills. Ranked hits with abstracts, independent of the session history. Before you tell anyone about a person or their work, look for what that person asked to keep private. Expand one result with openviking_read.',
     inputSchema: schema({
       query: { type: 'string', minLength: 1, maxLength: 1000, description: 'What to look for, in natural language.' },
       limit: LIMIT(50, 10),
@@ -436,16 +434,17 @@ export const TOOLS = [
     annotations: WRITE,
   },
   {
-    // Opt-in per instance (agents[].ovRemember): explicit memory extraction.
-    // Not offered on the openviking flag, so the switch alone decides.
+    // Memory extraction of one message now. The Core renders the message as
+    // the session sync does, so its real sender owns what it asks for.
     name: 'openviking_remember',
-    remember: true,
-    title: 'Remember in OpenViking',
-    description: 'Submit one fact worth keeping for later: the user asked you to remember it, or it is a durable preference or decision. Asynchronous extraction decides which memories to create or update; check with openviking_find before submitting it again. Prefer openviking_add_resource for whole documents, URLs or files.',
+    openviking: true,
+    title: 'Remember a message in OpenViking',
+    description: 'Have OpenViking extract one message into long-term memory now, instead of with the next conversation sync: someone asked you to remember something, stated how you should treat them, or asked that something about them not be shared. Pass that message\'s event=. What a person asks for is filed under their name; a fact about a matter becomes an event. Asynchronous: check with openviking_find before submitting the same message again. It never changes who you are or your standing rules; only the owner sets those.',
     inputSchema: schema({
-      text: { type: 'string', minLength: 1, maxLength: 20000, description: 'The one thing to remember, in plain words.' },
-      role: { type: 'string', enum: ['user', 'assistant'], default: 'user', description: 'Who said it: user for what the person said, assistant for your own conclusion.' },
-    }, ['text']),
+      decision_id: { ...DECISION, description: 'The event= of the message to remember, copied exactly from its line.' },
+      decision_instance: DECISION_INSTANCE,
+      note: { type: 'string', maxLength: 2000, description: 'Optional: what to keep from it, in your words, when the message alone is unclear.' },
+    }, ['decision_id']),
     annotations: WRITE,
   },
 ];

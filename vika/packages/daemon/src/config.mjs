@@ -205,11 +205,10 @@ export function getConfig() {
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
-    // Opt-in per instance (agents[].ovAutoRecall): the daemon recalls from OV
-    // for every line someone sends (ov-recall.mjs), over every peer or, with
-    // agents[].ovRecallScope "actor", only the sender's.
+    // Opt-in per instance (agents[].ovAutoRecall, config file only): besides
+    // the preferences it always shows, the daemon runs one OV search per line
+    // someone sends (ov-recall.mjs).
     ovAutoRecall: boolEnv('VIKA_OV_AUTO_RECALL', false),
-    ovRecallScope: enumEnv('VIKA_OV_RECALL_SCOPE', 'all', ['all', 'actor']),
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).
     openVikingToolTimeoutMs: intEnv('VIKA_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
@@ -306,10 +305,6 @@ export function getConfig() {
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
     meetingNotes: boolEnv('VIKA_MEETING_NOTES', false) && connectors.includes('lark'),
-    // Opt-in per instance (agents[].ovRemember): the openviking_remember tool,
-    // explicit memory extraction on an independent session. The default
-    // five OpenViking tools need no switch.
-    ovRemember: boolEnv('VIKA_OV_REMEMBER', false),
     historyLimit: intEnv('VIKA_HISTORY_LIMIT', 30, { min: 0, max: 200 }),
     // Replies to bot messages in one chat/thread with no person writing there
     // before the safety fuse holds further ones; 0 turns the fuse off.
