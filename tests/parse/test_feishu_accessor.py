@@ -273,12 +273,18 @@ def _install_fake_lark_modules(monkeypatch):
     monkeypatch.setitem(sys.modules, "lark_oapi.core.model", core_model)
     monkeypatch.setitem(sys.modules, "lark_oapi.core.http", core_http)
     monkeypatch.setitem(sys.modules, "lark_oapi.core.token", core_token)
+    monkeypatch.setattr(
+        FeishuAccessor,
+        "_stream_download",
+        staticmethod(lambda config, request, option, max_bytes: _FakeTransport.execute(config, request, option)),
+    )
 
 
 def _use_fake_client(monkeypatch, accessor: FeishuAccessor, client):
     monkeypatch.setattr(accessor, "_get_client", lambda **_kwargs: client)
     accessor._session = SimpleNamespace(
         tenant_token_cache_scope=lambda: nullcontext(),
+        tenant_access_token=None,
     )
     monkeypatch.setattr(
         FeishuApiSession,
@@ -968,6 +974,7 @@ def test_access_wiki_without_recursive_keeps_single_document_behavior(monkeypatc
     from openviking.parse.accessors.feishu_accessor import FeishuDocument
 
     accessor = FeishuAccessor()
+    monkeypatch.setattr(accessor, "_resolve_wiki_node", lambda *_args: ("docx", "doc_token", "Single Wiki"))
     recursive_root = MagicMock()
 
     async def fake_fetch_document(*_args, **_kwargs):

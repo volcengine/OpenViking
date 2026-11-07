@@ -23,6 +23,7 @@ class FeishuContent:
     url: str
     token: str
     kind: str  # url, markdown, file
+    doc_type: str | None = None
 
     def checkpoint_key(self, root: Path) -> str:
         relative = self.path.resolve().relative_to(root.resolve()).as_posix()
@@ -55,5 +56,5 @@ class FeishuImportPlan:
             raise ValueError("Feishu import download byte limit exceeded")
         self.downloaded_bytes += size
 
-    def add(self, path: Path, url: str, token: str, kind: str) -> None:
-        self.entries.append(FeishuContent(path, url, token, kind))
+    def add(self, path: Path, url: str, token: str, kind: str, *, doc_type: str | None = None) -> None:
+        self.entries.append(FeishuContent(path, url, token, kind, doc_type))

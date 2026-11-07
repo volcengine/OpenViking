@@ -49,7 +49,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 doc/docx、wiki、sheets、bitable、mindnote/mindnotes、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret`。Mindnote 及 Wiki 中的 Mindnote 要求本次使用的 token 具备 `mindnote:node:read` |
+| 飞书/Lark | URL 方式，支持 doc/docx、wiki、sheets、bitable、mindnote/mindnotes、slides、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret`。Mindnote 及 Wiki 中的 Mindnote 要求本次使用的 token 具备 `mindnote:node:read` |
 
 **网页类（递归网页爬虫）**
 
@@ -232,6 +232,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - Connector 导入设置 `is_active=false` 时会在提交前创建暂停状态的 Watch；原生飞书和 Git 导入会通过资源队列透传 `is_active`，解析出最终资源 URI 后再创建 Watch。两种情况下首次导入均执行一次，周期调度保持关闭。
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
+- Wiki 导入先解析底层对象类型，再决定处理方式。Wiki 指向的普通文件先下载，再按文件格式解析。原生 Slides（`/slides/{token}` 或指向 Slides 的 Wiki）先导出为 PPTX，再使用配置的原生或 Understanding 后端解析；递归 Wiki 和云盘目录中的 Slides 同样适用。调用身份需具备导出/下载权限，仅能读取 Wiki 元数据并不足够。Slides 导出超时为 120 秒。 普通文件和 Slides 导出文件均分块下载，超过 `args.feishu_max_download_bytes` 即停止（默认每次导入 1 GiB，目录导入由所有成员共享额度）。
 - 飞书/Lark Mindnote URL 支持 `/mindnote/{token}` 和 `/mindnotes/{token}`；Wiki URL 若解析为 `obj_type=mindnote` 也走同一读取流程。Mindnote 使用与其他飞书导入一致的认证选择：传入 `args.feishu_access_token` 时使用用户 token，否则回退到配置的 app/tenant token。本次使用的 token 需具备 `mindnote:node:read`。
 - Mindnote 节点图片通过飞书 Drive 素材接口下载，并沿用本次 Mindnote 导入的 token 类型。用户 token 导入会向媒体下载透传用户 token；app-token 导入使用配置的应用凭证。本次使用的 token 需具备 `docs:document.media:download`。媒体下载不可用时，正文仍会成功导入并保留原始图片引用。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
