@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -33,6 +33,11 @@ class RerankConfig(BaseModel):
     mode: Optional[str] = Field(
         default="noul",
         description="Jev rerank mode: 'noul' or 'choice'",
+    )
+
+    input: Literal["text", "multimodal"] = Field(
+        default="text",
+        description="Input capability of the rerank endpoint; multimodal requires provider='openai'",
     )
 
     candidates_visible: bool = Field(
@@ -96,6 +101,8 @@ class RerankConfig(BaseModel):
             raise ValueError("Rerank max_input_tokens must be 0 or at least 128")
 
         provider = self._effective_provider()
+        if self.input == "multimodal" and provider != "openai":
+            raise ValueError("Multimodal rerank input requires the OpenAI-compatible provider")
         if provider == "jev" and self.mode is not None:
             self.mode = self.mode.strip().lower()
             if self.mode not in ("noul", "choice"):
