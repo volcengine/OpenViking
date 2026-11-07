@@ -5,7 +5,7 @@ import {
   resolveFileTreeInfoKey,
   resolveInfoCopy,
   showsInlineDescription,
-} from '@openviking/react';
+} from '@openviking/react/components/file-tree';
 import type {
   FileTreeEntryRow,
   FileTreeRow,
@@ -477,9 +477,12 @@ export default function FileTreeBasic() {
             isOpen={open.has(row.uri)}
             isSelected={selected === row.uri}
             description={
-              key && showsInlineDescription(key)
+              // The row's own description wins, including an explicit empty
+              // string; the semantic copy is only the fallback.
+              row.description ??
+              (key && showsInlineDescription(key)
                 ? resolveInfoCopy(key, INFO_LABELS[lang]).description
-                : undefined
+                : undefined)
             }
             indicator={INDICATORS[row.uri]}
             text={t}

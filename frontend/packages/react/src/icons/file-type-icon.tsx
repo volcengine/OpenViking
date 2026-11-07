@@ -1,6 +1,7 @@
 import type { ComponentType, SVGProps } from 'react';
 
 import rules from '../../../icons/file-type-rules.json';
+import audio from '../../../icons/svg/audio.svg?react';
 import astro from '../../../icons/svg/file-type/astro.svg?react';
 import babel from '../../../icons/svg/file-type/babel.svg?react';
 import bash from '../../../icons/svg/file-type/bash.svg?react';
@@ -14,6 +15,10 @@ import cpp from '../../../icons/svg/file-type/cpp.svg?react';
 import css from '../../../icons/svg/file-type/css.svg?react';
 import database from '../../../icons/svg/file-type/database.svg?react';
 import defaultIcon from '../../../icons/svg/file-type/default.svg?react';
+import pdf from '../../../icons/svg/pdf.svg?react';
+import ppt from '../../../icons/svg/ppt.svg?react';
+import video from '../../../icons/svg/video.svg?react';
+import word from '../../../icons/svg/word.svg?react';
 import docker from '../../../icons/svg/file-type/docker.svg?react';
 import eslint from '../../../icons/svg/file-type/eslint.svg?react';
 import font from '../../../icons/svg/file-type/font.svg?react';
@@ -65,6 +70,7 @@ export type FileTypeIconComponent = ComponentType<SVGProps<SVGSVGElement>>;
  * {@link resolveFileTypeIconKey} returns.
  */
 const ICONS: Record<string, FileTypeIconComponent> = {
+  audio,
   astro,
   babel,
   bash,
@@ -117,6 +123,10 @@ const ICONS: Record<string, FileTypeIconComponent> = {
   webpack,
   yml,
   zig,
+  pdf,
+  ppt,
+  video,
+  word,
   zip,
 };
 

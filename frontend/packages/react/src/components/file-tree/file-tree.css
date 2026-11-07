@@ -38,6 +38,7 @@
  * children. Drawn with CSS alone, so it needs no icon asset.
  */
 .ov-file-tree__spinner {
+  display: inline-block;
   box-sizing: border-box;
   width: 12px;
   height: 12px;
