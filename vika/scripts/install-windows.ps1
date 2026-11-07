@@ -35,6 +35,11 @@ Copy-Item (Join-Path $release 'scripts\windows-launch.mjs') (Join-Path $bin 'vik
 # Launch through a Node bootstrap so HOME, PATH and PM2_HOME also exist at login.
 $launcher = '@echo off' + "`r`n" + '"' + $node + '" "%~dp0vika-launch.mjs" %*' + "`r`n"
 [IO.File]::WriteAllText((Join-Path $bin 'vika.cmd'), $launcher)
+# Keep the compatibility command on the same private PM2 transport as vika.
+Copy-Item (Join-Path $release 'scripts\windows-pm2-launch.mjs') (Join-Path $bin 'vika-pm2-launch.mjs')
+$pm2Launcher = '@echo off' + "`r`n" + '"' + $node + '" "%~dp0vika-pm2-launch.mjs" %*' + "`r`n"
+[IO.File]::WriteAllText((Join-Path $bin 'pm2.cmd'), $pm2Launcher)
+
 if (-not $SkipPathUpdate) {
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (($userPath -split ';') -notcontains $bin) {

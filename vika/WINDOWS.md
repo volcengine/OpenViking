@@ -98,3 +98,21 @@ interactive setup or real connector deliveries. Linux unit tests alone
 are not proof that the full Windows workflow works.
 
 Review scope and known differences: [feature parity](docs/windows-feature-parity.md) and [native audit](docs/windows-native-review.md). The feature-parity report includes a real-account Feishu + OpenViking acceptance checklist for Windows testers.
+
+
+### Installed source preview: PM2 diagnostics
+
+Prefer `vika status` and `vika logs <instance-id>` for normal diagnostics.
+The source installer also places `pm2.cmd` in `~/.vika/bin`. It uses the same
+Node executable as `vika.cmd`, the release's `scripts/pm2-windows.cjs` wrapper,
+and Vika's private PM2_HOME (or an explicit PM2_HOME override). It does not add
+all of node_modules/.bin to PATH. Open a new terminal after installation.
+
+Do not invoke `current/node_modules/.bin/pm2.cmd` directly: it bypasses the
+Windows per-home pipe adapter and may target a different PM2 daemon. Do not
+use `pm2 kill` or broad application selectors to troubleshoot a single instance.
+`pm2 jlist` can include environment credentials; never publish its raw output.
+Existing installations need the updated installer-generated launchers as well
+as updated source; a Git checkout change alone does not update installed files.
+This compatibility entry is fork installation support, not part of the minimal
+upstream Windows adapter PR.
