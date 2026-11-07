@@ -2,13 +2,14 @@
 
 import asyncio
 import json
-from typing import Any
 
 from loguru import logger
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
+from vikingbot.channels.whatsapp_auth import authenticate_bridge, resolve_bridge_token
+from vikingbot.config.loader import get_data_dir
 from vikingbot.config.schema import WhatsAppChannelConfig
 
 
@@ -41,12 +42,9 @@ class WhatsAppChannel(BaseChannel):
         while self._running:
             try:
                 async with websockets.connect(bridge_url) as ws:
+                    token = resolve_bridge_token(self.config.bridge_token, get_data_dir())
+                    await authenticate_bridge(ws, token)
                     self._ws = ws
-                    # Send auth token if configured
-                    if self.config.bridge_token:
-                        await ws.send(
-                            json.dumps({"type": "auth", "token": self.config.bridge_token})
-                        )
                     self._connected = True
                     logger.info("Connected to WhatsApp bridge")
 
