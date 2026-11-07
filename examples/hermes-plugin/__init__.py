@@ -163,10 +163,20 @@ _CONFIG_SCHEMA = [
     _cfg_field("recall_full_read_limit", "Max full L2 content reads per recall", type="integer", minimum=0, maximum=100, default=2),
     _cfg_field("recall_prefer_abstract", "Use abstracts instead of full L2 reads", type="boolean", default=False),
     _cfg_field("recall_resources", "Include resources in recall", type="boolean", default=False),
+    _cfg_field("recall_exclude_uris", (
+        "Subtree URIs the recall context search must never return, as a YAML list or "
+        "comma/newline-separated string (e.g. viking://user/memories/skills, viking://agent/skills). "
+        "Sent as exclude_uris on context recall so generated directory files stop matching "
+        "like ordinary content and consuming the recall budget. Unset sends nothing"
+    ), type="string", default=None),
 ]
 # Typed settings (config.yaml primary, env override) keyed by config key.
 _SETTING_SPECS = {f["key"]: f for f in _CONFIG_SCHEMA if "type" in f}
 _RECALL_SETTING_KEYS = tuple(k for k in _SETTING_SPECS if k.startswith("recall_"))
+# List-valued settings: YAML list or comma/newline string, trimmed and deduped.
+# exclude_uris is capped like the server (openviking/retrieve/context_assembler/params.py).
+_SETTING_LIST_KEYS = frozenset({"recall_exclude_uris"})
+_SETTING_LIST_MAX_ITEMS = 200
 # Explicit-uid URIs (viking://user/<uid>/...) work under every auth mode and
 # supported OpenViking version. The `~` alias requires OpenViking 0.4.16+ for
 # USER/ADMIN roles and 0.4.17+ for ROOT, so internal paths remain explicit.
@@ -2219,6 +2229,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     payload["session_id"] = session_id
                 if scope in ("shared", "peer"):
                     payload["peer_scope"] = "actor" if scope == "peer" else "all"
+                # exclude_uris is context-only: the server refuses it on list
+                # searches, so it rides only on this mode=context request.
+                if cfg["exclude_uris"]:
+                    payload["exclude_uris"] = cfg["exclude_uris"]
                 try:
                     assembled = self._unwrap_result(
                         client.post(
@@ -2306,6 +2320,33 @@ class OpenVikingMemoryProvider(MemoryProvider):
         except (TypeError, ValueError, OverflowError):
             return None
 
+    @staticmethod
+    def _parse_string_list_setting(value: Any) -> Optional[List[str]]:
+        """Normalize a list-valued setting (YAML list or comma/newline string);
+        None when the shape is unusable, so the default applies with a warning.
+
+        Entries must be viking:// URIs: the server validates every exclude_uris
+        entry (validate_viking_uri) and one malformed value would turn every
+        context recall request into a fallback search. Only the scheme is
+        checked here — scope and path rules stay server-owned.
+        """
+        if isinstance(value, str):
+            entries = value.replace("\n", ",").split(",")
+        elif isinstance(value, (list, tuple)):
+            entries = [str(entry) for entry in value]
+        else:
+            return None
+        seen: Set[str] = set()
+        normalized: List[str] = []
+        for entry in entries:
+            entry = entry.strip()
+            if entry and entry not in seen:
+                seen.add(entry)
+                normalized.append(entry)
+        if not all(entry.startswith("viking://") for entry in normalized):
+            return None
+        return normalized[:_SETTING_LIST_MAX_ITEMS]
+
     @classmethod
     def _setting(cls, key: str, provider_config: dict, *, env: Optional[dict] = None) -> Any:
         """Typed, range-clamped setting per _SETTING_SPECS (config.yaml primary, env override);
@@ -2319,7 +2360,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
             value, source = provider_config.get(key, default), f"memory.openviking.{key}"
         if value is None and default is None:
             return None  # No policy override on installations that predate the presets.
-        parsed = str(value).strip().lower() if "choices" in spec else cls._parse_setting_value(value, spec["type"])
+        if key in _SETTING_LIST_KEYS:
+            parsed = cls._parse_string_list_setting(value)
+        else:
+            parsed = str(value).strip().lower() if "choices" in spec else cls._parse_setting_value(value, spec["type"])
         if "choices" in spec and parsed not in spec["choices"]:
             parsed = None
         if parsed is None:
