@@ -63,7 +63,11 @@ async def expand_queries(
             timeout=timeout,
         )
     except Exception as exc:
-        logger.warning("Query expansion failed; using original query: %s", exc)
+        logger.warning(
+            "Query expansion failed; using original query: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         return [query], "failed"
 
     queries = [query]
