@@ -172,7 +172,7 @@ The field describes only a pure-dense vector score. Sparse fusion, time decay, r
 
 #### 1. API Implementation Overview
 
-Get the current account’s VLM and embedding configuration and token-usage information. `is_healthy` is true when the observer resolves that account’s model information without an error; it does not probe every provider. Use `/ready` for the embedding connectivity probe and inspect actual request errors for other models.
+Get the current account’s VLM and embedding configuration and token-usage information. `is_healthy` is true when the observer resolves that account’s model information without an error; it does not probe every provider. The embedding check in `/ready` reports provider initialization without sending an embedding request; inspect actual request errors for model connectivity issues.
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_models` - HTTP route
