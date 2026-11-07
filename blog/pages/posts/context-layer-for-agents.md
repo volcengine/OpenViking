@@ -1,0 +1,32 @@
+---
+title: Building a Context Layer for Agents
+date: 2026-05-08
+updated: 2026-05-08
+categories:
+  - Engineering
+tags:
+  - Context
+  - Memory
+  - Retrieval
+cover: /covers/context-provenance.png
+excerpt: OpenViking treats context as a first-class layer for agents, so memory, resources, and skills can be managed through one consistent model.
+description: A mock engineering note about why agents need a dedicated context layer.
+---
+
+![Context retrieval provenance view](/covers/context-provenance.png)
+
+Most agent products eventually need more than a prompt and a vector search call. They need a durable way to organize memories, resources, skills, and retrieval behavior across sessions.
+
+## Why context needs a home
+
+OpenViking treats that problem as a context layer. Instead of scattering state across ad hoc files, databases, and plugin-specific caches, it gives agents a consistent model for reading and writing context.
+
+## What the layer owns
+
+- **Memory:** durable facts and working notes that should survive a single chat turn.
+- **Resources:** files, snippets, project material, and operational context that agents can retrieve.
+- **Skills:** reusable procedures that tell agents how to act inside a specific domain.
+
+## Operational shape
+
+This mock post is here to exercise the blog list, post detail route, tags, categories, RSS output, Markdown copy, and the TOS deployment workflow.
