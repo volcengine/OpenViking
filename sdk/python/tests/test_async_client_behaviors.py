@@ -1847,3 +1847,76 @@ async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
 
     with pytest.raises(ValueError, match="is not a file"):
         await client.import_ovpack(str(pack_dir), parent="viking://resources/")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "args", "kwargs"),
+    [
+        ("acl_get", ("viking://resources/demo.md",), {}),
+        (
+            "acl_set",
+            ("viking://resources/demo.md", [{"principal": "user-1", "level": "read"}]),
+            {},
+        ),
+        ("acl_set", ("viking://resources/demo.md",), {"acl_mode": "restricted"}),
+        ("acl_grant", ("viking://resources/demo.md", "user-1", "read"), {}),
+        ("acl_revoke", ("viking://resources/demo.md", "user-1"), {}),
+        ("acl_delete", ("viking://resources/demo.md",), {}),
+    ],
+)
+async def test_async_http_client_acl_methods_retry_with_gateway_token(
+    method_name, args, kwargs
+):
+    """ACL methods must route through ``_request`` so the gateway-token retry applies.
+
+    Regression for #6782: the five ACL methods called ``self._http`` directly,
+    skipping the challenge/retry in ``_request`` - each failed on the first
+    marked gateway 401 even with a gateway token configured.
+    """
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if "X-Gateway-Token" not in request.headers:
+            return httpx.Response(
+                httpx.codes.UNAUTHORIZED,
+                headers={"X-VikingBot-Gateway": "true"},
+                json={
+                    "status": "error",
+                    "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "gateway token required",
+                    },
+                },
+            )
+        return httpx.Response(
+            httpx.codes.OK, json={"status": "ok", "result": {"entries": []}}
+        )
+
+    real_async_client = httpx.AsyncClient
+
+    def fake_async_client(**client_kwargs):
+        client_kwargs["transport"] = httpx.MockTransport(handler)
+        return real_async_client(**client_kwargs)
+
+    with patch(
+        "openviking_sdk.client.httpx.AsyncClient", side_effect=fake_async_client
+    ):
+        client = AsyncHTTPClient(url="http://gateway.example")
+        await client.initialize()
+
+    # Simulate an ovcli.conf with a configured gateway token.
+    client._gateway_token = "test-token"
+
+    result = await getattr(client, method_name)(*args, **kwargs)
+
+    assert result == {"entries": []}
+    # The first attempt went out without the token and was challenged; the
+    # retry carried it. Without the _request boundary the call raised on the
+    # first 401 and the second request was never made.
+    assert len(seen) == 2
+    assert "X-Gateway-Token" not in seen[0].headers
+    assert seen[1].headers["X-Gateway-Token"] == "test-token"
+
+    await client.close()
