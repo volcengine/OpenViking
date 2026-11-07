@@ -5,9 +5,6 @@
   width: 100%;
   min-width: 0;
 }
-:global(.studio-management-content):has(> .page) {
-  padding: 40px 24px;
-}
 .page > h1 {
   margin-bottom: 4px;
   font-size: 20px;

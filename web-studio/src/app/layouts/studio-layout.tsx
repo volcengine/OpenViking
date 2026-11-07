@@ -127,12 +127,6 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
           >
             <ScrollArea className="min-h-0 flex-1">
               <div
-                data-model-page={
-                  pathname.replace(/\/$/, '') === '/admin/configuration/server'
-                }
-                data-members-page={/^\/admin\/users(?:\/groups)?\/?$/.test(
-                  pathname,
-                )}
                 className={
                   filesystemMode
                     ? 'flex w-full flex-col'

@@ -1,7 +1,3 @@
-:global(.studio-management-content):has(> .page) {
-  padding: 40px;
-}
-
 .page {
   --bot-muted: #7f819c;
   display: flex;
@@ -335,9 +331,6 @@
 @media (max-width: 1050px) {
   .grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  :global(.studio-management-content):has(> .page) {
-    padding: 32px 24px;
   }
 }
 

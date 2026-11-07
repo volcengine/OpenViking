@@ -491,7 +491,7 @@
     border-radius: 16px 0 0 16px;
   }
   .studio-management-content {
-    padding: 40px clamp(32px, calc((100vw - 800px) / 4), 160px);
+    padding: 40px;
   }
 }
 
@@ -642,11 +642,6 @@
   border-radius: 999px;
 }
 
-@media (min-width: 768px) {
-  .studio-management-content[data-members-page='true'] {
-    padding: 40px 64px;
-  }
-}
 .studio-users-page {
   min-width: 0;
   display: flex;
@@ -1127,11 +1122,6 @@
   padding-top: 18px;
 }
 
-@media (min-width: 768px) {
-  .studio-management-content[data-model-page='true'] {
-    padding: 40px;
-  }
-}
 
 /* IDE workbench shares the console header, without a second navigation rail. */
 [data-workbench='true'] { --studio-canvas: #f6f6fc; --primary: #5252ff; --muted-foreground: #787c91; }

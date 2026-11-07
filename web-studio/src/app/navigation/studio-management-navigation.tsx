@@ -6,6 +6,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '#/shared/ui/sidebar'
+import styles from './studio-management-navigation.module.css'
 import { Link } from '@tanstack/react-router'
 import {
   BotIcon,
@@ -165,7 +166,7 @@ export function StudioManagementNavigation({
                     (to === '/admin/gateway' && current.startsWith(`${to}/`))
                   }
                   tooltip={t(title)}
-                  className="min-h-8 h-auto rounded-lg px-2.5 text-[13px] leading-[22px] data-[active=true]:font-semibold [&>svg:first-child]:size-4! [&>svg:first-child]:rounded-none! [&>svg:first-child]:bg-transparent! [&>svg:first-child]:p-0! [&>svg:first-child]:shadow-none! [&>span:last-child]:whitespace-normal group-data-[collapsible=icon]:[&>span:last-child]:hidden"
+                  className={`${styles.item} min-h-8 h-auto rounded-lg px-2.5 text-[13px] leading-[22px] data-[active=true]:font-semibold [&>svg:first-child]:size-4! [&>svg:first-child]:rounded-none! [&>svg:first-child]:bg-transparent! [&>svg:first-child]:p-0! [&>svg:first-child]:shadow-none! [&>span:last-child]:whitespace-normal group-data-[collapsible=icon]:[&>span:last-child]:hidden`}
                 >
                   <Icon />
                   <span>{t(title)}</span>

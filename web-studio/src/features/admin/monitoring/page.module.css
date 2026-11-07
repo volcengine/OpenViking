@@ -13,9 +13,10 @@
   margin-bottom: 4px;
 }
 .header h1 {
-  font-size: 20px;
-  line-height: 28px;
-  font-weight: 500;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
   color: var(--foreground);
 }
 .headerControls {
@@ -153,7 +154,4 @@
   .headerControls > span {
     display: none;
   }
-}
-:global(.studio-management-content):has(> .page) {
-  padding: 40px 24px;
 }

@@ -23,7 +23,10 @@ function AdminMonitoringPage() {
         void navigate({ search: value === 'tasks' ? { tab: 'tasks' } : {} })
       }
     >
-      <TabsList aria-label={t('adminNavigation.monitoring')}>
+      <TabsList
+        aria-label={t('adminNavigation.monitoring')}
+        className="gap-0.5 rounded-lg bg-muted p-1 [&_[data-slot=tabs-trigger]]:rounded-md [&_[data-slot=tabs-trigger]]:px-3 [&_[data-slot=tabs-trigger]]:font-normal [&_[data-slot=tabs-trigger]]:outline-none [&_[data-slot=tabs-trigger]]:focus-visible:border-transparent [&_[data-slot=tabs-trigger]]:focus-visible:ring-2 [&_[data-slot=tabs-trigger]]:focus-visible:ring-primary/30 [&_[data-slot=tabs-trigger]]:focus-visible:outline-none [&_[data-slot=tabs-trigger][data-active]]:font-medium"
+      >
         <TabsTrigger value="components">
           {t('navigation.monitoring.title')}
         </TabsTrigger>
