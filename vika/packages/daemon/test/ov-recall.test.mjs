@@ -26,7 +26,7 @@ function configFile(t) {
 // An OV that answers context searches, directory listings and reads, and
 // records them. `files` maps a viking:// uri to its text; a directory lists
 // the files and directories directly under it.
-function fakeOV({ entries = [], files = {}, delayMs = 0, fail = false } = {}) {
+function fakeOV({ entries = [], files = {}, times = {}, delayMs = 0, fail = false } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     const call = { url, headers: init.headers, body: init.body ? JSON.parse(init.body) : null };
@@ -50,7 +50,11 @@ function fakeOV({ entries = [], files = {}, delayMs = 0, fail = false } = {}) {
         children.set(`${prefix}${first}`, rest.length > 0);
       }
       if (!children.size) return Response.json({ status: 'error' }, { status: 404 });
-      return Response.json({ status: 'ok', result: [...children].map(([child, isDir]) => ({ uri: child, isDir })) });
+      // Like OV: at most node_limit (default 1000) a page, from offset.
+      const offset = Number(new URL(url).searchParams.get('offset') ?? 0);
+      const limit = Number(new URL(url).searchParams.get('node_limit') ?? 1000);
+      const all = [...children].map(([child, isDir]) => ({ uri: child, isDir, ...(times[child] ? { modTime: times[child] } : {}) }));
+      return Response.json({ status: 'ok', result: all.slice(offset, offset + limit), has_more: offset + limit < all.length });
     }
     return Response.json({ status: 'ok', result: { entries, rendered: '', stats: {} } });
   };
@@ -164,6 +168,54 @@ test('a mail sender is found by address, whatever its case; reads are kept a whi
   }
   recall.forgetPreferences();
   assert.match(await recall.forEvent(carol), /<memory who="sender" type="preferences">\n## 称呼\n- 叫她 Carol\n<\/memory>/);
+});
+
+test('a person is read from their own directory without listing everyone; a renamed one is found by paging through all', async (t) => {
+  const filler = Object.fromEntries(Array.from({ length: 2_500 }, (_, i) =>
+    [`${ROOT}/preferences/p${i}~${i.toString(16).padStart(12, '0')}/x.md`, '- x']));
+  const renamed = chatEvent({ senderId: 'ou_renamed', chatId: 'oc-group', messageId: 'om-r' });
+  const steady = chatEvent({ senderId: 'ou_steady', chatId: 'oc-group', messageId: 'om-s' });
+  const ov = fakeOV({ files: withAlias({ ...filler,
+    [`${ROOT}/preferences/旧名字~${personId(renamed)}/称呼.md`]: '- 叫他老王',
+    [`${ROOT}/preferences/${personDirectory(steady)}/语言.md`]: '- 用英文',
+  }) });
+  const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger });
+  const everyone = () => ov.calls.map(({ url }) => new URL(url).searchParams)
+    .filter((query) => query.get('uri') === 'viking://~/memories/preferences');
+  assert.match(await recall.forEvent(steady), /<memory who="sender" type="preferences">\n## 语言\n- 用英文/);
+  assert.deepEqual(everyone(), [], 'found under their name: no listing of everyone');
+  assert.match(await recall.forEvent(renamed), /<memory who="sender" type="preferences">\n## 称呼\n- 叫他老王/);
+  assert.deepEqual(everyone().map((query) => query.get('offset')), ['0', '2000'], 'every page, not the first 1000');
+});
+
+test('preferences show newest first and whole within a budget, the owner\'s larger; the rest are named, not read', async (t) => {
+  const many = chatEvent({ senderId: 'ou_many', chatId: 'oc-group', messageId: 'om-m' });
+  const tree = {};
+  const times = {};
+  const add = (directory, count, label) => {
+    for (let i = 0; i < count; i += 1) {
+      const uri = `${ROOT}/preferences/${directory}/${label}${String(i).padStart(2, '0')}.md`;
+      tree[uri] = `- ${label} ${i}：${'内容'.repeat(40)}`;
+      times[uri] = new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString();
+    }
+  };
+  add('owner', 40, '规则');
+  add(personDirectory(many), 20, '偏好');
+  const ov = fakeOV({ files: withAlias(tree), times });
+  const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger });
+  const block = await recall.forEvent(many);
+  const section = (who) => block.split(`<memory who="${who}" type="preferences">\n`)[1].split('\n</memory>')[0];
+  const [ownerShown, ownerNote] = section('owner').split('\n\n(Not shown, older: ');
+  const [senderShown, senderNote] = section('sender').split('\n\n(Not shown, older: ');
+  assert.ok(ownerShown.startsWith('## 规则39\n') && senderShown.startsWith('## 偏好19\n'), 'newest first');
+  assert.ok(ownerShown.length <= 3_000 && ownerShown.length > 2_500, `owner shown ${ownerShown.length}`);
+  assert.ok(senderShown.length <= 1_500 && senderShown.length > 1_200, `sender shown ${senderShown.length}`);
+  assert.doesNotMatch(ownerShown + senderShown, /…/, 'no topic is cut');
+  assert.match(ownerNote, /^规则\d\d(, 规则\d\d)*\. Read them with openviking_read under viking:\/\/~\/memories\/preferences\/owner\/\.\)$/);
+  assert.match(ownerNote, /规则00/);
+  assert.match(senderNote, /偏好00/);
+  const reads = ov.calls.filter(({ url }) => url.includes('/content/read')).length;
+  assert.ok(reads < 60, `files past the budget are not read (${reads} of 60)`);
 });
 
 test('recall never holds a line up for long or fails it, a broken config included', async (t) => {

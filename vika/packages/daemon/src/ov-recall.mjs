@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
-import { directoryPerson, personId } from './ov-person.mjs';
+import { OV_PREFERENCES, directoryPerson, findPersonDirectory, personDirectory, personId, scanPeople } from './ov-person.mjs';
 
 // What the daemon shows of OpenViking memory after a line someone sent, the
 // same for every runtime. The instance is one OV user; everything it took part
@@ -26,15 +26,18 @@ const MAX_TOKENS = 1_600;
 const SCORE_THRESHOLD = 0.35;
 // Entries served for the session's last few turns are not served again.
 const DEDUP_TURNS = 5;
+// How much of a person's preferences shows after a line: the owner's are the
+// standing rules, so they get more. Topics go newest first and whole; the
+// ones that do not fit are named, to be read on demand.
+const OWNER_CHARS = 3_000;
 const PERSON_CHARS = 1_500;
+const READ_BATCH = 8;
 const CACHE_TTL_MS = 10 * 60_000;
 const MIN_QUERY_CHARS = 2;
-const PREFERENCES = 'viking://~/memories/preferences';
 
 const escapeAttribute = (value) => String(value).replace(/[&"<>]/g, (char) => (
   { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]));
 
-const clip = (text) => (text.length > PERSON_CHARS ? `${text.slice(0, PERSON_CHARS)}…` : text);
 const leaf = (uri) => String(uri).replace(/\/+$/, '').split('/').pop() ?? '';
 // OV appends its bookkeeping to a memory file it stores.
 const withoutFields = (text) => String(text).replace(/\n*<!-- MEMORY_FIELDS[\s\S]*?-->\s*$/, '').trim();
@@ -65,6 +68,7 @@ export class OVRecall {
   async forEvent(event, { owner = false } = {}) {
     const query = String(event.content ?? '').trim();
     const sender = owner ? null : personId(event);
+    const senderDirectory = sender ? personDirectory(event) : null;
     const settled = (promise) => Promise.resolve().then(() => promise).catch((error) => {
       this.logger.debug('ov_recall_skipped', { status: error.httpStatus ?? null });
       return null;
@@ -75,7 +79,7 @@ export class OVRecall {
     try {
       const [ownerPreferences, senderPreferences, entries] = await Promise.all([
         bounded(this.preferences({ owner: true })),
-        sender ? bounded(this.preferences({ id: sender })) : null,
+        sender ? bounded(this.preferences({ id: sender, directory: senderDirectory })) : null,
         this.autoRecall && query.length >= MIN_QUERY_CHARS ? bounded(this.search(query)) : null,
       ]);
       return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [] });
@@ -126,37 +130,60 @@ export class OVRecall {
     }
   }
 
-  async list(uri) {
-    try {
-      const { result } = await this.connection.json(`/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`);
-      return Array.isArray(result) ? result : [];
-    } catch (error) {
-      if (error.httpStatus === 404) return [];
-      throw error;
-    }
-  }
-
-  // One person's preferences ({ owner } or { id }), every topic file in their
-  // directory joined under its topic.
+  // One person's preferences ({ owner } or { id, directory }), their topics
+  // joined under their names within the person's budget. Their directory is
+  // found under their name now, or, renamed since, in a whole-tree scan kept a
+  // while like everything else here.
   preferences(person) {
     const key = person.owner ? 'owner' : person.id;
     if (!key) return Promise.resolve(null);
     return this.cached(`preferences:${key}`, async () => {
-      const people = await this.cached('preferences:', () => this.list(PREFERENCES));
-      const directory = people.find((entry) => {
-        const whose = entry?.isDir ? directoryPerson(leaf(entry.uri)) : null;
-        return whose && (person.owner ? whose.owner : whose.id === person.id);
-      });
-      if (!directory) return null;
-      const files = (await this.list(directory.uri))
-        .filter((entry) => !entry?.isDir && /\.md$/.test(entry?.uri ?? '') && !leaf(entry.uri).startsWith('.'));
-      const texts = await Promise.all(files.map(async (file) => {
-        const text = withoutFields(await this.read(file.uri) ?? '');
-        return text ? `## ${leaf(file.uri).replace(/\.md$/, '')}\n${text}` : null;
-      }));
-      const joined = texts.filter(Boolean).join('\n\n');
-      return joined ? clip(joined) : null;
+      const json = (route) => this.connection.json(route);
+      const found = await findPersonDirectory(json, person, () => this.cached('preferences:', () => scanPeople(json)));
+      if (!found) return null;
+      const files = found.entries
+        .filter((entry) => !entry?.isDir && /\.md$/.test(entry?.uri ?? '') && !leaf(entry.uri).startsWith('.'))
+        .sort((a, b) => String(b.modTime ?? '').localeCompare(String(a.modTime ?? '')));
+      return this.within(files, person.owner ? OWNER_CHARS : PERSON_CHARS, `${OV_PREFERENCES}/${found.name}/`);
     });
+  }
+
+  // Topics newest first, each whole, while they fit; the rest by name, so the
+  // model knows they exist and where to read them. Files past the budget are
+  // not read at all.
+  async within(files, budget, directory) {
+    const topic = (file) => leaf(file.uri).replace(/\.md$/, '');
+    const shown = [];
+    const rest = [];
+    let used = 0;
+    let full = false;
+    for (let start = 0; start < files.length; start += READ_BATCH) {
+      if (full) {
+        rest.push(...files.slice(start).map(topic));
+        break;
+      }
+      const batch = files.slice(start, start + READ_BATCH);
+      const texts = await Promise.all(batch.map((file) => this.read(file.uri)));
+      batch.forEach((file, index) => {
+        const text = withoutFields(texts[index] ?? '');
+        if (!text) return;
+        const block = `## ${topic(file)}\n${text}`;
+        if (used + block.length <= budget) {
+          shown.push(block);
+          used += block.length + 2;
+        } else if (shown.length === 0) {
+          shown.push(`${block.slice(0, budget)}…`);
+          used = budget;
+          full = true;
+        } else {
+          rest.push(topic(file));
+          full = true;
+        }
+      });
+    }
+    if (shown.length === 0) return null;
+    return shown.join('\n\n')
+      + (rest.length ? `\n\n(Not shown, older: ${rest.join(', ')}. Read them with openviking_read under ${directory}.)` : '');
   }
 
   // Whose a searched memory is, where its path says: a person's preferences

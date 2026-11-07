@@ -308,6 +308,26 @@ describe('OpenViking tool client', () => {
     }
   });
 
+  it('finds a person\'s directory under their name without listing everyone, and a renamed one by paging through all', async (t) => {
+    const ov = await fakeOV(t);
+    const tools = client(ov);
+    const home = 'viking://user/owner/memories/preferences';
+    for (let i = 0; i < 2_500; i += 1) ov.state.files.set(`${home}/p${i}~${i.toString(16).padStart(12, '0')}/x.md`, '- x');
+    ov.state.files.set(`${home}/旧名~aaaaaaaaaaaa/称呼.md`, '- 叫他老王');
+    ov.state.files.set(`${home}/张三~bbbbbbbbbbbb/语言.md`, '- 用英文');
+    const everyone = () => requests(ov, 'GET /api/v1/fs/ls').filter(({ query }) => query.uri === 'viking://~/memories/preferences');
+    await tools.setPreference({ person: { id: 'bbbbbbbbbbbb', directory: '张三~bbbbbbbbbbbb' }, topic: '语言', text: '- 用中文' });
+    assert.deepEqual(everyone(), [], 'found under their name');
+    assert.equal(ov.state.files.get(`${home}/张三~bbbbbbbbbbbb/语言.md`), '- 用中文');
+    // Renamed since: the directory they have is found on the second page.
+    await tools.setPreference({ person: { id: 'aaaaaaaaaaaa', directory: '新名~aaaaaaaaaaaa' }, topic: '称呼', text: '- 叫他名字' });
+    assert.deepEqual(everyone().map(({ query }) => query.offset), ['0', '2000']);
+    assert.equal(ov.state.files.get(`${home}/旧名~aaaaaaaaaaaa/称呼.md`), '- 叫他名字');
+    assert.equal([...ov.state.files.keys()].some((uri) => uri.includes('新名~')), false, 'no second directory');
+    const removed = await tools.forgetPreference({ person: { id: 'aaaaaaaaaaaa', directory: '新名~aaaaaaaaaaaa' }, topic: '称呼' });
+    assert.equal(removed.data.removed, true);
+  });
+
   it('withdraws a preference by topic, and names what is stored when the topic is not', async (t) => {
     const ov = await fakeOV(t);
     const tools = client(ov);

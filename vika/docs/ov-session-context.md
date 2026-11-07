@@ -30,7 +30,11 @@ a directory the Core names and finds by key (`ov-person.mjs`), never by a
 display name: `memories/preferences/owner/` for the owner on every channel,
 `memories/preferences/<name>~<id>/` for anyone else, where `<id>` is 12 hex
 digits of a hash of the channel identity, so namesakes stay apart and a
-renamed person keeps theirs. With
+renamed person keeps theirs. A person's directory is read directly under the
+name they have now; only someone renamed since needs a scan of the whole
+tree, paged through to the end. Topics show newest first and whole, up to
+3000 characters for the owner and 1500 for anyone else; the ones that do not
+fit are named, with where to read them. With
 `agents[].ovAutoRecall` (default `false`, a config-file option) one context
 search (`/api/v1/search/search`, mode `context`) on the line also runs; once
 OV has this epoch's session the search names it, so OV's dedup ledger (a file

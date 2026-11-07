@@ -80,7 +80,10 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
           children.set(`${uri}/${first}`, rest.length > 0);
         }
         if (!children.size) return reply(404, 'not found');
-        return reply(200, [...children].map(([child, isDir]) => ({ uri: child, isDir })), { has_more: false });
+        const offset = Number(url.searchParams.get('offset') ?? 0);
+        const limit = Number(url.searchParams.get('node_limit') ?? 1000);
+        const all = [...children].map(([child, isDir]) => ({ uri: child, isDir }));
+        return reply(200, all.slice(offset, offset + limit), { has_more: offset + limit < all.length });
       }
       if (!listing) return reply(200, [], { has_more: false });
       const offset = Number(url.searchParams.get('offset') ?? 0);

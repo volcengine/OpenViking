@@ -14,7 +14,7 @@
 // echoing URLs, keys or response bodies.
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
-import { OWNER_DIRECTORY, directoryPerson, topicFile } from './ov-person.mjs';
+import { OV_PREFERENCES, OWNER_DIRECTORY, directoryPerson, findPersonDirectory, topicFile } from './ov-person.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 
 // Where add_resource lands when the caller names no target: the instance's
@@ -22,7 +22,7 @@ import { readWorkspaceFile } from './workspace-file.mjs';
 export const OV_DEFAULT_PARENT = 'viking://~/resources/inbox';
 
 // People's preferences, one directory per person, one file per topic.
-export const OV_PREFERENCES = 'viking://~/memories/preferences';
+export { OV_PREFERENCES } from './ov-person.mjs';
 
 // What add_resource never writes into: material the daemon itself keeps
 // (mail, meeting notes, timer state) and the memory, session and skill trees,
@@ -291,36 +291,22 @@ export class OVToolClient {
     };
   }
 
-  // The directory a person's preferences are in, found by its key (their
-  // digits, or `owner`), or null when none is stored yet.
+  // A person's directory ({ name, entries }), or null when none is stored yet:
+  // found by its key (`owner`, or their digits), never by listing everyone
+  // unless they were renamed since (ov-person.mjs).
   async preferenceDirectory(person) {
-    let entries;
+    const json = (route) => this.conn().json(route, undefined, { timeoutMs: this.readTimeoutMs });
     try {
-      entries = (await this.conn().json(`/api/v1/fs/ls?uri=${encodeURIComponent(OV_PREFERENCES)}&output=original`,
-        undefined, { timeoutMs: this.readTimeoutMs })).result;
+      return await findPersonDirectory(json, person);
     } catch (error) {
-      if (error?.httpStatus === 404) return null;
       throw toolError(error);
     }
-    const leafOf = (uri) => String(uri ?? '').replace(/\/+$/, '').split('/').pop();
-    const found = (Array.isArray(entries) ? entries : []).find((entry) => {
-      const whose = entry?.isDir ? directoryPerson(leafOf(entry.uri)) : null;
-      return whose && (person.owner ? whose.owner : whose.id === person.id);
-    });
-    return found ? leafOf(found.uri) : null;
   }
 
-  // The topics stored for a person, to name when the model asked for another.
-  async preferenceTopics(directory) {
-    try {
-      const { result } = await this.conn().json(
-        `/api/v1/fs/ls?uri=${encodeURIComponent(`${OV_PREFERENCES}/${directory}`)}&output=original`,
-        undefined, { timeoutMs: this.readTimeoutMs });
-      return (Array.isArray(result) ? result : []).map((entry) => String(entry?.uri ?? '').split('/').pop())
-        .filter((name) => name.endsWith('.md') && !name.startsWith('.')).map((name) => name.slice(0, -3));
-    } catch {
-      return [];
-    }
+  // The topics in a directory's entries, to name when the model asked for another.
+  static topics(entries) {
+    return (entries ?? []).map((entry) => String(entry?.uri ?? '').split('/').pop())
+      .filter((name) => name.endsWith('.md') && !name.startsWith('.')).map((name) => name.slice(0, -3));
   }
 
   // One person's preference on one topic, written as given: the file is
@@ -333,7 +319,7 @@ export class OVToolClient {
   async setPreference({ person, topic, text }) {
     const file = topicFile(topic);
     if (!file) throw ovError('invalid_input', 'topic must name what the preference is about');
-    const directory = (await this.preferenceDirectory(person)) ?? (person.owner ? OWNER_DIRECTORY : person.directory);
+    const directory = (await this.preferenceDirectory(person))?.name ?? (person.owner ? OWNER_DIRECTORY : person.directory);
     const uri = `${OV_PREFERENCES}/${directory}/${file}`;
     const write = (mode) => this.conn().json('/api/v1/content/write', { uri, content: String(text), mode, wait: false });
     try {
@@ -349,14 +335,14 @@ export class OVToolClient {
   async forgetPreference({ person, topic }) {
     const file = topicFile(topic);
     if (!file) throw ovError('invalid_input', 'topic must name the preference to remove');
-    const directory = await this.preferenceDirectory(person);
-    const missing = async () => {
-      const topics = directory ? await this.preferenceTopics(directory) : [];
+    const found = await this.preferenceDirectory(person);
+    const missing = () => {
+      const topics = OVToolClient.topics(found?.entries);
       return { text: topics.length ? `No preference under topic "${topic}"; this person has: ${topics.join(', ')}.`
         : 'No preference is stored for this person; nothing to remove.', data: { removed: false, topics } };
     };
-    if (!directory) return missing();
-    const uri = `${OV_PREFERENCES}/${directory}/${file}`;
+    if (!found) return missing();
+    const uri = `${OV_PREFERENCES}/${found.name}/${file}`;
     try {
       await this.conn().send(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`,
         { method: 'DELETE', headers: this.conn().headers }, this.timeoutMs);

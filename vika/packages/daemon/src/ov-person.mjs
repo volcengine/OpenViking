@@ -61,3 +61,66 @@ export function topicFile(topic) {
     .replace(/[\u0000-\u001f\u007f/\\~%?#]+/g, '').replace(/[\s_]+/g, '-').replace(/^[.-]+|-+$/g, '').slice(0, 60);
   return clean ? `${clean}.md` : null;
 }
+
+// Where people's preferences are kept, one directory each.
+export const OV_PREFERENCES = 'viking://~/memories/preferences';
+// A whole-tree scan reads this many entries a request. OV 0.5 pages with
+// offset/has_more; earlier releases return one page of up to this many.
+const SCAN_PAGE = 2_000;
+const SCAN_PAGES = 50;
+const leaf = (uri) => String(uri ?? '').replace(/\/+$/, '').split('/').pop() ?? '';
+
+// One directory's entries, or null when it does not exist. `json(route)` is
+// the caller's OV connection.
+export async function listDirectory(json, uri) {
+  try {
+    const { result } = await json(`/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`);
+    return Array.isArray(result) ? result : [];
+  } catch (error) {
+    if (error?.httpStatus === 404) return null;
+    throw error;
+  }
+}
+
+// Every person with preferences: key (`owner` or their digits) to directory
+// name, read page by page so no one is missed however many there are. Only
+// needed for someone whose directory is not under the name they have now.
+export async function scanPeople(json) {
+  const people = new Map();
+  for (let page = 0, offset = 0; page < SCAN_PAGES; page += 1) {
+    let body;
+    try {
+      body = await json(`/api/v1/fs/ls?uri=${encodeURIComponent(OV_PREFERENCES)}&output=original`
+        + `&node_limit=${SCAN_PAGE}&offset=${offset}`);
+    } catch (error) {
+      if (error?.httpStatus === 404) return people;
+      throw error;
+    }
+    const entries = Array.isArray(body?.result) ? body.result : [];
+    for (const entry of entries) {
+      const whose = entry?.isDir ? directoryPerson(leaf(entry.uri)) : null;
+      const key = whose?.owner ? OWNER_DIRECTORY : whose?.id;
+      if (key && !people.has(key)) people.set(key, leaf(entry.uri));
+    }
+    if (!body?.has_more || entries.length === 0) return people;
+    offset += entries.length;
+  }
+  return people;
+}
+
+// A person's directory ({ owner } or { id, directory }) and its entries, or
+// null when they have none: the directory under their name now, in one
+// request almost always; else, for someone renamed since, the one with their
+// key from `scan()` (scanPeople, possibly cached by the caller).
+export async function findPersonDirectory(json, person, scan = () => scanPeople(json)) {
+  const direct = person.owner ? OWNER_DIRECTORY : person.directory;
+  if (direct) {
+    const entries = await listDirectory(json, `${OV_PREFERENCES}/${direct}`);
+    if (entries?.length) return { name: direct, entries };
+  }
+  if (person.owner || !person.id) return null;
+  const name = (await scan()).get(person.id);
+  if (!name || name === direct) return null;
+  const entries = await listDirectory(json, `${OV_PREFERENCES}/${name}`);
+  return entries ? { name, entries } : null;
+}
