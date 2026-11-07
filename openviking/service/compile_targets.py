@@ -654,6 +654,7 @@ class CompileLifecycle:
                     prior.created_at
                     for prior in accepted
                     if self._compile_name(prior) == compile_name
+                    and self._owner_user_id(prior) == self._owner_user_id(task)
                 ]
             )
         locked_record["last_run_time"] = max(

@@ -646,8 +646,13 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(setup,
 async def test_first_acceptance_discovers_a_task_whose_state_publication_was_interrupted(setup):
     record = new_record(PARAMS)
     compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    name = await setup.store.create("acme", "bob", record, compile_name=compile_name)
+    other = make_task(
+        setup, compile_name=name, record=record, owner_user_id="bob", user_id="bob", created_at=50
+    )
+    await setup.lifecycle.record_queued(other)
     scheduled = make_task(
-        setup, compile_name=compile_name, record=record, created_at=100, trigger="scheduled"
+        setup, compile_name=compile_name, record=record, trigger="scheduled", user_id="bob"
     )
     # The Task and run survive, but the configuration mutation does not publish.
     unpublished = deepcopy(record)
