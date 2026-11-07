@@ -277,6 +277,14 @@ Environment variables:
 
 ---
 
+## Multi-instance deployments
+
+The built-in OAuth server is not supported when replicas share `storage.workspace` through a network filesystem. It stores dynamic client registrations, authorization codes, access tokens, and refresh tokens in `{storage.workspace}/{oauth.db_filename}` using SQLite WAL. Its application lock is process-local, so do not share this database between hosts.
+
+Giving each replica a separate OAuth database is also unsafe for a load-balanced deployment because a client, code, or token created on one replica is not available on another. For a multi-host deployment, use one OpenViking instance to serve built-in OAuth. A distributed OAuth store is not currently available.
+
+---
+
 ## Token model
 
 | Token | Format | Prefix | Lifetime | Storage |

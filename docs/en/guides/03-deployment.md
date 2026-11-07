@@ -350,6 +350,7 @@ For multi-instance deployments, prefer these settings:
 - Set `server.temp_upload.default_mode` to `"shared"` so uploaded temporary files can be consumed by a different replica.
 - Use a remote vector backend for shared storage. The existing `storage.skip_process_lock` option only disables the embedded-backend startup guard; it does not add multi-process support to embedded vector storage.
 - For QueueFS, prefer an explicit per-instance local SQLite path via `storage.agfs.queuefs.db_path`. If usage audit is enabled, prefer an explicit per-instance local SQLite path via `server.observability.usage_audit.sqlite_path` instead of mixing these files into a shared workspace volume.
+- If replicas share `storage.workspace` over a network filesystem, do not enable the built-in OAuth server. It stores clients, codes, and tokens in one SQLite WAL database and has no distributed store backend. See [OAuth deployment boundaries](11-oauth.md#multi-instance-deployments).
 
 Example:
 
