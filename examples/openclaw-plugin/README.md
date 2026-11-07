@@ -128,7 +128,7 @@ The main rules are:
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
 - `peer_role=none` is the default: messages have no peer attribution and memory stays in the shared user scope, for example `viking://user/alice/memories/...`; no peer-specific memory subtree is used
-- `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>` and uses peer-scoped memory such as `viking://user/alice/peers/main/memories/...`; if `peer_prefix` is set, the peer id becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=assistant` writes both user and assistant messages with `peer_id=<sessionAgent>` and uses peer-scoped memory such as `viking://user/alice/peers/main/memories/...`; if `peer_prefix` is set, the peer id becomes `<peer_prefix>_<sessionAgent>`. Both roles carry the id because OpenViking resolves peer ownership from user messages only, so tagging the assistant turn alone would leave the memory in the shared user scope
 - `peer_role=sender` writes user messages with the OpenClaw sender identity as `peer_id` and uses peer-scoped memory such as `viking://user/support-agent/peers/customer-42/memories/...`; assistant messages do not get `peer_id`
 - `person` remains accepted as a legacy config alias for `sender`, but new configuration and documentation use `sender`
 - data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `sender`

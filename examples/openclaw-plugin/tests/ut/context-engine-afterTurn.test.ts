@@ -235,7 +235,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
   });
 
-  it("does not attribute user messages to the sender in assistant mode", async () => {
+  it("leaves messages unattributed under the default memory scope", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -249,6 +249,29 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
     expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+  });
+
+  it("attributes both roles to the assistant peer under peer_role=assistant", async () => {
+    const { engine, client } = makeEngine({ cfgOverrides: { peer_role: "assistant" } });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "hello world" },
+        { role: "assistant", content: "hi there" },
+      ],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    // OpenViking reads peer ownership from user messages only, so the user turn
+    // is what makes peers/<peer_id>/memories a writable target.
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][5]).toBe("test-agent");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][5]).toBe("test-agent");
   });
 
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
