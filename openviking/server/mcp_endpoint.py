@@ -1538,6 +1538,7 @@ async def write(
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
     - resolve_conflicts: mark this edit as conflict resolution for an existing resource
       Markdown file in replace mode (including its create alias); defaults to false.
+    - A URI whose whitespace would change the storage target is rejected; rename the file or choose the intended target explicitly.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
