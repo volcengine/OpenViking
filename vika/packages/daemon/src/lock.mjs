@@ -45,12 +45,13 @@ export class InstanceLock {
 
   acquire() {
     fs.mkdirSync(path.dirname(this.lockPath), { recursive: true, mode: 0o700 });
+    const ownIdentity = this.identity(process.pid);
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
         const fd = fs.openSync(this.lockPath, 'wx', 0o600);
         fs.writeFileSync(fd, JSON.stringify({
           pid: process.pid,
-          processIdentity: this.identity(process.pid),
+          processIdentity: ownIdentity,
           hostname: os.hostname(),
           startedAt: new Date().toISOString(),
         }));
