@@ -17,7 +17,7 @@ from openviking.service.compile_targets import (
     split_control_args,
 )
 from openviking.service.external_task_service import ExternalTaskSnapshot
-from openviking.service.task_domain import TaskRecord, TaskStatus
+from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
 from openviking.storage.errors import ResourceBusyError
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
@@ -82,11 +82,17 @@ class Tracker:
 
     def __init__(self):
         self.tasks = {}
-        self._store = SimpleNamespace(list_durable=self.list_durable)
+        self._store = self
         self.cancelled = set()
 
     async def list_durable(self, account_id, **kwargs):
         return [deepcopy(t) for t in self.tasks.values() if t.account_id == account_id]
+
+    async def get_durable_task(self, task_id, *, account_id, user_id):
+        task = self.tasks.get(task_id)
+        if task is not None and (task.account_id, task.user_id) == (account_id, user_id):
+            return deepcopy(task)
+        return None
 
     async def patch_task(self, task_id, patch, **kwargs):
         task = self.tasks[task_id]
@@ -516,22 +522,32 @@ def test_execution_mode_and_forged_plan_controls_are_rejected(args):
         split_control_args(args)
 
 
-async def test_durable_task_scan_ignores_a_process_local_stale_cache():
+async def test_checkpoint_refresh_reads_only_its_task_despite_stale_cache(setup):
     files = _FakeAgfs()
-    store = PersistentTaskStore(files)
-    first = TaskRecord(
-        task_id="cmp_" + "a" * 32, task_type="compile", account_id="acme", user_id="alice"
-    )
-    await store.create(first)
-    await store.get_task(first.task_id, account_id="acme", user_id="alice")
-    path = store._task_path("acme", "alice", first.task_id)
-    payload = json.loads(files.files[path])
-    payload["auth"] = {"compile_execution": {"phase": "committing"}}
-    files.files[path] = json.dumps(payload).encode()
-    current = (await store.list_durable("acme", task_type="compile"))[0]
-    assert current.auth["compile_execution"]["phase"] == "committing"
-    cached = await store.get_task(first.task_id, account_id="acme", user_id="alice")
-    assert cached.auth == {}
+    reader = setup.tracker._store = PersistentTaskStore(files)
+    writer = PersistentTaskStore(files)
+    task = make_task(setup)
+    owner = {"account_id": task.account_id, "user_id": task.user_id}
+    task.auth = {"compile_execution": {"phase": "running"}}
+    await reader.create(task)
+    for i in range(99):
+        other = TaskRecord(f"write-{i}", "content_write", account_id="acme", user_id="bob")
+        await writer.create(other)
+    latest = {"compile_execution": {"phase": "committing"}}
+    await writer.patch_task(task.task_id, TaskPatch(auth=latest), **owner)
+
+    (current,) = await reader.list_durable(task.account_id, task_type="compile")
+    assert current.auth == latest
+    assert (await reader.get_task(task.task_id, **owner)).auth == task.auth
+
+    reads = reader._agfs.read = AsyncMock(wraps=reader._agfs.read)
+    listings = reader._agfs.ls = AsyncMock(wraps=reader._agfs.ls)
+    task.auth["external_task_id"] = "runtime-session"
+    await setup.lifecycle._refresh_checkpoint(task)
+
+    reads.assert_awaited_once_with(f"/local/acme/_system/tasks/alice/{task.task_id}.json")
+    listings.assert_not_awaited()
+    assert task.auth == {**latest, "external_task_id": "runtime-session"}
 
 
 async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(setup, registered):

@@ -181,6 +181,15 @@ class TaskWorkStore(Protocol):
         user_id: Optional[str] = None,
     ) -> Optional[TaskRecord]: ...
 
+    async def get_durable_task(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        """Read one owner's persisted Task, including private state, bypassing local caches.
+
+        Return None if the Task is absent. Storage and decoding errors propagate.
+        """
+        ...
+
     async def get_task_with_events(
         self,
         task_id: str,
@@ -1570,6 +1579,17 @@ class PersistentTaskStore(TaskWorkStore):
                 return self._task_cache[owner]
         if not account_id or not user_id:
             return None
+        task = await self.get_durable_task(task_id, account_id=account_id, user_id=user_id)
+        if task is None:
+            return None
+        self._put_if_absent(task)
+        with self._lock:
+            return self._task_cache.get((account_id, user_id, task_id))
+
+    async def get_durable_task(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        """Read the owner's task file without consulting or updating this worker's cache."""
         try:
             payload = json.loads(
                 _decode_bytes(await self._read(self._task_path(account_id, user_id, task_id)))
@@ -1577,9 +1597,7 @@ class PersistentTaskStore(TaskWorkStore):
         except (AGFSNotFoundError, FileNotFoundError):
             return None
         task = _task_from_payload(payload, account_id=account_id, user_id=user_id)
-        self._put_if_absent(task)
-        with self._lock:
-            return self._task_cache.get((account_id, user_id, task_id))
+        return task if task.task_id == task_id else None
 
     def _find_cached_owner(
         self, task_id: str, account_id: Optional[str], user_id: Optional[str]

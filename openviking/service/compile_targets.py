@@ -714,9 +714,10 @@ class CompileLifecycle:
         """Read the latest private checkpoint without trusting another worker's cache."""
         from openviking.service.task_tracker import get_task_tracker
 
-        tasks = await get_task_tracker()._store.list_durable(task.account_id, task_type="compile")
-        current = next((item for item in tasks if item.task_id == task.task_id), None)
-        if current is not None:
+        current = await get_task_tracker()._store.get_durable_task(
+            task.task_id, account_id=task.account_id, user_id=task.user_id
+        )
+        if current is not None and current.task_type == "compile":
             task.auth = {
                 **(task.auth or {}),
                 "compile_execution": deepcopy(self._checkpoint(current)),
