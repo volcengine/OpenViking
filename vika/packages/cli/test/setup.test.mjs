@@ -1641,11 +1641,14 @@ test('what an instance lacks: the app\'s scopes, events and callback, and scopes
 });
 
 
-test('expandHome expands tilde paths with either separator', () => {
-  const home = path.join('Users', 'example');
+test('expandHome expands home prefixes without changing literal paths', () => {
+  const home = path.resolve('Users', 'example $& 中文');
   assert.equal(expandHome('~', home), home);
   assert.equal(expandHome('~/vika-workspace/primary', home), path.join(home, 'vika-workspace', 'primary'));
-  if (process.platform === 'win32') {
-    assert.equal(expandHome('~\\vika-workspace\\primary', path.join('C:', home)), path.join('C:', home, 'vika-workspace', 'primary'));
+  const windowsInput = String.raw`~\vika-workspace\primary`;
+  assert.equal(expandHome(windowsInput, home), process.platform === 'win32'
+    ? path.join(home, 'vika-workspace', 'primary') : windowsInput);
+  for (const literal of ['~other/workspace', 'workspace', path.join(home, 'existing')]) {
+    assert.equal(expandHome(literal, home), literal);
   }
 });

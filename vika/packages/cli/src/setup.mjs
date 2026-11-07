@@ -54,8 +54,11 @@ function resolveLarkCli(env) {
 
 export function expandHome(value, homeDir = os.homedir()) {
   if (value === '~') return homeDir;
-  // Windows terminals hand back ~\\dir, POSIX ~/dir; both must expand.
-  return /^~[\\/]/.test(value) ? path.join(homeDir, value.slice(2)) : value;
+  // Backslashes are separators on Windows, but literal filename characters on POSIX.
+  if (process.platform === 'win32') {
+    return /^~[\\/]/.test(value) ? path.join(homeDir, value.slice(2)) : value;
+  }
+  return value.startsWith('~/') ? homeDir + value.slice(1) : value;
 }
 
 function shortenHome(value, homeDir) {
