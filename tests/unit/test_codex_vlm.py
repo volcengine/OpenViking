@@ -96,6 +96,8 @@ def test_codex_text_completion_uses_responses_api(mock_resolve, mock_openai_clas
     assert call_kwargs["stream"] is True
     assert "messages" not in call_kwargs
     mock_real_client.responses.stream.assert_not_called()
+    assert mock_real_client.responses.create.return_value.closed
+    mock_real_client.close.assert_called_once_with()
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
@@ -179,6 +181,8 @@ async def test_codex_async_client_defers_runtime_credential_resolution(
 
     assert response.choices[0].message.content == "async hello"
     mock_resolve.assert_called_once()
+    assert mock_real_client.responses.create.return_value.closed
+    mock_real_client.close.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -602,10 +606,11 @@ def test_codex_sync_client_re_resolves_credentials_per_request(mock_resolve, moc
             "base_url": "https://chatgpt.com/backend-api/codex",
         },
     ]
-    mock_openai_class.side_effect = [
+    request_clients = [
         _build_fake_openai_client("first"),
         _build_fake_openai_client("second"),
     ]
+    mock_openai_class.side_effect = request_clients
 
     vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
     client = vlm.get_client()
@@ -623,6 +628,9 @@ def test_codex_sync_client_re_resolves_credentials_per_request(mock_resolve, moc
     assert second.choices[0].message.content == "second"
     assert mock_openai_class.call_args_list[0].kwargs["api_key"] == "oauth-token-a"
     assert mock_openai_class.call_args_list[1].kwargs["api_key"] == "oauth-token-b"
+    for request_client in request_clients:
+        assert request_client.responses.create.return_value.closed
+        request_client.close.assert_called_once_with()
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
@@ -648,6 +656,9 @@ def test_codex_retries_unauthorized_once_with_refreshed_credentials(
     assert mock_resolve.call_args_list == [call(), call(force_refresh=True)]
     stale_client.responses.create.assert_called_once()
     fresh_client.responses.create.assert_called_once()
+    stale_client.close.assert_called_once_with()
+    fresh_client.close.assert_called_once_with()
+    assert fresh_client.responses.create.return_value.closed
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
@@ -673,6 +684,45 @@ def test_codex_does_not_retry_a_second_unauthorized_response(mock_resolve, mock_
     assert mock_resolve.call_args_list == [call(), call(force_refresh=True)]
     first_client.responses.create.assert_called_once()
     second_client.responses.create.assert_called_once()
+    first_client.close.assert_called_once_with()
+    second_client.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure_stage", ["request", "iteration", "stream_close", "refresh"])
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_closes_client_on_failure(mock_resolve, mock_openai_class, failure_stage):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://example.test",
+    }
+    client = MagicMock()
+    stream = MagicMock()
+    client.responses.create.return_value = stream
+    mock_openai_class.return_value = client
+    error = RuntimeError("synthetic failure")
+    if failure_stage == "request":
+        client.responses.create.side_effect = error
+    elif failure_stage == "iteration":
+        stream.__iter__.side_effect = error
+    elif failure_stage == "stream_close":
+        stream.close.side_effect = error
+    else:
+
+        class UnauthorizedError(Exception):
+            status_code = 401
+
+        client.responses.create.side_effect = UnauthorizedError("unauthorized")
+        mock_resolve.side_effect = [mock_resolve.return_value, error]
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+
+    with pytest.raises(RuntimeError) as raised:
+        vlm.get_client().chat.completions.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert raised.value is error
+    client.close.assert_called_once_with()
+    if failure_stage in {"iteration", "stream_close"}:
+        stream.close.assert_called_once_with()
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
