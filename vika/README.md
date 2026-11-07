@@ -1,8 +1,10 @@
 # OpenViking SuperAgent
 
-把本机的 coding agent 接入日常聊天，让它带着项目上下文长期协作。
+**Bring Your Own Machine：用你自己的机器，运行你自己的 Agent。**
 
-OpenViking SuperAgent（Vika）连接 Codex、Claude Code、Pi 等运行时与飞书、微信、Telegram、Slack、QQ，也能处理邮箱事件。任务在你配置的工作区执行，历史与记忆由 OpenViking 管理。命令仍是 `vika`。
+准备一台电脑或服务器，装好工作需要的软件，把项目和工具交给本机 Agent。OpenViking SuperAgent（Vika）让 Agent 接入 OpenViking 和即时通讯（IM）：你在聊天里交办任务，Agent 在这台机器的工作区中调用工具、完成工作，再把结果发回聊天；OpenViking 提供知识、记忆和跨会话上下文。
+
+Vika 支持 Codex、Claude Code、Pi 等运行时，可接入飞书、微信、Telegram、Slack、QQ，也能处理邮箱事件。命令仍是 `vika`。
 
 [快速安装](install.md) · [功能与架构](docs/usage-reference.md) · [配置示例](config.example.json) · [贡献指南](../CONTRIBUTING.md)
 
