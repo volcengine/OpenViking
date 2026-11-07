@@ -1137,6 +1137,11 @@ class SessionCompressorV3:
                         ctx=ctx,
                         archive_uri=archive_uri,
                     )
+                    if strict_extract_errors and exp_training_result.apply_result.errors:
+                        raise RuntimeError(
+                            "Experience write failed: "
+                            + "; ".join(exp_training_result.apply_result.errors)
+                        )
                     for item in training_rollouts:
                         case_uri = candidates_by_name[item.case.name]["uri"]
                         if case_uri:
@@ -1174,6 +1179,10 @@ class SessionCompressorV3:
                         skill_submitted += 1
                         apply_result = getattr(skill_training_result, "apply_result", None)
                         if apply_result is not None:
+                            if strict_extract_errors and apply_result.errors:
+                                raise RuntimeError(
+                                    "Skill write failed: " + "; ".join(apply_result.errors)
+                                )
                             for uri in getattr(apply_result, "written_uris", []) or []:
                                 if uri:
                                     skill_uris.append(str(uri))
