@@ -95,26 +95,70 @@ export function claudeIsolationSettings({ env = process.env, workspace = null } 
   };
 }
 
-// Pi discovers extensions from its agent directory and ships built-ins; the
-// OpenViking extension is one of the discovered. Discovery is switched off
-// and everything but OpenViking's is loaded again by path: the built-ins Pi
-// documents and each extension in the agent directory's extensions folder.
-// Extensions installed as Pi packages are not loaded for Vika's instances.
-// The short flag on purpose: Pi 1.4.0 ignores the long --no-extensions once an
-// --extension follows (or precedes) it, and discovers everything again; -ne
-// holds (verified against the real CLI, test/pi-mcp.integration.test.mjs).
-export const PI_BUILTIN_EXTENSIONS = Object.freeze(['builtin:mcp', 'builtin:llama.cpp']);
-export function piIsolationArgs(env = process.env) {
-  const agentDir = env.PI_CODING_AGENT_DIR || path.join(home(env), '.pi', 'agent');
-  const folder = path.join(agentDir, 'extensions');
-  let entries = [];
+// Pi 1.4.0's built-ins. Keep the indirect MCP tools too: servers using
+// codemode/deferred exposure need codemode/tool-search even though the Core's
+// own tools have direct exposure.
+export const PI_BUILTIN_EXTENSIONS = Object.freeze(['builtin:mcp', 'builtin:llama.cpp', 'builtin:codemode', 'builtin:tool-search']);
+
+// Use Pi's resolver for every enabled extension: user/project discovery,
+// settings paths, package manifests and their enable/disable filters. Then
+// disable discovery and pass that set back without OpenViking. Merely walking
+// agentDir/extensions loses configured/package/project extensions. Keeping the
+// original agent directory also preserves models, MCP configuration, OAuth
+// storage and its locks; no copied settings or credential symlinks are needed.
+// The project is trusted here just as it is by Vika's Pi --approve argument.
+export async function piIsolationArgs(env = process.env, workspace = process.cwd()) {
+  const { DefaultPackageManager, SettingsManager } = await import('@earendil-works/pi-coding-agent');
+  const agentDir = path.resolve(env.PI_CODING_AGENT_DIR || path.join(home(env), '.pi', 'agent'));
+  const cwd = path.resolve(workspace);
+  const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
+  const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager,
+    builtinExtensions: PI_BUILTIN_EXTENSIONS.map((entry) => entry.slice('builtin:'.length)) });
+  const resolved = await manager.resolve();
+  const extensions = resolved.extensions.filter((entry) => entry.enabled && !piOpenVikingExtension(entry, { agentDir, cwd }))
+    .map((entry) => entry.path);
+  // The Core requires Pi's MCP client, even when a user's standalone Pi has
+  // disabled that built-in. Other extension enable/disable choices stay theirs.
+  return ['-ne', ...uniq(['builtin:mcp', ...extensions]).flatMap((entry) => ['--extension', entry])];
+}
+
+function piOpenVikingExtension({ path: file, metadata }, { agentDir, cwd }) {
+  if (file.startsWith('builtin:')) return false;
+  const base = metadata.packageRoot || (metadata.scope === 'project' ? path.join(cwd, '.pi') : agentDir);
+  const label = (value) => {
+    const relative = path.relative(base, value);
+    // Do not mistake an unrelated extension for OV because its checkout or
+    // home happens to be named OpenViking. External paths retain their own
+    // directory name (e.g. /opt/openviking/index.ts), not their ancestors.
+    return relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      ? `${path.basename(path.dirname(value))}/${path.basename(value)}` : relative;
+  };
+  if (isOpenViking(label(file))) return true;
+  // Configured paths can point straight at a checkout's generically named
+  // entrypoint, without going through the `packages` setting.
+  if (isOpenViking(piExtensionPackage(file))) return true;
+  if (metadata.origin === 'package') {
+    const source = metadata.source;
+    if (isOpenViking(path.isAbsolute(source) || source.startsWith('.') ? path.basename(source) : source)) return true;
+    if (isOpenViking(readJson(path.join(metadata.packageRoot ?? base, 'package.json'))?.name)) return true;
+  }
+  // An auto-discovered symlink may have a neutral name but point at OV.
+  try { if (isOpenViking(label(fs.realpathSync(file)))) return true; } catch { /* Pi reports missing paths */ }
+  return false;
+}
+
+function piExtensionPackage(file) {
+  let directory;
   try {
-    entries = fs.readdirSync(folder, { withFileTypes: true })
-      .filter((entry) => !entry.name.startsWith('.') && !isOpenViking(entry.name)
-        && (entry.isDirectory() || /\.(?:[cm]?[jt]s)$/.test(entry.name)))
-      .map((entry) => path.join(folder, entry.name));
-  } catch { /* no extensions folder */ }
-  return ['-ne', ...[...PI_BUILTIN_EXTENSIONS, ...entries].flatMap((extension) => ['--extension', extension])];
+    const real = fs.realpathSync(file);
+    directory = fs.statSync(real).isDirectory() ? real : path.dirname(real);
+  } catch { return null; }
+  while (directory !== path.dirname(directory)) {
+    const manifest = readJson(path.join(directory, 'package.json'));
+    if (manifest) return manifest.name;
+    directory = path.dirname(directory);
+  }
+  return null;
 }
 
 // OpenCode loads every file plugin in its global config folder whatever its

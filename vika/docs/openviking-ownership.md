@@ -37,13 +37,13 @@ The registration throws without one.
 4. Verify against the real CLI before you rely on it. Install the OpenViking plugin into a throwaway home (`CODEX_HOME`, `TRAE_HOME` with `TRAECLI_HOME`, `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `XDG_CONFIG_HOME`) and check what actually loaded:
    - Codex/TraeX: app-server `hooks/list` and `mcpServerStatus/list`.
    - Claude Code: the stream-json `init` event (`plugins`, `mcp_servers`) and hook events.
-   - Pi: RPC `get_commands`.
+   - Pi: a real RPC turn must expose the Core's six `mcp__personal_agent__openviking_*` tools, built-in coding tools, and other extensions and MCP tools; marker extensions must prove OpenViking never loaded. Check direct, codemode and deferred MCP exposure.
    - OpenCode: a marker file plugin; `opencode debug config` alone is not proof, since a plugins-folder file loads even when the config lists none.
 
    Never point these at the owner's real homes: some CLIs write to the real config even when only part of the home is redirected. TraeX, for example, needs `TRAE_HOME`, not just `TRAECLI_HOME`.
 
    CLIs differ from their help text. Two examples:
-   - Pi 1.4.0 ignores `--no-extensions` once an `--extension` is present, but honors `-ne`.
+   - Pi 1.4.0 ignores `--no-extensions` once an `--extension` is present, but honors `-ne`. Resolve enabled user/project extensions with Pi's package manager before passing paths back; walking only `extensions/` loses settings and package sources. Keep `codemode` and `tool-search` as well as `mcp`: other MCP servers need those indirect tools. Preserve the original agent directory so model and MCP configuration, credential storage and locks keep their usual paths.
    - Codex merges `-c mcp_servers={}` instead of replacing the table.
 
    Only the real binary tells you which way it behaves.

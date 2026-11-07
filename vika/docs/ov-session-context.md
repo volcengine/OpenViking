@@ -56,8 +56,11 @@ is launched (`ov-isolation.mjs`; each runtime declares its mechanism as
 `ovIsolation` in `runtime-catalog.mjs`): Codex and TraeX get config overrides
 that disable the plugin, any MCP server that runs OpenViking and their own
 memory feature; Claude Code gets one `--settings` layer that disables the
-plugin and denies those servers; Pi runs with extension discovery off and its
-built-ins and the owner's other extensions loaded by path; OpenCode reads a
+plugin and denies those servers; Pi resolves enabled user/project extensions
+with its own package manager, then runs with discovery off and every non-OV
+extension loaded by path, including configured paths and packages. Its built-in
+coding tools, codemode, tool search and other MCP servers remain available;
+OpenCode reads a
 Vika-owned config home with the plugin and servers left out. The OPENVIKING_*
 process variables of the instance (`openVikingAgentEnv` in
 `deployment-config.cjs`) are the second line: a plugin that loads anyway is

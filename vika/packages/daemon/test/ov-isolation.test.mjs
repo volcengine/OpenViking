@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  OV_PLUGIN_ID, claudeIsolationSettings, codexConfigFile, codexIsolationArgs, piIsolationArgs, prepareOpencodeConfigHome,
+  OV_PLUGIN_ID, PI_BUILTIN_EXTENSIONS, claudeIsolationSettings, codexConfigFile, codexIsolationArgs, piIsolationArgs, prepareOpencodeConfigHome,
   traexConfigFile,
 } from '../src/ov-isolation.mjs';
 import { OV_ISOLATION, RUNTIME_CATALOG } from '../src/runtime-catalog.mjs';
@@ -77,19 +77,19 @@ test('Claude Code gets one settings layer that disables OpenViking\'s plugins an
   });
 });
 
-test('Pi loads its built-ins and the owner\'s extensions by path, never OpenViking\'s', (t) => {
+test('Pi loads its built-ins and the owner\'s extensions by path, never OpenViking\'s', async (t) => {
   const { write, env } = home(t);
   write('.pi/agent/extensions/openviking/index.ts', '');
   write('.pi/agent/extensions/my-provider/index.ts', '');
   write('.pi/agent/extensions/lint.ts', '');
   write('.pi/agent/extensions/notes.txt', '');
-  const args = piIsolationArgs(env);
+  const args = await piIsolationArgs(env, env.HOME);
   assert.equal(args[0], '-ne', 'the short flag: Pi ignores the long one next to --extension');
   const loaded = args.filter((_, index) => args[index - 1] === '--extension');
-  assert.deepEqual(loaded.slice(0, 2), ['builtin:mcp', 'builtin:llama.cpp']);
-  assert.deepEqual(loaded.slice(2).map((file) => path.basename(file)).sort(), ['lint.ts', 'my-provider']);
-  assert.deepEqual(piIsolationArgs({ HOME: path.join(env.HOME, 'nobody') }).filter((arg) => arg !== '--extension'),
-    ['-ne', 'builtin:mcp', 'builtin:llama.cpp']);
+  assert.deepEqual(loaded.filter((entry) => entry.startsWith('builtin:')), PI_BUILTIN_EXTENSIONS);
+  assert.deepEqual(loaded.filter((entry) => !entry.startsWith('builtin:')).map((file) => path.basename(file)).sort(), ['index.ts', 'lint.ts']);
+  assert.deepEqual((await piIsolationArgs({ HOME: path.join(env.HOME, 'nobody') }, env.HOME)).filter((arg) => arg !== '--extension'),
+    ['-ne', ...PI_BUILTIN_EXTENSIONS]);
 });
 
 test('OpenCode reads a Vika-owned config home: the owner\'s config without OpenViking, every other tool\'s config linked', (t) => {
@@ -117,4 +117,38 @@ test('OpenCode reads a Vika-owned config home: the owner\'s config without OpenV
   // Built again on the next start, from scratch.
   prepareOpencodeConfigHome(target, env);
   assert.deepEqual(fs.readdirSync(path.join(target, 'opencode', 'plugins')), ['wakatime.js']);
+});
+
+
+test('Pi resolves configured and package extensions in both scopes, retaining filters and all original settings', async (t) => {
+  const { write, env, directory } = home(t);
+  const body = 'export default function() {}';
+  const configured = write('.pi/agent/custom/configured.mjs', body);
+  const disabled = write('.pi/agent/extensions/disabled.js', body);
+  const project = write('ws/.pi/custom/configured.mjs', body);
+  const automatic = write('ws/.pi/extensions/project.js', body);
+  write('ws/.pi/extensions/openviking/index.js', body);
+  write('.pi/agent/custom/openviking.js', body);
+  // A package's manifest, not just its entrypoint basename, identifies OV.
+  write('.pi/agent/packages/neutral/package.json', { name: '@openviking/pi-extension', pi: { extensions: ['./index.js'] } });
+  write('.pi/agent/packages/neutral/index.js', body);
+  write('.pi/agent/packages/keep/package.json', { name: '@fixture/tools', pi: { extensions: ['./index.js', './unused.js'] } });
+  const packaged = write('.pi/agent/packages/keep/index.js', body);
+  const unused = write('.pi/agent/packages/keep/unused.js', body);
+  write('ws/.pi/packages/keep/package.json', { name: '@fixture/project-tools', pi: { extensions: ['./index.js'] } });
+  const projectPackage = write('ws/.pi/packages/keep/index.js', body);
+  const globalSettings = write('.pi/agent/settings.json', {
+    extensions: ['./custom/configured.mjs', './custom/openviking.js', '-extensions/disabled.js', '-builtin:llama.cpp'],
+    packages: [{ source: './packages/keep', extensions: ['index.js'] }, './packages/neutral'],
+  });
+  const projectSettings = write('ws/.pi/settings.json', { extensions: ['./custom/configured.mjs'], packages: ['./packages/keep'] });
+  const before = [globalSettings, projectSettings].map((file) => fs.readFileSync(file, 'utf8'));
+  const args = await piIsolationArgs(env, path.join(directory, 'ws'));
+  const loaded = args.filter((_, i) => args[i - 1] === '--extension');
+  for (const file of [configured, project, automatic, packaged, projectPackage, 'builtin:mcp', 'builtin:codemode', 'builtin:tool-search']) {
+    assert.ok(loaded.includes(file), `keeps ${path.basename(file)}`);
+  }
+  for (const file of [disabled, unused, 'builtin:llama.cpp']) assert.ok(!loaded.includes(file), `respects disabling ${path.basename(file)}`);
+  assert.equal(loaded.some((file) => /openviking|neutral/.test(file)), false);
+  assert.deepEqual([globalSettings, projectSettings].map((file) => fs.readFileSync(file, 'utf8')), before);
 });

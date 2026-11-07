@@ -90,6 +90,7 @@ export class PiAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this._isolationArgs = options.isolationArgs ?? piIsolationArgs;
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.onTurnAbandoned = options.onTurnAbandoned ?? null;
@@ -315,10 +316,11 @@ export class PiAgent {
     if (this.needsHistoryPrefix) await this.store.prepareOVContext?.(this.cognitionEpoch);
     const model = this.model;
     const effort = this.effort;
+    const env = sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken), this.config);
+    const isolationArgs = await this._isolationArgs(env, this.config.workspace);
     return new Promise((resolve, reject) => {
       const promptPath = this._promptPath();
       fs.writeFileSync(promptPath, this.developerInstructionsText, { encoding: 'utf8', mode: 0o600 });
-      const env = sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken), this.config);
       const args = [
         '--mode', 'rpc',
         '--append-system-prompt', promptPath,
@@ -326,9 +328,7 @@ export class PiAgent {
         '--session-id', this.sessionId,
         '--session-dir', this._sessionDir(),
         '--approve',
-        // Pi's own OpenViking extension stays off (ov-isolation.mjs); the
-        // built-ins and the owner's other extensions load by path.
-        ...piIsolationArgs(env),
+        ...isolationArgs,
         '--extension', PI_MCP_EXTENSION,
       ];
       if (model) args.push('--model', model);
