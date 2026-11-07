@@ -92,6 +92,7 @@ class EventType(str, Enum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     REASONING = "reasoning"
+    PROGRESS = "progress"
     CONTENT_DELTA = "content_delta"
     REASONING_DELTA = "reasoning_delta"
     ITERATION = "iteration"

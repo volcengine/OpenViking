@@ -292,6 +292,8 @@ class OpenAPIChannel(BaseChannel):
                 await pending.close_stream()
             elif msg.event_type == OutboundEventType.REASONING:
                 await pending.add_event("reasoning", msg.content)
+            elif msg.event_type == OutboundEventType.PROGRESS:
+                await pending.add_event("progress", msg.content)
             elif msg.event_type == OutboundEventType.CONTENT_DELTA:
                 await pending.add_event("content_delta", msg.content)
             elif msg.event_type == OutboundEventType.REASONING_DELTA:
@@ -330,6 +332,8 @@ class OpenAPIChannel(BaseChannel):
             await pending.close_stream()
         elif msg.event_type == OutboundEventType.REASONING:
             await pending.add_event("reasoning", msg.content)
+        elif msg.event_type == OutboundEventType.PROGRESS:
+            await pending.add_event("progress", msg.content)
         elif msg.event_type == OutboundEventType.CONTENT_DELTA:
             await pending.add_event("content_delta", msg.content)
         elif msg.event_type == OutboundEventType.REASONING_DELTA:
