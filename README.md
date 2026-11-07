@@ -324,17 +324,11 @@ Download:
 
 ## OpenViking SuperAgent
 
-OpenViking SuperAgent brings a general-purpose agent into your everyday chats, with **OpenViking as its long-term memory and context foundation**. Connect your preferred agent runtime to Feishu/Lark, WeChat, Telegram, Slack, or QQ to research, write documents, work on code, and follow up on tasks across conversations and days.
+**Bring Your Own Machine.** OpenViking SuperAgent (Vika) connects the agent on your computer or cloud VM to **OpenViking and messaging apps**. Send a task in chat; your agent works with your local files and tools, then replies with the result. OpenViking supplies its knowledge and memory.
 
-<img src="docs/images/superagent-overview.png" alt="Messaging apps connect through SuperAgent to personal work context stored in OpenViking: conversations, meeting notes, emails, tasks and knowledge." width="100%" />
+<img src="docs/images/superagent-overview.png" alt="Chat and email connect to Vika and your agent on your machine or cloud VM; the agent uses workspace tools, while OpenViking provides local or remote knowledge and memory." width="100%" />
 
-Install on macOS or Linux:
-
-```bash
-curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
-```
-
-The installer launches `vika setup` to configure your agent and chat connections. See the [SuperAgent overview](vika/README.md) and [installation guide](vika/install.md) for setup and runtime options.
+[Get started →](vika/install.md) · [Learn more →](vika/README.md) · Requires a local or remote OpenViking service.
 
 ## VikingBot
 
