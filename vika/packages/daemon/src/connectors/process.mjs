@@ -16,6 +16,16 @@ const defaultWorkerPath = fileURLToPath(new URL('./worker.mjs', import.meta.url)
 const RESTART_DELAYS_MS = [5_000, 15_000, 60_000, 300_000];
 const STABLE_AFTER_MS = 30_000;
 
+export function connectorCrashDetail(tail) {
+  return String(tail).split('\n').filter(line => {
+    try {
+      const record = JSON.parse(line);
+      if (record && ['debug', 'info', 'warn'].includes(record.level)) return false;
+    } catch {}
+    return line.trim().length > 0;
+  }).join('\n').slice(-2_000);
+}
+
 function unavailable(id) {
   return Object.assign(new Error(`connector ${id} is temporarily unavailable`), { code: 'connector_unavailable' });
 }
@@ -149,7 +159,7 @@ export class ConnectorProcess {
       this.onUnexpectedExit = null;
       // The worker's own failure report says why (an expired login, say);
       // the stderr tail is the fallback for a crash.
-      const detail = this.reportedError || this.stderrTail.trim().slice(-2_000);
+      const detail = this.reportedError || connectorCrashDetail(this.stderrTail);
       const error = new Error(`connector ${this.id} exited ${code ?? signal ?? 'unknown'}${detail ? `: ${detail}` : ''}`);
       this.failPending(error);
       if (!wasStopping) {

@@ -34,7 +34,7 @@
     "import { spawn } from 'node:child_process';",
     "if (process.platform === 'win32') {",
     "].filter(choice => process.platform !== 'win32' || choice.value !== 'email');",
-    "...(process.platform === 'win32' ? [] : [['start', 'updater', t('\u81ea\u52a8\u5347\u7ea7\u670d\u52a1', 'Auto-upgrade service')]]),"
+    "...(process.platform === 'win32' ? [] : [['start', 'updater', t('自动升级服务', 'Auto-upgrade service')]]),"
   ],
   "packages/cli/src/upgrade.mjs": [
     "if (process.platform === 'win32') {"
@@ -76,6 +76,11 @@
   "packages/daemon/src/lark.mjs": [
     "detached: this.config.connectorWorker ? false : process.platform !== 'win32',"
   ],
+  "packages/daemon/src/lock.mjs": [
+    "import { execFileSync } from 'node:child_process';",
+    "if (process.platform === 'linux') {",
+    "if (process.platform === 'win32') {"
+  ],
   "packages/daemon/src/main.mjs": [
     "if (process.platform === 'win32') {"
   ],
@@ -99,6 +104,7 @@
     "const paths = windows ? path.win32 : path.posix;",
     "export function executableInvocation(command, args, { platform = process.platform, env = process.env } = {}) {",
     "if (platform !== 'win32') return { command, args };",
+    "const extension = path.win32.extname(resolved).toLowerCase();",
     "if (process.platform !== 'win32') return nodeSpawn(...arguments);",
     "if (process.platform !== 'win32') return nodeExecFile(...arguments);",
     "export function localSocketPath(directory, name = 'actions', platform = process.platform) {",

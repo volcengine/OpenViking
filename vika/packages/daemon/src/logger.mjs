@@ -76,10 +76,10 @@ export function createLogger(level = 'info', base = {}) {
       ...base,
     };
     for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined) record[key] = cleanValue(value);
+      if (value !== undefined) record[key] = value;
     }
     const stream = kind === 'error' ? process.stderr : process.stdout;
-    stream.write(`${JSON.stringify(record)}\n`);
+    stream.write(`${JSON.stringify(cleanValue(record))}\n`);
   }
 
   return {

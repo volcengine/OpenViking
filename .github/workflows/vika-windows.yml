@@ -29,6 +29,8 @@ jobs:
       - run: npm --version
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-lark-install.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
+      - name: Acceptance regression fixes
+        run: node --test packages/daemon/test/windows-file-path.test.mjs packages/daemon/test/lock-identity.test.mjs packages/daemon/test/logger-redaction.test.mjs packages/daemon/test/connector-crash-detail.test.mjs packages/cli/test/log-options.test.mjs
       - name: Review isolation and runtime PATH regressions
         run: |
           node --test packages/daemon/test/platform-isolation.test.mjs packages/updater/test/windows-review-regression.test.mjs

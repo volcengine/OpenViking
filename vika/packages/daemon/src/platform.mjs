@@ -67,6 +67,10 @@ export function executableInvocation(command, args, { platform = process.platfor
   if (/\.[cm]?js$/i.test(resolved) || /[\\/]node_modules[\\/]pm2[\\/]bin[\\/]pm2$/i.test(resolved)) {
     return { command: process.execPath, args: [resolved, ...args] };
   }
+  const extension = path.win32.extname(resolved).toLowerCase();
+  if (extension && !['.exe', '.com'].includes(extension)) {
+    throw new Error(`Unsupported Windows executable entrypoint: ${resolved}. Invoke scripts through an explicit interpreter (for example pwsh.exe -File script.ps1).`);
+  }
   return { command: resolved, args };
 }
 

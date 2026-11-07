@@ -92,3 +92,10 @@ test('POSIX process wrappers preserve native overloads and Promise child handle'
     assert.deepEqual(await once(child, 'exit'), [0, null]);
   }
 });
+
+ test('Windows rejects unsupported direct script entrypoints before spawning', () => {
+  for (const command of ['C:\\tools\\test.ps1', 'script.PS1', 'script.py', 'script.sh', 'script.vbs']) {
+    assert.throws(() => executableInvocation(command, [], { platform: 'win32', env: { PATH: '' } }), /Unsupported Windows executable entrypoint/);
+  }
+  assert.deepEqual(executableInvocation('pwsh.exe', ['-File', 'test.ps1'], { platform: 'win32', env: { PATH: '' } }), { command: 'pwsh.exe', args: ['-File', 'test.ps1'] });
+});

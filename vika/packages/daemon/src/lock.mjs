@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 function pidIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -15,8 +16,29 @@ function pidIsAlive(pid) {
   }
 }
 
+// A PID alone can belong to a different process after a crash. Unknown identity
+// must fail closed; inability to query a process is not proof the lock is stale.
+export function processIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === 'linux') {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      return `linux:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+    }
+    if (process.platform === 'win32') {
+      const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const result = execFileSync(executable, ['-NoProfile', '-NonInteractive', '-Command',
+        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`],
+        { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      return /^\d+$/.test(result) ? `windows:${result}` : null;
+    }
+  } catch {}
+  return null;
+}
+
 export class InstanceLock {
-  constructor(lockPath) {
+  constructor(lockPath, { identity = processIdentity } = {}) {
+    this.identity = identity;
     this.lockPath = lockPath;
     this.held = false;
   }
@@ -28,6 +50,7 @@ export class InstanceLock {
         const fd = fs.openSync(this.lockPath, 'wx', 0o600);
         fs.writeFileSync(fd, JSON.stringify({
           pid: process.pid,
+          processIdentity: this.identity(process.pid),
           hostname: os.hostname(),
           startedAt: new Date().toISOString(),
         }));
@@ -47,7 +70,10 @@ export class InstanceLock {
         let owner = null;
         try { owner = JSON.parse(fs.readFileSync(this.lockPath, 'utf8')); } catch {}
         if (owner?.hostname === os.hostname() && pidIsAlive(Number(owner.pid))) {
-          throw new Error(`another vika instance is running (pid ${owner.pid})`);
+          const actualIdentity = this.identity(Number(owner.pid));
+          if (!owner.processIdentity || !actualIdentity || owner.processIdentity === actualIdentity) {
+            throw new Error(`another vika instance is running (pid ${owner.pid})`);
+          }
         }
         let after;
         try { after = fs.lstatSync(this.lockPath); } catch (statError) {

@@ -27,7 +27,7 @@ const commands = () => {
       ['stop', target, t('停止', 'Stop')],
       ['restart', target, t('重启', 'Restart')],
       ['status', '', t('查看各进程状态和接入的 IM', 'Show each process and its IMs')],
-      ['logs', t('[实例]', '[instance]'), t('查看日志', 'Show the logs')],
+      ['logs', t('[实例] [--lines N] [--no-follow]', '[instance] [--lines N] [--no-follow]'), t('查看日志', 'Show the logs')],
     ]],
     [t('维护', 'Maintain'), [
       ['upgrade', t('[实例|all]', '[instance|all]'), t('升级到最新版本；不写时升级全部', 'Upgrade to the latest release; everything when no instance is named')],
@@ -105,13 +105,14 @@ async function main([command, ...args], lang) {
       return statusCommand();
     }
     case 'logs': {
-      if (args.length > 1) break;
+      const { parseLogOptions } = await import('../src/log-options.mjs');
+      const logOptions = parseLogOptions(args);
       const [{ logsCommand }, { chooseInstance, loadInstances }, { Prompter }] = await Promise.all([
         import('../src/control.mjs'), import('../src/instances.mjs'), import('../src/prompt.mjs')]);
       const prompter = new Prompter();
-      const agent = await chooseInstance({ deployment: loadInstances(), requested: args[0], prompter, question: t('看哪个实例的日志', 'Whose logs') })
+      const agent = await chooseInstance({ deployment: loadInstances(), requested: logOptions.target, prompter, question: t('看哪个实例的日志', 'Whose logs') })
         .finally(() => prompter.close());
-      return logsCommand(agent.id);
+      return logsCommand(agent.id, logOptions);
     }
     case 'login': {
       const [{ loginCommand }, { Prompter }] = await Promise.all([import('../src/login.mjs'), import('../src/prompt.mjs')]);
