@@ -434,5 +434,12 @@ Guidance rules:
 - if the user wants local execution, prefer Ollama + `openviking-server init`
 - if the user wants `openai-codex`, remind them that it mainly solves the VLM side and embedding still needs to be configured separately
 
+## Connect the user's agent to the running server
+
+Once the server is healthy, the agent still needs a client-side integration for automatic memory. Do not build a manual MCP + hooks wiring by default:
+
+1. Check the client's plugin installation documentation and follow the [marketplace registration and installation commands](../agent-integrations/01-overview.md#claude-code-plugin-compatible-clients-install-the-plugin-directly). Register `volcengine/OpenViking`, install `openviking-memory@openviking`, configure the server connection, and verify its MCP server and lifecycle hooks in a new session.
+2. Only when the client has no Claude Code compatibility layer, follow the matching page under [Agent integrations](../agent-integrations/01-overview.md) (client-specific plugin, MCP clients, or the gateway).
+
 ## Additional reference
 - [OpenViking GitHub repository](https://github.com/volcengine/OpenViking)

@@ -434,5 +434,12 @@ python -m pip install --upgrade --force-reinstall openviking
 - 用户想本地运行，就优先建议 Ollama + `openviking-server init`
 - 用户想用 `openai-codex`，提醒它主要解决 VLM，embedding 仍需单独确认
 
+## 将用户的 Agent 接入已运行的服务端
+
+服务端健康检查通过后，还需要给客户端接上自动记忆。不要默认手写一套 MCP + hooks 集成：
+
+1. 查看客户端的插件安装文档，按照[插件市场注册与安装命令](../agent-integrations/01-overview.md#支持-claude-code-插件规范的客户端-直接安装插件)添加 `volcengine/OpenViking`，安装 `openviking-memory@openviking`，配置服务端连接，再在新会话中验证 MCP 服务与生命周期 hooks。
+2. 仅当客户端没有 Claude Code 兼容层时，才按 [Agent 集成](../agent-integrations/01-overview.md)中的对应页面（客户端专属插件、MCP 客户端或网关）手动接入。
+
 ## 其他详细参考
 - [OpenViking 官方GitHub 仓库](https://github.com/volcengine/OpenViking)
