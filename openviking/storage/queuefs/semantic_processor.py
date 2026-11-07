@@ -159,14 +159,20 @@ class SemanticProcessor(DequeueHandlerBase):
         embedding_worker_stopped: Optional[Callable[[], bool]] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
         runtime_config_manager: Any = None,
+        max_failure_requeues: int = 5,
     ):
         """
         Initialize SemanticProcessor.
 
         Args:
             max_concurrent_llm: Maximum concurrent LLM calls
+            max_failure_requeues: Maximum consecutive failure requeues for one
+                semantic message before it is dead-lettered instead of being
+                re-enqueued again. Guards against unbounded retry loops when a
+                model endpoint is persistently unavailable.
         """
         self.max_concurrent_llm = max_concurrent_llm
+        self.max_failure_requeues = max_failure_requeues
         self._default_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._circuit_breakers: Dict[str, CircuitBreaker] = {}
         self._breaker_lock = threading.Lock()
@@ -361,6 +367,39 @@ class SemanticProcessor(DequeueHandlerBase):
         """Compatibility wrapper for existing skill retry callers."""
         await self._enqueue_semantic_retry(queue, msg, scope)
 
+    async def _requeue_within_failure_limit(
+        self,
+        msg: SemanticMsg,
+        *,
+        reason: str,
+    ) -> Optional[ProcessResult]:
+        """Advance one failed message toward requeue, capped by consecutive failures.
+
+        Returns a failed (dead-letter) :class:`ProcessResult` once
+        ``msg.failure_requeue_count`` has reached ``max_failure_requeues``, so
+        a persistently failing job stops consuming model capacity instead of
+        re-enqueueing forever. Returns ``None`` when the message may still be
+        re-enqueued; the caller performs the actual requeue.
+        """
+        if msg.failure_requeue_count >= self.max_failure_requeues:
+            logger.error(
+                "Semantic message reached the failure requeue limit "
+                "(%d consecutive failures); dead-lettering instead of "
+                "requeueing again: uri=%s reason=%s",
+                msg.failure_requeue_count,
+                msg.uri,
+                reason,
+            )
+            self._merge_request_stats(msg.telemetry_id, error_count=1)
+            await self._cleanup_local_artifact(msg)
+            return ProcessResult.failed(
+                f"Semantic message for {msg.uri} stopped after "
+                f"{msg.failure_requeue_count} consecutive failures ({reason}); "
+                f"requeue limit reached, not retrying again."
+            )
+        msg.failure_requeue_count += 1
+        return None
+
     async def _requeue_semantic_msg_after_error(
         self,
         msg: SemanticMsg,
@@ -375,6 +414,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 await self._cleanup_local_artifact(msg)
                 return ProcessResult.failed(f"Pathlock recovery retry limit reached: {error}")
             msg.lock_handoff_retry = payload["lock_handoff_retry"]
+        else:
+            # Handoff retries have their own bounded recovery path; cap every
+            # other failure requeue so a persistently failing model endpoint
+            # cannot loop the queue without ever reaching a terminal state.
+            result = await self._requeue_within_failure_limit(msg, reason=str(error))
+            if result is not None:
+                return result
         try:
             await work.reenqueue_after_error()
             self._merge_request_stats(msg.telemetry_id, requeue_count=1)
@@ -588,6 +634,12 @@ class SemanticProcessor(DequeueHandlerBase):
             try:
                 breaker.check()
             except CircuitBreakerOpen:
+                result = await self._requeue_within_failure_limit(
+                    msg, reason="circuit breaker open"
+                )
+                if result is not None:
+                    execute_status = "error"
+                    return result
                 logger.warning(
                     f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
                 )
@@ -801,6 +853,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     if failure is not None:
                         return failure
                     self._merge_request_stats(msg.telemetry_id, processed=1)
+                    # Consecutive-failure counter only tracks requeues; a
+                    # successful run clears the dead-letter backoff.
+                    msg.failure_requeue_count = 0
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     breaker.record_success()
                     await self._cleanup_local_artifact(msg)
