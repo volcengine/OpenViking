@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 import requests
 
+from openviking.models.network import create_model_requests_session
 from openviking.models.rerank.base import RerankBase
 from openviking_cli.utils import get_logger
 
@@ -71,6 +72,11 @@ class OpenAIRerankClient(RerankBase):
         self.timeout = timeout
         self.provider = "openai"
         self._uses_nested_envelope = _uses_nested_envelope(api_base)
+        # One session for the client's whole lifetime. The retriever reranks every
+        # hierarchy level of a search through this client, and a module-level
+        # requests.post() would open — and TLS-handshake — a new connection for each
+        # of those calls.
+        self._session: requests.Session = create_model_requests_session(api_base)
 
     def _build_request_body(self, query: str, documents: List[str]) -> dict:
         """Build the request body for the rerank API.
@@ -140,7 +146,7 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
-            response = requests.post(
+            response = self._session.post(
                 url=self.api_base,
                 headers=headers,
                 json=req_body,
