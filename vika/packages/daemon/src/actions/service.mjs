@@ -694,6 +694,7 @@ export class ActionService {
         ? blocked('in_progress', `Delivery blocked: this identical action is still in progress. ${NO_ACTION}`)
         : blocked('uncertain_not_retried', `Delivery blocked: this identical action was already attempted and its outcome is uncertain. ${NO_ACTION}`);
     }
+    if (final && fence) this.store.linkFinalDecisionDelivery(reservation.id, fence.seq);
     this.settleDecision(caller, fence, final);
     caller.trace.attempt = reservation.attempt;
     caller.trace.invoked = true;
