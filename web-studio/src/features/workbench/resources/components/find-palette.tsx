@@ -297,19 +297,29 @@ export function FindPalette({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (composingRef.current) return
+      if (
+        e.defaultPrevented ||
+        composingRef.current ||
+        e.nativeEvent.isComposing ||
+        e.keyCode === 229
+      )
+        return
+
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+        return
+      }
+
+      // Preview editors and action buttons own their keyboard events. Only
+      // the search input uses palette cursor/navigation shortcuts.
+      if (e.target !== inputRef.current) return
 
       // `//` + Enter resets scope to global root, regardless of mode.
       if (isResetGlobalCommand(query) && e.key === 'Enter') {
         e.preventDefault()
         setFindTargetUri(PALETTE_ROOT_URI)
         setQuery('')
-        return
-      }
-
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
         return
       }
 
