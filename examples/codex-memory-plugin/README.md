@@ -385,6 +385,40 @@ layers; resolution order is env vars → the workspace layers → `plugin.codex`
 
 After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=0`: Codex keeps its own transcript, so every captured message is archived and extracted. `PreCompact` also commits everything before compaction, whatever `pending_tokens` is.
 
+#### Capture conversation without tool traffic
+
+Tool capture stays enabled by default. To capture user/assistant prose without
+tool-call arguments or results, add this to `ovcli.conf`:
+
+```json
+{
+  "plugin": {
+    "codex": {
+      "captureToolTraffic": false
+    }
+  }
+}
+```
+
+`OPENVIKING_CAPTURE_TOOL_TRAFFIC=false` overrides the file. This setting is
+currently implemented by the **Codex** capture hooks only, including Stop,
+PreCompact, SessionEnd and SessionStart catch-up. It removes tool traffic from
+the upload payload, not just from the server's extraction input. It is not an
+alias for `captureFilters` or `captureToolMaxChars`.
+
+The filter uses message structure, not tool names. It covers function/custom
+calls and outputs, MCP/command/patch/dynamic completed events, tool discovery,
+sub-agent activity and history-appended tool items. A mixed text/tool message
+keeps its prose. Tool-only messages do not become empty uploads or activate
+keyword capture. Ordinary user/assistant text that describes or quotes a tool
+is still conversation text; this option does not redact such quotations.
+
+The persisted cursor still counts the original extracted turns. Switching the
+option in an existing session does not replay history or skip subsequent prose,
+and failed uploads retry from the last acknowledged source position. Previously
+captured tools remain stored; this option does not delete historical records or
+change Codex's local transcript. Other clients keep their existing capture policy.
+
 ### PreCompact (deterministic commit)
 
 `pre-compact-capture.mjs`:

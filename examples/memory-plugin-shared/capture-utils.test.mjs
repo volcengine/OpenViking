@@ -18,6 +18,21 @@ const CAPTURE_CONFIG = {
   captureMaxLength: 24000,
 }
 
+test("optional source indices preserve source coordinates without changing default turns", () => {
+  const entries = [
+    { type: "session_meta", payload: { id: "ignored" } },
+    { payload: { role: "user", content: "First ordinary prompt" } },
+    { payload: { role: "system", content: "Ignored system instruction" } },
+    { payload: { role: "assistant", content: "Ordinary assistant response" } },
+  ]
+  const original = extractCaptureTurns(entries, CAPTURE_CONFIG)
+  assert.equal(original.length, 2)
+  assert.ok(original.every((turn) => !("sourceIndex" in turn)))
+  const indexed = extractCaptureTurns(entries, CAPTURE_CONFIG, { includeSourceIndex: true })
+  assert.deepEqual(indexed.map((turn) => turn.sourceIndex), [1, 3])
+  assert.deepEqual(indexed.map(({ sourceIndex, ...turn }) => turn), original)
+})
+
 for (const text of [
   "мой любимый редактор называется курсор",
   "これからもこのせっていをおぼえてください",

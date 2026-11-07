@@ -35,6 +35,7 @@ const OVERRIDES = [
   "OPENVIKING_CREDENTIALS_SOURCE",
   "OPENVIKING_RECALL_QUERY_FILTERS",
   "OPENVIKING_CAPTURE_FILTERS",
+  "OPENVIKING_CAPTURE_TOOL_TRAFFIC",
   "OPENVIKING_USAGE_VIEW",
   "OPENVIKING_USAGE_OUTPUT",
 ];
@@ -75,6 +76,23 @@ function withConfigs({ ov, cli, workspace, env = {} }, fn) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test("tool traffic capture is opt-out and resolves normal configuration layers", () => {
+  withConfigs({}, () => assert.equal(loadConfig().captureToolTraffic, true));
+  withConfigs({ cli: { plugin: { codex: { captureToolTraffic: false } } } }, () => {
+    assert.equal(loadConfig().captureToolTraffic, false);
+  });
+  withConfigs({
+    cli: { plugin: { captureToolTraffic: true, codex: { captureToolTraffic: false } } },
+    env: { OPENVIKING_CAPTURE_TOOL_TRAFFIC: "true" },
+  }, () => assert.equal(loadConfig().captureToolTraffic, true));
+  withConfigs({ env: { OPENVIKING_CAPTURE_TOOL_TRAFFIC: "false" } }, () => {
+    assert.equal(loadConfig().captureToolTraffic, false);
+  });
+  withConfigs({ env: { OPENVIKING_CAPTURE_TOOL_TRAFFIC: "invalid" } }, () => {
+    assert.equal(loadConfig().captureToolTraffic, true);
+  });
+});
 
 test("a repository can carry the bypass patterns its contributors share", () => {
   withConfigs({
