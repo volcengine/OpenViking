@@ -117,11 +117,11 @@ class RestoreRequest(BaseModel):
     project_dir: Optional[str] = None
     source_commit: Optional[str] = None
     path: Optional[str] = None
-    restore_version: Optional[str] = Field(
-        None, description="Historical version UUID supplying the restored content"
+    restore_commit_id: Optional[str] = Field(
+        None, pattern=r"^[0-9a-f]{40}$", description="Full commit ID supplying content at path"
     )
-    current_version: Optional[str] = Field(
-        None, description="Required current version UUID; mismatch returns a conflict"
+    current_commit_id: Optional[str] = Field(
+        None, pattern=r"^[0-9a-f]{40}$", description="Expected last commit changing path"
     )
     branch: str = "main"
     dry_run: bool = False
@@ -134,8 +134,8 @@ class RestoreRequest(BaseModel):
         if self.path is not None:
             if self.project_dir is not None or self.source_commit is not None:
                 raise ValueError("path cannot be combined with project_dir or source_commit")
-            if not self.restore_version or not self.current_version:
-                raise ValueError("path requires restore_version and current_version")
+            if not self.restore_commit_id or not self.current_commit_id:
+                raise ValueError("path requires restore_commit_id and current_commit_id")
         elif not self.source_commit:
             raise ValueError("source_commit is required")
         return self
@@ -161,14 +161,14 @@ async def restore(
     request: RestoreRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Forward-commit restore: rebuild project_dir from source_commit on top of HEAD."""
+    """Restore a directory or one file's historical content as a forward commit."""
     service = get_service()
     if request.path is not None:
         path = validate_request_viking_uri(request.path, _ctx, field_name="path")
         result = await service.compile.restore_file_version(
             uri=path,
-            restore_version=request.restore_version,
-            current_version=request.current_version,
+            restore_commit_id=request.restore_commit_id,
+            current_commit_id=request.current_commit_id,
             ctx=_ctx,
         )
         return Response(status="ok", result=result)

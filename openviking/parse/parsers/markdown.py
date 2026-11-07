@@ -213,14 +213,15 @@ class MarkdownParser(BaseParser):
         self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
-        self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+        self._heading_pattern = re.compile(r"^(#{1,6})[ \t]+(.+)$", re.MULTILINE)
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
         self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
-        self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+        # Optional CR so LF and Windows CRLF documents share the same delimiters.
+        self._frontmatter_pattern = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
         self._html_comment_pattern = re.compile(r"<!--.*?-->", re.DOTALL)
         self._indented_code_pattern = re.compile(r"^(?:    |\t).+$", re.MULTILINE)
 
@@ -655,6 +656,8 @@ class MarkdownParser(BaseParser):
 
             level = len(match.group(1))
             title = match.group(2).strip()
+            if not title:
+                continue
             headings.append((match.start(), match.end(), title, level))
 
         return headings

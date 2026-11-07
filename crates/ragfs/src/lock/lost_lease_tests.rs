@@ -1,7 +1,9 @@
 //! Lost lease authorization, renewal deadlines, and bounded cleanup regressions.
 use super::*;
 use crate::core::{FsContextInner, PathLockContext, WriteFlag, FS_CTX};
-use crate::lock::provider::{FilesystemPathLockProvider, MemoryPathLockProvider};
+use crate::lock::provider::{
+    AtomicAcquisitionResult, FilesystemPathLockProvider, MemoryPathLockProvider,
+};
 use crate::lock::wrapper::PathLockWrappedFS;
 use crate::plugins::memfs::MemFileSystem;
 use async_trait::async_trait;
@@ -15,6 +17,12 @@ struct FaultProvider {
     refresh_calls: AtomicUsize,
     remove_calls: AtomicUsize,
     delay: Duration,
+    /// Fail the next token write at this path with an I/O error.
+    fail_write: StdMutex<Option<String>>,
+    /// Bump a holder heartbeat just before the next token write.
+    race_write: AtomicBool,
+    /// Delete the source token immediately before CAS at this path.
+    lose_source_on_write: StdMutex<Option<String>>,
 }
 
 impl FaultProvider {
@@ -26,6 +34,9 @@ impl FaultProvider {
             refresh_calls: AtomicUsize::new(0),
             remove_calls: AtomicUsize::new(0),
             delay: Duration::ZERO,
+            fail_write: StdMutex::new(None),
+            race_write: AtomicBool::new(false),
+            lose_source_on_write: StdMutex::new(None),
         }
     }
 }
@@ -38,15 +49,54 @@ impl PathLockProvider for FaultProvider {
     fn handle_mode(&self) -> PathLockHandleMode {
         self.inner.handle_mode()
     }
-    async fn try_acquire_batch_atomic(
+    async fn try_acquire_holders_atomic(
         &self,
         requests: &[PathLockRequest],
         owner: &str,
+        holder: &str,
         now: u128,
         stale: u128,
-    ) -> PathLockResult<Option<Vec<AtomicAcquisition>>> {
+        source: Option<&str>,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
         self.inner
-            .try_acquire_batch_atomic(requests, owner, now, stale)
+            .try_acquire_holders_atomic(requests, owner, holder, now, stale, source)
+            .await
+    }
+    async fn compare_and_remove_token(
+        &self,
+        path: &str,
+        expected: &LockToken,
+    ) -> PathLockResult<bool> {
+        self.inner.compare_and_remove_token(path, expected).await
+    }
+    async fn mutate_holder(
+        &self,
+        path: &str,
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale: u128,
+        release: bool,
+    ) -> PathLockResult<bool> {
+        if release {
+            self.remove_calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_remove.load(Ordering::SeqCst) {
+                return Err(PathLockError::Io("injected cleanup timeout".into()));
+            }
+        } else {
+            self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
+            let fault = self.failures.lock().unwrap().get(path).copied();
+            match fault {
+                Some(true) => return Err(PathLockError::Io("injected refresh timeout".into())),
+                Some(false) => return Ok(false),
+                None => {}
+            }
+        }
+        self.inner
+            .mutate_holder(path, owner, holder, now, stale, release)
             .await
     }
     async fn read_token(&self, path: &str) -> PathLockResult<Option<LockToken>> {
@@ -61,30 +111,43 @@ impl PathLockProvider for FaultProvider {
         expected: &LockToken,
         replacement: &LockToken,
     ) -> PathLockResult<bool> {
+        if self
+            .fail_write
+            .lock()
+            .unwrap()
+            .take_if(|p| p == path)
+            .is_some()
+        {
+            return Err(PathLockError::Io("injected write failure".into()));
+        }
+        if self.race_write.swap(false, Ordering::SeqCst) {
+            let mut refreshed = expected.clone();
+            refreshed.holders[0].time_ns += 1;
+            refreshed.recompute();
+            assert!(
+                self.inner
+                    .compare_and_write_token(path, expected, &refreshed)
+                    .await?
+            );
+        }
+        let lose_source = self
+            .lose_source_on_write
+            .lock()
+            .unwrap()
+            .take_if(|p| p == path)
+            .is_some();
+        if lose_source {
+            assert!(self.inner.compare_and_remove_token(path, expected).await?);
+        }
         self.inner
             .compare_and_write_token(path, expected, replacement)
             .await
     }
     async fn refresh_token(&self, path: &str, owner: &str, now: u128) -> PathLockResult<bool> {
-        self.refresh_calls.fetch_add(1, Ordering::SeqCst);
-        if !self.delay.is_zero() {
-            tokio::time::sleep(self.delay).await;
-        }
-        let fault = self.failures.lock().unwrap().get(path).copied();
-        match fault {
-            Some(true) => Err(PathLockError::Io("injected refresh timeout".into())),
-            Some(false) => Ok(false),
-            None => self.inner.refresh_token(path, owner, now).await,
-        }
+        self.inner.refresh_token(path, owner, now).await
     }
     async fn remove_token(&self, path: &str, owner: &str, force: bool) -> PathLockResult<bool> {
-        assert!(!force, "cleanup must use ownership CAS");
-        self.remove_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_remove.load(Ordering::SeqCst) {
-            Err(PathLockError::Io("injected cleanup timeout".into()))
-        } else {
-            self.inner.remove_token(path, owner, force).await
-        }
+        self.inner.remove_token(path, owner, force).await
     }
     async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
         self.inner.scan_descendant_locks(root).await
@@ -99,8 +162,26 @@ async fn fixture() -> (PathLockManager, Arc<FaultProvider>) {
     (manager, provider)
 }
 
+async fn filesystem_fixture() -> (Arc<MemFileSystem>, Arc<FaultProvider>, PathLockManager) {
+    let fs = Arc::new(MemFileSystem::new());
+    fs.mkdir("/data", 0o755).await.unwrap();
+    let provider = Arc::new(FaultProvider::new(Arc::new(
+        FilesystemPathLockProvider::new(fs.clone(), 30.0),
+    )));
+    let manager = PathLockManager::new(fs.clone(), provider.clone(), PathLockConfig::default());
+    (fs, provider, manager)
+}
+
+fn holder_ids(token: &LockToken) -> Vec<&str> {
+    token.holders.iter().map(|h| h.id.as_str()).collect()
+}
+
 fn capability(lease: &OwnedPathLockLease) -> Option<(&str, &str)> {
     Some((&lease.lease.lease_ref, &lease.ownership_ref))
+}
+
+fn health_key(lease: &OwnedPathLockLease, path: &str) -> String {
+    format!("{}\0{path}", lease.lease.lease_ref)
 }
 
 async fn age_token(
@@ -118,7 +199,7 @@ async fn age_token(
         .lock()
         .await
         .token_health
-        .get_mut(path)
+        .get_mut(&health_key(lease, path))
         .unwrap()
         .last_confirmed_at = Instant::now() - age;
 }
@@ -138,7 +219,7 @@ async fn lease_invalidation(
 }
 
 #[tokio::test]
-async fn loss_invalidates_whole_leases_sharing_tokens_but_not_exact_descendants() {
+async fn loss_invalidates_only_the_lost_holder_lease() {
     let (manager, provider) = fixture().await;
     let tree = manager
         .acquire_tree("/data", Duration::ZERO, None)
@@ -164,7 +245,8 @@ async fn loss_invalidates_whole_leases_sharing_tokens_but_not_exact_descendants(
         .unwrap()
         .insert(tree.lease.lock_paths[0].clone(), false);
     assert_eq!(manager.refresh(&tree).await.unwrap(), "lost");
-    for lease in [&tree, &shared] {
+    // Holders sharing a token are renewed and revoked independently.
+    for lease in [&tree] {
         assert_eq!(
             lease_invalidation(&manager, lease).await.reason,
             InvalidationReason::TokenLost
@@ -188,10 +270,12 @@ async fn loss_invalidates_whole_leases_sharing_tokens_but_not_exact_descendants(
             .await
             .is_some());
     }
-    assert!(manager
-        .get_owned_lease_by_ref(&child.lease.lease_ref)
-        .await
-        .is_some());
+    for lease in [&shared, &child] {
+        assert!(manager
+            .get_owned_lease_by_ref(&lease.lease.lease_ref)
+            .await
+            .is_some());
+    }
     manager.release(&shared).await.unwrap();
     assert!(provider
         .read_token(&child.lease.lock_paths[0])
@@ -220,24 +304,25 @@ async fn uncertain_partial_refresh_preserves_short_jitter_but_not_failed_token_d
         .lease_registry
         .resolve(&lease.lease.lease_ref)
         .unwrap();
-    let before = owner.registry.lock().await.token_health[&failed].last_confirmed_at;
+    let failed_key = health_key(&lease, &failed);
+    let before = owner.registry.lock().await.token_health[&failed_key].last_confirmed_at;
     assert_eq!(manager.refresh(&lease).await.unwrap(), "failed");
     assert!(manager
         .get_owned_lease_by_ref(&lease.lease.lease_ref)
         .await
         .is_some());
     assert_eq!(
-        owner.registry.lock().await.token_health[&failed].last_confirmed_at,
+        owner.registry.lock().await.token_health[&failed_key].last_confirmed_at,
         before
     );
     assert_eq!(
-        owner.registry.lock().await.token_health[&failed].consecutive_failures,
+        owner.registry.lock().await.token_health[&failed_key].consecutive_failures,
         1
     );
     provider.failures.lock().unwrap().clear();
     assert_eq!(manager.refresh(&lease).await.unwrap(), "refreshed");
     assert_eq!(
-        owner.registry.lock().await.token_health[&failed].consecutive_failures,
+        owner.registry.lock().await.token_health[&failed_key].consecutive_failures,
         0
     );
     provider
@@ -282,49 +367,40 @@ async fn uncertain_partial_refresh_preserves_short_jitter_but_not_failed_token_d
 }
 
 #[tokio::test]
-async fn reentry_and_handoff_do_not_restart_token_deadlines() {
+async fn reentrant_and_adopted_holders_have_independent_deadlines() {
     let (manager, _) = fixture().await;
     let lease = manager
         .acquire_tree("/data", Duration::ZERO, None)
         .await
         .unwrap();
-    let path = &lease.lease.lock_paths[0];
-    age_token(&manager, &lease, path, Duration::from_secs(23)).await;
-    let owner = manager
-        .lease_registry
-        .resolve(&lease.lease.lease_ref)
-        .unwrap();
-    let before = owner.registry.lock().await.token_health[path].last_confirmed_at;
+    let path = lease.lease.lock_paths[0].clone();
     let reentrant = manager
         .acquire_tree("/data", Duration::ZERO, capability(&lease))
         .await
         .unwrap();
-    assert_eq!(
-        owner.registry.lock().await.token_health[path].last_confirmed_at,
-        before
-    );
-    let handoff = manager.to_handoff(&lease);
-    manager.handoff(&lease).await.unwrap();
+    let handoff = manager.to_handoff(&reentrant);
+    manager.handoff(&reentrant).await.unwrap();
     let adopted = manager.adopt(&handoff).await.unwrap();
-    assert_eq!(
-        owner.registry.lock().await.token_health[path].last_confirmed_at,
-        before
-    );
-    age_token(&manager, &adopted, path, Duration::from_secs(25)).await;
+    age_token(&manager, &lease, &path, Duration::from_secs(25)).await;
+    assert!(manager
+        .get_owned_lease_by_ref(&lease.lease.lease_ref)
+        .await
+        .is_none());
+    assert!(manager
+        .get_owned_lease_by_ref(&adopted.lease.lease_ref)
+        .await
+        .is_some());
+    age_token(&manager, &adopted, &path, Duration::from_secs(25)).await;
     assert!(manager
         .get_owned_lease_by_ref(&adopted.lease.lease_ref)
         .await
         .is_none());
-    assert!(manager
-        .get_owned_lease_by_ref(&reentrant.lease.lease_ref)
-        .await
-        .is_none());
-    manager.release(&reentrant).await.unwrap();
+    manager.release(&lease).await.unwrap();
     manager.release(&adopted).await.unwrap();
 }
 
 #[tokio::test]
-async fn invalidated_pending_handoff_cannot_be_adopted() {
+async fn invalidated_pending_handoff_is_replaced_by_adoption() {
     let (manager, provider) = fixture().await;
     let lease = manager
         .acquire_tree("/data", Duration::ZERO, None)
@@ -354,18 +430,31 @@ async fn invalidated_pending_handoff_cannot_be_adopted() {
         "lost"
     );
     drop(registry);
-    assert!(manager.adopt(&handoff).await.is_err());
-    assert!(PathLockManager::release_lease_paths_with(
-        &manager.provider,
-        &manager.lease_registry,
-        owner,
-        &lease.lease.lease_ref,
-        None,
-        None,
-        Some(PathLockManager::cleanup_window(&manager.config)),
-    )
-    .await
-    .unwrap());
+    provider.failures.lock().unwrap().clear();
+    let adopted = manager.adopt(&handoff).await.unwrap();
+    assert!(manager
+        .lease_registry
+        .resolve(&lease.lease.lease_ref)
+        .is_none());
+    let token = provider
+        .read_token(&lease.lease.lock_paths[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        token
+            .holders
+            .iter()
+            .map(|h| h.id.as_str())
+            .collect::<Vec<_>>(),
+        [adopted.lease.lease_ref.as_str()]
+    );
+    manager.release(&adopted).await.unwrap();
+    assert!(provider
+        .read_token(&lease.lease.lock_paths[0])
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -491,7 +580,8 @@ async fn delayed_result_for_old_handoff_ref_cannot_update_the_adopted_lease() {
         .resolve(&adopted.lease.lease_ref)
         .unwrap();
     let mut registry = owner.registry.lock().await;
-    let before = registry.token_health[&lease.lease.lock_paths[0]].last_confirmed_at;
+    let adopted_key = health_key(&adopted, &adopted.lease.lock_paths[0]);
+    let before = registry.token_health[&adopted_key].last_confirmed_at;
     assert_eq!(
         registry.apply_refresh_results(
             &lease.lease.lease_ref,
@@ -503,7 +593,7 @@ async fn delayed_result_for_old_handoff_ref_cannot_update_the_adopted_lease() {
         "lost"
     );
     assert_eq!(
-        registry.token_health[&lease.lease.lock_paths[0]].last_confirmed_at,
+        registry.token_health[&adopted_key].last_confirmed_at,
         before
     );
     assert!(registry.entries[&adopted.lease.lease_ref]
@@ -515,7 +605,7 @@ async fn delayed_result_for_old_handoff_ref_cannot_update_the_adopted_lease() {
 }
 
 #[tokio::test]
-async fn cross_manager_adoption_cannot_revive_an_expired_token() {
+async fn expired_source_requires_explicit_recovery_with_a_new_holder() {
     let (producer, provider) = fixture().await;
     let lease = producer
         .acquire_tree("/data", Duration::ZERO, None)
@@ -525,10 +615,9 @@ async fn cross_manager_adoption_cannot_revive_an_expired_token() {
     producer.handoff(&lease).await.unwrap();
     let path = &lease.lease.lock_paths[0];
     let token = provider.read_token(path).await.unwrap().unwrap();
-    let expired = LockToken {
-        time_ns: 1,
-        ..token.clone()
-    };
+    let mut expired = token.clone();
+    expired.holders[0].time_ns = 1;
+    expired.recompute();
     assert!(provider
         .compare_and_write_token(path, &token, &expired)
         .await
@@ -538,8 +627,29 @@ async fn cross_manager_adoption_cannot_revive_an_expired_token() {
         provider.clone(),
         PathLockConfig::default(),
     );
-    assert!(consumer.adopt(&handoff).await.is_err());
+    assert!(matches!(
+        consumer.adopt(&handoff).await,
+        Err(PathLockError::HandoffRecoveryRequired {
+            reason: HandoffRecoveryReason::TokenUnavailable,
+        })
+    ));
     assert_eq!(provider.read_token(path).await.unwrap(), Some(expired));
+    let adopted = consumer
+        .reacquire_batch(&handoff.covered_paths, &handoff.owner_id, Duration::ZERO)
+        .await
+        .unwrap();
+    let token = provider.read_token(path).await.unwrap().unwrap();
+    assert_eq!(token.owner_id, lease.lease.owner_id);
+    assert_eq!(
+        token
+            .holders
+            .iter()
+            .map(|h| h.id.as_str())
+            .collect::<Vec<_>>(),
+        [adopted.lease.lease_ref.as_str()]
+    );
+    consumer.release(&adopted).await.unwrap();
+    assert!(provider.read_token(path).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -663,7 +773,6 @@ async fn takeover_rejects_protected_write(
     let old = provider.read_token(lock_path).await.unwrap().unwrap();
     let replacement = LockToken {
         owner_id: "new-owner".into(),
-        time_ns: PathLockManager::now_ns(),
         ..old.clone()
     };
     assert!(provider
@@ -867,10 +976,12 @@ async fn redis_20ms_renew_timeout_preserves_lease_and_recovers_after_network_del
 
     proxy.delay_once();
     let result = provider
-        .refresh_tokens(
+        .refresh_holders(
             &lease.lease.lock_paths,
             &lease.lease.owner_id,
+            &lease.lease.lease_ref,
             PathLockManager::now_ns(),
+            0,
         )
         .await;
     assert_eq!(result.len(), 1);
@@ -887,7 +998,8 @@ async fn redis_20ms_renew_timeout_preserves_lease_and_recovers_after_network_del
         .lease_registry
         .resolve(&lease.lease.lease_ref)
         .unwrap();
-    let confirmed_before = owner.registry.lock().await.token_health[path].last_confirmed_at;
+    let health = health_key(&lease, path);
+    let confirmed_before = owner.registry.lock().await.token_health[&health].last_confirmed_at;
     proxy.delay_once();
     assert_eq!(manager.refresh(&lease).await.unwrap(), "failed");
     {
@@ -896,10 +1008,10 @@ async fn redis_20ms_renew_timeout_preserves_lease_and_recovers_after_network_del
             .invalidation
             .is_none());
         assert_eq!(
-            registry.token_health[path].last_confirmed_at,
+            registry.token_health[&health].last_confirmed_at,
             confirmed_before
         );
-        assert_eq!(registry.token_health[path].consecutive_failures, 1);
+        assert_eq!(registry.token_health[&health].consecutive_failures, 1);
     }
     assert!(manager
         .get_owned_lease_by_capability(&lease.lease.lease_ref, &lease.ownership_ref)
@@ -932,8 +1044,8 @@ async fn redis_20ms_renew_timeout_preserves_lease_and_recovers_after_network_del
         assert!(registry.entries[&lease.lease.lease_ref]
             .invalidation
             .is_none());
-        assert!(registry.token_health[path].last_confirmed_at > confirmed_before);
-        assert_eq!(registry.token_health[path].consecutive_failures, 0);
+        assert!(registry.token_health[&health].last_confirmed_at > confirmed_before);
+        assert_eq!(registry.token_health[&health].consecutive_failures, 0);
     }
     let token = provider.read_token(path).await.unwrap().unwrap();
     assert_eq!(token.owner_id, lease.lease.owner_id);
@@ -1000,6 +1112,11 @@ async fn redis_takeover_denies_writes_and_cleanup_preserves_new_owner() {
         .compare_and_write_token(path, &old, &replacement)
         .await
         .unwrap());
+    // Redis assigns the takeover confirmation time; cleanup must preserve the
+    // actual server-written snapshot rather than the requested client token.
+    let replacement = provider.read_token(path).await.unwrap().unwrap();
+    assert_eq!(replacement.owner_id, "new-owner");
+    assert_eq!(replacement.lock_type, old.lock_type);
     assert_eq!(manager.refresh(&lease).await.unwrap(), "lost");
     let wrapped = PathLockWrappedFS::new(manager.clone(), fs.clone());
     let context = Arc::new(FsContextInner::with_pathlock(
@@ -1028,4 +1145,194 @@ async fn redis_takeover_denies_writes_and_cleanup_preserves_new_owner() {
         .await
         .unwrap();
     runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn filesystem_adopt_retries_a_concurrent_same_owner_heartbeat() {
+    let (_, provider, manager) = filesystem_fixture().await;
+    let outer = manager
+        .acquire_tree("/data", Duration::ZERO, None)
+        .await
+        .unwrap();
+    let inner = manager
+        .acquire_tree("/data", Duration::ZERO, capability(&outer))
+        .await
+        .unwrap();
+    let handoff = manager.to_handoff(&inner);
+    manager.handoff(&inner).await.unwrap();
+    provider.race_write.store(true, Ordering::SeqCst);
+    let adopted = manager.adopt(&handoff).await.unwrap();
+    let path = &outer.lease.lock_paths[0];
+    let token = provider.read_token(path).await.unwrap().unwrap();
+    let mut expected = vec![
+        outer.lease.lease_ref.as_str(),
+        adopted.lease.lease_ref.as_str(),
+    ];
+    expected.sort();
+    assert_eq!(holder_ids(&token), expected);
+    manager.release(&adopted).await.unwrap();
+    manager.release(&outer).await.unwrap();
+    assert!(provider.read_token(path).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn failed_filesystem_adoption_restores_the_parked_source() {
+    let (_, provider, manager) = filesystem_fixture().await;
+    let lease = manager
+        .acquire_exact_batch(&["/data/a".into(), "/data/b".into()], Duration::ZERO, None)
+        .await
+        .unwrap();
+    let handoff = manager.to_handoff(&lease);
+    manager.handoff(&lease).await.unwrap();
+    *provider.fail_write.lock().unwrap() = Some(lease.lease.lock_paths[1].clone());
+    assert!(matches!(
+        manager.adopt(&handoff).await,
+        Err(PathLockError::Io(_))
+    ));
+    for path in &lease.lease.lock_paths {
+        let token = provider.read_token(path).await.unwrap().unwrap();
+        assert_eq!(holder_ids(&token), [lease.lease.lease_ref.as_str()]);
+    }
+    let adopted = manager.adopt(&handoff).await.unwrap();
+    manager.release(&adopted).await.unwrap();
+    for path in &lease.lease.lock_paths {
+        assert!(provider.read_token(path).await.unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn source_loss_during_cas_rolls_back_the_transferred_batch() {
+    let (_, provider, manager) = filesystem_fixture().await;
+    let lease = manager
+        .acquire_exact_batch(&["/data/a".into(), "/data/b".into()], Duration::ZERO, None)
+        .await
+        .unwrap();
+    let handoff = manager.to_handoff(&lease);
+    manager.handoff(&lease).await.unwrap();
+    *provider.lose_source_on_write.lock().unwrap() = Some(lease.lease.lock_paths[1].clone());
+    assert!(matches!(
+        manager.adopt(&handoff).await,
+        Err(PathLockError::HandoffRecoveryRequired {
+            reason: HandoffRecoveryReason::TokenUnavailable,
+        })
+    ));
+    let first = provider
+        .read_token(&lease.lease.lock_paths[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(holder_ids(&first), [lease.lease.lease_ref.as_str()]);
+    assert!(provider
+        .read_token(&lease.lease.lock_paths[1])
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(manager.observe().await.active_locks, 1);
+}
+
+#[tokio::test]
+async fn redelivered_handoff_recovers_under_the_live_outer_owner() {
+    let (fs, provider, producer) = filesystem_fixture().await;
+    let outer = producer
+        .acquire_tree("/data", Duration::ZERO, None)
+        .await
+        .unwrap();
+    let inner = producer
+        .acquire_tree("/data", Duration::ZERO, capability(&outer))
+        .await
+        .unwrap();
+    let handoff = producer.to_handoff(&inner);
+    producer.handoff(&inner).await.unwrap();
+    let crashed = PathLockManager::new(fs.clone(), provider.clone(), PathLockConfig::default());
+    let lost = crashed.adopt(&handoff).await.unwrap();
+    // The consumer crashes; its holder expires while the outer lease stays live.
+    let path = &outer.lease.lock_paths[0];
+    let token = provider.read_token(path).await.unwrap().unwrap();
+    let mut expired = token.clone();
+    for holder in &mut expired.holders {
+        if holder.id == lost.lease.lease_ref {
+            holder.time_ns = 1;
+        }
+    }
+    expired.recompute();
+    assert!(provider
+        .compare_and_write_token(path, &token, &expired)
+        .await
+        .unwrap());
+    drop(crashed);
+    let consumer = PathLockManager::new(fs, provider.clone(), PathLockConfig::default());
+    assert!(matches!(
+        consumer.adopt(&handoff).await,
+        Err(PathLockError::HandoffRecoveryRequired {
+            reason: HandoffRecoveryReason::TokenUnavailable,
+        })
+    ));
+    let recovered = consumer
+        .reacquire_batch(&handoff.covered_paths, &handoff.owner_id, Duration::ZERO)
+        .await
+        .unwrap();
+    assert_eq!(recovered.lease.owner_id, outer.lease.owner_id);
+    consumer.release(&recovered).await.unwrap();
+    assert_eq!(producer.refresh(&outer).await.unwrap(), "refreshed");
+    assert!(consumer
+        .acquire_exact("/data/file", Duration::ZERO, None)
+        .await
+        .is_err());
+    producer.release(&outer).await.unwrap();
+    assert!(provider.read_token(path).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn duplicate_and_chained_adoptions_each_release_their_own_holder() {
+    let (fs, provider, first) = filesystem_fixture().await;
+    let second = PathLockManager::new(fs, provider.clone(), PathLockConfig::default());
+    let lease = first
+        .acquire_tree("/data", Duration::ZERO, None)
+        .await
+        .unwrap();
+    let path = lease.lease.lock_paths[0].clone();
+    let handoff = first.to_handoff(&lease);
+    first.handoff(&lease).await.unwrap();
+    let (a, b) = tokio::join!(first.adopt(&handoff), second.adopt(&handoff));
+    let recover = |result: PathLockResult<OwnedPathLockLease>| {
+        assert!(matches!(
+            result,
+            Err(PathLockError::HandoffRecoveryRequired {
+                reason: HandoffRecoveryReason::TokenUnavailable,
+            })
+        ));
+    };
+    let (a, b) = match (a, b) {
+        (Ok(a), failed) => {
+            recover(failed);
+            let b = second
+                .reacquire_batch(&handoff.covered_paths, &handoff.owner_id, Duration::ZERO)
+                .await
+                .unwrap();
+            (a, b)
+        }
+        (failed, Ok(b)) => {
+            recover(failed);
+            let a = first
+                .reacquire_batch(&handoff.covered_paths, &handoff.owner_id, Duration::ZERO)
+                .await
+                .unwrap();
+            (a, b)
+        }
+        (a, b) => panic!("one source must transfer exactly once: {a:?}, {b:?}"),
+    };
+    assert_ne!(a.lease.lease_ref, b.lease.lease_ref);
+    first.release(&a).await.unwrap();
+    assert!(provider.read_token(&path).await.unwrap().is_some());
+    // Ownership travels B -> A -> B; each adoption retires its source.
+    let mut current = (&second, b);
+    for next in [&first, &second] {
+        let handoff = current.0.to_handoff(&current.1);
+        current.0.handoff(&current.1).await.unwrap();
+        current = (next, next.adopt(&handoff).await.unwrap());
+        let token = provider.read_token(&path).await.unwrap().unwrap();
+        assert_eq!(holder_ids(&token), [current.1.lease.lease_ref.as_str()]);
+    }
+    current.0.release(&current.1).await.unwrap();
+    assert!(provider.read_token(&path).await.unwrap().is_none());
 }

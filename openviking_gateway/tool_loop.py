@@ -88,7 +88,8 @@ class HiddenToolLoop:
             if value is None:
                 continue
             if "error" in value or value.get("type") == "error":
-                raise ToolLoopError("Model stream failed")
+                event = value if value.get("type") else {"type": "error", **value}
+                raise ToolLoopError("Model stream failed", event=event)
             for event in self.adapter.event(value):
                 yield self.adapter.encode(event)
 
@@ -235,8 +236,13 @@ class HiddenToolLoop:
         self.capture.usage = self.counted or self.capture.usage
         self.prepared.metrics["hidden_rounds"] = self.rounds
 
-    def error(self, message: str) -> bytes:
-        return b"".join(self.adapter.encode(event) for event in self.adapter.error(message))
+    def error(self, error: Exception) -> bytes:
+        events = (
+            [error.event]
+            if isinstance(error, ToolLoopError) and error.event is not None
+            else self.adapter.error(str(error))
+        )
+        return b"".join(self.adapter.encode(event) for event in events)
 
     async def run(self, response, send):
         """Publish the terminal event only after the exact transcript is durable."""

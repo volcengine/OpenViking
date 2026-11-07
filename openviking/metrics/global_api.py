@@ -46,6 +46,7 @@ from .collectors.retrieval import RetrievalCollector
 from .collectors.session import SessionCollector
 from .collectors.telemetry_bridge import TelemetryBridgeCollector
 from .collectors.vlm import VLMCollector
+from .collectors.vikingdb_operations import VikingDBOperationCollector
 from .core.registry import MetricRegistry
 from .core.runtime import EventCollectorRouter
 from .exporters.otel import OTelMetricExporter
@@ -248,6 +249,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
     telemetry_bridge_collector = TelemetryBridgeCollector()
     queue_duration_collector = QueueDurationCollector()
     pathlock_recovery_collector = PathLockRecoveryCollector()
+    vikingdb_operation_collector = VikingDBOperationCollector()
 
     def _receiver(collector, event_name: str):
         """
@@ -292,6 +294,8 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
         ("telemetry.summary", telemetry_bridge_collector),
         ("queue.processed", queue_duration_collector),
         ("pathlock.recovery_blocked", pathlock_recovery_collector),
+        ("vikingdb.operation", vikingdb_operation_collector),
+        ("vikingdb.retry", vikingdb_operation_collector),
     ):
         router.register(event_name, _receiver(collector, event_name))
     return router

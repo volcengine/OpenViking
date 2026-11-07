@@ -1,7 +1,7 @@
 //! Logical path mapping and account partition routing.
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -147,22 +147,69 @@ impl MultiWritePaths {
 /// Routes account paths through the current persisted partitions manifest.
 pub struct AccountRouter {
     store: Arc<MetadataStore>,
+    route_cache: Mutex<HashMap<String, RouteSnapshot>>,
+}
+
+/// Cached immutable routing identity for one initialized account.
+#[derive(Debug, Clone)]
+struct RouteSnapshot {
+    epoch: u64,
+    partitions: HashSet<u32>,
+    routes: Vec<RouteEntry>,
+}
+
+impl RouteSnapshot {
+    /// Build a route snapshot from a validated account partitions manifest.
+    fn from_manifest(manifest: PartitionsManifest) -> Result<Self> {
+        manifest.validate()?;
+        Ok(Self {
+            epoch: manifest.epoch,
+            partitions: manifest.partitions.keys().copied().collect(),
+            routes: manifest.routes,
+        })
+    }
 }
 
 impl AccountRouter {
     /// Create an account router backed by the supplied metadata store.
     pub fn new(store: Arc<MetadataStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            route_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Return a cached route snapshot for one account when present.
+    fn cached_snapshot(&self, account_id: &str) -> Result<Option<RouteSnapshot>> {
+        Ok(self
+            .route_cache
+            .lock()
+            .map_err(|_| Error::internal("account route cache lock poisoned"))?
+            .get(account_id)
+            .cloned())
+    }
+
+    /// Load and cache the immutable routing identity for one account.
+    async fn route_snapshot(&self, account_id: &str) -> Result<RouteSnapshot> {
+        if let Some(snapshot) = self.cached_snapshot(account_id)? {
+            return Ok(snapshot);
+        }
+        let manifest_path = self.store.paths().account_manifest(account_id)?.0;
+        let manifest: PartitionsManifest = self.store.read_json(&manifest_path).await?;
+        let snapshot = RouteSnapshot::from_manifest(manifest)?;
+        self.route_cache
+            .lock()
+            .map_err(|_| Error::internal("account route cache lock poisoned"))?
+            .insert(account_id.to_string(), snapshot.clone());
+        Ok(snapshot)
     }
 
     /// Route one canonical logical account path to its partition context.
     pub async fn route(&self, account_id: &str, logical_path: &str) -> Result<PartitionContext> {
         let bucket = self.store.paths().vbucket(account_id, logical_path)?;
-        let manifest_path = self.store.paths().account_manifest(account_id)?.0;
-        let manifest: PartitionsManifest = self.store.read_json(&manifest_path).await?;
-        manifest.validate()?;
-        let index = manifest.routes.partition_point(|route| route.end < bucket);
-        let route = manifest
+        let snapshot = self.route_snapshot(account_id).await?;
+        let index = snapshot.routes.partition_point(|route| route.end < bucket);
+        let route = snapshot
             .routes
             .get(index)
             .ok_or_else(|| Error::Serialization("vbucket route is missing".to_string()))?;
@@ -175,10 +222,25 @@ impl AccountRouter {
             scope: ScopeKey {
                 account_id: account_id.to_string(),
                 partition_id: route.partition,
-                epoch: manifest.epoch,
+                epoch: snapshot.epoch,
             },
             segment_dir,
         })
+    }
+
+    /// Validate a scope against the cached account routing identity.
+    pub async fn validate_scope(&self, scope: &ScopeKey) -> Result<()> {
+        let snapshot = self.route_snapshot(&scope.account_id).await?;
+        scope.validate()?;
+        if !snapshot.partitions.contains(&scope.partition_id) {
+            return Err(Error::Serialization("scope partition is unknown".to_string()));
+        }
+        if scope.epoch != snapshot.epoch {
+            return Err(Error::Serialization(
+                "scope epoch does not match manifest".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 

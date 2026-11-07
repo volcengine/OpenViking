@@ -245,7 +245,18 @@ store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
 store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该条目
+store.close()
 ```
+
+同步使用后调用 `close()`，异步使用后调用 `await store.aclose()`；也可使用
+`with OpenVikingStore(...) as store` 或 `async with` 自动清理。
+清理仅释放 Store 内部创建的客户端，注入的客户端仍由调用方管理。
+关闭未使用的 Store 不会创建客户端，关闭后不可复用。
+清理会等待正在执行的后端请求结束，再释放内部创建的客户端。
+异步代码应使用 `aclose()`，避免等待过程阻塞事件循环。
+在 Store 后端调用内部调用 `close()` 或 `aclose()` 会抛出 `RuntimeError`；
+继承该活动调用上下文的回调或任务也受此约束。被拒绝的关闭尝试会保持 Store 未关闭，
+应在原调用完成后再关闭。
 
 按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
 删除不存在的键不会产生任何影响。
@@ -255,6 +266,9 @@ store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该�
 
 读取记录时，仅记录不存在才返回 `None`；权限、后端和 JSON 解析错误会向调用方抛出，
 `put()` 不会在读取失败后覆盖记录。
+索引创建仅在明确返回目标已存在时改用替换写入；其他索引写入错误向调用方传播。
+JSON 记录先于索引投影写入，因此投影失败时存储值可能已更新；两次写入不是事务操作。
+
 `list_namespaces(prefix=("users", "*"))` 中的每个 `*` 匹配一层命名空间，
 也适用于 `viking://~/peers/support/memories/langgraph_store` 这样的 peer 主目录别名。
 
@@ -262,6 +276,9 @@ store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该�
 筛选中的 `eq`、`ne`、`gt`、`gte`、`lt`、`lte` 和 `in` 在所有嵌套层级均为保留的运算符别名。
 使用 `index=["items[*].text"]` 可以只索引数组中的指定字段，同时保留完整的存储值。
 已有条目的索引会在再次写入该条目时更新。
+
+空字段列表（`index=[]`）与 `index=False` 一样移除索引投影，构造时的默认值也遵循此规则；
+完整值仍可通过 `get()` 和非语义搜索读取。
 
 ### LangGraph middleware
 

@@ -34,7 +34,12 @@ test("the bundled skill stays readable without watching the installed package", 
   }, buildSkillsConfig());
   try {
     const candidates = await provider.list({ cwd: "/workspace" });
-    assert.deepEqual(candidates.map(candidate => candidate.name).sort(), ["openviking-memory", "openviking-skills", "ov-experience-memory"]);
+    assert.deepEqual(candidates.map(candidate => candidate.name).sort(), [
+      "openviking-memory",
+      "openviking-rule-search",
+      "openviking-skills",
+      "ov-experience-memory",
+    ]);
     for (const candidate of candidates) {
       assert.equal(candidate.source, "bundled", candidate.name);
       assert.equal(candidate.provider, "openviking", candidate.name);
@@ -55,6 +60,13 @@ test("the vendored skill ships at the served path", () => {
   // The skill text must stay harness-neutral: dsh publishes the tools under an
   // `mcp__openviking__` prefix, which is one of the forms it already names.
   assert.match(skill, /mcp__openviking__/);
+});
+
+test("the Rule search skill uses the server-qualified MCP tool", () => {
+  const skill = readFileSync(join(SKILLS_DIR, "openviking-rule-search", "SKILL.md"), "utf8");
+
+  assert.match(skill, /^---\nname: openviking-rule-search\n/);
+  assert.match(skill, /mcp__openviking__rule_search/);
 });
 
 test("mounting passes the provider plugin and its config to the host context", () => {

@@ -145,8 +145,7 @@ async def test_compile_api_rejects_system_source_without_creating_task(
     owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
     tracker = get_task_tracker()
     before = {
-        task.task_id
-        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
     }
 
     response = await client.post(
@@ -161,8 +160,7 @@ async def test_compile_api_rejects_system_source_without_creating_task(
     assert response.status_code == 400, response.text
     assert "Compile source must not be in the system namespace" in response.text
     after = {
-        task.task_id
-        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
     }
     assert after == before
 
@@ -231,7 +229,8 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
     transport.mount("queuefs", "/queue", {"backend": "memory"})
     manager = QueueManager(transport)
     manager.get_queue(manager.EXTERNAL_TASK, allow_create=True)
-    monkeypatch.setattr(module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+
     provider = SimpleNamespace(
         task_type="compile",
         task_id_prefix="cmp_",
@@ -240,6 +239,9 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         poll_max_attempts=1,
         submit=AsyncMock(return_value="external-task"),
         get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"done": True})),
+        on_start=AsyncMock(return_value=None),
+        on_finish=AsyncMock(side_effect=lambda task, snapshot: snapshot),
+        submission_meta=lambda external_task_id: {},
     )
     service = ExternalTaskService()
     service.register(provider)
@@ -298,7 +300,6 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     import base64
     from datetime import datetime, timedelta
 
-    import openviking.service.external_task_service as external
     from openviking.server.auth import get_request_context
     from openviking.server.identity import ResolvedIdentity
     from openviking.service.compile_scheduler import (
@@ -356,7 +357,10 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     )
 
     # Drive the real task provider explicitly; generation and derived refresh are external work.
-    monkeypatch.setattr(external, "get_queue_manager", lambda: SimpleNamespace(enqueue=AsyncMock()))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(enqueue=AsyncMock()),
+    )
     monkeypatch.setattr(service.fs, "finalize_compile_directories", AsyncMock())
     monkeypatch.setattr(service.search, "find", AsyncMock(return_value=SimpleNamespace(total=2)))
     monkeypatch.setattr(service.fs, "_enqueue_copy_refresh", AsyncMock(return_value="queued"))
@@ -438,7 +442,9 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     )
     assert retry.json()["result"]["task_id"] == first
     assert "private-runtime-key" not in retry.text and "submission_hash" not in retry.text
-    auth = await tracker.get_task_auth(first, **owner)
+    stored_auth = await tracker.get_task_auth(first, **owner)
+    assert "private-runtime-key" not in json.dumps(stored_auth)
+    auth = await service.compile._tasks._task_auth(first, **owner)
     assert auth["openviking_connection"]["request_id"] == "original-request-id"
     await service.compile._tasks.execute(first, **owner)
     assert (await tracker.get(first, **owner)).status == "completed", (
@@ -617,7 +623,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     )
     assert {"execution", "skill_snapshot"}.isdisjoint(cancelled_operation["meta"])
 
-    # Binary version restore is guarded by the version the caller last observed.
+    # Binary restore is guarded by the last commit changing the file.
     await service.fs.batch_write(
         root_uri=target,
         operations=[
@@ -632,12 +638,12 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert versions["to"] == target
     restore = {
         "path": picture,
-        "restore_version": versions["versions"][-1]["version_id"],
-        "current_version": versions["current_version"],
+        "restore_commit_id": versions["versions"][-1]["snapshot_id"],
+        "current_commit_id": (await service.fs.log(ctx, paths=[picture], limit=1))[0]["oid"],
     }
     restored = await client.post("/api/v1/snapshot/restore", json=restore)
     assert restored.status_code == 200, restored.text
-    assert restored.json()["result"]["meta"]["restored_from"] == restore["restore_version"]
+    assert restored.json()["result"]["meta"]["restored_from"] == restore["restore_commit_id"]
     await service.resources.wait_processed()
     assert await service.fs.read_file_bytes(picture, ctx) == png
     assert (await client.post("/api/v1/snapshot/restore", json=restore)).status_code == 409

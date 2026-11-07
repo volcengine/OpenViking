@@ -9,6 +9,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from openviking.concurrency import bounded_map
 from openviking.core.namespace import uri_parts
 from openviking.core.namespace_constants import SYSTEM_ASSET_ROOT_MAPPINGS
 from openviking.core.namespace_policy import (
@@ -26,6 +27,7 @@ _MANIFEST_SCHEMA_VERSION = 1
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SYSTEM_ASSET_MANIFEST_PATH = "/local/_system/system_assets_manifest.json"
 _SYNC_LOCK_TIMEOUT_SECONDS = 300.0
+_SYNC_CONCURRENCY = 4
 
 
 @asynccontextmanager
@@ -104,20 +106,30 @@ class SystemAssetSynchronizer:
             except AGFSAlreadyExistsError:
                 pass
 
-        pending: list[tuple[str, bytes]] = []
-        for source_path, target_uri in self._iter_managed_assets():
+        async def check_asset(asset: tuple[Path, str]) -> tuple[str, bytes] | None:
+            source_path, target_uri = asset
             expected = source_path.read_bytes()
             try:
                 current = await self._viking_fs.read_file_bytes(target_uri, ctx=ctx)
             except (FileNotFoundError, NotFoundError):
                 current = None
             if current == expected:
-                continue
-            pending.append((self._viking_fs._uri_to_path(target_uri, ctx=ctx), expected))
+                return None
+            return self._viking_fs._uri_to_path(target_uri, ctx=ctx), expected
 
-        for path, content in pending:
+        # Finish every check before writing; failed workers settle before the
+        # caller releases its manifest or account Tree lease.
+        checked = await bounded_map(
+            self._iter_managed_assets(), check_asset, concurrency=_SYNC_CONCURRENCY
+        )
+        pending = [asset for asset in checked if asset is not None]
+
+        async def write_asset(asset: tuple[str, bytes]) -> None:
+            path, content = asset
             await agfs.ensure_parent_dirs(path, fs_ctx=fs_ctx)
             # This trusted package-copy path is separate from externally authorized
             # VFS writes. Encryption remains in AGFS; the outer lock owns exclusion.
             await agfs.write(path, content, fs_ctx=fs_ctx, auto_pathlock=False)
+
+        await bounded_map(pending, write_asset, concurrency=_SYNC_CONCURRENCY)
         return len(pending)

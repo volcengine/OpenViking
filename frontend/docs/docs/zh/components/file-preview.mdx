@@ -1,0 +1,145 @@
+# FilePreview 文件预览
+
+带页签的文件预览。宿主给出内容与文件名，组件负责格式识别、页签行、内容区标题行与正文。
+
+当前是占位实现：页签外壳、编辑流程与成功通知已就位并可交互，文件正文尚未接入渲染器，先以纯文本降级展示。视图后续按本文契约重写。
+
+## 基础用法
+
+至少传入一个页签。文件页签携带 `source`，内容页签携带由宿主自行渲染的节点。
+
+```tsx file="../../_demos/file-preview-basic.tsx" preview
+
+```
+
+## 两类页签
+
+| 类型              | 由谁渲染     | 典型用途             |
+| ----------------- | ------------ | -------------------- |
+| `kind: 'file'`    | 组件         | 文件原文、源码、文档 |
+| `kind: 'content'` | 宿主原样渲染 | 看板、图谱、摘要     |
+
+两类共享外壳——页签行、路径面包屑、复制路径与标题行插槽。差异在正文怎么来，以及预览/源码切换只属于文件页签：内容页签需要多种视图时在 `content` 里自行实现。
+
+当前激活哪个页签由组件内部维护。需要从外部切换时用 ref 句柄：
+
+```tsx
+const previewRef = useRef<FilePreviewHandle>(null);
+previewRef.current?.setActiveTab('dashboard');
+```
+
+## 内容从哪来
+
+`source` 接受三种互斥输入，按顺序取第一个有值的：
+
+- `content` —— 内联文本，会被包成以 `fileName` 命名的 `File`。
+- `file` —— `File` 或 `Blob`，直接透传。
+- `url` —— 可访问链接，组件不自行鉴权。
+
+`fileName` 必填，同时决定格式识别与页签默认标题。
+
+## 状态
+
+加载中、失败与格式不支持都不是 props，由组件根据内容与文件名判定。三种状态都可以通过插槽替换：
+
+- `slots.loadingFallback`
+- `slots.errorFallback`
+- `slots.unsupportedFallback`
+
+宿主提供异步 `editing.save` 执行保存，可选提供 `editing.loadContent` 读取完整文本；返回 `undefined` 表示放弃编辑，拒绝时显示读取失败提示。保存失败时保留草稿并显示错误。`editing.onSave` 仅通知保存成功，`editing.onCancel` 通知草稿已被丢弃。保存中阻止重复提交与页签切换。
+
+执行能力与通知分开：操作成功后才触发对应的 `on…` 回调，失败时不触发。省略方法时隐藏或禁用对应入口，通知本身不承担操作。正文 URI 交互待接入 FileViewer 时启用。
+
+## 属性
+
+| 属性     | 类型                                             | 默认值 | 说明                                 |
+| -------- | ------------------------------------------------ | ------ | ------------------------------------ |
+| `tabs`   | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填   | 至少一个页签，初始展示第一个。       |
+| `labels` | `FilePreviewLabels`                              | 英文   | 所有页签的默认文案，页签可逐项覆盖。 |
+| 其余属性 | `HTMLAttributes<HTMLDivElement>`                 | —      | 标准 div 属性。                      |
+
+### 页签字段
+
+两类页签共有：
+
+| 属性                 | 类型                         | 默认值  | 说明                                   |
+| -------------------- | ---------------------------- | ------- | -------------------------------------- |
+| `key`                | `string`                     | 必填    | 页签唯一标识。                         |
+| `title`              | `ReactNode`                  | 文件名  | 页签行显示内容；内容页签必填。         |
+| `icon`               | `ReactNode`                  | 按格式  | 页签图标。                             |
+| `labels`             | `Partial<FilePreviewLabels>` | —       | 覆盖该页签的文案。                     |
+| `disabled`           | `boolean`                    | `false` | 禁用该页签。                           |
+| `onOpenParent`       | `(path: string) => void`     | —       | 上级目录成功打开后触发；失败时不触发。 |
+| `onCopyPath`         | `(path: string) => void`     | —       | 路径复制成功后通知。                   |
+| `showViewModeSwitch` | `boolean`                    | `true`  | 预览/源码切换；仅文件页签生效。        |
+| `slots`              | `FilePreviewHeaderSlots`     | —       | `actions`、`titleExtra`。              |
+
+文件页签额外提供：
+
+| 属性            | 类型                            | 默认值 | 说明                                                                                     |
+| --------------- | ------------------------------- | ------ | ---------------------------------------------------------------------------------------- |
+| `source`        | `FilePreviewSource`             | 必填   | 内容与文件名。                                                                           |
+| `operations`    | `FilePreviewOperations`         | —      | 异步执行能力：`openParent(path)`、`download()`、`openUri(uri)`，均返回 `Promise<void>`。 |
+| `resources`     | `readonly FileViewerResource[]` | —      | 伴随资源，例如 3D 贴图。                                                                 |
+| `editing`       | `FilePreviewEditing`            | —      | 编辑能力；不传即只读。                                                                   |
+| `slots`         | `FilePreviewFileTabSlots`       | —      | 增加三类状态兜底。                                                                       |
+| `onCopyContent` | `(text: string) => void`        | —      | 正文复制成功后通知。                                                                     |
+| `onDownload`    | `() => void`                    | —      | 下载操作成功后触发；失败时不触发。                                                       |
+| `onOpenUri`     | `(uri: string) => void`         | —      | 正文资源成功打开后触发；失败时不触发。                                                   |
+
+```tsx
+import { FilePreview } from '@openviking/react/components/file-preview';
+import '@openviking/react/components/file-preview/style.css';
+```
+
+复制由组件完成。文件页签提供 `source.path` 时显示路径复制按钮；没有可复制文本时，正文复制按钮禁用。两类回调都接收已经复制成功的值，失败时不触发；省略回调不影响复制，宿主无需再次执行复制。
+
+## 无障碍
+
+页签行使用 `role="tablist"` 与 `role="tab"` 按钮并上报 `aria-selected`。图标按钮都带 `aria-label` 与 `title` 提示。路径面包屑只在传入 `operations.openParent` 时才可点击。
+
+## 类名
+
+类名带 `ov-` 前缀。块名为 `ov-file-preview`，元素使用 `ov-file-preview__<元素>`。
+
+| 类名                               | 元素     | 用途                           |
+| ---------------------------------- | -------- | ------------------------------ |
+| `ov-file-preview`                  | 根节点   | 纵向布局与基础排版。           |
+| `ov-file-preview__tab-row`         | 页签栏   | 可横向滚动的页签行。           |
+| `ov-file-preview__tab`             | 页签     | 单个页签，带 `aria-selected`。 |
+| `ov-file-preview__tab-title`       | 页签标题 | 截断的页签文本。               |
+| `ov-file-preview__header`          | 头部     | 路径行与操作区。               |
+| `ov-file-preview__breadcrumb`      | 面包屑   | 上级目录导航按钮。             |
+| `ov-file-preview__header-actions`  | 操作区   | 切换、按钮与扩展操作。         |
+| `ov-file-preview__action`          | 图标按钮 | 方形纯图标控件。               |
+| `ov-file-preview__button`          | 按钮     | 次要按钮。                     |
+| `ov-file-preview__button--primary` | 按钮     | 主要（保存）按钮。             |
+| `ov-file-preview__switch`          | 切换组   | 编辑与预览切换容器。           |
+| `ov-file-preview__switch-item`     | 切换项   | 单个切换，带 `data-active`。   |
+| `ov-file-preview__body`            | 滚动区域 | 内容滚动容器。                 |
+| `ov-file-preview__pre`             | 预览文本 | 只读文本内容。                 |
+| `ov-file-preview__textarea`        | 编辑器   | 可编辑文本域。                 |
+| `ov-file-preview__state`           | 状态面板 | 整高的加载、空态与错误视图。   |
+
+```css
+.my-workbench .ov-file-preview__tab {
+  max-width: 180px;
+}
+```
+
+## 主题变量
+
+| CSS 变量             | 默认值                    | 用途               |
+| -------------------- | ------------------------- | ------------------ |
+| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         | 分隔线与边框。     |
+| `--ov-ui-text-muted` | `#8f959e`                 | 次要文字与图标。   |
+| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         | 悬停背景。         |
+| `--ov-ui-accent`     | `#2563c5`                 | 面包屑与主按钮。   |
+| `--ov-ui-focus-ring` | `#2563c5`                 | 键盘焦点环。       |
+| `--ov-ui-radius`     | `6px`                     | 圆角。             |
+| `--ov-ui-surface`    | `canvas`                  | 选中页签背景。     |
+| `--ov-ui-font-mono`  | `ui-monospace, monospace` | 正文与编辑器文字。 |
+
+## 实现范围
+
+组件渲染外壳并通知成功的操作。读取、保存、下载与导航由宿主提供执行能力，成功通知不执行这些操作。
