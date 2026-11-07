@@ -47,7 +47,7 @@ class ContextInventoryProvider:
 
         files, skills, memories = await asyncio.gather(
             self._stat_count("viking://resources", ctx=ctx),
-            self._stat_count(f"{user_root}/skills", ctx=ctx),
+            self._stat_count("viking://resources/skills", ctx=ctx),
             self._stat_count(f"{user_root}/memories", ctx=ctx),
         )
         return {
