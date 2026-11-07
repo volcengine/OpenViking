@@ -13,6 +13,7 @@ from openviking.storage.observers import (
     ModelsObserver,
     QueueObserver,
     RetrievalObserver,
+    UsageObserver,
     VikingDBObserver,
 )
 from openviking.storage.queuefs import get_queue_manager
@@ -505,6 +506,20 @@ class ObserverService:
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
             status=observer.get_status_table(),
+        )
+
+    async def usage(self, ctx: Optional[RequestContext] = None) -> ComponentStatus:
+        """Get context usage metrics. Async so the /usage endpoint reaches
+        get_status_table_async directly instead of double-wrapping in
+        run_async."""
+        observer = UsageObserver(self._vikingdb)
+        # Read the status first: has_errors() reports on the query it runs.
+        status = await observer.get_status_table_async(ctx=ctx)
+        return ComponentStatus(
+            name="usage",
+            is_healthy=observer.is_healthy(),
+            has_errors=observer.has_errors(),
+            status=status,
         )
 
     def get_retrieval_status(self, *, format: str = "table") -> ComponentStatus:
