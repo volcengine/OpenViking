@@ -5,6 +5,7 @@
 import asyncio
 import re
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
@@ -96,6 +97,60 @@ class ScheduledTreeWork:
     work: SemanticTreeWork
 
 
+@dataclass
+class _SemanticWorkBatch:
+    resources: deque[ScheduledTreeWork] = field(default_factory=deque)
+    memories: deque[ScheduledTreeWork] = field(default_factory=deque)
+    next_memory: bool = False
+
+
+class _SemanticTreeQueue(asyncio.Queue[ScheduledTreeWork]):
+    """Alternate disjoint resource and memory roots without crossing other work."""
+
+    def _init(self, maxsize: int) -> None:
+        self._queue: deque[Any] = deque()
+        self._pending = 0
+
+    def qsize(self) -> int:
+        return self._pending
+
+    def _put(self, item: ScheduledTreeWork) -> None:
+        root = getattr(item.executor, "_root_uri", None)
+        lane = None
+        if isinstance(root, str) and root.startswith("viking://"):
+            classification = classify_uri(root)
+            if classification.scope == "resources":
+                lane = "resource"
+            elif classification.is_memory:
+                lane = "memory"
+        if lane is None:
+            # Unknown or broader roots must remain in FIFO order with both lanes.
+            self._queue.append(item)
+        else:
+            if not self._queue or not isinstance(self._queue[-1], _SemanticWorkBatch):
+                self._queue.append(_SemanticWorkBatch(next_memory=lane == "memory"))
+            batch = self._queue[-1]
+            (batch.memories if lane == "memory" else batch.resources).append(item)
+        self._pending += 1
+
+    def _get(self) -> ScheduledTreeWork:
+        entry = self._queue[0]
+        if isinstance(entry, _SemanticWorkBatch):
+            use_memory = entry.next_memory
+            if use_memory and not entry.memories:
+                use_memory = False
+            elif not use_memory and not entry.resources:
+                use_memory = True
+            item = (entry.memories if use_memory else entry.resources).popleft()
+            entry.next_memory = not use_memory
+            if not entry.resources and not entry.memories:
+                self._queue.popleft()
+        else:
+            item = self._queue.popleft()
+        self._pending -= 1
+        return item
+
+
 class SemanticTreeScheduler:
     """Shared node executor for semantic DAG work in one event loop."""
 
@@ -103,7 +158,7 @@ class SemanticTreeScheduler:
 
     def __init__(self, max_workers: int):
         self._max_workers = max(1, max_workers)
-        self._queue: asyncio.Queue[ScheduledTreeWork] = asyncio.Queue()
+        self._queue: asyncio.Queue[ScheduledTreeWork] = _SemanticTreeQueue()
         self._workers: Set[asyncio.Task] = set()
 
     def configure(self, max_workers: int) -> None:
