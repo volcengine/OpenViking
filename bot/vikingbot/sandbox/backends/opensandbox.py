@@ -12,7 +12,12 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
+from vikingbot.sandbox.base import (
+    CommandResult,
+    SandboxBackend,
+    SandboxFileInfo,
+    SandboxNotStartedError,
+)
 from vikingbot.sandbox.managed_server import WORKSPACE_GID_LABEL, WORKSPACE_UID_LABEL
 
 
@@ -34,6 +39,7 @@ class OpenSandboxBackend(SandboxBackend):
         self._host_workspace = host_workspace
         self._sandbox = None
         self._connection_config = None
+        self._published_paths: set[str] = set()
 
         self._osb_config = config.backends.opensandbox
 
@@ -150,6 +156,11 @@ class OpenSandboxBackend(SandboxBackend):
             if error:
                 stderr_text = "\n".join(filter(None, [stderr_text, f"{error.name}: {error.value}"]))
                 exit_code = exit_code or 1
+                if error.name == "CommandExecError":
+                    try:
+                        exit_code = int(error.value) or 1
+                    except (TypeError, ValueError):
+                        pass
 
             if stdout_text:
                 output_parts.append(stdout_text)
@@ -165,7 +176,7 @@ class OpenSandboxBackend(SandboxBackend):
                 result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"
 
             logger.info("[OpenSandbox] Output:\n{}", result)
-            return result
+            return CommandResult(result, exit_code)
 
         except Exception as e:
             logger.error("[OpenSandbox] Error: {}", e)
@@ -187,6 +198,8 @@ class OpenSandboxBackend(SandboxBackend):
 
         self._sandbox = None
         self._connection_config = None
+
+        self._published_paths.clear()
 
     def is_running(self) -> bool:
         return self._sandbox is not None
@@ -215,6 +228,32 @@ class OpenSandboxBackend(SandboxBackend):
 
     def local_file_path(self, path: str) -> Path | None:
         return None
+
+    async def replace_file(self, source: str, destination: str) -> None:
+        """Publish new shards by API; retain atomic mv for execd's no-clobber rename."""
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        from opensandbox.exceptions import SandboxApiException
+        from opensandbox.models.filesystem import MoveEntry
+
+        source, destination = self._replacement_paths(source, destination)
+        if destination not in self._published_paths:
+            try:
+                await self._sandbox.files.move_files(
+                    [
+                        MoveEntry(
+                            src=self._sandbox_path(source), dest=self._sandbox_path(destination)
+                        )
+                    ]
+                )
+            except SandboxApiException:
+                # Execd 1.0.6 refuses existing destinations. Never delete the old
+                # state or upload over it: upload truncates before copying data.
+                await super().replace_file(source, destination)
+        else:
+            await super().replace_file(source, destination)
+        # This is a transport hint only. A stale hint still performs a real rename.
+        self._published_paths.add(destination)
 
     async def read_file(self, path: str) -> str:
         return (await self.read_file_bytes(path)).decode("utf-8")

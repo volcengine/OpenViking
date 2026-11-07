@@ -13,6 +13,7 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.sandbox.base import CommandResult
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.tracing import get_current_response_id
 
@@ -272,6 +273,8 @@ class ToolRegistry:
                     execute_success = not isinstance(result, Exception) and not (
                         isinstance(result, str) and result.lstrip().startswith("Error:")
                     )
+                    if isinstance(result, CommandResult) and result.exit_code is not None:
+                        execute_success = result.exit_code == 0
                     output_str = str(result) if result is not None else None
                     self.langfuse.end_tool_call(
                         span=tool_span,

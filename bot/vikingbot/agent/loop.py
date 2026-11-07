@@ -44,6 +44,7 @@ from vikingbot.openviking_mount.session_state import (
 )
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
+from vikingbot.sandbox.base import CommandResult
 from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens, ensure_non_empty_assistant_content
 from vikingbot.utils.tracing import set_response_id, trace
@@ -54,6 +55,8 @@ if TYPE_CHECKING:
 
 
 def _is_tool_result_success(result: Any) -> bool:
+    if isinstance(result, CommandResult) and result.exit_code is not None:
+        return result.exit_code == 0
     if result is None or isinstance(result, Exception):
         return False
     text = str(result).lstrip()
