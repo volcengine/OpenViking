@@ -1,4 +1,4 @@
-import { ContentTabIcon, resolveFileIcon } from './file-preview-icons.js';
+import { ContentTabIcon, FileTypeIcon } from './file-preview-icons.js';
 import type { FilePreviewTab } from './types.js';
 
 export interface FilePreviewTabRowProps {
@@ -45,7 +45,7 @@ export function FilePreviewTabRow({
             <span className="ov-file-preview__tab-icon" aria-hidden="true">
               {tab.icon ??
                 (tab.kind === 'file' ? (
-                  resolveFileIcon(tab.source.fileName)
+                  <FileTypeIcon fileName={tab.source.fileName} />
                 ) : (
                   <ContentTabIcon />
                 ))}

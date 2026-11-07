@@ -1,4 +1,20 @@
+/**
+ * 文件预览的主题变量。默认值取自对齐的宿主实现，宿主可按自己的主题整组覆盖；
+ * 逐条覆盖时只需重设对应变量。组件私有的变量用 `--ov-ui-file-preview-` 前缀，
+ * 与包内其他组件互不干扰。
+ *
+ * Theme variables of the file preview. Defaults come from the host implementation
+ * this component aligns with; a host overrides the whole set or any single
+ * variable. Component-private variables carry the `--ov-ui-file-preview-` prefix
+ * so they never collide with other components in the package.
+ */
 .ov-file-preview {
+  --ov-ui-file-preview-accent: #2563c5;
+  --ov-ui-file-preview-border: rgb(0 0 0 / 8%);
+  --ov-ui-file-preview-focus-ring: #2563c5;
+  --ov-ui-file-preview-row-hover: rgb(0 0 0 / 4%);
+  --ov-ui-file-preview-surface: canvas;
+
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -19,7 +35,7 @@
   align-items: stretch;
   min-width: 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-bottom: 1px solid var(--ov-ui-file-preview-border);
   scrollbar-width: thin;
 }
 
@@ -39,11 +55,11 @@
 }
 
 .ov-file-preview__tab:hover:not(:disabled) {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  background: var(--ov-ui-file-preview-row-hover);
 }
 
 .ov-file-preview__tab--active {
-  border-bottom-color: var(--ov-ui-accent, #2563c5);
+  border-bottom-color: var(--ov-ui-file-preview-accent);
   color: inherit;
 }
 
@@ -57,7 +73,7 @@
 .ov-file-preview__button:focus-visible,
 .ov-file-preview__switch-item:focus-visible,
 .ov-file-preview__breadcrumb-link:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
   outline-offset: 1px;
 }
 
@@ -88,7 +104,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-bottom: 1px solid var(--ov-ui-file-preview-border);
 }
 
 .ov-file-preview__path-row,
@@ -144,7 +160,7 @@
 }
 
 .ov-file-preview__breadcrumb-link:hover:not(:disabled) {
-  color: var(--ov-ui-accent, #2563c5);
+  color: var(--ov-ui-file-preview-accent);
   text-decoration: underline;
 }
 
@@ -188,9 +204,9 @@
   min-width: 160px;
   margin: 4px 0 0;
   padding: 4px;
-  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border: 1px solid var(--ov-ui-file-preview-border);
   border-radius: var(--ov-ui-radius, 6px);
-  background: var(--ov-ui-surface, canvas);
+  background: var(--ov-ui-file-preview-surface);
   box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
   list-style: none;
 }
@@ -209,7 +225,7 @@
 }
 
 .ov-file-preview__breadcrumb-menu button:hover:not(:disabled) {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  background: var(--ov-ui-file-preview-row-hover);
 }
 
 .ov-file-preview__action {
@@ -220,7 +236,7 @@
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border: 1px solid var(--ov-ui-file-preview-border);
   border-radius: var(--ov-ui-radius, 6px);
   background: none;
   color: inherit;
@@ -229,7 +245,7 @@
 }
 
 .ov-file-preview__action:hover:not(:disabled) {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  background: var(--ov-ui-file-preview-row-hover);
 }
 
 .ov-file-preview__action:disabled {
@@ -241,7 +257,7 @@
   display: inline-flex;
   flex: none;
   overflow: hidden;
-  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border: 1px solid var(--ov-ui-file-preview-border);
   border-radius: var(--ov-ui-radius, 6px);
 }
 
@@ -255,7 +271,7 @@
 }
 
 .ov-file-preview__switch-item[data-active] {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  background: var(--ov-ui-file-preview-row-hover);
   color: inherit;
   font-weight: 500;
 }
@@ -263,7 +279,7 @@
 .ov-file-preview__button {
   flex: none;
   padding: 2px 10px;
-  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border: 1px solid var(--ov-ui-file-preview-border);
   border-radius: var(--ov-ui-radius, 6px);
   background: none;
   color: inherit;
@@ -272,12 +288,12 @@
 }
 
 .ov-file-preview__button:hover:not(:disabled) {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  background: var(--ov-ui-file-preview-row-hover);
 }
 
 .ov-file-preview__button--primary {
-  border-color: var(--ov-ui-accent, #2563c5);
-  background: var(--ov-ui-accent, #2563c5);
+  border-color: var(--ov-ui-file-preview-accent);
+  background: var(--ov-ui-file-preview-accent);
   color: #fff;
 }
 
@@ -343,7 +359,7 @@
   min-width: 0;
   min-height: 240px;
   padding: 8px;
-  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border: 1px solid var(--ov-ui-file-preview-border);
   border-radius: var(--ov-ui-radius, 6px);
   background: none;
   color: inherit;
@@ -364,7 +380,7 @@
 .ov-file-preview__footer {
   flex: none;
   padding: 4px 10px;
-  border-top: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  border-top: 1px solid var(--ov-ui-file-preview-border);
   color: var(--ov-ui-text-muted, #8f959e);
   font-size: 12px;
 }
