@@ -78,6 +78,7 @@ _INPUT_FIELDS = ("from", "to", "skill", "instruction", "args")
 STATE_FIELDS = frozenset(
     (
         *_INPUT_FIELDS,
+        "updated_by",
         "auto_update",
         "update_schedule",
         "task_first_create_time",
@@ -300,9 +301,10 @@ class CompileStateStore:
         leaves the configuration unpublished. This method does not execute Compile.
         """
         path = self._record_path(account_id, owner_user_id, compile_name)
+        record = deepcopy(record)
+        record["updated_by"] = owner_user_id
         if set(record) != STATE_FIELDS:
             raise InvalidArgumentError("Compile state fields do not match the configuration schema")
-        record = deepcopy(record)
         record["execution_context"]["owner_user_id"] = owner_user_id
         async with self.locked(path) as lease:
             if await self.read_json(path) is not None:

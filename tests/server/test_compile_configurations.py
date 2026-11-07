@@ -441,6 +441,7 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
         ctx=ctx,
     )
     assert scheduler._expiry.report.await_args.args[0].identity.user_id == other_owner
+    assert (await store.get(ctx.account_id, other_owner, compile_name))["updated_by"] == other_owner
     assert (
         await scheduler.trigger_if_due(ctx.account_id, other_owner, compile_name, due)
         == "submitted"
@@ -483,11 +484,13 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
                 "compile_name": compile_name,
                 "instruction": "changed",
                 "auto_update": False,
+                "updated_by": "bob",
             }
         ),
         ctx,
     )
     updated = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
+    assert updated["updated_by"] == "bob"
     assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
     assert updated["progress"] == {}
     assert updated["conflict_num"] == 7
@@ -496,7 +499,9 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     )
     changed.to = "viking://resources/new-target"
     await service.compile.update_config(changed, ctx)
-    assert (await store.get(ctx.account_id, ctx.user.user_id, compile_name))["conflict_num"] is None
+    updated = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
+    assert updated["conflict_num"] is None
+    assert updated["updated_by"] == ctx.user.user_id
     recovered = await service.compile.create(
         request, ctx=ctx, connection={}, idempotency_key="compile-frozen-config"
     )

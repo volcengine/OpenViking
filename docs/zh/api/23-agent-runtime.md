@@ -172,6 +172,8 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 配置更新必填 `compile_name`、`from`、`to`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
 
+创建配置时，`state.json` 的顶层字段 `updated_by` 记录配置归属用户的 ID。更新时可在请求体顶层传入字符串 `updated_by` 指定记录的值，省略时记录当前认证用户的 ID。
+
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
 两个调用时间都使用 Unix 秒：
@@ -205,7 +207,7 @@ Compile 业务文件仅有：
 
 目录中的 `user_id` 取创建请求的 `args.owner_id`，省略时取当前认证用户的 ID。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含归属于该用户的配置；共享目标目录仍按现有 ACL 授权。公开 API 只需传入 `compile_name`，在当前认证用户目录内定位；拥有共享目标的权限不代表可以访问其他用户的配置。
 
-state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存配置归属用户 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
+state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存配置归属用户 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
 
 `conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在产物快照收尾后统计，不等待目标补标；失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
 

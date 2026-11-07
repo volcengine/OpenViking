@@ -36,6 +36,8 @@ export type CompileConfig = CompileRequest & {
 export type CompileConfigSummary = CompileConfig
 export type CompileConfigUpdate = CompileRequest & {
   compile_name: string
+  /** User credited with this update. Defaults to the authenticated user's ID. */
+  updated_by?: string
   auto_update: boolean
   update_schedule: UpdateSchedule | null
 }

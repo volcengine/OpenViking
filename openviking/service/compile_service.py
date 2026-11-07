@@ -173,6 +173,9 @@ class CompileConfigUpdate(CompileCreateRequest):
 
     auto_update: bool
     update_schedule: UpdateSchedule | None = None
+    updated_by: str | None = Field(
+        default=None, description="User credited with this update. Defaults to the requesting user."
+    )
 
 
 class CompileErrorInfo(BaseModel):
@@ -877,6 +880,9 @@ class CompileService:
             await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
             previous_signature = execution_signature(record)
             replacement = deepcopy(replacement)
+            replacement["updated_by"] = (
+                ctx.user.user_id if body.updated_by is None else body.updated_by
+            )
             replacement["execution_context"]["owner_user_id"] = owner_user_id
             if replacement["to"] == record["to"]:
                 replacement["conflict_num"] = record["conflict_num"]
