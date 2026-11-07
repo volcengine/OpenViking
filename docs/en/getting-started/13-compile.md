@@ -21,15 +21,24 @@ ov add-skill ./llm-wiki-v1.zip -p viking://agent/skills --wait
 ov read viking://agent/skills/llm-wiki/SKILL.md
 ```
 
-The package contains the project's LLM Wiki Skill. Compilation calls the model and writes output into a new directory. Use another target name for repeat runs.
+The package contains the project's LLM Wiki Skill. Compilation calls the model and writes output into a new directory.
 
 ## Submit compilation
 
+Create a named configuration with the sources, target, Skill, and optional `--instruction` and `--args`.
+
 ```bash
-ov compile --from viking://resources/onboarding-en-v1 \
+ov compile create --compile-name lighthouse-wiki \
+  --from viking://resources/onboarding-en-v1 \
   --to viking://resources/onboarding-wiki-en-v1 \
   --skill viking://agent/skills/llm-wiki \
   --instruction "Generate index.md and entity/lighthouse.md in English. Explain the isolated-network feedback pilot using the project, feedback, and meeting sources. Preserve full viking:// source URIs and identify undecided dates. Write only inside the target directory."
+```
+
+Create the configuration once. Submit each run by name:
+
+```bash
+ov compile --compile-name lighthouse-wiki
 ```
 
 Record the returned `cmp_...` task ID and inspect progress:
@@ -42,9 +51,9 @@ Check every 5 seconds for up to 5 minutes initially. Read outputs after `complet
 
 After compilation, the target directory should contain an index and a project page. See the [sample Wiki page](/quickstart/wiki-output-en-v1.txt) for content organization and source citations, then follow the checks below to review your output.
 
-The command above is a one-off full compile. To maintain incremental history, use `ov compile create --compile-name research-summary` with the same inputs, then execute `ov compile --compile-name research-summary`. The name is required, case-sensitive, and unique for the current user within an account; it contains 1–64 ASCII letters, digits, underscores, or hyphens. The first character cannot be a hyphen. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
+The first run is full. Subsequent runs use the last successful baseline. The name is required, case-sensitive, and unique for the current user within an account; it contains 1–64 ASCII letters, digits, underscores, or hyphens. The first character cannot be a hyphen. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
 
-A named run reads its inputs from the saved configuration. Supply `--from`, `--to`, `--skill`, `--instruction`, and `--args` when creating the configuration, or omit `--compile-name` for a one-off run.
+The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
 ## Open the body page
 

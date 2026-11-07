@@ -948,12 +948,12 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Use a VikingBot Skill to transform materials into reports, JSON, Wiki pages or other Skill-defined files, or `ov compile memory` to consolidate existing memories in place.",
         examples: &[
             HelpItem {
-                label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki",
-                description: "Compile one source directory into Wiki pages.",
+                label: "ov compile create --compile-name weekly-wiki --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki",
+                description: "Save the inputs for the weekly Wiki.",
             },
             HelpItem {
-                label: "ov compile --from viking://resources/weekly --to viking://agent/skills --skill viking://agent/skills/skill-creator",
-                description: "Generate or update one shared Skill package.",
+                label: "ov compile --compile-name weekly-wiki",
+                description: "Run the saved Wiki configuration.",
             },
             HelpItem {
                 label: "ov compile memory",

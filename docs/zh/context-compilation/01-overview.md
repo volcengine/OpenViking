@@ -14,29 +14,22 @@
 
 编译由服务端配置的 [Agent Runtime](../api/23-agent-runtime.md) 执行，本地部署可使用内置 [VikingBot](../concepts/15-vikingbot.md)。它以请求用户的身份读取来源和 Skill，在独立的 Agent Loop 中整理并写入内容。任务异步运行，返回 `task_id` 后可查询进度和结果。
 
-## 一条命令跑起来
+## 创建配置并提交编译
 
 先按 [LLM Wiki 示例](02-llm-wiki.md) 导入来源、安装 Skill，再执行：
 
 ```bash
-ov compile \
+ov compile create --compile-name research-summary \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
   --instruction "把研究资料整理成便于团队检索的知识库"
+ov compile --compile-name research-summary
 ```
 
 命令会立即返回一个 `cmp_...` 任务 ID，之后用 `ov task status <id>` 查看进度、用 `ov task cancel <id>` 取消。完整的字段说明、任务生命周期和 HTTP 接口见 [Agent Runtime API](../api/23-agent-runtime.md)。
 
 ## 复用持久编译配置
-
-上面的完整参数命令执行一次性全量编译。需要保存来源基线、后续增量执行时，先创建配置：
-
-```bash
-ov compile create --compile-name research-summary --from viking://resources/research \
-  --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki
-ov compile --compile-name research-summary
-```
 
 创建必须提供 `compile_name` 并原样返回，准备并标记输出目录，但不执行 Compile。每次执行返回新的 `cmp_...` 任务 ID；首次为完整编译，后续成功执行推进手动和定时共享的基线。定时计划通过 `/api/v1/compile/create` 的 `args` 配置。相同输出目录的多个配置独立存在。普通文件移动或删除不修改持久配置。
 

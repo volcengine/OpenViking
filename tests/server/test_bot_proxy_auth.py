@@ -313,6 +313,9 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
         "X-OpenViking-User": "alice",
     }
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        memory = {"skill": "memory", "to": "viking://~/memories"}
+        response = await client.post("/api/v1/compile", headers=headers, json=memory)
+        assert response.status_code == 202 and {"deprecation", "link"}.isdisjoint(response.headers)
         created = await client.post(
             "/api/v1/compile",
             headers={**headers, **({"X-Request-ID": request_id} if request_id else {})},
@@ -331,6 +334,9 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
             headers=headers,
         )
 
+    assert created.headers["deprecation"] == "@1794009600"
+    guide = "https://docs.openviking.ai/en/api/23-agent-runtime#execute-compile"
+    assert created.links["deprecation"]["url"] == guide
     assert created.status_code == 202
     assert created.json()["result"]["task_id"] == "cmp_1"
     assert legacy_created.status_code == 400

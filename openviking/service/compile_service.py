@@ -147,7 +147,7 @@ class CompileRequest(BaseModel):
             if len(data) != 1:
                 raise ValueError(
                     "To run a saved configuration, send only compile_name to POST /api/v1/compile. "
-                    "For a one-off compile, omit compile_name and supply the execution inputs. "
+                    "Save the execution inputs with compile_name using POST /api/v1/compile/create. "
                     "See https://docs.openviking.ai/en/api/23-agent-runtime"
                 )
             if data["compile_name"] is None:

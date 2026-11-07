@@ -83,6 +83,8 @@ POST /api/v1/compile
 
 仅传名称时读取当前用户已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
 
+直接提交 `from`、`to` 和 Skill URI 的写法已弃用。受理时，`Deprecation` 和 `Link` 响应头提供弃用日期和迁移指南。请先将这些输入连同 `compile_name` 提交到 `POST /api/v1/compile/create`，再向 `POST /api/v1/compile` 仅提交 `compile_name`。
+
 传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标开始/结束快照、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
 
 两种普通执行形式都先完成目标校验、必要的目录创建及独立补标任务持久入队，再提交 Compile 执行任务。后台索引或 tag 延迟不阻塞 Compile 提交、产物写入或收尾，也不使 Compile 因补标失败而失败。受理成功不代表 tag 已可查询，补标期间由上述虚拟树锁保护目标。Compile 的显式开始/结束快照、产物 `snapshot_id`、Outputs 和回滚流程保持原有语义。该 tag 是目录检索标记，任务完成、失败或取消不会自动移除它。
@@ -113,8 +115,6 @@ ov compile create --compile-name research-summary --from viking://resources/rese
   --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki \
   --args '{"auto_update":true,"update_schedule":{"frequency":"daily","hour":10}}'
 ov compile --compile-name research-summary
-ov compile --from viking://resources/research \
-  --to viking://resources/one-off-wiki --skill viking://agent/skills/llm-wiki
 ```
 
 `--args` 是 JSON 对象。创建必须传入 `--compile-name` 并返回该配置名称；两种执行方式都返回任务 ID。

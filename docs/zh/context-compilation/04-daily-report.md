@@ -28,21 +28,23 @@ ov skills list
 在 `--instruction` 里说清楚**日期、时区、报告对象和侧重点**，Skill 会据此定位和取舍：
 
 ```bash
-ov compile \
+ov compile create --compile-name daily-report \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "按 Asia/Shanghai 时区生成 2026-08-20 的日报，聚焦我的工作产出与决策"
+ov compile --compile-name daily-report
 ```
 
 一次生成多天，把日期范围写进 `--instruction` 即可（每天仍是独立一页）：
 
 ```bash
-ov compile \
+ov compile create --compile-name report-range \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "按 Asia/Shanghai 时区生成 2026-08-18 至 2026-08-20 每天一份日报"
+ov compile --compile-name report-range
 ```
 
 命令会立刻返回 `task_id`：

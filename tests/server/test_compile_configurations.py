@@ -206,6 +206,7 @@ async def test_same_name_configuration_and_runs_are_user_scoped(service, app, cl
             headers={"Idempotency-Key": "same-user-scoped-key"},
         )
         assert accepted.status_code == 202, accepted.text
+        assert all({"deprecation", "link"}.isdisjoint(r.headers) for r in (created, accepted))
         task_ids.append(accepted.json()["result"]["task_id"])
         runs = (await client.get("/api/v1/compile/runs", params={"compile_name": name})).json()[
             "result"

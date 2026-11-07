@@ -83,6 +83,8 @@ This endpoint accepts exactly one of these request shapes:
 
 A name-only request loads the current user's saved inputs. It cannot override `from`, `to`, `skill`, `instruction`, or `args`. Its first execution performs a full compile; later executions use the last successful source snapshot, including additions, modifications and deletions. Skill or instruction changes can require full recomputation. Manual and scheduled executions use the same entry point and baseline.
 
+Submitting `from`, `to`, and a Skill URI directly is deprecated. Accepted requests include the deprecation date and migration guide in the `Deprecation` and `Link` response headers. Send the inputs and a `compile_name` to `POST /api/v1/compile/create` once, then send only `compile_name` to `POST /api/v1/compile` for each run.
+
 A full-input request always performs a one-off full compile, including when the same output has saved configurations. It does not read or write saved configuration/run files and does not snapshot sources. Target start/finish snapshots, cancellation and recovery still apply. `skill="memory"` remains an independent in-place consolidation mode without `from`; it cannot be saved or scheduled through the creation endpoint.
 
 Both ordinary execution forms validate the target, create its directory when needed, and durably enqueue independent tagging before submitting the Compile execution task. Background index or tag delays do not block submission, output writes or Compile finalization, and tagging failures do not fail Compile. Acceptance does not mean the tag is searchable; the virtual lease protects pending targets as described above. Explicit start/finish snapshots, output `snapshot_id`, Outputs and rollback retain their existing semantics. The tag is a directory retrieval marker; task completion, failure or cancellation does not automatically remove it.
@@ -113,8 +115,6 @@ ov compile create --compile-name research-summary --from viking://resources/rese
   --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki \
   --args '{"auto_update":true,"update_schedule":{"frequency":"daily","hour":10}}'
 ov compile --compile-name research-summary
-ov compile --from viking://resources/research \
-  --to viking://resources/one-off-wiki --skill viking://agent/skills/llm-wiki
 ```
 
 `--args` is a JSON object. Creation requires `--compile-name` and returns that configuration name; either execution form returns a task ID.

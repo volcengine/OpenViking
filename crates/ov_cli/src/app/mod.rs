@@ -146,12 +146,12 @@ pub(crate) async fn run() {
             i18n::Language::ZhCn => (
                 "命令错误",
                 format!("--compile-name 不能与 {flag} 同时使用。"),
-                "运行已有配置：ov compile --compile-name <名称>\n一次性编译：省略 --compile-name，传入执行参数。\n详见编译指南：https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
+                "请用 ov compile create --compile-name <名称> 保存输入参数，再用 ov compile --compile-name <名称> 运行。\n详见编译指南：https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
             ),
             i18n::Language::En => (
                 "Command Error",
                 format!("--compile-name cannot be combined with {flag}."),
-                "Run a saved configuration: ov compile --compile-name <name>\nFor a one-off compile, omit --compile-name and supply the execution inputs.\nSee https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
+                "Save inputs with ov compile create --compile-name <name>, then run ov compile --compile-name <name>.\nSee https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
             ),
         };
         error_ui::print_report(&error_ui::ErrorReport::new(title, message), false);

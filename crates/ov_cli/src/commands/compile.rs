@@ -1,5 +1,6 @@
 use crate::client::{CompileAccepted, HttpClient};
 use crate::error::{Error, Result};
+use crate::i18n::{Language, copy};
 use crate::output::{OutputFormat, output_success};
 use serde_json::{Map, Value};
 
@@ -52,6 +53,16 @@ pub async fn run(
         let accepted = client
             .create_compile(&sources, to.trim(), &skill, instruction, args.as_ref())
             .await?;
+        if !memory_mode {
+            eprintln!(
+                "{}",
+                copy(
+                    Language::current(),
+                    "ov compile --from … is deprecated. Use ov compile create --compile-name <name> with your inputs, then ov compile --compile-name <name>. https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
+                    "ov compile --from … 已弃用。请用 ov compile create --compile-name <名称> 保存参数，再用 ov compile --compile-name <名称> 运行。https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
+                )
+            );
+        }
         render_accepted(&accepted, to.trim(), output_format, compact);
     }
     Ok(())

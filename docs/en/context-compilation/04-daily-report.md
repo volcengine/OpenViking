@@ -28,21 +28,23 @@ ov skills list
 Spell out the **date, timezone, report subject, and emphasis** in `--instruction` — the Skill uses it to scope and prioritize:
 
 ```bash
-ov compile \
+ov compile create --compile-name daily-report \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "Daily report for 2026-08-20 in Asia/Shanghai, focused on my outcomes and decisions"
+ov compile --compile-name daily-report
 ```
 
 For several days at once, put the date range in `--instruction` (each day is still its own page):
 
 ```bash
-ov compile \
+ov compile create --compile-name report-range \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "One daily report per day for 2026-08-18 to 2026-08-20 in Asia/Shanghai"
+ov compile --compile-name report-range
 ```
 
 The command returns a `task_id` immediately:

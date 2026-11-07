@@ -6,6 +6,7 @@ import asyncio
 import math
 
 from fastapi import APIRouter, Depends, Header, Path, Query, status
+from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -39,6 +40,7 @@ async def create_compile_task(
 @router.post("/compile", status_code=status.HTTP_202_ACCEPTED)
 async def create_compile(
     body: CompileRequest,
+    response: FastAPIResponse,
     ctx: RequestContext = Depends(get_request_context),
     idempotency_key: str | None = Header(
         None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9:._-]+$"
@@ -59,6 +61,13 @@ async def create_compile(
         ctx=ctx,
         **({"idempotency_key": idempotency_key} if idempotency_key else {}),
     )
+    if body.compile_name is None and not body.is_memory_mode:
+        # RFC 9745 date for the full-input request form (2026-11-07 UTC).
+        response.headers["Deprecation"] = "@1794009600"
+        response.headers["Link"] = (
+            "<https://docs.openviking.ai/en/api/23-agent-runtime#execute-compile>; "
+            'rel="deprecation"; title="POST /api/v1/compile/create, then POST /api/v1/compile with compile_name"'
+        )
     return Response(status="ok", result=result.to_dict())
 
 
