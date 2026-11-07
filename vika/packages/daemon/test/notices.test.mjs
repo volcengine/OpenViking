@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Store } from '../src/store.mjs';
 import { describe, it } from 'node:test';
 import { createLogger } from '../src/logger.mjs';
 import { FailurePolicy } from '../src/notices.mjs';
@@ -228,4 +232,91 @@ describe('failure notice mute', () => {
     const notices = activities.filter((entry) => entry.kind === 'agent.failure_notice');
     assert.deepEqual(notices.map((entry) => entry.status), ['NOTIFYING', 'MUTED', 'NOTIFYING']);
   });
+});
+
+describe('failures after durable decisions', () => {
+  function fixture(outcomes) {
+    const replies = [];
+    const transitions = [];
+    const rows = [1, 2].map((seq) => chatEvent({ seq, chatId: `chat-${seq}`, messageId: `message-${seq}` }));
+    const policy = new FailurePolicy({
+      config: {},
+      store: {
+        inboundBySeq: (seq) => rows.find((row) => row.seq === seq),
+        coveringDecision: (_scope, seq) => outcomes[seq] ?? null,
+        successfulDecisionDelivery: (_scope, seq) => outcomes[seq] === 'delivered',
+        getCognitionState: () => ({ runtime: 'claude' }),
+      },
+      actions: { replyToEvent: async (row) => { replies.push(row.seq); return { ok: true }; } },
+      runtime: { transition: async (request) => { transitions.push(request); return { ok: true }; }, submit() {} },
+      logger: createLogger('error'), recordActivity() {},
+    });
+    return { policy, replies, transitions };
+  }
+
+  for (const outcome of ['delivered', 'silent']) {
+    it(`does not retry or notify an input already ${outcome}`, async () => {
+      const { policy, replies, transitions } = fixture({ 1: outcome });
+      await policy.onTurnFailed({ inboundSeqs: [1], error: 'pi stop: error' });
+      await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'pi stop: error' });
+      assert.deepEqual(replies, []);
+      assert.deepEqual(transitions, []);
+    });
+  }
+
+  it('notifies the unanswered scope even when the last input was delivered', async () => {
+    const { policy, replies } = fixture({ 2: 'delivered' });
+    await policy.notifyTurnFailure({ inboundSeqs: [1, 2], error: 'pi stop: error' });
+    assert.deepEqual(replies, [1]);
+  });
+
+  it('notifies uncertain delivery separately before retrying an unanswered scope', async () => {
+    const { policy, replies, transitions } = fixture({ 2: 'delivered' });
+    policy.store.successfulDecisionDelivery = () => false;
+    let submitted;
+    policy.runtime.submit = (items) => { submitted = items; };
+    await policy.onTurnFailed({ inboundSeqs: [1, 2], error: 'upstream error' });
+    assert.deepEqual(replies, [2, 1]);
+    assert.equal(transitions.length, 1);
+    assert.deepEqual(submitted.map((item) => item.seq), [1]);
+  });
+
+  it('still retries unanswered inputs without redelivering completed ones', async () => {
+    const { policy, replies, transitions } = fixture({ 2: 'delivered' });
+    let submitted;
+    policy.runtime.submit = (items) => { submitted = items; };
+    await policy.onTurnFailed({ inboundSeqs: [1, 2], error: 'upstream error' });
+    assert.equal(transitions.length, 1);
+    assert.deepEqual(replies, [1]);
+    assert.deepEqual(submitted.map((item) => item.seq), [1]);
+  });
+});
+
+
+describe('failure notices use confirmed outbox delivery', () => {
+  for (const status of ['PENDING', 'UNCERTAIN', 'SENT']) {
+    it(`handles a reserved decision with ${status} outbox status`, async (t) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-failure-outbox-'));
+      const store = new Store(path.join(dir, 'test.sqlite3'), createLogger('error'));
+      t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+      const older = store.ingest(chatEvent({ messageId: 'older' })).inbound;
+      const newer = store.ingest(chatEvent({ messageId: 'newer' })).inbound;
+      const row = store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(newer.seq);
+      store.recordDecision({ row, outcome: 'delivered' });
+      const delivery = store.reserveOutbox({ connector: 'lark', action: 'message.reply',
+        idempotencyKey: 'final', payload: {}, caller: 'agent', inboundSeq: older.seq,
+        metadata: { finalDecisionSeq: newer.seq } });
+      if (status !== 'PENDING') store.settleOutbox(delivery.id, status);
+      const replies = [];
+      const policy = new FailurePolicy({ config: {}, store,
+        actions: { replyToEvent: async (event) => { replies.push(event.seq); return { ok: true }; } },
+        logger: createLogger('error'), recordActivity() {},
+        runtime: { transition() { throw new Error('must not retry an attempted delivery'); } },
+      });
+      await policy.onTurnFailed({ inboundSeqs: [newer.seq], error: 'late error' });
+      assert.deepEqual(replies, status === 'SENT' ? [] : [newer.seq]);
+      assert.equal(store.successfulDecisionDelivery(newer.scopeKey, newer.seq), status === 'SENT');
+      assert.equal(store.successfulDecisionDelivery('another scope', older.seq), false);
+    });
+  }
 });

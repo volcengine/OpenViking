@@ -208,6 +208,7 @@ export class DurableAgent {
           env,
           shell: false,
           detached: process.platform !== 'win32',
+          windowsHide: process.platform === 'win32',
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {

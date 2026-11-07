@@ -129,8 +129,9 @@ class FakeChild extends EventEmitter {
 // are acknowledged by the test itself.
 function fakeHarness({ config = baseConfig(), store = makeStore(), version = DURABLE_VERSION, ready = {}, agentOptions = {} } = {}) {
   const children = [];
-  const spawn = (_command, _args) => {
+  const spawn = (_command, _args, options) => {
     const child = new FakeChild();
+    child.spawnOptions = options;
     children.push(child);
     const write = child.stdin.write;
     child.stdin.write = (value) => {
@@ -185,6 +186,7 @@ describe('DurableAgent host protocol', () => {
     agent.deliver('current request', 7);
     const submit = lastWrite(child);
     assert.equal(submit.type, 'submit');
+    assert.equal(child.spawnOptions.windowsHide, process.platform === 'win32');
     assert.match(submit.text, /current request/);
     assert.match(submit.requestId, new RegExp(`^durable:${agent.threadId}:7$`));
     assert.equal(agent.turnActive, true);
