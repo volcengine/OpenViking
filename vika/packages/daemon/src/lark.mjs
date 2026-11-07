@@ -500,9 +500,11 @@ export class LarkClient {
     return { messages: messageList(data), has_more: Boolean(data.has_more) };
   }
 
-  async searchMessages({ query, chat_id: chatId, start, end, limit = 20 }) {
+  // As the owner by default; as the bot, the search covers only the chats it
+  // has joined (needs the app's own search:message).
+  async searchMessages({ query, chat_id: chatId, start, end, limit = 20, as = 'user' }) {
     const data = await this.im([
-      '+messages-search', '--as', 'user', '--query', query, '--page-size', String(limit), '--format', 'json',
+      '+messages-search', '--as', as, '--query', query, '--page-size', String(limit), '--format', 'json',
       ...(chatId ? ['--chat-id', chatId] : []), ...(start ? ['--start', start] : []), ...(end ? ['--end', end] : []),
     ], 'search messages');
     return { messages: messageList(data).slice(0, limit), has_more: Boolean(data.has_more) };

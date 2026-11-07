@@ -32,6 +32,22 @@ function agentName(config) {
   return (config.agentName ?? process.env.VIKA_AGENT_NAME ?? process.env.VIKA_INSTANCE_ID ?? '').trim() || 'the bot';
 }
 
+// Whose visibility reads and searches use (agents[].larkMessageAccess): the
+// owner's by default; `bot` keeps them inside the chats the bot has joined.
+// The owner's wording is the policy as it was before the choice existed.
+const READ_IDENTITY = {
+  owner: {
+    SEARCH_MESSAGES: 'searches with the owner\'s identity where the connector supports it',
+    OWNER_DATA: ' Anything read with the owner\'s identity (`search_messages`, or `as: "user"`) is the owner\'s private data: use it only to serve the person who asked, and never bring it into another chat unless that person asks.',
+    LARK_READ_IDENTITY: '- `list_chat_messages` and `list_thread_messages` (by `omt_` or `om_` id) take `as: "user"` to read chats the bot has not joined, with the owner\'s visibility.',
+  },
+  bot: {
+    SEARCH_MESSAGES: 'searches the chats the bot has joined',
+    OWNER_DATA: '',
+    LARK_READ_IDENTITY: '- `list_chat_messages` and `list_thread_messages` (by `omt_` or `om_` id) and `search_messages` read only chats the bot has joined, as the bot: this instance never reads with the owner\'s identity. A chat the bot has not joined is out of reach; when asked about one, say so and suggest adding the bot to it.',
+  },
+};
+
 export function substitutePromptPlaceholders(text, config = {}) {
   const upgradeTarget = (
     config.upgradeTarget
@@ -43,7 +59,9 @@ export function substitutePromptPlaceholders(text, config = {}) {
     .replaceAll('{{AGENT_NAME}}', agentName(config))
     .replaceAll('{{VIKA_UPGRADE_TARGET}}', upgradeTarget || '(configured target)')
     .replaceAll('{{LARK_CLI}}', () => cliCommandCode(config.larkCliBin || 'lark-cli'))
-    .replaceAll('{{LARK_CLI_HELP}}', () => cliCommandCode(config.larkCliBin || 'lark-cli', ' --help'));
+    .replaceAll('{{LARK_CLI_HELP}}', () => cliCommandCode(config.larkCliBin || 'lark-cli', ' --help'))
+    .replace(/\{\{(SEARCH_MESSAGES|OWNER_DATA|LARK_READ_IDENTITY)\}\}/g,
+      (_, key) => READ_IDENTITY[config.larkMessageAccess === 'bot' ? 'bot' : 'owner'][key]);
 }
 
 function renderPrompt(config, name) {

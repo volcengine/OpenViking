@@ -105,7 +105,7 @@ export async function loginCommand([connector, requested, ...extra], {
   const bin = larkCliBin(env, deployment);
   if (!bin) throw new Error(t('找不到 lark-cli：这个安装不完整，重新运行安装脚本', 'lark-cli is missing: this install is incomplete, run the installer again'));
   const larkCli = new LarkCli(bin);
-  const scopes = larkScopes();
+  const scopes = larkScopes(agent.larkMessageAccess);
   const { inspected } = await completeLarkApp({ agent, prompter, larkCli, scopes, register: connect.register });
   await reauthorizeOwner({ agent, prompter, larkCli, scopes, inspected });
   return 0;
