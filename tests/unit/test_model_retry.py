@@ -317,6 +317,11 @@ def test_quota_exceeded_case_insensitive():
         ),
         "Error code: 413 - Payload Too Large",
         (
+            "Error code: 400 - {'error': {'code': 400, 'message': "
+            "'request (42062 tokens) exceeds the available context size (32768 tokens), "
+            "try increasing it', 'type': 'exceed_context_size_error'}}"
+        ),
+        (
             "Error code: 500 - {'error': {'code': 500, 'message': "
             "'input (8525 tokens) is too large to process. increase the physical batch size "
             "(current batch size: 2048)', 'type': 'server_error'}}"
@@ -341,6 +346,47 @@ def test_other_siliconflow_400_codes_stay_permanent():
         "Error code: 400 - {'code': 20012, 'message': 'Model not exists', 'data': None}"
     )
     assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+
+
+def test_llama_context_overflow_structured_error_is_input_too_large():
+    error = openai.BadRequestError(
+        "Input rejected",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://example.test")),
+        body={
+            "error": {
+                "code": 400,
+                "type": "exceed_context_size_error",
+                "message": (
+                    "request (42062 tokens) exceeds the available context size "
+                    "(32768 tokens), try increasing it"
+                ),
+            }
+        },
+    )
+
+    @model_error_boundary
+    def call():
+        raise error
+
+    with pytest.raises(ModelError) as raised:
+        call()
+    assert raised.value.kind is ModelErrorKind.INPUT_TOO_LARGE
+
+
+def test_unrelated_structured_400_stays_invalid_request():
+    error = openai.BadRequestError(
+        "Bad parameter",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://example.test")),
+        body={"error": {"code": 400, "type": "invalid_parameter", "message": "Bad parameter"}},
+    )
+
+    @model_error_boundary
+    def call():
+        raise error
+
+    with pytest.raises(ModelError) as raised:
+        call()
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
 
 
 def test_20015_inside_request_id_is_not_input_too_large():
