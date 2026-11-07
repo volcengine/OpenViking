@@ -2,7 +2,7 @@
 
 **Bring Your Own Machine：用你自己的机器，运行你自己的 Agent。**
 
-准备一台电脑或服务器，装好工作需要的软件，把项目和工具交给本机 Agent。OpenViking SuperAgent（Vika）让 Agent 接入 OpenViking 和即时通讯（IM）：你在聊天里交办任务，Agent 在这台机器的工作区中调用工具、完成工作，再把结果发回聊天；OpenViking 提供知识、记忆和跨会话上下文。
+准备你自己的机器（本机或云上 VM），装好工作需要的软件，把项目和工具交给本机 Agent。OpenViking SuperAgent（Vika）让 Agent 接入 OpenViking 和即时通讯（IM）：你在聊天里交办任务，Agent 在这台机器的工作区中调用工具、完成工作，再把结果发回聊天；OpenViking 提供知识、记忆和跨会话上下文。
 
 Vika 支持 Codex、Claude Code、Pi 等运行时，可接入飞书、微信、Telegram、Slack、QQ，也能处理邮箱事件。命令仍是 `vika`。
 
@@ -10,7 +10,7 @@ Vika 支持 Codex、Claude Code、Pi 等运行时，可接入飞书、微信、T
 
 ## 为什么用它
 
-- **在聊天里交办任务。** 调试代码、修改文档、整理资料，不必把需求反复复制到终端。
+- **Bring Your Own Machine。** 在自己的机器上准备工作软件与项目，Agent 通过 Vika 接入 OV 和 IM，在你配置的环境中完成任务。
 - **沿用你的 Agent。** 使用本机已登录的 coding agent，或内置的 Pi / Durable。→ [运行时配置](docs/installation-reference.md#准备)
 - **上下文可以延续。** OpenViking 保存会话历史，供新会话和运行时切换时读取；也提供长期记忆与资料检索。→ [会话上下文](docs/ov-session-context.md)
 - **多个入口，共同协作。** 同一实例可连接多个聊天渠道；多个实例各有工作区、数据目录和 OV 配置。→ [多实例](docs/installation-reference.md#多个-agent)
@@ -51,7 +51,7 @@ vika upgrade primary
 | 你想了解 | 文档 |
 |---|---|
 | 安装、模型登录、首次接入 | [安装指南](install.md) |
-| 各聊天渠道、邮箱、附件与卡片 | [功能参考](docs/usage-reference.md#安装) |
+| 各聊天渠道、邮箱、附件与卡片 | [功能参考](docs/usage-reference.md#聊天渠道与邮箱) |
 | 权限、重新登录、升级回滚、源码开发 | [配置与运维参考](docs/installation-reference.md) |
 | 上下文归档与恢复 | [OV session context](docs/ov-session-context.md) |
 | 接入新消息源 | [Connector protocol](docs/connector-protocol.md) |

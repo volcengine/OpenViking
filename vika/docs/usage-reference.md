@@ -32,6 +32,10 @@ Core 的入站模型同时支持聊天与非聊天事件：所有来源写入 `c
 
 一条命令：`curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh`，装好后 `vika setup` 接飞书、微信、Telegram、Slack、QQ 或邮箱；界面有中文和英文（`--lang zh|en`）。机器上不需要 Node。细节看 [install.md](../install.md)：依赖、setup、升级回滚、开机自启、多 agent 和发布新版本。
 
+## 聊天渠道与邮箱
+
+各渠道的配置与支持范围见下文；[附件与卡片](#文档附件与交互卡片)单独说明。
+
 ### 微信单聊 MVP
 
 可以在 `config.json` 中增加一个微信实例。`channel` 是兼容字段；`connectors` 声明该 Core 启动的 Connector。`profile` 是飞书 Connector 的 lark-cli profile，纯微信实例不填（填了会被拒绝）；`ovConfig` 必填，`ovAutoRecall` 默认为 `false`：
