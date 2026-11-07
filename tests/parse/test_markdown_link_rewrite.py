@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for MarkdownParser relative-link rewriting on ingest."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -770,6 +771,28 @@ class TestRewriteImageUris:
         assert _decode(fake.files[f"{root}/doc.md"]) == f"![p]({root}/logo.png)"
         assert f"{root}/.image_mappings.json" not in fake.files
 
+    @pytest.mark.parametrize("suffix", [".MD", ".Md", ".mD"])
+    async def test_mixed_case_markdown_mapping_consumed(self, suffix: str):
+        from openviking.parse.image_rewrite import rewrite_image_uris
+
+        root = "viking://resources/doc"
+        markdown_name = f"report{suffix}"
+        fake = FakeVikingFS()
+        fake.files = {
+            f"{root}/{markdown_name}": b"![p](report.png)",
+            f"{root}/report.png": b"img",
+            f"{root}/.image_mappings.json": json.dumps(
+                {markdown_name: {"report.png": "report.png"}}
+            ).encode(),
+        }
+
+        with self._patched(fake):
+            stats = await rewrite_image_uris(root, lease_ref=None)
+
+        assert stats == {"files_processed": 1, "references_rewritten": 1}
+        assert _decode(fake.files[f"{root}/{markdown_name}"]) == (f"![p]({root}/report.png)")
+        assert f"{root}/.image_mappings.json" not in fake.files
+
     async def test_merge_temp_carries_sidecar_but_not_other_hidden_files(self):
         # _merge_temp must carry the declared .image_mappings.json sidecar, but
         # keep filtering every other hidden file a parser (or anything else)
@@ -835,7 +858,8 @@ class TestRewriteImageUris:
         assert fake.files[f"{dest}/report/report.md"] == b"body"
         assert f"{dest}/report/.image_mappings.json" in fake.files
 
-    async def test_sync_path_carries_nested_mappings_to_target(self):
+    @pytest.mark.parametrize("extension", ["md", "MD", "Md", "mD"])
+    async def test_sync_path_carries_nested_mappings_to_target(self, extension: str):
         # Re-ingest of an existing resource goes through SemanticProcessor's
         # temp->target sync, which MOVES the visible files into the target and
         # skips hidden ones: afterwards the temp tree holds ONLY the
@@ -849,11 +873,11 @@ class TestRewriteImageUris:
         fake = FakeVikingFS()
         fake.files = {
             # temp tree after sync: visible files moved away, sidecar left behind
-            f"{root}/index/.image_mappings.json": (
-                '{"index.md": {"./assets/logo.png": "logo.png"}}'.encode()
-            ),
+            f"{root}/index/.image_mappings.json": json.dumps(
+                {f"index.{extension}": {"./assets/logo.png": "logo.png"}}
+            ).encode(),
             # target tree after sync: visible files only, no hidden sidecar
-            f"{target}/index/index.md": "![p](./assets/logo.png)".encode(),
+            f"{target}/index/index.{extension}": "![p](./assets/logo.png)".encode(),
             f"{target}/index/logo.png": b"img",
         }
 
@@ -868,7 +892,9 @@ class TestRewriteImageUris:
         ):
             await processor._rewrite_target_image_uris(root, target)
 
-        assert _decode(fake.files[f"{target}/index/index.md"]) == (f"![p]({target}/index/logo.png)")
+        assert _decode(fake.files[f"{target}/index/index.{extension}"]) == (
+            f"![p]({target}/index/logo.png)"
+        )
 
     @pytest.mark.parametrize("split_content", [True, False])
     async def test_directory_ingest_images_become_viking_uris(

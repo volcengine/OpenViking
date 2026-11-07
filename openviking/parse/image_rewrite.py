@@ -25,12 +25,30 @@ _REMOTE_PREFIXES = ("http://", "https://", "viking://", "data:", "ftp://")
 # Sidecar written by MarkdownParser._ingest_local_images at each document root,
 # consumed (and deleted) here. Shared so merge/sync code can recognize it.
 IMAGE_MAPPINGS_FILENAME = ".image_mappings.json"
+_MARKDOWN_GLOB_PATTERNS = ("**/*.md", "**/*.mD", "**/*.Md", "**/*.MD")
 
 # HTML <img src="..."> embeds, common in markdown for sizing control. Shared
 # with the parser so ingestion and rewriting see the same references.
 HTML_IMG_PATTERN = re.compile(r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE)
 _FENCE_PATTERN = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _LIST_ITEM_PATTERN = re.compile(r"^(\s{0,3})([-*+]|\d{1,9}[.)])(\s+)")
+
+
+def _is_markdown_path(path: Path) -> bool:
+    return path.suffix.casefold() == ".md"
+
+
+async def discover_markdown_uris(
+    viking_fs,
+    root_uri: str,
+    ctx: Optional[RequestContext] = None,
+) -> list[str]:
+    """Return Markdown URIs under *root_uri* with case-insensitive suffix matching."""
+    matches = set()
+    for pattern in _MARKDOWN_GLOB_PATTERNS:
+        glob_result = await viking_fs.glob(pattern, uri=root_uri, ctx=ctx)
+        matches.update(glob_result.get("matches", []))
+    return sorted(matches)
 
 
 def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
@@ -44,8 +62,8 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
     root = root_dir.resolve()
     mappings: Dict[str, Dict[str, str]] = {}
 
-    for md_path in root.rglob("*.md"):
-        if not md_path.is_file():
+    for md_path in root.rglob("*"):
+        if not md_path.is_file() or not _is_markdown_path(md_path):
             continue
         try:
             content = md_path.read_text(encoding="utf-8")
@@ -285,9 +303,8 @@ async def rewrite_image_uris(
 
     root_prefix = root_uri.rstrip("/")
 
-    # Find all .md files recursively
-    glob_result = await viking_fs.glob("**/*.md", uri=root_uri, ctx=ctx)
-    md_uris = glob_result.get("matches", [])
+    # Find all Markdown files recursively, regardless of suffix casing.
+    md_uris = await discover_markdown_uris(viking_fs, root_uri, ctx)
 
     if not md_uris:
         return {"files_processed": 0, "references_rewritten": 0}
