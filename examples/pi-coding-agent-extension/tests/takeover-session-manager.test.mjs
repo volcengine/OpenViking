@@ -61,6 +61,7 @@ async function openSession(t, config = {}) {
       commit: async () => ({
         status: "accepted",
         archived: true,
+        effective_enable_working_memory: true,
         archive_uri: `viking://user/u/sessions/pi-s/history/archive_${String(++archives).padStart(3, "0")}`,
       }),
       readArchiveOverview: async () => "OV SUMMARY",
