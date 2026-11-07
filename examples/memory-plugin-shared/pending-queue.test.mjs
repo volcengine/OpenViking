@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { readdir, utimes } from "node:fs/promises";
+import { readdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   claimForReplay,
+  createPendingCommitLookup,
+  releaseClaim,
   enqueue,
   listPending,
   replayPending,
@@ -28,6 +30,23 @@ test("replayPending sends queued entries and removes them after success", async 
     assert.equal(calls[0].path, "/api/v1/sessions/queue-replay/messages");
     assert.deepEqual(JSON.parse(calls[0].init.body), payload);
     assert.deepEqual(await listPending(), []);
+  });
+});
+
+test("commit lookup follows on-disk claims, releases and legacy markers", async () => {
+  await withPendingDir(async (dir) => {
+    const commits = createPendingCommitLookup();
+    const { path } = await enqueue("commitSession", "session-a", {});
+    await enqueue("commitSession", "session-b", {});
+    assert.deepEqual(await commits("session-a"), [path]);
+    const claimed = await claimForReplay(path);
+    assert.deepEqual(await commits("session-a"), []);
+    await releaseClaim(claimed);
+    assert.deepEqual(await commits("session-a"), [path]);
+
+    const legacy = "legacy.json";
+    await writeFile(join(dir, legacy), JSON.stringify({ type: "commitSession", sessionId: "session-a" }));
+    assert.deepEqual((await commits("session-a")).sort(), [legacy, path].sort());
   });
 });
 

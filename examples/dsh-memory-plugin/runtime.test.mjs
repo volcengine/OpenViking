@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -239,6 +241,52 @@ test("new queued messages move an older pending commit behind them", async () =>
     "addMessage",
     "commitSession",
   ]);
+});
+
+test("offline captures do not reread unrelated pending payloads after discovery", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "dsh-pending-reads-"));
+  tempDirs.push(dir);
+  process.env.OPENVIKING_PENDING_DIR = dir;
+  const unrelated = new Set();
+  for (let i = 0; i < 32; i++) {
+    const result = await enqueue("addMessage", "dsh-other", { content: String(i) });
+    unrelated.add(join(dir, result.path));
+  }
+  const session = { id: "capture", header: { cwd: "/workspace" } };
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  runtime.stateFor(session).hasPendingWrites = true;
+  runtime.capture(session, userEvent("Discover pre-existing queue files."));
+  await runtime.flush(session);
+
+  // Another writer may place a new commit between captures.
+  await enqueue("commitSession", "dsh-capture", { keep_recent_count: 10 });
+  const original = fsPromises.readFile;
+  let otherReads = 0;
+  const reader = t.mock.method(fsPromises, "readFile", function (path, ...args) {
+    if (unrelated.has(path)) otherReads++;
+    return original(path, ...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    for (const text of ["Second message.", "Third message."]) {
+      runtime.capture(session, userEvent(text));
+      await runtime.flush(session);
+    }
+  } finally {
+    reader.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal(otherReads, 0);
+  assert.ok((await listPending()).every(item => item.entry.type !== "commitSession"));
+  await runtime.dispose(session);
+  const sent = [];
+  const restarted = new OpenVikingRuntime({
+    async fetchJSON(path) { sent.push(path); return { ok: true }; },
+  }, config(), { debug() {} });
+  await restarted.replayPendingQueue();
+  assert.deepEqual(sent.filter(path => path.includes("/dsh-capture/")).map(path => path.split("/").pop()),
+    ["messages", "messages", "messages", "commit"]);
+  assert.equal(sent.filter(path => path.includes("/dsh-other/")).length, unrelated.size);
 });
 
 test("flush waits only for the requested session", async () => {
