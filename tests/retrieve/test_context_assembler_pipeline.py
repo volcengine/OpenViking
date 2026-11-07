@@ -5,6 +5,8 @@ import re
 from collections import Counter
 from types import SimpleNamespace
 
+import pytest
+
 from openviking.retrieve.context_assembler import pipeline as pipeline_module
 from openviking.retrieve.context_assembler import rewrite as rewrite_module
 from openviking.retrieve.context_assembler.budget import (
@@ -537,6 +539,50 @@ def _resource_candidate(abstract, category="resources", uri=f"{USER_ROOT}/resour
         is_directory=False,
         read_ctx=_ctx(),
     )
+
+
+@pytest.mark.parametrize(
+    ("same_body", "detail", "max_tokens", "recovers_second"),
+    [
+        pytest.param(False, None, 2000, True, id="distinct-full-bodies"),
+        pytest.param(True, None, 2000, False, id="identical-full-bodies"),
+        pytest.param(False, "overview", 2000, False, id="overview-pin"),
+        pytest.param(False, None, 140, False, id="tight-budget"),
+    ],
+)
+def test_event_overview_dedup_preserves_distinct_full_bodies(
+    same_body, detail, max_tokens, recovers_second
+):
+    first, second, other, duplicate = [
+        f"{USER_ROOT}/memories/events/{name}.md" for name in ("a", "b", "c", "d")
+    ]
+    summary = "# Summary\nThe deployment was discussed.\n\n# ChatLog\n"
+    first_body = summary + "Alice validated the rollback plan. " * 30
+    second_body = summary + "Bob tested the migration script. " * 30
+    contents = {
+        first: first_body,
+        second: first_body if same_body else second_body,
+        other: "# Summary\nThe release date moved.\n\n# ChatLog\nRelease moved to Friday.",
+        duplicate: first_body if same_body else second_body,
+    }
+    candidates = [_resource_candidate("", "events", uri) for uri in contents]
+
+    plan = plan_entries(candidates, contents, max_tokens=max_tokens, detail=detail)
+
+    assert [entry.uri for entry in plan.entries] == (
+        [first, second, other] if recovers_second else [first, other]
+    )
+    assert plan.stats["deduped"] == (1 if recovers_second else 2)
+    assert (
+        plan.stats["used_tokens"]
+        == sum(entry.tokens for entry in plan.entries) + len(plan.entries) - 1
+    )
+    assert plan.stats["used_tokens"] <= max_tokens
+    if recovers_second:
+        assert [(entry.detail, entry.text) for entry in plan.entries[:2]] == [
+            ("full", first_body.strip()),
+            ("full", second_body.strip()),
+        ]
 
 
 def test_resource_without_abstract_never_substitutes_its_body():
