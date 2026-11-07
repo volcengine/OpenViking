@@ -6,12 +6,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
-from test_fakes import fake_request_context
+from test_fakes import LockingAGFS, fake_request_context
 
 from openviking.message import Message, TextPart
 from openviking.session.memory.dataclass import StoredLink
@@ -62,6 +63,7 @@ class DummyVikingFS:
     def __init__(self):
         self.reloads = 0
         self.version = 1
+        self._async_agfs = LockingAGFS()
 
     async def ls(self, uri: str, output: str = "original", ctx=None):
         del output, ctx
@@ -338,7 +340,9 @@ async def test_default_policy_optimization_pipeline_runs_one_batch():
     assert DummyUpdater.last_instance is not None
     assert len(DummyUpdater.last_instance.transaction_handles) == 1
     assert DummyUpdater.last_instance.transaction_handles[0] is not None
-    assert initial_policy_set.viking_fs.reloads == 1
+    # plan_and_apply reloads twice: once lock-free to plan against a snapshot,
+    # once under the tree lock to validate that snapshot before applying.
+    assert initial_policy_set.viking_fs.reloads == 2
     assert len(result.epochs) == 1
     assert result.epochs[0].epoch == 0
     assert result.epochs[0].policy_snapshot_ids == ["snapshot-1"]
@@ -1933,3 +1937,251 @@ def test_tau2_service_filter_parses_task_indices():
         _task_indices_from_filters({"task_indices": 2})
     with pytest.raises(ValueError, match="task index must be >= 0"):
         _task_indices_from_filters({"task_indices": [-1]})
+
+
+# ---------------------------------------------------------------------------
+# plan_and_apply locking regression tests (issue #6095)
+# ---------------------------------------------------------------------------
+
+
+class SlowPlannerOptimizer:
+    """Optimizer whose plan() takes ``delay`` seconds and can bump the store.
+
+    Records the wall-clock interval of every plan() call so tests can assert
+    the policy-root tree lock was not held across planning.
+    """
+
+    def __init__(self, viking_fs: DummyVikingFS, *, delay: float = 0.0, bump_version: bool = False):
+        self.viking_fs = viking_fs
+        self.delay = delay
+        self.bump_version = bump_version
+        self.calls = 0
+        self.intervals: list[tuple[float, float]] = []
+
+    async def plan(
+        self,
+        gradients: list[DummyGradient],
+        policy_set: ExperienceSet,
+        context: Any,
+    ) -> PolicyUpdatePlan:
+        del policy_set, context
+        self.calls += 1
+        start = time.monotonic()
+        try:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            if self.bump_version:
+                self.viking_fs.version += 1
+            return PolicyUpdatePlan(metadata={"gradient_count": len(gradients)})
+        finally:
+            self.intervals.append((start, time.monotonic()))
+
+
+class RecordingUpdater:
+    """PolicyUpdater double recording every apply() call."""
+
+    def __init__(self):
+        self.applied: list[dict[str, Any]] = []
+
+    async def apply(
+        self,
+        plan: PolicyUpdatePlan,
+        policy_set: ExperienceSet,
+        context: Any,
+        *,
+        transaction_handle: Any = None,
+    ) -> PolicyApplyResult:
+        del context
+        self.applied.append(
+            {
+                "plan": plan,
+                "policy_set": policy_set,
+                "transaction_handle": transaction_handle,
+                "at": time.monotonic(),
+            }
+        )
+        return PolicyApplyResult(updated_policy_set=policy_set, written_uris=[])
+
+
+def _plan_apply_engine(optimizer: Any, updater: Any) -> Any:
+    from openviking.session.train.engine import PolicyTrainingEngine
+
+    return PolicyTrainingEngine(
+        rollout_analyzer=object(),
+        gradient_estimator=object(),
+        policy_optimizer=optimizer,
+        policy_updater=updater,
+    )
+
+
+def _lock_regression_gradient() -> DummyGradient:
+    return DummyGradient(
+        target_name="booking_duplicate_handling",
+        target_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
+        base_version=1,
+        rationale="trajectory succeeded",
+        links=[],
+        confidence=0.9,
+    )
+
+
+def _lock_held_across(
+    interval: tuple[float, float],
+    holds: list[dict[str, float]],
+) -> bool:
+    """Whether any single lock hold spans the whole planning interval.
+
+    That is the pre-fix (#6095) signature: the tree lock was acquired before
+    planning and released after apply, so the hold contained the plan.  Short
+    holds by *other* writers overlapping the plan are expected after the fix.
+    """
+
+    return any(hold["start"] <= interval[0] and interval[1] <= hold["end"] for hold in holds)
+
+
+def _overlaps(
+    interval: tuple[float, float],
+    holds: list[dict[str, float]],
+) -> bool:
+    return any(hold["start"] < interval[1] and interval[0] < hold["end"] for hold in holds)
+
+
+@pytest.mark.asyncio
+async def test_plan_and_apply_does_not_hold_policy_lock_across_slow_planning():
+    """A slow planner must not block another writer on the policy tree lock.
+
+    Regression for issue #6095: planning used to run inside the policy-root
+    tree lock, so a minutes-long LLM plan made every concurrent session commit
+    wait for the 300s lock acquisition timeout and fail terminally.  The fake
+    lock budget (1s) stands in for that timeout: with the lock held across the
+    2s plan, the second writer times out and this test fails.
+    """
+
+    fs = DummyVikingFS()
+    fs._async_agfs = LockingAGFS(lock_budget_secs=1.0)
+    policy_set = _policy_set(viking_fs=fs)
+    ctx = PipelineContext()
+
+    slow_optimizer = SlowPlannerOptimizer(fs, delay=2.0)
+    fast_optimizer = SlowPlannerOptimizer(fs)
+    slow_updater, fast_updater = RecordingUpdater(), RecordingUpdater()
+
+    async def run(engine):
+        return await engine.plan_and_apply(
+            gradients=[_lock_regression_gradient()],
+            policy_set=policy_set,
+            ctx=ctx,
+        )
+
+    slow_task = run(_plan_apply_engine(slow_optimizer, slow_updater))
+    fast_task = run(_plan_apply_engine(fast_optimizer, fast_updater))
+    await asyncio.wait_for(asyncio.gather(slow_task, fast_task), timeout=15.0)
+
+    # Both writers applied exactly once.
+    assert len(slow_updater.applied) == 1
+    assert len(fast_updater.applied) == 1
+    # The fast writer planned and applied entirely inside the slow plan window.
+    slow_plan_interval = slow_optimizer.intervals[0]
+    assert fast_optimizer.intervals[0][1] <= slow_plan_interval[1]
+    assert fast_updater.applied[0]["at"] < slow_plan_interval[1]
+    # No acquisition ever hit the 1s lock budget (no TimeoutError bubbled up),
+    # and no single lock hold spans a whole planning window: short holds by
+    # the other writer inside the slow plan window are expected after the fix.
+    assert not _lock_held_across(slow_plan_interval, fs._async_agfs.holds)
+    assert not _lock_held_across(fast_optimizer.intervals[0], fs._async_agfs.holds)
+
+
+@pytest.mark.asyncio
+async def test_plan_and_apply_replans_bounded_when_snapshot_changes_during_planning():
+    """A snapshot moved during planning triggers bounded re-plans, then a
+    guarded apply of the last plan against the freshest snapshot."""
+
+    from openviking.session.train.engine import _PLAN_APPLY_MAX_REPLANS
+
+    fs = DummyVikingFS()
+    policy_set = _policy_set(viking_fs=fs)
+    optimizer = SlowPlannerOptimizer(fs, bump_version=True)
+    updater = RecordingUpdater()
+    engine = _plan_apply_engine(optimizer, updater)
+
+    plan, apply_result = await asyncio.wait_for(
+        engine.plan_and_apply(
+            gradients=[_lock_regression_gradient()],
+            policy_set=policy_set,
+            ctx=PipelineContext(),
+        ),
+        timeout=15.0,
+    )
+
+    # One plan per attempt: initial + bounded replans.
+    assert optimizer.calls == _PLAN_APPLY_MAX_REPLANS + 1
+    assert len(updater.applied) == 1
+    assert apply_result.updated_policy_set is updater.applied[0]["policy_set"]
+    # The exhausted optimistic apply is marked so callers can audit it.
+    assert plan.metadata["optimistic_apply_after_conflict"] is True
+    assert plan.metadata["replan_attempts"] == _PLAN_APPLY_MAX_REPLANS + 1
+    # apply received the freshest snapshot (every plan bumped the version),
+    # never the stale one the plan was built from.
+    applied_versions = [p.version for p in updater.applied[0]["policy_set"].policies]
+    assert applied_versions == [fs.version]
+    # The tree lock was never held while the optimizer was planning.
+    for interval in optimizer.intervals:
+        assert not _overlaps(interval, fs._async_agfs.holds)
+
+
+@pytest.mark.asyncio
+async def test_plan_and_apply_fast_path_plans_once_and_releases_lock():
+    fs = DummyVikingFS()
+    policy_set = _policy_set(viking_fs=fs)
+    optimizer = SlowPlannerOptimizer(fs)
+    updater = RecordingUpdater()
+    engine = _plan_apply_engine(optimizer, updater)
+
+    plan, _ = await asyncio.wait_for(
+        engine.plan_and_apply(
+            gradients=[_lock_regression_gradient()],
+            policy_set=policy_set,
+            ctx=PipelineContext(),
+        ),
+        timeout=15.0,
+    )
+
+    assert optimizer.calls == 1
+    assert "optimistic_apply_after_conflict" not in plan.metadata
+    assert len(fs._async_agfs.acquire_calls) == 1
+    assert len(fs._async_agfs.release_calls) == 1
+    assert not fs._async_agfs.is_locked(fs._async_agfs.acquire_calls[0]["path"])
+
+
+@pytest.mark.asyncio
+async def test_policy_set_lock_passes_timeout_and_releases_on_error():
+    fs = DummyVikingFS()
+    agfs = fs._async_agfs
+    policy_set = _policy_set(viking_fs=fs)
+    path = None
+
+    async with policy_set.lock(timeout_secs=5.0) as lease:
+        path = agfs.acquire_calls[-1]["path"]
+        assert agfs.acquire_calls[-1]["timeout_secs"] == 5.0
+        assert agfs.is_locked(path)
+        assert lease is not None
+        # A second acquirer of the same tree fails once its timeout expires.
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.2):
+                async with policy_set.lock(timeout_secs=0.2):
+                    pass
+    assert not agfs.is_locked(path)
+    # The failed acquirer must not have released the first holder's lease.
+    assert len(agfs.release_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_policy_set_lock_releases_when_body_raises():
+    fs = DummyVikingFS()
+    policy_set = _policy_set(viking_fs=fs)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with policy_set.lock():
+            raise RuntimeError("boom")
+
+    assert not fs._async_agfs.is_locked(fs._async_agfs.acquire_calls[0]["path"])
