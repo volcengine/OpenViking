@@ -2,19 +2,37 @@
 
 import asyncio
 import re
-from typing import Any
 
 from loguru import logger
-from slack_sdk.socket_mode.websockets import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
+from slack_sdk.socket_mode.websockets import SocketModeClient
 from slack_sdk.web.async_client import AsyncWebClient
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import SlackChannelConfig
-from vikingbot.channels.utils import extract_image_paths, read_image_file
+
+_SLACK_AUTOLINK_RE = re.compile(
+    r"<(?P<target>[A-Za-z][A-Za-z0-9+.\-]*:[^>|]+)(?:\|(?P<label>[^>]+))?>"
+)
+_SLACK_ESCAPED_CONTROL_RE = re.compile(r"&(?P<name>amp|lt|gt);")
+_SLACK_CONTROL_CHARACTERS = {"amp": "&", "lt": "<", "gt": ">"}
+
+
+def _normalize_slack_inbound_text(text: str) -> str:
+    """Restore Slack's flat message text for the agent."""
+
+    def replace_link(match: re.Match[str]) -> str:
+        target = match.group("target")
+        label = match.group("label")
+        return f"{label} ({target})" if label and label != target else target
+
+    without_autolinks = _SLACK_AUTOLINK_RE.sub(replace_link, text)
+    return _SLACK_ESCAPED_CONTROL_RE.sub(
+        lambda match: _SLACK_CONTROL_CHARACTERS[match.group("name")], without_autolinks
+    )
 
 
 class SlackChannel(BaseChannel):
@@ -151,7 +169,7 @@ class SlackChannel(BaseChannel):
         if channel_type != "im" and not self._should_respond_in_channel(event_type, text, chat_id):
             return
 
-        text = self._strip_bot_mention(text)
+        text = _normalize_slack_inbound_text(self._strip_bot_mention(text))
 
         thread_ts = event.get("thread_ts") or event.get("ts")
         # Add :eyes: reaction to the triggering message (best-effort)
