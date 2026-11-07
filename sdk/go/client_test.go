@@ -727,6 +727,62 @@ func TestAdminGetUserNotFound(t *testing.T) {
 	}
 }
 
+// The server exposes group membership only on the member collection, with a
+// user_ids array. The SDK must use that route; a per-member path would 404.
+func TestAdminAddGroupMemberUsesMemberCollection(t *testing.T) {
+	var gotPath string
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s", r.Method)
+		}
+		gotPath = r.URL.Path
+		body := readJSONBody(t, r)
+		if ids, ok := body["user_ids"].([]any); !ok || len(ids) != 1 || ids[0] != "alice@example.com" {
+			t.Fatalf("user_ids = %#v", body["user_ids"])
+		}
+		writeOK(t, w, map[string]any{"added": 1})
+	}))
+	defer closeServer()
+
+	result, err := client.AdminAddGroupMember(context.Background(), "acct", "team", "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/v1/admin/accounts/acct/groups/team/members" {
+		t.Fatalf("path = %s", gotPath)
+	}
+	if result["added"] != float64(1) {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAdminRemoveGroupMemberUsesMemberCollection(t *testing.T) {
+	var gotPath string
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s", r.Method)
+		}
+		gotPath = r.URL.Path
+		body := readJSONBody(t, r)
+		if ids, ok := body["user_ids"].([]any); !ok || len(ids) != 1 || ids[0] != "alice@example.com" {
+			t.Fatalf("user_ids = %#v", body["user_ids"])
+		}
+		writeOK(t, w, map[string]any{"removed": 1})
+	}))
+	defer closeServer()
+
+	result, err := client.AdminRemoveGroupMember(context.Background(), "acct", "team", "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/v1/admin/accounts/acct/groups/team/members" {
+		t.Fatalf("path = %s", gotPath)
+	}
+	if result["removed"] != float64(1) {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/search" {
