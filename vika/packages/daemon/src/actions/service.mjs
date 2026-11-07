@@ -204,6 +204,7 @@ export class ActionService {
   definition(tool) {
     return toolDefinition(tool, {
       explicitSilence: Boolean(this.config.explicitSilence), stagedReplies: Boolean(this.config.stagedReplies),
+      larkMessageAccess: this.config.larkMessageAccess,
     });
   }
 
@@ -1165,6 +1166,14 @@ export class ActionService {
     const connector = this.route(caller, operation, 'queries', source, ids);
     if (input.cursor !== undefined && this.manifest(connector).name !== 'slack') {
       throw blocked('unsupported', 'cursor is currently supported only for Slack queries.');
+    }
+    // A bot-only Lark instance reads every message as the bot, so only in the
+    // chats it has joined; the tool schema already offers no other identity.
+    if (this.config.larkMessageAccess === 'bot' && this.manifest(connector).name === 'lark') {
+      if (input.as === 'user') {
+        throw blocked('unsupported', 'This instance reads only the chats the Lark bot has joined; reading as the owner is turned off.');
+      }
+      if (operation === 'message.search') input = { ...input, as: 'bot' };
     }
     caller.trace.invoked = true;
     const data = await this.connectors.invoke(connector, operation, input);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import tls from 'node:tls';
+import { mailboxName, mailboxWireName } from './mailbox.mjs';
 
 // The IMAP4rev1 subset a read-only inbox watcher needs: LOGIN, EXAMINE (the
 // mailbox opens read-only, so nothing is ever marked read), UID SEARCH, UID
@@ -225,7 +226,7 @@ export class ImapConnection {
   }
 
   async examine(mailbox = 'INBOX') {
-    const { untagged } = await this.command('EXAMINE', quote(mailbox));
+    const { untagged } = await this.command('EXAMINE', quote(mailboxWireName(mailboxName(mailbox), this.capabilities.has('IMAP4REV2'))));
     const box = { uidValidity: null, uidNext: null, exists: 0 };
     for (const parts of untagged) {
       const head = parts[0];

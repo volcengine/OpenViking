@@ -322,6 +322,14 @@ Download:
 - [macOS Intel (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/darwin-x64/openviking-helper-0.0.19-x64.dmg)
 - [Windows (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/win32-x64/openviking-helper-0.0.19-x64.exe)
 
+## OpenViking SuperAgent
+
+**Bring Your Own Machine.** OpenViking SuperAgent (Vika) connects the agent on your computer or cloud VM to **OpenViking and messaging apps**. Send a task in chat; your agent works with your local files and tools, then replies with the result. OpenViking supplies its knowledge and memory.
+
+<img src="docs/images/superagent-overview.png" alt="Chat with your agent through SuperAgent, with knowledge and memory from OpenViking." width="100%" />
+
+[Get started →](vika/install.md) · [Learn more →](vika/README.md) · Requires a local or remote OpenViking service.
+
 ## VikingBot
 
 VikingBot is an AI agent framework built on top of OpenViking:
