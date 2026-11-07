@@ -44,6 +44,17 @@ tools. Reads are cached ten minutes (dropped as soon as `openviking_remember`
 changes a preference) and bounded at 3 s together; on a timeout or a failure
 the line goes on with what arrived. No request carries a peer.
 
+For substantive questions and project discussions, the local runtime's policy
+asks the model to start with one focused `openviking_find`, reuse earlier
+answers and decisions, and read useful hits before seeking more information
+elsewhere. Evidence already retrieved for the same question is reused; greetings
+and self-contained text transformations need no lookup. Relevant historical
+context should help the answer, with no invented recollections or assumption
+that old facts remain current. Privacy constraints already in context or found
+with the topic are reused; missing constraints about other people require a
+lookup because only owner/sender preferences are injected. This is model policy,
+not an extra daemon search or a change to `ovAutoRecall`.
+
 Vika owns OpenViking for the agents it runs. This session transport writes
 the conversation, and its extraction keeps profile, entities and events, never
 preferences: extraction decides whose a preference is from names, so it merges

@@ -369,7 +369,7 @@ export const TOOLS = [
     name: 'openviking_find',
     openviking: true,
     title: 'Find in OpenViking',
-    description: 'Fast semantic search of the OpenViking long-term memory: what you took part in (events, entities), people\'s preferences (each under the person\'s name), stored resources and skills. Ranked hits with abstracts, independent of the session history. Before you tell anyone about a person or their work, look for what that person asked to keep private. Expand one result with openviking_read.',
+    description: 'Start here for substantive questions, troubleshooting, project discussions, past decisions and progress: search for earlier answers and relevant context before researching elsewhere or asking someone to repeat it. Reuse evidence already retrieved for this question. Searches events, entities, people\'s preferences, stored resources and skills; returns ranked abstracts and URIs to expand with openviking_read. Apply privacy constraints already available, and look up missing ones before disclosure. Greetings and self-contained text transformations need no search.',
     inputSchema: schema({
       query: { type: 'string', minLength: 1, maxLength: 1000, description: 'What to look for, in natural language.' },
       limit: LIMIT(50, 10),
