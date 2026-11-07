@@ -604,6 +604,28 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("passes vector record IDs to stat and read unchanged", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const id = "0123456789abcdef0123456789abcdef";
+    await client.stat(id);
+    await client.read(` ${id}\n`);
+    await client.stat("resources/docs/api.md");
+    await client.read("0123456789ABCDEF0123456789ABCDEF");
+    const uris = fetcher.mock.calls.map(([url]) =>
+      new URL(String(url)).searchParams.get("uri"),
+    );
+    expect(uris).toEqual([
+      id,
+      id,
+      "viking://resources/docs/api.md",
+      "viking://0123456789ABCDEF0123456789ABCDEF",
+    ]);
+  });
+
   it("maps response envelopes to typed errors", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
