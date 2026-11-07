@@ -151,6 +151,19 @@ class ObserverService:
         """Check if both vikingdb and config dependencies are set."""
         return self._vikingdb is not None and self._config is not None
 
+    def _build_rerank_instance(self) -> Optional[Any]:
+        """Build a Rerank client from config, or None when rerank is not configured.
+
+        Single owner of the "is rerank configured and available" rule so cluster-scope
+        and account-scope model status cannot disagree about whether rerank is observed.
+        """
+        rerank_config = getattr(self._config, "rerank", None)
+        if rerank_config and rerank_config.is_available():
+            from openviking.models.rerank import RerankClient
+
+            return RerankClient.from_config(rerank_config)
+        return None
+
     async def get_queue_status_async(self, *, format: str = "table") -> ComponentStatus:
         """Get queue status."""
         try:
@@ -275,13 +288,7 @@ class ObserverService:
 
             embedding_instance = SimpleNamespace(get_token_usage=_get_token_tracker().to_dict)
 
-        rerank_instance = None
-        rerank_config = getattr(self._config, "rerank", None)
-
-        if rerank_config and rerank_config.is_available():
-            from openviking.models.rerank import RerankClient
-
-            rerank_instance = RerankClient.from_config(rerank_config)
+        rerank_instance = self._build_rerank_instance()
 
         observer = ModelsObserver(
             vlm_instance=vlm_instance,
@@ -315,6 +322,7 @@ class ObserverService:
             observer = ModelsObserver(
                 vlm_instance=vlm,
                 embedding_instance=self._embedding_provider.bind(ctx.account_id),
+                rerank_instance=self._build_rerank_instance(),
             )
             status = observer.get_status_json() if format == "json" else observer.get_status_table()
             if format == "json":
