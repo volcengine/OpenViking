@@ -9,56 +9,85 @@ const DEFAULT_FIELDS = {
   path: 'Path',
 } as const;
 
+export interface FileTreeInfoCopy {
+  /** 行名称，作为浮层标题。Row name, used as the tooltip title. */
+  title: string;
+  /** 说明，已按行内同样的优先级解析。Description, resolved with the same precedence as inline. */
+  description?: string;
+  /** 触发行为，只出现在浮层。Trigger copy, tooltip only. */
+  triggerBehavior?: string;
+  /** 完整路径。Full path. */
+  path: string;
+  /** 浮层里各行的字段名。Field names used inside the tooltip. */
+  fields: { description: string; triggerBehavior: string; path: string };
+}
+
 /**
- * 目录的默认浮层内容：说明、触发行为与路径。没有内置文案的路径返回 `null`，
- * 此时不显示浮层。
+ * 解析目录浮层要显示的内容，没有可显示内容时返回 `null`。
  *
- * 九类长期记忆的说明只出现在这里，因此这个浮层是它们唯一的展示位置。
+ * 说明按 `row.description` → 内置文案的顺序解析，与行内一致：宿主给了就用宿主的
+ * （含显式空串），没给才用内置。调用方据此决定是否创建浮层外壳，避免留下一个
+ * 只有背景和内边距的空壳。
+ *
+ * Resolves what a directory tooltip should show, or `null` when there is nothing.
+ *
+ * The description resolves as `row.description` then built-in copy, matching the
+ * inline behaviour: a host value wins, including an explicit empty string, and
+ * the built-in copy applies only when absent. The caller uses this to decide
+ * whether to create the tooltip shell, so no empty shell is left behind.
+ */
+export function resolveFileTreeInfoCopy(
+  row: FileTreeEntryRow,
+  infoLabels?: FileTreeInfoLabels,
+): FileTreeInfoCopy | null {
+  const key = resolveFileTreeInfoKey(row.uri);
+  const builtIn = key ? resolveInfoCopy(key, infoLabels) : {};
+  const description = row.description ?? builtIn.description;
+
+  // 只有路径时不算内容，否则任意文件都会有一个只显示路径的浮层。
+  // A path alone does not count as content, or every file would show a tooltip.
+  if (!description && !builtIn.triggerBehavior) return null;
+
+  return {
+    title: row.name,
+    description,
+    triggerBehavior: builtIn.triggerBehavior,
+    path: row.uri,
+    fields: { ...DEFAULT_FIELDS, ...infoLabels?.field },
+  };
+}
+
+/**
+ * 目录的默认浮层内容：说明、触发行为与路径。九类长期记忆的说明只出现在这里，
+ * 因此这个浮层是它们唯一的展示位置。
  *
  * The default tooltip content for a directory: description, trigger copy and
- * path. Returns `null` when the path has no built-in copy, in which case no
- * tooltip shows.
- *
- * The nine long-term-memory keys describe themselves here only, so this tooltip
- * is the sole place their copy appears.
+ * path. The nine long-term-memory keys describe themselves here only, so this
+ * tooltip is the sole place their copy appears.
  */
-export function FileTreeInfoTooltip({
-  row,
-  infoLabels,
-}: {
-  row: FileTreeEntryRow;
-  infoLabels?: FileTreeInfoLabels;
-}) {
-  const key = resolveFileTreeInfoKey(row.uri);
-  if (!key) return null;
-
-  const copy = resolveInfoCopy(key, infoLabels);
-  const fields = { ...DEFAULT_FIELDS, ...infoLabels?.field };
-
-  if (!copy.description && !copy.triggerBehavior) return null;
+export function FileTreeInfoTooltip({ copy }: { copy: FileTreeInfoCopy }) {
+  const { description, fields, path, title, triggerBehavior } = copy;
 
   return (
     <span className="ov-file-tree__info">
-      <span className="ov-file-tree__info-title">{row.name}</span>
-      {copy.description ? (
+      <span className="ov-file-tree__info-title">{title}</span>
+      {description ? (
         <span className="ov-file-tree__info-row">
           <span className="ov-file-tree__info-label">{fields.description}</span>
-          <span className="ov-file-tree__info-value">{copy.description}</span>
+          <span className="ov-file-tree__info-value">{description}</span>
         </span>
       ) : null}
-      {copy.triggerBehavior ? (
+      {triggerBehavior ? (
         <span className="ov-file-tree__info-row">
           <span className="ov-file-tree__info-label">
             {fields.triggerBehavior}
           </span>
-          <span className="ov-file-tree__info-value">
-            {copy.triggerBehavior}
-          </span>
+          <span className="ov-file-tree__info-value">{triggerBehavior}</span>
         </span>
       ) : null}
       <span className="ov-file-tree__info-row">
         <span className="ov-file-tree__info-label">{fields.path}</span>
-        <span className="ov-file-tree__info-path">{row.uri}</span>
+        <span className="ov-file-tree__info-path">{path}</span>
       </span>
     </span>
   );

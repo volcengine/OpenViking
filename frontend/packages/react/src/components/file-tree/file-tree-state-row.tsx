@@ -55,6 +55,7 @@ export function FileTreeStateRow({
       return shell(
         <>
           <span className="ov-file-tree__toggle-spacer" />
+          {row.loading ? spinner : null}
           <button
             type="button"
             className="ov-file-tree__action"
