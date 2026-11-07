@@ -250,16 +250,15 @@ export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
    */
   errorFallback?: ReactNode;
   /**
-   * 选中一个选项时触发。组件不清空关键字，也不改变面板可见性，由宿主决定。
-   * Invoked when an option is selected. The component neither clears the
-   * keyword nor changes panel visibility; the host decides.
+   * 选中时触发；组件关闭本级面板，不改变搜索词和业务选中值。
+   * Invoked on selection. Closes this panel; selection and search remain host-owned.
    */
-  onSelect: (option: ScopeSwitcherOption) => void;
+  onSelect?: (option: ScopeSwitcherOption) => void;
   /**
-   * 面板是否可见，由宿主持有。
-   * Whether the panel is visible, owned by the host.
+   * 可选受控展开状态；不传时由本级选择器独立维护。
+   * Optional controlled visibility; otherwise local to this selector.
    */
-  visible: boolean;
+  visible?: boolean;
   /**
    * 面板可见性变化时触发，打开和关闭都会调用，参数是变化后的状态。
    *
@@ -271,7 +270,7 @@ export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
    * The host writes it back to `visible` and can load data on demand from it,
    * for example requesting the first page only when the panel opens.
    */
-  onVisibleChange: (visible: boolean) => void;
+  onVisibleChange?: (visible: boolean) => void;
   /**
    * 搜索关键字变化时触发。不传时不渲染搜索框。
    * Invoked when the search keyword changes. No search box is rendered when
@@ -345,6 +344,8 @@ export type ScopeSwitcherLevel =
  * Replaceable copy; the component ships English defaults.
  */
 export interface ScopeSwitcherLabels {
+  /** Loading status text / 加载提示。 */
+  loading?: string;
   /**
    * 搜索框占位文本。
    * Search input placeholder.
@@ -368,40 +369,11 @@ export interface ScopeSwitcherLabels {
   error?: string;
 }
 
-/**
- * 作用域切换器的公开接口。
- *
- * 组件负责面包屑触发器、下拉面板、选项列表与搜索框。面板里除列表以外的内容
- * 由宿主的 `renderPanel` 实现；取数、持久化、权限判断与路由也都由宿主负责。
- *
- * Public interface of the scope switcher.
- *
- * The component owns the breadcrumb triggers, the dropdown panels, the option
- * list and the search box. Everything in a panel except the list is
- * implemented by the host's `renderPanel`; data access, persistence, permission
- * checks and routing belong to the host too.
- */
-export interface ScopeSwitcherProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  'children' | 'onSelect'
-> {
-  /**
-   * 从左到右渲染的层级，例如库 → 数据空间 → 用户。
-   *
-   * 层级数量由宿主按当前登录方式决定，少传一层即该层不渲染、不占位：宿主暂时拿
-   * 不到某一层的数据时直接省略它，不要传占位项或空层级，组件不提供隐藏开关。
-   *
-   * Levels rendered left to right, for example library → data space → user.
-   *
-   * The host decides the level count from the current sign-in method: a level
-   * left out is neither rendered nor reserved. Omit a level the host cannot
-   * resolve yet rather than passing a placeholder or an empty level; the
-   * component has no separate visibility switch.
-   */
-  levels: readonly ScopeSwitcherLevel[];
-  /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
-   */
+/** Layout only: each child owns its state and data subscription. */
+export type ScopeSwitcherProps = HTMLAttributes<HTMLDivElement>;
+
+/** A single independently rendered scope view. */
+export interface ScopeSelectorProps {
+  level: ScopeSwitcherLevel;
   labels?: ScopeSwitcherLabels;
 }
