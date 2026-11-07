@@ -106,6 +106,9 @@ class ChatProtocol(ToolProtocol):
     def encode(self, value):
         return super().encode(value) if value is None else sse(value)
 
+    def upstream_error(self, event):
+        return [event, None]
+
     def accumulate(self, value):
         self.envelope.update({k: v for k, v in value.items() if k not in {"choices", "usage"}})
         if value.get("usage"):

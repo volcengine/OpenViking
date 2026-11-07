@@ -449,6 +449,10 @@ class ToolProtocol(ABC):
     def error(self, message: str) -> list[StreamEvent]:
         return [{"type": "error", "error": {"type": "gateway_tool_error", "message": message}}]
 
+    def upstream_error(self, event: dict) -> list[StreamEvent]:
+        """Return a normalized upstream error with this protocol's terminator."""
+        return [event]
+
     def encode(self, value: StreamEvent) -> bytes:
         if value is None:
             return b"data: [DONE]\n\n"
