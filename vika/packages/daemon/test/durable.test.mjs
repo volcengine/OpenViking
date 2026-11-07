@@ -129,8 +129,9 @@ class FakeChild extends EventEmitter {
 // are acknowledged by the test itself.
 function fakeHarness({ config = baseConfig(), store = makeStore(), version = DURABLE_VERSION, ready = {}, agentOptions = {} } = {}) {
   const children = [];
-  const spawn = (_command, _args) => {
+  const spawn = (_command, _args, options) => {
     const child = new FakeChild();
+    child.spawnOptions = options;
     children.push(child);
     const write = child.stdin.write;
     child.stdin.write = (value) => {
@@ -172,6 +173,7 @@ describe('DurableAgent host protocol', () => {
     await agent.start();
     const child = children[0];
     const hello = JSON.parse(child.writes[0]);
+    assert.equal(child.spawnOptions.windowsHide, process.platform === 'win32');
     assert.equal(hello.type, 'hello');
     assert.equal(hello.sessionKey, agent.threadId);
     // A fresh session asks the host for a new conversation and then publishes

@@ -39,7 +39,7 @@ function options(argv) {
     };
     if (flag === '--ref') result.ref = value();
     else if (flag === '--platform') result.platforms.push(value());
-    else if (flag === '--all') result.platforms.push(...Object.keys(PLATFORMS));
+    else if (flag === '--all') result.platforms.push(...Object.keys(PLATFORMS).filter(id => !PLATFORMS[id].sourceOnly));
     else if (flag === '--out') result.out = path.resolve(value());
     else if (flag === '--version') result.version = value();
     else if (flag === '--download-base') result.downloadBase = value();
@@ -47,7 +47,9 @@ function options(argv) {
   }
   if (result.platforms.length === 0) result.platforms.push(hostPlatform());
   result.platforms = [...new Set(result.platforms)];
-  result.platforms.forEach(platform);
+  result.platforms.forEach(id => {
+    if (platform(id).sourceOnly) throw new Error(`${id} supports source setup only, not release builds`);
+  });
   return result;
 }
 

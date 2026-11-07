@@ -14,9 +14,12 @@ import { assertSha256, checksumFor, download, platform } from '../../packages/up
 
 const MIRROR = 'https://registry.npmmirror.com';
 
-export async function installLarkCliBinary({ packageDir, platformId, fetchImpl = globalThis.fetch, mirror = process.env.VIKA_LARK_CLI_MIRROR || MIRROR }) {
+export async function installLarkCliBinary({ packageDir, platformId, fetchImpl = globalThis.fetch, mirror = process.env.VIKA_LARK_CLI_MIRROR || MIRROR, execFileSyncImpl = execFileSync }) {
   const { version } = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
-  const archive = `lark-cli-${version}-${platform(platformId).larkCli}.tar.gz`;
+  const target = platform(platformId);
+  const windows = target.os === 'win32';
+  const executable = windows ? 'lark-cli.exe' : 'lark-cli';
+  const archive = `lark-cli-${version}-${target.larkCli}.${windows ? 'zip' : 'tar.gz'}`;
   const expected = checksumFor(fs.readFileSync(path.join(packageDir, 'checksums.txt'), 'utf8'), archive);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-lark-cli-'));
   try {
@@ -37,10 +40,10 @@ export async function installLarkCliBinary({ packageDir, platformId, fetchImpl =
       }
     }
     if (lastError) throw lastError;
-    execFileSync('tar', ['-xzf', file, '-C', work, 'lark-cli']);
-    const bin = path.join(packageDir, 'bin', 'lark-cli');
+    execFileSyncImpl('tar', [windows ? '-xf' : '-xzf', file, '-C', work, executable]);
+    const bin = path.join(packageDir, 'bin', executable);
     fs.mkdirSync(path.dirname(bin), { recursive: true });
-    fs.copyFileSync(path.join(work, 'lark-cli'), bin);
+    fs.copyFileSync(path.join(work, executable), bin);
     fs.chmodSync(bin, 0o755);
     return { bin, version };
   } finally {

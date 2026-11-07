@@ -11,10 +11,11 @@ import { pipeline } from 'node:stream/promises';
 // the build and publish scripts and the updater.
 
 // The platforms a Vika release ships for, and how Node.js and lark-cli name them.
-// musl (Alpine) and Windows are not built: Node's official musl builds are
-// unofficial, and the daemon is Unix-only. WSL2 runs the linux build.
+// Windows is source-preview only; its entry also selects the Lark CLI asset.
+// musl (Alpine) is not built because Node's musl builds are unofficial.
 
 export const PLATFORMS = Object.freeze({
+  'win32-x64': { os: 'win32', arch: 'x64', node: 'win-x64', larkCli: 'windows-amd64', sourceOnly: true },
   'linux-x64': { os: 'linux', arch: 'x64', node: 'linux-x64', larkCli: 'linux-amd64' },
   'linux-arm64': { os: 'linux', arch: 'arm64', node: 'linux-arm64', larkCli: 'linux-arm64' },
   'darwin-x64': { os: 'darwin', arch: 'x64', node: 'darwin-x64', larkCli: 'darwin-amd64' },

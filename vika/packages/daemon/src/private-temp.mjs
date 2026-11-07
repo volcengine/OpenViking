@@ -9,7 +9,7 @@ export function assertPrivateDirectory(directory) {
     || (typeof process.getuid === 'function' && info.uid !== process.getuid())) {
     throw new Error(`Temporary directory must be a directory owned by the daemon user: ${directory}`);
   }
-  if ((info.mode & 0o077) !== 0) {
+  if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
     throw new Error(`Temporary directory must have mode 0700; use a private VIKA_TEMP_DIR: ${directory}`);
   }
 }

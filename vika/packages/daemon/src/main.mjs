@@ -48,6 +48,14 @@ async function handleSignal(signal) {
   clearTimeout(forceTimer);
 }
 
+if (process.platform === 'win32') {
+  process.on('message', (message) => {
+    if (message === 'shutdown') void handleSignal('shutdown').then(() => {
+      if (process.connected) process.disconnect();
+    });
+  });
+}
+
 process.on('SIGINT', () => void handleSignal('SIGINT'));
 process.on('SIGTERM', () => void handleSignal('SIGTERM'));
 process.on('SIGHUP', () => void handleSignal('SIGHUP'));
