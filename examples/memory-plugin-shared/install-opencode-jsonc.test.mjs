@@ -12,7 +12,8 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -171,9 +172,14 @@ function runInstaller(args, options, script = installer) {
 // The cases above are the editor; this is the wiring. It is the only thing that
 // proves install.sh still finds the module and hands it the right three
 // arguments now that the editor no longer lives inside the script.
-for (const sourceMode of ["dev", "archive"]) {
-  test(`the OpenCode ${sourceMode} install loads its entries from clean sources`, async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ov-opencode-jsonc-"));
+// Reuse the real package installed for plugin development; no registry calls or
+// substitute YAML parser. The npm shim models success, registry failure, and an
+// incomplete install that falsely exits zero so the public import must catch it.
+const yamlRoot = dirname(createRequire(resolve(repoRoot, "examples/opencode-plugin/package.json")).resolve("yaml/package.json"));
+for (const [sourceMode, dependencyResult] of ["dev", "archive"].flatMap((mode) =>
+  ["success", "install-failure", "missing-dependency", "broken-skill"].map((result) => [mode, result]))) {
+  test(`OpenCode ${sourceMode} clean install: ${dependencyResult}`, async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "ov-opencode-jsonc-")));
     try {
       const home = join(dir, "home");
       const bin = join(dir, "bin");
@@ -184,6 +190,18 @@ for (const sourceMode of ["dev", "archive"]) {
       const opencode = join(bin, "opencode");
       await writeFile(opencode, "#!/usr/bin/env sh\nprintf 'opencode 0.0.0-test\\n'\n");
       await chmod(opencode, 0o755);
+      const npm = join(bin, "npm");
+      await writeFile(npm, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+fs.writeFileSync(process.env.NPM_TEST_LOG, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+if (process.env.NPM_TEST_RESULT === "install-failure") { console.error("fixture registry unavailable"); process.exit(1); }
+if (["success", "broken-skill"].includes(process.env.NPM_TEST_RESULT)) {
+  fs.mkdirSync("node_modules", { recursive: true });
+  fs.cpSync(process.env.NPM_TEST_YAML, path.resolve("node_modules/yaml"), { recursive: true });
+}
+`);
+      await chmod(npm, 0o755);
 
       // An earlier installer registered the npm package; the file plugin
       // replaces it rather than loading beside it.
@@ -201,12 +219,24 @@ for (const sourceMode of ["dev", "archive"]) {
         copyFileSync(join(repoRoot, file), join(source, file));
       }
       await mkdir(join(source, ".git"));
+      if (dependencyResult === "broken-skill") {
+        await writeFile(join(source, "examples/skills/openviking-memory/SKILL.md"),
+          "---\nname: []\ndescription: broken\n---\n# broken\n");
+      }
       if (sourceMode === "archive") {
         execFileSync("bash", [join(source, ".github/scripts/stage-memory-plugin-marketplace.sh"), join(dir, "memory-plugin-marketplace")]);
         execFileSync("zip", ["-rq", join(dir, "memory-plugin-marketplace.zip"), "memory-plugin-marketplace"], { cwd: dir });
       }
 
-      await runInstaller([
+      const installedRoot = join(configDir, "plugins/openviking");
+      const previousConfig = await readFile(configPath, "utf8");
+      const wrapper = join(configDir, "plugins/openviking.js");
+      if (dependencyResult !== "success") {
+        await mkdir(installedRoot, { recursive: true });
+        await writeFile(join(installedRoot, "previous.txt"), "keep previous plugin");
+        await writeFile(wrapper, "// keep previous wrapper\n");
+      }
+      const installRun = runInstaller([
         "--harness", "opencode",
         "--source", sourceMode,
         "--lang", "en",
@@ -218,6 +248,9 @@ for (const sourceMode of ["dev", "archive"]) {
         env: {
           ...process.env,
           HOME: home,
+          NPM_TEST_RESULT: dependencyResult,
+          NPM_TEST_LOG: join(dir, "npm.json"),
+          NPM_TEST_YAML: yamlRoot,
           OPENVIKING_HOME: join(home, ".openviking"),
           OPENVIKING_MARKETPLACE_ARCHIVE_URL: `file://${join(dir, "memory-plugin-marketplace.zip")}`,
           OPENVIKING_DOWNLOAD_BASE: "https://downloads.example.invalid",
@@ -226,15 +259,48 @@ for (const sourceMode of ["dev", "archive"]) {
         },
       }, join(source, "examples/memory-plugin-shared/install.sh"));
 
+      if (dependencyResult === "success") {
+        await installRun;
+      } else {
+        await assert.rejects(installRun, (error) => {
+          assert.match(error.stdout + error.stderr, /OpenCode: dependency installation or public entrypoint import failed/);
+          assert.doesNotMatch(error.stdout, /OpenCode file plugin installed:/);
+          assert.match(error.stdout + error.stderr, dependencyResult === "install-failure"
+            ? /fixture registry unavailable/ : dependencyResult === "broken-skill"
+              ? /Invalid bundled skill/ : /Cannot find package 'yaml'/);
+          return true;
+        });
+        assert.equal(await readFile(configPath, "utf8"), previousConfig);
+        assert.equal(await readFile(wrapper, "utf8"), "// keep previous wrapper\n");
+        assert.equal(await readFile(join(installedRoot, "previous.txt"), "utf8"), "keep previous plugin");
+        assert.equal(existsSync(`${installedRoot}.tmp`), false);
+      }
+      const npmCall = JSON.parse(await readFile(join(dir, "npm.json"), "utf8"));
+      assert.deepEqual(npmCall.args, ["install", "--omit=dev", "--ignore-scripts", "--package-lock=false", "--no-audit", "--no-fund"]);
+      assert.equal(npmCall.cwd, sourceMode === "dev" ? join(source, "examples/opencode-plugin") : `${installedRoot}.tmp`);
+      if (dependencyResult !== "success") return;
+      assert.ok(existsSync(join(installedRoot, "node_modules/yaml/package.json")));
       const raw = await readFile(configPath, "utf8");
       assert.match(raw, /keep this user note/);
       assert.match(raw, /"theme": "system"/);
       assert.match(parse(raw).mcp.openviking.command[1], /servers\/mcp-proxy\.mjs$/);
-      const installedRoot = join(configDir, "plugins/openviking");
       const env = { HOME: home, OPENVIKING_HOME: join(home, ".openviking") };
       assert.deepEqual(parse(raw).plugin, []);
       expectExit(await runHookScript(parse(raw).mcp.openviking.command[1], { cwd: home, env }));
       expectExit(await runHookScript(join(installedRoot, "index.mjs"), { cwd: home, env }));
+      execFileSync(process.execPath, ["--input-type=module", "-e", `
+        const { default: plugin, OpenVikingPlugin } = await import(${JSON.stringify(`file://${installedRoot}/index.mjs`)});
+        if (typeof plugin.setup !== "function" || typeof OpenVikingPlugin !== "function") throw Error("missing entrypoints");
+        const { readFile } = await import("node:fs/promises");
+        const { loadBundledV2Skills } = await import(${JSON.stringify(`file://${installedRoot}/lib/v2-skills.mjs`)});
+        const skills = await loadBundledV2Skills(${JSON.stringify(installedRoot)});
+        if (skills.map(s => s.name).sort().join(",") !== "openviking-memory,openviking-rule-search,openviking-skills,ov-experience-memory") throw Error("missing bundled skills");
+        for (const skill of skills) {
+          if (!(await readFile(skill.path, "utf8")).endsWith(skill.content) || !skill.content.startsWith("# ")) throw Error("invalid skill body");
+        }
+        const hooks = await plugin.server({ directory: process.cwd() });
+        if (Object.keys(hooks).length !== 0) throw Error("disabled V1 should have no hooks");
+      `], { cwd: home, env: { ...process.env, ...env, OPENVIKING_MEMORY_ENABLED: "false" } });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
