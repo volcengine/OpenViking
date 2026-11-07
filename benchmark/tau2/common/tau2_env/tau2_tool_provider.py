@@ -22,8 +22,8 @@ class Tau2BenchToolProvider:
 
     def reset(self) -> None:
         env = Tau2BenchEnv(self.domain, self.task_id)
-        env.reset()
         self.env = env
+        env.reset()
         # Tau2BenchEnv.tool_schemas already includes tau2's native tools plus
         # communicate_with_user.
         self._openai_tools = list(env.tool_schemas)
@@ -54,6 +54,11 @@ class Tau2BenchToolProvider:
             raise RuntimeError("Environment not initialized. Call reset() first.")
         normalized = name.replace("-", "_")
         return self.env.tool_call(normalized, arguments)
+
+    def close(self, *, termination_reason: str = "max_steps") -> None:
+        """Finalize any live Tau simulation without discarding its tool state."""
+        if self.env is not None:
+            self.env.close(termination_reason=termination_reason)
 
 
 def load_task_id(data_split: str, task_no: int) -> tuple[str, str]:

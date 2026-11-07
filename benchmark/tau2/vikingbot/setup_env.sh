@@ -47,7 +47,9 @@ _tau2_user_simulator_ready() {
   "${py}" - <<'PYEOF' >/dev/null 2>&1
 from tau2.gym.gym_agent import AgentGymEnv
 import gymnasium  # noqa: F401
-assert AgentGymEnv is not None
+from inspect import signature
+assert "defer_user_stop" in signature(AgentGymEnv).parameters
+assert "termination_reason" in signature(AgentGymEnv.close).parameters
 PYEOF
 }
 
@@ -74,7 +76,7 @@ _setup_install() {
     if [[ -x "${PY}" ]] && _tau2_user_simulator_ready "${PY}"; then
       return 0  # already installed; nothing to do
     fi
-    echo "[setup_env] Existing setup marker found, but tau2 gym user simulator is missing; repairing tau2-bench[gym] install."
+    echo "[setup_env] Existing tau2 gym install is missing or incompatible; reinstalling from the selected checkout."
     if [[ ! -x "${PY}" ]]; then
       echo "[setup_env] venv python not found at ${PY}; continuing with full setup."
     else
@@ -84,7 +86,7 @@ _setup_install() {
         echo "[setup_env] Installing tau2-bench with gym extra (pip install -e ${TAU2_BENCH_ROOT}[gym])"
         "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]" || { echo "[setup_env] tau2-bench gym repair failed"; return 1; }
         if ! _tau2_user_simulator_ready "${PY}"; then
-          echo "[setup_env] tau2 gym user simulator still unavailable after repair; try: source ${BASH_SOURCE[0]} --reinstall"
+          echo "[setup_env] tau2 gym must support deferred user STOP. Select a compatible Tau checkout as described in README.md."
           return 1
         fi
         return 0
@@ -174,7 +176,7 @@ PYEOF
   echo "[setup_env] Installing tau2-bench with gym extra (pip install -e ${TAU2_BENCH_ROOT}[gym])"
   "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]" || { echo "[setup_env] tau2-bench install failed"; return 1; }
   if ! _tau2_user_simulator_ready "${PY}"; then
-    echo "[setup_env] tau2 gym user simulator is unavailable after installing tau2-bench[gym]"
+    echo "[setup_env] tau2 gym must support deferred user STOP. Select a compatible Tau checkout as described in README.md."
     return 1
   fi
 
