@@ -95,7 +95,7 @@ Image queries skip text reranking and recall `limit` candidates. They default to
 
 ## Rerank Strategy
 
-Rerank processes only the candidates from the completed global search; it never starts another search. For example, with `limit=10`, reranking recalls the top 20 vector hits and returns at most 10 results after reranking. Without reranking, recall is limited to 10 hits.
+Rerank processes only the candidates from the completed global search; it never starts another search (opt-in [relation expansion](#relation-expansion-opt-in) adds one scoped lookup of linked URIs). For example, with `limit=10`, reranking recalls the top 20 vector hits and returns at most 10 results after reranking. Without reranking, recall is limited to 10 hits.
 
 - Candidate index records supply the `abstract` text for reranking.
 - Scores and ranking use rerank scores when available, otherwise vector scores; access frequency, update time, and parent-directory scores do not affect them.
@@ -104,6 +104,29 @@ Rerank processes only the candidates from the completed global search; it never 
 - Directory priority queues, parent-to-child score propagation, and convergence rounds are removed.
 
 See [rerank configuration](../guides/01-configuration.md#rerank) for supported providers and settings.
+
+## Relation Expansion (opt-in)
+
+A file can name the resources it relates to with a `related` list in its YAML frontmatter:
+
+```markdown
+---
+related:
+  - viking://resources/auth/token-validation.md
+---
+# JWT authentication
+```
+
+The links are part of the file's bytes, so write, move, copy, delete, restore, export, and import carry them with the content; there is no separate relation store. Links are explicit (written by a user or agent), single-hop, and only `viking://` URIs are read.
+
+When `retrieval.relation_expansion.enabled` is true and a query runs in THINKING mode with a usable reranker (`search()`), retrieval:
+
+1. Takes up to `max_seeds` top-ranked L2 file hits that already passed the score threshold.
+2. Reads at most 8 KB of each seed's head and examines at most `max_edges` link entries in total. Links to self, repeated links, and links to already recalled resources are skipped.
+3. Fetches the linked URIs through the same scoped search as ordinary retrieval (tenant and permission filter, `target_uri`, context type, `filter`, `level`), restricted to those exact URIs. A link never widens the search: a linked resource the caller could not have found is not returned, and nothing about it is reported.
+4. Reranks the linked candidates against the query, applies the same threshold rule as other candidates (request `score_threshold`, else `rerank.threshold` for model scores), and adds at most `max_added` of them to the pool, which is then ranked and cut to `limit` as usual.
+
+A link alone never admits a resource. QUICK mode, including `find()` and `mode="context"` assembly (also with `retrieval.apply_rerank_to_context`, which reranks only the candidates `find()` recalled), does not follow links: there, linked candidates could only compete on the recall score that already ranked them out. Eligibility does not depend on the mode: QUICK and THINKING recall make the same scoped search (same tenant/permission, scope, filter, and level), and linked URIs are checked by that same search. Hits added through a link carry `related_from` (the seed URI) in JSON responses; it is not rendered into LLM-facing tool output. A link whose target has moved or been deleted is ignored.
 
 ## Retrieval Results
 
