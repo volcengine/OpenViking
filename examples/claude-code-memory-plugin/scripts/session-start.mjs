@@ -31,6 +31,7 @@ import {
   getSessionContext,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
+import { clearHostCompressorBlock } from "./lib/host-compressor.mjs";
 import { replayPending } from "./lib/pending-queue.mjs";
 import {
   buildProfileBlock,
@@ -104,6 +105,11 @@ runHookStage({
   const source = input.source || "startup";
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", { source, sessionId, peerSource: effectivePeer.source });
+
+  // A new session earns the compressor one fresh attempt: the failure recorded
+  // last session may have been the endpoint, the network, or a model the
+  // gateway started serving in the meantime.
+  await clearHostCompressorBlock();
 
   const willInjectProfile = !cfg.noAutoInject;
   const willInjectArchive = cfg.resumeArchiveInject && (source === "resume" || source === "compact") && !!sessionId;

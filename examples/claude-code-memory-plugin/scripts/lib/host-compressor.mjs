@@ -10,12 +10,13 @@
  */
 
 import { spawn } from "node:child_process";
-import { readFile, mkdir, rename, writeFile } from "node:fs/promises";
+import { readFile, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const PROBE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 4000;
+const BLOCK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function statePath(name) {
   return join(homedir(), ".openviking", "state", name);
@@ -101,6 +102,41 @@ export async function probeHostCli(command = "claude", cachePath = statePath("ho
 }
 
 /**
+ * Whether a previous run of this configuration already failed.
+ *
+ * A hook is its own process, so remembering the failure in memory would not
+ * survive to the next prompt: every turn would spawn the same doomed child and
+ * pay the whole timeout before falling back to the block it could have used
+ * immediately. The record is therefore a file, keyed to the configuration that
+ * produced it, so changing the model or the effort earns a fresh attempt, and
+ * it expires on its own after `recallCompressDetectTtlMs`.
+ */
+function blockPath() {
+  return statePath("host-compressor-block.json");
+}
+
+function blockKey({ command, model, effort, mode }) {
+  return JSON.stringify({ command, model, effort, mode });
+}
+
+export async function loadHostCompressorBlock(cfg = {}, key) {
+  const cached = await readJson(blockPath());
+  if (!cached || cached.configKey !== key) return null;
+  const ttl = Number(cfg.recallCompressDetectTtlMs ?? BLOCK_TTL_MS);
+  if (ttl > 0 && Date.now() - Number(cached.checkedAt || 0) > ttl) return null;
+  return cached;
+}
+
+export async function markHostCompressorBlocked(key, model = "") {
+  await writeJson(blockPath(), { configKey: key, failedModel: model, checkedAt: Date.now() });
+}
+
+/** Forget the record so the next SessionStart re-tries the compressor once. */
+export async function clearHostCompressorBlock() {
+  try { await rm(blockPath(), { force: true }); } catch { /* best effort */ }
+}
+
+/**
  * Build the `runCompressor(prompt) -> text` callback the shared recall core
  * expects, or null when no local compressor is available.
  */
@@ -117,8 +153,25 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
   const model = String(cfg.recallCompressModel || "haiku");
   const effort = String(cfg.recallCompressEffort || "low");
   const timeoutMs = Math.max(5000, Number(cfg.recallCompressTimeoutMs || 30000));
+  const key = blockKey({ command, model, effort, mode });
+
+  const blocked = await loadHostCompressorBlock(cfg, key);
+  if (blocked) {
+    log("host_compressor_blocked", {
+      model,
+      failedModel: blocked.failedModel || model,
+      since: Number(blocked.checkedAt) || 0,
+    });
+    return null;
+  }
+
+  // One hook can ask for two digests (a legacy-peer pass falls back to a second
+  // search). After the first failure the second would wait out the same timeout
+  // for the same answer, so this stops at one.
+  let available = true;
 
   return async (prompt) => {
+    if (!available) return "";
     const args = [
       "-p",
       "--model", model,
@@ -128,7 +181,11 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
     ];
     const result = await runCommand(command, args, { timeoutMs, input: prompt });
     if (!result.ok) {
-      log("host_compressor_failed", { code: result.code, timedOut: Boolean(result.timedOut) });
+      available = false;
+      log("host_compressor_failed", { code: result.code, timedOut: Boolean(result.timedOut), model });
+      // Fire and forget: a hook that waits on its own audit trail can still miss
+      // the deadline it is trying to stay inside.
+      void markHostCompressorBlocked(key, model).catch(() => {});
       return "";
     }
     return result.stdout;
