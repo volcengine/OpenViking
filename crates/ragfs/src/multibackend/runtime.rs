@@ -1,7 +1,7 @@
 //! Foreground event queue and metadata flush worker for V2 multi-write.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,7 @@ use crate::multibackend::constants::SYSTEM_DIR;
 use crate::multibackend::meta::{MetadataStore, MultiWriteMetricsSnapshot, MultiWriteWorker};
 use crate::multibackend::model::{
     DirectoryEvent, DirectoryOperation, MarkerPosition, PartitionContext, PartitionState,
-    PartitionsManifest, PendingEvent, PendingEventKind, ScopeKey, SegmentEventType,
+    PartitionsManifest, PendingEvent, PendingEventKind, ProtocolStatus, ScopeKey, SegmentEventType,
 };
 use crate::multibackend::provider::{bootstrap_account, MultiWriteProvider};
 use crate::multibackend::router::AccountRouter;
@@ -70,8 +70,38 @@ pub struct MultiWriteRuntime {
     import_worker: StdMutex<Option<JoinHandle<Result<()>>>>,
     store: Arc<MetadataStore>,
     catch_up_cancelled: watch::Sender<bool>,
+    catch_up_full_scan: CatchUpFullScanRequester,
     running: Arc<AtomicBool>,
     pending_events: Arc<AtomicUsize>,
+}
+
+/// Broadcasts one immediate full-scan request to every catch-up worker.
+#[derive(Clone)]
+pub(crate) struct CatchUpFullScanRequester {
+    sender: watch::Sender<u64>,
+    version: Arc<AtomicU64>,
+}
+
+impl CatchUpFullScanRequester {
+    /// Create a requester with no pending full-scan request.
+    fn new() -> Self {
+        let (sender, _) = watch::channel(0);
+        Self {
+            sender,
+            version: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Return a receiver that observes future full-scan requests.
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.sender.subscribe()
+    }
+
+    /// Ask every catch-up worker to run one full scan as soon as it is stable.
+    pub(crate) fn request(&self) {
+        let version = self.version.fetch_add(1, Ordering::Relaxed) + 1;
+        self.sender.send_replace(version);
+    }
 }
 
 impl MultiWriteRuntime {
@@ -93,6 +123,7 @@ impl MultiWriteRuntime {
         let worker_pending_events = pending_events.clone();
         let (activation, _) = watch::channel(None);
         let (catch_up_cancelled, _) = watch::channel(false);
+        let catch_up_full_scan = CatchUpFullScanRequester::new();
         let flush_primary = primary.clone();
         let checkpoint_state = primary.as_ref().map(|primary| {
             Arc::new(CheckpointWorker::new(
@@ -156,7 +187,9 @@ impl MultiWriteRuntime {
             worker_running.store(false, Ordering::SeqCst);
         }));
         for (worker, dirty_scopes) in catch_up_workers {
+            let status_store = store.clone();
             let mut cancelled = catch_up_cancelled.subscribe();
+            let mut full_scan_requests = catch_up_full_scan.subscribe();
             let mut activated = activation.subscribe();
             drop(tokio::spawn(async move {
                 if !wait_for_start(&mut activated).await {
@@ -164,8 +197,15 @@ impl MultiWriteRuntime {
                 }
                 let mut tick = 0usize;
                 while !*cancelled.borrow() {
+                    let mut force_full_scan = false;
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_secs(CATCH_UP_INTERVAL_SECS)) => {}
+                        changed = full_scan_requests.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
+                            force_full_scan = true;
+                        }
                         changed = cancelled.changed() => {
                             if changed.is_err() || *cancelled.borrow() {
                                 break;
@@ -173,8 +213,23 @@ impl MultiWriteRuntime {
                         }
                     }
                     tick += 1;
-                    let full_scan = tick >= CATCH_UP_FULL_SCAN_TICKS;
+                    let full_scan = force_full_scan || tick >= CATCH_UP_FULL_SCAN_TICKS;
                     let scopes = take_dirty_scopes(&dirty_scopes);
+                    if !full_scan && scopes.is_empty() {
+                        continue;
+                    }
+                    match status_store.protocol_status().await {
+                        Ok(ProtocolStatus::Stable) => {}
+                        Ok(ProtocolStatus::Migrating) => {
+                            restore_dirty_scopes(&dirty_scopes, scopes);
+                            continue;
+                        }
+                        Err(error) => {
+                            restore_dirty_scopes(&dirty_scopes, scopes);
+                            debug!(error = %error, "multi-write catch-up status check failed");
+                            continue;
+                        }
+                    }
                     let result = if full_scan {
                         tick = 0;
                         worker.run_once().await
@@ -194,9 +249,15 @@ impl MultiWriteRuntime {
             import_worker: StdMutex::new(None),
             store,
             catch_up_cancelled,
+            catch_up_full_scan,
             running,
             pending_events,
         }
+    }
+
+    /// Return a handle that can request immediate catch-up full scans.
+    pub(crate) fn catch_up_full_scan_requester(&self) -> CatchUpFullScanRequester {
+        self.catch_up_full_scan.clone()
     }
 
     /// Attach the full-data import task to this runtime's lifecycle.

@@ -11,12 +11,14 @@ use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
 use crate::core::types::{FileInfo, WriteFlag};
 use crate::lock::PathLockManager;
-use crate::multibackend::constants::{MULTIWRITE_MOUNT_PREFIX, VBUCKETS};
+use crate::multibackend::constants::{MULTIWRITE_MOUNT_PREFIX, SYSTEM_DIR, VBUCKETS};
 use crate::multibackend::model::{
     BackendState, CheckpointsManifest, PartitionEntry, PartitionManifest, PartitionState,
     PartitionsManifest, ProtocolState, ProtocolStatus, ScopeKey, SegmentManifest,
 };
 use crate::multibackend::router::{build_initial_routes, MultiWritePaths};
+
+const RESET_IMPORT_MARKER_FILE: &str = ".multiwrite.reset_import";
 
 /// Trait for resolving `FsContext` from a filesystem path.
 ///
@@ -389,6 +391,43 @@ impl MetadataStore {
             Ok(()) | Err(Error::NotFound(_)) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// Remove V2 protocol and per-account partition metadata for full re-import.
+    pub(crate) async fn reset_multiwrite_metadata(&self) -> Result<()> {
+        self.remove_file(&self.paths.mount_protocol().0).await?;
+        for entry in self.primary.read_internal_dir("/").await? {
+            if !entry.is_dir {
+                continue;
+            }
+            self.remove_all(&self.paths.account_partitions(&entry.name)?.0)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Persist that reset-triggered imports must scan existing primary files.
+    pub(crate) async fn mark_reset_import_pending(&self) -> Result<()> {
+        self.write_immutable(&self.reset_import_marker_path(), b"1")
+            .await
+    }
+
+    /// Return whether a reset-triggered import still needs full reconciliation.
+    pub(crate) async fn reset_import_pending(&self) -> Result<bool> {
+        match self.read_bytes(&self.reset_import_marker_path()).await {
+            Ok(_) => Ok(true),
+            Err(Error::NotFound(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Clear the reset import marker after the importer reaches Stable.
+    pub(crate) async fn clear_reset_import_pending(&self) -> Result<()> {
+        self.remove_file(&self.reset_import_marker_path()).await
+    }
+
+    fn reset_import_marker_path(&self) -> String {
+        format!("{MULTIWRITE_MOUNT_PREFIX}/{SYSTEM_DIR}/{RESET_IMPORT_MARKER_FILE}")
     }
 
     /// Recheck destructive GC safety while the caller holds the account Exact lock.

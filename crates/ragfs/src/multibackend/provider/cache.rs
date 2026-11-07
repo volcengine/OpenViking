@@ -352,7 +352,11 @@ impl CacheProvider {
     ) -> Result<Self> {
         Self::validate_namespace(&namespace)?;
         runtime
-            .require_operations(&[CacheOperation::Lrange, CacheOperation::ExecuteScript])
+            .require_operations(&[
+                CacheOperation::Del,
+                CacheOperation::Lrange,
+                CacheOperation::ExecuteScript,
+            ])
             .map_err(|error| {
                 Error::config(format!(
                     "Cache-backed multi-write provider is incompatible: {error}"
@@ -1227,6 +1231,16 @@ impl CacheProvider {
 
 #[async_trait]
 impl MultiWriteProvider for CacheProvider {
+    /// Deletes cache keys owned by one partition scope before or during metadata reset.
+    async fn reset_scope(&self, scope: &ScopeKey) -> Result<()> {
+        let keys = self.keys_for_scope(scope)?;
+        self.runtime
+            .del(&[keys.state, keys.head, keys.flush_gate])
+            .await
+            .map(|_| ())
+            .map_err(|error| Self::cache_error("reset", error))
+    }
+
     /// Atomically installs reconstructed state only when cache state is absent.
     async fn bootstrap_manifest(&self, scope: &ScopeKey, manifest: SegmentManifest) -> Result<()> {
         self.validate_scope(scope).await?;
