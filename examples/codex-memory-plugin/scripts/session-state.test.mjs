@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -51,6 +53,86 @@ test("concurrent stale takeovers leave exactly one holder", async () => {
   assert.equal(outcomes.filter((o) => o.value === true).length, 3);
   assert.equal(await exists(dir), false, "the last holder releases the lock");
 });
+
+for (const scenario of ["successor", "heartbeat", "replacement", "release"]) {
+  test(`a delayed stale claimant revalidates the lock after ${scenario}`, { timeout: 5_000 }, async (t) => {
+    const sessionId = `delayed-${scenario}`;
+    const dir = join(STATE_DIR, `${sessionId}.lock`);
+    const ownerFile = join(dir, "owner");
+    await mkdir(dir);
+    await writeFile(ownerFile, "old-owner");
+    const old = new Date(Math.floor(Date.now() / 1000) * 1000 - 600_000);
+    await utimes(ownerFile, old, old);
+    const observed = await stat(ownerFile);
+
+    let paused, resume, entered, release;
+    const claimantPaused = new Promise((resolve) => { paused = resolve; });
+    const resumeClaimant = new Promise((resolve) => { resume = resolve; });
+    const successorEntered = new Promise((resolve) => { entered = resolve; });
+    const releaseSuccessor = new Promise((resolve) => { release = resolve; });
+    const originalMkdir = fs.mkdir;
+    let delayed = false;
+    const hook = t.mock.method(fs, "mkdir", async (path, ...args) => {
+      if (!delayed && path.startsWith(join(dir, "claim-"))) {
+        delayed = true;
+        if (scenario === "release") {
+          await originalMkdir(path, ...args);
+          await rm(dir, { recursive: true, force: true });
+        }
+        // Pause after observing the old stamp, before atomically claiming it.
+        paused();
+        await resumeClaimant;
+        if (scenario === "release") return;
+      }
+      return originalMkdir(path, ...args);
+    });
+    syncBuiltinESMExports();
+
+    let staleEntries = 0;
+    const first = withSessionLock(sessionId, async () => { staleEntries += 1; });
+    let second;
+    try {
+      await claimantPaused;
+      if (scenario === "successor") {
+        second = withSessionLock(sessionId, async () => {
+          entered();
+          await releaseSuccessor;
+          return "live";
+        });
+        await successorEntered;
+      } else if (scenario === "heartbeat") {
+        const now = new Date();
+        await utimes(ownerFile, now, now);
+      } else if (scenario === "replacement") {
+        const replacement = join(dir, "replacement");
+        await writeFile(replacement, "old-owner");
+        await utimes(replacement, old, old);
+        await rename(replacement, ownerFile);
+        const current = await stat(ownerFile);
+        assert.equal(current.dev, observed.dev);
+        assert.notEqual(current.ino, observed.ino);
+        assert.equal(current.mtimeMs, observed.mtimeMs);
+      }
+      const liveOwner = scenario === "release" ? null : await readFile(ownerFile, "utf-8");
+      resume();
+      assert.deepEqual(await first, { skipped: true });
+      assert.equal(staleEntries, 0, "the live successor keeps exclusive access");
+      if (scenario !== "release") assert.equal(await readFile(ownerFile, "utf-8"), liveOwner);
+      release();
+      if (second) {
+        assert.equal((await second).value, "live");
+        assert.equal(await exists(dir), false);
+      }
+    } finally {
+      resume();
+      release();
+      await Promise.allSettled([first, second]);
+      hook.mock.restore();
+      syncBuiltinESMExports();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("a claim left behind by a dead taker does not wedge the lock", async () => {
   const dir = join(STATE_DIR, "wedged.lock");
