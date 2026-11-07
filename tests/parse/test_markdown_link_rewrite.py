@@ -770,6 +770,68 @@ class TestRewriteImageUris:
         assert _decode(fake.files[f"{root}/doc.md"]) == f"![p]({root}/logo.png)"
         assert f"{root}/.image_mappings.json" not in fake.files
 
+    @pytest.mark.parametrize("failure", ["ls", "read_file", "write_file", None])
+    async def test_mapping_cleanup_waits_for_failed_document_retry(self, failure):
+        import json
+
+        from openviking.parse.image_rewrite import rewrite_image_uris
+
+        root = "viking://resources/retry"
+        failed_doc = f"{root}/split/one.md"
+        lease = {"path": root}
+
+        class FaultyFS(FakeVikingFS):
+            pending_failure = failure
+
+            def fail_once(self, operation, uri):
+                target = f"{root}/split" if operation == "ls" else failed_doc
+                if self.pending_failure == operation and uri == target:
+                    self.pending_failure = None
+                    raise OSError("transient storage failure")
+
+            async def ls(self, uri, **kw):
+                self.fail_once("ls", uri)
+                return await super().ls(uri, **kw)
+
+            async def read_file(self, uri, **kw):
+                self.fail_once("read_file", uri)
+                return await super().read_file(uri, **kw)
+
+            async def write_file(self, uri, content, **kw):
+                self.fail_once("write_file", uri)
+                assert kw["lease_ref"] is lease
+                await super().write_file(uri, content, **kw)
+
+            async def rm(self, uri, **kw):
+                assert kw["lease_ref"] is lease
+                await super().rm(uri, **kw)
+
+        fake = FaultyFS()
+        for name in ("split/one", "split/two", "other/three"):
+            fake.files[f"{root}/{name}.md"] = b"![p](image.png)"
+        for directory, documents in (("split", ["one", "two"]), ("other", ["three"])):
+            fake.files[f"{root}/{directory}/image.png"] = b"img"
+            fake.files[f"{root}/{directory}/.image_mappings.json"] = json.dumps(
+                {f"{name}.md": {"image.png": "image.png"} for name in documents}
+            ).encode()
+
+        with self._patched(fake):
+            first = await rewrite_image_uris(root, lease_ref=lease)
+            assert first["references_rewritten"] == (2 if failure else 3)
+            assert f"{root}/other/.image_mappings.json" not in fake.files
+            assert (f"{root}/split/.image_mappings.json" in fake.files) == bool(failure)
+            if failure:
+                assert _decode(fake.files[failed_doc]) == "![p](image.png)"
+            second = await rewrite_image_uris(root, lease_ref=lease)
+            third = await rewrite_image_uris(root, lease_ref=lease)
+
+        assert second["references_rewritten"] == (1 if failure else 0)
+        assert third == {"files_processed": 0, "references_rewritten": 0}
+        assert not any(uri.endswith(".image_mappings.json") for uri in fake.files)
+        for name in ("split/one", "split/two", "other/three"):
+            directory = name.rsplit("/", 1)[0]
+            assert _decode(fake.files[f"{root}/{name}.md"]) == f"![p]({root}/{directory}/image.png)"
+
     async def test_merge_temp_carries_sidecar_but_not_other_hidden_files(self):
         # _merge_temp must carry the declared .image_mappings.json sidecar, but
         # keep filtering every other hidden file a parser (or anything else)
