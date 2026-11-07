@@ -781,6 +781,47 @@ test("concurrent saves never race the shared state file (#3877)", async (t) => {
   })
 })
 
+test("separate managers use unique temp files for shared state", async (t) => {
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const origWriteFile = fs.promises.writeFile
+  const origRename = fs.promises.rename
+  const tempPaths = new Set()
+  let raceDetected = false
+
+  t.mock.method(fs.promises, "writeFile", async (filename, ...args) => {
+    if (String(filename).endsWith(".tmp")) tempPaths.add(String(filename))
+    await delay(20)
+    return origWriteFile.call(fs.promises, filename, ...args)
+  })
+  t.mock.method(fs.promises, "rename", async (from, to) => {
+    await delay(5)
+    if (!fs.existsSync(from)) {
+      raceDetected = true
+      const err = new Error(`ENOENT: no such file or directory, rename '${from}' -> '${to}'`)
+      err.code = "ENOENT"
+      throw err
+    }
+    return origRename.call(fs.promises, from, to)
+  })
+
+  await withTempDir("ov-oc-shared-state-", async (dir) => {
+    const config = { ...baseConfig("http://127.0.0.1:1"), autoCapture: false }
+    const first = createMemorySessionManager({ config, pluginRoot: dir })
+    const second = createMemorySessionManager({ config, pluginRoot: dir })
+
+    await Promise.all([
+      first.handleEvent({ type: "session.created", properties: { info: { id: "first" } } }),
+      second.handleEvent({ type: "session.created", properties: { info: { id: "second" } } }),
+    ])
+    await Promise.all([first.flushAll(), second.flushAll()])
+
+    assert.ok(tempPaths.size >= 2)
+    assert.equal(raceDetected, false)
+    const data = JSON.parse(await fs.promises.readFile(join(dir, "openviking-session-state.json"), "utf8"))
+    assert.equal(data.version, 2)
+  })
+})
+
 test("explicit commit writes the response trace_id to the plugin log", async () => {
   const requests = []
   const server = createServer(async (req, res) => {
