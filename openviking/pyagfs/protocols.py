@@ -12,6 +12,33 @@ AGFSByteStream = Iterator[bytes]
 class AGFSSyncClientProtocol(Protocol):
     """AGFS binding contract used by OpenViking."""
 
+    def ls_pages(
+        self,
+        path: str,
+        page_size: int | None = None,
+        ctx: Dict[str, str] | None = None,
+        *,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+    ) -> Iterator[list[Dict[str, Any]]]:
+        """Return bounded batches from one directory enumeration."""
+
+    def tree_directory_pages(
+        self,
+        path: str,
+        show_hidden: bool = False,
+        page_size: int | None = None,
+        level_limit: int | None = None,
+        ctx: Dict[str, str] | None = None,
+        *,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+        directories_only: bool = False,
+    ) -> Iterator[list[Dict[str, Any]]]:
+        """Return bounded batches from one tree traversal."""
+
     def ls(
         self,
         path: str = "/",

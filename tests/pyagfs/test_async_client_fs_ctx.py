@@ -34,10 +34,10 @@ class _RecordingClient:
         ctx: dict[str, str] | None = None,
         **options: Any,
     ) -> list[dict[str, Any]]:
-        """Record listing options and return an empty result."""
+        """Record listing options and return one entry."""
         self.calls.append(("ls", path, ctx))
         self.list_options = options
-        return []
+        return [{"name": "first"}]
 
     def tree_directory(
         self,
@@ -46,10 +46,50 @@ class _RecordingClient:
         ctx: dict[str, str] | None = None,
         **options: Any,
     ) -> list[dict[str, Any]]:
-        """Record tree options and return an empty result."""
+        """Record tree options and return one entry."""
         self.calls.append(("tree_directory", path, ctx))
         self.tree_options = options
-        return []
+        return [{"path": path + "/first"}]
+
+    def ls_pages(self, path, *, ctx=None, **options):
+        self.calls.append(("ls_pages", path, ctx))
+        assert options["offset"] == 1
+        return iter([[{"name": "second"}]])
+
+    def tree_directory_pages(self, path, *, ctx=None, **options):
+        self.calls.append(("tree_directory_pages", path, ctx))
+        assert options["offset"] == 1
+        return iter([[{"path": path + "/second"}]])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls_pages", "tree_directory_pages"])
+async def test_listing_batches_keep_account_context(method):
+    client = _RecordingClient()
+    agfs = AsyncAGFSClient(client)
+    batches = await getattr(agfs, method)("/local/acct-1/data", page_size=1)
+    assert client.calls == [
+        (method.removesuffix("_pages"), "/local/acct-1/data", {"account_id": "acct-1"})
+    ]
+    assert len([page async for page in batches]) == 2
+    assert client.calls == [
+        (method.removesuffix("_pages"), "/local/acct-1/data", {"account_id": "acct-1"}),
+        (method, "/local/acct-1/data", {"account_id": "acct-1"}),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls_pages", "tree_directory_pages"])
+@pytest.mark.parametrize("page_size", [None, 2])
+async def test_complete_first_batch_does_not_create_retained_listing(method, page_size):
+    client = _RecordingClient()
+    batches = await getattr(AsyncAGFSClient(client), method)(
+        "/local/acct-1/data", page_size=page_size
+    )
+    assert len([page async for page in batches]) == 1
+    assert client.calls == [
+        (method.removesuffix("_pages"), "/local/acct-1/data", {"account_id": "acct-1"})
+    ]
 
 
 @pytest.mark.asyncio
