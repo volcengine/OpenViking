@@ -86,6 +86,7 @@ const AGENT_FIELDS = Object.freeze([
   'workspace',
   'ovConfig',
   'ovAutoRecall',
+  'capabilitiesFile',
   'ovRecallScope',
   'explicitSilence',
   'stagedReplies',
@@ -277,6 +278,7 @@ function parseAgent(value, index, ignored) {
   if (connectors.includes('email') !== (emailAccounts.length > 0)) {
     throw new Error(`${label}.emailAccounts and the email connector must be configured together`);
   }
+  if (value.capabilitiesFile && model === 'ark') throw new Error(`${label}.capabilitiesFile requires a runtime with Core tools`);
   if (connectors.includes('email') && model === 'ark') {
     throw new Error(`${label} using the email connector cannot use the ark runtime`);
   }
@@ -329,6 +331,7 @@ function parseAgent(value, index, ignored) {
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
+    capabilitiesFile: value.capabilitiesFile == null ? null : manifestAbsolutePath(value.capabilitiesFile, `${label}.capabilitiesFile`),
     ovAutoRecall: value.ovAutoRecall ?? false,
     ovRecallScope: value.ovRecallScope ?? 'all',
     // On by default, except on Ark (no Core tools, so no stay_silent); an
@@ -565,6 +568,8 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   }
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
+  if (agent.capabilitiesFile) env.VIKA_CAPABILITIES_FILE = agent.capabilitiesFile;
+  else delete env.VIKA_CAPABILITIES_FILE;
   env.VIKA_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
   env.VIKA_OV_RECALL_SCOPE = agent.ovRecallScope;
   env.VIKA_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';

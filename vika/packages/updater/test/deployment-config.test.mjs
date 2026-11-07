@@ -760,3 +760,17 @@ test('rejects invalid defaults, relative paths, and overlapping agent storage', 
     });
   }
 });
+
+test('Core capability manifests are instance-scoped and never inherited from another instance', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-config-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const manifest = validManifest();
+  manifest.agents[0].capabilitiesFile = '/srv/capabilities/alpha.json';
+  const file = path.join(root, 'config.json'); fs.writeFileSync(file, JSON.stringify(manifest));
+  const deployment = loadDeploymentManifest({ VIKA_CONFIG: file });
+  const env = { VIKA_CAPABILITIES_FILE: '/wrong.json' };
+  applyDeploymentAgentEnv(env, deployment, 'alpha');
+  assert.equal(env.VIKA_CAPABILITIES_FILE, '/srv/capabilities/alpha.json');
+  applyDeploymentAgentEnv(env, deployment, 'beta');
+  assert.equal(env.VIKA_CAPABILITIES_FILE, undefined);
+});
