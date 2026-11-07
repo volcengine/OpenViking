@@ -52,13 +52,13 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 
 - `ov --sudo admin` - 账户和用户管理
 - `ov --sudo system` - 系统工具命令
-- `ov --sudo reindex` - 重建索引
 - `ov --sudo task status/list` - 查询 root/system 后台任务，例如账号删除任务
 
 ### 使用限制
 
-- `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
-- 必须配置 `root_api_key` 才能使用 `--sudo`
+- 使用 `--sudo` 需要配置 `root_api_key`。
+- 在 `api_key` 模式下，[重建共享资源索引](12-content.md#reindex)时，将租户 admin key 配置为 `api_key`，直接运行 `ov reindex`。
+- 在 `trusted` 模式下，`ov --sudo reindex` 使用配置中的 root key 进行认证。通过 CLI 配置或 `--account` 和 `--user` 指定身份，服务端根据该租户身份和角色授权。
 
 ## 用户组
 

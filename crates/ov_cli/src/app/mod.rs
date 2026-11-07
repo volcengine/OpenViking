@@ -204,7 +204,7 @@ pub(crate) async fn run() {
         let (title, message, actions) = match language {
             i18n::Language::En => (
                 "Command Error",
-                "--sudo is only supported for admin, system, reindex, task status, and task list commands.",
+                "--sudo is supported for admin, system, task status, task list, and reindex (trusted mode only).",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "Show admin commands"),
                     error_ui::ErrorAction::new("ov system --help", "Show system commands"),
@@ -214,7 +214,7 @@ pub(crate) async fn run() {
             ),
             i18n::Language::ZhCn => (
                 "命令错误",
-                "--sudo 只支持 admin、system、reindex、task status 和 task list 命令。",
+                "--sudo 支持 admin、system、task status、task list 和 reindex（仅限 trusted 模式）。",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "查看管理命令"),
                     error_ui::ErrorAction::new("ov system --help", "查看系统命令"),
