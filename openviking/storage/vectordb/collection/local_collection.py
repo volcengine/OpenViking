@@ -243,6 +243,9 @@ class LocalCollection(ICollection):
         self.dense_search_config = dict((config or {}).get("dense_search", {}))
 
         self.store_mgr: Optional[StoreManager] = store_mgr
+        self._ttl_state_lock = threading.Lock()
+        self._ttl_cleanup_lock = threading.Lock()
+        self._next_expire_ns: Optional[int] = store_mgr.next_expiration_ns()
         self.data_processor = DataProcessor(
             self.meta.fields_dict, collection_name=self.meta.collection_name
         )
@@ -511,6 +514,7 @@ class LocalCollection(ICollection):
         advance: Optional[Dict[str, Any]] = None,
         return_detail_info: bool = False,
     ) -> SearchResult:
+        self._expire_if_due()
         time_decay = (advance or {}).get("time_decay")
         if advance is not None and (
             set(advance) != {"time_decay"} or not isinstance(time_decay, dict)
@@ -655,6 +659,7 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
+        self._expire_if_due()
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
 
@@ -886,6 +891,8 @@ class LocalCollection(ICollection):
         with self._index_mutation_barrier.mutation() as mutation:
             need_record_delta = True if self.indexes.count() > 0 else False
             delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
+            if ttl > 0 and cands_list:
+                self._record_next_expiration(min(data.expire_ns_ts for data in cands_list))
             mutation.mark_changed()
 
             def upsert_to_index(name, index):
@@ -905,6 +912,7 @@ class LocalCollection(ICollection):
         return result
 
     def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
+        self._expire_if_due()
         result = FetchDataInCollectionResult()
         pk = self.meta.primary_key
         labels_list = (
@@ -1037,18 +1045,34 @@ class LocalCollection(ICollection):
         if self.store_mgr:
             self.store_mgr.delete_delta_data_before_ts(oldest_version)
 
+    def _record_next_expiration(self, expire_ns: int) -> None:
+        with self._ttl_state_lock:
+            if self._next_expire_ns is None or expire_ns < self._next_expire_ns:
+                self._next_expire_ns = expire_ns
+
+    def _expire_if_due(self) -> None:
+        with self._ttl_state_lock:
+            next_expire_ns = self._next_expire_ns
+        if next_expire_ns is not None and time.time_ns() >= next_expire_ns:
+            self._expire_timeout_data()
+
     def _expire_timeout_data(self):
         if not self.store_mgr:
             return
-        with self._index_mutation_barrier.mutation() as mutation:
-            delta_list = self.store_mgr.expire_data()
-            if delta_list:
-                mutation.mark_changed()
+        with self._ttl_cleanup_lock:
+            with self._ttl_state_lock:
+                next_expire_ns = self._next_expire_ns
+            if next_expire_ns is None or time.time_ns() < next_expire_ns:
+                return
+            with self._index_mutation_barrier.exclusive_mutation():
+                delta_list = self.store_mgr.expire_data()
+                with self._ttl_state_lock:
+                    self._next_expire_ns = self.store_mgr.next_expiration_ns()
 
-            def delete_from_index(name, index):
-                index.delete_data(delta_list)
+                def delete_from_index(name, index):
+                    index.delete_data(delta_list)
 
-            self.indexes.iterate(delete_from_index)
+                self.indexes.iterate(delete_from_index)
 
     def _register_scheduler_job(self):
         if self.ttl_cleanup_seconds > 0:
@@ -1219,6 +1243,7 @@ class LocalCollection(ICollection):
         Returns:
             AggregateResult: Object containing aggregation results
         """
+        self._expire_if_due()
         new_filters = {}
         sorter = {
             "op": "count",
