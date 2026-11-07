@@ -20,6 +20,7 @@ const workspace = {
       extraction: '记忆抽取规则',
       services: '服务配置',
       operations: '运维',
+      monitoring: '监控',
       tasks: '任务监控',
       root: 'Root 配置',
     },
@@ -98,7 +99,7 @@ const workspace = {
       managementDescription:
         '管理 Account、User、权限与服务配置。选择 User 后进入对应的用户工作台。',
       enterWorkbench: '进入工作台',
-      returnManagement: '管理后台',
+      returnManagement: '管理团队',
       selectUser: '选择 User',
       selectUserDescription: '请先选择具备有效数据凭据的 User，再进入工作台。',
       unavailable: '无法访问管理模式',
@@ -531,6 +532,7 @@ const workspace = {
     },
   },
   tasksPage: {
+    backToWorkbench: '返回工作台',
     labels: {
       timing: '耗时',
       totalDuration: '总耗时',

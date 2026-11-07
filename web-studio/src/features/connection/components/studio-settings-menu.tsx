@@ -119,13 +119,18 @@ export function StudioSettingsMenu({
       <PopoverTrigger
         aria-label={t('studioSettings.open')}
         title={identityName}
-        className="flex size-8 shrink-0 items-center justify-center rounded-full outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          'flex shrink-0 items-center justify-center rounded-full outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring',
+          managementMode ? 'size-8' : 'size-7',
+        )}
       >
         {showUser || managementMode ? (
           <SettingsAvatar
             name={identityName}
-            usesApiKey={usesApiKey}
-            className="size-6 text-xs"
+            usesApiKey={managementMode && usesApiKey}
+            className={
+              managementMode ? 'size-6 text-xs' : 'size-7 text-xs lowercase'
+            }
           />
         ) : managementIdentity ? (
           <ShieldCheckIcon

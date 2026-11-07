@@ -68,8 +68,10 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
     serverMode,
     allowed: canManageGateway,
   })
-  const filesystemMode =
-    pathname === '/filesystem' || pathname === '/filesystem/'
+  const surface = pathname.replace(/\/$/, '')
+  const filesystemMode = surface === '/filesystem'
+  const tasksMode = surface === '/tasks'
+  const workbenchChrome = filesystemMode || tasksMode
 
   return (
     <StudioHeaderActionsContext.Provider value={headerActions}>
@@ -77,7 +79,7 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
         defaultOpen
         desktopToggleEnabled={false}
         data-management={managementMode}
-        data-workbench={filesystemMode}
+        data-workbench={workbenchChrome}
         style={
           managementMode
             ? ({ '--sidebar-width': '200px' } as React.CSSProperties)
@@ -89,7 +91,8 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
         <StudioHeader
           actionsRef={setHeaderActions}
           managementMode={managementMode}
-          filesystemMode={filesystemMode}
+          workbenchChrome={workbenchChrome}
+          tasksMode={tasksMode}
           canManage={canManage}
           isGatewayHost={isGatewayHost}
           settingsPath={settingsPath}

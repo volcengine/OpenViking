@@ -128,11 +128,6 @@ const DIRECTORY_HINTS: Record<string, string> = {
   skills: 'ide.hints.skills',
 }
 
-const NAMESPACE_LABELS: Record<string, string> = {
-  agent: 'Agent',
-  resources: 'Resources',
-}
-
 const NAMESPACE_ORDER: Partial<Record<string, number>> = {
   user: 0,
   resources: 2,
@@ -347,10 +342,6 @@ export function ContextTreeNode({
   selectedFileUri?: string | null
 }) {
   const { t } = useTranslation('filesystem')
-  const displayName =
-    level === 0
-      ? (NAMESPACE_LABELS[entry.name.toLowerCase()] ?? entry.name)
-      : entry.name
   const isOpen = expandedKeys.has(entry.uri)
   const isFileSelected = !entry.isDir && selectedFileUri === entry.uri
   const isDirSelected =
@@ -484,7 +475,7 @@ export function ContextTreeNode({
             />
           )}
           <span className={styles.name} title={entry.name}>
-            {displayName}
+            {entry.name}
           </span>
           {namespaceHint ? (
             <span className={styles.hint} title={namespaceHint}>

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentType, PropsWithChildren } from 'react'
@@ -41,8 +42,13 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
       useSearch: () => mocks.search,
     }),
     useNavigate: () => mocks.navigate,
+    useBlocker: () => undefined,
   }
 })
+
+vi.mock('#/app/layouts/studio-header-actions', () => ({
+  StudioHeaderActions: ({ children }: PropsWithChildren) => children,
+}))
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -131,6 +137,15 @@ const firstFile = 'viking://user/default/memories/first.md'
 const secondFile = 'viking://user/default/memories/second.md'
 const parentDirectory = 'viking://user/default/memories/'
 
+function renderFilesystem() {
+  const client = new QueryClient()
+  return render(<FilesystemRoute />, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  })
+}
+
 describe('filesystem context tree refresh', () => {
   beforeAll(async () => {
     await FilesystemRoute.preload?.()
@@ -151,12 +166,23 @@ describe('filesystem context tree refresh', () => {
     mocks.dataManagement.mockReset()
   })
 
+  it('opens the standalone task list from the workbench header', async () => {
+    renderFilesystem()
+
+    await userEvent.click(screen.getByRole('button', { name: 'title' }))
+
+    expect(mocks.navigate).toHaveBeenCalledWith({
+      to: '/tasks',
+      search: { file: firstFile, uri: parentDirectory },
+    })
+  })
+
   it('offers OVPack for the parent resource directory while a file is selected', async () => {
     mocks.search = {
       file: 'viking://resources/preferences/response-tone.md',
       uri: 'viking://resources/preferences/',
     }
-    render(<FilesystemRoute />)
+    renderFilesystem()
 
     await userEvent.click(
       screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
@@ -173,7 +199,7 @@ describe('filesystem context tree refresh', () => {
       file: 'viking://resources/preferences/response-tone.md',
       uri: 'viking://resources/preferences/',
     }
-    render(<FilesystemRoute />)
+    renderFilesystem()
 
     await userEvent.click(
       screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
@@ -187,7 +213,7 @@ describe('filesystem context tree refresh', () => {
   it('shows only the CLI tab for hosted reads while keeping local tools unavailable', async () => {
     mocks.provider = 'volcengine'
     mocks.search = { file: firstFile, panel: 'agent', uri: parentDirectory }
-    render(<FilesystemRoute />)
+    renderFilesystem()
     await userEvent.click(
       screen.getByRole('button', { name: 'dataManagement:historyTitle' }),
     )
@@ -212,14 +238,14 @@ describe('filesystem context tree refresh', () => {
 
   it('clears a deleted selected file from the preview and URL search', async () => {
     mocks.fetchFsStat.mockRejectedValue({ statusCode: 404 })
-    render(<FilesystemRoute />)
+    renderFilesystem()
 
     await userEvent.click(
       await screen.findByRole('button', { name: mocks.refreshLabel }),
     )
 
     await waitFor(() => {
-      expect(screen.getByTestId('preview').textContent).toBe('')
+      expect(screen.queryByTestId('preview')).toBeNull()
     })
     expect(mocks.invalidateList.mock.calls[0]).toEqual([])
     expect(mocks.fetchFsStat).toHaveBeenCalledWith(firstFile, {
@@ -238,7 +264,7 @@ describe('filesystem context tree refresh', () => {
         rejectStat = reject
       }),
     )
-    const { rerender } = render(<FilesystemRoute />)
+    const { rerender } = renderFilesystem()
 
     await userEvent.click(
       await screen.findByRole('button', { name: mocks.refreshLabel }),

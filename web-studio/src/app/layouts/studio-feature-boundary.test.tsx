@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   pathname: '/compile',
+  taskMonitoringTab: false,
   provider: 'volcengine',
   ready: true,
   capability: 'unavailable',
@@ -13,7 +14,10 @@ const state = vi.hoisted(() => ({
   controlKey: 'mock-admin',
 }))
 vi.mock('@tanstack/react-router', () => ({
-  useRouterState: () => state.pathname,
+  useRouterState: () => ({
+    pathname: state.pathname,
+    taskMonitoringTab: state.taskMonitoringTab,
+  }),
   Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
@@ -44,6 +48,7 @@ vi.mock('react-i18next', () => ({
 }))
 afterEach(() => {
   cleanup()
+  state.taskMonitoringTab = false
   state.provider = 'volcengine'
   state.ready = true
   state.mode = 'api_key'
@@ -196,4 +201,26 @@ it('requires the trusted credential before mounting data pages', () => {
   expect(
     screen.getByText('states.trustedCredentialRequired.title'),
   ).toBeTruthy()
+})
+
+it('keeps the tasks tab accessible in dev mode where component monitoring is gated', () => {
+  state.provider = 'opensource'
+  state.pathname = '/admin/monitoring'
+  state.mode = 'dev'
+  state.role = 'root'
+  const content = (
+    <StudioFeatureBoundary>
+      <span data-testid="monitoring-content" />
+    </StudioFeatureBoundary>
+  )
+  const view = render(content)
+  expect(screen.queryByTestId('monitoring-content')).toBeNull()
+
+  state.taskMonitoringTab = true
+  view.rerender(
+    <StudioFeatureBoundary>
+      <span data-testid="monitoring-content" />
+    </StudioFeatureBoundary>,
+  )
+  expect(screen.getByTestId('monitoring-content')).toBeTruthy()
 })

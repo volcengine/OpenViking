@@ -13,6 +13,7 @@ import {
   CopyIcon,
   EyeIcon,
   EyeOffIcon,
+  KeyIcon,
   KeyRoundIcon,
 } from 'lucide-react'
 import * as React from 'react'
@@ -50,6 +51,7 @@ export function StudioApiKeyMenu({
     <CredentialPopover
       key={`${managementMode}:${createConnectionRoleProbeKey(connection, serverMode)}`}
       apiKey={apiKey}
+      managementMode={managementMode}
       identityLabel={identityLabel}
       identityValue={identityValue}
       credentialLabel={
@@ -61,11 +63,13 @@ export function StudioApiKeyMenu({
 
 function CredentialPopover({
   apiKey,
+  managementMode,
   identityLabel,
   identityValue,
   credentialLabel,
 }: {
   apiKey: string
+  managementMode: boolean
   identityLabel: string
   identityValue: string
   credentialLabel?: string
@@ -92,9 +96,13 @@ function CredentialPopover({
     <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger
         aria-label={t('apiKey.title')}
-        className="inline-flex h-9 items-center justify-center gap-2 rounded-md px-2 text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-muted sm:px-2.5"
+        className={`inline-flex items-center justify-center px-2 text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-muted ${managementMode ? 'h-9 gap-2 rounded-md sm:px-2.5' : 'h-7 gap-1 rounded-full text-xs'}`}
       >
-        <KeyRoundIcon className="size-4" />
+        {managementMode ? (
+          <KeyRoundIcon className="size-4" />
+        ) : (
+          <KeyIcon className="size-4 text-foreground/80" />
+        )}
         <span className="hidden sm:inline">{t('apiKey.title')}</span>
       </PopoverTrigger>
       <PopoverContent

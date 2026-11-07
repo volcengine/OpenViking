@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StudioLayout } from '#/app/layouts/studio-layout'
 import { IdentityScopedAppShell } from '#/app/layouts/connection-boundary'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
@@ -88,6 +89,21 @@ vi.mock('@tanstack/react-router', async (original) => ({
   }) => select({ location: { pathname: state.pathname } }),
 }))
 afterEach(cleanup)
+it('keeps the workbench header when opening the standalone tasks page', () => {
+  const view = render(<StudioLayout>{null}</StudioLayout>)
+  const header = screen.getByRole('banner')
+  expect(header.parentElement?.getAttribute('data-workbench')).toBe('true')
+  expect(
+    header.querySelector('[data-slot="studio-header-actions"]'),
+  ).toBeTruthy()
+
+  state.pathname = '/tasks'
+  view.rerender(<StudioLayout>{null}</StudioLayout>)
+
+  expect(screen.getByRole('banner')).toBe(header)
+  expect(header.parentElement?.getAttribute('data-workbench')).toBe('true')
+  expect(header.querySelector('[aria-current="page"]')).toBeTruthy()
+})
 it('keeps settings reachable while a health request is pending', () => {
   state.pathname = '/filesystem'
   render(
@@ -285,7 +301,7 @@ it('keeps management setup reachable from an ordinary User workbench without a c
       <span data-testid="settings" />
     </IdentityScopedAppShell>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Admin console' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Manage team' }))
   expect(
     screen.getByRole('dialog', { name: 'Configure management access' }),
   ).toBeTruthy()

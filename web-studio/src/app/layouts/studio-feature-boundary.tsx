@@ -19,7 +19,14 @@ import { useTranslation } from 'react-i18next'
 
 export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
   const { t } = useTranslation('studio')
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const { pathname, taskMonitoringTab } = useRouterState({
+    select: ({ location }) => ({
+      pathname: location.pathname,
+      taskMonitoringTab:
+        location.pathname.replace(/\/$/, '') === '/admin/monitoring' &&
+        location.search.tab === 'tasks',
+    }),
+  })
   const {
     connection,
     connectionRole,
@@ -29,11 +36,13 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     studioMode,
   } = useAppConnection()
   const service = useStudioService()
-  const feature = featureForPath(
-    pathname === '/admin/request-logs' || pathname === '/admin/request-logs/'
-      ? '/request-logs'
-      : pathname,
-  )
+  const path = pathname.replace(/\/$/, '')
+  // The tasks tab uses the admin route and task credential checks.
+  const feature = taskMonitoringTab
+    ? undefined
+    : featureForPath(
+        path === '/admin/request-logs' ? '/request-logs' : pathname,
+      )
   const probe = feature && 'probe' in feature ? feature.probe : undefined
   const cloudProbe =
     service.ready && service.provider === 'volcengine' && Boolean(probe)

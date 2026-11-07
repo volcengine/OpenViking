@@ -21,6 +21,7 @@ const workspace = {
       extraction: 'Memory extraction rules',
       services: 'Service configuration',
       operations: 'Operations',
+      monitoring: 'Monitoring',
       tasks: 'Task monitoring',
       root: 'Root settings',
     },
@@ -100,7 +101,7 @@ const workspace = {
       managementDescription:
         'Manage accounts, users, permissions and service configuration. Select a user to open their workbench.',
       enterWorkbench: 'Open workbench',
-      returnManagement: 'Admin console',
+      returnManagement: 'Manage team',
       selectUser: 'Select a user',
       selectUserDescription:
         'Select a user with a valid data credential before opening the workbench.',
@@ -547,6 +548,7 @@ const workspace = {
     },
   },
   tasksPage: {
+    backToWorkbench: 'Back to workbench',
     labels: {
       timing: 'Duration',
       totalDuration: 'Total Time',

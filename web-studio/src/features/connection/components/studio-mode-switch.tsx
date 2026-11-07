@@ -13,11 +13,7 @@ import {
   DialogTitle,
 } from '#/shared/ui/dialog'
 import { Link, useNavigate } from '@tanstack/react-router'
-import {
-  LayoutDashboardIcon,
-  PanelsTopLeftIcon,
-  UserRoundIcon,
-} from 'lucide-react'
+import { PanelsTopLeftIcon, UserRoundIcon, UsersRoundIcon } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -60,14 +56,16 @@ export function StudioModeSwitch({
       {managementMode ? (
         <PanelsTopLeftIcon className="size-4" />
       ) : (
-        <LayoutDashboardIcon className="size-4" />
+        <UsersRoundIcon className="size-4" />
       )}
       <span className={compact ? 'sr-only' : 'hidden md:inline'}>{label}</span>
     </>
   )
   const buttonClass = compact
     ? 'size-8 rounded-md border-0 bg-transparent p-0 shadow-none text-muted-foreground'
-    : 'size-9 rounded-md p-0 md:w-auto md:gap-2 md:px-3'
+    : managementMode
+      ? 'size-9 rounded-md p-0 md:w-auto md:gap-2 md:px-3'
+      : 'h-7 w-7 rounded-full bg-[#5252ff] p-0 text-xs leading-5 tracking-[0.003em] text-white hover:bg-[#4545e8] md:w-auto md:gap-1 md:px-2.5'
   async function enter(identity: SavedDataIdentity) {
     if (pending) return
     const controller = new AbortController()
@@ -99,7 +97,7 @@ export function StudioModeSwitch({
       <Button
         nativeButton={false}
         size="sm"
-        variant="outline"
+        variant={managementMode ? 'outline' : 'default'}
         aria-label={label}
         className={buttonClass}
         render={

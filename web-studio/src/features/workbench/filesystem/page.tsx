@@ -11,7 +11,7 @@ import { useDocumentGuard } from './lib/use-document-guard'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
-  ClipboardListIcon,
+  GalleryVerticalEndIcon,
   FileTextIcon,
   MoreHorizontalIcon,
   ArrowLeftIcon,
@@ -35,7 +35,6 @@ import { useStudioService } from '#/features/connection/hooks/use-studio-service
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
 import { LazyFilePreview } from '#/features/workbench/resources/components/lazy-file-preview'
-import { UploadTaskDialog } from '#/features/workbench/resources/components/upload-task-dialog'
 import {
   ResourceUploadProvider,
   useResourceUpload,
@@ -111,7 +110,7 @@ export function FilesystemRoute() {
 }
 
 function FilesystemWorkbench() {
-  const { t } = useTranslation(['filesystem', 'resources'])
+  const { t } = useTranslation(['filesystem', 'resources', 'tasksPage'])
   const { provider } = useStudioService()
   const canUseLocalTools = provider === 'opensource'
   const canUseCliPanel = canUseLocalTools || provider === 'volcengine'
@@ -173,7 +172,6 @@ function FilesystemWorkbench() {
     enableBeforeUnload: () => dirtyRef.current,
   })
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
-  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [dataManagementMode, setDataManagementMode] = useState<
     'history' | 'transfer' | 'compare' | null
   >(null)
@@ -228,13 +226,8 @@ function FilesystemWorkbench() {
     showAllHidden: true,
     nodeLimit: 500,
   })
-  const {
-    activeTaskCount,
-    hasActiveTasks,
-    isRefreshingTasks,
-    refreshTasks,
-    tasks,
-  } = useResourceUpload()
+  const { activeTaskCount, hasActiveTasks, isRefreshingTasks } =
+    useResourceUpload()
   const { invalidateAll, invalidateList } = useInvalidateVikingFs()
   const handleDocumentSaved = useCallback(
     (uri: string) => {
@@ -425,9 +418,9 @@ function FilesystemWorkbench() {
   )
 
   const handleOpenProcessingTasks = useCallback(() => {
-    setTaskDialogOpen(true)
-    void refreshTasks()
-  }, [refreshTasks])
+    const { file, uri, panel, session } = search
+    void navigate({ to: '/tasks', search: { file, uri, panel, session } })
+  }, [navigate, search])
 
   const handleOpenSearch = useCallback(() => {
     setFindPaletteOpen(true)
@@ -608,32 +601,30 @@ function FilesystemWorkbench() {
 
   return (
     <div className={styles.workbench}>
-      {canUseLocalTools ? (
-        <StudioHeaderActions>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="relative size-8 text-muted-foreground"
-            title={t('processingTasks.title', { ns: 'resources' })}
-            aria-label={t('processingTasks.title', { ns: 'resources' })}
-            onClick={handleOpenProcessingTasks}
-          >
-            <ClipboardListIcon
-              className={
-                hasActiveTasks || isRefreshingTasks
-                  ? 'size-4 text-primary'
-                  : 'size-4'
-              }
-            />
-            {activeTaskCount > 0 ? (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none text-primary-foreground">
-                {activeTaskCount}
-              </span>
-            ) : null}
-          </Button>
-        </StudioHeaderActions>
-      ) : null}
+      <StudioHeaderActions>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="relative size-8 rounded-full text-foreground/80"
+          title={t('title', { ns: 'tasksPage' })}
+          aria-label={t('title', { ns: 'tasksPage' })}
+          onClick={handleOpenProcessingTasks}
+        >
+          <GalleryVerticalEndIcon
+            className={
+              hasActiveTasks || isRefreshingTasks
+                ? 'size-[18px] text-primary'
+                : 'size-[18px]'
+            }
+          />
+          {activeTaskCount > 0 ? (
+            <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none text-primary-foreground">
+              {activeTaskCount}
+            </span>
+          ) : null}
+        </Button>
+      </StudioHeaderActions>
       <div ref={layoutRef} className={styles.layout} style={layoutStyle}>
         <aside className={styles.explorer}>
           <ContextExplorerHeader
@@ -927,11 +918,6 @@ function FilesystemWorkbench() {
               </div>
             </DialogContent>
           </Dialog>
-          <UploadTaskDialog
-            open={taskDialogOpen}
-            onOpenChange={setTaskDialogOpen}
-            tasks={tasks}
-          />
         </>
       ) : null}
       {dataManagementMode === 'compare' ? (
@@ -1076,7 +1062,7 @@ function FilesystemMobileActionScreen({
   sessionId?: string
   showAgentTab: boolean
 }) {
-  const { t } = useTranslation(['filesystem', 'resources'])
+  const { t } = useTranslation(['filesystem', 'resources', 'tasksPage'])
   const [toolbarContainer, setToolbarContainer] =
     useState<HTMLDivElement | null>(null)
 

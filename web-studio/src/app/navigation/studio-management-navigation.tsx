@@ -117,12 +117,7 @@ export function StudioManagementNavigation({
             items: [
               {
                 to: '/admin/monitoring',
-                title: 'navigation.monitoring.title',
-                icon: ListChecksIcon,
-              },
-              {
-                to: '/admin/tasks',
-                title: 'adminNavigation.tasks',
+                title: 'adminNavigation.monitoring',
                 icon: ListChecksIcon,
               },
               {

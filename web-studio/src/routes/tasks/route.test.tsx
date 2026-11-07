@@ -46,10 +46,32 @@ vi.mock('#/features/connection/lib/health', async (importOriginal) => ({
   fetchServerHealth: credentialMocks.health,
 }))
 
-const navigationMocks = vi.hoisted(() => ({ navigate: vi.fn() }))
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  search: {} as Record<string, string>,
+}))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof TanStackRouter>()),
   useNavigate: () => navigationMocks.navigate,
+  useSearch: () => navigationMocks.search,
+  Link: ({
+    to,
+    search,
+    children,
+  }: {
+    to: string
+    search: Record<string, string>
+    children: React.ReactNode
+  }) => (
+    <a
+      href={
+        to +
+        (Object.keys(search).length ? '?' + new URLSearchParams(search) : '')
+      }
+    >
+      {children}
+    </a>
+  ),
 }))
 
 vi.mock('#/shared/api/ov-client/index', () => ({
@@ -77,7 +99,7 @@ const connectionState = vi.hoisted(() => ({
     baseUrl: 'http://localhost:1933',
     userId: 'alice',
   },
-  connectionRole: 'root' as 'root' | 'admin' | 'unknown',
+  connectionRole: 'root' as 'root' | 'admin' | 'user' | 'unknown',
   serverMode: 'api_key' as 'api_key' | 'trusted',
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
@@ -156,6 +178,7 @@ function expectRunningRows(count: number) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  navigationMocks.search = {}
   connectionState.connection.accountId = 'default'
   connectionState.connection.adminApiKey = 'management-key'
   connectionState.connection.apiKey = 'user-key'
@@ -192,6 +215,21 @@ afterEach(() => {
 })
 
 describe('task status presentation', () => {
+  it('opens the workbench task list with the user credential and links back to the selected file', async () => {
+    connectionState.connectionRole = 'user'
+    connectionState.connection.adminApiKey = ''
+    navigationMocks.search = { file: 'viking://resources/notes.md' }
+
+    await renderPage()
+
+    await waitFor(() => expect(taskRows().length).toBeGreaterThan(0))
+    expect(clientMocks.getTasks).toHaveBeenCalledWith({ query: { limit: 200 } })
+    const back = screen.getByRole('link', { name: 'Back to workbench' })
+    expect(back.getAttribute('href')).toBe(
+      '/filesystem?file=viking%3A%2F%2Fresources%2Fnotes.md',
+    )
+  })
+
   it('keeps all twelve running tasks running in both rows and the count', async () => {
     await renderPage()
     await screen.findByRole('row', { name: 'View details for task task-12' })

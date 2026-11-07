@@ -47,7 +47,6 @@ it.each([false, true])(
           ]
         : []),
       '/admin/monitoring',
-      '/admin/tasks',
       '/admin/request-logs',
     ])
     expect(

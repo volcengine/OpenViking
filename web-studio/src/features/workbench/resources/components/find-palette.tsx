@@ -4,6 +4,7 @@ import {
   FolderOpen,
   Loader2,
   Search,
+  SlidersHorizontal,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -14,6 +15,13 @@ import type { RetrievalMode } from '#/features/workbench/retrieval/types/retriev
 import { useTransientScrollbar } from '#/shared/hooks/use-transient-scrollbar'
 import { cn } from '#/shared/lib/utils'
 import { retrievalResultNameFromUri } from '#/shared/lib/viking-uri'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '#/shared/ui/dropdown-menu'
 
 import { DirBrowser } from '#/features/workbench/resources/components/dir-browser'
 import { LazyFilePreview } from '#/features/workbench/resources/components/lazy-file-preview'
@@ -98,6 +106,10 @@ export function FindPalette({
   const [findTargetUri, setFindTargetUri] = useState(() =>
     normalizeDirUri(scopeUri || PALETTE_ROOT_URI),
   )
+  const searchModeLabel = (item: PaletteSearchMode) =>
+    item === 'name'
+      ? t('searchPalette.modes.name')
+      : t(`controls.modes.${item}`, { ns: 'retrieval' })
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
@@ -299,7 +311,14 @@ export function FindPalette({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (composingRef.current) return
+      if (
+        composingRef.current ||
+        (e.target instanceof Element &&
+          e.target.closest('[data-search-mode-menu]'))
+      )
+        return
+
+      if (ide && e.key !== 'Escape' && e.target !== inputRef.current) return
 
       // `//` + Enter resets scope to global root, regardless of mode.
       if (isResetGlobalCommand(query) && e.key === 'Enter') {
@@ -352,8 +371,8 @@ export function FindPalette({
         return
       }
 
-      // Outside dirBrowse, Tab cycles the search mode (query is untouched).
-      if (e.key === 'Tab') {
+      // The legacy palette uses Tab to cycle search modes.
+      if (!ide && e.key === 'Tab') {
         e.preventDefault()
         setSearchMode((current) => cycleSearchMode(current, e.shiftKey))
         return
@@ -383,6 +402,7 @@ export function FindPalette({
       }
     },
     [
+      ide,
       query,
       mode,
       activeEntry,
@@ -413,7 +433,10 @@ export function FindPalette({
       : 'w-[min(92vw,67rem)]'
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-4 sm:items-start sm:px-6 sm:pt-[12vh]"
+      className={cn(
+        'fixed inset-0 z-50 flex items-center justify-center px-4 sm:px-6',
+        !ide && 'sm:items-start sm:pt-[12vh]',
+      )}
       role="dialog"
       aria-modal="true"
       aria-label={t('searchPalette.ariaLabel')}
@@ -432,11 +455,14 @@ export function FindPalette({
         className={cn(
           'animate-palette-in relative flex h-[40rem] max-h-[calc(100svh-2rem)] max-w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[width] duration-300 sm:max-h-[84vh]',
           paletteWidth,
+          ide && 'h-[65svh] rounded-2xl border-border/60 shadow-none',
         )}
         onKeyDown={handleKeyDown}
       >
         {/* Search input */}
-        <div className="flex items-center gap-3 border-b px-4">
+        <div
+          className={cn('flex items-center gap-3 border-b px-4', ide && 'px-6')}
+        >
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             ref={inputRef}
@@ -454,7 +480,10 @@ export function FindPalette({
             onCompositionEnd={() => {
               composingRef.current = false
             }}
-            className="h-12 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/70 md:text-sm"
+            className={cn(
+              'h-12 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/70 md:text-sm',
+              ide && 'h-16 md:text-base',
+            )}
           />
           {query && (
             <button
@@ -483,37 +512,73 @@ export function FindPalette({
               </button>
             )}
           </span>
+          {ide && (
+            <button
+              type="button"
+              aria-label={t('searchPalette.footer.resultMode.close')}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={onClose}
+            >
+              <X className="size-4" />
+            </button>
+          )}
         </div>
 
         {/* Search mode switcher */}
         {mode.kind !== 'dirBrowse' && (
           <div className="flex items-center gap-2 px-6 py-4 text-xs text-muted-foreground">
             {ide ? (
-              <span>
-                {t('searchPalette.footer.resultMode.count', {
-                  count: visibleEntries.length,
-                })}
-              </span>
-            ) : null}
-            {ide ? (
-              <select
-                aria-label={t('searchPalette.modes.switchHint')}
-                className="rounded-md border bg-background px-2 py-1 text-foreground"
-                value={searchMode}
-                onChange={(event) =>
-                  setSearchMode(event.target.value as PaletteSearchMode)
-                }
-              >
-                {PALETTE_SEARCH_MODES.map((item) => (
-                  <option key={item} value={item}>
-                    {item === 'name'
-                      ? t('searchPalette.modes.name')
-                      : t(`controls.modes.${item}`, { ns: 'retrieval' })}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            {!ide ? (
+              <>
+                <span>
+                  {t('searchPalette.footer.resultMode.count', {
+                    count: visibleEntries.length,
+                  })}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="rounded border border-border px-1 text-foreground">
+                  {searchModeLabel(searchMode)}
+                </span>
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger
+                    data-search-mode-menu=""
+                    className="inline-flex items-center gap-1 rounded px-1 text-primary hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <SlidersHorizontal className="size-3.5" />
+                    {t('searchPalette.modes.switchHint')}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    data-search-mode-menu=""
+                    className="w-64 max-w-[calc(100vw-2rem)] rounded-lg"
+                  >
+                    <DropdownMenuRadioGroup
+                      value={searchMode}
+                      onValueChange={(value) =>
+                        setSearchMode(value as PaletteSearchMode)
+                      }
+                    >
+                      {PALETTE_SEARCH_MODES.map((item) => (
+                        <DropdownMenuRadioItem
+                          key={item}
+                          value={item}
+                          className="rounded-md py-1.5 data-checked:bg-muted [&_[data-slot=dropdown-menu-radio-item-indicator]]:text-primary"
+                        >
+                          <span className="flex min-w-0 flex-col gap-0.5">
+                            <span>{searchModeLabel(item)}</span>
+                            {item !== 'name' && (
+                              <span className="text-xs text-muted-foreground">
+                                {t(`modeDescriptions.${item}`, {
+                                  ns: 'retrieval',
+                                })}
+                              </span>
+                            )}
+                          </span>
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            ) : (
               <>
                 {PALETTE_SEARCH_MODES.map((item) => (
                   <button
@@ -527,9 +592,7 @@ export function FindPalette({
                     )}
                     onClick={() => setSearchMode(item)}
                   >
-                    {item === 'name'
-                      ? t('searchPalette.modes.name')
-                      : t(`controls.modes.${item}`, { ns: 'retrieval' })}
+                    {searchModeLabel(item)}
                   </button>
                 ))}
                 <span className="ml-auto text-[11px] text-muted-foreground/50">
@@ -539,7 +602,7 @@ export function FindPalette({
                   {t('searchPalette.modes.switchHint')}
                 </span>
               </>
-            ) : null}
+            )}
           </div>
         )}
 
@@ -580,6 +643,7 @@ export function FindPalette({
                   ) : showIdleBrowse && idleEntries.length > 0 ? (
                     <DirResultList
                       className="h-full"
+                      ide={ide}
                       items={idleEntries}
                       activeIndex={activeIndex}
                       onActiveChange={setIndex}
@@ -650,6 +714,7 @@ export function FindPalette({
                 ) : (
                   <DirResultList
                     className="h-full"
+                    ide={ide}
                     items={filteredEntries}
                     activeIndex={activeIndex}
                     onActiveChange={setIndex}
@@ -711,6 +776,7 @@ export function FindPalette({
             </span>
           </div>
         ) : (
+          !ide &&
           hasResults && (
             <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
               <span>
@@ -745,6 +811,7 @@ export function FindPalette({
 }
 function DirResultList({
   className,
+  ide,
   items,
   activeIndex,
   onActiveChange,
@@ -752,6 +819,7 @@ function DirResultList({
   onOpenDir,
 }: {
   className?: string
+  ide: boolean
   items: VikingFsEntry[]
   activeIndex: number
   onActiveChange: (index: number) => void
@@ -765,6 +833,7 @@ function DirResultList({
     <div
       className={cn(
         'scrollbar-fade min-h-0 flex-1 overflow-y-auto overscroll-contain',
+        ide && 'px-3',
         className,
       )}
       data-scrolling={isScrolling || undefined}
@@ -782,14 +851,17 @@ function DirResultList({
             data-active={isActive}
             className={cn(
               'animate-palette-row group relative flex w-full items-start gap-3 border-b border-border/50 px-4 py-3 text-left transition-colors last:border-b-0',
+              ide && 'items-center rounded-lg px-3 py-4',
               isActive
-                ? 'bg-primary/8 text-foreground'
+                ? ide
+                  ? 'border-transparent bg-muted/60 text-foreground'
+                  : 'bg-primary/8 text-foreground'
                 : 'text-foreground/80 hover:bg-muted/40',
             )}
             style={{ animationDelay: `${i * 24}ms` }}
             onMouseEnter={() => onActiveChange(i)}
           >
-            {isActive && (
+            {isActive && !ide && (
               <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
             )}
             <button
@@ -798,20 +870,36 @@ function DirResultList({
               onFocus={() => onActiveChange(i)}
               onClick={() => onSelect(entry)}
             >
-              <EntryIcon
+              <span
                 className={cn(
-                  'mt-0.5 size-4 shrink-0',
-                  entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70',
+                  'mt-0.5 shrink-0',
+                  ide
+                    ? 'rounded-md border bg-muted/40 p-1 text-muted-foreground'
+                    : entry.isDir
+                      ? 'text-blue-500/70'
+                      : 'text-muted-foreground/70',
                 )}
-              />
+              >
+                <EntryIcon className="size-4" />
+              </span>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{name}</div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="truncate text-sm font-medium">{name}</span>
+                  {ide && (
+                    <span
+                      title={entry.uri}
+                      className="max-w-[45%] truncate text-xs text-muted-foreground"
+                    >
+                      {entry.uri}
+                    </span>
+                  )}
+                </div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
                   {abstract || parent}
                 </div>
               </div>
             </button>
-            {entry.size && (
+            {!ide && Boolean(entry.size) && (
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground/60">
                 {entry.size}
               </span>
