@@ -273,6 +273,8 @@ pub enum PathLockError {
     Timeout {
         /// Elapsed time in milliseconds.
         elapsed_ms: u64,
+        /// Owner blocking the last acquisition attempt, if it hit a live lock.
+        conflicting_owner: Option<String>,
     },
 
     /// Lock token mutation is temporarily blocked and should be retried.

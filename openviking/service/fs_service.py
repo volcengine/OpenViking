@@ -90,6 +90,7 @@ from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+_COMPILE_TARGET_LOCK_OWNER_PREFIX = "compile-target-"
 
 _DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS = 60.0
 _DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS = 3.0
@@ -2195,7 +2196,7 @@ class FSService:
         )
         # Account-root initialization must not overlap the virtual admission lease.
         path = f"/local/_system/compile_locks/{ctx.account_id}/{target}"
-        owner = "compile-target-" + hashlib.sha256(path.encode()).hexdigest()
+        owner = _COMPILE_TARGET_LOCK_OWNER_PREFIX + hashlib.sha256(path.encode()).hexdigest()
         return [{"path": path, "kind": "tree"}], owner
 
     async def ensure_compile_target(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
@@ -2221,6 +2222,13 @@ class FSService:
                     )
                 )
             except LockAcquisitionError as exc:
+                # Identical targets share an owner; distinct Compile owners conflict only across a subtree.
+                if (
+                    exc.conflicting_owner
+                    and exc.conflicting_owner.startswith(_COMPILE_TARGET_LOCK_OWNER_PREFIX)
+                    and exc.conflicting_owner != owner
+                ):
+                    logger.warning("Compile target rejected: parent/child directory lock conflict")
                 raise ResourceBusyError(
                     "Compile target is busy or its parent/child is already a Compile target. "
                     "Choose another directory or retry later.",

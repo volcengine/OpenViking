@@ -910,11 +910,13 @@ impl PathLockManager {
         let mut waiting = WaitingCountGuard(None);
         let mut retry_attempt: u32 = 0;
         let mut first_attempt = true;
+        let mut conflicting_owner = None;
 
         let result = loop {
             let (mut owner_registry, locked_immediately) = match owner.registry.try_lock() {
                 Ok(owner_registry) => (owner_registry, true),
                 Err(_) => {
+                    conflicting_owner = None;
                     if waiting.0.is_none() {
                         debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch waiting for owner state");
                         waiting.0 = Some(&self.waiting_lock_count);
@@ -925,6 +927,7 @@ impl PathLockManager {
                     if remaining.is_zero() {
                         break Err(PathLockError::Timeout {
                             elapsed_ms: start.elapsed().as_millis() as u64,
+                            conflicting_owner,
                         });
                     }
                     match tokio::time::timeout(remaining, owner.registry.lock()).await {
@@ -932,6 +935,7 @@ impl PathLockManager {
                         Err(_) => {
                             break Err(PathLockError::Timeout {
                                 elapsed_ms: start.elapsed().as_millis() as u64,
+                                conflicting_owner,
                             });
                         }
                     }
@@ -942,6 +946,7 @@ impl PathLockManager {
                 drop(owner_registry);
                 break Err(PathLockError::Timeout {
                     elapsed_ms: start.elapsed().as_millis() as u64,
+                    conflicting_owner,
                 });
             }
             owner_registry.invalidate_expired(Instant::now(), Self::lease_validity(&self.config));
@@ -972,24 +977,28 @@ impl PathLockManager {
                             .fetch_add(1, AtomicOrdering::Relaxed);
                     }
                     if let PathLockError::Conflict {
-                        ref lock_path,
-                        ref owner,
+                        lock_path,
+                        owner,
                         kind,
-                    } = &err
+                    } = err
                     {
                         self.metrics
                             .write()
                             .await
                             .record_conflict(PathLockConflict {
-                                lock_path: lock_path.clone(),
+                                lock_path,
                                 conflicting_owner: owner.clone(),
-                                conflicting_kind: *kind,
+                                conflicting_kind: kind,
                             });
+                        conflicting_owner = Some(owner);
+                    } else {
+                        conflicting_owner = None;
                     }
 
                     if start.elapsed() >= timeout {
                         break Err(PathLockError::Timeout {
                             elapsed_ms: start.elapsed().as_millis() as u64,
+                            conflicting_owner,
                         });
                     }
 

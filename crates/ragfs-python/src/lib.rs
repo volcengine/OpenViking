@@ -177,7 +177,17 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE
                     .get()
                     .expect("LockAcquisitionError not initialized");
-                PyErr::from_type(ty.bind(py).clone(), err.to_string())
+                let exception = PyErr::from_type(ty.bind(py).clone(), err.to_string());
+                if let PathLockError::Timeout {
+                    conflicting_owner: Some(owner),
+                    ..
+                } = &err
+                {
+                    if let Err(error) = exception.value(py).setattr("conflicting_owner", owner) {
+                        return error;
+                    }
+                }
+                exception
             })
         }
         PathLockError::InvalidRequest(_) => PyValueError::new_err(err.to_string()),
@@ -3439,7 +3449,10 @@ mod tests {
                         lock_path: "/data/.path.ovlock".to_string(),
                         operation: "remove".to_string(),
                     },
-                    PathLockError::Timeout { elapsed_ms: 1000 },
+                    PathLockError::Timeout {
+                        elapsed_ms: 1000,
+                        conflicting_owner: None,
+                    },
                 ] {
                     let error = if wrapped {
                         to_py_err(contention.into())
