@@ -102,7 +102,22 @@ Review scope and known differences: [feature parity](docs/windows-feature-parity
 
 ### Installed source preview: PM2 diagnostics
 
-Prefer `vika status` and `vika logs <instance-id>` for normal diagnostics.
+Use `vika status` for a bounded status check. `vika logs <instance-id>` follows
+logs continuously; it is intended for an interactive terminal, not an unattended
+agent command. For a bounded log snapshot, use the installed PM2 shim:
+
+```powershell
+pm2 logs vika-primary --nostream --lines 50
+```
+
+PM2 JSON can contain keys that differ only in case (for example `username` and
+`USERNAME`). On PowerShell 7, parse it with `ConvertFrom-Json -AsHashtable`;
+default `ConvertFrom-Json` creates case-insensitive properties and can reject
+such output. For Windows PowerShell 5.1, which lacks `-AsHashtable`, use a
+case-sensitive JSON parser such as Node's `JSON.parse`, or use `vika status`
+when only application status is needed. Do not rewrite all environment keys
+to uppercase: PM2 metadata and child-process environment are distinct fields,
+and normalizing the launch environment does not guarantee unique JSON keys.
 The source installer also places `pm2.cmd` in `~/.vika/bin`. It uses the same
 Node executable as `vika.cmd`, the release's `scripts/pm2-windows.cjs` wrapper,
 and Vika's private PM2_HOME (or an explicit PM2_HOME override). It does not add
