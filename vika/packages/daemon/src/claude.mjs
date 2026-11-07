@@ -15,6 +15,7 @@ import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition, isModelUnavailableError } from './runtime-catalog.mjs';
+import { claudeIsolationSettings, isOpenViking } from './ov-isolation.mjs';
 import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
@@ -208,7 +209,7 @@ export class ClaudeAgent {
     for (const flag of [
       '--input-format', '--output-format', '--resume', '--session-id', '--mcp-config',
       '--dangerously-skip-permissions', '--disallowed-tools', '--effort',
-      '--append-system-prompt', '--no-chrome', '--model', '--print', '--permission-prompts',
+      '--append-system-prompt', '--no-chrome', '--model', '--print', '--permission-prompts', '--settings',
     ]) {
       if (!help.stdout.includes(flag)) {
         const hint = flag === '--permission-prompts' ? '; upgrade Claude Code to 2.1.259 or newer for unattended operation' : '';
@@ -308,9 +309,11 @@ export class ClaudeAgent {
         '--verbose',
         '--output-format', 'stream-json',
         '--input-format', 'stream-json',
-        // No --strict-mcp-config: user-scope skill/MCP servers (OpenViking via
-        // OPENVIKING_* env) load alongside personal_agent.
+        // No --strict-mcp-config: the owner's other MCP servers load alongside
+        // personal_agent. OpenViking's plugin and servers do not: Vika owns
+        // OpenViking (ov-isolation.mjs).
         '--mcp-config', mcpConfigPath,
+        '--settings', JSON.stringify(claudeIsolationSettings({ env: process.env, workspace: this.config.workspace })),
         '--disallowed-tools', 'EnterPlanMode,ExitPlanMode',
         '--append-system-prompt', this.developerInstructionsText,
         '--no-chrome',
@@ -619,6 +622,14 @@ export class ClaudeAgent {
 
     if (message.type === 'system' && message.subtype === 'init') {
       if (typeof message.model === 'string') this.actualModel = message.model;
+      // The launch settings keep OpenViking's plugin and servers out; say so
+      // loudly if a Claude Code release stops honoring them.
+      const loaded = [...(message.plugins ?? []), ...(message.mcp_servers ?? [])]
+        .map((item) => (typeof item === 'string' ? item : item?.name)).filter(isOpenViking);
+      if (loaded.length) {
+        this.logger.error('ov_plugin_loaded', { runtime: CLAUDE_RUNTIME.id, names: loaded });
+        this._recordActivity('agent.ov_plugin_loaded', { summary: loaded.join(', '), metadata: { runtime: CLAUDE_RUNTIME.id } });
+      }
       const sessionId = message.session_id ?? message.sessionId;
       if (typeof sessionId === 'string' && sessionId) {
         this.sessionId = sessionId;

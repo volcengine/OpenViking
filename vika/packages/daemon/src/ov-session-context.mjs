@@ -31,19 +31,35 @@ export function withoutWorkingMemory({ latest_archive_overview: _overview, pre_a
   return { ...context, messages: context.messages?.filter(({ message_kind: kind }) => kind !== 'checkpoint') };
 }
 
-// Whom OV attributes a journal line to; memory extraction files what a user
-// line says under its speaker. Something someone sent is the owner's own (no
-// peer) or that sender's peer, as decided at ingest (ov-peer.mjs). The agent's
-// deliveries, the daemon's control lines and the agent's own reminders (an
-// event without a sender) are assistant lines: context, never the owner's
-// words. A line from before peers were recorded stays a plain user line.
+// How OV reads a journal line. Something someone sent is a user line, whoever
+// sent it: the line's `from=` names the speaker. No peer is attached: the
+// instance is the OV user, and every collaboration lands in its own events.
+// The agent's deliveries and its own reminders (an event without a sender)
+// are assistant lines: context, never anyone's words.
 export function ovAttribution(item) {
   if (item.kind !== 'inbound') return { role: 'assistant' };
   const event = item.metadata?.event;
   if (event && !event.actor) return { role: 'assistant' };
-  const peer = item.metadata?.peer;
-  return typeof peer === 'string' && peer ? { role: 'user', peer_id: peer } : { role: 'user' };
+  return { role: 'user' };
 }
+
+// The memory types extraction may write from the conversation. Left out:
+// - preferences: extraction picks whose a preference is from names, so it
+//   merges namesakes and edits one person's file with another's request. The
+//   Core writes them instead, into the sender's own directory, when the agent
+//   calls openviking_remember (ov-person.mjs); this also keeps a later commit
+//   from extracting the same request a second time.
+// - the agent's own soul and identity: a line that talks the agent into a new
+//   name or a global rule would otherwise rewrite who it is (Vika's name and
+//   role come from its configuration, and the owner's standing rules are the
+//   owner's preferences).
+// These exist in every OV release that has memory_policy, so a commit never
+// fails on an unknown type.
+export const OV_MEMORY_TYPES = Object.freeze(['profile', 'entities', 'events']);
+
+// Daemon control lines (slash commands and their notices) steer the runtime;
+// they are neither history worth recalling nor anyone's words.
+const syncsToOV = (row) => row.kind !== 'control';
 
 // OV owns archives and assembled context. SQLite retains only the transport
 // cursor/intent here; cognition_journal is the existing durable delivery ledger
@@ -74,7 +90,7 @@ export class OVSessionClient extends OVConnection {
   create(sessionId) {
     return this.request('/sessions', { session_id: sessionId, auto_commit_policy: {
       pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
-    } });
+    }, memory_policy: { memory_types: [...OV_MEMORY_TYPES] } });
   }
   append(sessionId, message) { return this.request(`/sessions/${encodeURIComponent(sessionId)}/messages`, message); }
   context(sessionId) {
@@ -268,12 +284,18 @@ export class OVSessionContext {
     // Bounded DB reads; no epoch-sized array of bodies is materialized.
     while (state.synced_seq < throughSeq) {
       if (this.stopped) throw new Error('OV sync stopped');
-      const row = this.store.db.prepare(`SELECT seq,status FROM cognition_journal
+      const row = this.store.db.prepare(`SELECT seq,status,kind FROM cognition_journal
         WHERE epoch=? AND seq>? AND seq<=?
           AND status IN ('PENDING', 'COMMITTED', 'UNCERTAIN')
         ORDER BY seq LIMIT 1`).get(epoch, state.synced_seq, throughSeq);
       if (!row) break;
       if (row.status === 'PENDING') return false;
+      if (!syncsToOV(row)) {
+        this.store.db.prepare('UPDATE ov_session_sync SET synced_seq=?,pending_seq=NULL WHERE epoch=?').run(row.seq, epoch);
+        state.synced_seq = row.seq;
+        state.pending_seq = null;
+        continue;
+      }
       const sourceId = `lark:${epoch}:${row.seq}`;
       if (!(state.pending_seq === row.seq && await this.hasSource(state, sourceId))) {
         const item = this.store.cognitionJournal(epoch, row.seq, row.seq - 1)[0];

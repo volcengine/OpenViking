@@ -3,6 +3,7 @@
 
 import { CodexAgent, sanitizeCodexEnv } from './codex.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { codexIsolationArgs, traexConfigFile } from './ov-isolation.mjs';
 
 const TRAEX_RUNTIME = getRuntimeDefinition('traex');
 const TRAEX_APP_SERVER_CONFIG_ARGS = Object.freeze([]);
@@ -27,6 +28,8 @@ export class TraexAgent extends CodexAgent {
       binConfigKey: 'traexBin',
       modelSettingKey: 'traex_model',
       appServerConfigArgs: TRAEX_APP_SERVER_CONFIG_ARGS,
+      // TraeCode installs the same OpenViking plugin, in its own config file.
+      ovIsolationArgs: () => codexIsolationArgs(traexConfigFile(process.env)),
       sanitizeEnv: sanitizeTraexEnv,
       policyVersion: 'traex-steer-v1',
     });

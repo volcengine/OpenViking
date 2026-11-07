@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { PI_BUILTIN_EXTENSIONS } from '../src/ov-isolation.mjs';
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -63,7 +64,7 @@ class FakeChild extends EventEmitter {
 
 const helpFlags = [
   '--mode', '--append-system-prompt', '--thinking', '--session-id', '--session-dir',
-  '--model', '--extension', '--approve', 'rpc',
+  '--model', '--extension', '--approve', '--no-extensions', 'rpc',
 ].join('\n');
 
 function parsedWrites(child) {
@@ -195,6 +196,7 @@ function harness({ config = baseConfig, store = makeStore(), agentOptions = {}, 
   const failures = [];
   const agent = new PiAgent(config, store, quietLogger, {
     spawn,
+    isolationArgs: async () => ['-ne', ...PI_BUILTIN_EXTENSIONS.flatMap((entry) => ['--extension', entry])],
     startTimeoutMs: 100,
     onTurnFailed: (failure) => failures.push(failure),
     ...agentOptions,
@@ -365,7 +367,11 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig));
     assert.doesNotMatch(runtimePrompt, /Agent tools from bash|actions\/cli\.mjs/);
     assert.doesNotMatch(runtimePrompt, /lark-cli im \+messages-reply/);
-    assert.equal(args[args.indexOf('--extension') + 1], PI_MCP_EXTENSION);
+    assert.equal(args[args.lastIndexOf('--extension') + 1], PI_MCP_EXTENSION);
+    // Pi's own OpenViking extension stays off; its built-ins load by name.
+    assert.ok(args.includes('-ne'));
+    assert.deepEqual(args.filter((arg, index) => args[index - 1] === '--extension' && arg.startsWith('builtin:')),
+      PI_BUILTIN_EXTENSIONS);
     assert.deepEqual(JSON.parse(env.PERSONAL_AGENT_MCP_CONFIG), {
       command: process.execPath,
       args: [baseConfig.actionMcpPath, '--socket', baseConfig.actionSocketPath, '--authority', agent.authorityToken],

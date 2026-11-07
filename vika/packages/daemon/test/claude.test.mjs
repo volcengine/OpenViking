@@ -56,7 +56,7 @@ class FakeChild extends EventEmitter {
 const helpFlags = [
   '--input-format', '--output-format', '--resume', '--session-id', '--mcp-config',
   '--dangerously-skip-permissions', '--disallowed-tools', '--effort',
-  '--append-system-prompt', '--no-chrome', '--model', '--print', '--permission-prompts',
+  '--append-system-prompt', '--no-chrome', '--model', '--print', '--permission-prompts', '--settings',
 ].join('\n');
 
 function makeStore({ globalOverride = {} } = {}) {
@@ -375,8 +375,12 @@ describe('ClaudeAgent persistent stream-json runtime', () => {
     for (const value of ['--print', '--input-format', 'stream-json', '--output-format', '--mcp-config']) {
       assert.ok(args.includes(value));
     }
-    // User-scope and plugin MCP servers must load alongside personal_agent.
+    // The owner's other MCP servers load alongside personal_agent; OpenViking's
+    // plugin and servers are switched off by one settings layer.
     assert.ok(!args.includes('--strict-mcp-config'));
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    assert.equal(settings.enabledPlugins['openviking-memory@openviking'], false);
+    assert.ok(settings.deniedMcpServers.some(({ serverName }) => serverName === 'openviking'));
     const mcpConfig = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'));
     assert.deepEqual(mcpConfig.mcpServers.personal_agent.args, [
       '/release/packages/daemon/src/actions/mcp.mjs', '--socket', '/data/actions.sock', '--authority', agent.authorityToken,
