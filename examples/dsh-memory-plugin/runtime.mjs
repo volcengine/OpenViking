@@ -4,6 +4,7 @@ import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
 import {
   dequeue,
   enqueue,
+  hasPending,
   listPending,
   replayPending,
 } from "./shared/pending-queue.mjs";
@@ -350,8 +351,7 @@ export class OpenVikingRuntime {
     if (this.drainRunning) return;
     this.drainRunning = true;
     try {
-      const pending = await listPending();
-      if (pending.length > 0) {
+      if (await hasPending()) {
         const health = await this.client.healthResult();
         if (!health.ok) {
           // Only the flip into the outage is logged, not every 60s probe.
@@ -359,6 +359,9 @@ export class OpenVikingRuntime {
             this.log("drain_health_down", { status: health.status || 0 });
           }
           this.drainHealth = false;
+          // Keep existing latches until recovery; inspecting their payloads
+          // while offline would deserialize the entire backlog per session.
+          return;
         } else {
           if (this.drainHealth === false) {
             this.log("drain_health_restored", {});
