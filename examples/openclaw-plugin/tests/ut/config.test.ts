@@ -438,6 +438,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     ).toThrow("recallTargetTypes contains unknown resource types: session");
   });
 
+  it("normalizes recallEventsDecayProtection by trimming and defaults to empty", () => {
+    const configured = memoryOpenVikingConfigSchema.parse({ recallEventsDecayProtection: " 7d " });
+    expect(configured.recallEventsDecayProtection).toBe("7d");
+
+    const unset = memoryOpenVikingConfigSchema.parse({});
+    expect(unset.recallEventsDecayProtection).toBe("");
+  });
+
   it("keeps deprecated recallResources as an additive compatibility switch when recallTargetTypes is unset", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ recallResources: true });
     expect(cfg.recallTargetTypes).toEqual(["user", "agent", "resource"]);

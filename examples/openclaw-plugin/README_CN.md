@@ -84,6 +84,8 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 
 插件还提供手动 slash command：`/add-resource`、`/add-skill`、`/ov-search`、`/ov-recall-trace`。Agent 可见的 `add_resource` 工具默认禁用（`enableAddResourceTool=false`），避免搜索/检索阶段误触发资源导入；如确实要允许 Agent 导入资源，可显式设置 `enableAddResourceTool=true`，否则使用手动 `/add-resource`。
 
+设置 `recallEventsDecayProtection`（如 `7d`、`12h`）后，事件记忆在窗口期内保持原分、之后衰减：在"现在进展如何"这类状态问句上，被取代的旧事件不再压过更新的终态事件。留空则保持服务端默认（关闭衰减）。
+
 ## 数据流与隐私
 
 - **发送内容**：每轮 user/assistant 消息文本（已剥离注入的记忆块和元数据噪音）。
