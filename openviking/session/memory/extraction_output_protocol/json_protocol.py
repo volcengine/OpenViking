@@ -88,9 +88,10 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
         )
 
     def render_format_retry(self, error: str | None = None) -> str:
-        del error
+        detail = f" Parser error: {error}" if error else ""
         return (
-            "Your previous output could not be parsed as valid JSON. "
+            "Your previous output could not be parsed as valid JSON."
+            f"{detail} "
             "Please output ONLY a valid JSON object matching the required schema. "
             "Do not include any explanation, markdown formatting, or text outside the JSON."
         )
