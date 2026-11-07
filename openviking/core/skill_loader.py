@@ -17,6 +17,8 @@ class SkillLoader:
     @staticmethod
     def _normalize_allowed_tools(value: Any) -> list[str]:
         """Normalize standard scalar and legacy list forms of ``allowed-tools``."""
+        if value is None:
+            return []
         if isinstance(value, list):
             if any(not isinstance(tool, str) for tool in value):
                 raise ValueError(
@@ -168,9 +170,7 @@ def _parse_skill_for_validation(data: Any) -> Dict[str, Any]:
     if not allowed_tools:
         allowed_tools = parsed.get("allowed-tools")
     if allowed_tools is not None:
-        parsed["allowed_tools"] = (
-            allowed_tools if isinstance(allowed_tools, list) else [allowed_tools]
-        )
+        parsed["allowed_tools"] = SkillLoader._normalize_allowed_tools(allowed_tools)
     parsed.pop("allowed-tools", None)
 
     tags = parsed.get("tags")

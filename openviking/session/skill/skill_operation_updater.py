@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -134,17 +135,20 @@ class SkillOperationUpdater:
         if not schema:
             raise ValueError(f"Unknown session skill schema: {operation.memory_type}")
 
+        raw_allowed_tools = (existing_skill or {}).get("allowed_tools") or []
         skill = {
             "name": (existing_skill or {}).get("name")
             or operation.memory_fields.get("skill_name", ""),
             "description": (existing_skill or {}).get("description", ""),
             "content": (existing_skill or {}).get("content"),
-            "allowed_tools": list((existing_skill or {}).get("allowed_tools") or []),
+            "allowed_tools": SkillLoader._normalize_allowed_tools(raw_allowed_tools),
             "tags": list(
                 (existing_skill or {}).get("tags")
                 or (["session-derived"] if existing_skill is None else [])
             ),
         }
+        if existing_skill and "metadata" in existing_skill:
+            skill["metadata"] = deepcopy(existing_skill["metadata"])
 
         for schema_field in schema.fields:
             if schema_field.name not in operation.memory_fields:
@@ -186,9 +190,11 @@ class SkillOperationUpdater:
                 or self._root_uri_from_skill_md(skill_md_uri).rstrip("/").split("/")[-1],
                 "description": abstract_meta.get("description", ""),
                 "content": raw_content.strip(),
-                "allowed_tools": abstract_meta.get("allowed_tools")
-                or abstract_meta.get("allowed-tools")
-                or [],
+                "allowed_tools": SkillLoader._normalize_allowed_tools(
+                    abstract_meta.get("allowed_tools")
+                    or abstract_meta.get("allowed-tools")
+                    or []
+                ),
                 "tags": abstract_meta.get("tags") or [],
             }
 
