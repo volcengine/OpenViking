@@ -195,7 +195,7 @@ test('OV HTTP client pins auth, disables auto commits, retains a token tail, and
     pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
   });
   // Extraction never writes the agent's own soul or identity.
-  assert.deepEqual(JSON.parse(request.options.body).memory_policy, { memory_types: ['profile', 'preferences', 'entities', 'events'] });
+  assert.deepEqual(JSON.parse(request.options.body).memory_policy, { memory_types: ['profile', 'entities', 'events'] });
   await client.commit('test');
   assert.deepEqual(JSON.parse(request.options.body), {
     retention_mode: 'turn_budget', keep_recent_turn_count: 10_000, retained_message_token_budget: 24_000,

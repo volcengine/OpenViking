@@ -57,6 +57,7 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
     const user = apiKeys[request.headers['x-api-key']] ?? request.headers['x-openviking-user'] ?? 'owner';
     const canonical = (uri) => uri?.replace(/^viking:\/\/~(?=\/|$)/, `viking://user/${user}`);
     const uri = canonical(url.searchParams.get('uri'));
+    if (route === 'GET /health') return reply(200, { user_id: user });
     if (route === 'GET /api/v1/system/status') return reply(200, { initialized: true, user });
     if (route === 'POST /api/v1/content/write') {
       const target = canonical(body.uri);
@@ -129,10 +130,18 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
     }
     if (route === 'POST /api/v1/sessions') {
       const id = body?.session_id ?? `session-${next += 1}`;
-      state.sessions.set(id, { policy: body?.auto_commit_policy ?? null, messages: [], commits: 0 });
+      state.sessions.set(id, { policy: body?.auto_commit_policy ?? null, memoryPolicy: body?.memory_policy ?? null,
+        messages: [], commits: 0, pendingTokens: 0 });
       return reply(200, { session_id: id, uri: `viking://user/testuser/sessions/${id}` });
     }
-    const session = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/(messages|commit)$/);
+    const session = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)(?:\/(messages|commit|context))?$/);
+    if (session && request.method === 'GET') {
+      const record = state.sessions.get(decodeURIComponent(session[1]));
+      if (!record) return reply(404, 'no such session');
+      return reply(200, session[2] === 'context'
+        ? { messages: record.messages, stats: { totalArchives: record.commits } }
+        : { pending_tokens: record.pendingTokens });
+    }
     if (session && request.method === 'POST') {
       const record = state.sessions.get(decodeURIComponent(session[1]));
       if (!record) return reply(404, 'no such session');
@@ -141,6 +150,7 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
         return reply(200, { session_id: session[1], message_count: record.messages.length });
       }
       record.commits += 1;
+      record.pendingTokens = 0;
       return reply(200, { status: 'completed', task_id: `commit-${next += 1}` });
     }
     return reply(404, `no route ${route}`);

@@ -16,6 +16,7 @@ import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
 import { BOT_SENDERS, oneLine, readMetadataTag } from '../runtime-input.mjs';
 import { formatOVJournalLine } from '../cognition.mjs';
+import { personKey } from '../ov-person.mjs';
 import { TimerSchedule } from '../timers.mjs';
 import {
   APPROVAL_SECONDS, approvalCard, approvalMessage, approvalNote, approvalQuestion, approvalStatusText, approvedText,
@@ -1602,13 +1603,16 @@ export class ActionService {
     return await this.ovToolClient().addResource({ ...input, workspace: this.config.workspace });
   }
 
-  // The message is the one decision_id names, rendered exactly as the session
-  // sync renders it: its from= is the real sender, so whatever it asks for is
-  // filed under that person, and the model cannot put words in anyone's mouth.
+  // Preserve the authentic input and its stable sender key. OV receives this
+  // attribution as text; the extraction model still chooses the preference's
+  // user field. An assistant note does not establish the sender's wishes.
   async openvikingRemember(input, caller) {
     const row = this.resolveDecision(input, caller, 'Not remembered');
     const item = this.store.journalItemForInbound(row.seq);
     if (!item) throw blocked('not_rememberable', `Not remembered: that input is not part of the conversation history. ${NO_ACTION}`);
+    if (!personKey(normalizeEvent(JSON.parse(row.event_json)))) {
+      throw blocked('not_rememberable', `Not remembered: a persistent preference requires an input with an identifiable sender. ${NO_ACTION}`);
+    }
     const note = String(input.note ?? '').trim();
     caller.trace.invoked = true;
     return await this.ovToolClient().remember({

@@ -32,8 +32,8 @@ export function withoutWorkingMemory({ latest_archive_overview: _overview, pre_a
 }
 
 // How OV reads a journal line. Something someone sent is a user line, whoever
-// sent it: the line's `from=` names the speaker, and memory extraction files a
-// preference under that name (preferences/<name>/). No peer is attached: the
+// sent it: the line's `from=` carries the speaker's stable person key.
+// No peer is attached: the
 // instance is the OV user, and every collaboration lands in its own events.
 // The agent's deliveries and its own reminders (an event without a sender)
 // are assistant lines: context, never anyone's words.
@@ -44,13 +44,11 @@ export function ovAttribution(item) {
   return { role: 'user' };
 }
 
-// The memory types extraction may write. The agent's own soul and identity
-// are left out: a line that talks the agent into a new name or a global rule
-// would otherwise rewrite who it is (Vika's name and role come from its
-// configuration, and the owner's standing rules are the owner's preferences).
-// These four exist in every OV release that has memory_policy, so a commit
-// never fails on an unknown type.
-export const OV_MEMORY_TYPES = Object.freeze(['profile', 'preferences', 'entities', 'events']);
+// History commits extract facts. Persistent preferences have their own
+// explicit entry point in OVToolClient.remember; do not add them here or a
+// later history commit could extract the same request again from mixed input.
+// Neither entry point may extract the agent's soul or identity.
+export const OV_HISTORY_MEMORY_TYPES = Object.freeze(['profile', 'entities', 'events']);
 
 // Daemon control lines (slash commands and their notices) steer the runtime;
 // they are neither history worth recalling nor anyone's words.
@@ -85,7 +83,7 @@ export class OVSessionClient extends OVConnection {
   create(sessionId) {
     return this.request('/sessions', { session_id: sessionId, auto_commit_policy: {
       pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
-    }, memory_policy: { memory_types: [...OV_MEMORY_TYPES] } });
+    }, memory_policy: { memory_types: [...OV_HISTORY_MEMORY_TYPES] } });
   }
   append(sessionId, message) { return this.request(`/sessions/${encodeURIComponent(sessionId)}/messages`, message); }
   context(sessionId) {

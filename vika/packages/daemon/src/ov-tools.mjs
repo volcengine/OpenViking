@@ -14,7 +14,6 @@
 
 import { randomUUID } from 'node:crypto';
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
-import { OV_MEMORY_TYPES } from './ov-session-context.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 import { assertMailAccess, mailAncestorUri, normalizeOVUri, privateMailFilter, visibleWithoutMail } from './ov-path.mjs';
 
@@ -33,6 +32,8 @@ const FIND_TEXT_MAX_CHARS = 20_000;
 const READ_TEXT_MAX_CHARS = 16_000;
 const URL_MAX_CHARS = 4_096;
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+// Kept separate from history sync: this tool only submits lasting preferences.
+const REMEMBER_MEMORY_TYPES = Object.freeze(['preferences']);
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -292,17 +293,16 @@ export class OVToolClient {
     };
   }
 
-  // Memory extraction of one message now, on an independent one-shot session:
-  // the message exactly as the session sync writes it (a user line whose
-  // from= is its real sender, so a preference is filed under that person's stable key),
-  // plus the agent's optional note as an assistant line. Same memory types as
-  // the sync. Never retried: a commit that timed out may already have landed.
+  // Preference extraction from one authenticated input on a one-shot session.
+  // Its from= key is source attribution in text, not an enforced target-person
+  // constraint on OV's extraction model. An optional assistant note is separate
+  // from the sender's words. Never retry an ambiguously completed commit.
   async remember({ line, note = '' } = {}) {
     const sessionId = `vika-remember-${randomUUID().slice(0, 12)}`;
     await this.call('/api/v1/sessions', {
       session_id: sessionId,
       auto_commit_policy: { pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0 },
-      memory_policy: { memory_types: [...OV_MEMORY_TYPES] },
+      memory_policy: { memory_types: [...REMEMBER_MEMORY_TYPES] },
     });
     const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
     await this.call(`${route}/messages`, { role: 'user', content: String(line) });
@@ -320,7 +320,7 @@ export class OVToolClient {
     const taskId = trimmed(committed?.task_id) || null;
     if (!taskId) throw ovError('openviking_failed', 'OpenViking committed nothing for memory extraction');
     return {
-      text: `Submitted for memory extraction (task_id=${taskId}); it runs in the background and files what the sender asked for under their stable person key. Find it with openviking_find shortly.`,
+      text: `Submitted for preference extraction (task_id=${taskId}); processing runs in the background. Check the extracted preference and its attribution with openviking_find before treating it as stored.`,
       data: { task_id: taskId, session_id: sessionId },
     };
   }

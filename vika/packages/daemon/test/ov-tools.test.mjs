@@ -267,7 +267,7 @@ describe('OpenViking tool client', () => {
     assert.equal(requests(ov, 'POST /api/v1/resources').length, 0);
   });
 
-  it('remembers one message on an independent session with the sync\'s memory types, committed once', async (t) => {
+  it('remembers one message on an independent session with preferences-only extraction, committed once', async (t) => {
     const ov = await fakeOV(t);
     const line = '[chat=oc-1 source=lark msg=om-1 time=2026-11-07T09:00Z from=李四] 以后回复我都加个 emoji';
     const remembered = await client(ov).remember({ line, note: '[from=me] 李四希望回复他时带 emoji' });
@@ -276,7 +276,7 @@ describe('OpenViking tool client', () => {
     assert.deepEqual(created.body.auto_commit_policy, {
       pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
     });
-    assert.deepEqual(created.body.memory_policy, { memory_types: ['profile', 'preferences', 'entities', 'events'] });
+    assert.deepEqual(created.body.memory_policy, { memory_types: ['preferences'] });
     assert.deepEqual(requests(ov, /messages/).map((request) => request.body), [
       { role: 'user', content: line },
       { role: 'assistant', content: '[from=me] 李四希望回复他时带 emoji' },
@@ -285,7 +285,7 @@ describe('OpenViking tool client', () => {
     assert.equal(session.commits, 1);
     assert.match(remembered.data.task_id, /^commit-/);
     assert.equal(remembered.data.session_id, created.body.session_id);
-    assert.match(remembered.text, /under their stable person key/);
+    assert.match(remembered.text, /preference extraction/);
 
     await client(ov).remember({ line });
     assert.deepEqual(requests(ov, /messages/).at(-1).body, { role: 'user', content: line }, 'no note, no assistant line');

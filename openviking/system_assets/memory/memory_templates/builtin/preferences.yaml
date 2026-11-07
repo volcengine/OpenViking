@@ -2,6 +2,10 @@ memory_type: preferences
 description: |
   User preference memory - captures "what the user likes/dislikes or is accustomed to".
   Extract specific preferences the user has expressed across conversations.
+  Only retain lasting preferences explicitly stated or confirmed by that participant.
+  Quotations, reports of another person's wishes, and assistant notes are not evidence
+  of the speaker's own preference. Do not promote a one-time instruction into a
+  lasting rule. Preserve any stated group, task, or other applicability conditions.
   Each preference should be about a specific topic (not generic).
   Topics can be: code style, communication style, tools, workflow, food, commute, etc.
   Store different topics as separate memory files, do NOT mix unrelated preferences.

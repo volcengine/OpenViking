@@ -11,10 +11,16 @@ Vika owns OpenViking memory for every agent it runs:
 
 Keep these rules when you change any of it:
 
-- **No peers.** Synced lines carry no `peer_id`. An OV line's `from=` is a stable `person-<hash>` derived from source, connector instance, tenant, actor type and the complete actor ID. Chat and non-chat events use the same attribution. Extraction uses that key in `memories/preferences/<person-key>/` and profile headings; `display=` is only a readable label. Events are kept once, in the instance's own memory.
-- **Extraction never writes the agent itself.** Every session (sync and `openviking_remember`) is created with `memory_policy.memory_types` = `OV_MEMORY_TYPES` (profile, preferences, entities, events). Never add `soul` or `identity`: a line that talks the agent into a new name or a global rule would rewrite who it is. Its name and role come from the configuration, and its standing rules are the owner's preferences.
-- **No words in anyone's mouth.** `openviking_remember` submits a real inbound message, rendered exactly as the sync renders it (`formatOVJournalLine`), never text the model wrote as a user line.
+- **No peers.** Synced lines carry no `peer_id`. An OV line's `from=` is a stable `person-<hash>` derived from source, connector instance, tenant, actor type and the complete actor ID. Chat and non-chat events use the same attribution. Extraction is instructed to use that key in `memories/preferences/<person-key>/` and profile headings; `display=` is only a readable label. Events are kept once, in the instance's own memory.
+- **Extraction never writes the agent itself.** History sessions are created with `memory_policy.memory_types` = `[profile, entities, events]`; explicit `openviking_remember` sessions use `[preferences]`. These separate policies prevent routine history commits from also extracting preferences. Never add `soul` or `identity`: a line that talks the agent into a new name or a global rule would rewrite who it is. Its name and role come from the configuration, and its standing rules are the owner's preferences.
+- **No words in anyone's mouth.** `openviking_remember` submits a real inbound message with an identifiable sender, rendered exactly as the sync renders it (`formatOVJournalLine`). The optional note is assistant context. Use it for persistent preferences stated or confirmed by that sender; quotes, reported wishes and assistant notes do not establish a personal preference. General facts use ordinary history extraction. Preserve stated applicability; do not promote a one-time instruction into a global rule.
 - **What the daemon keeps is not a tool target.** `add_resource` refuses mail, meeting notes, timer state, memories, sessions, peers and skills (`reservedTarget`). Normalize repeated slashes before checking either `to` or `parent`; reject traversal and ambiguous encodings before uploads. An exact replacement of their resource ancestor is also refused.
+
+## Preference capture and remaining attribution risk
+
+History sync and explicit remember previously shared the same four memory types. Remember was an additional immediate extraction, so later threshold or epoch-finalization commits could extract preferences again from mixed history. Their policies are now disjoint: history extracts profile/entities/events, and remember extracts only preferences. Conversation history still contains the original messages.
+
+The current OV API can allow memory types and self/peer namespaces. It has no target-person constraint for the `user` field that determines `preferences/<person-key>/`: `from=` is text, and the extraction model still chooses that field. Peer routing would change the storage model and is not used as a substitute. Single-input capture reduces ambiguity but does not guarantee correct attribution, prevent prompt injection, or prove that quoted content belongs to the sender. Profile extraction remains automatic and can still attribute facts to the wrong person.
 
 ## Request attribution and private mail
 
@@ -28,7 +34,7 @@ This association is a model declaration, not an isolation boundary: a model can 
 
 ### Existing memories
 
-Old name-only preference directories and profile headings remain available as historical memory, but are never automatically identified as owner/sender preferences. No migration guesses identity from a display name. New sync and explicit remember calls use stable keys. Built-in extraction templates preserve these keys; installations with custom profile/preference templates must adopt the same rule. Extraction is model-based, so a malformed or name-based output is not promoted to owner guidance.
+Old name-only preference directories and profile headings remain available as historical memory, but are never automatically identified as owner/sender preferences. No migration guesses identity from a display name. New sync and explicit remember calls use stable keys. Built-in extraction templates instruct the model to preserve these keys; installations with custom profile/preference templates must adopt the same rule. Extraction is model-based, so a malformed or name-based output is not promoted to owner guidance.
 
 ## Every runtime keeps its own OpenViking plugin out
 
