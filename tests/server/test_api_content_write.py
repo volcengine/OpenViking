@@ -147,7 +147,7 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
     assert resolution["state"] == "fixed" and resolution["fix_time"] > 0
     assert resolution["match_text"] == expected_anchor
     assert resolution["fix_plan"] == (
-        "用户手动解决内容冲突，修正后的内容如正文所示，后续更新的时候不能修改这部分内容"
+        "用户手动解决内容冲突，修正后的内容如正文所示"
     )
     assert resolution["resolution_basis"] == "人工修复"
     attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})

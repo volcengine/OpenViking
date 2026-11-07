@@ -12,7 +12,7 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 _CONFLICT_BLOCK = re.compile(r"<!--\s*CONFLICTS_CONTENT\b(.*?)-->", re.DOTALL)
 _MANUAL_RESOLUTION = (
-    "用户手动解决内容冲突，修正后的内容如正文所示，后续更新的时候不能修改这部分内容"
+    "用户手动解决内容冲突，修正后的内容如正文所示"
 )
 # Fixed contexts prevent matching neighboring edits.
 _ANCHOR_CONTEXT_CHARS = 10

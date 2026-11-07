@@ -191,7 +191,7 @@ write descriptive values in the output language, except the fixed Chinese values
 | `severity` | Exactly `high`, `medium`, or `low`. |
 | `state` | `fixed` when resolved, `unfixed` when unresolved; never infer it solely from severity. |
 | `begin_time` | Integer Unix seconds when the issue is first detected, not a source date or estimated origin time. |
-| `fix_plan` | Automatic repair: non-empty actual correction and scope. Human resolution: exactly `用户手动解决内容冲突，修正后的内容如正文所示，后续更新的时候不能修改这部分内容`. Unresolved: `""`. |
+| `fix_plan` | Automatic repair: non-empty actual correction and scope. Human resolution: exactly `用户手动解决内容冲突，修正后的内容如正文所示`. Unresolved: `""`. |
 | `fix_time` | For `fixed`, integer Unix seconds after repair and verification, no earlier than `begin_time`; for `unfixed`, `null`. Retained human times do not change. |
 | `resolution_basis` | Automatic repair: non-empty evidence location, supporting content, and applicability. Human resolution: exactly `人工修复`. Unresolved: `""`. |
 
