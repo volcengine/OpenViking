@@ -232,6 +232,90 @@ async def test_skills_api_update_requires_matching_name(client):
     assert shown["source"]["skill_name"] == "update-skill"
 
 
+@pytest.mark.parametrize("method", ["put", "delete"])
+@pytest.mark.parametrize(
+    "installed_parent", ["viking://user/default/skills", "viking://agent/skills"]
+)
+async def test_skills_api_explicit_mutation_does_not_fallback(client, method, installed_parent):
+    name = "scoped-skill"
+    added = await client.post(
+        "/api/v1/skills",
+        json={"data": _skill_md(name, "Original"), "target_uri": installed_parent, "wait": True},
+    )
+    assert added.status_code == 200, added.text
+    original_uri = added.json()["result"]["uri"]
+    missing_parent = (
+        "viking://agent/skills"
+        if installed_parent.startswith("viking://user/")
+        else "viking://user/default/skills"
+    )
+    for target, status in [(missing_parent, 404), ("", 400), ("   ", 400)]:
+        kwargs = (
+            {"json": {"target_uri": target, "data": _skill_md(name, "Replacement"), "wait": True}}
+            if method == "put"
+            else {"params": {"target_uri": target}}
+        )
+        response = await client.request(method, f"/api/v1/skills/{name}", **kwargs)
+        assert response.status_code == status, response.text
+        assert response.json()["error"]["code"] == (
+            "NOT_FOUND" if status == 404 else "INVALID_ARGUMENT"
+        )
+        shown = await client.get(f"/api/v1/skills/{name}", params={"include_content": True})
+        assert shown.status_code == 200, shown.text
+        assert shown.json()["result"]["root_uri"] == original_uri
+        assert shown.json()["result"]["description"] == "Original"
+
+    # Reading retains the existing fallback; a mutation with no target does too.
+    shown = await client.get(f"/api/v1/skills/{name}", params={"target_uri": missing_parent})
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["result"]["root_uri"] == original_uri
+    kwargs = (
+        {"json": {"data": _skill_md(name, "Replacement"), "wait": True}} if method == "put" else {}
+    )
+    response = await client.request(method, f"/api/v1/skills/{name}", **kwargs)
+    assert response.status_code == 200, response.text
+    shown = await client.get(f"/api/v1/skills/{name}")
+    if method == "put":
+        assert shown.json()["result"]["root_uri"] == original_uri
+        assert shown.json()["result"]["description"] == "Replacement"
+    else:
+        assert shown.status_code == 404
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+async def test_skills_api_explicit_mutation_preserves_same_named_other_scope(client, method):
+    name = "shared-name"
+    user_skill = await _add_skill(client, name, "User version")
+    agent_parent = "viking://agent/skills"
+    added = await client.post(
+        "/api/v1/skills",
+        json={"data": _skill_md(name, "Agent version"), "target_uri": agent_parent, "wait": True},
+    )
+    assert added.status_code == 200, added.text
+    kwargs = (
+        {
+            "json": {
+                "target_uri": agent_parent,
+                "data": _skill_md(name, "Updated agent"),
+                "wait": True,
+            }
+        }
+        if method == "put"
+        else {"params": {"target_uri": agent_parent}}
+    )
+    response = await client.request(method, f"/api/v1/skills/{name}", **kwargs)
+    assert response.status_code == 200, response.text
+    user = await client.get(f"/api/v1/skills/{name}")
+    assert user.json()["result"]["root_uri"] == user_skill["uri"]
+    assert user.json()["result"]["description"] == "User version"
+    agent = await client.get("/api/v1/skills", params={"target_uri": agent_parent})
+    skills = agent.json()["result"]["skills"]
+    assert [skill["name"] for skill in skills] == ([name] if method == "put" else [])
+    if method == "put":
+        shown = await client.get(f"/api/v1/skills/{name}", params={"target_uri": agent_parent})
+        assert shown.json()["result"]["description"] == "Updated agent"
+
+
 async def test_skills_api_update_accepts_temp_uploaded_single_file_with_arbitrary_name(
     client,
     tmp_path,
