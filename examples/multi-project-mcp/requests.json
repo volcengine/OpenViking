@@ -1,0 +1,15 @@
+{
+  "sequential": [
+    {"jsonrpc":"2.0","id":"a-list","method":"tools/call","params":{"name":"list","arguments":{"uri":"viking://resources/project-a","limit":20}}},
+    {"jsonrpc":"2.0","id":"a-find","method":"tools/call","params":{"name":"find","arguments":{"query":"What is this project's retry limit?","target_uri":"viking://resources/project-a","context_type":"resource","limit":3}}},
+    {"jsonrpc":"2.0","id":"a-read","method":"tools/call","params":{"name":"read","arguments":{"uri":"viking://resources/project-a/brief.md"}}},
+    {"jsonrpc":"2.0","id":"b-list","method":"tools/call","params":{"name":"list","arguments":{"uri":"viking://resources/project-b","limit":20}}},
+    {"jsonrpc":"2.0","id":"b-find","method":"tools/call","params":{"name":"find","arguments":{"query":"What is this project's retry limit?","target_uri":"viking://resources/project-b","context_type":"resource","limit":3}}},
+    {"jsonrpc":"2.0","id":"b-read","method":"tools/call","params":{"name":"read","arguments":{"uri":"viking://resources/project-b/brief.md"}}},
+    {"jsonrpc":"2.0","id":"a-find-again","method":"tools/call","params":{"name":"find","arguments":{"query":"What is this project's retry limit?","target_uri":"viking://resources/project-a","context_type":"resource","limit":3}}}
+  ],
+  "concurrent": [
+    {"jsonrpc":"2.0","id":"a-concurrent","method":"tools/call","params":{"name":"find","arguments":{"query":"What is this project's retry limit?","target_uri":"viking://resources/project-a","context_type":"resource","limit":3}}},
+    {"jsonrpc":"2.0","id":"b-concurrent","method":"tools/call","params":{"name":"find","arguments":{"query":"What is this project's retry limit?","target_uri":"viking://resources/project-b","context_type":"resource","limit":3}}}
+  ]
+}

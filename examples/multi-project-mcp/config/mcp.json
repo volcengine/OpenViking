@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "openviking": {
+      "type": "http",
+      "url": "http://127.0.0.1:1933/mcp",
+      "headers": {
+        "Authorization": "Bearer <TEST_USER_API_KEY>"
+      }
+    }
+  }
+}
