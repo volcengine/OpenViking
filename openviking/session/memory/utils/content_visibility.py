@@ -3,6 +3,7 @@
 """Public-content projection for persisted memory files."""
 
 from openviking.core.namespace import classify_uri
+from openviking.session.memory.utils.line_numbers import slice_lines_keepends
 from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
 
 
@@ -23,8 +24,4 @@ def visible_content(
     if classify_uri(uri).is_memory:
         content = strip_memory_fields_trailer(content)
 
-    if offset == 0 and limit == -1:
-        return content
-    lines = content.splitlines(keepends=True)
-    sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
-    return "".join(sliced)
+    return slice_lines_keepends(content, offset, limit)

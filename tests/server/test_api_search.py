@@ -1051,6 +1051,32 @@ async def test_grep(client_with_resource):
     ]
 
 
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://resources/line_offsets/notes.md",
+        "viking://user/default/memories/line_offsets.md",
+    ],
+)
+async def test_grep_line_number_is_the_read_offset(client: httpx.AsyncClient, uri):
+    # Only "\n" ends a grep line, so a form feed or U+2028 must not shift read offsets.
+    content = "first\nform \f feed\nline \u2028 separator\ntarget"
+    resp = await client.post(
+        "/api/v1/content/write",
+        json={"uri": uri, "content": content, "mode": "create", "wait": True},
+    )
+    assert resp.status_code == 200
+
+    resp = await client.post("/api/v1/search/grep", json={"uri": uri, "pattern": "target"})
+    line = resp.json()["result"]["matches"][0]["line"]
+    assert line == 4
+
+    resp = await client.get(
+        "/api/v1/content/read", params={"uri": uri, "offset": line - 1, "limit": 1}
+    )
+    assert resp.json()["result"] == "target"
+
+
 @pytest.mark.asyncio
 async def test_grep_forwards_tags_to_filesystem_service(monkeypatch):
     seen = {}
