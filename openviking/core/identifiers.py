@@ -17,7 +17,7 @@ def validate_identifier_part(part: str, part_name: str) -> str | None:
         return f"{part_name} is empty"
     if part in {".", ".."}:
         return f"{part_name} must not be '.' or '..'"
-    if not _VALIDATION_PATTERN.match(part):
+    if not _VALIDATION_PATTERN.fullmatch(part):
         return f"{part_name} must be alpha_numeric string."
     if part.count("@") > 1:
         return f"{part_name} must have at most one @."
