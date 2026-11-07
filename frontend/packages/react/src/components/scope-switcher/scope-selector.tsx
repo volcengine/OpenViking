@@ -54,6 +54,9 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
 
   // Restore DOM focus only after the panel actually closes. Controlled hosts
   // may keep it open after selection. Do not steal focus moved outside meanwhile.
+  // No cleanup is needed: focus() is synchronous, the pending flag is consumed,
+  // and no subscription, timer or asynchronous work survives this effect.
+  // Restoring the previous focus on cleanup would undo the intended navigation.
   useEffect(() => {
     if (open || !restoreSelectionFocus.current) return;
     restoreSelectionFocus.current = false;
