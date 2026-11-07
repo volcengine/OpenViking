@@ -55,3 +55,22 @@ container's loopback interface cannot be reached merely by publishing its port.
 5. Compare latency with fixed inputs and matching runtime/model/configuration;
    separate cold-start time, model calls, tools, OV and delivery. A single cold
    turn is not a platform performance benchmark.
+
+## Background console windows
+
+Durable host and connector-worker children now set `windowsHide` on Windows.
+Both retain piped stdio and existing shutdown supervision. Verify on the real
+Windows desktop after restarting only the test instance: no extra Node console
+windows, working Feishu delivery, working Durable tools, and clean stop/restart.
+This was reported by screenshots; local Linux tests cannot validate window visibility.
+
+## Matrix interpretation corrections
+
+The attachment labels a Debian container populated by install.sh as an "official
+Docker image"; it is a custom reference deployment of the official Linux release.
+Its 714-character summary exercise is not an ultra-long-context acceptance test.
+The appended interruption evidence describes Windows; independent Docker evidence
+is still needed. The latency entries compare a Windows Durable cold turn with a
+Docker Pi cold turn, so they are not a matched runtime performance comparison.
+The restart-recall entries quote the resulting text; retain actual retrieval tool
+results and source URIs to distinguish OV retrieval from restored conversation text.
