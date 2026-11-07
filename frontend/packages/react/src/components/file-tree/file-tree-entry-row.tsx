@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 
 import {
   FileTreeChevron,
@@ -10,10 +10,16 @@ import {
   showsInlineDescription,
 } from './file-tree-info.js';
 import { resolveInfoCopy } from './file-tree-info-labels.js';
+import { FileTreeInfoTooltip } from './file-tree-info-tooltip.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { Guides, rowStyle } from './file-tree-row-shared.js';
 import type { FileTreeEntryRow } from './types.js';
 import { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
+
+/** 内置浮层在没有匹配文案时会渲染成 `null`，据此判断是否有内容。 */
+function hasTooltip(tooltip: ReactNode) {
+  return tooltip !== null && tooltip !== undefined && tooltip !== false;
+}
 
 /**
  * 一条条目行：展开箭头、图标、名称、行内说明、行尾指示器与悬停浮层。
@@ -55,7 +61,11 @@ export function FileTreeRowView({
     ...extraAttributes
   } = extra;
   const dashboard = renderDashboard?.(row) ?? null;
-  const tooltip = renderRowTooltip?.(row) ?? null;
+  // 宿主给了自定义浮层就用它，否则用按 uri 解析出的内置浮层。
+  const customTooltip = renderRowTooltip?.(row) ?? null;
+  const tooltip = customTooltip ?? (
+    <FileTreeInfoTooltip row={row} infoLabels={ctx.infoLabels} />
+  );
   // 宿主给了 description 就用它（含显式空串）；否则按 uri 取内置说明。
   const infoKey = resolveFileTreeInfoKey(row.uri);
   const description =
@@ -179,7 +189,7 @@ export function FileTreeRowView({
         <span className="ov-file-tree__dashboard">{dashboard}</span>
       ) : null}
 
-      {tooltip && tooltipRowId === row.id ? (
+      {tooltipRowId === row.id && hasTooltip(tooltip) ? (
         <span role="tooltip" className="ov-file-tree__tooltip">
           {tooltip}
         </span>

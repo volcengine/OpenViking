@@ -11,7 +11,11 @@ export function FileTreeStateRow({
   row: FileTreeRow;
   ctx: FileTreeRowContext;
 }) {
-  const { text, onLoadMore, onRetry, getRowAttributes } = ctx;
+  const { text, onLoadMore, onRetry, getRowAttributes, renderSpinner } = ctx;
+  // 宿主给了 spinner 插槽就用它，否则用内置的 CSS 圆环。
+  const spinner = renderSpinner?.() ?? (
+    <span className="ov-file-tree__spinner" />
+  );
   const extra = getRowAttributes?.(row) ?? {};
   const {
     className: extraClassName,
@@ -42,7 +46,7 @@ export function FileTreeStateRow({
       return shell(
         <>
           <span className="ov-file-tree__toggle-spacer" />
-          <span className="ov-file-tree__spinner" />
+          {spinner}
           <span className="ov-file-tree__muted">{text.loading}</span>
         </>,
         true,

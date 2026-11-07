@@ -2,7 +2,7 @@
 
 A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
 
-This is a placeholder: it renders a fixed-size empty shell and consumes no props. The props contract below is the final shape; the view will be written against it.
+The component renders the host-flattened row list and handles selection, expansion, paging and keyboard interaction. Toolbars, search and import flows belong to the page layer and are injected through slots.
 
 ## Basic usage
 
@@ -20,7 +20,7 @@ The example demonstrates three host responsibilities:
 
 Names like `memories`, `peers` and `privacy` are followed by their built-in description.
 
-The component itself is still a placeholder shell (fixed 280 × 320), so the example renders the rows against the contract rather than mounting `<FileTree />` — that way the data shape and copy are visible.
+The example mounts `<FileTree />` directly, keeping only the tree data and the expansion and paging state the host owns.
 
 ## How rows work
 
@@ -39,7 +39,7 @@ Emit only the ones your data source needs. A host that returns all children at o
 - `slots.toolbar` — search, import sources, refresh. The component does not know what is inside.
 - `slots.spinner` — replaces the spinner shown while a directory loads its children, rendered at 12 × 12. Omitted uses the built-in `FileTreeSpinner` (a CSS ring with no icon asset behind it).
 - `renderDashboard` — the row-end indicator, for example a dashboard entry.
-- `renderRowTooltip` — hover content; the component handles the delay and positioning.
+- `renderRowTooltip` — hover content; the component handles the delay and positioning. When omitted the component renders a built-in tooltip from the row `uri` (description, trigger copy, path).
 
 ## Directory copy
 
@@ -122,6 +122,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 | `labels`                  | `FileTreeLabels`                          | English  | Replaceable copy.                                                              |
 | `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>` | —        | Extra attributes per row; `className` is merged.                               |
 | `renderDashboard`         | `(row) => ReactNode`                      | —        | Row-end indicator; `null` hides it.                                            |
+| `renderRowIcon`           | `(row) => ReactNode`                      | —        | Leading icon of a file row; the generic file icon when omitted.                |
 | `renderRowTooltip`        | `(row) => ReactNode`                      | —        | Hover content; `null` hides it.                                                |
 | `onSelect`                | `(row: FileTreeEntryRow) => void`         | —        | Called after selection succeeds; not called on failure.                        |
 | `onToggleExpand`          | `(row: FileTreeEntryRow) => void`         | —        | Called after expansion or collapse succeeds; not called on failure.            |
@@ -141,7 +142,7 @@ The tree uses `role="tree"` with `role="treeitem"` rows and reports `aria-level`
 
 ## Styling
 
-Class names are prefixed with `ov-`. The block is `ov-file-tree`; elements use `ov-file-tree__<element>`. The placeholder outputs only the root element and a fixed size; row, toolbar and state-view class names and theme tokens are settled with the real view. The stylesheet has its own entry:
+Class names are prefixed with `ov-`. The block is `ov-file-tree`; elements use `ov-file-tree__<element>`. Theme tokens are declared on the root element and can be overridden as a set or one by one. The stylesheet has its own entry:
 
 ```tsx
 import '@openviking/react/components/file-tree/style.css';

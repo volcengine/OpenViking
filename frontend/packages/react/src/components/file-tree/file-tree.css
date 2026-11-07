@@ -241,6 +241,42 @@
   pointer-events: none;
 }
 
+/* 内置浮层：标题、说明、触发行为与路径。 */
+.ov-file-tree__info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ov-file-tree__info-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  word-break: break-all;
+}
+
+.ov-file-tree__info-row {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.ov-file-tree__info-label {
+  flex: none;
+  opacity: 0.65;
+}
+
+.ov-file-tree__info-value {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.ov-file-tree__info-path {
+  min-width: 0;
+  opacity: 0.8;
+  word-break: break-all;
+}
+
 .ov-file-tree__state-row {
   color: var(--ov-ui-file-tree-text-muted);
 }
