@@ -334,8 +334,8 @@ class TelegramChannel(BaseChannel):
 
                 media_paths.append(str(file_path))
 
-                # Handle voice transcription
-                if media_type == "voice" or media_type == "audio":
+                # Transcribe native voice notes. Keep music/audio files as attachments.
+                if media_type == "voice":
                     from vikingbot.providers.transcription import GroqTranscriptionProvider
 
                     transcriber = GroqTranscriptionProvider(api_key=self.groq_api_key)
