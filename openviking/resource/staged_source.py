@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Set, Union
 
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.server.identity import RequestContext
@@ -78,6 +78,9 @@ async def stage_source(
     *,
     viking_fs: Any,
     ctx: RequestContext,
+    ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
+    include: Optional[str] = None,
+    exclude: Optional[str] = None,
 ) -> StagedSource:
     """Copy one prepared source into task-owned VikingFS storage."""
     path = resource.path
@@ -88,7 +91,15 @@ async def stage_source(
     source_uri = safe_join_viking_uri(f"{temp_uri}/source", path.name or "resource")
     try:
         if path.is_dir():
-            await _copy_local_tree(path, source_uri, viking_fs, ctx)
+            await _copy_local_tree(
+                path,
+                source_uri,
+                viking_fs,
+                ctx,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+            )
         else:
             await viking_fs.write_file_bytes(
                 source_uri,
@@ -159,12 +170,47 @@ async def _copy_local_tree(
     target_uri: str,
     viking_fs: Any,
     ctx: RequestContext,
+    *,
+    ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
+    include: Optional[str] = None,
+    exclude: Optional[str] = None,
 ) -> None:
+    # Apply the same public directory-filter semantics used by DirectoryParser
+    # before reading or staging any file from a watched local tree.
+    from openviking.parse.directory_scan import (
+        _matches_exclude,
+        _matches_include,
+        _parse_patterns,
+        _should_skip_directory,
+    )
+
+    if isinstance(ignore_dirs, str):
+        parsed_ignore_dirs: Optional[Set[str]] = set(_parse_patterns(ignore_dirs)) or None
+    elif ignore_dirs:
+        parsed_ignore_dirs = {str(item) for item in ignore_dirs}
+    else:
+        parsed_ignore_dirs = None
+    include_patterns = _parse_patterns(include)
+    exclude_patterns = _parse_patterns(exclude)
+
     directories = {target_uri}
     files: list[tuple[Path, str]] = []
     for root, dir_names, file_names in os.walk(local_dir, followlinks=False):
         root_path = Path(root)
-        dir_names[:] = [name for name in dir_names if not (root_path / name).is_symlink()]
+        kept_dirs = []
+        for name in dir_names:
+            directory = root_path / name
+            if directory.is_symlink():
+                continue
+            should_skip, _ = _should_skip_directory(
+                directory,
+                local_dir,
+                parsed_ignore_dirs,
+            )
+            if should_skip:
+                continue
+            kept_dirs.append(name)
+        dir_names[:] = kept_dirs
         relative_root = root_path.relative_to(local_dir)
         if relative_root.parts:
             directories.add(safe_join_viking_uri(target_uri, relative_root.as_posix()))
@@ -172,9 +218,14 @@ async def _copy_local_tree(
             local_path = root_path / name
             if local_path.is_symlink() or not local_path.is_file():
                 continue
+            rel_path = local_path.relative_to(local_dir).as_posix()
+            if include_patterns and not _matches_include(name, include_patterns):
+                continue
+            if exclude_patterns and _matches_exclude(rel_path, name, exclude_patterns):
+                continue
             target_file_uri = safe_join_viking_uri(
                 target_uri,
-                local_path.relative_to(local_dir).as_posix(),
+                rel_path,
             )
             directories.add(target_file_uri.rsplit("/", 1)[0])
             files.append((local_path, target_file_uri))
