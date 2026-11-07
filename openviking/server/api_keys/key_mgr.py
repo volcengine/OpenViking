@@ -17,6 +17,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 
@@ -84,6 +85,11 @@ class APIKeyManager:
         self._store = store
         self._root_api_key = root_key
         self._issue_user_keys = issue_user_keys
+
+    def require_writable(self) -> None:
+        """Reject management writes before handlers acquire filesystem leases."""
+        if self._store.read_only:
+            raise PermissionDeniedError("Account store is read-only.")
 
     async def load(self) -> None:
         try:

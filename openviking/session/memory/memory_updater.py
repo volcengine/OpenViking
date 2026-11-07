@@ -1059,13 +1059,20 @@ class MemoryUpdater:
         uri_memory_type_map = {}
         for resolved_op in applicable_upserts:
             try:
-                await self._apply_upsert(
-                    resolved_op,
-                    ctx,
-                    extract_context=extract_context,
-                    lease_ref=self._transaction_handle,
-                    uri_remap=uri_remap,
-                )
+                from openviking.observability.reporting.facts import bind_memory_type
+
+                with bind_memory_type(
+                    resolved_op.memory_type,
+                    task_id=getattr(resolved_op.source, "task_id", None),
+                    source_task_ids=getattr(resolved_op.source, "task_ids", None),
+                ):
+                    await self._apply_upsert(
+                        resolved_op,
+                        ctx,
+                        extract_context=extract_context,
+                        lease_ref=self._transaction_handle,
+                        uri_remap=uri_remap,
+                    )
                 # Add all uris to result (uris is List[str])
                 add_result = (
                     result.add_edited

@@ -119,6 +119,21 @@ def _metadata_from_context(payload: dict[str, Any]) -> dict[str, str | None]:
 def build_event(event_name: str, payload: dict[str, Any] | None = None) -> ObservabilityEvent:
     """Create an enriched event envelope from a raw event name and payload."""
     normalized_payload = dict(payload or {})
+    from openviking.observability.reporting.runtime import is_reporting_enabled
+
+    if is_reporting_enabled() and not normalized_payload.get("event_id"):
+        from uuid import uuid4
+
+        normalized_payload["event_id"] = "evt_" + uuid4().hex
+    from openviking.observability.reporting.facts import event_context
+
+    for key, value in event_context(str(event_name)).items():
+        if normalized_payload.get(key) is None:
+            normalized_payload[key] = value
+    if event_name == "http.request":
+        tasks = get_observability_context().extra.get("metric_tasks", {})
+        if tasks:
+            normalized_payload["metric_tasks"] = list(tasks.values())
     metadata = _metadata_from_context(normalized_payload)
     return ObservabilityEvent(
         event_name=str(event_name),

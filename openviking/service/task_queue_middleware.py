@@ -180,6 +180,8 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                 metadata.user_id,
                 enqueued_work=enqueued_work,
                 work_id=metadata.work_id,
+                task_type=metadata.task_type,
+                mode=metadata.mode,
             ):
                 try:
                     result = await call_next(ctx)

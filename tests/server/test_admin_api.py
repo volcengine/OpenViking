@@ -223,6 +223,49 @@ async def lightweight_admin_app(monkeypatch):
     return app
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/accounts", {"account_id": "new_account", "admin_user_id": "admin"}),
+        ("DELETE", "/accounts/readonly_account", None),
+        ("POST", "/accounts/readonly_account/users", {"user_id": "new_user"}),
+        ("DELETE", "/accounts/readonly_account/users/member", None),
+        ("PUT", "/accounts/readonly_account/users/member/role", {"role": "admin"}),
+        ("POST", "/accounts/readonly_account/users/member/key", None),
+        ("POST", "/accounts/readonly_account/groups", {"group_id": "new_group"}),
+        ("DELETE", "/accounts/readonly_account/groups/team", None),
+        ("PUT", "/accounts/readonly_account/groups/team/members", {"user_ids": ["member"]}),
+        ("DELETE", "/accounts/readonly_account/groups/team/members", {"user_ids": ["member"]}),
+    ],
+)
+async def test_read_only_identity_writes_fail_before_filesystem_locks(
+    lightweight_admin_app, method, path, body
+):
+    app = lightweight_admin_app
+    manager = app.state.api_key_manager
+    await manager.create_account("readonly_account", "admin")
+    await manager.register_user("readonly_account", "member")
+    await manager.create_group("readonly_account", "team")
+    manager._store._read_only = True
+    service = app.state.fake_service
+    original_files = dict(service.viking_fs.agfs._files)
+    original_writes = list(service.viking_fs.writes)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.request(
+            method, f"/api/v1/admin{path}", json=body, headers={"X-API-Key": ROOT_KEY}
+        )
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+        read = await client.get("/api/v1/admin/accounts", headers={"X-API-Key": ROOT_KEY})
+        assert read.status_code == 200
+    assert service.account_lock_events == []
+    assert service.viking_fs.agfs._files == original_files
+    assert service.viking_fs.writes == original_writes
+    await manager.close()
+
+
 @pytest_asyncio.fixture(scope="function")
 async def lightweight_admin_client(lightweight_admin_app):
     transport = httpx.ASGITransport(app=lightweight_admin_app)
@@ -2425,9 +2468,10 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
             url, json={"add_targets": {"skill_uri": "viking://~/skills"}}, headers=user_headers
         )
         assert patched.status_code == 200, patched.text
-        assert patched.json()["result"]["add_targets"]["resource_uri"] == stored["add_targets"][
-            "resource_uri"
-        ]
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
         assert patched.json()["result"]["memory_policy"]["memory_types"] == ["retired_type"]
         before_rejected = dict(fs.files)
         rejected = await client.patch(
@@ -2447,9 +2491,10 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
             url, json={"memory_policy": {"memory_types": ["events"]}}, headers=user_headers
         )
         assert patched.status_code == 200, patched.text
-        assert patched.json()["result"]["add_targets"]["resource_uri"] == stored["add_targets"][
-            "resource_uri"
-        ]
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
         assert json.loads(fs.files[stored_uri])["memory_policy"]["memory_types"] == ["events"]
     finally:
         set_openviking_config(previous_config)

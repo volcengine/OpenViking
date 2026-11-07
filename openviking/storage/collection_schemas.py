@@ -763,7 +763,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-                        with bind_ingestion_source_type(embedding_msg.source_type):
+                        from openviking.observability.reporting.facts import bind_embedding_purpose
+
+                        purpose = embedding_msg.context_data.get("context_type", "unknown")
+                        with (
+                            bind_ingestion_source_type(embedding_msg.source_type),
+                            bind_embedding_purpose(purpose),
+                        ):
                             result = await embed_compat(
                                 embedder,
                                 embedding_msg.message,

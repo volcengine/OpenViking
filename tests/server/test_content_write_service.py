@@ -23,6 +23,35 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
+async def test_memory_write_fact_reuses_created_root_task(service, monkeypatch):
+    from openviking.observability.events import get_event_bus
+    from openviking.observability.reporting import runtime
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    uri = f"viking://user/{ctx.user.user_space_name()}/memories/experiences/edit.md"
+    await service.viking_fs.write_file(uri, "Original experience", ctx=ctx)
+    monkeypatch.setattr(runtime, "is_reporting_enabled", lambda: True)
+    events = []
+    bus = get_event_bus()
+    bus.register("content_write_root_fact_test", events.append)
+    try:
+        result = await service.fs.write(uri, "Updated experience", ctx=ctx, wait=False)
+    finally:
+        bus.unregister("content_write_root_fact_test")
+
+    facts = [
+        event
+        for event in events
+        if event.event_name == "file_mutation" and event.payload.get("uri") == uri
+    ]
+    assert len(facts) == 1
+    assert facts[0].payload["task_id"] == result["task_id"]
+    assert facts[0].payload["task_type"] == "content_write"
+    assert facts[0].payload["memory_type"] == "experiences"
+    assert facts[0].payload["change_type"] == "modified"
+
+
+@pytest.mark.asyncio
 async def test_write_updates_memory_file_and_parent_overview(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences"
@@ -692,7 +721,6 @@ async def test_write_lock_storage_error_is_not_mapped_to_resource_busy(file_uri)
         )
 
 
-
 class _AnyDirVikingFS:
     """Stats the given file uri as a file and every other uri as a directory."""
 
@@ -740,7 +768,6 @@ async def test_resource_write_anchors_nested_file_to_direct_parent(
 
     assert write_anchor == parent_uri
     assert set_tags_anchor == project_root
-
 
 
 @pytest.mark.asyncio

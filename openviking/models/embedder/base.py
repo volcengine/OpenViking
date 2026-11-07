@@ -72,9 +72,9 @@ class QueryEmbeddingCache(dict[Any, _SharedQueryEmbedding]):
             self.pop(key, None)
 
     async def close(self) -> None:
-        pending = {
-            entry.task for entry in self.values() if not entry.task.done()
-        } | {task for task in self._pending_tasks if not task.done()}
+        pending = {entry.task for entry in self.values() if not entry.task.done()} | {
+            task for task in self._pending_tasks if not task.done()
+        }
         for task in pending:
             task.cancel()
         if pending:
@@ -165,6 +165,17 @@ def extract_text_from_content(content: "EmbeddingInput") -> str:
 
 
 async def embed_compat(
+    embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
+) -> "EmbedResult":
+    from contextlib import nullcontext
+
+    from openviking.observability.reporting.facts import bind_embedding_purpose
+
+    with bind_embedding_purpose("search_query") if is_query else nullcontext():
+        return await _embed_compat_impl(embedder, content, is_query=is_query)
+
+
+async def _embed_compat_impl(
     embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
 ) -> "EmbedResult":
     """Prepare input, then call the embedder's async-compatible entrypoint.
@@ -497,6 +508,7 @@ class EmbedderBase(ABC):
                 account_id=getattr(self, "_account_id", None)
                 or (root_context.account_id if root_context is not None else None),
                 source_type=get_ingestion_source_type(),
+                cost_bearer=getattr(self, "cost_bearer", None),
             )
         except Exception as e:
             # Metrics must never break embedding execution.

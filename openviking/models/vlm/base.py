@@ -77,6 +77,7 @@ class VLMBase(ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.cost_bearer = config.get("cost_bearer")
         self.provider = config.get("provider", "openai")
         self.model = config.get("model")
         self.api_key = config.get("api_key")
@@ -297,6 +298,7 @@ class VLMBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
+                cost_bearer=self.cost_bearer,
             )
         except Exception as e:
             # Metrics must never break model inference.
@@ -323,6 +325,7 @@ class VLMBase(ABC):
                 prompt_tokens=0,
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
+                cost_bearer=self.cost_bearer,
                 account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as metrics_error:

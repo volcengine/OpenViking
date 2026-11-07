@@ -22,6 +22,7 @@ from uuid import uuid4
 from openviking.config.generation import get_output_language_override
 from openviking.core.context import Context
 from openviking.message import Message
+from openviking.observability.reporting.facts import event_context
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.constants import (
@@ -756,6 +757,7 @@ class SessionCompressorV3:
 
         extraction_id = uuid4().hex
         extracted_at = datetime.now(timezone.utc).isoformat()
+        source_task_id = event_context("file_mutation").get("task_id")
 
         updater = await get_streaming_memory_updater(
             key=make_streaming_memory_updater_key(request_context=ctx),
@@ -782,6 +784,7 @@ class SessionCompressorV3:
                     "source_extraction_id": extraction_id,
                     "session_id": session_id,
                     "archive_uri": archive_uri,
+                    "task_id": source_task_id,
                     "trace_id": tracer.get_trace_id(),
                     "extracted_at": extracted_at,
                 },
