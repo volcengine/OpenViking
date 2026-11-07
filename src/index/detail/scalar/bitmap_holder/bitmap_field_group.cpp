@@ -449,9 +449,17 @@ BitmapPtr FieldBitmapGroupSet::make_field_copy(const std::string& field,
                                                const std::string key) {
   auto itr = field_bitmap_groups_map_.find(field);
   if (itr == field_bitmap_groups_map_.end()) {
-    return nullptr;
+    // A filter referencing a field (or a scalar value) that was never
+    // inserted matches nothing: return an empty bitmap so callers get an
+    // explicit zero instead of a null bitmap that search treats as an
+    // engine failure. Same semantics as the multi-key variant above.
+    return std::make_shared<Bitmap>();
   }
-  return itr->second->get_bitmap_copy(key);
+  auto bitmap = itr->second->get_bitmap_copy(key);
+  if (bitmap == nullptr) {
+    return std::make_shared<Bitmap>();
+  }
+  return bitmap;
 }
 
 BitmapPtr FieldBitmapGroupSet::make_path_field_copy(
