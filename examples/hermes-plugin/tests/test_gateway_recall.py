@@ -389,10 +389,53 @@ def test_recall_scope_default_and_environment_override(external_provider, monkey
     schema = {field["key"]: field for field in provider.get_config_schema()}
     assert schema["recall_scope"]["choices"] == ["shared", "peer"]
     assert module.OpenVikingMemoryProvider._setting("recall_scope", {}) is None
+    decay_setting = schema["recall_events_time_decay_protection"]
+    assert decay_setting["default"] is None
+    assert decay_setting["env_var"] == "OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION"
+    assert (
+        module.OpenVikingMemoryProvider._setting("recall_events_time_decay_protection", {}) is None
+    )
+    monkeypatch.setenv("OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION", "7d")
+    assert (
+        provider._setting(
+            "recall_events_time_decay_protection", {"recall_events_time_decay_protection": "1d"}
+        )
+        == "7d"
+    )
+    monkeypatch.delenv("OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION")
     monkeypatch.setenv("OPENVIKING_RECALL_SCOPE", "peer")
     assert provider._setting("recall_scope", {"recall_scope": "shared"}) == "peer"
     monkeypatch.delenv("OPENVIKING_RECALL_SCOPE")
     assert provider._setting("recall_scope", {"recall_scope": "invalid"}) is None
+
+
+@pytest.mark.parametrize(
+    ("compress", "fallback"), [("off", False), ("off", True), ("server", False)]
+)
+@pytest.mark.parametrize("protection", [None, "7d"])
+def test_auto_recall_forwards_event_time_decay_protection(
+    external_provider, monkeypatch, compress, fallback, protection
+):
+    home, provider, _, manager, backend = initialize(
+        external_provider, monkeypatch, scope=None, compress=compress
+    )
+    if protection is not None:
+        provider.save_config({"recall_events_time_decay_protection": protection}, str(home))
+    backend.reject_session_search = fallback and compress == "off"
+    try:
+        with profile_scope(home):
+            provider._search_prefetch_context(
+                "what is the current status", session_id="event-decay", client=provider._client
+            )
+        assert backend.searches
+        assert (len(backend.searches) == 2) is fallback
+        for _, payload in backend.searches:
+            if protection is None:
+                assert "events_time_decay_protection" not in payload
+            else:
+                assert payload["events_time_decay_protection"] == protection
+    finally:
+        manager.shutdown_all()
 
 
 def pause_first_worker(module, monkeypatch):
