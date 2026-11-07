@@ -14,12 +14,12 @@ export const FILESYSTEM_AGENT_SESSIONS_STORAGE_KEY =
 export const FILESYSTEM_EXPANDED_URIS_STORAGE_KEY =
   'openviking.playground.expandedUris'
 export const FILESYSTEM_LEFT_WIDTH = {
-  default: 330,
+  default: 352,
   max: 620,
   min: 240,
 }
 export const FILESYSTEM_RIGHT_WIDTH = {
-  default: 430,
+  default: 360,
   max: 680,
   min: 320,
 }

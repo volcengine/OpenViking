@@ -1,11 +1,10 @@
+import { DEFAULT_ADMIN_USER_PAGE } from './admin-membership-queries'
 import { useState } from 'react'
 
 export function useUserList(scope: string) {
   const [state, setState] = useState({
     scope,
-    search: '',
-    page: 1,
-    pageSize: 20,
+    ...DEFAULT_ADMIN_USER_PAGE,
   })
   const current =
     state.scope === scope

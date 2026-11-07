@@ -11,18 +11,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '#/shared/ui/alert-dialog'
+import { Switch } from '#/shared/ui/switch'
 import { Button } from '#/shared/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '#/shared/ui/popover'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Settings2Icon } from 'lucide-react'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 export function AccountAclSettings({
   inPopover = false,
+  inline = false,
 }: {
   inPopover?: boolean
+  inline?: boolean
 }) {
   const state = useAclManagement()
   if (!state.allowed) return null
@@ -31,18 +34,22 @@ export function AccountAclSettings({
       key={JSON.stringify(state.settingsKey)}
       state={state}
       inPopover={inPopover}
+      inline={inline}
     />
   )
 }
 function AccountAclControl({
   state,
   inPopover,
+  inline,
 }: {
   state: ReturnType<typeof useAclManagement>
   inPopover: boolean
+  inline: boolean
 }) {
   const { t } = useTranslation('settings')
   const client = useQueryClient()
+  const controlId = useId()
   const [next, setNext] = useState<boolean | null>(null)
   const update = useMutation({
     mutationFn: (enabled: boolean) => state.api.setEnabled(enabled),
@@ -90,7 +97,37 @@ function AccountAclControl({
   )
   return (
     <>
-      {inPopover ? (
+      {inline ? (
+        <div className="flex flex-col items-start gap-3">
+          <div className="inline-flex items-center gap-4 text-sm font-medium">
+            <label htmlFor={controlId} className="cursor-pointer">
+              {t('acl.page.controlTitle')}
+            </label>
+            <Switch
+              id={controlId}
+              checked={state.settings.data === true}
+              disabled={
+                !state.settings.isSuccess ||
+                state.settings.isFetching ||
+                update.isPending
+              }
+              onCheckedChange={(enabled) => setNext(enabled)}
+            />
+          </div>
+          {state.settings.isError && (
+            <div role="alert" className="text-sm text-destructive">
+              {getErrorMessage(state.settings.error)}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void state.settings.refetch()}
+              >
+                {t('actions.refresh')}
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : inPopover ? (
         <Popover>
           <PopoverTrigger
             openOnHover

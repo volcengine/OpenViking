@@ -200,7 +200,15 @@ function ExperiencePagination({
   )
 }
 
-export function AgentExperienceRoute() {
+export function AgentExperienceRoute({
+  directoryUri,
+  onOpenFile,
+  embedded = false,
+}: {
+  directoryUri?: string
+  onOpenFile?: (uri: string) => void
+  embedded?: boolean
+} = {}) {
   const { t, i18n } = useTranslation('agentExperiencePage')
   const { connection, identityScopeKey } = useAppConnection()
   const [keyword, setKeyword] = React.useState('')
@@ -210,7 +218,7 @@ export function AgentExperienceRoute() {
   const [previewExperience, setPreviewExperience] =
     React.useState<ExperienceFileItem | null>(null)
 
-  const experiencesUri = buildExperiencesUri(connection.userId)
+  const experiencesUri = directoryUri ?? buildExperiencesUri(connection.userId)
   React.useEffect(() => {
     const timeout = window.setTimeout(() => {
       setSearchKeyword(keyword.trim())
@@ -273,7 +281,8 @@ export function AgentExperienceRoute() {
     experiencesQuery.error.code === 'NETWORK_ERROR'
 
   const handleOpenPreview = (experience: ExperienceFileItem) => {
-    setPreviewExperience(experience)
+    if (onOpenFile) onOpenFile(experience.uri)
+    else setPreviewExperience(experience)
   }
 
   return (
@@ -307,7 +316,7 @@ export function AgentExperienceRoute() {
         </div>
       </header>
 
-      <ExperienceSetupGuide />
+      {!embedded ? <ExperienceSetupGuide /> : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 px-4 py-3">
         <div className="relative w-full sm:max-w-md">
@@ -397,8 +406,16 @@ export function AgentExperienceRoute() {
               {t('emptyDescription')}
             </p>
             <Button
-              render={<Link to="/sessions" />}
-              nativeButton={false}
+              render={onOpenFile ? undefined : <Link to="/sessions" />}
+              onClick={
+                onOpenFile
+                  ? () =>
+                      onOpenFile(
+                        `viking://user/${encodeURIComponent(connection.userId)}/sessions/`,
+                      )
+                  : undefined
+              }
+              nativeButton={Boolean(onOpenFile)}
               variant="outline"
               size="sm"
               className="mx-auto mt-3"
@@ -513,11 +530,18 @@ export function AgentExperienceRoute() {
                         onClick={(event) => event.stopPropagation()}
                       >
                         <Button
+                          onClick={
+                            onOpenFile
+                              ? () => onOpenFile(experience.uri)
+                              : undefined
+                          }
                           render={
-                            <Link
-                              params={{ experienceUri: experience.uri }}
-                              to="/agent-experience/$experienceUri"
-                            />
+                            onOpenFile ? undefined : (
+                              <Link
+                                params={{ experienceUri: experience.uri }}
+                                to="/agent-experience/$experienceUri"
+                              />
+                            )
                           }
                           nativeButton={false}
                           size="xs"

@@ -64,12 +64,19 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function ExperienceDetailRoute() {
+  const { experienceUri } = routeApi.useParams()
+  return <ExperienceDetail experienceUri={experienceUri} />
+}
+
+export function ExperienceDetail({
+  experienceUri,
+  embedded = false,
+}: {
+  experienceUri: string
+  embedded?: boolean
+}) {
   const { t, i18n } = useTranslation('agentExperiencePage')
   const { identityScopeKey } = useAppConnection()
-  const params = routeApi.useParams()
-  // The router percent-encodes path params when building hrefs and decodes
-  // them again on match, so `params.experienceUri` is the raw `viking://` URI.
-  const experienceUri = params.experienceUri
 
   const [activeTab, setActiveTab] = React.useState<DetailTab>('impact')
   const [timeRangePreset, setTimeRangePreset] =
@@ -163,69 +170,77 @@ export function ExperienceDetailRoute() {
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-6">
-      <header className="grid gap-3">
-        <div>
-          <Button
-            render={<Link to="/agent-experience" />}
-            nativeButton={false}
-            size="xs"
-            variant="ghost"
-            className="-ml-2 text-muted-foreground"
-          >
-            <ArrowLeftIcon className="size-3.5" />
-            {t('detail.back')}
-          </Button>
-        </div>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <BrainCircuitIcon className="size-4.5" />
-          </div>
-          <div className="min-w-0">
-            <h1
-              className="truncate text-xl font-semibold tracking-tight"
-              title={experienceName}
+      {!embedded ? (
+        <header className="grid gap-3">
+          <div>
+            <Button
+              render={<Link to="/agent-experience" />}
+              nativeButton={false}
+              size="xs"
+              variant="ghost"
+              className="-ml-2 text-muted-foreground"
             >
-              {experienceName}
-            </h1>
-            <div className="flex items-center gap-1.5">
-              <code
-                className="min-w-0 truncate text-xs text-muted-foreground"
-                title={experienceUri}
+              <ArrowLeftIcon className="size-3.5" />
+              {t('detail.back')}
+            </Button>
+          </div>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <BrainCircuitIcon className="size-4.5" />
+            </div>
+            <div className="min-w-0">
+              <h1
+                className="truncate text-xl font-semibold tracking-tight"
+                title={experienceName}
               >
-                {experienceUri}
-              </code>
-              <Button
-                type="button"
-                aria-label={t('detail.copyUri')}
-                size="icon-xs"
-                variant="ghost"
-                onClick={handleCopyUri}
-              >
-                <ClipboardIcon className="size-3.5" />
-              </Button>
-              <Button
-                render={
-                  <Link
-                    rel="noreferrer noopener"
-                    search={{ file: experienceUri }}
-                    target="_blank"
-                    to="/filesystem"
-                  />
-                }
-                nativeButton={false}
-                aria-label={t('detail.openFilesystem')}
-                title={t('detail.openFilesystem')}
-                size="icon-xs"
-                variant="ghost"
-              >
-                <ExternalLinkIcon className="size-3.5" />
-              </Button>
+                {experienceName}
+              </h1>
+              <div className="flex items-center gap-1.5">
+                <code
+                  className="min-w-0 truncate text-xs text-muted-foreground"
+                  title={experienceUri}
+                >
+                  {experienceUri}
+                </code>
+                <Button
+                  type="button"
+                  aria-label={t('detail.copyUri')}
+                  size="icon-xs"
+                  variant="ghost"
+                  onClick={handleCopyUri}
+                >
+                  <ClipboardIcon className="size-3.5" />
+                </Button>
+                <Button
+                  render={
+                    <Link
+                      rel="noreferrer noopener"
+                      search={{ file: experienceUri }}
+                      target="_blank"
+                      to="/filesystem"
+                    />
+                  }
+                  nativeButton={false}
+                  aria-label={t('detail.openFilesystem')}
+                  title={t('detail.openFilesystem')}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <ExternalLinkIcon className="size-3.5" />
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
+      ) : null}
 
-      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)]">
+      <div
+        className={
+          embedded
+            ? 'grid min-w-0 items-start gap-6'
+            : 'grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)]'
+        }
+      >
         <Card
           size="sm"
           className="gap-0 bg-background shadow-none ring-border/70"

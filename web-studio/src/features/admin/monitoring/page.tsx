@@ -1,3 +1,6 @@
+import { AdminScopeFilters } from '#/features/admin/users/components/admin-scope-filters'
+import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
+import styles from './page.module.css'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -75,10 +78,12 @@ function normalizeComponent(
   }
 }
 
-async function fetchMonitoringOverview(): Promise<MonitoringOverview> {
+async function fetchMonitoringOverview(
+  headers?: Record<string, string>,
+): Promise<MonitoringOverview> {
   const [health, observer] = await Promise.all([
     getOvResult<Record<string, unknown>>(getHealth()),
-    getOvResult<Record<string, unknown>>(getObserverSystem()),
+    getOvResult<Record<string, unknown>>(getObserverSystem({ headers })),
   ])
   const rawComponents = isRecord(observer.components) ? observer.components : {}
   const components: Record<string, ObserverComponent> = {}
@@ -112,7 +117,7 @@ function HealthBadge({
     <Badge
       variant="outline"
       className={cn(
-        'gap-1.5 font-normal',
+        styles.badge,
         healthy === undefined
           ? 'text-muted-foreground'
           : healthy
@@ -138,11 +143,14 @@ function HealthBadge({
 export function MonitoringRoute() {
   const { i18n, t } = useTranslation('monitoringPage')
   const { identityScopeKey, serverMode } = useAppConnection()
+  const scoped = useAdminSpaceHeaders(true)
   const [activeType, setActiveType] = React.useState<MonitorType>('overview')
   const monitoringQuery = useQuery({
-    enabled: serverMode !== 'offline',
-    queryFn: fetchMonitoringOverview,
-    queryKey: ['monitoring-overview', identityScopeKey],
+    enabled:
+      serverMode !== 'offline' && !scoped.isLoading && scoped.headers !== null,
+    queryFn: () => fetchMonitoringOverview(scoped.headers ?? undefined),
+    queryKey: ['monitoring-overview', identityScopeKey, scoped.scopeKey],
+    meta: { adminSpaceScope: scoped.scopeKey },
     refetchInterval: 10_000,
     retry: false,
     staleTime: 5_000,
@@ -165,35 +173,22 @@ export function MonitoringRoute() {
     : undefined
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="grid gap-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {t('title')}
-            </h1>
-            {overview?.version ? (
-              <Badge variant="outline" className="font-mono font-normal">
-                {t('version', {
-                  version: stripVersionPrefix(overview.version),
-                })}
-              </Badge>
-            ) : null}
-          </div>
-          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            {t('description')}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {updatedAt ? (
-            <span className="text-xs text-muted-foreground">
-              {t('updatedAt', { time: updatedAt })}
+    <div className={styles.page}>
+      <header className={styles.header}>
+        <h1>{t('title')}</h1>
+        <div className={styles.headerControls}>
+          {overview?.version && (
+            <span>
+              {t('version', { version: stripVersionPrefix(overview.version) })}
             </span>
-          ) : null}
+          )}
+          {updatedAt && <span>{t('updatedAt', { time: updatedAt })}</span>}
           <Button
             type="button"
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t('refresh')}
+            title={t('refresh')}
             disabled={monitoringQuery.isFetching}
             onClick={() => void monitoringQuery.refetch()}
           >
@@ -203,10 +198,15 @@ export function MonitoringRoute() {
                 monitoringQuery.isFetching && 'animate-spin',
               )}
             />
-            {t('refresh')}
           </Button>
         </div>
       </header>
+      {(activeType === 'overview' ||
+        activeType === 'models' ||
+        activeType === 'vikingdb') && <AdminScopeFilters />}
+      {!scoped.isLoading && scoped.headers === null && (
+        <p role="status">{t(scoped.unavailableKey)}</p>
+      )}
 
       {serverMode === 'offline' ? (
         <Alert>
@@ -214,7 +214,10 @@ export function MonitoringRoute() {
           <AlertTitle>{t('offline.title')}</AlertTitle>
           <AlertDescription>
             {t('offline.description')}{' '}
-            <Link to="/settings" className="font-medium text-primary underline">
+            <Link
+              to="/admin/settings"
+              className="font-medium text-primary underline"
+            >
               {t('offline.action')}
             </Link>
           </AlertDescription>
@@ -236,12 +239,12 @@ export function MonitoringRoute() {
         </Alert>
       ) : (
         <>
-          <Card className="gap-0 overflow-hidden py-0">
-            <CardContent className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+          <Card className={styles.summary}>
+            <CardContent className={styles.summaryContent}>
               <div className="flex items-center gap-3">
                 <div
                   className={cn(
-                    'flex size-10 items-center justify-center rounded-xl',
+                    styles.summaryIcon,
                     overview?.healthy
                       ? 'bg-emerald-500/10 text-emerald-600'
                       : 'bg-destructive/10 text-destructive',
@@ -281,7 +284,7 @@ export function MonitoringRoute() {
           <div
             role="tablist"
             aria-label={t('tabs.label')}
-            className="flex max-w-full gap-1 overflow-x-auto rounded-xl border bg-muted/20 p-1"
+            className={styles.tabs}
           >
             {MONITOR_TYPES.map(([name, Icon]) => (
               <button
@@ -289,6 +292,8 @@ export function MonitoringRoute() {
                 type="button"
                 role="tab"
                 aria-selected={activeType === name}
+                id={`monitor-tab-${name}`}
+                aria-controls="monitor-panel"
                 className={cn(
                   'flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm text-muted-foreground transition-colors',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -305,7 +310,12 @@ export function MonitoringRoute() {
           </div>
 
           {activeType === 'overview' ? (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div
+              className={styles.grid}
+              role="tabpanel"
+              id="monitor-panel"
+              aria-labelledby="monitor-tab-overview"
+            >
               {MONITOR_TYPES.slice(1).map(([name, Icon]) => {
                 const component = overview?.components[name]
                 const healthy = component
@@ -318,10 +328,10 @@ export function MonitoringRoute() {
                     className="group rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => setActiveType(name)}
                   >
-                    <Card className="h-full gap-3 p-4 transition-colors group-hover:border-primary/35 group-hover:bg-muted/15">
+                    <Card className={styles.componentCard}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-2">
-                          <div className="flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                          <div className={styles.componentIcon}>
                             <Icon className="size-4" />
                           </div>
                           <CardTitle>{t(`tabs.${name}`)}</CardTitle>
@@ -346,7 +356,12 @@ export function MonitoringRoute() {
               })}
             </div>
           ) : (
-            <Card className="gap-0 overflow-hidden py-0">
+            <Card
+              role="tabpanel"
+              id="monitor-panel"
+              aria-labelledby={`monitor-tab-${activeType}`}
+              className="gap-0 overflow-hidden py-0"
+            >
               <CardHeader className="border-b px-5 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">

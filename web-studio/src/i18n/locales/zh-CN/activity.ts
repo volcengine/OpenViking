@@ -137,6 +137,29 @@ const activity = {
     },
   },
   filesystem: {
+    ide: {
+      sessions: '会话',
+      connectAgent: '连接 Agent',
+      search: '搜索文件 ⌘+K...',
+      more: '更多操作',
+      workspace: '工作台',
+      emptyDirectory: '此目录暂无文件',
+      loadFailed: '无法加载目录',
+      discard: '有未保存的修改，确定放弃吗？',
+      sessionFiles: '查看会话文件',
+      sessionPreview: '预览会话',
+      hints: {
+        memories: '跨会话长期记忆',
+        experiences: 'Agent 经验',
+        preferences: '画像与偏好',
+        entities: '实体',
+        events: '事件',
+        peers: '按应用或工作区隔离上下文',
+        privacy: '密钥等敏感信息',
+        sessions: '对话与任务运行记录',
+        skills: 'Agent 可用的技能与工具',
+      },
+    },
     copyUri: '复制当前 URI',
     copied: '已复制 URI',
     copyFailed: '复制失败',
@@ -145,7 +168,7 @@ const activity = {
     readFailed: '无法读取 {{uri}}',
     tabs: {
       terminal: '终端',
-      agent: 'Agent',
+      agent: 'VikingBot',
     },
     actionPanel: {
       collapse: '收起面板',
@@ -158,14 +181,14 @@ const activity = {
     },
     explorer: {
       title: '文件系统',
-      addResource: '添加资源',
+      addResource: '导入资源',
       abstractLevel: 'L0',
       collapseDirectory: '收起 {{name}}',
       empty: '空',
       expandDirectory: '展开 {{name}}',
       loading: '加载中',
       overviewLevel: 'L1',
-      search: '搜索上下文',
+      search: '搜索文件和内容',
       refresh: '刷新文件系统',
       namespaces: {
         agent: 'Agent 的能力、工具和经验',
@@ -197,8 +220,8 @@ const activity = {
         retry: '重新检测',
       },
       empty: {
-        heading: 'Agent 操作会与左侧目录联动',
-        body: '发送问题后，工具调用输出里的 `viking://` 文件会变成可点击链接，点击即可在左侧定位并在中间打开。',
+        heading: '欢迎使用 VikingBot',
+        body: '围绕资料、记忆和上下文提问，也可以在工作台直接打开回复里引用的文件。',
         prompts: [
           '总结当前目录',
           '递归查找相关文档',

@@ -150,6 +150,7 @@ function renderPreview(
   onNavigate: ((uri: string) => void) | undefined,
   directoryOverview?: string,
   directoryAbstract?: string,
+  ide = false,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -170,6 +171,7 @@ function renderPreview(
 
   return render(
     <FilePreview
+      ide={ide}
       file={entry}
       onClose={vi.fn()}
       onNavigate={onNavigate}
@@ -444,6 +446,19 @@ describe('FilePreview Markdown rendering', () => {
     expect(container.textContent).toContain('parse error')
     expect(container.textContent).toContain('Show Mermaid source')
     expect(container.textContent).toContain('this is not a diagram')
+  })
+
+  it('switches IDE directory preview from L0 to L1', () => {
+    renderPreview(directory, vi.fn(), 'Overview body', 'Summary body', true)
+
+    expect(screen.getByText('Summary body')).toBeTruthy()
+    expect(screen.queryByText('Overview body')).toBeNull()
+
+    const overview = screen.getByRole('button', { name: /^L1 / })
+    fireEvent.click(overview)
+    expect(overview.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByText('Overview body')).toBeTruthy()
+    expect(screen.queryByText('Summary body')).toBeNull()
   })
 
   it('renders directory L0 and L1 frontmatter as independent metadata panels', () => {
@@ -1440,5 +1455,82 @@ describe('FilePreview complete-content editing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(screen.queryByTestId('editor-content')).toBeNull()
+  })
+})
+
+describe('IDE file preview', () => {
+  afterEach(() => {
+    cleanup()
+    previewState.override = null
+  })
+
+  it('keeps experience details in preview and raw markdown in source mode', async () => {
+    const toolbar = document.createElement('div')
+    document.body.append(toolbar)
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <FilePreview
+          file={file}
+          ide
+          toolbarContainer={toolbar}
+          previewContent={<p>Experience details</p>}
+          onClose={vi.fn()}
+          showCloseButton={false}
+        />
+      </QueryClientProvider>,
+    )
+    expect(screen.getByText('Experience details')).toBeTruthy()
+    expect(
+      toolbar.contains(
+        screen.getByRole('button', { name: 'filePreview.markdownSource' }),
+      ),
+    ).toBe(true)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'filePreview.markdownSource' }),
+    )
+    expect(screen.queryByText('Experience details')).toBeNull()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'filePreview.markdownPreview' }),
+    )
+    expect(screen.getByText('Experience details')).toBeTruthy()
+    cleanup()
+    toolbar.remove()
+  })
+
+  it('saves the editor content with the IDE keyboard shortcut and exits editing', async () => {
+    const onSaved = vi.fn()
+    vi.mocked(saveFileContent).mockResolvedValue(undefined)
+    const toolbar = document.createElement('div')
+    document.body.append(toolbar)
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <FilePreview
+          file={file}
+          ide
+          onSaved={onSaved}
+          toolbarContainer={toolbar}
+          onClose={vi.fn()}
+          showCloseButton={false}
+        />
+      </QueryClientProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    await screen.findByTestId('editor-content')
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() =>
+      expect(saveFileContent).toHaveBeenCalledWith(
+        file.uri,
+        '[Target](./target.md)',
+      ),
+    )
+    await waitFor(() =>
+      expect(screen.queryByTestId('editor-content')).toBeNull(),
+    )
+    expect(
+      screen.getByRole('button', { name: 'filePreview.edit' }),
+    ).toBeTruthy()
+    expect(onSaved).toHaveBeenCalledWith(file.uri)
+    cleanup()
+    toolbar.remove()
   })
 })

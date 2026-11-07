@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import i18n from '#/i18n/core'
 import { formatDateTime } from '#/i18n/format'
 import { useQuery } from '@tanstack/react-query'
@@ -137,6 +138,11 @@ async function ensureLanguage(lang: string): Promise<void> {
 }
 
 interface FilePreviewProps {
+  ide?: boolean
+  toolbarContainer?: HTMLDivElement | null
+  previewContent?: ReactNode
+  onSaved?: (uri: string) => void
+  onDirtyChange?: (dirty: boolean) => void
   readOnly?: boolean
   defaultReadLimit?: number
   file: VikingFsEntry | null
@@ -146,6 +152,7 @@ interface FilePreviewProps {
   showCloseButton?: boolean
 }
 
+const MARKDOWN_MODES = ['preview', 'source'] as const
 const vikingPrefix = 'viking://'
 const markdownSanitizeSchema = {
   ...defaultSchema,
@@ -1390,6 +1397,11 @@ function JsonlPreview({ content }: { content: string }) {
 }
 
 export function FilePreview({
+  ide = false,
+  toolbarContainer,
+  previewContent,
+  onDirtyChange,
+  onSaved,
   readOnly = false,
   defaultReadLimit,
   file,
@@ -1459,10 +1471,12 @@ export function FilePreview({
   const [activeDirectoryLevels, setActiveDirectoryLevels] = useState<
     Set<DirectoryLevelId>
   >(new Set(['abstract', 'overview']))
+  const [directoryTab, setDirectoryTab] = useState<DirectoryLevelId>('abstract')
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loadingEditor, setLoadingEditor] = useState(false)
   const [editorContent, setEditorContent] = useState('')
+  const [dirty, setDirty] = useState(false)
   const fileUriRef = useRef(file?.uri)
   fileUriRef.current = file?.uri
   const editorRef = useRef<CodeEditorHandle>(null)
@@ -1481,10 +1495,18 @@ export function FilePreview({
     setMarkdownMode('preview')
     setJsonMode('preview')
     setEditing(false)
+    setDirty(false)
     setLoadingEditor(false)
+    setSaving(false)
     setEditorContent('')
     setActiveDirectoryLevels(new Set(['abstract', 'overview']))
+    setDirectoryTab('abstract')
   }, [file?.uri])
+
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+    return () => onDirtyChange?.(false)
+  }, [dirty, onDirtyChange])
 
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [imageLoading, setImageLoading] = useState(false)
@@ -1631,17 +1653,34 @@ export function FilePreview({
 
   const handleSave = async () => {
     if (!file || !editorRef.current) return
+    const uri = file.uri
+    const content = editorRef.current.getContent()
     setSaving(true)
     try {
-      await saveFileContent(file.uri, editorRef.current.getContent())
-      invalidatePreview(file.uri)
+      await saveFileContent(uri, content)
+      invalidatePreview(uri)
+      onSaved?.(uri)
+      if (fileUriRef.current !== uri) return
       setEditing(false)
+      setDirty(false)
     } catch (err) {
       toast.error(t('filePreview.saveFailed'), { description: String(err) })
     } finally {
-      setSaving(false)
+      if (fileUriRef.current === uri) setSaving(false)
     }
   }
+
+  useEffect(() => {
+    if (!ide || !editing) return
+    const handleKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        if (!saving) void handleSave()
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  })
 
   if (!file) {
     return (
@@ -1657,9 +1696,16 @@ export function FilePreview({
   const availableDirectoryLevels = directoryPreview.levels.filter(
     (level) => level.document !== null || level.content.trim(),
   )
-  const visibleDirectoryLevels = availableDirectoryLevels.filter((level) =>
-    activeDirectoryLevels.has(level.id),
-  )
+  const activeDirectoryTab =
+    availableDirectoryLevels.find((level) => level.id === directoryTab) ??
+    availableDirectoryLevels.at(0)
+  const visibleDirectoryLevels = ide
+    ? activeDirectoryTab
+      ? [activeDirectoryTab]
+      : []
+    : availableDirectoryLevels.filter((level) =>
+        activeDirectoryLevels.has(level.id),
+      )
   const showHeader = !(hideDirectoryHeader && file.isDir)
   const previewFile = resolvedFile || file
   const sizeLabel = formatSize(previewFile.sizeBytes ?? previewFile.size, {
@@ -1677,69 +1723,126 @@ export function FilePreview({
     hasPreviewContent &&
     isJsonFile
 
+  const toolbar = (
+    <div
+      data-file-toolbar
+      className={
+        ide
+          ? 'flex min-w-0 items-center gap-2'
+          : 'flex min-h-14 shrink-0 items-center justify-between border-b px-4'
+      }
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <div className={ide ? 'hidden' : 'min-w-0'}>
+          <div className="truncate text-sm font-medium leading-5">
+            {file.name}
+          </div>
+        </div>
+        {ide && isMarkdown && !editing ? (
+          <div className="inline-flex rounded-md bg-muted/70 p-0.5">
+            {MARKDOWN_MODES.map((mode) => (
+              <button
+                type="button"
+                key={mode}
+                aria-pressed={markdownMode === mode}
+                className={`rounded px-3 py-1 text-xs ${markdownMode === mode ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground'}`}
+                onClick={() => setMarkdownMode(mode)}
+              >
+                {t(
+                  mode === 'preview'
+                    ? 'filePreview.markdownPreview'
+                    : 'filePreview.markdownSource',
+                )}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {editing ? (
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving}
+              onClick={() => {
+                if (!dirty || window.confirm(t('filesystem:ide.discard'))) {
+                  setEditing(false)
+                  setDirty(false)
+                }
+              }}
+            >
+              <XCircle className="mr-1 size-3.5" />
+              {t('filePreview.cancel')}
+            </Button>
+            <Button
+              size="sm"
+              className="active:scale-[0.96] transition-transform"
+              disabled={saving}
+              onClick={handleSave}
+            >
+              {saving ? (
+                <Loader2 className="mr-1 size-3.5 animate-spin" />
+              ) : (
+                <Save className="mr-1 size-3.5" />
+              )}
+              {t('filePreview.save')}
+            </Button>
+          </div>
+        ) : (
+          canEdit && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={loadingEditor}
+              onClick={() => void handleEdit()}
+            >
+              <Pencil className="mr-1 size-3.5" />
+              {t('filePreview.edit')}
+            </Button>
+          )
+        )}
+      </div>
+      {showCloseButton ? (
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-10"
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
+      ) : null}
+    </div>
+  )
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {showHeader ? (
-        <div className="flex min-h-14 shrink-0 items-center justify-between border-b px-4">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium leading-5">
-                {file.name}
-              </div>
-            </div>
-            {editing ? (
-              <div className="flex items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={saving}
-                  onClick={() => setEditing(false)}
-                >
-                  <XCircle className="mr-1 size-3.5" />
-                  {t('filePreview.cancel')}
-                </Button>
-                <Button
-                  size="sm"
-                  className="active:scale-[0.96] transition-transform"
-                  disabled={saving}
-                  onClick={handleSave}
-                >
-                  {saving ? (
-                    <Loader2 className="mr-1 size-3.5 animate-spin" />
-                  ) : (
-                    <Save className="mr-1 size-3.5" />
-                  )}
-                  {t('filePreview.save')}
-                </Button>
-              </div>
-            ) : (
-              canEdit && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={loadingEditor}
-                  onClick={() => void handleEdit()}
-                >
-                  <Pencil className="mr-1 size-3.5" />
-                  {t('filePreview.edit')}
-                </Button>
-              )
-            )}
-          </div>
-          {showCloseButton ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-10"
-              onClick={onClose}
+      {showHeader
+        ? ide
+          ? toolbarContainer
+            ? createPortal(toolbar, toolbarContainer)
+            : null
+          : toolbar
+        : null}
+
+      {ide && file.isDir && availableDirectoryLevels.length > 0 ? (
+        <div className="flex shrink-0 gap-4 border-b bg-background px-3">
+          {availableDirectoryLevels.map((level) => (
+            <button
+              key={level.id}
+              type="button"
+              aria-pressed={activeDirectoryTab?.id === level.id}
+              className="border-b-2 border-transparent px-1 py-2 text-sm text-muted-foreground aria-pressed:border-foreground aria-pressed:font-medium aria-pressed:text-foreground"
+              onClick={() => setDirectoryTab(level.id)}
             >
-              <X className="size-4" />
-            </Button>
-          ) : null}
+              {level.name} {t(level.label)}
+            </button>
+          ))}
         </div>
       ) : null}
 
-      {editing && preview?.content != null ? (
+      {!editing && markdownMode === 'preview' && previewContent ? (
+        <div className="min-h-0 flex-1 overflow-auto p-6">{previewContent}</div>
+      ) : editing && preview?.content != null ? (
         <div className="min-h-0 flex-1 p-2">
           <Suspense
             fallback={
@@ -1751,7 +1854,9 @@ export function FilePreview({
           >
             <LazyCodeEditor
               ref={editorRef}
+              readOnly={saving}
               initialContent={editorContent}
+              onChange={(content) => setDirty(content !== editorContent)}
               filename={file.name}
               isDark={isDark}
             />
@@ -1831,8 +1936,14 @@ export function FilePreview({
         </div>
       ) : (
         <ScrollArea className="min-h-0 flex-1">
-          <div className="mx-auto min-h-full w-full max-w-5xl p-4">
-            {isMarkdown && !editing ? (
+          <div
+            className={
+              ide && file.isDir
+                ? 'min-h-full w-full p-4'
+                : 'mx-auto min-h-full w-full max-w-5xl p-4'
+            }
+          >
+            {isMarkdown && !editing && !ide ? (
               <div className="mb-3 inline-flex overflow-hidden rounded-md border">
                 <button
                   type="button"
@@ -1853,7 +1964,7 @@ export function FilePreview({
 
             {file.isDir ? (
               <div className="grid gap-4">
-                {availableDirectoryLevels.length > 0 ? (
+                {!ide && availableDirectoryLevels.length > 0 ? (
                   <div className="flex flex-wrap gap-2 border-b pb-3">
                     {availableDirectoryLevels.map((level) => {
                       const active = activeDirectoryLevels.has(level.id)
@@ -1907,15 +2018,19 @@ export function FilePreview({
                     {visibleDirectoryLevels.map((level, index) => (
                       <section key={level.id} className="grid gap-2">
                         {index > 0 ? <div className="border-t" /> : null}
-                        <header className="flex items-center gap-2 text-xs">
-                          <span className="font-mono font-semibold uppercase tracking-wide text-primary">
-                            {level.name}
-                          </span>
-                          <span className="font-medium">{t(level.label)}</span>
-                          <span className="text-muted-foreground">
-                            {t(level.title)}
-                          </span>
-                        </header>
+                        {!ide ? (
+                          <header className="flex items-center gap-2 text-xs">
+                            <span className="font-mono font-semibold uppercase tracking-wide text-primary">
+                              {level.name}
+                            </span>
+                            <span className="font-medium">
+                              {t(level.label)}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {t(level.title)}
+                            </span>
+                          </header>
+                        ) : null}
                         {level.document ? (
                           <OkfMetadataPanel
                             metadata={level.document.metadata}
@@ -1924,7 +2039,9 @@ export function FilePreview({
                           />
                         ) : null}
                         {level.content.trim() ? (
-                          <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
+                          <article
+                            className={`prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20 ${ide ? '' : 'rounded-md border bg-muted/20 p-3'}`}
+                          >
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
                               urlTransform={transformDirectoryMarkdownUrl}

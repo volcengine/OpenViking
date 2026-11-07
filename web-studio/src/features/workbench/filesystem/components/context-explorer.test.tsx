@@ -68,7 +68,6 @@ beforeEach(() => {
     callback(0)
     return 1
   })
-  Element.prototype.scrollIntoView = vi.fn()
 })
 
 afterEach(() => {
@@ -105,6 +104,35 @@ function renderTree({
 }
 
 describe('ContextTree keyboard semantics', () => {
+  it.each([
+    { rowTop: 160, expectedScrollTop: 300 },
+    { rowTop: 190, expectedScrollTop: 322 },
+  ])(
+    'only scrolls the tree when selection falls outside its viewport ($rowTop)',
+    ({ rowTop, expectedScrollTop }) => {
+      const props = {
+        currentUri: 'viking://',
+        expandedKeys: new Set([directory.uri]),
+        onExpandedKeysChange: vi.fn(),
+        onSelectDirectory: vi.fn(),
+        onSelectFile: vi.fn(),
+      }
+      const { rerender } = render(<ContextTree {...props} />)
+      const tree = screen.getByRole('list', {
+        name: 'Filesystem',
+      }).parentElement!
+      const row = screen.getByRole('button', { name: file.name }).parentElement!
+      tree.getBoundingClientRect = () => new DOMRect(0, 100, 300, 100)
+      Object.defineProperty(tree, 'clientHeight', { value: 100 })
+      tree.scrollTop = 300
+      row.getBoundingClientRect = () => new DOMRect(0, rowTop, 300, 32)
+
+      rerender(<ContextTree {...props} selectedFileUri={file.uri} />)
+
+      expect(tree.scrollTop).toBe(expectedScrollTop)
+    },
+  )
+
   it('renders native controls in a labelled, nested list', () => {
     renderTree({
       expandedKeys: new Set([directory.uri]),

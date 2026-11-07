@@ -1,3 +1,10 @@
+import brandLockup from '#/assets/onboarding/brand.svg'
+import serverIcon from '#/assets/onboarding/server.svg'
+import eyeIcon from '#/assets/onboarding/eye.svg'
+import arrowRightIcon from '#/assets/onboarding/arrow-right.svg'
+import teamIllustration from '#/assets/onboarding-team.png'
+import volcengineMark from '#/assets/volcengine-mark.png'
+import './studio-setup.css'
 import { ErrorMessage } from '#/shared/components/error-message'
 import { SetupIdentityDirectory } from '#/features/connection/components/setup-identity-directory'
 import type { ConnectionDraft } from '#/features/connection/lib/connection-runtime'
@@ -17,13 +24,6 @@ import {
 } from '#/features/connection/lib/profiles'
 import { PLAIN_INPUT_PROPS } from '#/shared/lib/form-input'
 import { Button } from '#/shared/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '#/shared/ui/card'
 import { Input } from '#/shared/ui/input'
 import {
   Select,
@@ -33,27 +33,22 @@ import {
   SelectValue,
 } from '#/shared/ui/select'
 import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  CheckIcon,
   ChevronDownIcon,
-  CloudIcon,
+  EyeOffIcon,
   Loader2Icon,
   ServerIcon,
 } from 'lucide-react'
-import { useTheme } from 'next-themes'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 const LANGUAGES = [
-  ['zh-CN', '中文'],
+  ['zh-CN', '简体中文'],
   ['en', 'English'],
 ] as const
 const PROVIDERS = [
   ['opensource', ServerIcon],
-  ['volcengine', CloudIcon],
+  ['volcengine', ServerIcon],
 ] as const
-const THEMES = ['light', 'dark', 'system'] as const
 const ADVANCED_FIELDS = ['accountId', 'userId'] as const
 const NEW_CONNECTION = 'new'
 type SavedConnection = ReturnType<typeof savedSetupConnections>[number]
@@ -104,8 +99,8 @@ export function StudioSetup({
   canReturnToWorkspace?: boolean
 }) {
   const { t, i18n } = useTranslation(['onboarding', 'studio', 'settings'])
-  const { theme, setTheme } = useTheme()
-  const [step, setStep] = useState(0)
+  const [showKey, setShowKey] = useState(false)
+  const [showAddress, setShowAddress] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [controlVerified, setControlVerified] = useState(false)
   const [directoryOpen, setDirectoryOpen] = useState(false)
@@ -185,56 +180,29 @@ export function StudioSetup({
   const selectedProfile = providerConnections.find(
     (profile) => profile.id === selectedConnectionId,
   )
-  const needsNewAddress =
-    draft.serviceSelection === 'opensource' &&
-    selectedConnectionId === NEW_CONNECTION
-  const canContinue =
-    (draft.serviceSelection === 'opensource' && !needsNewAddress) ||
-    isValidConnectionUrl(draft.baseUrl)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | Error>('')
   const connectionRevisionRef = useRef(0)
   const verifiedSelectionRef = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const keyInputRef = useRef<HTMLInputElement>(null)
+  const urlInputRef = useRef<HTMLInputElement>(null)
+  const focusKeyOnProviderSwitchRef = useRef(false)
   const headingRef = useRef<HTMLHeadingElement>(null)
-  const cardRef = useRef<HTMLDivElement>(null)
-  const cardAnimationRef = useRef<Animation | null>(null)
-  const previousCardHeightRef = useRef<number | null>(null)
   useEffect(() => {
+    if (urlInputRef.current) urlInputRef.current.focus()
+    else headingRef.current?.focus()
     return () => abortRef.current?.abort()
   }, [])
   useEffect(() => {
-    headingRef.current?.focus()
-  }, [step])
-  useLayoutEffect(() => {
-    const card = cardRef.current
-    const previousHeight = previousCardHeightRef.current
-    previousCardHeightRef.current = null
-    if (!card || previousHeight === null) return
-
-    const nextHeight = card.getBoundingClientRect().height
     if (
-      previousHeight === nextHeight ||
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    )
-      return
-
-    cardAnimationRef.current = card.animate(
-      [{ height: `${previousHeight}px` }, { height: `${nextHeight}px` }],
-      { duration: 360, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
-    )
-    cardAnimationRef.current.onfinish = () => {
-      cardAnimationRef.current = null
+      draft.serviceSelection === 'volcengine' &&
+      focusKeyOnProviderSwitchRef.current
+    ) {
+      keyInputRef.current?.focus()
     }
-  }, [step])
-  function changeStep(nextStep: number) {
-    previousCardHeightRef.current =
-      cardRef.current?.getBoundingClientRect().height ?? null
-    cardAnimationRef.current?.cancel()
-    cardAnimationRef.current = null
-    setStep(nextStep)
-  }
+    focusKeyOnProviderSwitchRef.current = false
+  }, [draft.serviceSelection])
   const language = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh')
     ? 'zh-CN'
     : 'en'
@@ -281,6 +249,7 @@ export function StudioSetup({
     const current =
       draft.serviceSelection === 'volcengine' ? 'volcengine' : 'opensource'
     if (provider === current) return
+    focusKeyOnProviderSwitchRef.current = provider === 'volcengine'
     connectionRevisionRef.current += 1
     verifiedSelectionRef.current = null
     providerSelectionsRef.current[current] = selectedConnectionId
@@ -314,6 +283,19 @@ export function StudioSetup({
     setVerified(null)
     setError('')
   }
+  async function enterWorkspace(connection: ConnectionDraft) {
+    const matchingProfile = savedSetupConnections().find(
+      (profile) =>
+        connectionProfileFingerprint(profile.connection) ===
+        connectionProfileFingerprint(connection),
+    )
+    await completeStudioSetup(
+      connection,
+      t(`studio:providers.${connection.serviceSelection}`),
+      matchingProfile?.id,
+    )
+    onComplete(connection)
+  }
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     if (busy) return
@@ -326,17 +308,7 @@ export function StudioSetup({
       }
       setBusy(true)
       try {
-        const matchingProfile = savedSetupConnections().find(
-          (profile) =>
-            connectionProfileFingerprint(profile.connection) ===
-            connectionProfileFingerprint(verified),
-        )
-        await completeStudioSetup(
-          verified,
-          t(`studio:providers.${verified.serviceSelection}`),
-          matchingProfile?.id,
-        )
-        onComplete(verified)
+        await enterWorkspace(verified)
       } catch {
         setError(t('storageError'))
       } finally {
@@ -378,6 +350,14 @@ export function StudioSetup({
         setDraft(result)
         verifiedSelectionRef.current = selectedConnectionId
         setVerified(result)
+        // Explicit management credentials keep the identity picker available.
+        if (!result.adminApiKey || !draft.adminApiKey) {
+          try {
+            await enterWorkspace(result)
+          } catch {
+            setError(t('storageError'))
+          }
+        }
       }
     } catch (err) {
       if (!controller.signal.aborted)
@@ -396,575 +376,382 @@ export function StudioSetup({
     }
   }
   return (
-    <main className="flex h-svh flex-col items-center overflow-y-auto bg-background px-5 py-6 text-foreground sm:px-8 sm:py-8 lg:pt-[max(2rem,calc((100svh-52rem)/2))]">
-      <div className="w-full max-w-5xl shrink-0">
-        <div className="mb-6 flex items-center gap-3 lg:mb-8">
+    <main className="studio-setup" data-provider={draft.serviceSelection}>
+      <section className="setup-connection">
+        <header className="setup-header">
           <img
-            src={`${import.meta.env.BASE_URL}ov-logo.png`}
-            alt=""
-            className="size-10 rounded-xl"
+            src={brandLockup}
+            alt={t('productName')}
+            className="setup-brand"
           />
-          <span className="text-base font-semibold tracking-tight">
-            {t('brand')}
-          </span>
-          {onCancel ? (
+          <div
+            className="setup-languages"
+            role="group"
+            aria-label={t('language')}
+          >
+            {LANGUAGES.map(([value, label]) => (
+              <button
+                type="button"
+                key={value}
+                aria-pressed={language === value}
+                onClick={() => {
+                  setError('')
+                  void i18n.changeLanguage(value)
+                  document.documentElement.lang = value
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {onCancel && canReturnToWorkspace ? (
             <Button
               type="button"
               variant="ghost"
-              className="ml-auto"
+              className="setup-cancel"
               onClick={() => {
                 connectionRevisionRef.current += 1
                 abortRef.current?.abort()
                 onCancel()
               }}
             >
-              {t(canReturnToWorkspace ? 'cancel' : 'exit')}
+              {t('cancel')}
             </Button>
           ) : null}
-        </div>
-        <div className="grid items-start gap-6 lg:grid-cols-[1fr_1.15fr] lg:gap-20">
-          <header className="lg:pt-5">
-            <h1
-              ref={headingRef}
-              tabIndex={-1}
-              className="whitespace-nowrap text-[clamp(1.25rem,3vw,2rem)] leading-tight font-semibold tracking-tight outline-none"
-            >
-              {step === 0 ? t('workspace') : t('connectionTitle')}
+        </header>
+        <div className="setup-content">
+          <div className="setup-heading">
+            <h1 ref={headingRef} tabIndex={-1}>
+              {t('connectTitle')}
             </h1>
-            <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground lg:mt-5 lg:min-h-14 lg:leading-7">
-              {step === 0
-                ? t('welcomeDescription')
-                : t('connectionDescription')}
-            </p>
-            <ol
-              className="mt-5 flex gap-6 lg:mt-12 lg:flex-col lg:gap-7"
-              aria-label={t('steps')}
-            >
-              {[t('workspace'), t('connection')].map((label, index) => (
-                <li
-                  key={index}
-                  aria-current={step === index ? 'step' : undefined}
-                  className="relative flex items-start gap-3"
-                >
-                  {index === 0 ? (
-                    <span
-                      aria-hidden="true"
-                      className="absolute left-[11.5px] top-7 hidden h-[calc(100%-4px)] w-px overflow-hidden rounded-full bg-border/70 lg:block"
-                    >
-                      <span
-                        className={`block h-full w-full origin-top bg-foreground/70 transition-transform duration-500 ease-out motion-reduce:transition-none ${step === 1 ? 'scale-y-100' : 'scale-y-0'}`}
-                      />
-                    </span>
-                  ) : null}
-                  <span
-                    aria-hidden="true"
-                    className={`relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-medium transition-colors duration-300 motion-reduce:transition-none ${step >= index ? 'border-foreground bg-foreground text-background' : 'border-border text-muted-foreground'}`}
-                  >
-                    {step > index ? (
-                      <CheckIcon className="size-3" />
-                    ) : (
-                      index + 1
-                    )}
-                  </span>
-                  <div className="pt-1">
-                    <p
-                      className={`text-sm font-medium ${step === index ? 'text-foreground' : 'text-muted-foreground'}`}
-                    >
-                      {label}
-                    </p>
-                    <p className="mt-1 hidden text-xs leading-5 text-muted-foreground lg:block">
-                      {t(index === 0 ? 'workspaceHint' : 'connectionHint')}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </header>
-          <Card
-            ref={cardRef}
-            className="gap-0 overflow-hidden rounded-2xl border-border/70 bg-card py-0 shadow-sm"
+            <p>{t('connectDescription')}</p>
+          </div>
+          <form
+            onSubmit={(event) => void submit(event)}
+            className="setup-form"
+            noValidate
           >
-            <CardHeader className="gap-2 border-b border-border/70 px-6 py-4 sm:px-8 sm:py-5">
-              <CardTitle className="text-lg font-semibold tracking-tight">
-                {step === 0 ? t('workspace') : t('connection')}
-              </CardTitle>
-              <CardDescription className="text-sm leading-6">
-                {t(step === 0 ? 'workspaceHint' : 'connectionHint')}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="px-6 py-5 sm:px-8">
-              {step === 0 ? (
-                <div className="space-y-4">
-                  <fieldset className="space-y-3">
-                    <legend className="text-sm font-medium">
-                      {t('studio:serviceType')}
-                    </legend>
-                    <div className="grid grid-cols-2 gap-3">
-                      {PROVIDERS.map(([provider, Icon]) => (
-                        <label
-                          key={provider}
-                          className="flex min-h-16 cursor-pointer items-center gap-2.5 rounded-lg border border-border px-3 text-sm font-medium transition-colors hover:bg-muted/40 has-checked:border-foreground has-checked:bg-muted/40 has-focus-visible:ring-2 has-focus-visible:ring-ring"
-                        >
-                          <input
-                            className="sr-only"
-                            type="radio"
-                            name="provider"
-                            value={provider}
-                            checked={draft.serviceSelection === provider}
-                            onChange={() => switchProvider(provider)}
-                          />
-                          <Icon
-                            aria-hidden="true"
-                            className="size-4 shrink-0 text-muted-foreground"
-                          />
-                          {t(`studio:providers.${provider}`)}
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                  {draft.serviceSelection === 'opensource' ? (
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">
-                        {t('connectionChoice')}
-                      </p>
-                      <Select
-                        value={selectedConnectionId}
-                        onValueChange={(value) => {
-                          if (value) selectConnection(value)
-                        }}
-                      >
-                        <SelectTrigger
-                          aria-label={t('connectionChoice')}
-                          className="h-11 w-full min-w-0 rounded-lg bg-background px-4 shadow-xs"
-                        >
-                          <SelectValue>
-                            {selectedProfile
-                              ? savedConnectionLabel(
-                                  selectedProfile,
-                                  providerConnections,
-                                  t('openSourceConnection'),
-                                )
-                              : t('newConnection')}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent
-                          align="start"
-                          className="w-[var(--anchor-width)] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-popover p-1 shadow-lg before:hidden"
-                        >
-                          {providerConnections.map((profile) => (
-                            <SelectItem
-                              key={profile.id}
-                              value={profile.id}
-                              className="min-h-10 overflow-hidden rounded-lg px-3 pr-9"
-                              title={profile.connection.baseUrl}
-                            >
-                              <span className="block min-w-0 truncate font-medium">
-                                {savedConnectionLabel(
-                                  profile,
-                                  providerConnections,
-                                  t('openSourceConnection'),
-                                )}
-                              </span>
-                            </SelectItem>
-                          ))}
-                          <SelectItem
-                            value={NEW_CONNECTION}
-                            className="min-h-10 rounded-lg px-3 pr-9"
-                          >
-                            {t('newConnection')}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {needsNewAddress ? (
-                        <div className="space-y-2 pt-2">
-                          <label htmlFor="setup-new-url" className="sr-only">
-                            {t('settings:fields.baseUrl')}
-                          </label>
-                          <Input
-                            id="setup-new-url"
-                            className="h-11 rounded-lg"
-                            type="url"
-                            value={draft.baseUrl}
-                            placeholder="http://127.0.0.1:1933"
-                            aria-invalid={
-                              Boolean(draft.baseUrl) && !canContinue
-                            }
-                            aria-describedby="setup-new-url-help"
-                            onChange={(event) =>
-                              update({ baseUrl: event.target.value })
-                            }
-                            {...PLAIN_INPUT_PROPS}
-                          />
-                          <p
-                            id="setup-new-url-help"
-                            className="text-xs text-muted-foreground"
-                          >
-                            {draft.baseUrl && !canContinue
-                              ? t('studio:profiles.invalidUrl')
-                              : t('newAddressHint')}
-                          </p>
-                        </div>
+            <fieldset disabled={busy} className="setup-fields">
+              <fieldset className="setup-provider">
+                <legend>{t('studio:serviceType')}</legend>
+                <div className="setup-provider-options">
+                  {PROVIDERS.map(([provider]) => (
+                    <label key={provider}>
+                      <input
+                        className="sr-only"
+                        type="radio"
+                        name="provider"
+                        value={provider}
+                        checked={draft.serviceSelection === provider}
+                        onChange={() => switchProvider(provider)}
+                      />
+                      {provider === 'volcengine' ? (
+                        <img src={volcengineMark} alt="" />
                       ) : (
-                        <p
-                          className="line-clamp-2 break-all px-1 pt-1 text-xs text-muted-foreground"
-                          title={draft.baseUrl}
-                        >
-                          {draft.baseUrl}
-                        </p>
+                        <img
+                          src={serverIcon}
+                          alt=""
+                          className="setup-server-icon"
+                        />
                       )}
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <p
-                        id="setup-hosted-url-label"
-                        className="text-sm font-medium"
-                      >
-                        {t('hostedEndpoint')}
-                      </p>
-                      <p
-                        aria-labelledby="setup-hosted-url-label"
-                        className="break-all rounded-lg bg-muted/30 px-4 py-3 text-sm text-muted-foreground"
-                      >
-                        {draft.baseUrl}
-                      </p>
-                    </div>
-                  )}
-                  <fieldset className="space-y-3">
-                    <legend className="text-sm font-medium">
-                      {t('language')}
-                    </legend>
-                    <div className="grid grid-cols-2 gap-3">
-                      {LANGUAGES.map(([value, label]) => (
-                        <label
-                          key={value}
-                          className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-lg border border-border px-4 transition-colors hover:bg-muted/40 has-checked:border-foreground has-checked:bg-muted/40 has-focus-visible:ring-2 has-focus-visible:ring-ring has-focus-visible:ring-offset-2"
-                        >
-                          <input
-                            className="sr-only"
-                            type="radio"
-                            name="language"
-                            value={value}
-                            checked={language === value}
-                            onChange={() => {
-                              void i18n.changeLanguage(value)
-                              document.documentElement.lang = value
-                            }}
-                          />
-                          <span className="text-sm font-medium">{label}</span>
-                          <span
-                            aria-hidden="true"
-                            className={`flex size-4 items-center justify-center rounded-full border ${language === value ? 'border-foreground bg-foreground text-background' : 'border-muted-foreground/30'}`}
-                          >
-                            {language === value ? (
-                              <CheckIcon className="size-3" />
-                            ) : null}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                  <fieldset className="space-y-3">
-                    <legend className="text-sm font-medium">
-                      {t('theme')}
-                    </legend>
-                    <div className="grid grid-cols-3 gap-3">
-                      {THEMES.map((value) => (
-                        <label
-                          key={value}
-                          className="min-w-0 cursor-pointer rounded-xl border border-border p-2 transition-colors hover:bg-muted/40 has-checked:border-foreground has-checked:bg-muted/30 has-focus-visible:ring-2 has-focus-visible:ring-ring has-focus-visible:ring-offset-2"
-                        >
-                          <input
-                            className="sr-only"
-                            type="radio"
-                            name="theme"
-                            value={value}
-                            checked={(theme ?? 'system') === value}
-                            onChange={() => setTheme(value)}
-                          />
-                          <ThemePreview appearance={value} />
-                          <span className="mt-2 flex items-center justify-between gap-1 text-xs font-medium sm:text-sm">
-                            {t(value)}
-                            {(theme ?? 'system') === value ? (
-                              <CheckIcon
-                                aria-hidden="true"
-                                className="size-3.5 shrink-0"
-                              />
-                            ) : null}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                  <Button
-                    className="mt-2 min-h-11 w-full rounded-lg"
-                    disabled={!canContinue}
-                    onClick={() => changeStep(1)}
-                  >
-                    {t('next')}
-                    <ArrowRightIcon aria-hidden="true" className="size-4" />
-                  </Button>
+                      {t(
+                        provider === 'opensource'
+                          ? 'privateDeployment'
+                          : 'hostedService',
+                      )}
+                    </label>
+                  ))}
                 </div>
-              ) : (
-                <form
-                  onSubmit={(event) => void submit(event)}
-                  className="space-y-5"
-                >
-                  <fieldset disabled={busy} className="space-y-4">
-                    <div className="grid gap-2 text-sm">
-                      <span className="font-medium">
-                        {t('studio:serviceType')}
-                      </span>
-                      <p>{t(`studio:providers.${draft.serviceSelection}`)}</p>
-                    </div>
-                    <div className="grid gap-2 text-sm">
-                      <span className="font-medium">{t('hostedEndpoint')}</span>
-                      <p className="break-all rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
-                        {draft.baseUrl}
-                      </p>
-                    </div>
-                    <label
-                      className="grid gap-2 text-sm font-medium"
-                      htmlFor="setup-key"
+                {draft.serviceSelection === 'volcengine' ? (
+                  <p
+                    className="setup-hosted-endpoint"
+                    aria-label={t('hostedEndpoint')}
+                  >
+                    {t('hostedAddress', { address: draft.baseUrl })}
+                  </p>
+                ) : null}
+              </fieldset>
+              {draft.serviceSelection === 'opensource' &&
+              providerConnections.length > 0 ? (
+                <div className="setup-field">
+                  <label>{t('connectionChoice')}</label>
+                  <Select
+                    value={selectedConnectionId}
+                    onValueChange={(value) => {
+                      if (value) selectConnection(value)
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label={t('connectionChoice')}
+                      className="h-12 w-full rounded-lg"
                     >
-                      {t('keyLabel')}
+                      <SelectValue>
+                        {selectedProfile
+                          ? savedConnectionLabel(
+                              selectedProfile,
+                              providerConnections,
+                              t('openSourceConnection'),
+                            )
+                          : t('newConnection')}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent
+                      align="start"
+                      className="w-[var(--anchor-width)]"
+                    >
+                      {providerConnections.map((profile) => (
+                        <SelectItem
+                          key={profile.id}
+                          value={profile.id}
+                          title={profile.connection.baseUrl}
+                        >
+                          {savedConnectionLabel(
+                            profile,
+                            providerConnections,
+                            t('openSourceConnection'),
+                          )}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={NEW_CONNECTION}>
+                        {t('newConnection')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+              {draft.serviceSelection === 'opensource' ? (
+                <div className="setup-field">
+                  <label htmlFor="setup-new-url" id="setup-url-label">
+                    {t('hostedEndpoint')}
+                  </label>
+                  {selectedProfile ? (
+                    <p className="setup-hosted-address" title={draft.baseUrl}>
+                      {draft.baseUrl}
+                    </p>
+                  ) : (
+                    <div className="setup-key-input">
                       <Input
-                        ref={keyInputRef}
-                        className="h-11 rounded-lg bg-background/60 text-sm"
-                        id="setup-key"
-                        name="apiKey"
-                        type="password"
-                        aria-invalid={error === t('keyRequired')}
-                        aria-describedby={
-                          error === t('keyRequired')
-                            ? 'setup-key-error'
-                            : undefined
+                        ref={urlInputRef}
+                        id="setup-new-url"
+                        type={showAddress ? 'url' : 'password'}
+                        value={draft.baseUrl}
+                        aria-label={t('settings:fields.baseUrl')}
+                        placeholder={t('addressPlaceholder')}
+                        aria-invalid={
+                          Boolean(draft.baseUrl) &&
+                          !isValidConnectionUrl(draft.baseUrl)
                         }
-                        value={draft.apiKey}
                         onChange={(event) =>
-                          update({ apiKey: event.target.value })
+                          update({ baseUrl: event.target.value })
                         }
                         {...PLAIN_INPUT_PROPS}
-                        autoComplete="off"
                       />
-                    </label>
-                    {error === t('keyRequired') ? (
-                      <p
-                        id="setup-key-error"
-                        role="alert"
-                        className="text-sm text-destructive"
+                      <button
+                        type="button"
+                        aria-label={t(
+                          showAddress ? 'hideAddress' : 'showAddress',
+                        )}
+                        aria-pressed={!showAddress}
+                        onClick={() => setShowAddress((show) => !show)}
                       >
-                        {error}
-                      </p>
-                    ) : null}
-                    <p className="text-sm text-muted-foreground">
-                      {t(
-                        draft.serviceSelection === 'volcengine'
-                          ? 'hostedKeyHelp'
-                          : 'keyHelp',
-                      )}
-                    </p>
-                    {draft.serviceSelection === 'opensource' && (
-                      <div className="grid gap-2 text-sm font-medium">
-                        <label htmlFor="setup-adminApiKey">
-                          {t('settings:fields.rootApiKey')}
-                        </label>
-                        <Input
-                          id="setup-adminApiKey"
-                          aria-describedby="setup-control-hint"
-                          type="password"
-                          value={draft.adminApiKey}
-                          onChange={(event) =>
-                            update({ adminApiKey: event.target.value })
-                          }
-                          className="h-11 rounded-lg"
-                          {...PLAIN_INPUT_PROPS}
-                          autoComplete="off"
-                        />
-                        <p
-                          id="setup-control-hint"
-                          className="text-xs font-normal text-muted-foreground"
-                        >
-                          {t('verifyDirectoryHint')}
-                        </p>
-                      </div>
-                    )}
-                    {draft.serviceSelection === 'opensource' &&
-                    !controlVerified ? (
-                      <div>
-                        <button
-                          type="button"
-                          aria-expanded={advancedOpen}
-                          aria-controls="setup-advanced-fields"
-                          onClick={() => setAdvancedOpen((open) => !open)}
-                          className="flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                        >
-                          <ChevronDownIcon
-                            aria-hidden="true"
-                            className={`size-3 transition-transform duration-300 motion-reduce:transition-none ${advancedOpen ? 'rotate-180' : ''}`}
-                          />
-                          {t('advanced')}
-                        </button>
-                        <div
-                          id="setup-advanced-fields"
-                          aria-hidden={!advancedOpen}
-                          inert={!advancedOpen}
-                          className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none ${advancedOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
-                        >
-                          <div className="min-h-0 overflow-hidden">
-                            <div className="grid gap-3 pt-3">
-                              {ADVANCED_FIELDS.map((key) => (
-                                <label
-                                  className="grid gap-2 text-sm"
-                                  key={key}
-                                  htmlFor={`setup-${key}`}
-                                >
-                                  {t(
-                                    `settings:fields.${key === 'accountId' ? 'account' : 'user'}`,
-                                  )}
-                                  <Input
-                                    id={`setup-${key}`}
-                                    className="focus-visible:ring-inset"
-                                    name={key}
-                                    type={'text'}
-                                    value={draft[key]}
-                                    onChange={(event) =>
-                                      update({ [key]: event.target.value })
-                                    }
-                                    {...PLAIN_INPUT_PROPS}
-                                    autoComplete={'off'}
-                                  />
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </fieldset>
-                  {controlVerified && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      aria-expanded={directoryOpen}
-                      aria-controls="setup-identity-options"
-                      onClick={() => setDirectoryOpen(!directoryOpen)}
-                    >
-                      {t('directoryOptions')}
-                    </Button>
-                  )}
-                  {controlVerified && directoryOpen && (
-                    <div id="setup-identity-options">
-                      <SetupIdentityDirectory
-                        connection={draft}
-                        disabled={busy}
-                        onSelect={(identity) => {
-                          const changed =
-                            identity.accountId !== draft.accountId ||
-                            identity.userId !== draft.userId
-                          update({
-                            ...identity,
-                            ...(changed ? { apiKey: '' } : {}),
-                          })
-                          setSelectedDirectoryIdentity(true)
-                        }}
-                      />
+                        {showAddress ? (
+                          <img src={eyeIcon} alt="" />
+                        ) : (
+                          <EyeOffIcon aria-hidden="true" />
+                        )}
+                      </button>
                     </div>
                   )}
-                  {error && error !== t('keyRequired') ? (
-                    <ErrorMessage
-                      error={error}
-                      className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 leading-6"
+                </div>
+              ) : null}
+              <div className="setup-field">
+                <label htmlFor="setup-key">{t('keyLabel')}</label>
+                <div className="setup-key-input">
+                  <Input
+                    ref={keyInputRef}
+                    id="setup-key"
+                    name="apiKey"
+                    type={showKey ? 'text' : 'password'}
+                    placeholder={t('keyPlaceholder')}
+                    value={draft.apiKey}
+                    aria-invalid={error === t('keyRequired')}
+                    aria-describedby={
+                      error === t('keyRequired') ? 'setup-key-error' : undefined
+                    }
+                    onChange={(event) => update({ apiKey: event.target.value })}
+                    {...PLAIN_INPUT_PROPS}
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    aria-label={t(showKey ? 'hideKey' : 'showKey')}
+                    aria-pressed={showKey}
+                    onClick={() => setShowKey((show) => !show)}
+                  >
+                    {showKey ? (
+                      <EyeOffIcon aria-hidden="true" />
+                    ) : (
+                      <img src={eyeIcon} alt="" />
+                    )}
+                  </button>
+                </div>
+                {error === t('keyRequired') ? (
+                  <p
+                    id="setup-key-error"
+                    role="alert"
+                    className="text-sm text-destructive"
+                  >
+                    {error}
+                  </p>
+                ) : null}
+              </div>
+              {draft.serviceSelection === 'opensource' &&
+              !controlVerified &&
+              canReturnToWorkspace ? (
+                <div>
+                  <button
+                    type="button"
+                    aria-expanded={advancedOpen}
+                    aria-controls="setup-advanced-fields"
+                    onClick={() => setAdvancedOpen((open) => !open)}
+                    className="flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  >
+                    <ChevronDownIcon
+                      aria-hidden="true"
+                      className={`size-3 transition-transform duration-300 motion-reduce:transition-none ${advancedOpen ? 'rotate-180' : ''}`}
                     />
-                  ) : null}
-                  {verified ? (
-                    <p
-                      role="status"
-                      className="rounded-lg border border-emerald-600/20 bg-emerald-600/5 p-3 text-sm leading-6 text-emerald-700 dark:text-emerald-400"
-                    >
-                      {t(
-                        studioSetupDestination(verified) === '/admin'
-                          ? 'verifiedManagement'
-                          : 'verified',
-                      )}
-                      {verified.accountId && verified.userId
-                        ? ` ${verified.accountId} / ${verified.userId}`
-                        : null}
-                    </p>
-                  ) : null}
-                  <div className="flex gap-3 border-t border-border/70 pt-5">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="min-h-11 rounded-lg"
-                      onClick={() => {
-                        abortRef.current?.abort()
-                        setBusy(false)
-                        changeStep(0)
-                      }}
-                    >
-                      <ArrowLeftIcon aria-hidden="true" className="size-4" />
-                      {t('back')}
-                    </Button>
-                    <Button
-                      type="submit"
-                      className="min-h-11 flex-1 rounded-lg"
-                      disabled={busy || !isValidConnectionUrl(draft.baseUrl)}
-                    >
-                      {busy ? (
-                        <Loader2Icon className="size-4 animate-spin" />
-                      ) : null}
-                      {t(busy ? 'verifying' : verified ? 'enter' : 'verify')}
-                    </Button>
+                    {t('advanced')}
+                  </button>
+                  <div
+                    id="setup-advanced-fields"
+                    aria-hidden={!advancedOpen}
+                    inert={!advancedOpen}
+                    className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none ${advancedOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
+                  >
+                    <div className="min-h-0 overflow-hidden">
+                      <div className="grid gap-3 pt-3">
+                        <div className="grid gap-2 text-sm font-medium">
+                          <label htmlFor="setup-adminApiKey">
+                            {t('settings:fields.rootApiKey')}
+                          </label>
+                          <Input
+                            id="setup-adminApiKey"
+                            aria-describedby="setup-control-hint"
+                            type="password"
+                            value={draft.adminApiKey}
+                            onChange={(event) =>
+                              update({ adminApiKey: event.target.value })
+                            }
+                            className="h-11 rounded-lg"
+                            {...PLAIN_INPUT_PROPS}
+                            autoComplete="off"
+                          />
+                          <p
+                            id="setup-control-hint"
+                            className="text-xs font-normal text-muted-foreground"
+                          >
+                            {t('verifyDirectoryHint')}
+                          </p>
+                        </div>
+                        {ADVANCED_FIELDS.map((key) => (
+                          <label
+                            className="grid gap-2 text-sm"
+                            key={key}
+                            htmlFor={`setup-${key}`}
+                          >
+                            {t(
+                              `settings:fields.${key === 'accountId' ? 'account' : 'user'}`,
+                            )}
+                            <Input
+                              id={`setup-${key}`}
+                              className="focus-visible:ring-inset"
+                              name={key}
+                              type={'text'}
+                              value={draft[key]}
+                              onChange={(event) =>
+                                update({ [key]: event.target.value })
+                              }
+                              {...PLAIN_INPUT_PROPS}
+                              autoComplete={'off'}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </form>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </main>
-  )
-}
+                </div>
+              ) : null}
+            </fieldset>
+            {controlVerified && (
+              <Button
+                type="button"
+                variant="ghost"
+                aria-expanded={directoryOpen}
+                aria-controls="setup-identity-options"
+                onClick={() => setDirectoryOpen(!directoryOpen)}
+              >
+                {t('directoryOptions')}
+              </Button>
+            )}
+            {controlVerified && directoryOpen && (
+              <div id="setup-identity-options">
+                <SetupIdentityDirectory
+                  connection={draft}
+                  disabled={busy}
+                  onSelect={(identity) => {
+                    const changed =
+                      identity.accountId !== draft.accountId ||
+                      identity.userId !== draft.userId
+                    update({
+                      ...identity,
+                      ...(changed ? { apiKey: '' } : {}),
+                    })
+                    setSelectedDirectoryIdentity(true)
+                  }}
+                />
+              </div>
+            )}
+            {error && error !== t('keyRequired') ? (
+              <ErrorMessage
+                error={error}
+                className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 leading-6"
+              />
+            ) : null}
+            {verified ? (
+              <p
+                role="status"
+                className="rounded-lg border border-emerald-600/20 bg-emerald-600/5 p-3 text-sm leading-6 text-emerald-700 dark:text-emerald-400"
+              >
+                {t(
+                  studioSetupDestination(verified) === '/admin'
+                    ? 'verifiedManagement'
+                    : 'verified',
+                )}
+                {verified.accountId && verified.userId
+                  ? ` ${verified.accountId} / ${verified.userId}`
+                  : null}
+              </p>
+            ) : null}
 
-function ThemePreview({ appearance }: { appearance: (typeof THEMES)[number] }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={`relative h-14 overflow-hidden rounded-md border border-black/10 bg-clip-padding ${appearance === 'light' ? 'bg-[#f9fafb]' : appearance === 'dark' ? 'bg-[#191b20]' : 'bg-[linear-gradient(110deg,#f9fafb_calc(50%_-_0.5px),#191b20_calc(50%_+_0.5px))]'}`}
-    >
-      <div
-        className={`flex h-4 items-center gap-1 border-b px-2 ${appearance === 'dark' ? 'border-white/10' : 'border-black/10'}`}
-      >
-        {[0, 1, 2].map((dot) => (
-          <span
-            key={dot}
-            className={`size-1 rounded-full ${appearance === 'dark' ? 'bg-white/25' : 'bg-black/20'}`}
-          />
-        ))}
-      </div>
-      <div className="flex h-full">
-        <div
-          className={`w-1/4 border-r p-1.5 ${appearance === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/10 bg-black/[0.03]'}`}
-        >
-          <div
-            className={`mb-1.5 h-1 rounded-full ${appearance === 'dark' ? 'bg-white/20' : 'bg-black/15'}`}
-          />
-          <div
-            className={`h-1 w-2/3 rounded-full ${appearance === 'dark' ? 'bg-white/10' : 'bg-black/10'}`}
-          />
+            <Button type="submit" className="setup-submit" disabled={busy}>
+              {busy ? (
+                <Loader2Icon
+                  aria-hidden="true"
+                  className="size-4 animate-spin"
+                />
+              ) : null}
+              {t(busy ? 'verifying' : verified ? 'enter' : 'connectAndEnter')}
+              {!busy ? <img src={arrowRightIcon} alt="" /> : null}
+            </Button>
+          </form>
         </div>
-        <div className="flex-1 space-y-1.5 p-2">
-          <div
-            className={`h-1.5 w-3/5 rounded-full ${appearance === 'dark' ? 'bg-white/35' : 'bg-black/20'}`}
-          />
-          <div
-            className={`h-1 w-full rounded-full ${appearance === 'dark' ? 'bg-white/10' : 'bg-black/10'}`}
-          />
-          <div
-            className={`h-1 w-4/5 rounded-full ${appearance === 'dark' ? 'bg-white/10' : 'bg-black/10'}`}
-          />
+      </section>
+      <aside className="setup-visual">
+        <div className="setup-visual-content">
+          <img src={teamIllustration} alt="" width={567} height={378} />
+          <p>{t('teamTagline')}</p>
         </div>
-      </div>
-    </div>
+      </aside>
+    </main>
   )
 }

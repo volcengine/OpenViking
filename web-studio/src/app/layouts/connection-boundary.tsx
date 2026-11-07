@@ -1,6 +1,7 @@
 import { StudioFeatureBoundary } from '#/app/layouts/studio-feature-boundary'
 import { StudioLayout } from '#/app/layouts/studio-layout'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { createConnectionRoleProbeKey } from '#/features/connection/lib/connection-runtime'
 import type { ServerMode } from '#/features/connection/lib/health'
 import {
   connectionSettingsPath,
@@ -16,12 +17,32 @@ export function IdentityScopedAppShell({
 }: {
   children: React.ReactNode
 }) {
-  const { identityScopeKey, activeProfileId, serverMode, studioMode } =
-    useAppConnection()
+  const {
+    identityScopeKey,
+    activeProfileId,
+    serverMode,
+    studioMode,
+    connectionRole,
+    connection,
+  } = useAppConnection()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
   const isSettings = isConnectionSettingsPath(pathname)
+  const rootManagement =
+    studioMode === 'management' && connectionRole === 'root'
+  const shellKey = rootManagement
+    ? activeProfileId +
+      createConnectionRoleProbeKey(
+        { ...connection, accountId: '', userId: '', apiKey: '' },
+        serverMode,
+      )
+    : identityScopeKey
+  const keepAccountFilters =
+    rootManagement &&
+    ['/admin/dashboard', '/admin/request-logs', '/admin/monitoring'].includes(
+      pathname.replace(/\/$/, ''),
+    )
   // Keep the settings tree stable across health transitions, but reset it when
   // an actual profile changes. Business routes retain identity isolation.
   if (serverMode === 'checking' && !isSettings)
@@ -41,13 +62,14 @@ export function IdentityScopedAppShell({
       </div>
     )
   return (
-    <StudioLayout
-      key={isSettings ? `settings:${activeProfileId}` : identityScopeKey}
-    >
+    <StudioLayout key={isSettings ? `settings:${activeProfileId}` : shellKey}>
       {isSettings ? (
         children
       ) : (
-        <ConnectionScopedRouteContent serverMode={serverMode}>
+        <ConnectionScopedRouteContent
+          key={keepAccountFilters ? 'management-filters' : identityScopeKey}
+          serverMode={serverMode}
+        >
           <StudioFeatureBoundary>{children}</StudioFeatureBoundary>
         </ConnectionScopedRouteContent>
       )}

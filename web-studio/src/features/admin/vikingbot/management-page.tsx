@@ -1,3 +1,4 @@
+import styles from './management-page.module.css'
 import {
   getCapabilities,
   getConnections,
@@ -10,7 +11,7 @@ import { ConversationRow } from '#/shared/components/conversation-row'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { ArrowLeftIcon, BotIcon, UsersIcon } from 'lucide-react'
+import { ArrowLeftIcon, UsersIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -62,33 +63,32 @@ function BotManagementWorkspace({ scope }: { scope: string }) {
     )
   if (!capabilities.data.can_manage) return <p>{t('adminOnly')}</p>
   return (
-    <section className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-col items-start gap-4 border-b pb-3">
+    <section className={styles.page}>
+      <header className={styles.header}>
         <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <BotIcon className="size-5" />
           {t('managementTitle')}
         </h1>
-        <p className="text-sm text-muted-foreground">{t('managementHint')}</p>
         <div
           role="tablist"
           aria-label={t('managementTitle')}
-          className="flex gap-2"
+          className={styles.tabs}
         >
           {MANAGEMENT_TABS.map((value) => (
-            <Button
+            <button
+              type="button"
               key={value}
               role="tab"
               aria-selected={tab === value}
-              variant={tab === value ? 'secondary' : 'ghost'}
+              className={styles.tab}
               onClick={() => setTab(value)}
             >
               {t(value)}
-            </Button>
+            </button>
           ))}
         </div>
       </header>
       {tab === 'channels' ? (
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="min-h-0 flex-1">
           <Channels canManage scope={scope} />
         </div>
       ) : (

@@ -10,6 +10,9 @@ const dataManagement = {
   snapshotScope:
     'Only the selected path is included. Excluded files, permissions, and vector indexes are not versioned.',
   loading: 'Loading history...',
+  historyScanLimit:
+    'The server reached its scan limit before it finished checking this path’s history. Older snapshots may exist.',
+  historyLoadFailed: 'Could not load version history.',
   noSnapshots: 'No snapshots for this path yet.',
   viewDiff: 'View diff',
   diffComparison: 'Version comparison',

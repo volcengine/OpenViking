@@ -77,3 +77,23 @@ it('opens advanced controls on hover and keeps confirmation available after leav
   await user.unhover(trigger)
   expect(screen.getByRole('button', { name: 'acl.confirm' })).toBeTruthy()
 })
+
+it('keeps the inline switch unchanged until the ACL confirmation succeeds', async () => {
+  const client = new QueryClient()
+  const user = userEvent.setup()
+  render(
+    <QueryClientProvider client={client}>
+      <AccountAclSettings inline />
+    </QueryClientProvider>,
+  )
+  const toggle = screen.getByRole('switch', { name: 'acl.page.controlTitle' })
+  await user.click(toggle)
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+  expect(mocks.update).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'actions.cancel' }))
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+  await user.click(toggle)
+  await user.click(screen.getByRole('button', { name: 'acl.confirm' }))
+  await waitFor(() => expect(mocks.update).toHaveBeenCalledWith(true))
+  client.clear()
+})

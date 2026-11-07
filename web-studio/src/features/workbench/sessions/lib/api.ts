@@ -342,9 +342,11 @@ export async function addMessage(
 export async function commitSession(
   sessionId: string,
   keepRecentCount?: number,
+  headers?: Record<string, string>,
 ): Promise<CommitSessionResult> {
   return getOvResult<CommitSessionResult>(
     postSessionIdCommit({
+      ...(headers ? { headers } : {}),
       body:
         keepRecentCount === undefined
           ? undefined

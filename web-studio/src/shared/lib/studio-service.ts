@@ -67,8 +67,8 @@ export const STUDIO_FEATURES = [
   },
   {
     id: 'monitoring',
-    domain: 'extensions',
-    to: '/monitoring',
+    domain: 'management',
+    to: '/admin/monitoring',
     probe: '/api/v1/observer/system',
   },
   { id: 'gateway', domain: 'management', to: '/admin/gateway' },

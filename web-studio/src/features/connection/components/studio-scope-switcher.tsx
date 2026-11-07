@@ -9,6 +9,7 @@ import {
 import { newConnectionPath } from '#/features/connection/lib/studio-mode'
 import { resolveStudioManagementCapabilities } from '#/features/connection/lib/studio-permissions'
 import { fetchAdminAccounts, fetchAdminUsers } from '#/shared/api/admin'
+import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
@@ -41,6 +42,7 @@ function ScopeMenu({
   value,
   icon: Icon,
   readOnly = false,
+  serviceBadge = false,
   children,
 }: React.PropsWithChildren<{
   open: boolean
@@ -49,6 +51,7 @@ function ScopeMenu({
   value: string
   icon: LucideIcon
   readOnly?: boolean
+  serviceBadge?: boolean
 }>) {
   if (readOnly) {
     return (
@@ -58,7 +61,11 @@ function ScopeMenu({
         title={value}
         className="flex h-9 min-w-0 items-center gap-1 px-1.5 text-xs sm:gap-1.5 sm:px-2.5 sm:text-sm"
       >
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+        {serviceBadge ? (
+          <span aria-hidden="true" className="studio-service-dot" />
+        ) : (
+          <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
         <span className="max-w-24 truncate sm:max-w-40">{value}</span>
       </div>
     )
@@ -70,7 +77,11 @@ function ScopeMenu({
         title={value}
         className="flex h-9 min-w-0 items-center gap-1 rounded-md px-1.5 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:gap-1.5 sm:px-2.5 sm:text-sm"
       >
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+        {serviceBadge ? (
+          <span aria-hidden="true" className="studio-service-dot" />
+        ) : (
+          <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
         <span className="max-w-24 truncate sm:max-w-40">{value}</span>
         <ChevronDownIcon className="hidden size-3 shrink-0 text-muted-foreground sm:block" />
       </PopoverTrigger>
@@ -306,11 +317,18 @@ export function StudioScopeSwitcher({
 
   return (
     <>
-      <div className="flex h-9 min-w-0 items-center rounded-lg border border-border/60 bg-muted/30 p-0.5">
+      <div
+        className={cn(
+          'flex h-9 min-w-0 items-center rounded-lg border border-border/60 bg-muted/30 p-0.5',
+          managementMode &&
+            'studio-management-scope rounded-full bg-transparent',
+        )}
+      >
         <ScopeMenu
           open={open === 'connection'}
           onOpenChange={changeOpen('connection')}
           label={t('connections.switch')}
+          serviceBadge={managementMode}
           value={activeService?.name || host(connection.baseUrl)}
           icon={provider === 'volcengine' ? CloudIcon : ServerIcon}
         >
@@ -320,6 +338,14 @@ export function StudioScopeSwitcher({
           {searchField(t('scope.searchConnections'))}
           <div className="max-h-64 overflow-y-auto">
             {services
+              .filter(
+                ({ profile }) =>
+                  !managementMode ||
+                  resolveConfiguredServiceProvider(
+                    profile.connection.baseUrl,
+                    profile.connection.serviceSelection,
+                  ) === 'opensource',
+              )
               .filter(({ name, profile }) =>
                 matches(`${name} ${profile.connection.baseUrl}`),
               )
@@ -608,7 +634,7 @@ export function StudioScopeSwitcher({
           </>
         ) : null}
       </div>
-      {managementMode ? (
+      {managementMode && showAccountScope ? (
         <span
           role="status"
           aria-label={t('scope.managementCredential')}

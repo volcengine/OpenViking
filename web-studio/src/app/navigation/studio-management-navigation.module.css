@@ -1,0 +1,9 @@
+.item:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.item:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: -2px;
+}

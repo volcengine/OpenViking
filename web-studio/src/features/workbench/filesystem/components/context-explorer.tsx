@@ -1,15 +1,16 @@
+import styles from './context-explorer.module.css'
 import {
+  PlugIcon,
   ChevronRightIcon,
-  ClipboardListIcon,
   FileTextIcon,
   FolderIcon,
-  FolderTreeIcon,
+  FolderOpenIcon,
   Loader2Icon,
-  PlusIcon,
+  UploadIcon,
   RefreshCcwIcon,
   SearchIcon,
 } from 'lucide-react'
-import type { PointerEvent as ReactPointerEvent } from 'react'
+import type { ComponentProps, PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -24,82 +25,71 @@ import {
   visibleContextEntries,
 } from '#/features/workbench/filesystem/lib/utils'
 
-const TREE_INDENT_WIDTH = 16
+const TREE_INDENT_WIDTH = 18
 const TREE_ROW_PADDING = 6
 const TREE_GUIDE_OFFSET = 8
-const TREE_CHILD_CONTENT_OFFSET = 26
+const TREE_CHILD_CONTENT_OFFSET = 24
 const TREE_CONTROL_SIZE = 16
-const TREE_CONTROL_GAP = 6
+const TREE_CONTROL_GAP = 2
 
 export function ContextExplorerHeader({
-  activeTaskCount,
-  hasActiveTasks,
-  hasTasks,
   isRefreshing,
-  isRefreshingTasks,
   onAddResource,
-  onOpenProcessingTasks,
   onOpenSearch,
   onRefresh,
 }: {
-  activeTaskCount: number
-  hasActiveTasks: boolean
-  hasTasks: boolean
   isRefreshing: boolean
-  isRefreshingTasks: boolean
   onAddResource?: () => void
-  onOpenProcessingTasks: () => void
   onOpenSearch: () => void
   onRefresh: () => void
 }) {
   const { t } = useTranslation(['filesystem', 'resources'])
-  const showProcessingTasks = hasTasks || isRefreshingTasks
 
   return (
-    <div className="border-b px-3 py-3">
-      <div className="flex items-center gap-2">
-        <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <FolderTreeIcon className="size-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">{t('explorer.title')}</div>
-        </div>
-        {showProcessingTasks ? (
+    <div className={styles.header}>
+      <div className={styles.actions}>
+        <a
+          href="https://docs.openviking.ai/agent-integrations/01-overview"
+          target="_blank"
+          rel="noreferrer"
+          className={styles.headerAction}
+        >
+          <PlugIcon className="size-3.5" />
+          {t('ide.connectAgent')}
+        </a>
+        {onAddResource ? <span className="h-3 w-px bg-[#d6d5ff]" /> : null}
+        {onAddResource ? (
           <Button
             type="button"
-            size="icon-sm"
+            size="sm"
             variant="ghost"
-            className="relative"
-            title={t('processingTasks.title', { ns: 'resources' })}
-            onClick={onOpenProcessingTasks}
+            className={styles.headerAction}
+            onClick={onAddResource}
           >
-            <ClipboardListIcon
-              className={cn(
-                'size-4',
-                (hasActiveTasks || isRefreshingTasks) && 'text-primary',
-              )}
-            />
-            {activeTaskCount > 0 ? (
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
-                {activeTaskCount}
-              </span>
-            ) : null}
+            <UploadIcon className="size-4" />
+            {t('explorer.addResource')}
           </Button>
         ) : null}
+      </div>
+      <div className={styles.searchRow}>
         <Button
           type="button"
-          size="icon-sm"
-          variant="ghost"
+          size="sm"
+          variant="outline"
+          className={styles.search}
           title={t('explorer.search')}
           onClick={onOpenSearch}
         >
           <SearchIcon className="size-4" />
+          <span className="truncate">{t('ide.search')}</span>
         </Button>
+
         <Button
           type="button"
           size="icon-sm"
-          variant="ghost"
+          variant="outline"
           title={t('explorer.refresh')}
+          className={styles.refresh}
           onClick={onRefresh}
         >
           <RefreshCcwIcon
@@ -107,18 +97,6 @@ export function ContextExplorerHeader({
           />
         </Button>
       </div>
-      {onAddResource ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="mt-3 w-full justify-center gap-2"
-          onClick={onAddResource}
-        >
-          <PlusIcon className="size-4" />
-          {t('explorer.addResource')}
-        </Button>
-      ) : null}
     </div>
   )
 }
@@ -138,10 +116,57 @@ const NAMESPACE_DESCRIPTION_KEYS: Partial<
   user: 'explorer.namespaces.user',
 } as const
 
+const DIRECTORY_HINTS: Record<string, string> = {
+  memories: 'ide.hints.memories',
+  experiences: 'ide.hints.experiences',
+  preferences: 'ide.hints.preferences',
+  entities: 'ide.hints.entities',
+  events: 'ide.hints.events',
+  peers: 'ide.hints.peers',
+  privacy: 'ide.hints.privacy',
+  sessions: 'ide.hints.sessions',
+  skills: 'ide.hints.skills',
+}
+
 const NAMESPACE_ORDER: Partial<Record<string, number>> = {
   user: 0,
-  resources: 1,
-  agent: 2,
+  resources: 2,
+  agent: 1,
+}
+
+const USER_DIRECTORY_ORDER = [
+  'memories',
+  'peers',
+  'privacy',
+  'resources',
+  'sessions',
+  'settings',
+  'skills',
+  'tools',
+]
+const MEMORY_DIRECTORY_ORDER = [
+  'experiences',
+  'preferences',
+  'entities',
+  'events',
+]
+
+function orderContextChildren(
+  uri: string,
+  entries: VikingFsEntry[],
+): VikingFsEntry[] {
+  const order = /^viking:\/\/user\/[^/]+\/?$/.test(uri)
+    ? USER_DIRECTORY_ORDER
+    : /\/memories\/?$/.test(uri)
+      ? MEMORY_DIRECTORY_ORDER
+      : []
+  const rank = (entry: VikingFsEntry) => {
+    const index = entry.isDir ? order.indexOf(entry.name.toLowerCase()) : -1
+    return index < 0 ? order.length : index
+  }
+  return sortTreeEntries(entries).sort(
+    (left, right) => rank(left) - rank(right),
+  )
 }
 
 export function ContextTree({
@@ -185,7 +210,7 @@ export function ContextTree({
   )
 
   return (
-    <div className="h-full overflow-auto px-2 py-2 font-mono">
+    <div className={styles.tree}>
       {rootQuery.isLoading ? (
         <div className="flex h-7 items-center gap-2 px-1.5 text-xs text-muted-foreground">
           <Loader2Icon className="size-3 animate-spin" />
@@ -207,6 +232,19 @@ export function ContextTree({
         >
           {namespaces.map((entry) => {
             const normalizedName = entry.name.toLowerCase()
+            if (normalizedName === 'user')
+              return (
+                <UserRoots
+                  key={entry.uri}
+                  entry={entry}
+                  currentUri={currentUri}
+                  expandedKeys={expandedKeys}
+                  onExpandedKeysChange={onExpandedKeysChange}
+                  onSelectDirectory={onSelectDirectory}
+                  onSelectFile={onSelectFile}
+                  selectedFileUri={selectedFileUri}
+                />
+              )
             const descriptionKey = NAMESPACE_DESCRIPTION_KEYS[normalizedName]
 
             return (
@@ -233,6 +271,34 @@ export function ContextTree({
   )
 }
 
+function UserRoots(
+  props: Omit<ComponentProps<typeof ContextTreeNode>, 'level'>,
+) {
+  const { t } = useTranslation('filesystem')
+  const query = useVikingFsList(props.entry.uri, {
+    output: 'agent',
+    showAllHidden: true,
+    nodeLimit: 200,
+  })
+  const users = visibleContextEntries(query.data?.entries ?? []).filter(
+    (entry) => entry.isDir,
+  )
+  if (!query.isSuccess || users.length === 0)
+    return <ContextTreeNode {...props} level={0} />
+  return (
+    <>
+      {users.map((entry) => (
+        <ContextTreeNode
+          {...props}
+          key={entry.uri}
+          entry={{ ...entry, abstract: t('explorer.namespaces.user') }}
+          level={0}
+        />
+      ))}
+    </>
+  )
+}
+
 export function FilesystemResizeHandle({
   active,
   label,
@@ -248,10 +314,10 @@ export function FilesystemResizeHandle({
       aria-label={label}
       aria-orientation="vertical"
       data-active={active}
-      className="group hidden w-2 shrink-0 cursor-col-resize touch-none items-center justify-center border-x border-transparent transition-colors hover:bg-primary/10 active:bg-primary/15 data-[active=true]:bg-primary/15 lg:flex"
+      className="group relative z-10 hidden -mx-1.5 w-1.5 shrink-0 cursor-col-resize touch-none items-center justify-center border-x border-transparent transition-colors hover:bg-primary/10 active:bg-primary/15 data-[active=true]:bg-primary/15 lg:flex"
       onPointerDown={onPointerDown}
     >
-      <span className="h-full w-px bg-border transition-colors group-hover:bg-primary/60 group-data-[active=true]:bg-primary" />
+      <span className="h-full w-px bg-transparent transition-colors group-hover:bg-primary/60 group-data-[active=true]:bg-primary" />
     </div>
   )
 }
@@ -281,7 +347,13 @@ export function ContextTreeNode({
   const isDirSelected =
     entry.isDir && currentUri === entry.uri && !selectedFileUri
   const isSelected = isDirSelected || isFileSelected
-  const namespaceHint = level === 0 ? entry.abstract : ''
+  const namespaceHint = entry.isDir
+    ? DIRECTORY_HINTS[entry.name.toLowerCase()]
+      ? t(DIRECTORY_HINTS[entry.name.toLowerCase()])
+      : level === 0
+        ? entry.abstract
+        : ''
+    : ''
   const rowRef = useRef<HTMLDivElement>(null)
   const disclosureLabel = entry.isDir
     ? t(isOpen ? 'explorer.collapseDirectory' : 'explorer.expandDirectory', {
@@ -299,19 +371,32 @@ export function ContextTreeNode({
     shouldLoadChildren,
   )
   const children = useMemo(
-    () => sortTreeEntries(visibleContextEntries(listQuery.data?.entries ?? [])),
-    [listQuery.data?.entries],
+    () =>
+      orderContextChildren(
+        entry.uri,
+        visibleContextEntries(listQuery.data?.entries ?? []),
+      ),
+    [entry.uri, listQuery.data?.entries],
   )
 
   useEffect(() => {
     if (!isSelected) return
 
-    window.requestAnimationFrame(() => {
-      rowRef.current?.scrollIntoView({
-        block: 'center',
-        inline: 'nearest',
-      })
+    const frame = window.requestAnimationFrame(() => {
+      const row = rowRef.current
+      const tree = row?.closest<HTMLElement>(`.${styles.tree}`)
+      if (!row || !tree) return
+
+      const bounds = row.getBoundingClientRect()
+      const top = tree.getBoundingClientRect().top + tree.clientTop
+      const bottom = top + tree.clientHeight
+      if (bounds.top < top) {
+        tree.scrollTop += bounds.top - top
+      } else if (bounds.bottom > bottom) {
+        tree.scrollTop += bounds.bottom - bottom
+      }
     })
+    return () => window.cancelAnimationFrame(frame)
   }, [entry.uri, isSelected])
 
   const toggle = useCallback(() => {
@@ -338,12 +423,8 @@ export function ContextTreeNode({
       <TreeIndentGuides level={level} />
       <div
         ref={rowRef}
-        className={cn(
-          'group relative z-10 h-7 select-none rounded-md text-xs transition-colors',
-          isSelected
-            ? 'bg-muted text-foreground'
-            : 'text-muted-foreground hover:bg-muted/55 hover:text-foreground',
-        )}
+        className={styles.row}
+        data-selected={isSelected || undefined}
       >
         {entry.isDir ? (
           <button
@@ -351,14 +432,14 @@ export function ContextTreeNode({
             aria-expanded={isOpen}
             aria-label={disclosureLabel}
             title={disclosureLabel}
-            className="absolute top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors group-hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className={styles.disclosure}
             style={{ left: treeRowPadding(level) }}
             onClick={toggle}
           >
             <ChevronRightIcon
               aria-hidden="true"
               className={cn(
-                'size-3 transition-transform',
+                'size-2.5 transition-transform',
                 isOpen && 'rotate-90',
               )}
             />
@@ -368,37 +449,36 @@ export function ContextTreeNode({
           type="button"
           aria-label={entry.name}
           aria-current={isSelected ? 'location' : undefined}
-          className="absolute inset-0 z-10 flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          style={{ paddingLeft: treeSelectionPadding(level, entry.isDir) }}
+          className={styles.selection}
+          style={{ paddingLeft: treeSelectionPadding(level) }}
           onClick={select}
         >
-          {!entry.isDir ? (
-            <span aria-hidden="true" className="size-4 shrink-0" />
-          ) : null}
           {entry.isDir ? (
-            <FolderIcon
-              aria-hidden="true"
-              className={cn(
-                'size-4 shrink-0',
-                isOpen ? 'text-primary/80' : 'text-muted-foreground',
-              )}
-            />
+            isOpen ? (
+              <FolderOpenIcon
+                aria-hidden="true"
+                className={styles.nodeIcon}
+                strokeWidth={1.5}
+              />
+            ) : (
+              <FolderIcon
+                aria-hidden="true"
+                className={styles.nodeIcon}
+                strokeWidth={1.5}
+              />
+            )
           ) : (
             <FileTextIcon
               aria-hidden="true"
-              className="size-4 shrink-0 text-muted-foreground"
+              className={styles.nodeIcon}
+              strokeWidth={1.5}
             />
           )}
-          <span
-            className={cn(
-              'truncate',
-              namespaceHint ? 'shrink-0 text-foreground' : 'min-w-0 flex-1',
-            )}
-          >
+          <span className={styles.name} title={entry.name}>
             {entry.name}
           </span>
           {namespaceHint ? (
-            <span className="min-w-0 flex-1 truncate font-sans text-xs text-muted-foreground">
+            <span className={styles.hint} title={namespaceHint}>
               {namespaceHint}
             </span>
           ) : null}
@@ -458,11 +538,11 @@ export function TreeIndentGuides({ level }: { level: number }) {
   if (level <= 0) return null
 
   return (
-    <div className="pointer-events-none absolute inset-y-0 left-0 right-0 z-0">
+    <div className={styles.guides}>
       {Array.from({ length: level }, (_, index) => (
         <span
           key={index}
-          className="absolute bottom-0 top-0 w-px bg-border/70"
+          className={styles.guide}
           style={{ left: treeGuideLeft(index) }}
         />
       ))}
@@ -478,11 +558,8 @@ export function treeRowPadding(level: number): string {
   return `${level * TREE_INDENT_WIDTH + TREE_ROW_PADDING}px`
 }
 
-function treeSelectionPadding(level: number, hasDisclosure: boolean): string {
-  const disclosureOffset = hasDisclosure
-    ? TREE_CONTROL_SIZE + TREE_CONTROL_GAP
-    : 0
-  return `${level * TREE_INDENT_WIDTH + TREE_ROW_PADDING + disclosureOffset}px`
+function treeSelectionPadding(level: number): string {
+  return `${level * TREE_INDENT_WIDTH + TREE_ROW_PADDING + TREE_CONTROL_SIZE + TREE_CONTROL_GAP}px`
 }
 
 export function treeChildContentPadding(level: number): string {
@@ -506,9 +583,10 @@ export function PanelTab({
       className={cn(
         'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors',
         active
-          ? 'bg-muted text-foreground'
+          ? 'bg-background text-foreground shadow-xs'
           : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
+      aria-pressed={active}
       onClick={onClick}
     >
       <Icon className="size-3.5" />

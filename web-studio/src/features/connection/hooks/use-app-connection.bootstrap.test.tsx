@@ -8,6 +8,9 @@ import {
   waitFor,
 } from '@testing-library/react'
 import { once } from 'node:events'
+import { useEffect, useState } from 'react'
+import { createAdminClient } from '#/shared/api/admin'
+import { ovClient } from '#/shared/api/ov-client/index'
 import { createServer } from 'node:http'
 import { afterEach, expect, it, vi } from 'vitest'
 
@@ -16,11 +19,153 @@ import {
   useAppConnection,
 } from '#/features/connection/hooks/use-app-connection'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
+import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 
 const { navigate, routing } = vi.hoisted(() => ({
   navigate: vi.fn(),
   routing: { pathname: '/home' },
 }))
+
+it('keeps the verified Root shell and cache mounted when only the management Account changes', async () => {
+  routing.pathname = '/admin/dashboard'
+  let rootProbes = 0
+  let mounts = 0
+  const server = createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Headers', '*')
+    if (req.method === 'OPTIONS') {
+      res.end()
+      return
+    }
+    res.setHeader('Content-Type', 'application/json')
+    const key = String(req.headers['x-api-key'] ?? '')
+    const url = new URL(req.url!, 'http://test')
+    if (url.pathname === '/health') {
+      if (key === 'root-key') rootProbes += 1
+      res.end(
+        JSON.stringify({
+          auth_mode: 'api_key',
+          version: '0.5.4',
+          account_id: key === 'second-key' ? 'second' : 'default',
+          user_id: key === 'root-key' ? 'default' : 'admin',
+          ...(key ? { role: key === 'root-key' ? 'root' : 'admin' } : {}),
+        }),
+      )
+    } else {
+      const account = url.pathname.includes('/second/') ? 'second' : 'default'
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          result: [
+            {
+              user_id: 'admin',
+              role: 'admin',
+              api_key: `${account}-key`,
+            },
+          ],
+        }),
+      )
+    }
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as { port: number }
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  localStorage.setItem(
+    'ov_console_connection',
+    JSON.stringify({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      accountId: 'default',
+      userId: 'default',
+      apiKey: '',
+      adminApiKey: 'root-key',
+    }),
+  )
+  function Content() {
+    useEffect(() => {
+      mounts += 1
+    }, [])
+    const { connection } = useAppConnection()
+    const scoped = useAdminSpaceHeaders(true)
+    return (
+      <output data-testid="scoped-content">
+        {connection.accountId}:{scoped.headers?.['X-API-Key']}
+      </output>
+    )
+  }
+  function Page() {
+    const app = useAppConnection()
+    const service = useStudioService()
+    return (
+      <>
+        <button onClick={() => void app.switchManagementAccount('second')}>
+          second
+        </button>
+        <button onClick={() => void app.switchManagementAccount('default')}>
+          default
+        </button>
+        <button onClick={app.reconnect}>reconnect</button>
+        {service.ready && !app.isConnectionRoleLoading ? (
+          <Content />
+        ) : (
+          <span>checking</span>
+        )}
+      </>
+    )
+  }
+  try {
+    render(
+      <QueryClientProvider client={client}>
+        <AppConnectionProvider>
+          <Page />
+        </AppConnectionProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('scoped-content').textContent).toBe(
+        'default:default-key',
+      ),
+    )
+    const initialMounts = mounts
+    const initialProbes = rootProbes
+    client.setQueryData(['unrelated-data'], 'keep')
+    fireEvent.click(screen.getByRole('button', { name: 'second', exact: true }))
+    await waitFor(() =>
+      expect(screen.getByTestId('scoped-content').textContent).toBe(
+        'second:second-key',
+      ),
+    )
+    expect(mounts).toBe(initialMounts)
+    expect(rootProbes).toBe(initialProbes)
+    expect(client.getQueryData(['unrelated-data'])).toBe('keep')
+    fireEvent.click(
+      screen.getByRole('button', { name: 'default', exact: true }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('scoped-content').textContent).toBe(
+        'default:default-key',
+      ),
+    )
+    expect(mounts).toBe(initialMounts)
+    expect(rootProbes).toBe(initialProbes)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'reconnect', exact: true }),
+    )
+    await waitFor(() => expect(rootProbes).toBeGreaterThan(initialProbes))
+    await waitFor(() =>
+      expect(screen.getByTestId('scoped-content').textContent).toBe(
+        'default:default-key',
+      ),
+    )
+  } finally {
+    cleanup()
+    client.clear()
+    localStorage.removeItem('ov_console_connection')
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
   useRouterState: () => routing.pathname,
@@ -486,3 +631,106 @@ vi.mock('#/features/connection/lib/credential-storage', () => ({
     localStorage.setItem(key, value),
   flushCredentialStorage: async () => {},
 }))
+
+it('prefers the verified Account Admin through both clients after Root connection bootstrap', async () => {
+  routing.pathname = '/admin/users'
+  const observed: Array<[string, unknown]> = []
+  const server = createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Headers', '*')
+    if (req.method === 'OPTIONS') {
+      res.end()
+      return
+    }
+    const key = req.headers['x-api-key']
+    const url = new URL(req.url!, 'http://test')
+    observed.push([url.pathname, key])
+    res.setHeader('Content-Type', 'application/json')
+    if (url.pathname === '/health') {
+      res.end(
+        JSON.stringify({
+          auth_mode: 'api_key',
+          version: '0.4.22',
+          account_id: 'default',
+          user_id: key === 'space-admin' ? 'admin' : 'default',
+          ...(key ? { role: key === 'space-admin' ? 'admin' : 'root' } : {}),
+        }),
+      )
+    } else if (url.pathname === '/api/v1/admin/accounts/default/users') {
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          result: [{ user_id: 'admin', role: 'admin', api_key: 'space-admin' }],
+        }),
+      )
+    } else {
+      res.end(JSON.stringify({ status: 'ok', result: [] }))
+    }
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as { port: number }
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  localStorage.setItem(
+    'ov_console_connection',
+    JSON.stringify({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      accountId: 'default',
+      userId: 'default',
+      apiKey: '',
+      adminApiKey: 'root-key',
+    }),
+  )
+  function Requests() {
+    const { connection, connectionRole, isConnectionRoleLoading } =
+      useAppConnection()
+    const [done, setDone] = useState(false)
+    useEffect(() => {
+      if (isConnectionRoleLoading || connectionRole !== 'root') return
+      void Promise.all([
+        createAdminClient({
+          ...connection,
+          apiKey: connection.adminApiKey,
+        }).get({ url: '/api/v1/admin/accounts/default/groups' }),
+        ovClient.client.get({
+          url: '/api/v1/admin/accounts/default/configuration',
+        }),
+        ovClient.client.get({ url: '/api/v1/admin/configuration' }),
+      ]).then(() => setDone(true))
+    }, [connection, connectionRole, isConnectionRoleLoading])
+    return <output data-testid="routed-requests">{String(done)}</output>
+  }
+  try {
+    render(
+      <QueryClientProvider client={client}>
+        <AppConnectionProvider>
+          <Requests />
+        </AppConnectionProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('routed-requests').textContent).toBe('true'),
+    )
+    expect(observed).toContainEqual([
+      '/api/v1/admin/accounts/default/groups',
+      'space-admin',
+    ])
+    expect(observed).toContainEqual([
+      '/api/v1/admin/accounts/default/configuration',
+      'space-admin',
+    ])
+    expect(observed).toContainEqual(['/api/v1/admin/configuration', 'root-key'])
+    expect(
+      observed.filter(
+        ([url]) => url === '/api/v1/admin/accounts/default/users',
+      ),
+    ).toHaveLength(1)
+  } finally {
+    cleanup()
+    client.clear()
+    localStorage.removeItem('ov_console_connection')
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})

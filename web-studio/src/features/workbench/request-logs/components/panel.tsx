@@ -69,9 +69,12 @@ export function RequestLogPanel({
   const { t } = useTranslation('requestLogs')
 
   return (
-    <Card className="overflow-hidden">
+    <Card data-log-panel className="overflow-hidden">
       <CardHeader className="gap-4 border-b bg-muted/20">
-        <div className="grid min-w-0 grid-cols-[9rem_minmax(0,1fr)] items-center gap-3">
+        <div
+          data-log-toolbar
+          className="grid min-w-0 grid-cols-[9rem_minmax(0,1fr)] items-center gap-3"
+        >
           <CardTitle className="text-base leading-tight whitespace-nowrap">
             {t('table.title')}
           </CardTitle>

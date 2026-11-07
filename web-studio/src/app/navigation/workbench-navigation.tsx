@@ -12,7 +12,6 @@ import {
 } from '#/shared/ui/sidebar'
 import { Link } from '@tanstack/react-router'
 import {
-  ActivityIcon,
   BotIcon,
   BrainIcon,
   ChevronRightIcon,
@@ -20,7 +19,6 @@ import {
   HomeIcon,
   ListChecksIcon,
   MessagesSquareIcon,
-  NetworkIcon,
   PanelsTopLeftIcon,
   ScrollTextIcon,
   SearchIcon,
@@ -60,13 +58,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
     section: 'workspace',
     titleKey: 'navigation.filesystem.title',
     to: '/filesystem',
-  },
-  {
-    icon: NetworkIcon,
-    id: 'arranger',
-    section: 'workspace',
-    titleKey: 'navigation.arranger.title',
-    to: '/arranger',
   },
   {
     icon: BotIcon,
@@ -131,13 +122,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
     section: 'operations',
     titleKey: 'navigation.watches.title',
     to: '/watches',
-  },
-  {
-    icon: ActivityIcon,
-    id: 'monitoring',
-    section: 'operations',
-    titleKey: 'navigation.monitoring.title',
-    to: '/monitoring',
   },
 ] as const
 

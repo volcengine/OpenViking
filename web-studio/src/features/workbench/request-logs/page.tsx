@@ -1,3 +1,8 @@
+import styles from './page.module.css'
+import {
+  AdminScopeFilters,
+  useAdminUserScope,
+} from '#/features/admin/users/components/admin-scope-filters'
 import { useQuery } from '@tanstack/react-query'
 import * as React from 'react'
 
@@ -31,33 +36,53 @@ function hashSecret(value: string): string {
   return (hash >>> 0).toString(36)
 }
 
-export function RequestLogsRoute() {
-  const { t } = useTranslation('requestLogs')
-  const { connection, connectionRole, isConnectionRoleLoading } =
-    useAppConnection()
+export function RequestLogsRoute({
+  management = false,
+}: { management?: boolean } = {}) {
+  const { t } = useTranslation(['requestLogs', 'appShell'])
+  const { connection, connectionRole, serverMode } = useAppConnection()
+  const {
+    headers,
+    scopeKey,
+    isLoading: isConnectionRoleLoading,
+    unavailableKey,
+    userFilter,
+  } = useAdminUserScope(management, 'usage')
   const [draftFilters, setDraftFilters] =
     React.useState<AuditFilters>(DEFAULT_FILTERS)
   const [filters, setFilters] = React.useState<AuditFilters>(DEFAULT_FILTERS)
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
   const zeroResult = isZeroResultCombination(filters)
-  const canQueryAudit = !isConnectionRoleLoading && connectionRole !== 'unknown'
+  const canQueryAudit =
+    !isConnectionRoleLoading && connectionRole !== 'unknown' && headers !== null
   const auditScopeKey = {
+    scopeKey,
     accountId: connection.accountId,
     baseUrl: connection.baseUrl,
-    keyHash: hashSecret(connection.apiKey),
+    keyHash: hashSecret(
+      management ? connection.adminApiKey : connection.apiKey,
+    ),
+    management,
+    serverMode,
     role: connectionRole,
     userId: connection.userId,
   }
 
   const audit = useQuery({
+    meta: { adminSpaceScope: management ? scopeKey : undefined },
     enabled: canQueryAudit && !zeroResult,
-    queryFn: () => fetchAuditLogs(filters, page, pageSize),
+    queryFn: () =>
+      fetchAuditLogs(filters, page, pageSize, headers ?? undefined),
     queryKey: ['console-audit-logs', auditScopeKey, filters, page, pageSize],
     refetchInterval: 30_000,
   })
 
-  const logs = zeroResult ? [] : (audit.data?.items ?? [])
+  React.useEffect(() => {
+    setPage(1)
+  }, [scopeKey])
+
+  const logs = !canQueryAudit || zeroResult ? [] : (audit.data?.items ?? [])
   const disabled = audit.data?.enabled === false
   const hasMetrics =
     zeroResult || (!isConnectionRoleLoading && audit.isSuccess && !disabled)
@@ -102,19 +127,37 @@ export function RequestLogsRoute() {
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
-      <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-        {scopeLabel}
-      </div>
+    <div
+      className={
+        management ? styles.page : 'flex w-full min-w-0 flex-col gap-5'
+      }
+    >
+      {management ? (
+        <>
+          <h1 className="text-xl font-semibold tracking-tight">
+            {t('appShell:navigation.requestLogs.title')}
+          </h1>
+          <AdminScopeFilters userFilter={userFilter} />
+        </>
+      ) : null}
+      {!management ? (
+        <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          {scopeLabel}
+        </div>
+      ) : null}
 
       {!isConnectionRoleLoading && !canQueryAudit ? (
         <EmptyLogsState
           title={t('accessRequired.title')}
-          description={t('accessRequired.description')}
+          description={
+            headers === null
+              ? t(unavailableKey)
+              : t('accessRequired.description')
+          }
         />
       ) : (
         <>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2" data-log-metrics>
             <MetricCard
               label={t('metrics.total')}
               value={hasMetrics ? (total >= 1000 ? '999+' : total) : '—'}

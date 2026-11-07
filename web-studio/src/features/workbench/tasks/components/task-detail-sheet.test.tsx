@@ -56,6 +56,7 @@ async function showDetail(
   language = 'en',
   identity = 'acme/alice',
   existingClient?: QueryClient,
+  headers?: Record<string, string>,
 ) {
   const i18n = createInstance()
   await i18n.init({
@@ -76,6 +77,7 @@ async function showDetail(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
         <TaskDetailSheet
+          headers={headers}
           open
           taskId="task-1"
           identityScopeKey={identity}
@@ -157,6 +159,20 @@ describe('recorded task execution events', () => {
       ).toBe(true)
     },
   )
+
+  it('loads management details with the same admin role as the task list', async () => {
+    const headers = {
+      'X-API-Key': 'management-key',
+      'X-OpenViking-Role': 'admin',
+    }
+    await showDetail('en', 'management/acme/alice', undefined, headers)
+    await screen.findByRole('region', { name: 'Task execution log' })
+    expect(api.getTask).toHaveBeenCalledWith({
+      headers,
+      path: { task_id: 'task-1' },
+      query: { include_events: true },
+    })
+  })
 
   it('retains the last recorded events and reports a refresh error', async () => {
     const { client } = await showDetail()

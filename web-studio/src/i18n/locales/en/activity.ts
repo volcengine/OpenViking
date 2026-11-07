@@ -144,6 +144,29 @@ const activity = {
     },
   },
   filesystem: {
+    ide: {
+      sessions: 'Sessions',
+      connectAgent: 'Connect Agent',
+      search: 'Search files ⌘+K...',
+      more: 'More actions',
+      workspace: 'Workbench',
+      emptyDirectory: 'No files in this directory',
+      loadFailed: 'Unable to load directory',
+      discard: 'Discard unsaved changes?',
+      sessionFiles: 'View session files',
+      sessionPreview: 'Preview session',
+      hints: {
+        memories: 'Long-term memories',
+        experiences: 'Agent experiences',
+        preferences: 'Profile and preferences',
+        entities: 'Entities',
+        events: 'Events',
+        peers: 'Application and workspace contexts',
+        privacy: 'Sensitive information',
+        sessions: 'Conversations and tasks',
+        skills: 'Agent skills and tools',
+      },
+    },
     copyUri: 'Copy current URI',
     copied: 'URI copied',
     copyFailed: 'Copy failed',
@@ -152,7 +175,7 @@ const activity = {
     readFailed: 'Failed to read {{uri}}',
     tabs: {
       terminal: 'Terminal',
-      agent: 'Agent',
+      agent: 'VikingBot',
     },
     actionPanel: {
       collapse: 'Collapse panel',
@@ -166,14 +189,14 @@ const activity = {
     },
     explorer: {
       title: 'Filesystem',
-      addResource: 'Add resource',
+      addResource: 'Import resources',
       abstractLevel: 'L0',
       collapseDirectory: 'Collapse {{name}}',
       empty: 'empty',
       expandDirectory: 'Expand {{name}}',
       loading: 'loading',
       overviewLevel: 'L1',
-      search: 'Search context',
+      search: 'Search files and content',
       refresh: 'Refresh tree',
       namespaces: {
         agent: 'Agent capabilities, tools, and experience',
@@ -206,8 +229,8 @@ const activity = {
         retry: 'Detect again',
       },
       empty: {
-        heading: 'Agent actions sync with the tree on the left',
-        body: 'After you send a question, `viking://` files in the tool call output become clickable links — click to locate them on the left and open them in the middle.',
+        heading: 'Welcome to VikingBot',
+        body: 'Ask about your resources, memories, and context. Open linked files directly in the workspace.',
         prompts: [
           'Summarize the current directory',
           'Recursively find related docs',

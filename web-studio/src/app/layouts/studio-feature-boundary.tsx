@@ -12,6 +12,7 @@ import {
   resolveStudioManagementCapabilities,
 } from '#/features/connection/lib/studio-permissions'
 import { featureForPath } from '#/shared/lib/studio-service'
+import { Skeleton } from '#/shared/ui/skeleton'
 import { Button } from '#/shared/ui/button'
 import { Link, useRouterState } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
@@ -19,7 +20,14 @@ import { useTranslation } from 'react-i18next'
 
 export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
   const { t } = useTranslation('studio')
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const { pathname, taskMonitoringTab } = useRouterState({
+    select: ({ location }) => ({
+      pathname: location.pathname,
+      taskMonitoringTab:
+        location.pathname.replace(/\/$/, '') === '/admin/monitoring' &&
+        location.search.tab === 'tasks',
+    }),
+  })
   const {
     connection,
     connectionRole,
@@ -29,7 +37,13 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     studioMode,
   } = useAppConnection()
   const service = useStudioService()
-  const feature = featureForPath(pathname)
+  const path = pathname.replace(/\/$/, '')
+  // The tasks tab uses the admin route and task credential checks.
+  const feature = taskMonitoringTab
+    ? undefined
+    : featureForPath(
+        path === '/admin/request-logs' ? '/request-logs' : pathname,
+      )
   const probe = feature && 'probe' in feature ? feature.probe : undefined
   const cloudProbe =
     service.ready && service.provider === 'volcengine' && Boolean(probe)
@@ -106,6 +120,21 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
   )
     reason = 'managementRequired'
   if (!reason) return children
+  if (reason === 'checking')
+    return (
+      <div
+        role="status"
+        aria-label={t('providers.checking')}
+        className="flex w-full min-w-0 flex-col gap-6"
+      >
+        <div aria-hidden="true" className="flex flex-col gap-6">
+          <Skeleton className="h-7 w-32" />
+          <Skeleton className="h-5 w-48 max-w-full" />
+          <Skeleton className="h-9 w-64 max-w-full" />
+          <Skeleton className="h-56 w-full rounded-xl" />
+        </div>
+      </div>
+    )
   return (
     <section
       className="mx-auto grid w-full max-w-xl gap-4 rounded-xl border bg-card p-6"

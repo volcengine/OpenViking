@@ -1,3 +1,4 @@
+import styles from './server-configuration.module.css'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import type {
   ModelConfig,
@@ -20,6 +21,8 @@ export function ModelConnectionTest({
   thinking,
   mode,
   disabled,
+  variant = 'panel',
+  children,
 }: {
   kind: ModelKind
   config: ModelConfig
@@ -27,6 +30,8 @@ export function ModelConnectionTest({
   thinking?: boolean
   mode?: string
   disabled: boolean
+  variant?: 'panel' | 'row' | 'compact'
+  children?: React.ReactNode
 }) {
   const { t } = useTranslation('settings')
   const { connection, serverMode } = useAppConnection()
@@ -56,7 +61,10 @@ export function ModelConnectionTest({
     connection.userId,
     serverMode,
   ])
-  const supported = supportsModelTest(kind, config.provider)
+  const supported = supportsModelTest(
+    kind,
+    config.provider || fallback.provider,
+  )
   async function test() {
     if (testing || disabled || !supported) return
     const controller = new AbortController()
@@ -98,8 +106,65 @@ export function ModelConnectionTest({
       if (active.current === controller) setTesting(false)
     }
   }
+  if (variant === 'row')
+    return (
+      <>
+        <span
+          className={styles.modelTestStatus}
+          data-tone={
+            result
+              ? result.code === 'success'
+                ? 'success'
+                : 'error'
+              : 'neutral'
+          }
+          title={
+            result
+              ? t(`models.connectionTest.${result.code}`, { ms: result.ms })
+              : undefined
+          }
+        >
+          <span aria-hidden="true" />
+          {t(
+            testing
+              ? 'models.rowTesting'
+              : result
+                ? result.code === 'success'
+                  ? 'models.rowHealthy'
+                  : 'models.rowFailed'
+                : 'models.rowUntested',
+          )}
+        </span>
+        <div className={styles.modelRowActions}>
+          <Button
+            type="button"
+            variant="link"
+            disabled={disabled || testing || !supported}
+            title={t(
+              supported
+                ? 'models.connectionTest.hint'
+                : 'models.connectionTest.unsupported',
+            )}
+            onClick={() => void test()}
+          >
+            {t(
+              testing
+                ? 'models.connectionTest.testing'
+                : 'models.connectionTest.action',
+            )}
+          </Button>
+          {children}
+        </div>
+      </>
+    )
   return (
-    <div className="grid gap-2 border-t pt-4">
+    <div
+      className={
+        variant === 'compact'
+          ? styles.modelCompactTest
+          : 'grid gap-2 border-t pt-4'
+      }
+    >
       <div>
         <Button
           type="button"
@@ -107,7 +172,11 @@ export function ModelConnectionTest({
           disabled={disabled || testing || !supported}
           onClick={() => void test()}
         >
-          {testing ? <Loader2Icon className="animate-spin" /> : <PlugZapIcon />}
+          {testing ? (
+            <Loader2Icon className="animate-spin" />
+          ) : variant !== 'compact' ? (
+            <PlugZapIcon />
+          ) : null}
           {t(
             testing
               ? 'models.connectionTest.testing'
@@ -115,7 +184,10 @@ export function ModelConnectionTest({
           )}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p
+        hidden={variant === 'compact'}
+        className="text-xs text-muted-foreground"
+      >
         {t(
           supported
             ? 'models.connectionTest.hint'

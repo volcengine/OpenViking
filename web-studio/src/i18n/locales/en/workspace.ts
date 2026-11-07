@@ -1,5 +1,74 @@
 const workspace = {
   appShell: {
+    adminNavigation: {
+      gateway: 'Gateway',
+      loadingUsers: 'Loading users…',
+      userScopeUnavailable:
+        'The selected User identity is unavailable. Check its API Key or select another User.',
+      userFilter: 'Filter by User',
+      allUsers: 'All users in this space',
+      currentTaskUser: 'Current management identity',
+      userKeyUnavailable: 'No usable User API Key is available',
+
+      spaces: 'Data spaces',
+      generalConfiguration: 'General configuration',
+      modelConfiguration: 'Model configuration',
+      accountAdminUnavailable:
+        'No usable Admin API Key was found for this space. Check the administrator credentials in User & API Keys.',
+      accountAdminLookupFailed:
+        'Unable to retrieve or verify the Admin API Key for this space. Check the connection and try again.',
+      scopeUnavailable:
+        'The current management credential cannot query this space.',
+      spaceScope: 'This page shows data for this space only.',
+      overview: 'Overview',
+      currentSpace: 'Current space: {{space}}',
+      dashboard: 'Dashboard',
+      members: 'Spaces and members',
+      users: 'User & API Keys',
+      spaceConfiguration: 'Space configuration',
+      permissions: 'Directory permissions',
+      extraction: 'Memory extraction rules',
+      services: 'Service configuration',
+      operations: 'Operations',
+      monitoring: 'Monitoring',
+      tasks: 'Task monitoring',
+      extensions: 'Extensions',
+    },
+    userManagement: {
+      userId: 'User ID',
+      apiKeys: 'API Keys',
+      help: 'Manage members, API keys, and memory policies in this data space.',
+      keyNotice:
+        'API keys provide long-term access to OpenViking. Keep them private to prevent unauthorized access, security risks, or unexpected charges.',
+      agentNotice:
+        'An Agent configured with a member’s API key can access everything that member can see. Manage external sharing and cross-border access carefully.',
+      search: 'Search...',
+      addMember: 'Add member',
+      members: 'Members · {{total}}',
+      groups: 'Groups · {{total}}',
+      userActions: 'Actions for {{user}}',
+      makeAdmin: 'Make administrator',
+      makeMember: 'Make member',
+    },
+    spaces: {
+      createDescription:
+        'Create a data space with its initial administrator, then switch to it.',
+      title: 'Data spaces',
+      description: 'Manage data spaces and their members.',
+      count: '{{count}} spaces',
+      search: 'Search...',
+      create: 'Create space',
+      name: 'Space name',
+      members: 'Members',
+      createdAt: 'Created at',
+      actions: 'Actions',
+      memberCount: '{{count}} members',
+      empty: 'No data spaces yet',
+      noResults: 'No matching data spaces',
+      unavailable: 'Only Root administrators can manage data spaces.',
+      loading: 'Loading data spaces…',
+      retry: 'Retry',
+    },
     apiKey: {
       title: 'API Key',
       userId: 'User ID',
@@ -16,6 +85,8 @@ const workspace = {
       copied: 'Copied',
     },
     studioSettings: {
+      switchAccount: 'Switch account',
+      apiKeySignIn: 'Signed in with API Key',
       connections: 'Saved connections',
       addConnection: 'Add connection',
       manageConnections: 'Manage connections',
@@ -26,9 +97,6 @@ const workspace = {
       brand: 'OpenViking',
       open: 'Studio settings',
       settings: 'Settings',
-      defaultEntry: 'Default entry',
-      workbench: 'Workbench',
-      management: 'Administration',
       language: 'Language',
       theme: 'Theme',
       light: 'Light',
@@ -42,7 +110,7 @@ const workspace = {
       managementDescription:
         'Manage accounts, users, permissions and service configuration. Select a user to open their workbench.',
       enterWorkbench: 'Open workbench',
-      returnManagement: 'Admin console',
+      returnManagement: 'Manage team',
       selectUser: 'Select a user',
       selectUserDescription:
         'Select a user with a valid data credential before opening the workbench.',
@@ -150,7 +218,7 @@ const workspace = {
     },
   },
   monitoringPage: {
-    title: 'Monitoring',
+    title: 'Component monitoring',
     description: 'View real-time health for OpenViking components.',
     version: 'v{{version}}',
     refresh: 'Refresh',
@@ -489,6 +557,7 @@ const workspace = {
     },
   },
   tasksPage: {
+    backToWorkbench: 'Back to workbench',
     labels: {
       timing: 'Duration',
       totalDuration: 'Total Time',
@@ -961,6 +1030,31 @@ const workspace = {
     pageTitle: 'Settings',
     tabs: { connection: 'Connection', configuration: 'Server configuration' },
     models: {
+      vlmSection: 'VLM models',
+      embeddingSection: 'Embedding models',
+      editAction: 'Edit',
+      deleteAction: 'Delete',
+      categoryCount: '{{category}} ({{count}})',
+      designDescription:
+        'OpenViking uses VLM models to understand content and generate summaries, and Embedding models to build indexes. Models in each category are tried in order; drag to change priority.',
+      thinkingColumn: 'Thinking',
+      statusColumn: 'Status',
+      thinkingOn: 'On',
+      thinkingOff: 'Off',
+      rowUntested: 'Not tested',
+      rowTesting: 'Testing',
+      rowHealthy: 'Healthy',
+      rowFailed: 'Failed',
+      providerNames: {
+        volcengine: 'Volcengine Ark',
+        openai: 'OpenAI',
+        azure: 'Azure OpenAI',
+        kimi: 'Kimi',
+        glm: 'GLM',
+        litellm: 'LiteLLM',
+        'openai-codex': 'OpenAI Codex',
+      },
+
       editMode: 'Editing mode',
       formMode: 'Form editor',
       fileMode: 'File editor',
@@ -1064,6 +1158,13 @@ const workspace = {
       moveDown: 'Move down',
       view: 'View model',
       edit: 'Edit model',
+      editorTitle: '{{action}} {{kind}} model',
+      addAction: 'Add',
+      vlmDescription:
+        'VLM models understand images and documents, and generate summaries and memories.',
+      embeddingDescription: 'Embedding models build content indexes.',
+      inputPlaceholder: 'Enter a value',
+      defaultAddressHint: 'Leave blank to use the provider’s default address',
       addModel: 'Add model',
       serverSource: 'ov.conf',
       unsaved: 'Unsaved',
@@ -1120,6 +1221,13 @@ const workspace = {
           'Could not load permissions for the current directory. Changes to subdirectory permissions are unavailable until you retry.',
         emptyDirectory: 'No subdirectories here.',
         nameColumn: 'Name',
+        controlTitle: 'Directory access control',
+        inheritanceHint:
+          'Directories inherit their parent’s permissions unless configured separately. Space administrators always have access.',
+        directoryColumn: 'Shared directory',
+        accessColumn: 'Who can access',
+        permissionColumn: 'Permission',
+        groupName: '{{name}} group',
         ruleColumn: 'Permission rule',
         granteesColumn: 'Grants on this directory',
         actionsColumn: 'Actions',
@@ -1294,6 +1402,10 @@ const workspace = {
       confirmEveryoneGrant: 'Grant {{level}} access to all users',
     },
     groups: {
+      userLabel: 'User ({{total}})',
+      groupLabel: 'Group ({{total}})',
+      memberColumn: 'Members',
+      total: '{{count}} groups',
       navigation: 'Users & Permissions',
       usersTab: 'Users',
       title: 'User groups',
@@ -1301,7 +1413,7 @@ const workspace = {
       id: 'Group ID',
       count: 'Members',
       actions: 'Actions',
-      create: 'Create group',
+      create: 'Create Group',
       idHint:
         'A unique ID within this Account. It cannot be renamed after creation.',
       manage: 'Manage members',
@@ -1311,7 +1423,7 @@ const workspace = {
         'Delete {{group}}? Existing resource ACL references are not removed. Recreating this ID may reactivate those grants.',
       empty: 'No user groups yet.',
       notJoined: 'No groups',
-      search: 'Search groups',
+      search: 'Search Group ID',
       members: 'Members of {{group}}',
       memberHint:
         'Membership changes affect subsequent requests. Other grants may still allow access after removal.',
@@ -1585,6 +1697,13 @@ const workspace = {
     },
   },
   home: {
+    myUsage: 'My usage',
+    workspaceUsage: 'Workspace usage',
+    personalUsageAccessRequired:
+      'The current connection has no verified User identity for personal usage.',
+    personalUsageManagementScope:
+      'The current user ({{userId}}) is connected with management permissions. The statistics API returns workspace usage for this role, so individual usage is unavailable.',
+    viewWorkspaceUsage: 'View workspace statistics',
     contextCommits: {
       description:
         'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',

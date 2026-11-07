@@ -137,4 +137,43 @@ describe('automatic credential encryption', () => {
     await reloaded.initialize()
     expect(reloaded.read(profilesSlot)).toBe('new-user-key')
   })
+  it('accepts another tab saving identical credentials without overwriting its ciphertext', async () => {
+    const f = await fixture()
+    const first = f.open()
+    const second = f.open()
+    await Promise.all([first.initialize(), second.initialize()])
+    first.write(profilesSlot, 'same-user-key')
+    await first.flush()
+    const saved = f.disk.getItem(profilesSlot)
+    second.write(profilesSlot, 'same-user-key')
+    await expect(second.flush()).resolves.toBeUndefined()
+    expect(f.disk.getItem(profilesSlot)).toBe(saved)
+    second.write(profilesSlot, 'updated-user-key')
+    await second.flush()
+    const reloaded = f.open()
+    await reloaded.initialize()
+    expect(reloaded.read(profilesSlot)).toBe('updated-user-key')
+  })
+  it('reports recovery only after every failed slot has been saved', async () => {
+    const f = await fixture()
+    const recovered = vi.fn()
+    let failing = true
+    const disk = {
+      ...f.disk,
+      setItem: (slot: string, value: string) => {
+        if (failing && slot === profilesSlot) throw new Error('quota')
+        f.disk.setItem(slot, value)
+      },
+    }
+    const store = new CredentialStorage(disk, f.getKey, vi.fn(), recovered)
+    await store.initialize()
+    store.write(profilesSlot, 'new-key')
+    store.write(connectionSlot, 'connection')
+    await expect(store.flush()).rejects.toThrow('quota')
+    expect(recovered).not.toHaveBeenCalled()
+    failing = false
+    store.write(profilesSlot, 'new-key')
+    await store.flush()
+    expect(recovered).toHaveBeenCalledOnce()
+  })
 })

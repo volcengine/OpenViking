@@ -1,4 +1,14 @@
 export default {
+  platformBots: '{{platform}} bots',
+  platformIntegrationHint:
+    'Bring Viking answers into everyday team conversations',
+  searchBotsPlaceholder: 'Search bots…',
+  associatedUser: 'Linked User: {{user}}',
+  groupCount: 'Groups',
+  questionsLast7Days: 'Questions in 7 days',
+  statisticsUnavailable: 'Statistics unavailable',
+  botActions: 'Manage {{name}}',
+
   managementTitle: 'VikingBot management',
   managementHint:
     'Manage account bot channels, application credentials, and platform conversation history.',

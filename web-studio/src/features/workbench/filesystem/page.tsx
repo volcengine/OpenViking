@@ -1,6 +1,19 @@
-import { showErrorToast } from '#/shared/lib/error-toast'
-import { getRouteApi, useNavigate } from '@tanstack/react-router'
+import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
+import { useQueryClient } from '@tanstack/react-query'
+import styles from './workbench.module.css'
+import { WorkbenchDirectory } from './components/workbench-directory'
+import { ExperienceDetail } from '#/features/workbench/agent-experience/$experienceUri'
 import {
+  isExperienceFile,
+  usesWorkbenchDirectoryView,
+} from './lib/document-kind'
+import { useDocumentGuard } from './lib/use-document-guard'
+import { showErrorToast } from '#/shared/lib/error-toast'
+import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
+import {
+  GalleryVerticalEndIcon,
+  FileTextIcon,
+  MoreHorizontalIcon,
   ArrowLeftIcon,
   BotIcon,
   ClipboardIcon,
@@ -9,6 +22,7 @@ import {
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   TerminalIcon,
+  UploadIcon,
   WandSparkles,
 } from 'lucide-react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
@@ -21,7 +35,6 @@ import { useStudioService } from '#/features/connection/hooks/use-studio-service
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
 import { LazyFilePreview } from '#/features/workbench/resources/components/lazy-file-preview'
-import { UploadTaskDialog } from '#/features/workbench/resources/components/upload-task-dialog'
 import {
   ResourceUploadProvider,
   useResourceUpload,
@@ -97,11 +110,12 @@ export function FilesystemRoute() {
 }
 
 function FilesystemWorkbench() {
-  const { t } = useTranslation(['filesystem', 'resources'])
+  const { t } = useTranslation(['filesystem', 'resources', 'tasksPage'])
   const { provider } = useStudioService()
   const canUseLocalTools = provider === 'opensource'
   const canUseCliPanel = canUseLocalTools || provider === 'volcengine'
   const { identityScopeKey } = useAppConnection()
+  const queryClient = useQueryClient()
   const search = routeApi.useSearch()
   const navigate = useNavigate({ from: '/filesystem' })
   const initialCurrentUri = useMemo(
@@ -134,8 +148,30 @@ function FilesystemWorkbench() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(
     () => search.upload ?? false,
   )
+  const [documentToolbar, setDocumentToolbar] = useState<HTMLDivElement | null>(
+    null,
+  )
+  const {
+    dirty: documentDirty,
+    dirtyRef,
+    onDirtyChange: handleDirtyChange,
+    confirmNavigation: confirmDocumentNavigation,
+  } = useDocumentGuard(selectedFile?.uri, t('ide.discard'))
+  useBlocker({
+    shouldBlockFn: ({ current, next }) => {
+      const previousDocument = current.search as { file?: string; uri?: string }
+      const nextDocument = next.search as { file?: string; uri?: string }
+      if (
+        current.pathname === next.pathname &&
+        previousDocument.file === nextDocument.file &&
+        previousDocument.uri === nextDocument.uri
+      )
+        return false
+      return !confirmDocumentNavigation()
+    },
+    enableBeforeUnload: () => dirtyRef.current,
+  })
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
-  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [dataManagementMode, setDataManagementMode] = useState<
     'history' | 'transfer' | 'compare' | null
   >(null)
@@ -190,14 +226,21 @@ function FilesystemWorkbench() {
     showAllHidden: true,
     nodeLimit: 500,
   })
-  const {
-    activeTaskCount,
-    hasActiveTasks,
-    isRefreshingTasks,
-    refreshTasks,
-    tasks,
-  } = useResourceUpload()
+  const { activeTaskCount, hasActiveTasks, isRefreshingTasks } =
+    useResourceUpload()
   const { invalidateAll, invalidateList } = useInvalidateVikingFs()
+  const handleDocumentSaved = useCallback(
+    (uri: string) => {
+      void queryClient.invalidateQueries({
+        queryKey: ['agent-experience-content', identityScopeKey, uri],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['agent-experience-list', identityScopeKey],
+      })
+      void invalidateAll()
+    },
+    [identityScopeKey, queryClient, invalidateAll],
+  )
 
   const syncSearch = useCallback(
     (next: {
@@ -292,6 +335,7 @@ function FilesystemWorkbench() {
           ? normalizeDirUri(normalized)
           : normalizeDirUri(parentUri(normalized))
 
+        if (!confirmDocumentNavigation(normalized)) return
         setCurrentUri(nextCurrentUri)
         setSelectedFile({
           ...stat,
@@ -307,34 +351,18 @@ function FilesystemWorkbench() {
           uri: nextCurrentUri,
         })
       } catch (error) {
-        const fallbackIsDir = targetUri.endsWith('/')
-        const normalized = fallbackIsDir
-          ? normalizeDirUri(targetUri)
-          : normalizeFileUri(targetUri)
-        const nextCurrentUri = fallbackIsDir
-          ? normalized
-          : normalizeDirUri(parentUri(normalized))
-
-        setCurrentUri(nextCurrentUri)
-        setSelectedFile(null)
-        setExpandedKeys((prev) =>
-          mergeExpanded(prev, getAncestorUris(nextCurrentUri)),
-        )
-        syncSearch({
-          file: undefined,
-          uri: nextCurrentUri,
-        })
         showErrorToast(error, t('readFailed', { uri: cleaned }))
       } finally {
         setOpeningUri(null)
       }
     },
-    [syncSearch, t],
+    [syncSearch, t, confirmDocumentNavigation],
   )
 
   const handleSelectDirectory = useCallback(
     (entry: VikingFsEntry) => {
       const normalized = normalizeDirUri(entry.uri)
+      if (!confirmDocumentNavigation(normalized)) return
       setCurrentUri(normalized)
       setSelectedFile({ ...entry, isDir: true, uri: normalized })
       setExpandedKeys((prev) =>
@@ -342,12 +370,16 @@ function FilesystemWorkbench() {
       )
       syncSearch({ file: undefined, uri: normalized })
     },
-    [syncSearch],
+    [syncSearch, confirmDocumentNavigation],
   )
 
   const handleSelectFile = useCallback(
     (entry: VikingFsEntry) => {
       const normalized = normalizeFileUri(entry.uri)
+      const targetUri = isDirectoryLevelFile(normalized)
+        ? normalizeDirUri(parentUri(normalized))
+        : normalized
+      if (!confirmDocumentNavigation(targetUri)) return
       if (isDirectoryLevelFile(normalized)) {
         const dirUri = normalizeDirUri(parentUri(normalized))
         setCurrentUri(dirUri)
@@ -365,7 +397,7 @@ function FilesystemWorkbench() {
       )
       syncSearch({ file: normalized, uri: nextCurrentUri })
     },
-    [syncSearch],
+    [syncSearch, confirmDocumentNavigation],
   )
 
   const handlePanelChange = useCallback(
@@ -386,9 +418,9 @@ function FilesystemWorkbench() {
   )
 
   const handleOpenProcessingTasks = useCallback(() => {
-    setTaskDialogOpen(true)
-    void refreshTasks()
-  }, [refreshTasks])
+    const { file, uri, panel, session } = search
+    void navigate({ to: '/tasks', search: { file, uri, panel, session } })
+  }, [navigate, search])
 
   const handleOpenSearch = useCallback(() => {
     setFindPaletteOpen(true)
@@ -397,6 +429,7 @@ function FilesystemWorkbench() {
   const handleNavigateDirectory = useCallback(
     (rawUri: string) => {
       const normalized = normalizeDirUri(rawUri)
+      if (!confirmDocumentNavigation(normalized)) return
       setCurrentUri(normalized)
       setSelectedFile(createEntryFromUri(normalized, true))
       setExpandedKeys((prev) =>
@@ -404,7 +437,7 @@ function FilesystemWorkbench() {
       )
       syncSearch({ file: undefined, uri: normalized })
     },
-    [syncSearch],
+    [syncSearch, confirmDocumentNavigation],
   )
 
   const handleRefreshContextTree = useCallback(async () => {
@@ -449,6 +482,7 @@ function FilesystemWorkbench() {
   }, [])
 
   const selectedUri = selectedFile?.uri ?? currentUri
+  const hasOpenDocument = selectedFile !== null && selectedUri !== ROOT_URI
   const selectedIsDirectory = selectedFile?.isDir ?? true
   const transferUri = selectedIsDirectory
     ? selectedUri
@@ -456,10 +490,12 @@ function FilesystemWorkbench() {
   useEffect(() => {
     setDataManagementMode(null)
   }, [selectedUri])
-  const canManageSelectedUri = selectedUri !== ROOT_URI
   const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
-  const displayUri =
-    selectedUri === ROOT_URI ? selectedUri : selectedUri.replace(/\/$/, '')
+  const displayUri = selectedUri
+    .replace(/^viking:\/\//, '')
+    .replace(/\/$/, '')
+    .split('/')
+    .join(' / ')
   const entries = visibleContextEntries(listQuery.data?.entries ?? [])
   const layoutStyle = useMemo(
     () =>
@@ -564,23 +600,38 @@ function FilesystemWorkbench() {
   }, [])
 
   return (
-    <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-h-0 flex-col bg-background md:-mx-6">
-      <div
-        ref={layoutRef}
-        className="flex min-h-0 flex-1 flex-col bg-background lg:flex-row"
-        style={layoutStyle}
-      >
-        <aside className="flex min-h-[180px] min-w-0 shrink-0 basis-[36%] flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--filesystem-left-width)] lg:min-w-[var(--filesystem-left-width)] lg:basis-auto lg:border-b-0">
+    <div className={styles.workbench}>
+      <StudioHeaderActions>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="relative size-8 rounded-full text-foreground/80"
+          title={t('title', { ns: 'tasksPage' })}
+          aria-label={t('title', { ns: 'tasksPage' })}
+          onClick={handleOpenProcessingTasks}
+        >
+          <GalleryVerticalEndIcon
+            className={
+              hasActiveTasks || isRefreshingTasks
+                ? 'size-[18px] text-primary'
+                : 'size-[18px]'
+            }
+          />
+          {activeTaskCount > 0 ? (
+            <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none text-primary-foreground">
+              {activeTaskCount}
+            </span>
+          ) : null}
+        </Button>
+      </StudioHeaderActions>
+      <div ref={layoutRef} className={styles.layout} style={layoutStyle}>
+        <aside className={styles.explorer}>
           <ContextExplorerHeader
-            activeTaskCount={activeTaskCount}
-            hasActiveTasks={hasActiveTasks}
-            hasTasks={canUseLocalTools && tasks.length > 0}
             isRefreshing={listQuery.isFetching}
-            isRefreshingTasks={isRefreshingTasks}
             onAddResource={
               canUseLocalTools ? () => setUploadDialogOpen(true) : undefined
             }
-            onOpenProcessingTasks={handleOpenProcessingTasks}
             onOpenSearch={handleOpenSearch}
             onRefresh={() => void handleRefreshContextTree()}
           />
@@ -603,133 +654,199 @@ function FilesystemWorkbench() {
           onPointerDown={(event) => handleResizeStart('context', event)}
         />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:border-b-0">
-          <div className="flex min-h-14 items-center gap-3 border-b px-4">
-            <button
-              type="button"
-              className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
-              title={selectedUri}
-              onClick={() => void revealResource(selectedUri)}
+        <main className={styles.document}>
+          {hasOpenDocument ? (
+            <div className={styles.documentTabs}>
+              <span className={styles.activeTab}>
+                <FileTextIcon className="size-3.5" />
+                {selectedFile.name}
+                {documentDirty ? <span className={styles.dirtyDot} /> : null}
+              </span>
+            </div>
+          ) : null}
+          {hasOpenDocument ||
+          (canUseCliPanel && (isCompactLayout || rightCollapsed)) ? (
+            <div
+              className={
+                hasOpenDocument ? styles.documentToolbar : styles.emptyToolbar
+              }
             >
-              {displayUri}
-            </button>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              title={t('copyUri')}
-              onClick={() => {
-                void copyTextToClipboard(selectedUri)
-                  .then(() => {
-                    toast.success(t('copied'))
-                  })
-                  .catch(() => {
-                    toast.error(t('copyFailed'))
-                  })
-              }}
-            >
-              <ClipboardIcon className="size-4" />
-            </Button>
-            {canUseLocalTools &&
-              selectedIsDirectory &&
-              /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
-                selectedUri,
-              ) && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  aria-label={t('compile:compileThisFolder')}
-                  onClick={() =>
-                    void navigate({
-                      to: '/compile/new',
-                      search: { from: selectedUri },
-                    })
-                  }
-                >
-                  <WandSparkles className="size-4" />
-                  <span className="hidden sm:inline">
-                    {t('compile:compileThisFolder')}
-                  </span>
-                </Button>
-              )}
-            {canManageSelectedUri ? (
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                title={t('dataManagement:historyTitle')}
-                aria-label={t('dataManagement:historyTitle')}
-                onClick={() => setDataManagementMode('history')}
-              >
-                <HistoryIcon className="size-4" />
-              </Button>
-            ) : null}
-            {canTransferSelectedUri ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                title={t('dataManagement:transferTitle')}
-                aria-label={t('dataManagement:transferTitle')}
-                onClick={() => setDataManagementMode('transfer')}
-              >
-                <PackageIcon className="size-4" />
-                <span className="hidden sm:inline">
-                  {t('dataManagement:transferShortLabel')}
-                </span>
-              </Button>
-            ) : null}
-            {canUseCliPanel ? (
-              <div className="flex shrink-0 items-center gap-1 lg:hidden">
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
-                  title={t('tabs.terminal')}
-                  aria-label={t('tabs.terminal')}
-                  onClick={() => handleOpenActionPanel('terminal')}
-                >
-                  <TerminalIcon className="size-4" />
-                </Button>
-                {canUseLocalTools ? (
+              {hasOpenDocument ? (
+                <>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
+                    title={selectedUri}
+                    onClick={() => void revealResource(selectedUri)}
+                  >
+                    {displayUri}
+                  </button>
                   <Button
                     type="button"
                     size="icon-sm"
-                    variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
-                    title={t('tabs.agent')}
-                    aria-label={t('tabs.agent')}
-                    onClick={() => handleOpenActionPanel('agent')}
+                    variant="ghost"
+                    title={t('copyUri')}
+                    onClick={() => {
+                      void copyTextToClipboard(selectedUri)
+                        .then(() => {
+                          toast.success(t('copied'))
+                        })
+                        .catch(() => {
+                          toast.error(t('copyFailed'))
+                        })
+                    }}
                   >
-                    <BotIcon className="size-4" />
+                    <ClipboardIcon className="size-4" />
                   </Button>
-                ) : null}
-              </div>
-            ) : null}
-            {canUseCliPanel && rightCollapsed ? (
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                className="hidden shrink-0 lg:inline-flex"
-                title={t('actionPanel.expand')}
-                aria-label={t('actionPanel.expand')}
-                onClick={toggleRightCollapsed}
-              >
-                <PanelRightOpenIcon className="size-4" />
-              </Button>
-            ) : null}
-          </div>
-          <div className="min-h-0 flex-1">
-            <LazyFilePreview
-              defaultReadLimit={canUseLocalTools ? -1 : 10000}
-              file={selectedFile}
-              hideDirectoryHeader
-              onClose={() => setSelectedFile(null)}
-              onNavigate={(uri) => void revealResource(uri)}
-              showCloseButton={false}
-            />
-          </div>
+                  <div
+                    ref={setDocumentToolbar}
+                    className={styles.editorActions}
+                  />
+                  <details className={styles.moreMenu}>
+                    <summary aria-label={t('ide.more')} title={t('ide.more')}>
+                      <MoreHorizontalIcon className="size-4" />
+                    </summary>
+                    <div className={styles.moreMenuContent}>
+                      {canUseLocalTools && selectedIsDirectory ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          aria-label={t('explorer.addResource')}
+                          className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
+                          onClick={() => setUploadDialogOpen(true)}
+                        >
+                          <UploadIcon className="size-4" />
+                          <span className="hidden xl:inline">
+                            {t('explorer.addResource')}
+                          </span>
+                        </Button>
+                      ) : null}
+                      {canUseLocalTools &&
+                        selectedIsDirectory &&
+                        /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
+                          selectedUri,
+                        ) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            aria-label={t('compile:compileThisFolder')}
+                            onClick={() =>
+                              void navigate({
+                                to: '/compile/new',
+                                search: { from: selectedUri },
+                              })
+                            }
+                          >
+                            <WandSparkles className="size-4" />
+                            <span className="hidden sm:inline">
+                              {t('compile:compileThisFolder')}
+                            </span>
+                          </Button>
+                        )}
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        title={t('dataManagement:historyTitle')}
+                        aria-label={t('dataManagement:historyTitle')}
+                        onClick={() => setDataManagementMode('history')}
+                      >
+                        <HistoryIcon className="size-4" />
+                      </Button>
+                      {canTransferSelectedUri ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          title={t('dataManagement:transferTitle')}
+                          aria-label={t('dataManagement:transferTitle')}
+                          onClick={() => setDataManagementMode('transfer')}
+                        >
+                          <PackageIcon className="size-4" />
+                          <span className="hidden sm:inline">
+                            {t('dataManagement:transferShortLabel')}
+                          </span>
+                        </Button>
+                      ) : null}
+                    </div>
+                  </details>
+                </>
+              ) : null}
+              {canUseCliPanel ? (
+                <div className="flex shrink-0 items-center gap-1 xl:hidden">
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
+                    title={t('tabs.terminal')}
+                    aria-label={t('tabs.terminal')}
+                    onClick={() => handleOpenActionPanel('terminal')}
+                  >
+                    <TerminalIcon className="size-4" />
+                  </Button>
+                  {canUseLocalTools ? (
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
+                      title={t('tabs.agent')}
+                      aria-label={t('tabs.agent')}
+                      onClick={() => handleOpenActionPanel('agent')}
+                    >
+                      <BotIcon className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {canUseCliPanel && rightCollapsed ? (
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  className="hidden shrink-0 xl:inline-flex"
+                  title={t('actionPanel.expand')}
+                  aria-label={t('actionPanel.expand')}
+                  onClick={toggleRightCollapsed}
+                >
+                  <PanelRightOpenIcon className="size-4" />
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {hasOpenDocument ? (
+            <div className="filesystem-preview min-h-0 flex-1">
+              {selectedIsDirectory &&
+              usesWorkbenchDirectoryView(selectedUri) ? (
+                <WorkbenchDirectory
+                  key={selectedUri}
+                  uri={selectedUri}
+                  onNavigate={(uri) => void revealResource(uri)}
+                />
+              ) : (
+                <LazyFilePreview
+                  ide
+                  toolbarContainer={documentToolbar}
+                  onDirtyChange={handleDirtyChange}
+                  onSaved={handleDocumentSaved}
+                  previewContent={
+                    isExperienceFile(selectedFile.uri) ? (
+                      <ExperienceDetail
+                        experienceUri={selectedFile.uri}
+                        embedded
+                      />
+                    ) : undefined
+                  }
+                  defaultReadLimit={canUseLocalTools ? -1 : 10000}
+                  file={selectedFile}
+                  hideDirectoryHeader
+                  onClose={() => setSelectedFile(null)}
+                  onNavigate={(uri) => void revealResource(uri)}
+                  showCloseButton={false}
+                />
+              )}
+            </div>
+          ) : null}
         </main>
         {canUseCliPanel && !rightCollapsed ? (
           <FilesystemResizeHandle
@@ -740,7 +857,7 @@ function FilesystemWorkbench() {
         ) : null}
 
         {!isCompactLayout && canUseCliPanel && !rightCollapsed ? (
-          <aside className="hidden min-h-0 min-w-0 flex-col bg-muted/15 lg:flex lg:w-[var(--filesystem-right-width)] lg:min-w-[var(--filesystem-right-width)]">
+          <aside className={styles.assistant}>
             <FilesystemActionPanel
               activePanel={activePanel}
               currentUri={currentUri}
@@ -801,11 +918,6 @@ function FilesystemWorkbench() {
               </div>
             </DialogContent>
           </Dialog>
-          <UploadTaskDialog
-            open={taskDialogOpen}
-            onOpenChange={setTaskDialogOpen}
-            tasks={tasks}
-          />
         </>
       ) : null}
       {dataManagementMode === 'compare' ? (
@@ -826,6 +938,7 @@ function FilesystemWorkbench() {
         />
       ) : null}
       <FindPalette
+        ide
         open={findPaletteOpen}
         onClose={() => setFindPaletteOpen(false)}
         onNavigate={(uri) => void revealResource(uri)}
@@ -839,7 +952,7 @@ function FilesystemWorkbench() {
 function useIsCompactFilesystemLayout() {
   const [isCompact, setIsCompact] = useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(max-width: 1023px)').matches
+      ? window.matchMedia('(max-width: 1279px)').matches
       : false,
   )
 
@@ -847,7 +960,7 @@ function useIsCompactFilesystemLayout() {
     if (typeof window.matchMedia !== 'function') {
       return
     }
-    const mql = window.matchMedia('(max-width: 1023px)')
+    const mql = window.matchMedia('(max-width: 1279px)')
     const onChange = () => setIsCompact(mql.matches)
     onChange()
     mql.addEventListener('change', onChange)
@@ -886,7 +999,7 @@ function FilesystemActionPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-12 shrink-0 items-center gap-2 px-3">
         <FilesystemActionTabs
           activePanel={activePanel}
           onPanelChange={onPanelChange}
@@ -949,7 +1062,7 @@ function FilesystemMobileActionScreen({
   sessionId?: string
   showAgentTab: boolean
 }) {
-  const { t } = useTranslation(['filesystem', 'resources'])
+  const { t } = useTranslation(['filesystem', 'resources', 'tasksPage'])
   const [toolbarContainer, setToolbarContainer] =
     useState<HTMLDivElement | null>(null)
 
@@ -958,7 +1071,7 @@ function FilesystemMobileActionScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background lg:hidden">
+    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background xl:hidden">
       <div className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
         <Button
           type="button"
@@ -1009,13 +1122,7 @@ function FilesystemActionTabs({
   const { t } = useTranslation('filesystem')
 
   return (
-    <div className="inline-flex rounded-lg border bg-background p-1">
-      <PanelTab
-        active={activePanel === 'terminal'}
-        icon={TerminalIcon}
-        label={t('tabs.terminal')}
-        onClick={() => onPanelChange('terminal')}
-      />
+    <div className="inline-flex rounded-lg bg-muted p-0.5">
       {showAgentTab ? (
         <PanelTab
           active={activePanel === 'agent'}
@@ -1024,6 +1131,12 @@ function FilesystemActionTabs({
           onClick={() => onPanelChange('agent')}
         />
       ) : null}
+      <PanelTab
+        active={activePanel === 'terminal'}
+        icon={TerminalIcon}
+        label={t('tabs.terminal')}
+        onClick={() => onPanelChange('terminal')}
+      />
     </div>
   )
 }

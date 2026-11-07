@@ -54,7 +54,7 @@ afterEach(async () => {
 })
 async function open() {
   render(<ManagementKeyDialog />)
-  fireEvent.click(screen.getByRole('button', { name: '管理后台' }))
+  fireEvent.click(screen.getByRole('button', { name: '管理团队' }))
   await screen.findByRole('dialog', { name: '配置管理权限' })
 }
 
