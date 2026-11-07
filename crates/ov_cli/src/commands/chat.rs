@@ -14,7 +14,10 @@ use reqwest::Client;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
-use termimad::MadSkin;
+use termimad::{
+    FmtText, MadSkin,
+    minimad::{self, Composite, Line, TableRow, Text},
+};
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
@@ -1174,8 +1177,63 @@ fn print_tool_result(content: &str, language: Language) {
 
 /// Render markdown to terminal using termimad
 fn render_markdown(text: &str) {
+    let width = termimad::terminal_size().0 as usize;
+    print!("{}", format_markdown(text, width));
+}
+
+fn format_markdown(text: &str, width: usize) -> String {
     let skin = MadSkin::default();
-    skin.print_text(text);
+    FmtText::from_text(&skin, normalize_table_delimiter_rows(text), Some(width)).to_string()
+}
+
+/// Keep delimiter-shaped table body rows as data instead of rendering them as rules.
+///
+/// `minimad` classifies every table row made only of colons and hyphens as a
+/// `TableRule`. Markdown only gives the first such row in a contiguous table
+/// special meaning. Later rows are valid data and must remain visible.
+fn normalize_table_delimiter_rows(markdown: &str) -> Text<'_> {
+    let mut text = minimad::parse_text(markdown, minimad::Options::default());
+    let mut parsed_index = 0;
+    let mut saw_table_rule = false;
+
+    for source_line in markdown.lines() {
+        // Default minimad parsing omits fence marker lines from Text::lines.
+        if source_line.starts_with("```") {
+            continue;
+        }
+
+        let Some(line) = text.lines.get_mut(parsed_index) else {
+            break;
+        };
+        parsed_index += 1;
+
+        match line {
+            Line::TableRow(_) => {}
+            Line::TableRule(_) if !saw_table_rule => saw_table_rule = true,
+            Line::TableRule(_) => {
+                *line = Line::TableRow(delimiter_row_as_table_row(source_line));
+            }
+            _ => saw_table_rule = false,
+        }
+    }
+
+    debug_assert_eq!(parsed_index, text.lines.len());
+    text
+}
+
+fn delimiter_row_as_table_row(line: &str) -> TableRow<'_> {
+    let mut cells = line
+        .strip_prefix('|')
+        .unwrap_or(line)
+        .split('|')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if cells.last().is_some_and(|cell| cell.is_empty()) {
+        cells.pop();
+    }
+    let cells = cells.into_iter().map(Composite::raw_str).collect();
+
+    TableRow { cells }
 }
 
 fn health_auth_mode(health: &OpenVikingHealth) -> &str {
@@ -1572,6 +1630,92 @@ mod tests {
         assert!(health_has_user_identity(&admin_health));
         assert!(!health_has_user_identity(&root_health));
         assert!(!health_has_user_identity(&missing_identity));
+    }
+
+    #[test]
+    fn markdown_table_preserves_delimiter_shaped_body_rows() {
+        let markdown = "| Item | Status |\n\
+                        | :--- | ---: |\n\
+                        | --- | --- |\n\
+                        | build | passed |\n\
+                        | :---: | ---: |";
+
+        let rendered = strip_ansi(&format_markdown(markdown, 80));
+
+        assert!(rendered.contains("---"));
+        assert!(rendered.contains(":---:"));
+        assert!(rendered.contains("build"));
+        assert!(rendered.contains("passed"));
+    }
+
+    #[test]
+    fn markdown_table_keeps_its_first_delimiter_as_the_alignment_rule() {
+        let markdown = "| Item | Status |\n\
+                        | :--- | ---: |\n\
+                        | build | passed |";
+
+        let normalized = normalize_table_delimiter_rows(markdown);
+
+        assert!(matches!(normalized.lines[0], Line::TableRow(_)));
+        assert!(matches!(normalized.lines[1], Line::TableRule(_)));
+        assert!(matches!(normalized.lines[2], Line::TableRow(_)));
+    }
+
+    #[test]
+    fn markdown_table_resets_delimiter_tracking_between_tables() {
+        let markdown = "| First | Table |\n\
+                        | --- | --- |\n\
+                        | --- | :---: |\n\
+                        \n\
+                        | Second | Table |\n\
+                        | ---: | :--- |\n\
+                        | data | value |";
+
+        let normalized = normalize_table_delimiter_rows(markdown);
+
+        assert!(matches!(normalized.lines[1], Line::TableRule(_)));
+        assert!(matches!(normalized.lines[2], Line::TableRow(_)));
+        assert!(matches!(normalized.lines[5], Line::TableRule(_)));
+    }
+
+    #[test]
+    fn markdown_table_does_not_reinterpret_fenced_code() {
+        let markdown = "```markdown\n\
+                        | --- | :---: |\n\
+                        ```\n\
+                        \n\
+                        | Item | Status |\n\
+                        | --- | --- |";
+
+        let normalized = normalize_table_delimiter_rows(markdown);
+
+        assert!(matches!(
+            normalized.lines[0],
+            Line::Normal(ref composite) if composite.is_code()
+        ));
+        assert_eq!(
+            normalized
+                .lines
+                .iter()
+                .filter(|line| matches!(line, Line::TableRule(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn markdown_table_preserves_delimiter_cell_text() {
+        let markdown = "| Header | Header |\n\
+                        | --- | --- |\n\
+                        | :---: | ---: |";
+
+        let normalized = normalize_table_delimiter_rows(markdown);
+        let Line::TableRow(row) = &normalized.lines[2] else {
+            panic!("expected delimiter-shaped body line to remain a table row");
+        };
+
+        assert_eq!(row.cells[0].compounds[0].as_str(), ":---:");
+        assert_eq!(row.cells[1].compounds[0].as_str(), "---:");
     }
 
     fn strip_ansi(input: &str) -> String {
