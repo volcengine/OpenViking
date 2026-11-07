@@ -340,7 +340,7 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
 
 
 def check_vlm() -> tuple[bool, str, Optional[str]]:
-    """Load VLM config and verify it's configured."""
+    """Load VLM config and verify the configured model is callable."""
     config_path = _find_config()
     if config_path is None:
         return False, "Cannot check (no config file)", None
@@ -401,7 +401,54 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
             "Set vlm.api_key in ov.conf",
         )
 
-    return True, f"{provider}/{model}", None
+    return _probe_vlm_provider(vlm, provider, model)
+
+
+def _probe_vlm_provider(
+    vlm: VLMConfig,
+    provider: str,
+    model: str,
+) -> tuple[bool, str, Optional[str]]:
+    """Create the configured VLM client, make one 1-token request, and report callability."""
+    label = f"{provider}/{model}"
+
+    try:
+        instance = vlm.get_vlm_instance()
+    except Exception as exc:
+        return (
+            False,
+            f"{label} (invalid VLM client config: {exc})",
+            "Fix vlm section in ov.conf",
+        )
+
+    async def _run_probe():
+        # max_tokens=1 keeps the probe at a single output token. Reasoning
+        # models can return empty content with finish_reason="length" at that
+        # cap, so callability is judged by the request succeeding, not by text.
+        return await asyncio.wait_for(
+            instance.get_completion_async(
+                prompt="OpenViking doctor VLM probe",
+                max_tokens=1,
+            ),
+            timeout=15.0,
+        )
+
+    try:
+        asyncio.run(_run_probe())
+    except TimeoutError:
+        return (
+            False,
+            f"{label} (probe timed out)",
+            "Check vlm.api_base and make sure the VLM provider is reachable",
+        )
+    except Exception as exc:
+        return (
+            False,
+            f"{label} (probe failed: {exc})",
+            "Check the VLM provider service, model name, API key, and api_base",
+        )
+
+    return True, f"{label} probe ok", None
 
 
 def check_ollama() -> tuple[bool, str, Optional[str]]:
