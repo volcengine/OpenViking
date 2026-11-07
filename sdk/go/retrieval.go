@@ -34,8 +34,8 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
-	setAny(payload, "include_provenance", opts.IncludeProvenance)
-	setAny(payload, "read_content", opts.ReadContent)
+	setOptional(payload, "include_provenance", opts.IncludeProvenance)
+	setOptional(payload, "read_content", opts.ReadContent)
 	setString(payload, "since", opts.Since)
 	setString(payload, "until", opts.Until)
 	setString(payload, "time_field", opts.TimeField)
@@ -46,7 +46,7 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 		payload["tags"] = opts.Tags
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
-	if err := mergeExtra(payload, opts.Extra); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra, "include_provenance", "read_content"); err != nil {
 		return nil, err
 	}
 	var result FindResult
@@ -82,8 +82,8 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
-	setAny(payload, "include_provenance", opts.IncludeProvenance)
-	setAny(payload, "read_content", opts.ReadContent)
+	setOptional(payload, "include_provenance", opts.IncludeProvenance)
+	setOptional(payload, "read_content", opts.ReadContent)
 	setString(payload, "since", opts.Since)
 	setString(payload, "until", opts.Until)
 	setString(payload, "time_field", opts.TimeField)
@@ -94,7 +94,7 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 		payload["tags"] = opts.Tags
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
-	if err := mergeExtra(payload, opts.Extra); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra, "include_provenance", "read_content"); err != nil {
 		return nil, err
 	}
 	var result FindResult
@@ -118,12 +118,12 @@ func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchCo
 	}
 	setString(payload, "image_url", imageURL)
 	setString(payload, "session_id", opts.SessionID)
-	setAny(payload, "limit", opts.Limit)
-	setAny(payload, "node_limit", opts.NodeLimit)
-	setAny(payload, "score_threshold", opts.ScoreThreshold)
+	setOptional(payload, "limit", opts.Limit)
+	setOptional(payload, "node_limit", opts.NodeLimit)
+	setOptional(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
-	setAny(payload, "include_provenance", opts.IncludeProvenance)
+	setOptional(payload, "include_provenance", opts.IncludeProvenance)
 	if opts.Tags != nil {
 		payload["tags"] = opts.Tags
 	}
@@ -132,22 +132,25 @@ func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchCo
 	setString(payload, "time_field", opts.TimeField)
 	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setString(payload, "query_expansion", opts.QueryExpansion)
-	setAny(payload, "max_tokens", opts.MaxTokens)
+	setOptional(payload, "max_tokens", opts.MaxTokens)
 	if opts.Quotas != nil {
 		payload["quotas"] = opts.Quotas
 	}
 	setString(payload, "purpose", opts.Purpose)
 	setAny(payload, "detail", opts.Detail)
-	setAny(payload, "dedup_turns", opts.DedupTurns)
+	setOptional(payload, "dedup_turns", opts.DedupTurns)
 	if opts.ExcludeURIs != nil {
 		payload["exclude_uris"] = opts.ExcludeURIs
 	}
 	setString(payload, "peer_scope", opts.PeerScope)
 	setAny(payload, "other_peer_penalty", opts.OtherPeerPenalty)
 	setAny(payload, "rewrite", opts.Rewrite)
-	setAny(payload, "rewrite_max_bullets", opts.RewriteMaxBullets)
+	setOptional(payload, "rewrite_max_bullets", opts.RewriteMaxBullets)
 	setAny(payload, "telemetry", opts.Telemetry)
-	if err := mergeExtra(payload, opts.Extra); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra,
+		"limit", "node_limit", "score_threshold", "include_provenance",
+		"max_tokens", "dedup_turns", "rewrite_max_bullets",
+	); err != nil {
 		return nil, err
 	}
 	var result SearchContextResult
