@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { OVConnection, readOVConfig } from '../../daemon/src/ov-connection.mjs';
 import { availableInstanceOvConfig } from './manifest.mjs';
 import {
-  HOSTED_OV_URL, LOCAL_OV_URL, PEER_FIELDS, detectOpenViking, instanceOvConfig, instanceUserName, requestNamesUser,
+  HOSTED_OV_URL, LOCAL_OV_URL, PEER_FIELDS, connectionUserName, detectOpenViking, instanceOvConfig, instanceUserName, requestNamesUser,
   savedOVConfigPath, writeInstanceOvConfig,
 } from './ov.mjs';
 import { GoBack, PromptAborted } from './prompt.mjs';
@@ -302,13 +302,22 @@ export async function configureOpenViking({
 // The connection offered to the next new instance. A file new instances find
 // anyway is not copied: the copy would go stale and still be found first. An
 // administrator's key that created the instance's user is not kept anywhere.
-export function saveOVConnection(detected, { env = process.env, homeDir = env.HOME || os.homedir() } = {}) {
+// Where requests name the user, the connection chosen for `instanceId` may
+// already name that instance's own user (its config edited by hand, or chosen
+// as a file); the next instance gets the user it was derived from, not
+// `<user>.<instanceId>.<next>`.
+export function saveOVConnection(detected, { env = process.env, homeDir = env.HOME || os.homedir(), instanceId = null } = {}) {
   const target = savedOVConfigPath(homeDir);
   const found = [(env.OPENVIKING_CLI_CONFIG_FILE || '').trim(), target, path.join(homeDir, '.openviking', 'ovcli.conf')];
   if (detected.identity?.mode === 'register') return null;
   if (detected.configPath && found.includes(detected.configPath)) return null;
   const config = { ...sourceConfig(detected) };
   for (const field of PEER_FIELDS) delete config[field];
+  if (config.user && requestNamesUser(detected.authMode, config)) {
+    const user = connectionUserName(config.user, instanceId);
+    if (user) config.user = user;
+    else delete config.user;
+  }
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const temporary = `${target}.${randomUUID()}.tmp`;
   try {

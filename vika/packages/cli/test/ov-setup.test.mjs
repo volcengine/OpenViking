@@ -342,6 +342,23 @@ test('the menu shows who a new instance would be: its own Trusted user, or a key
   assert.doesNotMatch(h.text(), /user=weihan\.liu ·/);
 });
 
+test('the connection kept for the next instance names the user an instance’s own was derived from', async (t) => {
+  const h = fixture(t, []);
+  const save = (user, { authMode = 'trusted', instanceId = 'asd', ...rest } = {}) => {
+    saveOVConnection({ usable: true, configPath: null, authMode, config: { url: LOCAL_OV_URL, account: 'team', user, ...rest } },
+      { ...h.options, instanceId });
+    return JSON.parse(fs.readFileSync(savedOVConfigPath(h.home), 'utf8')).user;
+  };
+  // asd's own config chosen again, by hand or as a file, still names asd.
+  assert.equal(save('weihan.liu.asd'), 'weihan.liu');
+  assert.equal(save('weihan.liu'), 'weihan.liu');
+  assert.equal(save('asd'), undefined, 'the instance id alone was the user: the connection names none');
+  assert.equal(save('weihan.liu.asd2'), 'weihan.liu.asd2', 'only this instance’s own suffix is taken off');
+  assert.equal(save('weihan.liu.asd', { instanceId: null }), 'weihan.liu.asd');
+  // Under an API key the key decides the user; it is kept as the key reported it.
+  assert.equal(save('weihan.liu.asd', { authMode: 'api_key', api_key: 'test-secret' }), 'weihan.liu.asd');
+});
+
 test('a typed connection is kept privately for the next instance; a file new instances find anyway is not copied', async (t) => {
   const h = fixture(t, []);
   const saved = saveOVConnection({ usable: true, configPath: null, config: {
