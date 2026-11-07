@@ -59,9 +59,28 @@ export class FailurePolicy {
   // A failed turn first gets one shot at the automatic claude → codex fallback;
   // when that is not applicable (or the switch itself fails) the normal failure
   // notice goes out instead.
+  unsettledSeqs(inboundSeqs, { forNotice = false } = {}) {
+    return (Array.isArray(inboundSeqs) ? inboundSeqs : []).filter((seq) => {
+      const row = this.store.inboundBySeq(seq);
+      const decision = row?.scopeKey && this.store.coveringDecision?.(row.scopeKey, seq);
+      if (!decision) return true;
+      if (!forNotice || decision === 'silent') return false;
+      return !this.store.successfulDecisionDelivery?.(row.scopeKey, seq);
+    });
+  }
+
   async onTurnFailed(info) {
+    // A runtime may fail after delivering. Keep the runtime error in logs,
+    // but never retry or notify inputs that already have a durable decision.
+    // Filter per input so unanswered scopes in the same turn are not lost.
+    const pending = this.unsettledSeqs(info.inboundSeqs);
+    if (Array.isArray(info.inboundSeqs) && info.inboundSeqs.length > 0 && pending.length === 0) {
+      this.logger.info('turn_failure_after_decision', { error: safeError(info.error) });
+      await this.notifyTurnFailure(info);
+      return false;
+    }
     try {
-      if (await this.tryModelFallback(info)) return true;
+      if (await this.tryModelFallback({ ...info, inboundSeqs: pending })) return true;
     } catch (error) {
       this.logger.warn('model_fallback_failed', { error: safeError(error) });
     }
@@ -138,7 +157,8 @@ export class FailurePolicy {
   // failure does not spam the chat.
   async notifyTurnFailure({ inboundSeqs, error }) {
     if (this.isStopping()) return;
-    const seqs = Array.isArray(inboundSeqs) ? inboundSeqs : [];
+    const seqs = this.unsettledSeqs(inboundSeqs, { forNotice: true });
+    if (Array.isArray(inboundSeqs) && inboundSeqs.length > 0 && seqs.length === 0) return;
     const seq = seqs.at(-1) ?? null;
     const inbound = seq === null || seq === undefined ? null : this.store.inboundBySeq(seq);
     const errorSummary = safeError(error);
@@ -164,7 +184,10 @@ export class FailurePolicy {
       return;
     }
     const chatMessage = inbound?.chatId && inbound?.messageId && inbound.kind?.startsWith('message.');
-    const notice = `⚠️ 这一轮处理失败，没有生成回复：${error}`.slice(0, 600)
+    const attempted = inbound?.scopeKey
+      && this.store.coveringDecision?.(inbound.scopeKey, seq) === 'delivered';
+    const prefix = attempted ? '这一轮处理异常，回复投递结果未确认' : '这一轮处理失败，没有生成回复';
+    const notice = `⚠️ ${prefix}：${error}`.slice(0, 600)
       + (chatMessage ? '\n（消息不会自动重试；可再发一次，或用 /effort、/model 调整后重试）'
         : '\n（事件不会自动重试，请检查运行状态后决定是否重试。）');
     this.recordActivity('agent.failure_notice', {

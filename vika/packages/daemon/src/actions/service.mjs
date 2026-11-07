@@ -680,7 +680,8 @@ export class ActionService {
       connector, action, idempotencyKey: key, payload: input, summary,
       caller: caller.authority ? 'agent' : 'daemon', retryUncertain: Boolean(spec.idempotent),
       chatId: scope.chatId ?? null, threadId: scope.threadId ?? null, convKey: scope.convKey ?? null,
-      inboundSeq, runtimeToken: caller.authority ?? null, metadata,
+      inboundSeq, runtimeToken: caller.authority ?? null,
+      metadata: { ...metadata, finalDecisionSeq: final && fence ? fence.seq : null },
     });
     caller.trace.outboxId = reservation.id;
     if (!reservation.claimed) {
