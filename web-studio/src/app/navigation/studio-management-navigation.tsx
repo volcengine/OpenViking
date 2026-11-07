@@ -131,13 +131,13 @@ export function StudioManagementNavigation({
         ] as const)
       : []),
     {
-      label: 'adminNavigation.root',
+      label: 'adminNavigation.extensions',
       items: [
         ...(showGateway && (showRootConfiguration || gatewayOnly)
           ? ([
               {
                 to: '/admin/gateway',
-                title: 'footer.gateway',
+                title: 'adminNavigation.gateway',
                 icon: WaypointsIcon,
               },
             ] as const)
@@ -169,7 +169,14 @@ export function StudioManagementNavigation({
                   className={`${styles.item} min-h-8 h-auto rounded-lg px-2.5 text-[13px] leading-[22px] data-[active=true]:font-semibold [&>svg:first-child]:size-4! [&>svg:first-child]:rounded-none! [&>svg:first-child]:bg-transparent! [&>svg:first-child]:p-0! [&>svg:first-child]:shadow-none! [&>span:last-child]:whitespace-normal group-data-[collapsible=icon]:[&>span:last-child]:hidden`}
                 >
                   <Icon />
-                  <span>{t(title)}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span>{t(title)}</span>
+                    {to === '/admin/gateway' && (
+                      <span className="shrink-0 rounded border border-border px-1 text-[10px] leading-4 font-normal text-muted-foreground">
+                        {t('footer.beta')}
+                      </span>
+                    )}
+                  </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}

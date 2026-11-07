@@ -1,3 +1,4 @@
+import { AdminScopeFilters } from '#/features/admin/users/components/admin-scope-filters'
 import styles from './permissions-page.module.css'
 import { AccountAclSettings } from '#/features/resource-acl/components/account-acl-settings'
 import { ResourceAclIdentityRecovery } from '#/features/resource-acl/components/resource-acl-identity-recovery'
@@ -38,11 +39,7 @@ export function PermissionsPage() {
       <header className={styles.header}>
         <h1>{t('appShell:adminNavigation.permissions')}</h1>
       </header>
-      <p className={styles.scope}>
-        {t('appShell:adminNavigation.currentSpace', {
-          space: state.connection.accountId,
-        })}
-      </p>
+      <AdminScopeFilters />
       {state.allowed && <AccountAclSettings inline />}
       <p className={styles.hint}>{t('acl.page.inheritanceHint')}</p>
       <DirectoryPermissions

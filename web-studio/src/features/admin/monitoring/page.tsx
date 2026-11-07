@@ -1,3 +1,5 @@
+import { AdminScopeFilters } from '#/features/admin/users/components/admin-scope-filters'
+import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
 import styles from './page.module.css'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
@@ -76,10 +78,12 @@ function normalizeComponent(
   }
 }
 
-async function fetchMonitoringOverview(): Promise<MonitoringOverview> {
+async function fetchMonitoringOverview(
+  headers?: Record<string, string>,
+): Promise<MonitoringOverview> {
   const [health, observer] = await Promise.all([
     getOvResult<Record<string, unknown>>(getHealth()),
-    getOvResult<Record<string, unknown>>(getObserverSystem()),
+    getOvResult<Record<string, unknown>>(getObserverSystem({ headers })),
   ])
   const rawComponents = isRecord(observer.components) ? observer.components : {}
   const components: Record<string, ObserverComponent> = {}
@@ -139,11 +143,14 @@ function HealthBadge({
 export function MonitoringRoute() {
   const { i18n, t } = useTranslation('monitoringPage')
   const { identityScopeKey, serverMode } = useAppConnection()
+  const scoped = useAdminSpaceHeaders(true)
   const [activeType, setActiveType] = React.useState<MonitorType>('overview')
   const monitoringQuery = useQuery({
-    enabled: serverMode !== 'offline',
-    queryFn: fetchMonitoringOverview,
-    queryKey: ['monitoring-overview', identityScopeKey],
+    enabled:
+      serverMode !== 'offline' && !scoped.isLoading && scoped.headers !== null,
+    queryFn: () => fetchMonitoringOverview(scoped.headers ?? undefined),
+    queryKey: ['monitoring-overview', identityScopeKey, scoped.scopeKey],
+    meta: { adminSpaceScope: scoped.scopeKey },
     refetchInterval: 10_000,
     retry: false,
     staleTime: 5_000,
@@ -194,6 +201,12 @@ export function MonitoringRoute() {
           </Button>
         </div>
       </header>
+      {(activeType === 'overview' ||
+        activeType === 'models' ||
+        activeType === 'vikingdb') && <AdminScopeFilters />}
+      {!scoped.isLoading && scoped.headers === null && (
+        <p role="status">{t(scoped.unavailableKey)}</p>
+      )}
 
       {serverMode === 'offline' ? (
         <Alert>

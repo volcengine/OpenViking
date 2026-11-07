@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import userEvent from '@testing-library/user-event'
 import type { Connection } from '#/features/admin/vikingbot/api'
 import { ReplySettings } from '#/features/admin/vikingbot/providers/feishu/reply-settings'
 import zh from '#/i18n/locales/zh-CN/vikingbot'
@@ -46,18 +47,21 @@ it('keeps a failed selection for retry and saves against the connection revision
     </QueryClientProvider>,
   )
   fireEvent.click(screen.getByRole('button', { name: zh.replyMode }))
-  const select = screen.getByRole<HTMLSelectElement>('combobox', {
+  const select = screen.getByRole('combobox', {
     name: zh.replyMode,
   })
-  expect(select.value).toBe('true')
+  expect(select.textContent).toContain(zh.onlyMention)
   expect(
     screen.getByRole<HTMLButtonElement>('button', { name: zh.saveReplyMode })
       .disabled,
   ).toBe(true)
-  fireEvent.change(select, { target: { value: 'false' } })
+  await userEvent.click(select)
+  await userEvent.click(
+    await screen.findByRole('option', { name: zh.withoutMention }),
+  )
   fireEvent.click(screen.getByRole('button', { name: zh.saveReplyMode }))
   await screen.findByRole('alert')
-  expect(select.value).toBe('false')
+  expect(select.textContent).toContain(zh.withoutMention)
   expect(saved).not.toHaveBeenCalled()
   expect(update).toHaveBeenCalledWith(connection, {
     thread_require_mention: false,

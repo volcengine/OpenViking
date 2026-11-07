@@ -1,4 +1,7 @@
-import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
+import {
+  AdminScopeFilters,
+  useAdminUserScope,
+} from '#/features/admin/users/components/admin-scope-filters'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -58,7 +61,8 @@ export function HomePage({
     scopeKey,
     isLoading: isConnectionRoleLoading,
     unavailableKey,
-  } = useAdminSpaceHeaders(management)
+    userFilter,
+  } = useAdminUserScope(management, 'usage')
   const hasPersonalIdentity =
     connectionRole === 'user' &&
     (serverMode !== 'api_key' || Boolean(connection.apiKey.trim()))
@@ -137,6 +141,7 @@ export function HomePage({
           '[--home-token-input:#ed2887] [--home-token-output:#18b968] [--home-token-embedding:#3079ff] [&_[data-slot=usage-panel]]:rounded-[20px] [&_[data-slot=usage-panel]]:border-transparent [&_[data-slot=usage-panel]]:bg-[#f7f7f9] dark:[&_[data-slot=usage-panel]]:bg-[#262628]',
       )}
     >
+      {management && <AdminScopeFilters userFilter={userFilter} />}
       {!management ? (
         <h1 className="text-xl font-semibold">
           {t(hasWorkspaceUsage ? 'workspaceUsage' : 'myUsage')}

@@ -12,19 +12,6 @@
   font-weight: 500;
   letter-spacing: 0.003em;
 }
-.scope > div {
-  min-height: 36px;
-  padding: 8px 12px;
-  border: 1px solid #e8e8ec;
-  border-radius: 8px;
-  background: #fafafa;
-  color: #86868b;
-  font-size: 14px;
-  line-height: 20px;
-}
-.scope svg {
-  display: none;
-}
 .page [data-log-metrics] {
   gap: 12px;
 }
@@ -185,7 +172,6 @@
   background: white;
   box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
 }
-:global(.dark) .scope > div,
 :global(.dark)
   .page
   [data-log-metrics]

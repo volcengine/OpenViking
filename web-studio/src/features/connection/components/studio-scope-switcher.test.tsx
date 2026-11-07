@@ -73,6 +73,16 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
         },
       },
       {
+        id: 'cloud',
+        name: 'Volcengine',
+        connection: {
+          baseUrl: 'https://api.vikingdb.cn-beijing.volces.com/openviking',
+          accountId: 'cloud-account',
+          userId: 'cloud-user',
+          apiKey: 'cloud-key',
+        },
+      },
+      {
         id: 'three',
         name: 'Production',
         connection: {
@@ -422,5 +432,19 @@ it.each([
     fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
     expect(state.accounts).not.toHaveBeenCalled()
     expect(state.users).not.toHaveBeenCalled()
+  },
+)
+
+it.each([false, true])(
+  'only offers cloud connections in the workbench (management=%s)',
+  (management) => {
+    mount(management ? '/admin/settings' : '/settings')
+    fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
+    expect(Boolean(screen.queryByRole('button', { name: /Volcengine/ }))).toBe(
+      !management,
+    )
+    expect(
+      screen.getByRole('button', { name: /Production\s*https/ }),
+    ).toBeTruthy()
   },
 )

@@ -1,6 +1,15 @@
 const workspace = {
   appShell: {
     adminNavigation: {
+      gateway: '网关',
+      loadingUsers: '正在加载用户…',
+      userScopeUnavailable:
+        '无法使用所选 User 身份查询，请检查其 API Key 或选择其他 User。',
+      userFilter: '筛选 User',
+      allUsers: '当前空间全部用户',
+      currentTaskUser: '当前管理身份',
+      userKeyUnavailable: '没有可用的 User API Key',
+
       spaces: '数据空间',
       generalConfiguration: '常规配置',
       modelConfiguration: '模型配置',
@@ -22,7 +31,7 @@ const workspace = {
       operations: '运维',
       monitoring: '监控',
       tasks: '任务监控',
-      root: 'Root 配置',
+      extensions: '扩展功能',
     },
     userManagement: {
       userId: 'User ID',

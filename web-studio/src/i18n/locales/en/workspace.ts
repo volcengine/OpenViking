@@ -1,6 +1,15 @@
 const workspace = {
   appShell: {
     adminNavigation: {
+      gateway: 'Gateway',
+      loadingUsers: 'Loading users…',
+      userScopeUnavailable:
+        'The selected User identity is unavailable. Check its API Key or select another User.',
+      userFilter: 'Filter by User',
+      allUsers: 'All users in this space',
+      currentTaskUser: 'Current management identity',
+      userKeyUnavailable: 'No usable User API Key is available',
+
       spaces: 'Data spaces',
       generalConfiguration: 'General configuration',
       modelConfiguration: 'Model configuration',
@@ -23,7 +32,7 @@ const workspace = {
       operations: 'Operations',
       monitoring: 'Monitoring',
       tasks: 'Task monitoring',
-      root: 'Root settings',
+      extensions: 'Extensions',
     },
     userManagement: {
       userId: 'User ID',

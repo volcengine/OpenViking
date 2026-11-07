@@ -6,7 +6,17 @@ import { MonitoringRoute } from './page'
 import { NAV_ITEMS } from '#/app/navigation/workbench-navigation'
 import { featureForPath } from '#/shared/lib/studio-service'
 
-const api = vi.hoisted(() => ({ observer: vi.fn() }))
+const api = vi.hoisted(() => ({ observer: vi.fn(), scope: 'first' }))
+vi.mock('#/features/connection/hooks/use-admin-space-headers', () => ({
+  useAdminSpaceHeaders: () => ({
+    headers: { 'X-API-Key': `${api.scope}-admin` },
+    scopeKey: api.scope,
+    isLoading: false,
+  }),
+}))
+vi.mock('#/features/admin/users/components/admin-scope-filters', () => ({
+  AdminScopeFilters: () => <div>scope-filter</div>,
+}))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'root', serverMode: 'normal' }),
 }))

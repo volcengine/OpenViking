@@ -1,4 +1,5 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { validateFilesystemSearch } from '#/features/workbench/filesystem/lib/types'
 import { cn } from '#/shared/lib/utils'
 import { Link } from '@tanstack/react-router'
 import { Popover, PopoverContent, PopoverTrigger } from '#/shared/ui/popover'
@@ -177,6 +178,11 @@ export function StudioSettingsMenu({
           <div className="border-b border-border/70 pb-1">
             <Link
               to="/usage"
+              search={(previous) => {
+                const { file, uri, panel, session } =
+                  validateFilesystemSearch(previous)
+                return { file, uri, panel, session }
+              }}
               onClick={() => setOpen(false)}
               className={MENU_ITEM}
             >

@@ -9,6 +9,7 @@ import {
 import { newConnectionPath } from '#/features/connection/lib/studio-mode'
 import { resolveStudioManagementCapabilities } from '#/features/connection/lib/studio-permissions'
 import { fetchAdminAccounts, fetchAdminUsers } from '#/shared/api/admin'
+import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
@@ -337,6 +338,14 @@ export function StudioScopeSwitcher({
           {searchField(t('scope.searchConnections'))}
           <div className="max-h-64 overflow-y-auto">
             {services
+              .filter(
+                ({ profile }) =>
+                  !managementMode ||
+                  resolveConfiguredServiceProvider(
+                    profile.connection.baseUrl,
+                    profile.connection.serviceSelection,
+                  ) === 'opensource',
+              )
               .filter(({ name, profile }) =>
                 matches(`${name} ${profile.connection.baseUrl}`),
               )

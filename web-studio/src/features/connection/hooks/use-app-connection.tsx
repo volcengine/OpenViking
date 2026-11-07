@@ -106,6 +106,7 @@ export function AppConnectionProvider({
     key: string
     role: ConnectionRole
   } | null>(null)
+  const synchronizedHealthProbeRef = React.useRef<string | null>(null)
   if (initialConnectionRef.current === null) {
     // The provider remounts after /config. Filesystem query keys are shared
     // across profiles, so discard results fetched under the previous identity
@@ -158,6 +159,7 @@ export function AppConnectionProvider({
     authPromptSuppressedUntilRef.current =
       Date.now() + AUTH_PROMPT_SUPPRESSION_MS
     synchronizedRoleProbeRef.current = null
+    synchronizedHealthProbeRef.current = null
     resetServerHealthCache()
     setServerHealth(null)
     setServerMode('checking')
@@ -311,6 +313,12 @@ export function AppConnectionProvider({
   }, [connection, storeProfiles])
 
   React.useEffect(() => {
+    const healthKey =
+      studioMode + createConnectionRoleProbeKey(connection, 'checking')
+    if (synchronizedHealthProbeRef.current === healthKey) {
+      synchronizedHealthProbeRef.current = null
+      return
+    }
     let cancelled = false
     const controller = new AbortController()
 
@@ -633,6 +641,7 @@ export function AppConnectionProvider({
       preserveIdentity = false,
       rememberIdentity = false,
       dataSelection = false,
+      accountSelection = false,
     ) => {
       connectionGenerationRef.current += 1
       connectionRevisionRef.current += 1
@@ -662,7 +671,30 @@ export function AppConnectionProvider({
             : profile,
         ),
       })
-      queryClient.clear()
+      const preserveControlIdentity =
+        accountSelection &&
+        studioMode === 'management' &&
+        connectionRole === 'root' &&
+        !isConnectionRoleLoading &&
+        (serverMode === 'api_key' || serverMode === 'trusted') &&
+        normalized.baseUrl === connection.baseUrl &&
+        normalized.serviceSelection === connection.serviceSelection &&
+        normalized.adminApiKey === connection.adminApiKey &&
+        serverHealth?.key ===
+          studioMode + createConnectionRoleProbeKey(connection, 'checking')
+      if (preserveControlIdentity) {
+        const healthKey =
+          studioMode + createConnectionRoleProbeKey(normalized, 'checking')
+        synchronizedHealthProbeRef.current = healthKey
+        synchronizedRoleProbeRef.current = {
+          key:
+            studioMode + createConnectionRoleProbeKey(normalized, serverMode),
+          role: connectionRole,
+        }
+        setServerHealth({ key: healthKey, data: serverHealth.data })
+      } else {
+        queryClient.clear()
+      }
       setConnection(normalized)
     }
 
@@ -827,6 +859,7 @@ export function AppConnectionProvider({
         if (connectionRole !== 'root') {
           throw createConnectionError('rootRequired')
         }
+        if (accountId.trim() === connection.accountId) return
         storeProfiles({
           ...profilesRef.current!,
           profiles: profilesRef.current!.profiles.map((profile) =>
@@ -843,6 +876,8 @@ export function AppConnectionProvider({
                 accountId,
                 isGatewayHost,
               ),
+          false,
+          true,
           false,
           true,
         )

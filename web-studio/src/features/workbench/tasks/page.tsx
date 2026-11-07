@@ -1,5 +1,7 @@
-import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
-import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
+import {
+  AdminScopeFilters,
+  useAdminUserScope,
+} from '#/features/admin/users/components/admin-scope-filters'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
@@ -98,7 +100,8 @@ export function TasksRoute({
     scopeKey,
     isLoading: isScopeLoading,
     unavailableKey,
-  } = useAdminSpaceHeaders(management)
+    userFilter,
+  } = useAdminUserScope(management, 'tasks')
   const queryClient = useQueryClient()
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
@@ -616,7 +619,13 @@ export function TasksRoute({
 
   if (isScopeLoading) return <LoaderCircleIcon className="animate-spin" />
 
-  if (taskScopeUnavailable) return <p role="status">{t(unavailableKey)}</p>
+  if (taskScopeUnavailable)
+    return (
+      <div className="grid gap-4">
+        {management && <AdminScopeFilters userFilter={userFilter} />}
+        <p role="status">{t(unavailableKey)}</p>
+      </div>
+    )
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
@@ -646,9 +655,7 @@ export function TasksRoute({
       </header>
 
       {/* 4 大 Task 核心运行 KPI 观察行 */}
-      {management ? (
-        <AdminSpaceBanner accountId={connection.accountId} />
-      ) : null}
+      {management ? <AdminScopeFilters userFilter={userFilter} /> : null}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card className="flex flex-col gap-1 border-transparent bg-muted/55 p-4 shadow-none">
           <div className="flex items-center justify-between text-xs text-muted-foreground">

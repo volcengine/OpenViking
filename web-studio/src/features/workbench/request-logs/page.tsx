@@ -1,6 +1,8 @@
 import styles from './page.module.css'
-import { useAdminSpaceHeaders } from '#/features/connection/hooks/use-admin-space-headers'
-import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
+import {
+  AdminScopeFilters,
+  useAdminUserScope,
+} from '#/features/admin/users/components/admin-scope-filters'
 import { useQuery } from '@tanstack/react-query'
 import * as React from 'react'
 
@@ -44,7 +46,8 @@ export function RequestLogsRoute({
     scopeKey,
     isLoading: isConnectionRoleLoading,
     unavailableKey,
-  } = useAdminSpaceHeaders(management)
+    userFilter,
+  } = useAdminUserScope(management, 'usage')
   const [draftFilters, setDraftFilters] =
     React.useState<AuditFilters>(DEFAULT_FILTERS)
   const [filters, setFilters] = React.useState<AuditFilters>(DEFAULT_FILTERS)
@@ -134,9 +137,7 @@ export function RequestLogsRoute({
           <h1 className="text-xl font-semibold tracking-tight">
             {t('appShell:navigation.requestLogs.title')}
           </h1>
-          <div className={styles.scope}>
-            <AdminSpaceBanner accountId={connection.accountId} />
-          </div>
+          <AdminScopeFilters userFilter={userFilter} />
         </>
       ) : null}
       {!management ? (

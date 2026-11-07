@@ -89,7 +89,7 @@ it('keeps gateway management in its Root group and highlights every gateway subp
       />
     </SidebarProvider>,
   )
-  const gateway = screen.getByRole('link', { name: 'Gateway' })
+  const gateway = screen.getByRole('link', { name: /Gateway.*Beta/ })
   const configuration = screen.getByRole('link', {
     name: 'General configuration',
   })
@@ -113,7 +113,7 @@ it('keeps membership and Root credential entries out of unauthenticated developm
     </SidebarProvider>,
   )
   expect(screen.queryByRole('link', { name: 'Model configuration' })).toBeNull()
-  expect(screen.queryByRole('link', { name: 'Gateway' })).toBeNull()
+  expect(screen.queryByRole('link', { name: /Gateway.*Beta/ })).toBeNull()
   expect(screen.queryByRole('link', { name: 'User & API Keys' })).toBeNull()
 })
 
@@ -127,5 +127,5 @@ it('does not expose Gateway to an Account Admin even when the service supports i
       />
     </SidebarProvider>,
   )
-  expect(screen.queryByRole('link', { name: 'Gateway' })).toBeNull()
+  expect(screen.queryByRole('link', { name: /Gateway.*Beta/ })).toBeNull()
 })
