@@ -11,6 +11,7 @@ import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
+from openviking.retrieve.retrieval_stats import RetrievalStatsCollector
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -100,6 +101,15 @@ def _config() -> RerankConfig:
     return RerankConfig(ak="ak", sk="sk", threshold=0.1)
 
 
+@pytest.fixture
+def retrieval_stats(monkeypatch):
+    collector = RetrievalStatsCollector()
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.get_stats_collector", lambda: collector
+    )
+    return collector
+
+
 def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
     assert RerankConfig(max_input_tokens=0).max_input_tokens == 0
     with pytest.raises(ValueError, match="max_input_tokens"):
@@ -108,7 +118,7 @@ def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", [None, RetrieverMode.THINKING])
-async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
+async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode, retrieval_stats):
     fake_client = FakeRerankClient([0.1, 0.2, 0.95, 0.99])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
@@ -153,6 +163,8 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
     assert result.matched_contexts[0].origin_score == 0.5
     assert result.matched_contexts[0].time_score == 0.1
     assert fake_client.calls == [("hello", ["root abstract", "dir overview", "file C", "file D"])]
+    stats = retrieval_stats.snapshot()
+    assert (stats.rerank_used, stats.rerank_fallback) == (1, 0)
     assert len(storage.search_calls) == 1
     assert storage.search_calls[0]["limit"] == 4
     assert storage.search_calls[0]["level"] is None
@@ -244,8 +256,12 @@ async def test_rerank_scores_bounds_oversized_documents_and_preserves_tail(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, [0.9], RuntimeError("provider unavailable")])
-async def test_retrieve_falls_back_to_vector_scores_when_rerank_fails(monkeypatch, failure):
+@pytest.mark.parametrize(
+    "failure", [None, [0.9], RuntimeError("provider unavailable"), [float("nan")] * 3]
+)
+async def test_retrieve_falls_back_to_vector_scores_when_rerank_fails(
+    monkeypatch, failure, retrieval_stats
+):
     class FailedRerankClient(FakeRerankClient):
         def rerank_batch(self, query, documents):
             self.calls.append((query, list(documents)))
@@ -287,6 +303,8 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_fails(monkeypatc
     assert len(storage.search_calls) == 1
     assert storage.search_calls[0]["limit"] == 4
     assert fake_client.calls == [("hello", ["deep B", "deep A", "deep C"])]
+    stats = retrieval_stats.snapshot()
+    assert (stats.rerank_used, stats.rerank_fallback) == (0, 1)
 
 
 @pytest.mark.asyncio
@@ -319,7 +337,7 @@ async def test_rerank_failure_fallback_does_not_apply_rerank_threshold(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_rerank_threshold_filters_only_model_scores(monkeypatch):
+async def test_rerank_threshold_filters_only_model_scores(monkeypatch, retrieval_stats):
     fake_client = FakeRerankClient([0.05, 0.9, 0.95])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
@@ -344,6 +362,8 @@ async def test_rerank_threshold_filters_only_model_scores(monkeypatch):
         ("viking://resources/relevant", 0.9),
         ("viking://resources/no-abstract", 0.05),
     ]
+    stats = retrieval_stats.snapshot()
+    assert (stats.rerank_used, stats.rerank_fallback) == (1, 1)
 
 
 @pytest.mark.asyncio
@@ -416,7 +436,9 @@ async def test_rerank_scores_runs_blocking_client_off_event_loop():
     "rerank_config, mode",
     [(None, RetrieverMode.THINKING), (RerankConfig(), None), (_config(), RetrieverMode.QUICK)],
 )
-async def test_retrieve_without_rerank_does_not_expand_candidates(monkeypatch, rerank_config, mode):
+async def test_retrieve_without_rerank_does_not_expand_candidates(
+    monkeypatch, rerank_config, mode, retrieval_stats
+):
     fake_client = FakeRerankClient([])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
@@ -445,6 +467,25 @@ async def test_retrieve_without_rerank_does_not_expand_candidates(monkeypatch, r
     assert len(storage.search_calls) == 1
     assert storage.search_calls[0]["limit"] == 3
     assert storage.search_calls[0]["level"] is None
+    stats = retrieval_stats.snapshot()
+    assert (stats.rerank_used, stats.rerank_fallback) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_empty_retrieval_does_not_record_rerank_fallback(monkeypatch, retrieval_stats):
+    fake_client = FakeRerankClient([])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    retriever = HierarchicalRetriever(DummyStorage(), DummyEmbedder(), _config())
+
+    result = await retriever.retrieve(_query(), ctx=_ctx())
+
+    assert result.matched_contexts == []
+    assert fake_client.calls == []
+    stats = retrieval_stats.snapshot()
+    assert (stats.rerank_used, stats.rerank_fallback) == (0, 0)
 
 
 @pytest.mark.asyncio
