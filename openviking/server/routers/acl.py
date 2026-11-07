@@ -19,16 +19,22 @@ class _AclRequest(BaseModel):
 
 
 class SetAclRequest(AclSpec):
+    """Request body that replaces the ACL of a single ``uri``."""
+
     uri: str
 
 
 class GrantAclRequest(_AclRequest):
+    """Request body that grants ``level`` to one ``principal`` on ``uri``."""
+
     uri: str
     principal: str
     level: AclLevel
 
 
 class RevokeAclRequest(_AclRequest):
+    """Request body that revokes one ``principal``'s entry on ``uri``."""
+
     uri: str
     principal: str
 
@@ -38,6 +44,7 @@ async def get_acl(
     uri: str = Query(..., description="Viking URI"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Return the effective ACL entries for a URI."""
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     result = await get_service().fs.get_acl(uri, ctx=_ctx)
     return Response(status="ok", result=result)
@@ -48,6 +55,7 @@ async def set_acl(
     request: SetAclRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Replace the ACL of a URI with the supplied entries."""
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     result = await get_service().fs.set_acl(
         uri,
@@ -63,6 +71,7 @@ async def delete_acl(
     uri: str = Query(..., description="Viking URI"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Remove all ACL entries from a URI, restoring inherited defaults."""
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     result = await get_service().fs.delete_acl(uri, ctx=_ctx)
     return Response(status="ok", result=result)
@@ -73,6 +82,7 @@ async def grant_acl(
     request: GrantAclRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Grant a principal an access level on a URI."""
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     result = await get_service().fs.grant_acl(
         uri,
@@ -88,6 +98,7 @@ async def revoke_acl(
     request: RevokeAclRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Revoke a principal's ACL entry on a URI."""
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     result = await get_service().fs.revoke_acl(uri, request.principal, ctx=_ctx)
     return Response(status="ok", result=result)
