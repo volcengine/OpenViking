@@ -2,7 +2,7 @@
 
 展平后的文件树。树状态由宿主持有，宿主按顺序传入可见行；组件负责渲染并通知成功的操作。
 
-当前为占位组件：只渲染一个固定尺寸的空壳，不消费 props。下方的 props 契约是最终形态，真实视图后续按本文实现。
+组件渲染宿主展平后的行列表，并处理选中、展开、分页与键盘交互。工具栏、搜索与导入流程属于页面层，通过插槽注入。
 
 ## 基础用法
 
@@ -20,7 +20,7 @@
 
 目录名后跟着的是内置说明，`memories`、`peers`、`privacy` 等都有。
 
-组件本体仍是占位空壳（固定 280 × 320），所以示例没有直接渲染 `<FileTree />`，而是按契约渲染行——这样能看到数据结构与文案的实际形状。
+示例直接挂载 `<FileTree />`，只保留树数据与展开、分页状态这些宿主该持有的部分。
 
 ## 行的组织方式
 
@@ -39,7 +39,7 @@
 - `slots.toolbar` —— 搜索、导入来源、刷新。组件不知道里面有什么。
 - `slots.spinner` —— 替换目录加载子节点时的转圈，按 12 × 12 显示。省略时用内置的 `FileTreeSpinner`（纯 CSS 圆环，不依赖图标资源）。
 - `renderDashboard` —— 行尾指示器，例如看板入口。
-- `renderRowTooltip` —— 悬停内容，延迟与定位由组件处理。
+- `renderRowTooltip` —— 悬停内容，延迟与定位由组件处理。省略时组件按 `uri` 渲染内置浮层（说明、触发行为、路径）。
 
 ## 目录说明
 
@@ -116,6 +116,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 | `labels`                  | `FileTreeLabels`                          | 英文   | 可替换文案。                                 |
 | `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>` | —      | 按行追加属性，`className` 会与组件类名合并。 |
 | `renderDashboard`         | `(row) => ReactNode`                      | —      | 行尾指示器，返回 `null` 不显示。             |
+| `renderRowIcon`           | `(row) => ReactNode`                      | —      | 文件行的行首图标；省略时用通用文件图标。     |
 | `renderRowTooltip`        | `(row) => ReactNode`                      | —      | 悬停内容，返回 `null` 不显示。               |
 | `onSelect`                | `(row: FileTreeEntryRow) => void`         | —      | 选中成功后触发；失败时不触发。               |
 | `onToggleExpand`          | `(row: FileTreeEntryRow) => void`         | —      | 展开或折叠成功后触发；失败时不触发。         |
@@ -135,7 +136,7 @@ import '@openviking/react/components/file-tree/style.css';
 
 ## 样式
 
-类名带 `ov-` 前缀，块名为 `ov-file-tree`，元素使用 `ov-file-tree__<元素>`。占位组件只输出根节点与固定尺寸；行、工具栏与状态视图的类名和主题变量随真实视图确定。样式通过独立入口引入：
+类名带 `ov-` 前缀，块名为 `ov-file-tree`，元素使用 `ov-file-tree__<元素>`。主题变量集中在根节点声明，宿主可整组或逐条覆盖。样式通过独立入口引入：
 
 ```tsx
 import '@openviking/react/components/file-tree/style.css';

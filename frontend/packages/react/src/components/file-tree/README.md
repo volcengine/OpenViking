@@ -4,7 +4,7 @@ English / [中文](README_CN.md)
 
 A directory tree for resource browsing. The host flattens its tree state into an ordered list of rows and supplies async execution through `operations`; the component renders, handles keyboard interaction and notifies after an operation succeeds.
 
-> **This is currently a placeholder.** It renders a fixed-size empty shell and consumes no props, so the package can be published while the API is under review. The view will be written against this contract.
+It renders the five row kinds, indents by depth with a guide per ancestor level, and handles keyboard navigation; selection, expansion, paging and retry run through `operations`.
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -72,7 +72,7 @@ The cost is that the host writes a "tree state → row array" transform. What th
 
 ## Theme
 
-Styles are scoped and never modify the application's global styles. Theme variables are settled together with the real view; the placeholder only defines the root block.
+Styles are scoped and never modify the application's global styles. Theme tokens are declared on the root element and default to theme-neutral values, so the tree reads correctly on both light and dark backgrounds.
 
 ## Docs and development
 

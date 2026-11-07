@@ -1,19 +1,9 @@
 import { useState } from 'react';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 import { useLang } from '@rspress/core/runtime';
+import { FileTree } from '@openviking/react/components/file-tree';
+import type { FileTreeRow } from '@openviking/react/components/file-tree';
 import {
-  resolveFileTreeInfoKey,
-  resolveInfoCopy,
-  showsInlineDescription,
-} from '@openviking/react/components/file-tree';
-import type {
-  FileTreeEntryRow,
-  FileTreeRow,
-} from '@openviking/react/components/file-tree';
-import {
-  ChevronRightIcon,
-  FolderIcon,
-  FolderOpenIcon,
   getFileTypeColor,
   getFileTypeIcon,
   resolveFileTypeIconKey,
@@ -211,43 +201,10 @@ function flatten(nodes: Node[], depth: number, s: State): FileTreeRow[] {
   });
 }
 
-const MUTED = { color: '#8f959e' } as const;
-const INDENT = 20;
-const CHEVRON_SIZE = 16;
-const ROW = {
-  height: 'var(--ov-ui-file-tree-row-height, 32px)',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  paddingRight: 8,
-  borderRadius: 'var(--ov-ui-file-tree-row-radius, 4px)',
-} as const;
-/** Guide through one ancestor level; the 1px bleed joins consecutive rows. */
-const GUIDE = {
-  position: 'absolute',
-  top: -1,
-  bottom: -1,
-  width: 1,
-  background: 'var(--ov-ui-file-tree-guide, #e5e6eb)',
-  pointerEvents: 'none',
-} as const;
 const CENTER = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-} as const;
-const ICON = {
-  ...CENTER,
-  color: 'var(--ov-ui-file-tree-icon, #3f3f51)',
-  width: 16,
-  height: 16,
-} as const;
-const FOLDER = { position: 'relative', width: 14, height: 14 } as const;
-const LAYER = {
-  ...FOLDER,
-  position: 'absolute',
-  inset: 0,
-  transition: 'opacity 220ms',
 } as const;
 const BARE_BUTTON = {
   padding: 0,
@@ -255,7 +212,6 @@ const BARE_BUTTON = {
   background: 'none',
   cursor: 'pointer',
 } as const;
-const CHEVRON = { ...CENTER, ...BARE_BUTTON, width: 16, height: 16 } as const;
 const INDICATOR = {
   ...CENTER,
   ...BARE_BUTTON,
@@ -279,8 +235,6 @@ const CONFLICT_MARK_D =
   'M8.12525 5.16248C8.3636 5.05726 8.63591 5.0573 8.87427 5.16248C9.03672 5.23421 9.15691 5.36705 9.26587 5.5199C9.37554 5.67377 9.49733 5.88273 9.64771 6.141L11.2776 8.9408C11.4279 9.19896 11.5506 9.40737 11.6301 9.5785C11.7091 9.7484 11.7651 9.91933 11.7463 10.0961C11.7189 10.3552 11.5817 10.5903 11.3704 10.7426C11.2265 10.8461 11.0499 10.8827 10.8626 10.8998C10.6738 10.9169 10.4313 10.9164 10.1311 10.9164H6.86939C6.56887 10.9164 6.32581 10.917 6.13697 10.8998C5.94954 10.8827 5.77304 10.8462 5.62916 10.7426C5.4178 10.5902 5.28064 10.3551 5.25318 10.0961C5.23446 9.91932 5.29137 9.74839 5.37037 9.5785C5.44995 9.40742 5.57168 9.19884 5.72193 8.9408L7.35279 6.14002C7.50292 5.88219 7.62412 5.67363 7.73365 5.5199C7.84252 5.36711 7.96286 5.23426 8.12525 5.16248Z';
 const CONFLICT_DOT_D =
   'M8.24986 8.33335V7.00001C8.24986 6.86199 8.36185 6.75009 8.49986 6.75001C8.63793 6.75001 8.74986 6.86194 8.74986 7.00001V8.33335C8.74986 8.47142 8.63793 8.58335 8.49986 8.58335C8.36185 8.58327 8.24986 8.47137 8.24986 8.33335ZM8.76711 9.36655C8.76711 9.50443 8.65532 9.61628 8.51744 9.61655L8.48358 9.61688C8.41725 9.61696 8.35345 9.59049 8.3065 9.54363C8.25961 9.49678 8.23329 9.43317 8.23326 9.36688V9.33335C8.23326 9.19528 8.34519 9.08335 8.48326 9.08335H8.51711C8.65516 9.08337 8.76711 9.19529 8.76711 9.33335V9.36655Z';
-const BOOK_D =
-  'M8.05556 7.55556C8.05556 6.31099 8.05556 5.68871 8.29776 5.21335C8.51082 4.79522 8.85077 4.45526 9.26891 4.24221C9.74427 4 10.3666 4 11.6111 4H11.8333C12.4556 4 12.7668 4 13.0044 4.1211C13.2135 4.22763 13.3835 4.39761 13.49 4.60668C13.6111 4.84436 13.6111 5.1555 13.6111 5.77778V10.5556C13.6111 11.1778 13.6111 11.489 13.49 11.7267C13.3835 11.9357 13.2135 12.1057 13.0044 12.2122C12.7668 12.3333 12.4556 12.3333 11.8333 12.3333H11.0695C10.3738 12.3333 10.026 12.3333 9.71022 12.4292C9.43069 12.5141 9.17064 12.6533 8.94494 12.8388C8.69001 13.0483 8.49705 13.3378 8.11114 13.9166L8.05556 14L7.99997 13.9166C7.61406 13.3378 7.4211 13.0483 7.16617 12.8388C6.94048 12.6533 6.68043 12.5141 6.40089 12.4292C6.08514 12.3333 5.73728 12.3333 5.04157 12.3333H4.27778C3.6555 12.3333 3.34436 12.3333 3.10668 12.2122C2.89761 12.1057 2.72763 11.9357 2.6211 11.7267C2.5 11.489 2.5 11.1778 2.5 10.5556V5.77778C2.5 5.1555 2.5 4.84436 2.6211 4.60668C2.72763 4.39761 2.89761 4.22763 3.10668 4.1211C3.34436 4 3.6555 4 4.27778 4H4.5C5.74456 4 6.36684 4 6.8422 4.24221C7.26034 4.45526 7.6003 4.79522 7.81335 5.21335C8.05556 5.68871 8.05556 6.31099 8.05556 7.55556ZM8.05556 14V7.55556';
 const EXPERIENCE_D = [
   'M5.25 1.75H2.33333C2.01117 1.75 1.75 2.01117 1.75 2.33333V6.41667C1.75 6.73883 2.01117 7 2.33333 7H5.25C5.57217 7 5.83333 6.73883 5.83333 6.41667V2.33333C5.83333 2.01117 5.57217 1.75 5.25 1.75Z',
   'M11.6667 1.75H8.75C8.42783 1.75 8.16667 2.01117 8.16667 2.33333V4.08333C8.16667 4.4055 8.42783 4.66667 8.75 4.66667H11.6667C11.9888 4.66667 12.25 4.4055 12.25 4.08333V2.33333C12.25 2.01117 11.9888 1.75 11.6667 1.75Z',
@@ -324,19 +278,6 @@ function WikiBoardIcon(props: IconSvgProps) {
 }
 
 /** Wiki root: an open book. */
-function WikiBookIcon(props: IconSvgProps) {
-  return (
-    <Svg {...props} size={16} viewBox="0 0 16 16">
-      <path
-        d={BOOK_D}
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
 /** Wiki board with pending conflicts: orange, with an exclamation badge. */
 function WikiConflictIcon(props: IconSvgProps) {
   return (
@@ -372,15 +313,6 @@ function ExperienceBoardIcon(props: IconSvgProps) {
     </Svg>
   );
 }
-
-const BOX = {
-  font: '13px/20px system-ui, sans-serif',
-  border: '1px solid #e5e6eb',
-  borderRadius: 6,
-  padding: 8,
-  maxHeight: 420,
-  overflow: 'auto',
-} as const;
 
 export default function FileTreeBasic() {
   const lang = useLang() === 'zh' ? 'zh' : 'en';
@@ -427,216 +359,40 @@ export default function FileTreeBasic() {
   const rows = flatten(TREE, 0, { open, loaded, loading });
 
   return (
-    <div role="tree" aria-label={t.treeLabel} style={BOX}>
-      {rows.map((row) => {
-        const pad = 8 + row.depth * INDENT;
-        if (row.kind !== 'entry') {
-          const busy =
-            row.kind === 'loading' || loading.has(row.parentId ?? '');
-          return (
-            <div
-              key={row.id}
-              style={{
-                ...ROW,
-                ...MUTED,
-                position: 'relative',
-                paddingLeft: pad + INDENT,
-              }}
-            >
-              {/* State rows continue their parent's guide so the line stays unbroken. */}
-              {Array.from({ length: row.depth }, (_, level) => (
-                <span
-                  key={level}
-                  aria-hidden
-                  style={{
-                    ...GUIDE,
-                    left: 8 + level * INDENT + CHEVRON_SIZE / 2,
-                  }}
-                />
-              ))}
-              {row.kind === 'load-more' ? (
-                <button
-                  type="button"
-                  className="ov-file-tree__action"
-                  disabled={busy}
-                  onClick={() => row.parentId && loadPage(row.parentId)}
-                >
-                  {busy ? t.loading : t.loadMore}
-                </button>
-              ) : row.kind === 'loading' ? (
-                t.loading
-              ) : (
-                t.empty
-              )}
-            </div>
-          );
-        }
-        const key = resolveFileTreeInfoKey(row.uri);
-        return (
-          <EntryRow
-            key={row.id}
-            row={row}
-            isOpen={open.has(row.uri)}
-            isSelected={selected === row.uri}
-            description={
-              // The row's own description wins, including an explicit empty
-              // string; the semantic copy is only the fallback.
-              row.description ??
-              (key && showsInlineDescription(key)
-                ? resolveInfoCopy(key, INFO_LABELS[lang]).description
-                : undefined)
-            }
-            indicator={INDICATORS[row.uri]}
-            text={t}
-            onToggle={() => toggle(row)}
-            onSelect={() => {
-              setSelected(row.uri);
-              // 与宿主一致：点击行只展开，收起靠箭头。
-              if (row.type === 'directory' && !open.has(row.uri)) toggle(row);
-            }}
-          />
-        );
-      })}
+    <div style={{ height: 420 }}>
+      <FileTree
+        rows={rows}
+        selectedId={selected}
+        aria-label={t.treeLabel}
+        labels={{ info: INFO_LABELS[lang] }}
+        operations={{
+          select: (row) => {
+            setSelected(row.uri);
+            // 与宿主一致：点击行只展开，收起靠箭头。
+            if (row.type === 'directory' && !open.has(row.uri)) toggle(row);
+            return Promise.resolve();
+          },
+          toggleExpand: (row) => {
+            toggle(row);
+            return Promise.resolve();
+          },
+          loadMore: (row) => {
+            if (row.parentId) loadPage(row.parentId);
+            return Promise.resolve();
+          },
+        }}
+        renderRowIcon={(row) => <FileTypeIcon name={row.name} />}
+        renderDashboard={(row) => {
+          const indicator = INDICATORS[row.uri];
+          return indicator ? (
+            <Indicator indicator={indicator} text={t} />
+          ) : null;
+        }}
+      />
     </div>
   );
 }
 
-function EntryRow({
-  row,
-  isOpen,
-  isSelected,
-  description,
-  indicator,
-  text,
-  onToggle,
-  onSelect,
-}: {
-  row: FileTreeEntryRow;
-  isOpen: boolean;
-  isSelected: boolean;
-  description?: string;
-  indicator?: Indicator;
-  text: (typeof COPY)['en'];
-  onToggle: () => void;
-  onSelect: () => void;
-}) {
-  const isWikiRoot = row.type === 'directory' && row.uri === WIKI;
-  return (
-    <div
-      role="treeitem"
-      tabIndex={0}
-      aria-level={row.depth + 1}
-      aria-selected={isSelected}
-      aria-expanded={row.hasChildren ? isOpen : undefined}
-      data-selected={isSelected || undefined}
-      className="ov-file-tree__row"
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const rows = event.currentTarget
-          .closest('[role="tree"]')
-          ?.querySelectorAll<HTMLElement>('[role="treeitem"]');
-        const index = rows ? Array.from(rows).indexOf(event.currentTarget) : -1;
-        switch (event.key) {
-          case 'ArrowDown':
-            event.preventDefault();
-            rows?.[index + 1]?.focus();
-            break;
-          case 'ArrowUp':
-            event.preventDefault();
-            rows?.[index - 1]?.focus();
-            break;
-          case 'ArrowRight':
-            if (row.type === 'directory' && !isOpen) {
-              event.preventDefault();
-              onToggle();
-            }
-            break;
-          case 'ArrowLeft':
-            if (row.type === 'directory' && isOpen) {
-              event.preventDefault();
-              onToggle();
-            }
-            break;
-          case 'Enter':
-          case ' ':
-            event.preventDefault();
-            onSelect();
-            break;
-          default:
-            break;
-        }
-      }}
-      style={{
-        ...ROW,
-        position: 'relative',
-        paddingLeft: 8 + row.depth * INDENT,
-        cursor: 'pointer',
-      }}
-    >
-      {/* One guide per ancestor level, aligned to that level's chevron centre. */}
-      {Array.from({ length: row.depth }, (_, level) => (
-        <span
-          key={level}
-          aria-hidden
-          style={{
-            ...GUIDE,
-            left: 8 + level * INDENT + CHEVRON_SIZE / 2,
-          }}
-        />
-      ))}
-      {row.hasChildren ? (
-        <button
-          type="button"
-          aria-label={`${isOpen ? text.collapse : text.expand} ${row.name}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle();
-          }}
-          style={CHEVRON}
-        >
-          <ChevronRightIcon
-            width={12}
-            height={12}
-            style={{
-              transform: isOpen ? 'rotate(90deg)' : undefined,
-              transition: 'transform 150ms',
-            }}
-          />
-        </button>
-      ) : (
-        <span style={{ width: 16 }} />
-      )}
-      <span aria-hidden={isWikiRoot ? undefined : true} style={ICON}>
-        {isWikiRoot ? (
-          // A Wiki root keeps its book icon in both states; it never shows folders.
-          <WikiBookIcon
-            role="img"
-            aria-label="Wiki"
-            width={16}
-            height={16}
-            style={{ color: ICON.color }}
-          />
-        ) : row.type === 'directory' ? (
-          <span style={FOLDER}>
-            <FolderIcon style={{ ...LAYER, opacity: isOpen ? 0 : 1 }} />
-            <FolderOpenIcon style={{ ...LAYER, opacity: isOpen ? 1 : 0 }} />
-          </span>
-        ) : (
-          <FileTypeIcon name={row.name} />
-        )}
-      </span>
-      <span>{row.name}</span>
-      {description ? <span style={MUTED}>{description}</span> : null}
-      {indicator ? <Indicator indicator={indicator} text={text} /> : null}
-    </div>
-  );
-}
-
-/**
- * The row-end indicator. A Wiki root turns orange with an exclamation mark while
- * it has pending conflicts; otherwise both entries use their board icon.
- */
 function Indicator({
   indicator,
   text,
