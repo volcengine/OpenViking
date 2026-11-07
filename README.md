@@ -324,7 +324,11 @@ Download:
 
 ## OpenViking SuperAgent
 
-OpenViking SuperAgent brings a general-purpose agent into your everyday chats, with **OpenViking as its long-term memory and context foundation**. Connect your preferred agent runtime to Feishu/Lark, WeChat, Telegram, Slack, or QQ to research, write documents, work on code, and follow up on tasks across conversations and days.
+**Bring Your Own Machine.** Run your agent on your own computer or cloud VM, with the software, project files, and tools it needs to work.
+
+OpenViking SuperAgent (Vika) connects that agent to **OpenViking and your messaging apps**. Give it a task in Feishu/Lark, WeChat, Telegram, Slack, or QQ; it works in your configured workspace and sends the result back. OpenViking provides knowledge, memory, and cross-session context, so work can continue across conversations.
+
+Use an installed runtime such as Codex or Claude Code, or the bundled Pi / Durable. An OpenViking service is required and can run locally or remotely.
 
 <img src="docs/images/superagent-overview.png" alt="Messaging apps connect through SuperAgent to personal work context stored in OpenViking: conversations, meeting notes, emails, tasks and knowledge." width="100%" />
 
