@@ -7,7 +7,7 @@ Routing is controlled by ov.conf (OpenVikingConfig.parser_api).
 """
 
 from pathlib import Path
-from typing import Union
+from typing import TYPE_CHECKING, Optional, Union
 from urllib.parse import urlparse
 
 from openviking.parse.accessors.base import LocalResource, SourceType
@@ -16,6 +16,9 @@ from openviking.parse.base import ParseResult
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from openviking_cli.utils.config.open_viking_config import ParserApiConfig
 
 logger = get_logger(__name__)
 
@@ -85,13 +88,17 @@ class ParserRouter:
         return ext in extensions
 
     def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
+        from openviking.parse.understanding_api import UnderstandingAPI
+
         parser_backend = normalize_parser_backend(kwargs.get("parser_backend"))
         if parser_backend is ParserBackend.INTERNAL:
             return False
         forced = parser_backend is ParserBackend.UNDERSTANDING
+        # Routing needs no parser credential; Account-only deployments may have
+        # no Cluster key to construct a client with.
         return bool(
             (forced or self.should_use_understanding_api(source))
-            and self._get_understanding_api().can_submit_url_directly(source, **kwargs)
+            and UnderstandingAPI.can_submit_url_directly(source, **kwargs)
         )
 
     @staticmethod
@@ -151,7 +158,8 @@ class ParserRouter:
                 except Exception:
                     display = "<path>"
             logger.info(f"[ParserRouter] Using UnderstandingAPI for {display}")
-            return await self._get_understanding_api().parse(str(source_path), **kwargs)
+            api = self._get_understanding_api(kwargs.pop("parser_api_config", None))
+            return await api.parse(str(source_path), **kwargs)
         else:
             try:
                 display = Path(source_path).name
@@ -162,13 +170,14 @@ class ParserRouter:
 
     async def submit(self, source: Union[str, Path, LocalResource], **kwargs) -> str:
         source_path = self._extract_source_path(source)
+        api = self._get_understanding_api(kwargs.pop("parser_api_config", None))
         if Path(source_path).is_file():
             source_name = (
                 source.meta["resolved_name"]
                 if isinstance(source, LocalResource)
                 else kwargs.get("source_name")
             )
-            return await self._get_understanding_api().submit_file(
+            return await api.submit_file(
                 source_path,
                 source_name=source_name,
                 resolved_extension=(
@@ -179,13 +188,17 @@ class ParserRouter:
             )
         if not self.should_use_understanding_api(str(source_path)):
             raise ValueError("source is not routed to UnderstandingAPI")
-        return await self._get_understanding_api().submit_url(str(source_path), **kwargs)
+        return await api.submit_url(str(source_path), **kwargs)
 
-    async def upload_file(self, source: Union[str, Path, LocalResource]) -> str:
+    async def upload_file(
+        self,
+        source: Union[str, Path, LocalResource],
+        parser_api_config: Optional["ParserApiConfig"] = None,
+    ) -> str:
         """Upload a local source file and return only the external Files API file_id."""
         source_path = self._extract_source_path(source)
         source_name = source.meta["resolved_name"] if isinstance(source, LocalResource) else None
-        return await self._get_understanding_api().upload_file(
+        return await self._get_understanding_api(parser_api_config).upload_file(
             source_path,
             source_name=source_name,
             resolved_extension=(
@@ -199,9 +212,13 @@ class ParserRouter:
             return source.path
         return source
 
-    def _get_understanding_api(self):
-        if self._understanding_api is None:
-            from openviking.parse.understanding_api import UnderstandingAPI
+    def _get_understanding_api(self, parser_api_config: Optional["ParserApiConfig"] = None):
+        from openviking.parse.understanding_api import UnderstandingAPI
 
+        # An Account-resolved config is call-scoped; the cached client serves
+        # unmanaged callers with the Cluster configuration.
+        if parser_api_config is not None:
+            return UnderstandingAPI(parser_api_config)
+        if self._understanding_api is None:
             self._understanding_api = UnderstandingAPI()
         return self._understanding_api

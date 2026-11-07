@@ -1,0 +1,31 @@
+# Components
+
+Reusable views and file-type icons for OpenViking AI applications. Components receive prepared data and state through props and report user intent through callbacks. Applications own data fetching, authentication, and business workflows.
+
+## Available modules
+
+### [FileTree](./file-tree)
+
+A flattened file tree with row rendering, selection, expansion, keyboard interaction, and pagination intent. The host supplies ordered rows and handles data loading. The current view is a placeholder; see the component page for its scope and limitations.
+
+### [FilePreview](./file-preview)
+
+A tabbed file-preview view with header actions, tab switching, and plain-text preview and editing foundations. The current view is a placeholder: the file body is not wired to FileViewer yet and falls back to plain text. Applications provide content and save behavior.
+
+### [Tui](./tui)
+
+The reviewed API for command records, results and input. The current view is a placeholder; command completion, shared CLI metadata and result rendering will be implemented later.
+
+### [ScopeSwitcher](./scope-switcher)
+
+A header scope breadcrumb. The host declares the levels and their options; the component renders the triggers, dropdown panels, option list and search, and reports switch intent.
+
+### [AgentConnect](./agent-connect)
+
+An agent connection view. The host supplies the tabs, the items of the active tab and the detail body; the component renders the list and detail, and reports switch and copy intent.
+
+### [Icons](./icons)
+
+Five file-type icons with configurable image dimensions and accessible labels: audio, PDF, presentation, video, and word-processing files.
+
+See [Getting started](../guide/getting-started) for public package entries, stylesheet choices, and application integration boundaries.

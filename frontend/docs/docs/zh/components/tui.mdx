@@ -1,0 +1,111 @@
+# Tui 命令控制台
+
+命令控制台的主体：当前命令记录、结果与输入区，包括空态、建议与输入帮助。执行由宿主负责；命令发送、资源打开和复制成功后通过回调通知，失败时不触发对应回调。
+
+当前是占位组件：只渲染一个固定尺寸的空壳，不消费 props，宿主可先对着已发布的类型准备接入，真实视图后续迁入。下方类型描述真实视图的接口，占位实现会被替换。
+
+## 基础用法
+
+```tsx file="../../_demos/tui-basic.tsx" preview
+
+```
+
+占位尺寸为 360 × 560，代表记录区与输入区。
+
+## 组件边界
+
+Tui 只包含当前命令记录与结果、空态，以及带建议和帮助的命令输入区。新建会话、历史记录面板、视图与用户切换、外层工具栏、底部快捷键说明，由宿主通过独立组件组合。
+
+宿主处理会话和历史操作后，更新 `records` 与 `value`。历史结果复用同一套记录视图；Tui 不维护历史列表、专门的历史预览状态，也不提供外层工具栏或动作插槽。
+
+命令匹配、候选列表、高亮与键盘选择、参数提示和帮助面板属于组件内部能力。命令名称、参数、说明与示例统一复用 CLI 的共享命令元数据，宿主不逐条配置建议或渲染帮助。接受补全或提示时通过 `onValueChange` 更新输入；显式提交的命令发送成功后才触发 `onSubmit`。
+
+当前仅调整公开类型契约，补全、帮助面板和 CLI 共享命令元数据接入尚未实现。元数据加载与传输由共享适配层负责，组件不自行取数。
+
+## 属性
+
+公开的 props 从同一子路径以类型导出，以源码为准：
+
+```tsx
+import type {
+  TuiLabels,
+  TuiProps,
+  TuiRecord,
+  TuiRecordContent,
+  TuiSearchResultItem,
+} from '@openviking/react/components/tui';
+```
+
+下表说明公开的类型契约；当前占位组件尚不接受这些属性。
+
+| 属性          | 类型                      | 默认值       | 说明                                                                           |
+| ------------- | ------------------------- | ------------ | ------------------------------------------------------------------------------ |
+| records       | readonly TuiRecord[]      | 必填         | 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。               |
+| value         | string                    | 必填         | 受控输入值。                                                                   |
+| disabled      | boolean                   | false        | 禁用命令输入与提交，提示文案由 `labels.unavailableMessage` 提供。              |
+| emptyState    | ReactNode                 | labels.empty | 无记录时展示的完整空态，可包含标题、说明与快捷入口；传 `null` 时隐藏。         |
+| labels        | TuiLabels                 | —            | 统一的界面文案与引导提示。                                                     |
+| onValueChange | (value: string) => void   | —            | 上报输入变化，包含内部接受的补全与参数提示；填入不提交命令。省略时输入框只读。 |
+| onSubmit      | (command: string) => void | —            | 命令发送成功后触发，失败时不触发。省略时不能提交命令。                         |
+| onOpenUri     | (uri: string) => void     | —            | 资源成功打开后触发，参数为已打开的 URI；失败时不触发。                         |
+| onCopy        | (text: string) => void    | —            | 复制成功后触发，参数为已复制的文本；失败时不触发。省略回调不影响复制。         |
+
+`onSubmit` 在命令成功发送后通知宿主已发送的命令文本，不负责执行发送，发送失败时不触发。该通知不表示后台命令已经执行完成，操作是否成功不依赖通知回调的返回值。宿主通过 `records` 更新后续结果与错误；后台任务记录仍为 `pending` 时，不阻止后续提交。
+
+`emptyState` 是完整自定义空态的唯一入口。标题、说明、快捷入口及其交互由宿主在节点内组合。省略时展示 `labels.empty`，传 `null` 时隐藏空态内容。
+
+### 结果内容
+
+`TuiRecordContent` 包含一种通用文本与六种结构化结果：
+
+| variant          | 数据            | 说明                         |
+| ---------------- | --------------- | ---------------------------- |
+| text             | text, format?   | 通用输出，格式缺省为 plain。 |
+| search-list      | items, summary? | 检索结果与汇总。             |
+| resource-preview | title, content  | 资源正文预览。               |
+| resource-tree    | items, title?   | 资源条目与明细。             |
+| status           | rows, title?    | 键值状态行。                 |
+| write-result     | lines, title?   | 写入操作结果。               |
+| command-help     | sections        | 按分组展示可用命令。         |
+
+`text.format` 支持 `plain` 和 `markdown`，缺省为 `plain`。JSON 格式化为字符串后通过 `text` 展示。失败通过 `TuiRecord.status: 'error'` 表达，错误正文使用文本结果，不单独定义错误内容变体。
+
+命令帮助由共享命令定义生成，其他结果由共享适配层统一转换，宿主复用同一套转换。这些变体定义统一展示的目标契约，共享结果转换与实际视图仍待实现。
+
+### 文案与引导提示
+
+通用界面文案通过 `labels` 配置，默认使用内置英文。命令相关的参数提示与说明由共享命令元数据生成。
+
+| 属性                      | 类型   | 说明                                                          |
+| ------------------------- | ------ | ------------------------------------------------------------- |
+| labels.unavailableMessage | string | `disabled` 为 `true` 时的不可用提示；仅修改文案不会禁用组件。 |
+| labels.pending            | string | 等待中的状态文本。                                            |
+| labels.empty              | string | 无记录且未提供 `emptyState` 时展示的默认提示。                |
+
+`disabled` 缺省为 `false`。设为 `true` 时禁用命令输入与提交，提示内容由 `labels.unavailableMessage` 定制。
+
+### 检索结果详情
+
+`TuiSearchResultItem` 支持以下可选展示字段：
+
+| 属性         | 类型      | 说明                                                                   |
+| ------------ | --------- | ---------------------------------------------------------------------- |
+| levelLabel   | string    | 标题旁的内容层级标签。                                                 |
+| typeLabel    | string    | 分数旁的结果类型标签。                                                 |
+| scoreLabel   | string    | 宿主格式化后的分数文案。                                               |
+| scoreDetails | ReactNode | 悬停或键盘聚焦分数时展示的宿主详情内容，仅在提供 `scoreLabel` 时显示。 |
+
+### 等待中的记录
+
+`TuiRecord` 为 `pending` 时，组件根据 `command` 匹配共享命令定义并选择对应骨架，无法匹配时使用通用骨架。等待期间可省略 `content`，宿主无需指定骨架形态。
+
+占位组件和样式的导入方式：
+
+```tsx
+import { Tui } from '@openviking/react/components/tui';
+import '@openviking/react/components/tui/style.css';
+```
+
+## 实现范围
+
+组件渲染视图，并通知已完成的交互与成功的操作。操作执行、取数、持久化、权限与网络连接由接入层负责，成功通知不承担这些操作。当前占位组件尚未实现操作执行或成功通知。

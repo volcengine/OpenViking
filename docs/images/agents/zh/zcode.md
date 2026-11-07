@@ -19,6 +19,16 @@
 2. 确认 `~/.zcode/cli/config.json` 包含 `hooks.enabled: true`、`hooks.events` 下的 OpenViking 条目，以及 `mcp.servers.openviking`。
 3. 运行 `node ~/.openviking/agent-integrations/zcode/scripts/ov-memory-doctor.mjs`，检查安装状态和服务端连接。
 
+## 步骤3：开始使用
+
+在 ZCode 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
+
 ## 故障排查
 
 | 问题 | 处理 |

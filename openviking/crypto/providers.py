@@ -53,6 +53,20 @@ PROVIDER_VAULT = 0x02
 PROVIDER_VOLCENGINE = 0x03
 
 
+def decode_inline_root_key(root_key: object) -> bytes:
+    """Decode a 32-byte root key without exposing it in validation errors."""
+    error = "encryption.local.root_key must be a 64-character hexadecimal string"
+    if not isinstance(root_key, str) or len(root_key) != 64:
+        raise ConfigError(error)
+    try:
+        decoded = bytes.fromhex(root_key)
+    except ValueError as exc:
+        raise ConfigError(error) from exc
+    if len(decoded) != 32:
+        raise ConfigError(error)
+    return decoded
+
+
 class RootKeyProvider(ABC):
     """Root Key Provider abstract base class."""
 
@@ -179,17 +193,20 @@ class BaseProvider(RootKeyProvider):
 
 
 class LocalFileProvider(BaseProvider):
-    """Local file Root Key Provider."""
+    """Local Root Key Provider backed by a file or inline configuration."""
 
-    def __init__(self, key_file: str):
+    def __init__(self, key_file: Optional[str] = None, root_key: Optional[str] = None):
         """
         Initialize LocalFileProvider.
 
         Args:
-            key_file: Root Key file path
+            key_file: Root Key file path.
+            root_key: 32-byte Root Key encoded as 64 hexadecimal characters.
         """
-        self.key_file = Path(key_file).expanduser()
-        self._root_key: Optional[bytes] = None
+        if (key_file is None) == (root_key is None):
+            raise ConfigError("exactly one of key_file or root_key must be configured")
+        self.key_file = Path(key_file).expanduser() if key_file is not None else None
+        self._root_key = decode_inline_root_key(root_key) if root_key is not None else None
 
     async def get_root_key(self) -> bytes:
         """Get Root Key."""
@@ -224,6 +241,7 @@ class LocalFileProvider(BaseProvider):
 
     async def _load_or_create_root_key(self) -> bytes:
         """Load or create Root Key."""
+        assert self.key_file is not None
         if self.key_file.exists():
             # Read existing key
             with open(self.key_file, "r") as f:
@@ -820,8 +838,17 @@ def create_root_key_provider(
     """
     if provider_type == "local":
         local_config = config.get("local", {})
-        key_file_path = local_config.get("key_file", "~/.openviking/master.key")
+        key_file_path = local_config.get("key_file")
+        root_key = local_config.get("root_key")
 
+        if key_file_path is not None and root_key is not None:
+            raise ConfigError(
+                "encryption.local.root_key and encryption.local.key_file are mutually exclusive"
+            )
+        if root_key is not None:
+            return LocalFileProvider(root_key=root_key)
+        if key_file_path is None:
+            key_file_path = "~/.openviking/master.key"
         if not key_file_path:
             raise ConfigError("encryption.local.key_file is required")
         return LocalFileProvider(key_file_path)

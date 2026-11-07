@@ -1,8 +1,12 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from openai import AsyncOpenAI
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+from volcenginesdkarkruntime import AsyncArk
 
 from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm import FailoverVLM, MultiCredentialVLM, OpenAIVLM, VolcEngineVLM
@@ -52,7 +56,14 @@ def stream_chunk(
 
 
 def attach_client(vlm, completions: FakeCompletions) -> None:
-    vlm.get_async_client = lambda: SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    async def post(path, *, body, options, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return await completions.create(**body, extra_headers=options.get("headers"))
+
+    vlm.get_async_client = lambda: SimpleNamespace(
+        chat=SimpleNamespace(completions=completions), post=post
+    )
 
 
 def make_adapter(vlm, default_model: str) -> VLMProviderAdapter:
@@ -89,13 +100,10 @@ async def test_vlm_adapter_streams_openai_content_deltas():
     )
     attach_client(vlm, completions)
     provider = make_adapter(vlm, "gpt-test")
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    messages = [{"role": "tool", "tool_call_id": "read", "content": [image]}]
 
-    events = [
-        event
-        async for event in provider.chat_stream(
-            messages=[{"role": "user", "content": "hi"}],
-        )
-    ]
+    events = [event async for event in provider.chat_stream(messages=messages)]
 
     assert [event.type for event in events] == [
         "content_delta",
@@ -112,6 +120,11 @@ async def test_vlm_adapter_streams_openai_content_deltas():
     assert completions.calls[0]["stream"] is True
     assert completions.calls[0]["stream_options"] == {"include_usage": True}
     assert "thinking" not in completions.calls[0]
+    sent = completions.calls[0]["messages"]
+    assert [m["role"] for m in sent] == ["tool", "user"]
+    assert isinstance(sent[0]["content"], str)
+    assert sent[1]["content"][-1] == image
+    assert messages[0]["content"] == [image]
 
 
 @pytest.mark.asyncio
@@ -217,3 +230,49 @@ async def test_credential_stream_does_not_replay_after_a_visible_delta():
     assert events[-1].response.finish_reason == "error"
     assert len(primary_completions.calls) == 1
     assert backup_completions.calls == []
+
+
+@pytest.mark.parametrize(
+    "backend,client_type", [(OpenAIVLM, AsyncOpenAI), (VolcEngineVLM, AsyncArk)]
+)
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
+@pytest.mark.asyncio
+async def test_bot_stream_temperature_defaults_on_the_wire(backend, client_type, temperature):
+    bodies = []
+
+    def send(request):
+        bodies.append(json.loads(request.content))
+        chunk = {"choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]}
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
+        )
+
+    vlm = backend(
+        {
+            "model": "fixed-model",
+            "api_key": "test-key",
+            **({"temperature": temperature} if temperature != "omitted" else {}),
+        }
+    )
+    async with client_type(
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(send)),
+    ) as client:
+        vlm.get_async_client = lambda: client
+        events = [
+            event
+            async for event in make_adapter(vlm, "routed-model").chat_stream(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+        ]
+    assert events[-1].response.content == "ok"
+    assert len(bodies) == 1
+    assert bodies[0]["stream"] is True
+    if temperature is None or temperature == "omitted":
+        assert "temperature" not in bodies[0]
+    else:
+        assert bodies[0]["temperature"] == temperature

@@ -238,7 +238,7 @@ Next, [check the connection](#check-the-connection).
 
 ## DSH {#dsh}
 
-[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`) builds on pi's model layer and takes the same `api` and base URL values: `https://ov.example.com/gateway/v1`, or `https://ov.example.com/gateway` for Anthropic Messages. Add a provider to the profile configuration. `dsh web` uses the `web` profile, so the file is `~/.dsh/profiles/web/cordis.patch.yml`:
+[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`) builds on pi's model layer and takes the same `api` and base URL values: `https://ov.example.com/gateway/v1`, or `https://ov.example.com/gateway` for Anthropic Messages. Add a provider to the profile configuration. `dsh web` uses the `web` profile, so the file is `~/.dsh/profiles/web/cordis.patch.yml`; the DeepSeek Harness Desktop app uses `~/.dsh/profiles/desktop/cordis.patch.yml`:
 
 ```yaml
 - id: llm-pi-ai
@@ -257,6 +257,7 @@ If the file already has an `llm-pi-ai` entry, add `openviking` under its `provid
 Export the gateway key as `OPENVIKING_GATEWAY_KEY`, the variable `apiKeyEnv` names, then start `dsh web` and pick `<model>` under the `openviking` provider in the model picker.
 
 - You can also add the provider in the Web UI under Settings → Models → Add model provider → Custom model API, which writes the same file.
+- Desktop does not see variables exported in a terminal. On macOS, export `OPENVIKING_GATEWAY_KEY` in your shell startup file (`~/.zprofile` or `~/.zshrc`); on Windows, set it with `setx`. Then quit Desktop with ⌘Q or from the tray and reopen it. If Desktop's recovery dialog runs, it moves `cordis.patch.yml` aside to a `.bak-<timestamp>` file, so add the provider again.
 - A DSH provider speaks one protocol. To use the gateway over several, declare one provider per protocol.
 - Unless DSH sends one of the session headers, the gateway matches its conversations by their history (see [How conversations are recognized](#how-conversations-are-recognized)).
 - If the [OpenViking plugin for DSH](../agent-integrations/17-dsh.md) is installed in the same profile, the gateway steps aside for those conversations. Use one or the other.

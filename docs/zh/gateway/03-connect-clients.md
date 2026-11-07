@@ -238,7 +238,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 
 ## DSH {#dsh}
 
-[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）的模型层基于 pi，`api` 和 Base URL 的取值与 pi 相同：`https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`。在 profile 配置中添加一个服务商；`dsh web` 使用的 profile 是 `web`，所以文件是 `~/.dsh/profiles/web/cordis.patch.yml`：
+[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）的模型层基于 pi，`api` 和 Base URL 的取值与 pi 相同：`https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`。在 profile 配置中添加一个服务商；`dsh web` 使用的 profile 是 `web`，所以文件是 `~/.dsh/profiles/web/cordis.patch.yml`；DeepSeek Harness Desktop 桌面应用用的是 `~/.dsh/profiles/desktop/cordis.patch.yml`：
 
 ```yaml
 - id: llm-pi-ai
@@ -257,6 +257,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 把网关密钥导出为 `OPENVIKING_GATEWAY_KEY`（也就是 `apiKeyEnv` 填的变量名），然后启动 `dsh web`，在模型选择器中选择 `openviking` 服务商下的 `<model>`。
 
 - 也可以在 Web UI 的 Settings → Models → Add model provider → Custom model API 中添加，写入的是同一个文件。
+- Desktop 看不到在终端里 export 的变量。macOS 上把 `OPENVIKING_GATEWAY_KEY` 写进 shell 启动文件（`~/.zprofile` 或 `~/.zshrc`）；Windows 上用 `setx` 设置。然后用 ⌘Q 或托盘菜单退出 Desktop，再重新打开。Desktop 的恢复对话框会把 `cordis.patch.yml` 挪成 `.bak-<时间戳>` 文件，运行过恢复后需要重新添加服务商。
 - DSH 的一个服务商只使用一种协议。要通过多种协议使用网关，就为每种协议各声明一个服务商。
 - 除非 DSH 发送了某个会话请求头，否则网关根据历史匹配它的对话（见[网关如何识别对话](#how-conversations-are-recognized)）。
 - 同一个 profile 里装了 [OpenViking 的 DSH 插件](../agent-integrations/17-dsh.md)时，网关会让出这些对话，两者选一个即可。

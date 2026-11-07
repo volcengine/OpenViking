@@ -1,0 +1,44 @@
+﻿OpenViking 0.5.2 / VikingBot 0.5.2 / doubao-seed-2.1-lite
+Verified 2026-10-28. Real example output; wording can vary.
+
+Input 1
+Tool evidence: openviking_multi_read({"uris": ["viking://agent/skills/feedback-brief/SKILL.md"]})
+
+# Feedback Brief
+
+## 1. Facts
+- Offline export takes 8 minutes. (Feedback A)
+- The pilot administrator suggests a progress indicator. (Feedback A)
+- The release date is undecided. (Feedback A)
+
+## 2. Suggested Actions
+
+| Action | Owner | Evidence |
+|--------|-------|----------|
+| Add a progress indicator to the offline export flow | Unspecified | Feedback A — pilot administrator suggests a progress indicator |
+
+## 3. Open Questions
+- Release date: Undecided (Feedback A)
+- No owner is specified for implementing the suggested progress indicator (Feedback A)
+
+---
+
+Input 2
+Tool evidence: openviking_multi_read({"uris": ["viking://agent/skills/feedback-brief/SKILL.md"]})
+
+## Facts
+- The registration template lacks an issue category field. (Feedback B)
+- There are 3 duplicate reports. (Feedback B)
+- No owner is specified. (Feedback B)
+
+## Actions
+| Action | Owner | Evidence |
+|---|---|---|
+| Suggestion: Add an issue category field to the registration template | Unspecified | Feedback B — template lacks an issue category field |
+| Suggestion: Investigate and resolve the 3 duplicate reports | Unspecified | Feedback B — 3 duplicate reports |
+| Suggestion: Assign an owner to the registration process | Unspecified | Feedback B — no owner is specified |
+
+## Open questions
+- Who should own the registration template and the duplicate-report cleanup? (Undecided)
+- What deadline applies to adding the issue category field and resolving the duplicates? (Undecided)
+- What caused the 3 duplicate reports, and should the category field help prevent them? (Undecided)

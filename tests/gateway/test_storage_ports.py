@@ -881,7 +881,7 @@ async def test_open_stores_shares_redis_and_reads_across_instances(provider, tmp
         monkeypatch.setattr(redis_store, "connect", opened)
         config = GatewayConfig(
             storage_path=str(tmp_path),
-            session_ttl_days=2,
+            session_ttl_seconds=2 * 86400,
             log_retention_days=3,
             storage={
                 "kernel": "redis",

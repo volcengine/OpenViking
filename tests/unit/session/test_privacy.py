@@ -35,6 +35,53 @@ def privacy():
     return SimpleNamespace(get_current=AsyncMock())
 
 
+@pytest.fixture
+def enable_session_privacy_discovery(monkeypatch):
+    """Keep coverage of the retained discovery code while production disables it."""
+    monkeypatch.setattr(extraction, "_SESSION_PRIVACY_DISCOVERY_ENABLED", True)
+
+
+async def test_new_privacy_discovery_is_disabled(monkeypatch, request_context):
+    def unexpected_discovery(*args, **kwargs):
+        pytest.fail("Session writes must not run new-value discovery")
+
+    monkeypatch.setattr(extraction, "find_privacy_matches", unexpected_discovery)
+    monkeypatch.setattr(extraction, "is_sensitive_key", unexpected_discovery)
+    privacy = SimpleNamespace(insert_values=AsyncMock())
+    specs = [
+        {
+            "role": "assistant",
+            "parts": [
+                TextPart("password=example-password sk-abcdefghijklmnopqrstuv"),
+                ContextPart(uri="viking://resources/doc", abstract="api_key=example-key"),
+                ToolPart(
+                    tool_input={
+                        "password": "example-password",
+                        "token": 1234,
+                        "secret": [],
+                        "credentials": {"api_key": "example-key", "items": [False, None]},
+                    },
+                    tool_output="Authorization: Bearer example-token",
+                    tool_output_externalization_error="password=example-error",
+                ),
+                ToolPart(tool_output=None),
+                ImagePart(url="https://example.test/image"),
+            ],
+        }
+    ]
+    before = deepcopy(specs)
+    protected = await extraction.extract_and_store_session_privacy(
+        "discovery-disabled", specs, request_context, privacy, None
+    )
+    assert protected == before
+    assert specs == before
+    privacy.insert_values.assert_not_awaited()
+    protected[0]["parts"][2].tool_input["credentials"]["items"].append("changed")
+    protected[0]["parts"][0].text = "changed"
+    assert specs == before
+
+
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_extract_and_restore_complete_messages(privacy, request_context):
     specs = [
         {
@@ -94,6 +141,7 @@ async def test_extract_and_restore_complete_messages(privacy, request_context):
     assert "changed" not in json.dumps(list(values.values()))
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_batch_field_id_collision_preserves_both_values(
     monkeypatch, privacy, request_context
 ):
@@ -108,6 +156,7 @@ async def test_batch_field_id_collision_preserves_both_values(
     ) == message_jsonl(specs)
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 def test_exhausted_field_ids_reject_without_mutating_input(monkeypatch):
     monkeypatch.setattr(extraction, "token_urlsafe", lambda _: "same0001")
     specs = [{"parts": [ToolPart(tool_input={"password": "first", "api_key": "second"})]}]
@@ -117,6 +166,7 @@ def test_exhausted_field_ids_reject_without_mutating_input(monkeypatch):
     assert specs == before
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_sensitive_field_names_do_not_leak_into_references(privacy, request_context):
     key = "sk-proj-12345678901234567890_api_key"
     specs = [{"parts": [ToolPart(tool_input={key: "secret-value"})]}]
@@ -128,6 +178,7 @@ async def test_sensitive_field_names_do_not_leak_into_references(privacy, reques
     ) == message_jsonl(specs)
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 @pytest.mark.parametrize("sensitive", [False, True], ids=["nested-input", "sensitive-container"])
 @pytest.mark.parametrize(
     "limit,bound",

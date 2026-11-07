@@ -7,6 +7,13 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **LangGraph Store 发现错误**：非语义 `search()` 和 `list_namespaces()` 现在会传播
+  后端文件列表查询失败，包括权限和服务不可用错误。明确不存在的命名空间根路径仍返回空结果。
+- **移除旧会话迁移（不兼容变更）**：删除旧迁移实现、`ov admin migrate`（含 `--cleanup`）
+  及 Python、TypeScript、Go SDK 的对应方法。保留仅 ROOT 可调用的
+  `POST /api/v1/admin/migrate` 入口，当前返回 `400 / INVALID_ARGUMENT`，不创建任务。
+  新版本不再提供 0.3.x 遗留会话的迁移和清理工具；升级不会自动迁移或删除这些旧目录。
+  已迁移的会话和正常会话操作不受影响。
 - **网关部署与行为**：
   - 新增独立 Helm chart `deploy/helm/openviking-gateway`：带 PVC 的单副本 SQLite，
     或共享 Redis 的多副本部署。在包含这些功能的版本发布之前，需要显式设置 `image.tag`，
@@ -16,6 +23,8 @@ OpenViking 的所有重要变更都将记录在此文件中。
     默认存储仍是 SQLite。
   - 新增 `X-OpenViking-Upstream-URL` 请求头，按 Base URL 从允许的上游中选择一个，
     见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header)。
+  - `session_ttl_seconds`（不低于 3600）取代 `session_ttl_days`，对话可以在一天内过期；
+    旧字段会被忽略并在启动时打印警告，升级时请改用新字段。
   - 无需修改配置的行为变化：独立网关 keep-alive 从 5 秒提高到 75 秒；
     绑定公网地址的网关在启动时遇到 OpenViking 不可达或返回 5xx 会等待并重试；
     空闲 SSE 流每 15 秒发送一条注释心跳；OpenViking 以 402 或 403 拒绝密钥的请求会被拒绝，

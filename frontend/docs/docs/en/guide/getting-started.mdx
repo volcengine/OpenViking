@@ -1,0 +1,95 @@
+# Getting started
+
+OpenViking UI provides React foundations for building AI application interfaces on OpenViking, the context database for AI agents. The workspace includes Rslib builds, bilingual documentation, layered directory conventions, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration.
+
+The package provides FileTree, FilePreview, Tui, ScopeSwitcher and AgentConnect as placeholder views, five file-type icons, and four business module placeholders. See the [component overview](../components/) and [module overview](../modules/) for their current scope. Public business Hooks are not implemented yet.
+
+## Run locally
+
+Use Node.js 22.12 or newer. From the repository root:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Open the `/ui/` address printed by Rspress. English uses `/ui/`; Simplified Chinese uses `/ui/zh/`. The navigation language menu switches between corresponding pages.
+
+The workspace development plugin starts Rslib watch before the documentation server. Documentation examples consume built public exports, rather than source aliases. React and ReactDOM are peer dependencies, supporting React 18.2 and React 19; the documentation application uses React 19.
+
+## Organize application code
+
+- `packages/react/src/components/`: reusable views that receive prepared data through props and report intent through callbacks.
+- `packages/react/src/modules/`: four importable placeholder components; business Hooks and composed interactions will follow.
+- `packages/react/src/hooks/` and `utils/`: internal shared logic, without public subpaths.
+- `docs/docs/en/` and `docs/docs/zh/`: corresponding documentation pages; shared runnable examples belong in `docs/docs/_demos/`.
+
+Keep application-specific workflows and authentication in the application layer. Module Hooks load data through the shared Client; components do not fetch business data or depend on application routing.
+
+## Public entries
+
+The root `@openviking/react` entry currently exports `FileTree`, `Tui`, `ScopeSwitcher`, `AgentConnect`, and the four business module placeholders with their main Props types. `FilePreview` is available from the `components/file-preview` subpath only, because its types depend on the optional `@ark-design/ui`. Subtypes — row types, option types, handles and label bags — always come from the subpaths. `@openviking/react/icons` provides five file-type icons.
+
+There are no aggregate `components` or `modules` JavaScript entries. Business placeholders use individual `modules/<module>` entries:
+
+```tsx
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
+
+<FileBrowser />;
+```
+
+Each module's props are settled — request options, controlled state, callbacks, slots and copy — though the placeholder component itself still consumes only `className`, `style` and one label. None of them requires a Provider yet. See [Modules](../modules/) for runnable examples and the full props tables.
+
+Business modules will combine data-loading Hooks with composed views around focused capabilities. Each module entry will export its Hooks separately from its composed view, so hosts can reuse the logic with their own UI. Authentication, account scope, routing, permissions, and complete page flows remain with the host. Business Hooks and cross-module public Hooks have no implementation or exports yet.
+
+The planned capabilities focus on the personal terminal: `file-browser` combines the directory, search, and preview into one module that coordinates resource selection, result navigation, content loading, and refreshes. Hosts can optionally control the current resource. `console` combines the conversation view and TUI in one panel, coordinating mode switching, the toolbar, and shared context while preserving each mode's session and command state. Agent connection, task management, and current-user usage statistics remain separate capabilities. Hosts coordinate layout, navigation, and interactions between modules. Product onboarding, resource and Skill import flows, and synchronization settings remain with the host. Experience dashboards and session content attach through the file browser's preview extensions; administration is outside this scope. These interactions are planned; the current module components render placeholders only.
+
+Request configuration is provided through `OpenVikingProvider` from `@openviking/react/client`: `baseURL` plus identity fields (`apiKey`, `accountId`, `userId`, `resourceId`), with the Client assembling the headers. The request client already ships as the `@openviking/react/client` subpath: `createOvClient` over `fetch`, plus `OvRequestOptions`, `OvClient` and `OvClientError`. Modules and standalone Hooks can override individual fields through `requestOptions`; precedence is local options, then the nearest Provider, then library defaults. An empty `baseURL` means same-origin requests. A standard API needs no per-module Adapter. Hosts adapt nonstandard gateways at the shared request boundary. The Provider is implemented and exported; the module Hooks are still to come.
+
+## Styling
+
+Styles use stable class names prefixed with `ov-` and the `--ov-ui-` variable prefix. They do not apply a global reset. JavaScript imports do not load CSS automatically; choose the full, category, or individual stylesheet as needed:
+
+```ts
+import '@openviking/react/style.css';
+// Or choose @openviking/react/components/style.css
+// or @openviking/react/modules/style.css.
+// Individual entries: @openviking/react/<category>/<module>/style.css.
+```
+
+Rslib emits ESM JavaScript, TypeScript declarations, and CSS into `packages/react/dist/`. Each public stylesheet works independently. Module styles currently cover their placeholders; as composed views land, they must include their component dependencies. Future Hook-only use needs no CSS.
+
+Theme colors can be adjusted on a containing element, or a specific class can be targeted directly:
+
+```css
+.my-workbench {
+  --ov-ui-radius: 4px;
+  --ov-ui-row-hover: rgb(0 0 0 / 6%);
+}
+
+.my-workbench .ov-file-tree__row {
+  height: 32px;
+}
+```
+
+## Build and check
+
+From `frontend/`:
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run preview
+```
+
+`lint` builds the library, runs Rslint's code-quality and type checks, and checks formatting with Prettier. `typecheck` checks the library, build configuration, and documentation TypeScript projects. `test` builds the library and verifies its public package entries. `build` generates the library and static site; the site output is `docs/doc_build/`.
+
+Pass files or quoted globs after `npm run lint --` to limit formatting and lint targets. Type checking still covers the configured projects. JavaScript and TypeScript files are limited to 200 lines, excluding blank and comment-only lines.
+
+## Deployment
+
+Changes under `frontend/` run the UI checks. On `main`, the existing product documentation deployment includes the UI site under `/ui/` in the same complete site artifact or storage bucket. Package publication uses a separate tag-triggered workflow; local builds and tests do not publish to npm.

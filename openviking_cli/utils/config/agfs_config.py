@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from enum import Enum
 from typing import Any, List, Literal, Optional
 from urllib.parse import urlparse
@@ -155,13 +156,6 @@ class QueueFSConfig(BaseModel):
         return self
 
 
-class AGFSCacheTraversalMode(str, Enum):
-    """Traversal strategy for cache-aware recursive RAGFS APIs."""
-
-    BACKEND = "backend"
-    CACHED_TRAVERSAL = "cached_traversal"
-
-
 class AGFSCacheFSConfig(BaseModel):
     """CacheFS behavior independent from the selected global Provider."""
 
@@ -169,25 +163,6 @@ class AGFSCacheFSConfig(BaseModel):
         default="local",
         description="CacheFS backend: 'local' | 'cache'",
     )
-    max_file_size_bytes: int = Field(
-        default=1024 * 1024,
-        description="Maximum full-file object size admitted to cache",
-    )
-    traversal_mode: AGFSCacheTraversalMode = Field(
-        default=AGFSCacheTraversalMode.BACKEND,
-        description="Traversal strategy for tree, glob, and grep",
-    )
-    bypass_prefixes: list[str] = Field(
-        default_factory=list,
-        description="Path prefixes that bypass cache",
-    )
-
-    @model_validator(mode="after")
-    def validate_config(self):
-        """Validate CacheFS limits."""
-        if self.max_file_size_bytes <= 0:
-            raise ValueError("cachefs max_file_size_bytes must be > 0")
-        return self
 
 
 class RedisCacheConfig(BaseModel):
@@ -217,9 +192,9 @@ class RedisCacheConfig(BaseModel):
     )
     db: int = Field(default=0, description="Redis database number")
     pool_size: int = Field(default=32, description="Redis command concurrency")
-    connect_timeout_ms: int = Field(default=1000, description="Redis connect timeout")
-    command_timeout_ms: int = Field(default=20, description="Redis command timeout")
-    default_ttl_seconds: int = Field(default=3600, description="Redis default cache TTL")
+    connect_timeout_ms: int = Field(default=10000, description="Redis connect timeout")
+    command_timeout_ms: int = Field(default=0, description="Redis command timeout; 0 disables command timeout")
+    default_ttl_seconds: int = Field(default=300, description="Redis default cache TTL")
     tls_insecure_skip_verify: bool = Field(
         default=False, description="Skip Redis TLS certificate verification"
     )
@@ -265,8 +240,8 @@ class RedisCacheConfig(BaseModel):
             raise ValueError("redis pool_size must be > 0")
         if self.connect_timeout_ms <= 0:
             raise ValueError("redis connect_timeout_ms must be > 0")
-        if self.command_timeout_ms <= 0:
-            raise ValueError("redis command_timeout_ms must be > 0")
+        if self.command_timeout_ms < 0:
+            raise ValueError("redis command_timeout_ms must be >= 0")
         if self.default_ttl_seconds < 0:
             raise ValueError("redis default_ttl_seconds must be >= 0")
         if len(schemes) != 1:
@@ -298,7 +273,12 @@ class AGFSPathLockConfig(BaseModel):
 
     provider: str = Field(
         default="filesystem",
-        description="PathLock provider: 'filesystem' | 'memory' | 'cache'",
+        description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'cache'",
+    )
+    sqlite_path: Optional[str] = Field(
+        default=None,
+        description="Absolute local SQLite lock database file shared by all participating processes. "
+        "Defaults to '{storage.workspace}/_system/pathlock/pathlock.db' when not set.",
     )
     lock_timeout_secs: float = Field(
         default=0.0,
@@ -312,8 +292,16 @@ class AGFSPathLockConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate provider and timeout/expiry ranges."""
-        if self.provider not in {"filesystem", "memory", "cache"}:
-            raise ValueError("pathlock provider must be one of: 'filesystem', 'memory', 'cache'")
+        if self.provider not in {"filesystem", "memory", "sqlite", "cache"}:
+            raise ValueError(
+                "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'cache'"
+            )
+        if (
+            self.provider == "sqlite"
+            and self.sqlite_path is not None
+            and not os.path.isabs(self.sqlite_path)
+        ):
+            raise ValueError("pathlock sqlite_path must be an absolute local file path")
         if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:
             raise ValueError("pathlock lock_expire_secs must be finite and >= 1.0")
         return self

@@ -12,7 +12,7 @@ from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError
 
 if TYPE_CHECKING:
-    from openviking.server.api_keys.new import APIKeyManager
+    from openviking.server.api_keys.key_mgr import APIKeyManager
 
 
 def build_api_key_manager(
@@ -29,7 +29,7 @@ def build_api_key_manager(
     account_store: AccountStore | None = None,
 ) -> APIKeyManager:
     """Assemble the API key facade over one complete account store."""
-    from openviking.server.api_keys.new import APIKeyManager
+    from openviking.server.api_keys.key_mgr import APIKeyManager
 
     provider = account_store_provider.strip().lower()
     store = build_account_store(

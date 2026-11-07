@@ -31,7 +31,7 @@ description: 签发把客户端接入 OpenViking 网关的网关密钥，并在�
 
 按密钥隔离时，轮换 OpenViking 密钥会进入新分区并开始新对话。排障时可以不输出密钥，直接计算分区名：`"k_" + hashlib.sha256(("openviking\0" + key).encode()).hexdigest()`。OpenViking 的真实账号身份单独保存，用于吊销检查。
 
-缓存的 OpenViking 密钥及其用户记录，从创建时起经过配置的 `session_ttl_days` 后过期，请求不会续期。下一个请求会向 OpenViking 重新确认密钥并重建记录，分区和对话 scope 保持不变。签发的网关密钥没有这项 TTL。待写回内容和清理行为见[保留期限](11-security-and-data.md#retention)。
+缓存的 OpenViking 密钥及其用户记录，从创建时起经过配置的 `session_ttl_seconds` 后过期，请求不会续期。下一个请求会向 OpenViking 重新确认密钥并重建记录，分区和对话 scope 保持不变。签发的网关密钥没有这项 TTL。待写回内容和清理行为见[保留期限](11-security-and-data.md#retention)。
 
 如果客户端需要自己的上下文配置、上游或允许的模型，或者需要单独吊销，请使用网关密钥。
 

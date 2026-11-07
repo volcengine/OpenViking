@@ -69,8 +69,8 @@ Gateway data expires on its own. SQLite runs an hourly cleanup job; Redis uses k
 
 | Data | Kept for | Setting |
 | --- | --- | --- |
-| Conversation state | 30 days after last use | `session_ttl_days` |
-| Cached OpenViking keys and their user records | Configured TTL from creation, without renewal | `session_ttl_days` |
+| Conversation state | 30 days after last use | `session_ttl_seconds` |
+| Cached OpenViking keys and their user records | Configured TTL from creation, without renewal | `session_ttl_seconds` |
 | Stored request logs | 30 days | `log_retention_days` |
 | Which upstream created each Responses response | 30 days | `response_ttl_seconds` |
 | Sessions and memories in OpenViking | OpenViking's own rules | — |
@@ -83,7 +83,7 @@ Minimums and where to set these are in [Gateway fields](13-configuration.md#gate
 
 ## Redis conversation state {#redis-conversation-state}
 
-With `storage.kernel: redis`, conversation state is a cache with a TTL of `session_ttl_days`. Writes renew it; reading a record alone does not.
+With `storage.kernel: redis`, conversation state is a cache with a TTL of `session_ttl_seconds`. Writes renew it; reading a record alone does not.
 
 Eviction has observable effects:
 
@@ -108,7 +108,7 @@ Revoking a gateway key, or the bound OpenViking key becoming invalid, does not d
 | Root | `DELETE /gateway/admin/account/data?account_id=<account>` | All gateway data of an account |
 | Embedded deployment, automatically | Deleting a user or account in OpenViking | The matching gateway data |
 
-A standalone deployment has no automatic step; its data stays until it is explicitly deleted or [expires](#retention). With [`management_api: false`](13-configuration.md#gateway-fields), the deletion API is also unavailable: deleting an OpenViking user does not notify the standalone gateway, so its conversation state remains until `session_ttl_days` expires. Request logs and response mappings follow their own retention settings. Embedded deployments retain the server's automatic deletion hook in account tenancy. In key tenancy, the hook cannot locate the `k_` partitions from the OpenViking account and user IDs; their cached data instead follows the retention settings above.
+A standalone deployment has no automatic step; its data stays until it is explicitly deleted or [expires](#retention). With [`management_api: false`](13-configuration.md#gateway-fields), the deletion API is also unavailable: deleting an OpenViking user does not notify the standalone gateway, so its conversation state remains until `session_ttl_seconds` expires. Request logs and response mappings follow their own retention settings. Embedded deployments retain the server's automatic deletion hook in account tenancy. In key tenancy, the hook cannot locate the `k_` partitions from the OpenViking account and user IDs; their cached data instead follows the retention settings above.
 
 None of this touches memories and sessions already stored in OpenViking. The reverse also holds: after you delete a memory in OpenViking, the copy the gateway saved for an ongoing conversation is still replayed until that conversation expires. To clear it now, delete the user's gateway data.
 

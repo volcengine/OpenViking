@@ -1,0 +1,31 @@
+# 业务模块
+
+三个个人终端模块已提供占位组件，可先接入布局。props 已定型——请求配置、受控状态、回调、插槽与文案——但每个组件仍只展示模块名称与可替换的占位文案；业务 Hook、API 请求和模块内部交互随实际能力迁入后补充。
+
+props 里没有数据字段。模块通过 Hook 自己取数，宿主给配置与受控值，模块通过回调上报变化。
+
+| 模块                             | 组件          | 目标能力   |
+| -------------------------------- | ------------- | ---------- |
+| [`file-browser`](./file-browser) | `FileBrowser` | 文件浏览。 |
+| [`console`](./console)           | `Console`     | 交互面板。 |
+| [`task-center`](./task-center)   | `TaskCenter`  | 任务中心。 |
+
+## 预览
+
+示例使用公开模块入口和模块集合样式。网格布局属于文档示例，应用自行决定页面布局。
+
+```tsx file="../../_demos/modules-basic.tsx" preview
+
+```
+
+## 导入与样式
+
+从 `@openviking/react/modules/<模块>` 导入组件及其 Props / Labels / Slots 类型。三个组件的本体与主 Props 类型也从根入口 `@openviking/react` 导出；Labels、Slots 与枚举类型只从子路径导入。
+
+JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/style.css`，全部模块使用 `@openviking/react/modules/style.css`，整库使用 `@openviking/react/style.css`，每个样式入口均可独立消费。没有 `@openviking/react/modules` 分类聚合 JavaScript 入口。
+
+当前占位组件接受 `className`、`style` 和 `labels`，无需 Provider。业务 Hook、共享 Client 与 `OpenVikingProvider` 仍为规划，尚未导出。
+
+## 宿主职责
+
+页面布局、认证、账号作用域、路由和权限由宿主负责。产品引导、资源与 Skill 导入流程及同步配置留在宿主；管理后台不在这些模块的范围内。

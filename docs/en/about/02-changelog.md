@@ -7,6 +7,17 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **LangGraph Store discovery errors**: Non-semantic `search()` and
+  `list_namespaces()` now propagate backend listing failures, including permission
+  and availability errors. Explicitly missing namespace roots still return empty results.
+- **Legacy session migration removed (breaking change)**: Removed the legacy
+  implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
+  Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`
+  endpoint remains reserved and currently returns `400 / INVALID_ARGUMENT` without
+  creating a task. New releases no longer
+  provide migration or cleanup of legacy 0.3.x sessions; upgrading does not move or
+  delete those old directories. Migrated sessions and normal session operations
+  are unaffected.
 - **Gateway deployment and behavior**:
   - New standalone Helm chart, `deploy/helm/openviking-gateway`: one SQLite replica with a
     PVC, or several replicas sharing Redis. Until a release includes these features, set
@@ -16,6 +27,9 @@ This changelog is automatically generated from [GitHub Releases](https://github.
     SQLite remains the default storage.
   - New `X-OpenViking-Upstream-URL` request header picks one of the allowed upstreams by its
     Base URL; see [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header).
+  - `session_ttl_days` is replaced by `session_ttl_seconds` (at least 3600), so sessions can
+    expire in under a day. The old setting is ignored with a startup warning; set the new one
+    when upgrading.
   - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
     seconds; a gateway bound to a public address waits and retries at startup while
     OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every

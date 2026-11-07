@@ -1,0 +1,123 @@
+# FileTree 文件树
+
+展平后的文件树。树状态由宿主持有，宿主按顺序传入可见行；组件负责渲染并通知成功的操作。
+
+当前为占位实现：渲染全部文档化的行类型并遵守公开 props，方便消费方先按 API 接入。样式、图标与交互细节仍会调整，视图后续按本文契约重写。
+
+## 基础用法
+
+展开目录查看子节点。行来自 `rows`；选中与展开由使用方控制。
+
+```tsx file="../../_demos/file-tree-basic.tsx" preview
+
+```
+
+## 行的组织方式
+
+组件不感知父子关系，宿主把自己的状态展平成有序列表：
+
+- `entry` —— 目录或文件。
+- `loading` —— 子节点区域加载中。
+- `load-more` —— 可以继续加载的子节点分页。
+- `error` —— 子节点区域加载失败。
+- `empty` —— 已展开但没有子节点的目录。
+
+只需产出数据源真正需要的行。一次性返回全部子节点的宿主不会产出 `load-more`。
+
+## 插槽与宿主内容
+
+- `slots.toolbar` —— 搜索、导入来源、刷新。组件不知道里面有什么。
+- `renderDashboard` —— 行尾指示器，例如看板入口。
+- `renderRowTooltip` —— 悬停内容，延迟与定位由组件处理。
+
+## 一次性效果
+
+高亮属于页面层效果，不是树的属性。三种方式可选，也可组合：
+
+1. 每个行元素带 `data-file-tree-row-id`，属性名以 `FILE_TREE_ROW_ATTRIBUTE` 导出。
+2. `getRowAttributes(row)` 按行追加类名与属性。
+3. `ref` 句柄：`getRowElement(id)` 与 `scrollToRow(id, options)`。
+
+```tsx
+const treeRef = useRef<FileTreeHandle>(null);
+treeRef.current?.scrollToRow('resources', { block: 'center' });
+```
+
+`operations` 提供 `select(row)`、`toggleExpand(row)`、`loadMore(row)`、`retry(row)` 和 `openRetentionSettings(uri)`。各方法返回 `Promise<void>`，完成表示操作成功，拒绝表示失败。原有 `on…` 回调统一为可选的成功通知，不再承担操作执行；同一操作尚未完成时忽略重复触发。
+
+## 属性
+
+| 属性                      | 类型                                      | 默认值 | 说明                                         |
+| ------------------------- | ----------------------------------------- | ------ | -------------------------------------------- |
+| `rows`                    | `readonly FileTreeRow[]`                  | 必填   | 按渲染顺序排列的可见行。                     |
+| `operations`              | `FileTreeOperations`                      | —      | 异步执行能力；省略方法时禁用对应操作。       |
+| `selectedId`              | `string \| null`                          | —      | 当前选中的行 id，由宿主持有。                |
+| `isReady`                 | `boolean`                                 | `true` | 首次加载是否完成。                           |
+| `loadingFallback`         | `ReactNode`                               | —      | 首次加载期间替代行列表显示。                 |
+| `errorFallback`           | `ReactNode`                               | —      | 存在整树级错误行时显示。                     |
+| `emptyFallback`           | `ReactNode`                               | —      | `rows` 为空时显示。                          |
+| `slots`                   | `FileTreeSlots`                           | —      | `toolbar` 插槽，渲染在行列表上方。           |
+| `labels`                  | `FileTreeLabels`                          | 英文   | 可替换文案。                                 |
+| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>` | —      | 按行追加属性，`className` 会与组件类名合并。 |
+| `renderDashboard`         | `(row) => ReactNode`                      | —      | 行尾指示器，返回 `null` 不显示。             |
+| `renderRowTooltip`        | `(row) => ReactNode`                      | —      | 悬停内容，返回 `null` 不显示。               |
+| `onSelect`                | `(row: FileTreeEntryRow) => void`         | —      | 选中成功后触发；失败时不触发。               |
+| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`         | —      | 展开或折叠成功后触发；失败时不触发。         |
+| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`      | —      | 下一页子节点加载成功后触发；失败时不触发。   |
+| `onRetry`                 | `(row: FileTreeErrorRow) => void`         | —      | 重新加载成功后触发；重试失败时不触发。       |
+| `onOpenRetentionSettings` | `(uri: string) => void`                   | —      | 保留策略设置成功打开后触发；失败时不触发。   |
+| 其他属性                  | `HTMLAttributes<HTMLDivElement>`          | —      | 标准 div 属性。                              |
+
+```tsx
+import { FileTree } from '@openviking/react/components/file-tree';
+import '@openviking/react/components/file-tree/style.css';
+```
+
+## 无障碍
+
+使用 `role="tree"` 与 `role="treeitem"`，并输出 `aria-level`、`aria-selected`、`aria-expanded`。方向键在行间移动，左右键展开与折叠，回车与空格选中。状态通过可见文本表达，不只依赖颜色。
+
+## 类名
+
+类名带 `ov-` 前缀。块名为 `ov-file-tree`，元素使用 `ov-file-tree__<元素>`。
+
+| 类名                        | 元素       | 用途                           |
+| --------------------------- | ---------- | ------------------------------ |
+| `ov-file-tree`              | 根节点     | 纵向布局与基础排版。           |
+| `ov-file-tree__toolbar`     | 工具栏插槽 | 行区域上方的宿主工具栏。       |
+| `ov-file-tree__body`        | 滚动区域   | 承载行的滚动容器。             |
+| `ov-file-tree__rows`        | 行容器     | 行的纵向排列。                 |
+| `ov-file-tree__row`         | 行         | 单行条目，带 `data-selected`。 |
+| `ov-file-tree__row:hover`   | 行         | 悬停背景。                     |
+| `ov-file-tree__toggle`      | 展开按钮   | 展开与折叠控件。               |
+| `ov-file-tree__chevron`     | 折叠箭头   | 有 `data-expanded` 时旋转。    |
+| `ov-file-tree__label`       | 名称       | 行主文本。                     |
+| `ov-file-tree__description` | 描述       | 名称旁的次要文本。             |
+| `ov-file-tree__level`       | 层级标签   | 上下文层级徽标。               |
+| `ov-file-tree__expiry`      | 过期提示   | 过期文案及其操作按钮。         |
+| `ov-file-tree__tooltip`     | 提示浮层   | 行的悬浮提示。                 |
+| `ov-file-tree__child-row`   | 子行       | 加载、空态与错误行。           |
+| `ov-file-tree__state`       | 状态面板   | 整高的加载、空态与错误视图。   |
+
+```css
+.my-workbench .ov-file-tree__row {
+  height: 32px;
+}
+```
+
+## 主题变量
+
+| CSS 变量               | 默认值                 | 用途             |
+| ---------------------- | ---------------------- | ---------------- |
+| `--ov-ui-text`         | `#1f2329`              | 行文本颜色。     |
+| `--ov-ui-text-muted`   | `#8f959e`              | 次要文本与图标。 |
+| `--ov-ui-row-hover`    | `rgb(0 0 0 / 4%)`      | 行悬停背景。     |
+| `--ov-ui-row-selected` | `rgb(37 99 197 / 10%)` | 选中行背景。     |
+| `--ov-ui-focus-ring`   | `#2563c5`              | 键盘焦点环。     |
+| `--ov-ui-chip`         | `rgb(0 0 0 / 6%)`      | 层级标记背景。   |
+| `--ov-ui-warning`      | `#b26a00`              | 过期提示文字。   |
+| `--ov-ui-radius`       | `6px`                  | 行与浮层的圆角。 |
+
+## 实现范围
+
+目录加载、分页、搜索、权限与导航仍由宿主负责，通过 `operations` 提供异步执行能力；成功后组件才触发对应通知，失败时不触发。省略方法时禁用该操作，省略通知不影响执行。

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the downloads the docs site serves under /dl: the installer, the plugin
-# bundle, the Claude Code URL marketplace, the Codex git marketplace and the
+# Build the downloads the docs site serves under /dl: the installer, the history
+# import script, the plugin bundle, the Claude Code URL marketplace, the Codex git marketplace and the
 # channel data of the version check, laid out like the TOS release bucket. Each docs host publishes the tree built from
 # the commit it deploys, with its own address in the marketplace manifest.
 
@@ -35,6 +35,8 @@ case "${OUT}" in /*) ;; *) OUT="${PWD}/${OUT}" ;; esac
 
 bash "${SCRIPTS}/stamp-installer-version.sh" "${SHARED}/install.sh" "${VERSION}" "${OUT}/memory-plugin-shared/install.sh"
 cp "${SHARED}/bootstrap.sh" "${OUT}/memory-plugin-shared/bootstrap.sh"
+# The onboarding guide has agents fetch this one file and run it with node.
+cp "${SHARED}/import-history.mjs" "${OUT}/memory-plugin-shared/import-history.mjs"
 
 # The git marketplace is committed before the zips are built: zipping resets
 # the staged files' times. Like the zips, the repository keeps its bytes until

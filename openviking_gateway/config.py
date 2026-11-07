@@ -94,7 +94,7 @@ class StorageConfig(BaseModel):
 class GatewayConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # Settings an upgraded configuration may still carry; rejecting them would stop the host.
-    removed_fields: ClassVar[frozenset[str]] = frozenset({"encryption_key_env"})
+    removed_fields: ClassVar[frozenset[str]] = frozenset({"encryption_key_env", "session_ttl_days"})
 
     public_url: str = ""
     mcp_file_links: Literal["proxy", "direct"] = "proxy"
@@ -109,7 +109,8 @@ class GatewayConfig(BaseModel):
     default_upstreams: dict[str, Upstream] = Field(default_factory=dict, repr=False)
     default_profile: Policy = Field(default_factory=Policy)
     min_server_version: str = "0.4.16"
-    session_ttl_days: int = Field(default=30, ge=1)
+    # The 3600 floor keeps sessions alive past capture's default 600-second idle tail.
+    session_ttl_seconds: int = Field(default=30 * 86400, ge=3600)
     response_ttl_seconds: int = Field(default=30 * 86400, ge=60)
     request_log_sink: Literal["store", "stdout"] = "store"
     log_retention_days: int = Field(default=30, ge=1)

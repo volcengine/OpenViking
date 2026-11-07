@@ -257,6 +257,7 @@ def gateway_call(name, arguments, identifier="g-1"):
     [
         ("search", {"query": " release\n  date "}, '> OpenViking search: "release date"'),
         ("search", {"query": "q" * 200}, '> OpenViking search: "' + "q" * 79 + '…"'),
+        ("read", {"uri": "viking://a"}, "> OpenViking read: viking://a"),
         ("read", {"uris": ["viking://a"]}, "> OpenViking read: viking://a"),
         (
             "read",

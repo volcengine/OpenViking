@@ -108,7 +108,7 @@ def open_stores(config: GatewayConfig, encryptor):
             handle.client, settings.key_prefix, AsyncCodec(encryptor)
         )
     if settings.kernel == "redis":
-        store = redis_store.RedisKernelStore(backend, ttl=config.session_ttl_days * 86400)
+        store = redis_store.RedisKernelStore(backend, ttl=config.session_ttl_seconds)
     else:
         store = SQLiteKernelStore(config.directory / "kernel.sqlite3", encryptor)
         # SQLite threads may still wait on this loop for the encryptor.
@@ -196,7 +196,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
     async def cleanup_loop():
         while True:
             try:
-                await store.expire(time.time() - config.session_ttl_days * 86400)
+                await store.expire(time.time() - config.session_ttl_seconds)
                 await management.expire_logs(time.time() - config.log_retention_days * 86400)
                 await asyncio.sleep(3600)
             except Exception:

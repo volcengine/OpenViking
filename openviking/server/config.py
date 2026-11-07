@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Server configuration for OpenViking HTTP Server."""
 
+import json
 import sys
-from typing import Any, Dict, List, Literal, Optional
+from collections.abc import Mapping
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, ValidationError, field_validator
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
@@ -30,6 +32,7 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from openviking_cli.utils.config.ttl_config import TTLConfig
 
 logger = get_logger(__name__)
 
@@ -42,34 +45,12 @@ def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str
     uri = value.strip().rstrip("/")
     if not uri:
         raise ValueError(f"{field_name} must not be empty")
+    # Preserve pre-home-alias add-target configurations when upgrading.
+    if uri in {"viking://user/resources", "viking://user/skills"} or uri.startswith(
+        "viking://user/resources/"
+    ):
+        uri = "viking://~/" + uri.removeprefix("viking://user/")
     return uri
-
-
-def _rewrite_legacy_current_user_uri(uri: str, field_name: str) -> str:
-    """Rewrite legacy uid-less current-user spellings to the ``~`` home alias.
-
-    ``viking://user/resources[/...]`` and ``viking://user/skills`` are no longer
-    expanded at request boundaries, but stored configurations (ov.conf
-    ``user_config_defaults.add_targets``, persisted ``user_config.json``, old
-    PATCH bodies) may still carry them. Their intent was unambiguous, so
-    normalize them here instead of breaking existing deployments.
-    """
-    from openviking.core.namespace import uri_parts
-
-    try:
-        parts = uri_parts(uri.rstrip("/"))
-    except ValueError:
-        return uri
-    if parts[:2] not in (["user", "resources"], ["user", "skills"]):
-        return uri
-    rewritten = f"viking://~/{'/'.join(parts[1:])}"
-    logger.info(
-        "Rewrote legacy current-user %s %r to %r; use the viking://~ home alias instead.",
-        field_name,
-        uri,
-        rewritten,
-    )
-    return rewritten
 
 
 class AddTargetsConfig(BaseModel):
@@ -84,27 +65,28 @@ class AddTargetsConfig(BaseModel):
         uri = _normalize_config_uri(value, "resource_uri")
         if uri is None:
             return None
-        from openviking.core.namespace import classify_uri, uri_parts
+        from openviking.core.namespace import uri_parts
+        from openviking.core.peer_id import normalize_peer_id
         from openviking.core.uri_validation import validate_viking_uri
 
-        uri = _rewrite_legacy_current_user_uri(uri, "resource_uri")
         validate_viking_uri(uri, field_name="resource_uri")
         normalized = uri.rstrip("/")
         parts = uri_parts(normalized)
-        classification = classify_uri(normalized)
         if (
             parts[:1] == ["resources"]
             or parts[:2] == ["~", "resources"]
             or (
-                parts[:1] == ["user"]
-                and classification.context_type == "resource"
-                and classification.content_index is not None
+                len(parts) >= 4
+                and parts[:2] == ["~", "peers"]
+                and parts[3] == "resources"
+                and normalize_peer_id(parts[2]) is not None
             )
         ):
             return normalized
         raise ValueError(
             "resource_uri must be a resource directory URI: viking://resources/..., "
-            "viking://~/resources[/...], or viking://user/{user_id}/resources[/...]"
+            "viking://~/resources[/...], or viking://~/peers/{peer_id}/resources[/...]. "
+            "Explicit user IDs are not allowed in add-target configuration."
         )
 
     @field_validator("skill_uri")
@@ -116,18 +98,24 @@ class AddTargetsConfig(BaseModel):
         from openviking.core.namespace import uri_parts
         from openviking.core.uri_validation import validate_viking_uri
 
-        uri = _rewrite_legacy_current_user_uri(uri, "skill_uri")
         validate_viking_uri(uri, field_name="skill_uri")
         normalized = uri.rstrip("/")
         parts = uri_parts(normalized)
-        if parts in (["~", "skills"], ["agent", "skills"]) or (
-            len(parts) == 3 and parts[0] == "user" and parts[2] == "skills"
-        ):
+        if parts in (["~", "skills"], ["agent", "skills"]):
             return normalized
         raise ValueError(
-            "skill_uri must be viking://~/skills, viking://user/{user_id}/skills, "
-            "or viking://agent/skills"
+            "skill_uri must be viking://~/skills or viking://agent/skills. "
+            "Explicit user IDs are not allowed in add-target configuration."
         )
+
+
+def _normalize_user_memory_policy(value: Any) -> dict[str, Any]:
+    from openviking.session.memory_policy import MemoryPolicy
+
+    return MemoryPolicy.from_dict(value).to_dict()
+
+
+UserMemoryPolicy = Annotated[Dict[str, Any], BeforeValidator(_normalize_user_memory_policy)]
 
 
 class DeprecatedUserAgentEvolutionConfig(BaseModel):
@@ -140,20 +128,62 @@ class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
-    memory_policy: Optional[Dict[str, Any]] = None
+    memory_policy: Optional[UserMemoryPolicy] = None
+    ttl: Optional[TTLConfig] = None
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
     )
 
-    @field_validator("memory_policy", mode="before")
     @classmethod
-    def validate_memory_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
-        if value is None:
-            return None
-        from openviking.session.memory_policy import MemoryPolicy
+    def from_stored(cls, payload: dict[str, Any]) -> "UserConfig":
+        """Restore persisted values without applying configuration input validators."""
+        config = cls.model_construct(**payload)
+        config.add_targets = AddTargetsConfig.model_construct(**payload.get("add_targets", {}))
+        if config.ttl is not None:
+            config.ttl = TTLConfig.model_construct(**payload["ttl"])
+        return config
 
-        return MemoryPolicy.from_dict(value).to_dict()
+
+class UserSettingsPatch(BaseModel):
+    """Validate only fields supplied by a user-settings PATCH."""
+
+    model_config = {"extra": "forbid"}
+
+    add_targets: Optional[AddTargetsConfig] = None
+    memory_policy: Optional[UserMemoryPolicy] = None
+    ttl: Optional[TTLConfig] = None
+
+
+def validate_config_input(
+    settings: Mapping[str, Any] | UserConfig | UserSettingsPatch | None = None,
+    content: Optional[str] = None,
+) -> None:
+    """Check submitted configuration against the running server's capabilities."""
+    from openviking.ttl.wiring import ttl_config_supported
+    from openviking_cli.exceptions import UnimplementedError
+
+    if isinstance(settings, (UserConfig, UserSettingsPatch)):
+        settings = settings.model_dump(by_alias=True, exclude_unset=True)
+        memory_types = (settings.get("memory_policy") or {}).get("memory_types")
+        if memory_types is not None:
+            from openviking.session.memory.memory_type_registry import get_default_registry
+            from openviking.session.memory_policy import MemoryPolicy
+
+            MemoryPolicy(memory_types=set(memory_types)).validate_memory_types(
+                set(get_default_registry().list_names(include_disabled=False))
+            )
+    file_settings = None
+    if content is not None:
+        try:
+            file_settings = json.loads(content.lstrip("\ufeff"))
+        except (TypeError, ValueError):
+            pass  # The startup-file parser reports malformed JSON.
+    has_ttl = (settings is not None and "ttl" in settings) or (
+        isinstance(file_settings, dict) and "ttl" in file_settings
+    )
+    if has_ttl and not ttl_config_supported():
+        raise UnimplementedError("Redis-backed TTL is not enabled in this deployment.")
 
 
 class UserConfigDefaults(UserConfig):
@@ -260,6 +290,22 @@ class UsageReporterConfig(BaseModel):
     enabled: bool = False
     extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
     sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
+
+
+class TTLAdapterConfig(BaseModel):
+    """Opt-in Redis-backed directory TTL configuration.
+
+    Uses the built-in implementation, supplied with its ResourceID, Redis
+    connection and writer/reader role through ``config``. No external Python
+    package is required. Unset or disabled leaves all TTL hooks inactive.
+    """
+
+    enabled: bool = False
+    config: Dict[str, object] = Field(default_factory=dict)
+
+    @property
+    def writer_enabled(self) -> bool:
+        return self.enabled and bool(self.config.get("writer", True))
 
 
 class TraceDumpBodyConfig(BaseModel):
@@ -371,6 +417,8 @@ class ServerConfig(BaseModel):
     trusted_identity_pending_max_size: int = Field(10_000, gt=0)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
+    # Built-in Redis TTL; disabled unless explicitly configured.
+    ttl_adapter: Optional[TTLAdapterConfig] = None
     # Public-facing base URL emitted in MCP-issued upload instructions. See
     # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
     # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header

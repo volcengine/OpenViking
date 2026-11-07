@@ -60,6 +60,8 @@ The embedded gateway runs inside the OpenViking Server on the same port, and it 
 - When `OPENVIKING_GATEWAY_ENABLED` is set, it overrides `gateway.enabled` in `ov.conf`, so a false value keeps the gateway off after the restart.
 - If `ov.conf` is read-only, for example mounted from a Helm ConfigMap, Studio cannot change it. Set `gateway.enabled: true` in the Helm values or `OPENVIKING_GATEWAY_ENABLED=true`, then restart the server.
 
+**Where it stores data.** The embedded gateway keeps its databases in `<storage.workspace>/gateway` unless `gateway.storage_path` (or `OPENVIKING_GATEWAY_STORAGE_PATH`) is set. If that directory has no gateway database but the earlier default `~/.openviking/gateway` does, the server keeps using the old directory and logs a warning; copy the directory to the new location or set `storage_path` to silence it. The standalone gateway still defaults to `~/.openviking/gateway`.
+
 **Check that it is on.** Open `/studio/` on the server and choose **OpenViking Gateway** in the sidebar: you should see the gateway tabs instead of the not-enabled card. In local dev mode, if the default account has no upstreams, the gateway imports the server's usable VLM credentials as upstreams at startup and creates a `default` context profile. Imported Coding Plan upstreams need confirmation before use; if nothing can be imported, add an upstream by hand ([Upstreams](../gateway/07-upstreams.md#add-an-upstream)).
 
 **Letting an agent change the configuration.** An agent that holds the root API key can edit `ov.conf` and restart the server through the [runtime configuration API](../api/08-admin.md#runtime-configuration). A standalone gateway does not offer this API.
@@ -128,7 +130,7 @@ helm upgrade --install gateway ./deploy/helm/openviking-gateway \
 
 The default is one SQLite replica with a persistent volume and `Recreate` updates. A default StorageClass, or `persistence.storageClass`/`persistence.existingClaim`, must be available. Setting `persistence.enabled: false` loses SQLite state when a Pod is replaced; Helm NOTES warns about this. PVCs are retained on uninstall. Use both Redis providers before scaling; see [Scaling](#scaling).
 
-The chart sets `session_ttl_days: 7` and `response_ttl_seconds: 604800`, shorter than the gateway's 30-day defaults; override `config.*` to change them. Each Pod requests 500m CPU and 1Gi of memory, with limits of 2 CPUs and 4Gi; set `resources` for your load.
+The chart sets `session_ttl_seconds: 604800` and `response_ttl_seconds: 604800`, shorter than the gateway's 30-day defaults; override `config.*` to change them. Each Pod requests 500m CPU and 1Gi of memory, with limits of 2 CPUs and 4Gi; set `resources` for your load.
 
 The standalone chart's `existingSecret` accepts `management-key`, `redis-password` and `root-key`. The first two become `OPENVIKING_GATEWAY_MANAGEMENT_KEY` and `OPENVIKING_GATEWAY_REDIS_PASSWORD`; `config.storage.redis.password_env` names the latter. Local and KMS encryption mount `root-key` read-only at `/etc/openviking-gateway/keys/root-key` and set the provider's `key_file` to it. Generate the key before installing, as described under [Encryption](#encryption). For upstream credentials and KMS AK/SK, use `$VAR` in `config` and `extraEnv` with `secretKeyRef`; never put plaintext credentials in a ConfigMap.
 

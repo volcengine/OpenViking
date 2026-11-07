@@ -41,7 +41,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `default_upstreams` | 两者 | `{}` | 稳定 ID 到[上游设置](#upstream-settings)的对象映射 | 账号没有存储上游时供 OpenViking 密钥使用，见[部署默认上游](07-upstreams.md#deployment-default-upstreams) |
 | `default_profile` | 两者 | 内置上下文配置默认值 | [上下文配置设置](#context-profile-settings) | 账号没有 ID 为 `default` 的配置时使用，也是嵌入式 dev 模式初始化写入的配置 |
 | `min_server_version` | 两者 | `0.4.16` | 版本号 | 独立网关要求的 OpenViking Server 最低版本 |
-| `session_ttl_days` | 两者 | `30` | 1 及以上 | 对话闲置多少天后过期；也决定缓存的 OpenViking 密钥及其用户记录的固定寿命 |
+| `session_ttl_seconds` | 两者 | `2592000`（30 天） | 3600 及以上 | 对话闲置多少秒后过期；也决定缓存的 OpenViking 密钥及其用户记录的固定寿命 |
 | `response_ttl_seconds` | 两者 | `2592000`（30 天） | 60 及以上 | Responses 响应与上游的对应关系保留多少秒 |
 | `request_log_sink` | 两者 | `store` | `store`, `stdout` | 将请求和后台保存日志写入存储，或以每条一行 JSON 写到 stdout 并立即刷新；见[观测](../guides/22-gateway-operations.md#monitoring) |
 | `log_retention_days` | 两者 | `30` | 1 及以上 | 存储中的请求日志保留天数；stdout 的保留期限由日志采集系统管理 |
@@ -89,7 +89,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
       "command_timeout_ms": 5000
     }
   },
-  "session_ttl_days": 7
+  "session_ttl_seconds": 604800
 }
 ```
 
@@ -134,7 +134,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `tenancy` | `key` 要求 `management_api: false`；`openviking_keys` 关闭时此字段不生效 |
 | `client_rules` | 新增的模式必须是合法的 Python 正则表达式；新增的标签名以英文字母开头，只能包含英文字母、数字、`_`、`.`、`:` 和 `-` |
 | 未知字段 | 校验失败 |
-| 已删除的字段 | 忽略，启动时打印警告：`encryption_key_env`，以及 `ov.conf` 中[迁移](../guides/22-gateway-operations.md#migration)列出的 v0.5 字段 |
+| 已删除的字段 | 忽略，启动时打印警告：`encryption_key_env`、`session_ttl_days`（已由 `session_ttl_seconds` 取代），以及 `ov.conf` 中[迁移](../guides/22-gateway-operations.md#migration)列出的 v0.5 字段 |
 
 ## 客户端规则 {#client-rules}
 

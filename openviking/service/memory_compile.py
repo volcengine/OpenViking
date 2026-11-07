@@ -18,6 +18,7 @@ from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
+from openviking.service.compile_targets import commit_snapshot
 from openviking.service.fs_service import FSService
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_tracker import TaskRecord, get_task_tracker
@@ -35,7 +36,7 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.uri import render_template
 from openviking.telemetry import tracer
 from openviking.telemetry.span_models import create_root_span_attributes
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -106,9 +107,18 @@ class MemoryCompileRunner:
     task_type = "compile"
     task_id_prefix = "cmp_"
 
-    def __init__(self, fs: FSService, vikingdb: Any = None) -> None:
+    def __init__(
+        self,
+        fs: FSService,
+        vikingdb: Any = None,
+        *,
+        runtime_config_manager: Any = None,
+        vlm_resolver=None,
+    ) -> None:
         self._fs = fs
         self._vikingdb = vikingdb
+        self._runtime_config_manager = runtime_config_manager
+        self._vlm_resolver = vlm_resolver
         # Keep strong references so background tasks are not garbage collected.
         self._running: set[asyncio.Task[None]] = set()
 
@@ -176,7 +186,7 @@ class MemoryCompileRunner:
         ).rstrip("/")
         memory_type = _memory_type_from_target(uri)
         await self._fs.ensure_write_access(uri, ctx)
-        stat = await self._fs.stat(uri, ctx)
+        stat = await self._fs.stat(uri, ctx, skip_count=True)
         if not stat.get("isDir"):
             raise InvalidArgumentError("Memory-mode Compile target must be a directory")
         canonical = str(stat.get("uri") or uri).rstrip("/")
@@ -224,6 +234,7 @@ class MemoryCompileRunner:
                     ctx.user.user_id,
                     work_id=running_work_id,
                 ):
+                    await self._snapshot(target, task_id, "start", ctx)
                     result = await self._consolidate(
                         target=target,
                         memory_type=memory_type,
@@ -248,6 +259,26 @@ class MemoryCompileRunner:
                         task_id,
                         result["errors"],
                     )
+                await tracker.wait_for_task_work(
+                    task_id,
+                    exclude_work_id=running_work_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                queue_status = await tracker.build_queue_status(
+                    task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                )
+                if (queue_status.get("Embedding") or {}).get("error_count", 0):
+                    raise OpenVikingError(
+                        "Memory compile embedding failed", code="PROCESSING_ERROR"
+                    )
+                with bind_task_context(
+                    task_id,
+                    ctx.account_id,
+                    ctx.user.user_id,
+                    work_id=running_work_id,
+                ):
+                    await self._snapshot(target, task_id, "finish", ctx)
                 await tracker.complete(
                     task_id,
                     result,
@@ -268,6 +299,21 @@ class MemoryCompileRunner:
             if root_token is not None and reset_root_observability_context is not None:
                 reset_root_observability_context(root_token)
             await tracker.unregister_running_task(task_id)
+
+    async def _snapshot(self, target: str, task_id: str, phase: str, ctx: RequestContext) -> None:
+        """Snapshot the target for recovery; failures are logged and cancellation propagates."""
+        try:
+            oid = await commit_snapshot(
+                self._fs._ensure_initialized(),
+                [target],
+                f"memory compile {task_id} {phase}",
+                ctx,
+                wait_busy=False,
+            )
+            if oid is None:
+                logger.warning("Memory compile %s %s snapshot is unavailable", task_id, phase)
+        except Exception as exc:
+            logger.warning("Memory compile %s %s snapshot failed: %s", task_id, phase, exc)
 
     async def _consolidate(
         self,
@@ -304,7 +350,16 @@ class MemoryCompileRunner:
         if not memory_types:
             return result
         config = get_openviking_config()
-        vlm = config.vlm.get_vlm_instance()
+        vlm = (
+            await self._vlm_resolver.get_vlm(ctx.account_id)
+            if self._vlm_resolver is not None
+            else config.vlm.get_vlm_instance()
+        )
+        from openviking.config.generation import get_output_language_override
+
+        output_language_override = await get_output_language_override(
+            self._runtime_config_manager, ctx.account_id, cluster_config=config
+        )
         provider = ConsolidationExtractContextProvider(
             memory_types=memory_types,
             target_directory=target,
@@ -312,6 +367,7 @@ class MemoryCompileRunner:
             memory_registry=registry,
             ctx=ctx,
             viking_fs=viking_fs,
+            output_language_override=output_language_override,
         )
 
         extract_context = provider.get_extract_context()

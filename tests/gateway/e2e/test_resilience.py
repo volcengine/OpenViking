@@ -73,11 +73,23 @@ def test_02_default_grace_finishes_stream_and_other_pod_delivers(harness):
     )
     assert len(snapshot["libraries"]["library-a"]["sessions"]) == 1
     writes = [r for r in snapshot["requests"] if r["path"].endswith("/messages/batch")]
-    assert all(r["source_pod"] != victim_ip for r in writes), writes
     ids = [
         source for r in writes for m in r["body"]["messages"] for source in m["source_message_ids"]
     ]
     assert len(ids) == len(set(ids)) == 4
+    # The next request confirms the first turn, so the victim may deliver it
+    # immediately. Only the final, idle-delayed tail must survive on another Pod.
+    tail_ids = {
+        source
+        for message in written_messages(snapshot)[-2:]
+        for source in message["source_message_ids"]
+    }
+    tail_writes = [
+        r
+        for r in writes
+        if any(tail_ids.intersection(m["source_message_ids"]) for m in r["body"]["messages"])
+    ]
+    assert tail_writes and all(r["source_pod"] != victim_ip for r in tail_writes), tail_writes
 
 
 @pytest.mark.standalone

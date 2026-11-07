@@ -214,7 +214,7 @@ async def openviking_credential(app, key):
     account, user_id = identity["account_id"], identity["user_id"]
     if partitioned:
         account = "k_" + identifier
-    ttl = app.state.config.session_ttl_days * 86400
+    ttl = app.state.config.session_ttl_seconds
     stored = {
         "source": "openviking",
         "openviking_account": identity["account_id"],

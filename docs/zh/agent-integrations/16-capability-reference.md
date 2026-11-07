@@ -24,7 +24,7 @@
 
 ### 可调用工具
 
-“服务端 MCP 工具”指服务端 `tools/list` 返回的工具：当前服务端有 21 个，列在[服务端 MCP 工具](#服务端-mcp-工具)。
+“服务端 MCP 工具”指服务端 `tools/list` 返回的工具：当前服务端有 22 个，列在[服务端 MCP 工具](#服务端-mcp-工具)。
 
 | 集成 | 接入方式 | Agent 可调用的工具 |
 |---|---|---|
@@ -38,8 +38,8 @@
 | [OpenCode](#opencode) | npm 插件，自动添加 MCP 条目 | 服务端 MCP 工具，名为 `openviking_<tool>` |
 | [DSH](#dsh) | 同进程 Cordis 插件 + MCP 代理 | 服务端 MCP 工具，名为 `mcp__openviking__<tool>` |
 | [pi](#pi) | 原生扩展，内置 MCP 客户端 | 服务端 MCP 工具；MCP 握手成功后注册为 `openviking_<tool>` |
-| [OpenClaw](#openclaw) | context-engine 插件 | 15 个原生工具，默认启用 14 个 |
-| [Hermes](#hermes) | Hermes memory provider | 6 个原生 `viking_*` 工具 |
+| [OpenClaw](#openclaw) | context-engine 插件 | 16 个原生工具，默认启用 15 个 |
+| [Hermes](#hermes) | Hermes memory provider | 更新后的外部插件有 7 个原生 `viking_*` 工具；旧版内置 provider 有 6 个 |
 | [MCP 客户端、Agent Plugins](#其他集成) | 仅 MCP | 服务端 MCP 工具 |
 | [ov CLI](#ov-cli) | 命令行客户端 | 每个操作都是显式命令，不经过 Agent |
 
@@ -53,8 +53,8 @@
 | Cursor | 是，带会话 | profile、记忆索引、skill | 每捕获 8 条消息 | 否 | 先提交，再由宿主摘要 |
 | TRAE、TRAE CN | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | ZCode | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
-| Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 每捕获 8 条消息 | 仅当 `SessionEnd` 捕获到新消息 | 提交新捕获的消息 |
-| CodeBuddy Code | 是，带会话，仅限交互式 TUI | profile、记忆索引、skill | 每捕获 8 条消息 | 仅当 `SessionEnd` 捕获到新消息，且仅限交互式 TUI | 提交新捕获的消息 |
+| Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 每捕获 8 条消息 | 是 | 提交尚未提交的消息 |
+| CodeBuddy Code | 是，带会话，仅限交互式 TUI | profile、记忆索引、skill | 每捕获 8 条消息 | 是，仅限交互式 TUI | 提交尚未提交的消息 |
 | OpenCode | 是，带会话 | profile、记忆索引、skill、已索引的仓库 | 空闲时，待提交 token 达到 20,000 | 是，在宿主的清理时限内 | 在压缩前后提交 |
 | DSH | 是，带会话 | profile、记忆索引、skill，每个会话一次 | 待提交 token 达到 20,000 | 是，预算 3 秒 | 先提交，再由宿主摘要 |
 | pi | 是，带会话 | profile、记忆索引、skill，每轮 | takeover 开：约 30,000 token；关：20,000 | takeover 开：否；关：是 | takeover 替换 pi 的摘要 |
@@ -83,7 +83,7 @@
 
 | 分组 | 工具 |
 |---|---|
-| 检索与浏览 | `find`、`search`、`read`、`download`、`list`、`tree`、`grep`、`glob` |
+| 检索与浏览 | `find`、`search`、`rule_search`、`read`、`download`、`list`、`tree`、`grep`、`glob` |
 | 写入 | `remember`、`write`、`edit`、`add_resource`、`add_skill` |
 | 删除 | `forget` |
 | 监听资源 | `list_watches`、`cancel_watch`（商业版暂不支持） |
@@ -107,6 +107,34 @@
 - **pi** 只在以下条件都满足时注册工具：会话未被 bypass、健康检查通过、OpenViking 会话存在、`/mcp` 握手返回了工具列表。握手失败时，本次会话没有 OpenViking 工具，但召回、同步和 takeover 照常进行，后续轮次会重试握手。`mcpEnabled: false` 会关闭这条桥接。root API key 访问 `/mcp` 会得到 403，所以凭据链最终落到 `ov.conf` 的 `server.root_api_key` 时，会话里没有工具。
 - **Codex** 只把 `.mcp.json` 的 `env_vars` 中列出的环境变量传给 MCP 服务。
 
+### 各 Agent 的 Rule 检索
+
+Rule Search 是执行受约束的操作或回复前，由模型按需调用的只读检查。
+`task_context` 应包含用户目标、计划操作与相关事实；
+`rule_probability_threshold` 默认 `0.65`。返回结果保留完整 Rule。
+调用方仍需逐条检查 `applies_when`、`exception` 和 `content`，并遵守所有适用 Rule。
+工具不可用或请求失败，不代表没有适用 Rule。
+
+| 集成 | 注册的工具名 |
+|---|---|
+| Claude Code、Codex、TraeCode CLI、Cursor、TRAE/CN、ZCode、Kimi Code、CodeBuddy、Agent Plugins、其他 MCP 客户端 | 服务端 `rule_search`，带宿主的 MCP 命名空间 |
+| DSH / Desktop | `mcp__openviking__rule_search` |
+| OpenCode、pi、VikingBot | `openviking_rule_search` |
+| VikingBot 通过 MCP | `mcp_<server_name>_rule_search` |
+| Microsoft Agent Framework 通过 MCP | 动态发现的 `rule_search`，可带配置的前缀 |
+| OpenClaw、Open WebUI | `ov_rule_search` |
+| Hermes 外部插件、LangChain / LangGraph | `viking_rule_search` |
+| Magpie | `magpie-plugin_rule_search`，源码安装使用目录名前缀 |
+
+先升级到会发布 `rule_search` 的服务端版本，再重连 MCP 客户端。
+使用独立 REST 工具的接入端需要升级插件。共享 `openviking-rule-search` skill 随
+Claude Code、Codex/TraeCode CLI、Cursor、CodeBuddy、OpenCode、DSH、pi、
+OpenClaw 和 Agent Plugins 分发；没有附带 skill 的宿主仍可发现工具。
+沿用现有 MCP 开关与工具白名单。新增的是按需查询入口，没有增加每轮自动检查或强制拦截 hook。
+
+Hermes 的 catalog 安装固定在指定 commit，需要更新 catalog pin 才能收到新插件；
+旧版内置 provider 保留原工具集。
+
 ### OpenClaw 工具
 
 OpenClaw 注册自己的工具，不转发 MCP 工具。
@@ -114,6 +142,7 @@ OpenClaw 注册自己的工具，不转发 MCP 工具。
 | 分组 | 工具 | 说明 |
 |---|---|---|
 | 记忆 | `memory_recall`、`memory_store`、`memory_forget` | `memory_recall` 检索记忆；`memory_store` 通过临时会话提交 |
+| Rule | `ov_rule_search` | 返回完整适用约束；默认启用，也可用 `rules` 分组选择 |
 | 资源与 skill | `ov_search`、`ov_read`、`ov_multi_read`、`ov_list`、`add_skill`、`add_resource` | `ov_search` 默认检索资源和用户的 skill。`add_resource` 默认关闭，还需要开启 `enableAddResourceTool` |
 | 会话归档 | `ov_archive_search`、`ov_archive_expand` | 检索并展开已归档的历史 |
 | 大块工具输出 | `openviking_tool_result_read`、`openviking_tool_result_search`、`openviking_tool_result_list` | 读取服务端单独存放的工具输出 |
@@ -121,7 +150,7 @@ OpenClaw 注册自己的工具，不转发 MCP 工具。
 
 ### Hermes 工具
 
-Hermes 有 6 个工具：`viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。内置 provider 与外部插件的区别见 [Hermes](#hermes)。
+更新后的 Hermes 外部插件有 7 个工具：`viking_search`、`viking_rule_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 安装工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。旧版内置 provider 保留原来的 6 个工具。分发方式的区别见 [Hermes](#hermes)。
 
 <a id="_3-5-写入与删除的类型边界"></a><a id="_3-5-1-写入边界"></a><a id="_3-5-2-删除边界"></a>
 
@@ -199,7 +228,7 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 
 ### 会话开场上下文
 
-使用共享插件代码的集成会在会话开始时注入一个 `<openviking-context>` 块，包含用户 profile（`viking://user/<space>/memories/profile.md`）、`preferences/` 和 `entities/` 记忆的索引，以及 `<available-skills>` skill 清单：
+使用共享插件代码的集成会在会话开始时注入一个 `<openviking-context>` 块，包含用户 profile（`viking://user/<space>/memories/profile.md`）、`preferences/` 和 `entities/` 记忆的索引，以及 `<available-skills>` skill 清单。会话带有 actor peer 时，还会加入 `viking://user/<space>/peers/<peer>/memories/` 下的同名文件：profile、preferences 和 entities 没有消息范围，所以即使在 peer 会话中，抽取也会把用户本人的事实写到用户根目录。用户根目录在前；peer profile 是第二个 `<user-profile>` 元素，并去掉与用户 profile 相同的行；两个根目录共用同一份预算：
 
 ```text
 <openviking-context source="startup">
@@ -232,7 +261,7 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 
 预算与限制：
 
-- `profileTokenBudget`（默认 10,000 token）覆盖 profile 和记忆索引，profile 占一半。profile 超长时保留前 8 行和结尾；清单超长时以 `... +N more` 结尾。token 估算中，CJK 字符按 1.5 token 计，其他文本按每 4 个字符 1 token 计。
+- `profileTokenBudget`（默认 10,000 token）覆盖 profile 和记忆索引，profile 占一半：先放用户 profile，peer profile 使用剩余部分，剩余不足 200 token 时只放一行指向其 URI 的提示。两个根目录分摊索引预算。profile 超长时保留前 8 行和结尾；清单超长时以 `... +N more` 结尾。token 估算中，CJK 字符按 1.5 token 计，其他文本按每 4 个字符 1 token 计。
 - `skillCatalogTokenBudget`（默认 1,200 token，`OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）是 skill 清单的独立预算。`skillCatalog`（`OPENVIKING_SKILL_CATALOG`）或把预算设为 0 都会关闭清单。
 - 清单来自一次 `GET /api/v1/skills` 请求。用户自己的 skill 排在前面，与用户 skill 同名的账户 skill 不再列出。每条描述截到约 40 token。描述放不下时只列名称；名称也放不下时以 `... +N more` 结尾，或缩成一行数量。服务端没有该接口时不注入清单。
 - `sessionStartMaxBytes` 按 UTF-8 字节限制整个块：Claude Code 和 Codex 为 9,500，因为这两个宿主会把超过约 10,000 字符的 hook 输出存成文件，只显示预览；ZCode 为 20,000，因为它会丢弃超过 32 KB 的输出；其他集成不设上限。超出上限时，先去掉记忆索引，再去掉 skill 清单。
@@ -321,8 +350,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 总是提交 |
 | TRAE、TRAE CN | 每个捕获到内容的 `Stop` | 无 | 没有压缩前事件 |
 | ZCode | 每个 `Stop`；漏掉的 `Stop` 对应的轮次，在下一个 `Stop` 从 rollout 文件补齐 | 无 | 没有压缩前事件 |
-| Kimi Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 和 `Interrupt` 捕获到新消息时提交 | `PreCompact` 捕获到新消息时提交 |
-| CodeBuddy Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd`（仅交互式 TUI）捕获到新消息时提交；`SessionStart` 重放排队的写入 | `PreCompact` 捕获到新消息时提交 |
+| Kimi Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的 | `PreCompact` 提交所有尚未提交的消息 |
+| CodeBuddy Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd`（仅交互式 TUI）提交所有尚未提交的消息，包括 `Stop` 已经发送的；`SessionStart` 重放排队的写入 | `PreCompact` 提交所有尚未提交的消息 |
 | OpenCode | v1 `session.idle`、v2 执行结束时：待提交 token 达到 20,000 | 删除会话、v1 `session.error`、v1 dispose 和 v2 cleanup 强制提交 | v1 在压缩前后各一次；v2 在压缩结束后一次 |
 | DSH | `turn/end` 时待提交 token 达到 20,000 | Cordis teardown 提交每个会话 | `compaction/start` 提交，跳过阈值检查 |
 | pi，takeover 开（默认） | 本地估算达到 30,000 token，且用户轮多于 3 个 | `/viking commit` | `session_before_compact` |
@@ -345,8 +374,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Cursor | 否 | 否 | 否 | 否 | 否 | 关闭或切换对话不触发任何事件。`sessionEnd` 只在关闭窗口时触发，而此时宿主已停止执行 hook 命令。不足 8 条消息阈值的部分要等同一会话的后续消息 |
 | TRAE、TRAE CN | 否 | 否 | 否 | 否 | 否 | 每个 `Stop` 已经提交，最多丢失正在进行的那一轮 |
 | ZCode | 否 | 视情况 | 否 | 否 | 否 | 按 Ctrl+C 时如果该轮的 `Stop` 已触发，分离的 worker 会写完。每个 `Stop` 都提交，漏掉的轮次在下一个 `Stop` 补齐 |
-| Kimi Code | 视情况 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 只在捕获到新消息时提交；已被 `Stop` 捕获的尾部等待下一次提交 |
-| CodeBuddy Code | 视情况 | 否 | 否 | 否 | 否 | `SessionEnd` 只在交互式 TUI 触发，且只在捕获到新消息时提交，因此 headless 运行依赖阈值或 `/compact`。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
+| Kimi Code | 提交 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。`Interrupt` 的捕获和提交共用 2 秒请求预算，捕获慢时提交留给同一会话的下一次提交 |
+| CodeBuddy Code | 视情况 | 否 | 否 | 否 | 否 | `SessionEnd` 只在交互式 TUI 触发，会提交所有尚未提交的消息，包括 `Stop` 已经发送的；headless 运行依赖阈值或 `/compact`。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
 | OpenCode | 视情况 | 视情况 | 视情况 | 视情况 | 否 | v1 1.15.11+ 的 `dispose` 和 v2 cleanup 会提交所有会话，但宿主留给清理的时间有限，慢请求或会话较多时可能被截断。v2 cleanup 还会在空闲 60 分钟和插件热重载时运行 |
 | DSH | 提交 | 提交 | 提交 | 否 | 否 | teardown 给每个会话一次 3 秒的提交，排在慢写入之后，整体处于 5 秒的进程宽限期内。第二次 Ctrl+C 会强制退出，跳过提交。Web 形态下关闭浏览器标签页不会触发 teardown |
 | pi，takeover 开 | 否 | 否 | 否 | 否 | 否 | `session_shutdown` 保存 takeover 状态但不提交。等下次运行达到阈值，或执行 `/viking commit` |
@@ -400,9 +429,9 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Claude Code | 宿主摘要 | `PreCompact` 同步提交；这是唯一不在后台运行的写入，因为宿主紧接着就会重写 transcript | `source="compact"` 的 `SessionStart` 注入归档概览和最多 5 条摘要 |
 | Codex、TraeCode CLI 2.0 | 宿主摘要 | `PreCompact` 补齐未捕获的轮次，提交全部内容，并开始一个新的 OpenViking 会话。补齐不完整时不提交，稍后重试 | resume 时注入归档摘要 |
 | Cursor | 宿主摘要 | `preCompact` 提交 | 无 |
-| CodeBuddy Code | 宿主摘要 | `PreCompact` 提交新捕获的消息 | 无 |
+| CodeBuddy Code | 宿主摘要 | `PreCompact` 提交 | 无 |
 | TRAE、TRAE CN、ZCode | 宿主摘要 | 没有压缩前事件 | 无 |
-| Kimi Code | 宿主摘要 | `PreCompact` 提交新捕获的消息 | 无 |
+| Kimi Code | 宿主摘要 | `PreCompact` 提交 | 无 |
 | OpenCode | 宿主摘要 | v1 刷新并提交；v2 捕获 transcript | v1 在 `session.compacted` 时再提交一次；v2 在 `session.compaction.ended` 后提交 |
 | DSH | 宿主摘要 | `compaction/start` 无论 token 阈值如何都会提交。注入的上下文是一条用户消息，随宿主压缩一起缩减；profile 不再发送 | 无 |
 | pi | takeover，默认开启 | 提交并等待归档概览 | 用概览替换 pi 的摘要；失败时 pi 照常压缩 |
@@ -484,7 +513,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Kimi Code | 统一安装器；Kimi Code 托管插件 | `kc-<id>` | 共享配置，`plugin.kimicode` |
 | CodeBuddy Code | 统一安装器，由其注册本地 marketplace | `cb-<id>` | 共享配置，`plugin.codebuddy` |
 | OpenCode | 统一安装器、npm（`@openviking/opencode-plugin`）或源码 | `oc-<id>`；子代理 `oc-<parent>__subagent-<child>` | 共享配置，`plugin.opencode` |
-| DSH | 统一安装器或 `dsh plugin add @openviking/dsh-memory-plugin` | `dsh-<id>` | 共享配置，`plugin.dsh`，然后是 Cordis patch |
+| DSH | 统一安装器、`dsh plugin add @openviking/dsh-memory-plugin` 或 Desktop 的插件页 | `dsh-<id>` | 共享配置，`plugin.dsh`，然后是 Cordis patch |
 | pi | 统一安装器，装入 pi 的扩展目录 | `pi-<id>` | 共享配置，`plugin.pi` |
 | OpenClaw | ClawHub、npm 安装器或离线包；之后运行 `openclaw openviking setup` | 会话 UUID，或会话 key 的 SHA-256 | `openclaw.json` 和少量环境变量 |
 | Hermes（内置） | 随 Hermes 发布；运行 `hermes memory setup openviking` | Hermes 自己的会话 ID | `.env`、关联的 `ovcli.conf` 和 Hermes `config.yaml` |
@@ -547,15 +576,15 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 状态栏 | 命令 | 附带的 skill | 配置向导 |
 |---|---|---|---|---|
-| Claude Code | 有 | `/openviking-memory:ov` 显示服务端状态、身份和注入内容的来源 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`ov-memory-doctor` | 有 |
-| Codex、TraeCode CLI 2.0 | 无 | 无 | 与 Claude Code 相同的四个 | 有 |
-| Cursor | 无 | 无 | 一条常驻 rule，加上 `openviking-memory`、`openviking-skills`、`ov-experience-memory` | 安装器菜单 |
+| Claude Code | 有 | `/openviking-memory:ov` 显示服务端状态、身份和注入内容的来源 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` | 有 |
+| Codex、TraeCode CLI 2.0 | 无 | 无 | 与 Claude Code 相同的五个 | 有 |
+| Cursor | 无 | 无 | 一条常驻 rule，加上 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` | 安装器菜单 |
 | TRAE、TRAE CN、ZCode | 无 | 无 | 无 | 安装器菜单 |
-| OpenCode | 无 | 无 | 与 Cursor 相同的三个，仅在插件注册自己的 MCP 服务时提供 | 有 |
-| DSH | 无 | 无 | 与 Cursor 相同的三个 | 无 |
-| CodeBuddy Code | 无 | 无 | 与 Cursor 相同的三个 | 无 |
-| pi | 有 | `/viking`、`/viking commit` | 与 Cursor 相同的三个，`mcpEnabled` 为 `false` 时不提供 | 有 |
-| OpenClaw | 无 | `/add-resource`、`/add-skill`、`/ov-search`、`/ov-query-config`、`/ov-recall-trace` | 三个插件 skill | 有；检查 key 的角色和版本兼容性 |
+| OpenCode | 无 | 无 | 与 Cursor 相同的四个，仅在插件注册自己的 MCP 服务时提供 | 有 |
+| DSH | 无 | 无 | 与 Cursor 相同的四个 | 无 |
+| CodeBuddy Code | 无 | 无 | 与 Cursor 相同的四个 | 无 |
+| pi | 有 | `/viking`、`/viking commit` | 与 Cursor 相同的四个，`mcpEnabled` 为 `false` 时不提供 | 有 |
+| OpenClaw | 无 | `/add-resource`、`/add-skill`、`/ov-search`、`/ov-query-config`、`/ov-recall-trace` | 四个插件 skill，含 `openviking-rule-search` | 有；检查 key 的角色和版本兼容性 |
 | Hermes（内置） | 无 | 无 | 无 | 有；`hermes memory status` 列出环境变量覆盖项 |
 | ov CLI | 无 | CLI 本身 | 无 | `ov config` |
 
@@ -657,9 +686,9 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安装 **URI 
 
 - 监听 `agent/session-start`、`agent/pre-step`、`session/event`、`session/flush`、`tools/pre-execute` 和 `tools/post-execute`。
 - `ctx.provide("openvikingMemory")` 让其他 Cordis 插件可以在它之上构建功能。
-- 安装器默认使用 `web` profile，可以用 `--dsh-profile` 指定其他 profile。除 `dev` 外的所有模式都安装已发布的 npm 包。
+- 安装器默认使用 `web` profile，可以用 `--dsh-profile` 指定其他 profile。在 macOS 上，它还会把 DeepSeek Harness Desktop 的 `desktop` profile 作为单独的 harness `dsh-desktop`，通过 Desktop 自带的 `dsh` 命令安装（见 [DeepSeek Harness Desktop](./17-dsh.md#deepseek-harness-desktop)）。除 `dev` 外的所有模式都安装已发布的 npm 包。
 - 默认捕获工具结果（`captureToolResults: true`），所以 `ov-experience-memory` 能完整运行；关闭捕获后，只能检索和应用 Experience。
-- URI guard 先把工具名转成小写，在 `tools/pre-execute` 拒绝对 `viking://` 路径的文件工具调用，在 `tools/post-execute` 为包含这种路径的 `bash` 命令附加提示。
+- URI guard 先把工具名转成小写，在 `tools/pre-execute` 拒绝对 `viking://` 路径的文件工具调用，在 `tools/post-execute` 为包含这种路径的 `bash` 命令（Windows 上是 `pwsh` 命令）附加提示。
 - Cordis patch 中写明的凭据优先于其他所有来源；对行为配置来说，patch 是优先级最低的一层。
 
 <a id="pi-pi-coding-agent-extension"></a>

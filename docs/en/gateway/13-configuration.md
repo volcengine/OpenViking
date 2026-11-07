@@ -41,7 +41,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `default_upstreams` | Both | `{}` | Object mapping stable IDs to [upstream settings](#upstream-settings) | Upstreams for OpenViking keys when the account stores none; see [Deployment default upstreams](07-upstreams.md#deployment-default-upstreams) |
 | `default_profile` | Both | Built-in profile defaults | [Context profile settings](#context-profile-settings) | Used when the account has no profile with the ID `default`; also the initial profile seeded in embedded dev mode |
 | `min_server_version` | Both | `0.4.16` | Version string | Lowest OpenViking Server version a standalone gateway accepts |
-| `session_ttl_days` | Both | `30` | 1 or more | Days of inactivity before a conversation expires; also the fixed lifetime of cached OpenViking keys and their user records |
+| `session_ttl_seconds` | Both | `2592000` (30 days) | 3600 or more | Seconds of inactivity before a conversation expires; also the fixed lifetime of cached OpenViking keys and their user records. |
 | `response_ttl_seconds` | Both | `2592000` (30 days) | 60 or more | Seconds to remember which upstream created a Responses response |
 | `request_log_sink` | Both | `store` | `store`, `stdout` | Write request and background saving logs to storage or one flushed JSON line per record on stdout; see [Monitoring](../guides/22-gateway-operations.md#monitoring) |
 | `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout retention is managed by the log collector |
@@ -89,7 +89,7 @@ The default is local SQLite, with no external service. `storage.kernel` and `sto
       "command_timeout_ms": 5000
     }
   },
-  "session_ttl_days": 7
+  "session_ttl_seconds": 604800
 }
 ```
 
@@ -134,7 +134,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `tenancy` | `key` requires `management_api: false`; it has no effect when `openviking_keys` is off |
 | `client_rules` | Every added pattern must be a valid Python regular expression; added tag names start with an ASCII letter and use only ASCII letters, digits, `_`, `.`, `:` and `-` |
 | Unknown fields | Fail validation |
-| Removed fields | Ignored, with a startup warning: `encryption_key_env`, and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
+| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
 
 ## Client rules {#client-rules}
 
