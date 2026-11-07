@@ -57,10 +57,15 @@ class FileStore(IKVStore):
             key: File path
 
         Returns:
-            Optional[bytes]: File content, returns None if file doesn't exist or read fails
+            Optional[bytes]: File content, or None only when the file does not exist.
+
+        Raises:
+            Exception: Any other read failure propagates. Callers treat None as
+                "empty", so swallowing a transient error here would make them
+                persist a fresh value over the unreadable file.
         """
+        path = self._validate_path(key)
         try:
-            path = self._validate_path(key)
             # Open file in binary read-only mode
             with open(path, "rb") as f:
                 # Read all binary data (returns bytes type)
@@ -68,16 +73,6 @@ class FileStore(IKVStore):
             return binary_data
         except FileNotFoundError:
             # logger.warning(f"File not found: {key}")
-            return None
-        except PermissionError:
-            logger.error(f"Permission denied reading file: {key}")
-            return None
-        except ValueError as e:
-            # Path validation failed
-            logger.error(str(e))
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error reading file {key}: {e}")
             return None
 
     def put(self, key: str, value: bytes) -> bool:
