@@ -415,7 +415,7 @@ export async function searchSessionToolResult(
 // Bot Chat
 // ---------------------------------------------------------------------------
 
-function extractErrorMessage(text: string, fallback: string): string {
+export function extractErrorMessage(text: string, fallback: string): string {
   if (!text.trim()) return fallback
 
   try {
@@ -424,6 +424,7 @@ function extractErrorMessage(text: string, fallback: string): string {
       const record = parsed as Record<string, unknown>
       if (typeof record.detail === 'string') return record.detail
       const error = record.error
+      if (typeof error === 'string') return error
       if (error && typeof error === 'object') {
         const message = (error as Record<string, unknown>).message
         if (typeof message === 'string') return message
