@@ -1233,6 +1233,40 @@ async def test_admin_seed_payloads_are_sent():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize(
+    "method,verb,result",
+    [
+        ("admin_add_group_member", "PUT", "added"),
+        ("admin_remove_group_member", "DELETE", "removed"),
+    ],
+)
+async def test_admin_group_member_writes_use_batch_contract(client_type, method, verb, result):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": {result: True}})
+
+    client = client_type(url="http://localhost:1933", api_key="root-test-key")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://localhost:1933"
+    )
+    try:
+        response = getattr(client, method)("acct", "team", "alice@example.com")
+        if client_type is AsyncHTTPClient:
+            response = await response
+        assert response == {result: True}
+        assert len(requests) == 1
+        assert requests[0].method == verb
+        assert requests[0].url.path == "/api/v1/admin/accounts/acct/groups/team/members"
+        assert json.loads(requests[0].content) == {"user_ids": ["alice@example.com"]}
+    finally:
+        await async_client.close()
+
+
+@pytest.mark.asyncio
 async def test_admin_get_account_uses_exact_path_and_returns_metadata():
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._request = AsyncMock(return_value=object())

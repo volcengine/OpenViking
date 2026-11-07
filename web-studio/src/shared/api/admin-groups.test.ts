@@ -17,7 +17,7 @@ const connection = {
 }
 afterEach(() => vi.restoreAllMocks())
 
-it('uses the control credential and encodes account, group and user path segments', async () => {
+it('uses the control credential, encodes group paths and sends member IDs in JSON', async () => {
   const requests: InternalAxiosRequestConfig[] = []
   const transport = axios.create({
     adapter: async (config) => {
@@ -34,9 +34,12 @@ it('uses the control credential and encodes account, group and user path segment
   vi.spyOn(axios, 'create').mockReturnValue(transport)
   await updateAdminGroupMember(connection, 'group/a', 'bob@example.com', true)
   expect(requests[0].url).toBe(
-    'http://localhost:1933/api/v1/admin/accounts/tenant%20a/groups/group%2Fa/members/bob%40example.com',
+    'http://localhost:1933/api/v1/admin/accounts/tenant%20a/groups/group%2Fa/members',
   )
   expect(requests[0].method).toBe('put')
+  expect(JSON.parse(requests[0].data)).toEqual({
+    user_ids: ['bob@example.com'],
+  })
   expect(requests[0].headers.get('X-API-Key')).toBe('control-key')
   expect(requests[0].headers.get('X-OpenViking-User')).toBeUndefined()
 })
@@ -71,6 +74,7 @@ it('matches group CRUD and member endpoint contracts and unwraps results', async
     'delete',
   ])
   expect(requests[2].url).toMatch(/\/groups\/team\/members$/)
-  expect(requests[3].url).toMatch(/\/groups\/team\/members\/alice$/)
+  expect(requests[3].url).toMatch(/\/groups\/team\/members$/)
+  expect(JSON.parse(requests[3].data)).toEqual({ user_ids: ['alice'] })
   expect(requests[4].url).toMatch(/\/groups\/team$/)
 })

@@ -178,24 +178,14 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
                         >
                           {t('groups.manage')}
                         </Button>
-                        <span
-                          title={
-                            group.member_count
-                              ? t('groups.deleteHint')
-                              : undefined
-                          }
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={remove.isPending}
+                          onClick={() => setDeleting(group.group_id)}
                         >
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={
-                              group.member_count > 0 || remove.isPending
-                            }
-                            onClick={() => setDeleting(group.group_id)}
-                          >
-                            {t('groups.delete')}
-                          </Button>
-                        </span>
+                          {t('groups.delete')}
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
