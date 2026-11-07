@@ -17,7 +17,7 @@ Install Vika and verify that it can receive and answer messages. See the [README
 | Pi / Durable | Bundled; reuses model configuration from `~/.pi/agent`. Without existing configuration, run `vika pi` after installation and use `/login` |
 | OpenCode | Install and sign in to **1.x**, version 1.15.7 or later; this release does not support 2.x |
 
-See [runtime configuration](docs/installation-reference.md#准备) for models, version detection, and environment variables. Do not put API keys in `config.json` or commit them to a repository.
+See [runtime configuration](docs/installation-reference.md#prerequisites) for models, version detection, and environment variables. Do not put API keys in `config.json` or commit them to a repository.
 
 ## Install
 
@@ -40,9 +40,9 @@ Follow the wizard:
 3. **Connect chat.** Select and authorize a channel. With multiple IM channels, choose the primary one for proactive notifications. Email requires an IM channel alongside it.
 4. **Verify delivery.** Saving starts the service. The Feishu bot sends a greeting; reply to confirm that incoming messages work too.
 
-For Feishu, scan a QR code to create or select an app, or enter its App ID and App Secret manually. An existing app must use a long connection and must not also be monitored by another bot service. Setup asks whether to allow reading messages as your user; review [message access](docs/usage-reference.md#机器人能读到哪些消息) before authorizing.
+For Feishu, scan a QR code to create or select an app, or enter its App ID and App Secret manually. An existing app must use a long connection and must not also be monitored by another bot service. Setup asks whether to allow reading messages as your user; review [message access](docs/usage-reference.md#message-access) before authorizing.
 
-Other channel setup: [WeChat](docs/installation-reference.md#微信扫码与单聊链路) · [QQ](docs/installation-reference.md#qq-机器人接入) · [Telegram](docs/installation-reference.md#telegram-bot-接入) · [Slack](docs/installation-reference.md#slack-接入).
+Other channel setup: [WeChat](docs/installation-reference.md#wechat-setup) · [QQ](docs/installation-reference.md#qq-setup) · [Telegram](docs/installation-reference.md#telegram-setup) · [Slack](docs/installation-reference.md#slack-setup).
 
 ## Verify and manage
 
@@ -69,9 +69,9 @@ Configuration defaults to `~/.vika/config.json`. For a custom location, set the 
 | OV validation fails | Address, connectivity, and credentials; private services must be reachable from the machine running Vika |
 | No runtime is available | CLI authentication, or configure the bundled model with `vika pi` |
 | Feishu receives no messages | Long connection, message events, app publication / approval, and competing bot services |
-| Messages work but tools fail with permission errors | App permissions and user authorization; see [manual Feishu setup](docs/installation-reference.md#手动配飞书不用-setup-时) |
-| Startup or attachment operations fail | `vika logs primary`; see [attachment temporary directories](docs/installation-reference.md#飞书图片文件收发的临时目录) |
+| Messages work but tools fail with permission errors | App permissions and user authorization; see [manual Feishu setup](docs/installation-reference.md#manual-feishu-setup) |
+| Startup or attachment operations fail | `vika logs primary`; see [attachment temporary directories](docs/installation-reference.md#attachment-temporary-directories) |
 
-Some reference documents below are currently in Chinese.
+The release-process guide below is currently in Chinese.
 
-[Source development](docs/installation-reference.md#从源码运行开发) · [Upgrade and rollback](docs/installation-reference.md#升级与回滚) · [Multiple instances and memory](docs/installation-reference.md#多个-agent) · [Release process](../docs/repository/RELEASE_CN.md)
+[Source development](docs/installation-reference.md#running-from-source) · [Upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback) · [Multiple instances and memory](docs/installation-reference.md#multiple-agents) · [Release process](../docs/repository/RELEASE_CN.md)
