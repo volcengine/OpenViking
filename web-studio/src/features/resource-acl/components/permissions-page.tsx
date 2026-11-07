@@ -1,4 +1,4 @@
-import { AdminSpaceBanner } from '#/shared/components/admin-space-banner'
+import styles from './permissions-page.module.css'
 import { AccountAclSettings } from '#/features/resource-acl/components/account-acl-settings'
 import { ResourceAclIdentityRecovery } from '#/features/resource-acl/components/resource-acl-identity-recovery'
 import { ResourcePermissionsPanel } from '#/features/resource-acl/components/resource-permissions'
@@ -34,22 +34,17 @@ export function PermissionsPage() {
   const state = useAclManagement()
   const { t } = useTranslation(['settings', 'appShell'])
   return (
-    <main className="flex w-full min-w-0 flex-col gap-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            {t('appShell:adminNavigation.permissions')}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t('acl.page.description')}
-          </p>
-        </div>
-        {state.allowed && state.settings.data === true && (
-          <AccountAclSettings inPopover />
-        )}
+    <main className={styles.page}>
+      <header className={styles.header}>
+        <h1>{t('appShell:adminNavigation.permissions')}</h1>
       </header>
-      <AdminSpaceBanner accountId={state.connection.accountId} />
-      {state.allowed && state.settings.data !== true && <AccountAclSettings />}
+      <p className={styles.scope}>
+        {t('appShell:adminNavigation.currentSpace', {
+          space: state.connection.accountId,
+        })}
+      </p>
+      {state.allowed && <AccountAclSettings inline />}
+      <p className={styles.hint}>{t('acl.page.inheritanceHint')}</p>
       <DirectoryPermissions
         key={`${state.connection.baseUrl}:${state.connection.accountId}`}
       />
@@ -92,8 +87,8 @@ function DirectoryPermissions() {
     return <ResourceAclIdentityRecovery missingDataIdentity />
 
   return (
-    <section className="min-w-0 space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+    <section className={styles.directories}>
+      <div className={styles.toolbar}>
         {currentUri !== root && (
           <Button
             variant="ghost"
@@ -145,13 +140,20 @@ function DirectoryPermissions() {
           <RotateCwIcon />
         </Button>
       </div>
-      <div className="rounded-lg border">
+      <div className={styles.table}>
         <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="pl-4">{t('acl.page.nameColumn')}</TableHead>
-              <TableHead className="w-44">{t('acl.page.ruleColumn')}</TableHead>
-              <TableHead className="w-28 pr-4 text-right">
+              <TableHead className="w-[36%] pl-4">
+                {t('acl.page.directoryColumn')}
+              </TableHead>
+              <TableHead className="w-[28%]">
+                {t('acl.page.accessColumn')}
+              </TableHead>
+              <TableHead className="w-[18%]">
+                {t('acl.page.permissionColumn')}
+              </TableHead>
+              <TableHead className="w-[18%] pr-4">
                 {t('acl.page.actionsColumn')}
               </TableHead>
             </TableRow>
@@ -160,7 +162,7 @@ function DirectoryPermissions() {
             {directories.isPending ? (
               <TableRow>
                 <TableCell
-                  colSpan={3}
+                  colSpan={4}
                   className="py-10 text-center text-muted-foreground"
                 >
                   {t('loading')}
@@ -168,7 +170,7 @@ function DirectoryPermissions() {
               </TableRow>
             ) : directories.isError ? (
               <TableRow>
-                <TableCell colSpan={3} className="py-8 text-center">
+                <TableCell colSpan={4} className="py-8 text-center">
                   {isOvClientError(directories.error) &&
                   (directories.error.statusCode === 403 ||
                     directories.error.code === 'PERMISSION_DENIED') ? (
@@ -199,7 +201,7 @@ function DirectoryPermissions() {
             ) : directories.data.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={3}
+                  colSpan={4}
                   className="py-10 text-center text-muted-foreground"
                 >
                   {t('acl.page.emptyDirectory')}
@@ -273,30 +275,61 @@ function DirectoryRow({
   return (
     <TableRow>
       <TableCell className="pl-4">
-        <button
-          type="button"
-          className="flex max-w-full items-center gap-2 text-left font-medium hover:underline"
-          onClick={onOpen}
-        >
+        <button type="button" className={styles.directoryLink} onClick={onOpen}>
           <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="truncate" title={name}>
-            {name}
+            {entry.uri
+              .replace(/^viking:\/\//, '')
+              .replace(/\/$/, '')
+              .split('/')
+              .join(' / ')}
           </span>
         </button>
       </TableCell>
       <TableCell>
-        <span className="text-muted-foreground">
+        <div className={styles.grants}>
           {report.isPending
             ? t('loading')
             : report.isError
               ? t('acl.page.unreadable')
-              : t(`acl.modes.${report.data.acl_mode}`)}
-        </span>
+              : report.data.effective_entries.length > 0
+                ? report.data.effective_entries.map((grant) => (
+                    <span key={grant.principal}>
+                      {grant.principal === 'user:*'
+                        ? t('acl.everyone')
+                        : grant.principal.startsWith('group:')
+                          ? t('acl.page.groupName', {
+                              name: grant.principal.slice(6),
+                            })
+                          : grant.principal.replace(/^user:/, '')}
+                    </span>
+                  ))
+                : t('acl.page.noGrantees')}
+        </div>
       </TableCell>
-      <TableCell className="pr-4 text-right">
+      <TableCell>
+        <div
+          className={styles.grants}
+          title={
+            report.data ? t(`acl.modes.${report.data.acl_mode}`) : undefined
+          }
+        >
+          {report.isPending ||
+          report.isError ||
+          report.data.effective_entries.length === 0
+            ? '—'
+            : report.data.effective_entries.map((grant) => (
+                <span key={grant.principal}>
+                  {t(`acl.levels.${grant.level}`)}
+                </span>
+              ))}
+        </div>
+      </TableCell>
+      <TableCell className="pr-4">
         <Button
           variant="ghost"
           size="sm"
+          className={styles.manageButton}
           disabled={!accountEnabled}
           onClick={onEdit}
         >

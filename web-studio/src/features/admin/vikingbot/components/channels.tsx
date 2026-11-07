@@ -21,6 +21,13 @@ import {
   DialogTitle,
 } from '#/shared/ui/dialog'
 import { Input } from '#/shared/ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '#/shared/ui/dropdown-menu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BotIcon, EllipsisIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import { useState } from 'react'
@@ -90,41 +97,58 @@ export function Channels({
       {canManage && (
         <div className={styles.toolbar}>
           <UserSpaceSwitcher canManageAccounts />
-          <label className={styles.platformFilter}>
-            <PlatformIcon
-              platform={channelFilter === 'all' ? 'feishu' : channelFilter}
-            />
-            <select
+          <DropdownMenu>
+            <DropdownMenuTrigger
               aria-label={t('channelFilter')}
-              value={channelFilter}
-              onChange={(event) => setChannelFilter(event.target.value)}
+              className={styles.platformFilter}
             >
-              <option value="all">{t('all')}</option>
-              {Object.entries(providers).map(([type, entry]) => (
-                <option key={type} value={type}>
-                  {t('platformBots', { platform: t(entry.label) })}
-                </option>
-              ))}
-            </select>
-          </label>
+              <PlatformIcon
+                platform={channelFilter === 'all' ? 'feishu' : channelFilter}
+              />
+              {channelFilter === 'all'
+                ? t('all')
+                : t('platformBots', {
+                    platform: t(providers[channelFilter].label),
+                  })}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="min-w-40">
+              <DropdownMenuRadioGroup
+                value={channelFilter}
+                onValueChange={(value) => setChannelFilter(value)}
+              >
+                <DropdownMenuRadioItem value="all">
+                  {t('all')}
+                </DropdownMenuRadioItem>
+                {Object.entries(providers).map(([type, entry]) => (
+                  <DropdownMenuRadioItem key={type} value={type}>
+                    {t('platformBots', { platform: t(entry.label) })}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <p className={styles.platformHint}>{t('platformIntegrationHint')}</p>
-          <div className={styles.search}>
-            <SearchIcon aria-hidden="true" />
-            <Input
-              aria-label={t('searchBots')}
-              placeholder={t('searchBotsPlaceholder')}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
+          <div className={styles.toolbarActions}>
+            <div className={styles.search}>
+              <SearchIcon aria-hidden="true" />
+              <Input
+                aria-label={t('searchBots')}
+                placeholder={t('searchBotsPlaceholder')}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <Button
+              className={styles.addBot}
+              aria-label={t('addBot')}
+              title={t('addBot')}
+              variant="ghost"
+              onClick={() => setChoosing(true)}
+            >
+              <PlusIcon className="size-4" />
+              <span className="sr-only">{t('addBot')}</span>
+            </Button>
           </div>
-          <Button
-            className={styles.addBot}
-            variant="ghost"
-            onClick={() => setChoosing(true)}
-          >
-            <PlusIcon className="size-4" />
-            {t('addBot')}
-          </Button>
         </div>
       )}
       {!canManage && (

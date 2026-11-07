@@ -1157,6 +1157,13 @@ const workspace = {
           '无法读取当前目录权限，暂时无法修改子目录权限，请重试。',
         emptyDirectory: '当前目录下没有子目录。',
         nameColumn: '名称',
+        controlTitle: '目录权限控制',
+        inheritanceHint:
+          '未单独设置的目录沿用上一级权限，数据空间管理员始终可访问。',
+        directoryColumn: '共享目录',
+        accessColumn: '谁可以访问',
+        permissionColumn: '权限',
+        groupName: '{{name}} 用户组',
         ruleColumn: '权限规则',
         granteesColumn: '本目录授权对象',
         actionsColumn: '操作',

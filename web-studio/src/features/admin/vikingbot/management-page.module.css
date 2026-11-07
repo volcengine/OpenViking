@@ -1,5 +1,5 @@
 .page {
-  --bot-muted: #7f819c;
+  --bot-muted: #787c91;
   display: flex;
   min-height: 0;
   flex-direction: column;
@@ -16,7 +16,7 @@
 .header h1 {
   margin: 0;
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 28px;
 }
 
@@ -38,6 +38,7 @@
   color: var(--bot-muted);
   font-size: 12px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .tab[aria-selected='true'] {
@@ -63,14 +64,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  min-height: 34px;
   flex-wrap: wrap;
 }
 
 .toolbar :global(.users-space-trigger) {
   height: 34px;
   width: auto;
-  min-width: 178px;
+  min-width: min(178px, 100%);
+  max-width: 100%;
   padding: 0 10px;
   font-size: 13px;
 }
@@ -81,8 +83,13 @@
   gap: 4px;
   border-radius: 20px;
   background: #f5f6ff;
-  padding: 4px 8px;
+  padding: 4px 10px;
   height: 28px;
+  border: 0;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .platformFilter > span {
@@ -92,14 +99,9 @@
   color: #3370ff;
 }
 
-.platformFilter select {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  max-width: 140px;
+.platformFilter:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .platformHint {
@@ -114,10 +116,18 @@
   margin-right: 8px;
 }
 
+.toolbarActions {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+}
+
 .search {
   position: relative;
-  width: 242px;
-  margin-left: auto;
+  width: 240px;
+  max-width: 100%;
 }
 
 .search > svg {
@@ -140,12 +150,27 @@
 }
 
 .addBot {
+  position: absolute;
+  top: 3px;
+  right: 4px;
   width: 28px;
   height: 28px;
   padding: 0;
-  overflow: hidden;
-  font-size: 0;
   color: var(--bot-muted);
+  background: var(--background);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toolbarActions:hover .addBot,
+.toolbarActions:focus-within .addBot {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.toolbarActions:hover input,
+.toolbarActions:focus-within input {
+  padding-right: 36px;
 }
 
 .grid {
@@ -158,9 +183,13 @@
 .card {
   position: relative;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
   min-height: 128px;
-  padding: 20px;
-  border: 1px solid #e8e9f0;
+  padding: 16px;
+  border: 1px solid #edeef2;
   border-radius: 12px;
   background: var(--background);
   transition: border-color 120ms;
@@ -174,6 +203,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-height: 48px;
   width: 100%;
   border-radius: 4px;
   text-align: left;
@@ -200,7 +230,7 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .botName {
@@ -209,7 +239,7 @@
   white-space: nowrap;
   font-size: 18px;
   font-weight: 500;
-  line-height: 24px;
+  line-height: 26px;
 }
 
 .user {
@@ -218,16 +248,16 @@
   white-space: nowrap;
   color: var(--bot-muted);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .stats {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin: 24px 0 0;
+  margin: 0;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
   white-space: nowrap;
 }
 
@@ -335,15 +365,33 @@
 }
 
 @media (max-width: 650px) {
+  .header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .stats {
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+  .stats > div + div::before {
+    display: none;
+  }
   .grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .search {
+  .toolbarActions {
     width: 100%;
     order: 2;
   }
+  .search {
+    width: 100%;
+  }
   .addBot {
-    margin-left: auto;
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .search input {
+    padding-right: 36px;
   }
   .tabs,
   .actions summary {

@@ -1212,6 +1212,13 @@ const workspace = {
           'Could not load permissions for the current directory. Changes to subdirectory permissions are unavailable until you retry.',
         emptyDirectory: 'No subdirectories here.',
         nameColumn: 'Name',
+        controlTitle: 'Directory access control',
+        inheritanceHint:
+          'Directories inherit their parent’s permissions unless configured separately. Space administrators always have access.',
+        directoryColumn: 'Shared directory',
+        accessColumn: 'Who can access',
+        permissionColumn: 'Permission',
+        groupName: '{{name}} group',
         ruleColumn: 'Permission rule',
         granteesColumn: 'Grants on this directory',
         actionsColumn: 'Actions',
