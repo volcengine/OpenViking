@@ -1,4 +1,5 @@
-import { useCallback, type KeyboardEvent } from 'react';
+import { useCallback } from 'react';
+import { moveScopeFocus } from './scope-keyboard.js';
 import check from '../../../../icons/svg/scope-switcher/check.svg?inline';
 import { SCOPE_SWITCHER_SEARCH_THRESHOLD } from './types.js';
 import type {
@@ -16,34 +17,6 @@ function Highlight({ text, keyword }: { text: string; keyword: string }) {
       {text.slice(index + keyword.length)}
     </>
   );
-}
-
-function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-  if (
-    event.target instanceof HTMLInputElement &&
-    !event.key.startsWith('Arrow')
-  )
-    return;
-  const options = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      '[role="option"]:not([aria-disabled="true"])',
-    ),
-  );
-  if (!options.length) return;
-  event.preventDefault();
-  const current = options.indexOf(document.activeElement as HTMLElement);
-  const next =
-    event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? options.length - 1
-        : event.key === 'ArrowDown'
-          ? (current + 1) % options.length
-          : current < 0
-            ? options.length - 1
-            : (current - 1 + options.length) % options.length;
-  options[next]?.focus();
 }
 
 export function ScopePanel({
@@ -187,7 +160,7 @@ export function ScopePanel({
       role="group"
       tabIndex={-1}
       ref={focusPanel}
-      onKeyDownCapture={moveFocus}
+      onKeyDownCapture={moveScopeFocus}
     >
       {level.renderPanel ? (
         level.renderPanel({ search, list })

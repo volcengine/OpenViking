@@ -7,6 +7,7 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
   const [localVisible, setLocalVisible] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const restoreSelectionFocus = useRef(false);
   const panelId = useId();
   const open =
     level.kind === 'selectable' &&
@@ -50,6 +51,19 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
       document.removeEventListener('keydown', escape);
     };
   }, [open, changeVisible]);
+
+  // Restore DOM focus only after the panel actually closes. Controlled hosts
+  // may keep it open after selection. Do not steal focus moved outside meanwhile.
+  useEffect(() => {
+    if (open || !restoreSelectionFocus.current) return;
+    restoreSelectionFocus.current = false;
+    if (
+      document.activeElement === document.body ||
+      root.current?.contains(document.activeElement)
+    ) {
+      trigger.current?.focus();
+    }
+  }, [open]);
 
   const content = (
     <>
@@ -127,6 +141,7 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
             level={{
               ...level,
               onSelect: (option) => {
+                restoreSelectionFocus.current = true;
                 changeVisible(false);
                 level.onSelect?.(option);
               },
