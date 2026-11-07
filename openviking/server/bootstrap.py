@@ -4,6 +4,7 @@
 
 import argparse
 import asyncio
+import errno
 import json
 import os
 import shutil
@@ -492,30 +493,43 @@ def _main(recovery):
             if workers > 1:
                 # Multi-worker mode requires an import string so each worker
                 # can independently import the application.  We stash the
-                # resolved config path in an env-var so that the factory can
-                # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
+                # resolved config path (via ServerConfig already reading
+                # OPENVIKING_CONFIG_FILE) plus the host/port the workers
+                # should report, then run on a pre-bound socket so a
+                # transient EADDRINUSE is waited out (fd inherited per
+                # worker).
                 os.environ[WORKER_HOST_ENV] = config.host or ""
                 os.environ[WORKER_PORT_ENV] = str(config.port)
                 os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
                 os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
-                uvicorn.run(
+                _run_uvicorn(
+                    config,
                     "openviking.server.app:create_worker_app",
                     factory=True,
+                    workers=workers,
                     host=config.host,
                     port=config.port,
-                    workers=workers,
                     timeout_keep_alive=config.timeout_keep_alive,
                     log_config=None,
                 )
             else:
-                restart_requested = _run_restartable_server(
-                    app,
-                    recovery=recovery,
-                    host=config.host,
-                    port=config.port,
-                    timeout_keep_alive=config.timeout_keep_alive,
-                    log_config=None,
-                )
+                # Bind up front so a transient EADDRINUSE (supervisor racing
+                # the previous process) is waited out, then hand the socket
+                # to the restartable server the same way _run_uvicorn hands
+                # it to uvicorn.
+                sock = _bind_socket_with_retry(config)
+                try:
+                    restart_requested = _run_restartable_server(
+                        app,
+                        recovery=recovery,
+                        host=config.host,
+                        port=config.port,
+                        sock=sock,
+                        timeout_keep_alive=config.timeout_keep_alive,
+                        log_config=None,
+                    )
+                finally:
+                    sock.close()
     finally:
         if expiry_publisher_process is not None:
             _stop_expiry_publisher(expiry_publisher_process)
@@ -548,6 +562,61 @@ def _run_restartable_server(app, recovery=None, **kwargs) -> bool:
     if recovery is not None and recovery.pending:
         raise RuntimeError("Server failed to complete startup")
     return controller.requested
+
+
+def _bind_socket_with_retry(config):
+    """Bind the listen socket up front, waiting out a transient EADDRINUSE.
+
+    uvicorn logs a bind failure and exits gracefully instead of raising, so the
+    retry has to happen on a socket we own: bind (retrying while the port is
+    held), listen, then hand the bound socket to ``uvicorn.run(sock=...)``.
+    A supervised restart (watchdog, systemd, Docker) often relaunches the
+    server while the previous process still holds the port; retry up to
+    ``config.bind_retry_attempts`` times (0 keeps the die-on-first-failure
+    behavior), sleeping ``config.bind_retry_interval_seconds`` between
+    attempts. Any other error, or a port that never frees up, propagates.
+    """
+    attempts = max(0, int(config.bind_retry_attempts))
+    interval = max(0.1, float(config.bind_retry_interval_seconds))
+    family, typ, proto, _, addr = socket.getaddrinfo(
+        config.host, config.port, type=socket.SOCK_STREAM
+    )[0]
+    for attempt in range(attempts + 1):
+        sock = socket.socket(family, typ, proto)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(addr)
+            sock.listen(128)
+            return sock
+        except OSError as exc:
+            sock.close()
+            if getattr(exc, "errno", None) != errno.EADDRINUSE or attempt >= attempts:
+                raise
+            print(
+                f"Port {config.host}:{config.port} is still in use "
+                f"(attempt {attempt + 1}/{attempts}); retrying in {interval:.1f}s...",
+                file=sys.stderr,
+            )
+            time.sleep(interval)
+
+
+def _run_uvicorn(config, *args, **kwargs):
+    """Run uvicorn on a pre-bound socket so EADDRINUSE can be waited out.
+
+    uvicorn 0.41's ``run()`` takes no ``sock=`` parameter, so the bound socket
+    reaches uvicorn per mode: single-process servers go through
+    ``uvicorn.Config(sock=...)`` + ``Server.run()`` (the same pair ``run()``
+    itself assembles), while the multi-worker path passes the socket as the
+    inherited ``fd=`` that ``run()`` already supports.
+    """
+    sock = _bind_socket_with_retry(config)
+    try:
+        if kwargs.get("workers", 1) > 1:
+            return uvicorn.run(*args, fd=str(sock.fileno()), **kwargs)
+        uvicorn_config = uvicorn.Config(*args, **kwargs)
+        return uvicorn.Server(uvicorn_config).run(sockets=[sock])
+    finally:
+        sock.close()
 
 
 def _handle_vikingbot_failure(output: str, returncode: int) -> None:
