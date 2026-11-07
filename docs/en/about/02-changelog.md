@@ -7,6 +7,9 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **LangGraph Store discovery errors**: Non-semantic `search()` and
+  `list_namespaces()` now propagate backend listing failures, including permission
+  and availability errors. Explicitly missing namespace roots still return empty results.
 - **Legacy session migration removed (breaking change)**: Removed the legacy
   implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
   Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`

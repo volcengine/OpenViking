@@ -76,6 +76,7 @@ class OpenVikingConnection:
     extra_headers: dict[str, str] | None = None
     auto_initialize: bool = True
     async_client: Any = None
+    auth_mode: str | None = None
 
     def __deepcopy__(self, memo: dict[int, Any]) -> OpenVikingConnection:
         """Copy configuration while preserving caller-owned client identities."""
@@ -85,6 +86,7 @@ class OpenVikingConnection:
             async_client=self.async_client,
             url=self.url,
             api_key=self.api_key,
+            auth_mode=self.auth_mode,
             account=self.account,
             user=self.user,
             user_id=self.user_id,
@@ -561,6 +563,7 @@ def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
         actor_peer_id=connection.actor_peer_id,
         timeout=connection.timeout,
         extra_headers=connection.extra_headers,
+        **({"auth_mode": connection.auth_mode} if connection.auth_mode is not None else {}),
     )
 
     if connection.auto_initialize and hasattr(client, "initialize"):
@@ -581,6 +584,7 @@ async def _create_async_client_from_connection(connection: OpenVikingConnection)
         actor_peer_id=connection.actor_peer_id,
         timeout=connection.timeout,
         extra_headers=connection.extra_headers,
+        **({"auth_mode": connection.auth_mode} if connection.auth_mode is not None else {}),
     )
 
     try:

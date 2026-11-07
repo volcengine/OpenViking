@@ -58,7 +58,7 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 			payload["tag_mode"] = opts.TagMode
 		}
 	}
-	if err := c.addLocalUpload(ctx, payload, path, true); err != nil {
+	if err := c.addLocalUpload(ctx, payload, path, true, false); err != nil {
 		return nil, err
 	}
 	if err := mergeExtraProtected(payload, opts.Extra, "create_parent"); err != nil {
