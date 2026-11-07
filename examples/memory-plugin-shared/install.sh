@@ -3783,6 +3783,9 @@ $NOT_DONE
 EOF
   fi
   info "$(t 'Onboarding guide (for your agent):' '接入引导（给 Agent 看）：') $(onboarding_url)"
+  # One install command serves every edition; the prompt the user pasted names
+  # the guide for theirs (the team edition has its own), so it wins over ours.
+  info "$(t 'Using another edition of the guide (such as the team edition)? Follow the link in your prompt instead.' '用的是另一版接入引导（例如团队版）？以提示词里给的链接为准。')"
 }
 
 # ---------------------------------------------------------------------------
