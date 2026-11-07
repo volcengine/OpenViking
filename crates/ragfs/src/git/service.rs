@@ -921,9 +921,9 @@ impl GitService {
     ///
     /// `limit` counts returned commits, not commits inspected. With `paths`
     /// set, traversal continues through unrelated commits until `limit`
-    /// matching commits are collected or history ends. Filtered traversal
-    /// returns `GitError::LogScanLimitExceeded` when history remains after
-    /// 1,000 candidate commits.
+    /// matching commits are collected, history ends, or the scan budget is
+    /// exhausted. When the budget is exhausted, the matches collected so far
+    /// are returned.
     pub async fn log(&self, mut req: LogRequest) -> Result<Vec<LogEntry>, GitError> {
         validate_account_id(&req.account)?;
         req.paths = normalize_log_paths(req.paths)?;
@@ -997,12 +997,7 @@ impl GitService {
             }
 
             if filtered_paths.is_some() && scanned >= max_commits_scanned && next_oid.is_some() {
-                return Err(GitError::LogScanLimitExceeded {
-                    scanned,
-                    max_scanned: max_commits_scanned,
-                    matched: out.len(),
-                    requested: req.limit,
-                });
+                break;
             }
         }
 
@@ -3481,7 +3476,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_filtered_log_errors_when_uninspected_history_remains() {
+    async fn test_filtered_log_returns_empty_when_scan_budget_is_exhausted_without_matches() {
         let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_budget");
         vfs.put("resources/target.md", b"target");
         make_commit(&svc, "acct_log_budget", "main", "target root").await;
@@ -3490,7 +3485,7 @@ mod tests {
         vfs.put("resources/other.md", b"v2");
         make_commit(&svc, "acct_log_budget", "main", "unrelated two").await;
 
-        let err = svc
+        let log = svc
             .log_with_scan_limit(
                 LogRequest {
                     account: "acct_log_budget".into(),
@@ -3501,17 +3496,38 @@ mod tests {
                 2,
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(matches!(
-            err,
-            GitError::LogScanLimitExceeded {
-                scanned: 2,
-                max_scanned: 2,
-                matched: 0,
-                requested: 1,
-            }
-        ));
+        assert!(log.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_returns_partial_matches_when_scan_budget_is_exhausted() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_partial");
+        vfs.put("resources/target.md", b"target v1");
+        make_commit(&svc, "acct_log_partial", "main", "target root").await;
+        vfs.put("resources/other.md", b"other v1");
+        make_commit(&svc, "acct_log_partial", "main", "unrelated one").await;
+        vfs.put("resources/target.md", b"target v2");
+        let target_commit = make_commit(&svc, "acct_log_partial", "main", "target edit").await;
+        vfs.put("resources/other.md", b"other v2");
+        make_commit(&svc, "acct_log_partial", "main", "unrelated two").await;
+
+        let log = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_partial".into(),
+                    branch: "main".into(),
+                    limit: 5,
+                    paths: Some(vec!["resources/target.md".into()]),
+                },
+                2,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].oid, target_commit);
     }
 
     #[tokio::test]
@@ -5641,7 +5657,7 @@ mod tests {
         }
         object_store.reset();
 
-        let err = svc
+        let log = svc
             .log_with_scan_limit(
                 LogRequest {
                     account: "acct_log_reads".into(),
@@ -5652,11 +5668,8 @@ mod tests {
                 3,
             )
             .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            GitError::LogScanLimitExceeded { scanned: 3, .. }
-        ));
+            .unwrap();
+        assert!(log.is_empty());
 
         let commit_gets: usize = commits.iter().map(|oid| object_store.count_gets(oid)).sum();
         assert_eq!(commit_gets, 4, "three candidates plus one parent lookahead");

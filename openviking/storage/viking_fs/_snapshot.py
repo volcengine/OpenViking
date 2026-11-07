@@ -766,6 +766,7 @@ class _SnapshotMixin:
         """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
 
         Returns a list of commit metadata dicts (same shape as ``show(target_ref)``).
+        A path-filtered scan that reaches its budget returns matches found so far.
         """
         if limit <= 0:
             return []
