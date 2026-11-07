@@ -265,6 +265,7 @@ Common environment variables:
 | `OPENVIKING_PEER_ID` | Explicit actor peer |
 | `OPENVIKING_WORKSPACE_PEER` | Derive a peer from each DSH session workspace's git identity by default; `0` sends no peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` for cross-workspace recall or `actor` for isolation |
+| `OPENVIKING_NO_AUTO_INJECT` | Set to `1` to skip the automatic profile, memory index, and skill catalog. Recall and capture use their own settings. |
 
 The profile's `cordis.patch.yml` can also carry plugin config:
 
