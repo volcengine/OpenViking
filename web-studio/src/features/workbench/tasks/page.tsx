@@ -128,13 +128,13 @@ export function TasksRoute({
   const allTasks = React.useMemo(() => {
     if (!dedupByResource) return rawTasks
     const map = new Map<string, TaskRecord>()
-    for (const t of rawTasks) {
+    for (const taskItem of rawTasks) {
       const key =
-        t.resource_id && t.task_type !== 'compile'
-          ? `res:${t.resource_id}`
-          : `task:${t.task_id}`
+        taskItem.resource_id && taskItem.task_type !== 'compile'
+          ? `res:${taskItem.resource_id}`
+          : `task:${taskItem.task_id}`
       if (!map.has(key)) {
-        map.set(key, t)
+        map.set(key, taskItem)
       }
     }
     return Array.from(map.values())
@@ -280,11 +280,11 @@ export function TasksRoute({
     return 45
   }
 
-  const getTaskTotalSteps = (taskType?: string): number => {
-    if (taskType === 'session_commit') return 1
-    if (taskType === 'admin_reindex' || taskType === 'snapshot_restore_reindex')
+  const getTaskTotalSteps = (type?: string): number => {
+    if (type === 'session_commit') return 1
+    if (type === 'admin_reindex' || type === 'snapshot_restore_reindex')
       return 2
-    if (taskType === 'connector_import') return 4
+    if (type === 'connector_import') return 4
     return 3
   }
 
@@ -565,10 +565,10 @@ export function TasksRoute({
         const processing = matchingTasks.filter(
           (taskItem) => normalizeTaskStatus(taskItem.status) === 'running',
         ).length
-        const pending = matchingTasks.filter(
+        const pendingCount = matchingTasks.filter(
           (taskItem) => normalizeTaskStatus(taskItem.status) === 'pending',
         ).length
-        const completed = matchingTasks.filter(
+        const completedCount = matchingTasks.filter(
           (taskItem) => normalizeTaskStatus(taskItem.status) === 'completed',
         ).length
         const errors = matchingTasks.filter(
@@ -577,8 +577,8 @@ export function TasksRoute({
         return {
           name: t(`types.${typeKey}` as any, { defaultValue: typeKey }),
           processing,
-          pending,
-          completed,
+          pending: pendingCount,
+          completed: completedCount,
           errors,
           total: count,
         }
