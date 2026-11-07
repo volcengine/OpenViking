@@ -378,10 +378,13 @@ export async function cleanStale() {
  *   a background drainer can keep retrying a transient failure without
  *   burning the session-start retry budget. Exhausted and non-retryable
  *   entries are deleted exactly as in the default mode.
+ * @param {Set<string>} [options.skipSessionIds] - leave these sessions queued
+ *   without consuming their retry budget or blocking unrelated sessions.
  * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
  */
 export async function replayPending(fetchJSON, log, options = {}) {
   const consumeRetries = options.consumeRetries !== false;
+  const skipSessionIds = options.skipSessionIds;
   const pending = await listPending();
 
   if (pending.length === 0) {
@@ -398,6 +401,10 @@ export async function replayPending(fetchJSON, log, options = {}) {
   let processed = 0;
 
   for (const { filename, entry } of pending) {
+    if (skipSessionIds?.has(entry.sessionId)) {
+      deferred++;
+      continue;
+    }
     if (processed >= replayLimit) {
       deferred++;
       continue;

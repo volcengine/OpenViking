@@ -67,6 +67,36 @@ test("per-session actor peer overrides the process default", async () => {
   assert.equal(headers["X-OpenViking-Actor-Peer"], "workspace-peer");
 });
 
+test("session lookup exposes not-found without requesting auto-creation", async () => {
+  let seen;
+  globalThis.fetch = async (url, init) => {
+    seen = { url, init };
+    return new Response(JSON.stringify({
+      status: "error",
+      error: { code: "NOT_FOUND", message: "missing" },
+    }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    apiKey: "",
+    account: "",
+    user: "",
+    peerId: "",
+    userAgent: "",
+    requestTimeoutMs: 1000,
+  });
+
+  const result = await client.getSessionResult("dsh-missing", "workspace-peer");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 404);
+  assert.equal(seen.url, "http://127.0.0.1:1933/api/v1/sessions/dsh-missing");
+  assert.equal(seen.init.headers["X-OpenViking-Actor-Peer"], "workspace-peer");
+});
+
 test("client normalizes non-2xx OpenViking envelopes", async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({
     status: "error",

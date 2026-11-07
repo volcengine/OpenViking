@@ -116,10 +116,21 @@ test("capture, recall and commit send each session's peer on the wire", async t 
   const { a, b, writeConfig, start, session } = setup(t);
   writeConfig(b, { peer: { id: "project-b" } });
   const requests = [];
+  const createdSessions = new Set();
   t.mock.method(globalThis, "fetch", async (url, init = {}) => {
     const path = new URL(url).pathname;
     const body = init.body ? JSON.parse(init.body) : null;
     requests.push({ path, body, peer: new Headers(init.headers).get("X-OpenViking-Actor-Peer") });
+    if (path === "/api/v1/sessions" && init.method === "POST") {
+      createdSessions.add(body.session_id);
+    }
+    const lookup = path.match(/^\/api\/v1\/sessions\/([^/]+)$/);
+    if (lookup && !init.method && !createdSessions.has(decodeURIComponent(lookup[1]))) {
+      return new Response(JSON.stringify({ status: "error", error: { code: "NOT_FOUND" } }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     let result = {};
     if (path === "/api/v1/search/search") result = { rendered: "" };
     else if (path === "/api/v1/fs/ls") result = [];
