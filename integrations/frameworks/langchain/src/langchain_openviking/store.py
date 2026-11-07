@@ -73,7 +73,7 @@ class OpenVikingStore(BaseStore):
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
     Removal ignores missing targets and propagates other backend errors.
-    Every key remains one URI path segment. Encoded slash and backslash
+    Each namespace label and key remains one URI path segment. Encoded slash and backslash
     separators use adapter-level escape tokens because OpenViking rejects
     ``%2F`` and ``%5C`` within a URI segment.
 
@@ -547,7 +547,13 @@ class OpenVikingStore(BaseStore):
 
 
 def _segment(value: str) -> str:
-    return quote(str(value), safe="")
+    # quote(..., safe="") encodes a literal "!" as "%21", leaving bare "!"
+    # available as an unambiguous adapter escape marker.
+    return quote(str(value), safe="").replace("%2F", "!s").replace("%5C", "!b")
+
+
+def _decode_segment(segment: str) -> str:
+    return unquote(segment.replace("!s", "%2F").replace("!b", "%5C"))
 
 
 def _join_uri(root: str, *segments: str) -> str:
@@ -556,17 +562,7 @@ def _join_uri(root: str, *segments: str) -> str:
 
 
 def _record_uri(prefix: str, key: str, suffix: str) -> str:
-    return f"{prefix}/{_encode_key_segment(key)}{suffix}"
-
-
-def _encode_key_segment(key: str) -> str:
-    # quote(..., safe="") encodes a literal "!" as "%21", leaving bare "!"
-    # available as an unambiguous adapter escape marker.
-    return _segment(key).replace("%2F", "!s").replace("%5C", "!b")
-
-
-def _decode_key_segment(segment: str) -> str:
-    return unquote(segment.replace("!s", "%2F").replace("!b", "%5C"))
+    return f"{prefix}/{_segment(key)}{suffix}"
 
 
 def _parse_canonicalized_record_uri(
@@ -619,8 +615,8 @@ def _identity_relative_root_tail(classification: UriClassification) -> tuple[str
 def _parse_record_parts(parts: list[str]) -> tuple[tuple[str, ...], str] | None:
     if not parts or not parts[-1]:
         return None
-    namespace = tuple(unquote(part) for part in parts[:-1])
-    key = _decode_key_segment(parts[-1])
+    namespace = tuple(_decode_segment(part) for part in parts[:-1])
+    key = _decode_segment(parts[-1])
     return namespace, key
 
 
