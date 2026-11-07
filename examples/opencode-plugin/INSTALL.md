@@ -36,7 +36,7 @@ OpenCode shares the unified installer with the other memory plugins. It asks whi
 curl -fsSL https://openviking.ai/install | bash
 ```
 
-The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
+The installer places one wrapper in `~/.config/opencode/plugins/` and the package in `~/.config/opencode/openviking-plugin/`. It writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
 
 ## Installation Method 2: Published Package
 
@@ -62,11 +62,12 @@ Run the following commands from the repository root:
 
 ```bash
 node examples/memory-plugin-shared/sync.mjs
-mkdir -p ~/.config/opencode/plugins/openviking
+mkdir -p ~/.config/opencode/plugins ~/.config/opencode/openviking-plugin
+cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/lib ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/servers ~/.config/opencode/openviking-plugin/
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
-cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
+rm -rf ~/.config/opencode/plugins/openviking
 ```
 
 `sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
@@ -74,9 +75,10 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 After installation, the layout should look like this:
 
 ```text
-~/.config/opencode/plugins/
-├── openviking.js
-└── openviking/
+~/.config/opencode/
+├── plugins/
+│   └── openviking.js
+└── openviking-plugin/
     ├── index.mjs
     ├── package.json
     ├── lib/
@@ -86,11 +88,11 @@ After installation, the layout should look like this:
 The top-level `openviking.js` forwards the first-level `.js` entry that OpenCode can discover to the actual plugin directory:
 
 ```js
-export { OpenVikingPlugin, default } from "./openviking/index.mjs"
+export { OpenVikingPlugin, default } from "../openviking-plugin/index.mjs"
 ```
 
 This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
-Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
+Keep the package outside `plugins/`: v1 discovers the wrapper file, while v2 also discovers directories. Placing both there loads the same plugin twice. Restart OpenCode and its background service after replacing an existing installation.
 
 If you install through an npm package, you can also use `examples/opencode-plugin` as a normal OpenCode plugin package.
 
