@@ -43,12 +43,44 @@ test('实时：每秒按 after 游标增量拉取，空会话不走 after', () =
 });
 
 test('回合分组：消息按 inboundSeqs 归入回合，工具按 toolId 配对', () => {
-  assert.match(js, /kind === 'agent\.turn_started'/);
-  assert.match(js, /claim\(open, meta\.inboundSeqs\)/);
-  assert.match(js, /tools\.get\(toolId\)/);
-  assert.match(js, /LARK_DELIVERY = /);
-  assert.match(js, /CLI_DELIVERY = /); // 保留方舟 Worker 和旧版 CLI 投递记录
-  assert.match(js, /模型实际收到/);
+  const { buildModel } = runInNewContext(
+    js.slice(0, js.indexOf('// ---------- 渲染：上下文流')) + '\n({ buildModel });',
+    { document: { getElementById: () => ({}) } },
+  );
+  for (const status of ['failed', 'interrupted', 'completed']) {
+    const reason = status === 'failed' ? 'durable stopped during an active turn' : '';
+    const rows = [
+      { kind: 'message.received', inboundSeq: 1, summary: '运行任务' },
+      { kind: 'agent.turn_started', metadata: { inboundSeqs: [1] } },
+      { kind: 'agent.tool_called', metadata: { toolId: 'read', toolName: 'read', input: 'file.txt' } },
+      { kind: 'agent.tool_completed', status: 'COMPLETED', metadata: { toolId: 'read', output: 'content', durationMs: 25 } },
+      { kind: 'agent.tool_called', metadata: { toolId: 'sleep', toolName: 'powershell', input: 'Start-Sleep 120' } },
+      { kind: 'agent.tool_called', summary: '工具未提供 id', metadata: { input: 'pending' } },
+      { kind: 'agent.turn_completed', status, summary: reason, metadata: { durationMs: 9999 } },
+      { kind: 'agent.turn_started' },
+      { kind: 'agent.tool_called', metadata: { toolId: 'sleep', toolName: 'powershell', input: 'next task' } },
+    ].map((row, i) => ({ id: i + 1, createdAtMs: i * 100, ...row }));
+    const pending = buildModel(rows.slice(0, 6)).turns[0].steps.filter((step) => step.type === 'tool');
+    assert.equal(pending[1].running, true);
+    const model = buildModel(rows);
+    const [ended, active] = model.turns;
+    assert.equal(ended.messages[0].row.inboundSeq, 1);
+    assert.equal(model.items.some((item) => item.type === 'msg'), false);
+    const [read, sleep, anonymous] = ended.steps;
+    assert.equal(read.running, false);
+    assert.equal(read.failed, false);
+    assert.equal(read.output, 'content');
+    assert.equal(read.durationMs, 25);
+    for (const tool of [sleep, anonymous]) {
+      assert.equal(tool.running, false, `unfinished tool in ${status} turn`);
+      assert.equal(tool.failed, true);
+      assert.equal(tool.durationMs, ended.endMs - tool.startMs);
+      assert.ok(tool.error);
+      if (reason) assert.equal(tool.error, reason);
+    }
+    assert.equal(sleep.input, 'Start-Sleep 120');
+    assert.equal(active.steps[0].running, true, 'a later turn owns its reused tool id');
+  }
 });
 
 test('时间带折叠长空白并高亮视口内回合', () => {

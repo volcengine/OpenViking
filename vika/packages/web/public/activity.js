@@ -269,6 +269,13 @@ function buildModel(rows) {
 
     open.lastId = row.id;
     if (kind === 'agent.turn_completed') {
+      for (const tool of open.steps) {
+        if (tool.type !== 'tool' || !tool.running) continue;
+        completeTool(tool, {
+          ...row, status: 'FAILED',
+          metadata: { error: row.summary || '回合已结束，未收到工具结果' },
+        });
+      }
       open.endRow = row;
       open.endMs = row.createdAtMs;
       Object.assign(open.meta, meta);
