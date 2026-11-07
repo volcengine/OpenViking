@@ -55,6 +55,8 @@ Once installed, the plugin provides these agent tools:
 
 `add_resource` is hidden from agents by default (`enableAddResourceTool=false`), while manual `/add-resource` remains available. Configure `recallTargetTypes` to choose default recall targets (`user`, `agent`, `resource`); legacy `recallResources=true` appends `resource` only when `recallTargetTypes` is unset.
 
+Set `recallExcludeUris` (comma-separated subtree URIs) to keep generated directory files such as `viking://user/memories/skills` or `viking://agent/skills` out of auto-recall: they are forwarded to the context search as `exclude_uris`, so boilerplate matches never consume the recall budget.
+
 ## Data Flow & Privacy
 
 - **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).

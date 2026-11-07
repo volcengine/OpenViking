@@ -380,6 +380,7 @@ export async function buildAutoRecallContext(params: {
           peerScope: "actor",
           actorPeerId,
           requestTimeoutMs: cfg.autoRecallTimeoutMs,
+          excludeUris: Array.isArray(cfg.recallExcludeUris) ? cfg.recallExcludeUris : [],
         });
       } catch (error) {
         requestError = error;

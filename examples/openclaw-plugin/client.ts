@@ -61,6 +61,8 @@ export type SearchContextOptions = {
   peerScope?: "actor" | "all";
   actorPeerId?: string;
   requestTimeoutMs?: number;
+  /** Subtree URIs forwarded to the server as exclude_uris; empty means no exclusions. */
+  excludeUris?: string[];
 };
 
 export type FsListEntry = string | Record<string, unknown>;
@@ -526,7 +528,10 @@ export class OpenVikingClient {
       timeoutMs: this.timeoutMs,
     };
     const body = {
-      ...buildContextSearchBody(contractConfig, { sessionId: options.sessionId }),
+      ...buildContextSearchBody(contractConfig, {
+        sessionId: options.sessionId,
+        excludeUris: options.excludeUris,
+      }),
       ...(options.dedupTurns === 0 ? { dedup_turns: 0 } : {}),
       query,
       ...(options.contextType !== undefined ? { context_type: options.contextType } : {}),

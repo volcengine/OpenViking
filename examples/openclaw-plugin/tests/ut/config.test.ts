@@ -438,6 +438,29 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     ).toThrow("recallTargetTypes contains unknown resource types: session");
   });
 
+  it("normalizes recallExcludeUris from arrays and comma/newline-separated strings", () => {
+    const fromArray = memoryOpenVikingConfigSchema.parse({
+      recallExcludeUris: [" viking://user/memories/skills ", "viking://agent/skills", ""],
+    });
+    expect(fromArray.recallExcludeUris).toEqual([
+      "viking://user/memories/skills",
+      "viking://agent/skills",
+    ]);
+
+    const fromString = memoryOpenVikingConfigSchema.parse({
+      recallExcludeUris: "viking://user/memories/skills, viking://agent/skills\nviking://user/memories/skills",
+    });
+    expect(fromString.recallExcludeUris).toEqual([
+      "viking://user/memories/skills",
+      "viking://agent/skills",
+    ]);
+  });
+
+  it("defaults recallExcludeUris to an empty list", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.recallExcludeUris).toEqual([]);
+  });
+
   it("keeps deprecated recallResources as an additive compatibility switch when recallTargetTypes is unset", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ recallResources: true });
     expect(cfg.recallTargetTypes).toEqual(["user", "agent", "resource"]);
