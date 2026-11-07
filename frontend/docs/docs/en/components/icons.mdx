@@ -4,7 +4,7 @@ File-type icons are available from the public `@openviking/react/icons` entry. T
 
 ## Live example
 
-Use the size controls to resize the five decorative icons. The separate PDF icon demonstrates a meaningful `alt` label at 24 × 24 pixels.
+Use the size controls to resize the five decorative icons. The separate PDF icon demonstrates a meaningful `aria-label` at 24 × 24 pixels.
 
 ```tsx file="../../_demos/icons-basic.tsx" preview
 
@@ -22,30 +22,32 @@ Use the size controls to resize the five decorative icons. The separate PDF icon
 
 ## Props
 
-Each component renders an `img` and accepts its standard non-ref props, except `src` and `srcSet`, which are owned by the component.
+Each component renders an inline `svg` and accepts standard SVG props, except `children`.
 
-| Property    | Type               | Default | Description                                    |
-| ----------- | ------------------ | ------- | ---------------------------------------------- |
-| `width`     | `number \| string` | `16`    | Image width.                                   |
-| `height`    | `number \| string` | `16`    | Image height.                                  |
-| `alt`       | `string`           | `''`    | Accessible description; empty for decoration.  |
-| `className` | `string`           | —       | Adds a class to the image element.             |
-| Other props | Image attributes   | —       | Standard image attributes, including `aria-*`. |
+| Property     | Type               | Default | Description                                             |
+| ------------ | ------------------ | ------- | ------------------------------------------------------- |
+| `width`      | `number \| string` | `16`    | Icon width.                                             |
+| `height`     | `number \| string` | `16`    | Icon height.                                            |
+| `aria-label` | `string`           | —       | Accessible description; omit for decoration.            |
+| `className`  | `string`           | —       | Adds a class to the SVG element.                        |
+| Other props  | SVG attributes     | —       | Standard SVG attributes, including `aria-*` and `role`. |
 
 ```tsx
 import { PdfIcon } from '@openviking/react/icons';
 
 export default function Example() {
-  return <PdfIcon width={24} height={24} className="file-icon" alt="PDF" />;
+  return (
+    <PdfIcon width={24} height={24} className="file-icon" aria-label="PDF" />
+  );
 }
 ```
 
 ## Accessibility
 
-Leave `alt` empty when adjacent text already identifies the file type. For an icon that conveys information on its own, supply a descriptive `alt` value in the application's language. Icons are non-interactive; applications own button semantics, keyboard interaction, and focus styles when placing an icon inside a control.
+Omit `aria-label` when adjacent text already identifies the file type; the SVG stays `aria-hidden` so it is not announced twice. For an icon that conveys information on its own, supply a descriptive `aria-label` in the application's language. Icons are non-interactive; applications own button semantics, keyboard interaction, and focus styles when placing an icon inside a control.
 
 ## Assets and styling
 
-SVGs are embedded in the built JavaScript as data URLs. No separate SVG request or stylesheet import is needed for these icons. Applications with a Content Security Policy must allow `data:` in `img-src` to display them.
+Icons ship as inline SVG elements inside the built JavaScript. There is no separate asset request, no stylesheet import, and no Content Security Policy entry to add.
 
-Use `width`, `height`, `className`, or `style` to size and position the image. Its SVG colors are fixed artwork; changing CSS `color` does not recolor it.
+Use `width`, `height`, `className`, or `style` to size and position the icon. Its colors are fixed artwork; changing CSS `color` does not recolor it.

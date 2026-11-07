@@ -1,20 +1,18 @@
 import { forwardRef, useImperativeHandle, useRef } from 'react';
-import type { KeyboardEvent } from 'react';
 
-import { FileTreeBody } from './file-tree-body.js';
-import { findRowElement } from './file-tree-dom.js';
-import { handleRowKeyDown } from './file-tree-keyboard.js';
-import { DEFAULT_LABELS } from './file-tree-labels.js';
-import type { FileTreeRowContext } from './file-tree-row-context.js';
-import { useRowTooltip } from './file-tree-tooltip.js';
-import { useFileTreeActions } from './use-file-tree-actions.js';
-import type {
-  FileTreeComponent,
-  FileTreeEntryRow,
-  FileTreeHandle,
-  FileTreeProps,
-} from './types.js';
+import { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
+import type { FileTreeHandle, FileTreeProps } from './types.js';
 
+export { FileTreeSpinner } from './file-tree-spinner.js';
+export {
+  resolveFileTreeInfoKey,
+  showsInlineDescription,
+  splitVikingUri,
+} from './file-tree-info.js';
+export {
+  DEFAULT_INFO_LABELS,
+  resolveInfoCopy,
+} from './file-tree-info-labels.js';
 export { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
 export type {
   FileTreeChildRow,
@@ -23,6 +21,8 @@ export type {
   FileTreeEntryRow,
   FileTreeErrorRow,
   FileTreeHandle,
+  FileTreeInfoKey,
+  FileTreeInfoLabels,
   FileTreeLabels,
   FileTreeLoadingRow,
   FileTreeLoadMoreRow,
@@ -33,105 +33,71 @@ export type {
   FileTreeSlots,
 } from './types.js';
 
-export const FileTree: FileTreeComponent = forwardRef<
-  FileTreeHandle,
-  FileTreeProps
->(function FileTree(
-  {
-    rows,
-    operations,
-    selectedId,
-    isReady = true,
-    loadingFallback,
-    errorFallback,
-    emptyFallback,
-    slots,
-    labels,
-    getRowAttributes,
-    renderDashboard,
-    renderRowTooltip,
-    onSelect,
-    onToggleExpand,
-    onLoadMore,
-    onRetry,
-    onOpenRetentionSettings,
-    className,
-    ...rest
-  },
-  ref,
-) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const text = { ...DEFAULT_LABELS, ...labels };
-  const tooltip = useRowTooltip();
-  const actions = useFileTreeActions({
-    operations,
-    onSelect,
-    onToggleExpand,
-    onLoadMore,
-    onRetry,
-    onOpenRetentionSettings,
-  });
-
-  useImperativeHandle(
+/**
+ * 占位组件：只渲染固定尺寸的空壳，真实视图按 types.ts 的契约重写。
+ * 保留 `FileTreeProps` 与 `forwardRef` 契约，消费者可以照文档里的用法写
+ * JSX 并拿到句柄；还没有行可查，`getRowElement` 返回 `null`、
+ * `scrollToRow` 返回 `false`。
+ *
+ * Placeholder: renders a fixed shell until the real view lands against the
+ * contract in types.ts. It keeps the `FileTreeProps` and `forwardRef` contracts
+ * so consumers can write the JSX the docs show and receive a handle; with no
+ * rows yet, `getRowElement` returns `null` and `scrollToRow` returns `false`.
+ */
+export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(
+  function FileTree(
+    {
+      rows: _rows,
+      operations: _operations,
+      selectedId: _selectedId,
+      isReady: _isReady,
+      loadingFallback: _loading,
+      errorFallback: _error,
+      emptyFallback: _empty,
+      slots: _slots,
+      labels: _labels,
+      getRowAttributes: _getRowAttributes,
+      renderDashboard: _renderDashboard,
+      renderRowTooltip: _renderRowTooltip,
+      onSelect: _onSelect,
+      onToggleExpand: _onToggleExpand,
+      onLoadMore: _onLoadMore,
+      onRetry: _onRetry,
+      onOpenRetentionSettings: _onRetention,
+      className,
+      ...rest
+    },
     ref,
-    () => ({
-      getRowElement: (id) => findRowElement(rootRef.current, id),
-      scrollToRow: (id, options) => {
-        const element = findRowElement(rootRef.current, id);
-        if (!element) return false;
-        element.scrollIntoView({ block: 'nearest', ...options });
-        return true;
-      },
-    }),
-    [],
-  );
+  ) {
+    const rootRef = useRef<HTMLDivElement>(null);
 
-  const rowContext: FileTreeRowContext = {
-    text,
-    selectedId,
-    tooltipRowId: tooltip.tooltipRowId,
-    getRowAttributes,
-    renderDashboard,
-    renderRowTooltip,
-    ...actions,
-    onRowKeyDown: (
-      event: KeyboardEvent<HTMLDivElement>,
-      row: FileTreeEntryRow,
-    ) =>
-      handleRowKeyDown(event, {
-        root: rootRef.current,
-        row,
-        onSelect: actions.onSelect,
-        onToggleExpand: actions.onToggleExpand,
+    useImperativeHandle(
+      ref,
+      () => ({
+        getRowElement: (id) =>
+          rootRef.current?.querySelector<HTMLElement>(
+            `[${FILE_TREE_ROW_ATTRIBUTE}="${CSS.escape(id)}"]`,
+          ) ?? null,
+        scrollToRow: (id, options) => {
+          const element = rootRef.current?.querySelector<HTMLElement>(
+            `[${FILE_TREE_ROW_ATTRIBUTE}="${CSS.escape(id)}"]`,
+          );
+          if (!element) return false;
+          element.scrollIntoView({ block: 'nearest', ...options });
+          return true;
+        },
       }),
-    onRowEnter: tooltip.show,
-    onRowLeave: tooltip.hide,
-  };
+      [],
+    );
 
-  return (
-    <div
-      {...rest}
-      ref={rootRef}
-      className={['ov-file-tree', className].filter(Boolean).join(' ')}
-    >
-      {slots?.toolbar ? (
-        <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
-      ) : null}
+    return (
       <div
-        role="tree"
-        aria-label={rest['aria-label']}
-        className="ov-file-tree__body"
+        {...rest}
+        ref={rootRef}
+        className={['ov-file-tree', className].filter(Boolean).join(' ')}
       >
-        <FileTreeBody
-          rows={rows}
-          isReady={isReady}
-          text={text}
-          loadingFallback={loadingFallback}
-          errorFallback={errorFallback}
-          emptyFallback={emptyFallback}
-          ctx={rowContext}
-        />
+        FileTree
       </div>
-    </div>
-  );
-});
+    );
+  },
+);
