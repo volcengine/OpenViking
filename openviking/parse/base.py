@@ -51,6 +51,10 @@ def format_table_to_markdown(rows: List[List[str]], has_header: bool = True) -> 
     Returns:
         Markdown formatted table string
     """
+    last_row = len(rows)
+    while last_row and not any(str(cell).strip() for cell in rows[last_row - 1]):
+        last_row -= 1
+    rows = rows[:last_row]
     if not rows:
         return ""
 
@@ -74,7 +78,7 @@ def format_table_to_markdown(rows: List[List[str]], has_header: bool = True) -> 
         lines.append("| " + " | ".join(cells) + " |")
 
         # Add separator row after header
-        if row_idx == 0 and has_header and len(rows) > 1:
+        if row_idx == 0 and has_header:
             separator = ["-" * w for w in col_widths]
             lines.append("| " + " | ".join(separator) + " |")
 
