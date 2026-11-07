@@ -82,6 +82,7 @@ function buildEcosystem(sourceEnv = process.env) {
       VIKA_TEMP_DIR: agent.tempDir || sharedDaemonEnv.VIKA_TEMP_DIR || '',
       VIKA_WORKSPACE: agent.workspace,
       VIKA_MODEL: agent.model,
+      VIKA_CAPABILITIES_FILE: agent.capabilitiesFile || '',
       // Empty values deliberately override any legacy global seed. Managed
       // Agent identity must remain pinned to one daemon/profile instance.
       VIKA_VOLC_SESSION_ID: agent.volcSessionId || '',
