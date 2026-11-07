@@ -134,6 +134,15 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('VIKA_OV_AUTO_RECALL', undefined);
     setEnv('VIKA_OV_RECALL_SCOPE', undefined);
   });
+  it('reads Lark messages with the owner\'s visibility unless the instance keeps to the bot\'s chats', () => {
+    setEnv('VIKA_LARK_MESSAGE_ACCESS', undefined);
+    assert.equal(getConfig().larkMessageAccess, 'owner');
+    setEnv('VIKA_LARK_MESSAGE_ACCESS', 'bot');
+    assert.equal(getConfig().larkMessageAccess, 'bot');
+    setEnv('VIKA_LARK_MESSAGE_ACCESS', 'everyone');
+    assert.throws(() => getConfig(), /VIKA_LARK_MESSAGE_ACCESS must be one of: owner, bot/);
+    setEnv('VIKA_LARK_MESSAGE_ACCESS', undefined);
+  });
   it('stores meeting notes only on an instance that opts in and has Feishu/Lark', () => {
     setEnv('VIKA_MEETING_NOTES', undefined);
     assert.equal(getConfig().meetingNotes, false);

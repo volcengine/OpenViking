@@ -7,14 +7,14 @@ import { eventMessage } from '../connectors/protocol.mjs';
 import { safeError } from '../logger.mjs';
 import { MailArchive, parsesAttachment } from './archive.mjs';
 import { ImapConnection } from './imap.mjs';
+import { configuredMailboxes, mailboxDiscovery, mailboxIdentity, mailboxPollSeconds } from './mailbox.mjs';
+import { listMailboxes, selectMailboxes } from './list-mailboxes.mjs';
 import { buildReply, decodeCharset, isOwnMessageId, parseMail, replyMessageId } from './mime.mjs';
 import { sendMail, verifySmtp } from './smtp.mjs';
 import { EmailState } from './state.mjs';
 
-const MAILBOX = 'INBOX';
 // Servers may drop an IDLE after 29 minutes; renew it well before.
 const IDLE_MS = 9 * 60_000;
-const POLL_MS = 60_000;
 // After a long stop only the newest mails are reported; older ones are skipped.
 const MAX_CATCH_UP = 50;
 const FETCH_BATCH = 10;
@@ -56,7 +56,8 @@ export function loadAccount(file) {
     name: typeof value.name === 'string' ? value.name.trim() : '',
     user: typeof value.username === 'string' && value.username.trim() ? value.username.trim() : address,
     password: value.password,
-    imap: server('imap'),
+    imap: { ...server('imap'), mailbox: configuredMailboxes(value.imap)[0],
+      mailboxes: configuredMailboxes(value.imap), discovery: mailboxDiscovery(value.imap), pollIntervalSeconds: mailboxPollSeconds(value.imap?.pollIntervalSeconds) },
     smtp: server('smtp'),
   });
 }
@@ -75,7 +76,18 @@ export async function verifyAccount(account, { connectTls } = {}) {
   try {
     await imap.connect();
     await imap.login(account.user, account.password);
-    await imap.examine(MAILBOX);
+    const names = account.imap.discovery
+      ? discoveredNames(await listMailboxes(imap), account.imap.discovery)
+      : account.imap.mailboxes ?? [account.imap.mailbox];
+    let selected = names.length === 0 && !!account.imap.discovery;
+    let selectionError;
+    for (const name of names) {
+      try { await imap.examine(name); selected = true; } catch (error) {
+        if (imap.closed) throw error;
+        selectionError = error;
+      }
+    }
+    if (!selected) throw selectionError ?? new Error('No configured email mailbox is accessible');
     idle = imap.capabilities.has('IDLE');
     await imap.logout();
   } finally {
@@ -83,6 +95,12 @@ export async function verifyAccount(account, { connectTls } = {}) {
   }
   await verifySmtp({ ...account.smtp, user: account.user, password: account.password, ...(connectTls ? { connectTls } : {}) });
   return { idle };
+}
+
+function discoveredNames(entries, discovery) {
+  const names = selectMailboxes(entries, discovery).map((entry) => entry.name);
+  if (names.length > 100) throw new Error('Email discovery matched more than 100 folders; narrow imap.discovery.roots or exclude');
+  return names;
 }
 
 function people(list) {
@@ -125,10 +143,11 @@ function attachmentLine({ id, name, type, size, uri, status, reason }) {
 }
 
 // The mail as OV keeps it.
-function bodyMarkdown({ mail, messageId, mailbox, instance, attachments, inline }) {
+function bodyMarkdown({ mail, messageId, mailbox, imapMailbox, instance, attachments, inline }) {
   const lines = [`# ${mail.subject || '(no subject)'}`, '', ...headerLines(mail).map((line) => `- ${line}`)];
   if (mail.date) lines.push(`- Date: ${new Date(mail.date).toISOString()}`);
   lines.push(`- Mailbox: ${mailbox} (${instance})`, `- Message: ${messageId}`);
+  lines.push(`- IMAP folder: ${label(imapMailbox)}`);
   if (attachments.length || inline) {
     lines.push('', '## Attachments', '', ...attachments.map((attachment) => `- ${attachmentLine(attachment)}`));
     if (inline) lines.push(`- ${inline} inline image${inline === 1 ? '' : 's'} in the body, not stored`);
@@ -209,18 +228,21 @@ function sleep(ms, stopped) {
         clearInterval(timer);
         resolve();
       }
-    }, 1_000);
+    }, Math.min(ms, 100));
   });
 }
 
-// Watches one mailbox's INBOX read-only over IMAP and reports each new mail as
+// Watches configured mailboxes read-only over IMAP and reports each new mail as
 // an event; replies to a reported mail over SMTP. Never marks, moves or
 // deletes mail.
 export class EmailClient {
-  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS } = {}) {
+  constructor(config, _registry, logger, { connectTls, archive = null, attachmentWaitMs = ATTACHMENT_WAIT_MS, pollMs, discoveryMs, reconnectMs = 1_000 } = {}) {
     this.config = config;
     this.logger = logger;
     this.connectTls = connectTls;
+    this.pollMs = pollMs;
+    this.discoveryMs = discoveryMs;
+    this.reconnectMs = reconnectMs;
     this.state = new EmailState(config.dataDir, config.instance ?? 'email');
     this.archive = archive;
     this.attachmentWaitMs = attachmentWaitMs;
@@ -242,6 +264,7 @@ export class EmailClient {
 
   async open() {
     const imap = this.imapConnection();
+    this.imap = imap;
     try {
       await imap.connect();
       await imap.login(this.account.user, this.account.password);
@@ -275,36 +298,80 @@ export class EmailClient {
   }
 
   async watch(onLine) {
-    const imap = await this.open();
-    this.imap = imap;
-    try {
-      const box = await imap.examine(MAILBOX);
-      const key = `${this.tag}:${MAILBOX}`;
-      let cursor = this.state.cursor(key);
-      if (!cursor || cursor.uidValidity !== box.uidValidity) {
-        // First start, or the server renumbered the mailbox: begin with what
-        // arrives next instead of reporting the whole inbox.
-        if (cursor) this.logger.warn('email_mailbox_renumbered');
-        cursor = { uidValidity: box.uidValidity, lastUid: box.uidNext - 1 };
-        this.state.saveCursor(key, cursor);
-      }
-      while (!this.stopping) {
-        await this.catchUp(imap, key, cursor, onLine);
+    const discovery = this.account.imap.discovery;
+    let names = discovery ? [] : this.account.imap.mailboxes ?? [this.account.imap.mailbox];
+    let refreshedAt = null;
+    const discoveryMs = this.discoveryMs ?? (discovery?.refreshIntervalSeconds ?? 300) * 1_000;
+    const pollMs = this.pollMs ?? this.account.imap.pollIntervalSeconds * 1_000;
+    let next = 0;
+    let failures = 0;
+    while (!this.stopping) {
+      let imap;
+      try {
+        imap = await this.open();
         if (this.stopping) break;
-        if (imap.capabilities.has('IDLE')) {
-          await imap.idle(IDLE_MS, () => this.stopping);
-        } else {
-          await sleep(POLL_MS, () => this.stopping);
-          if (!this.stopping) await imap.command('NOOP');
+        while (!this.stopping) {
+          let idled = false;
+          if (discovery && (refreshedAt === null || Date.now() - refreshedAt >= discoveryMs)) {
+            try {
+              const found = discoveredNames(await listMailboxes(imap), discovery);
+              names = found;
+              next = names.length ? next % names.length : 0;
+              this.logger.info('email_mailboxes_discovered', { count: names.length });
+            } catch (error) {
+              if (imap.closed) throw error;
+              // Preserve the last successful snapshot on a failed LIST.
+              this.logger.warn('email_mailbox_discovery_failed', { error: safeError(error) });
+            }
+            refreshedAt = Date.now();
+          }
+          // Advance before opening a folder. A broken folder or connection
+          // cannot indefinitely starve the folders after it.
+          for (let count = 0; count < names.length && !this.stopping; count += 1) {
+            const name = names[next];
+            next = (next + 1) % names.length;
+            try {
+              const box = await imap.examine(name);
+              const key = `${this.tag}:${name}`;
+              let cursor = this.state.cursor(key);
+              if (!cursor || cursor.uidValidity !== box.uidValidity) {
+                if (cursor) this.logger.warn('email_mailbox_renumbered', { mailbox: name });
+                cursor = { uidValidity: box.uidValidity, lastUid: box.uidNext - 1 };
+                this.state.saveCursor(key, cursor);
+              }
+              await this.catchUp(imap, key, cursor, onLine, name);
+            } catch (error) {
+              if (this.stopping || imap.closed) throw error;
+              // A tagged NO/BAD (e.g. a removed or inaccessible folder) is
+              // isolated. Never SEARCH after a failed EXAMINE.
+              this.logger.warn('email_mailbox_unavailable', { mailbox: name, error: safeError(error) });
+              continue;
+            }
+            if (!discovery && names.length === 1 && imap.capabilities.has('IDLE') && !this.stopping) {
+              await imap.idle(IDLE_MS, () => this.stopping);
+              idled = true;
+            }
+          }
+          failures = 0;
+          if (this.stopping) break;
+          // A failed EXAMINE must also wait; no hot retry loop.
+          if (!idled) await sleep(pollMs, () => this.stopping);
         }
+      } catch (error) {
+        if (!this.stopping) {
+          this.logger.warn('email_reconnecting', { error: safeError(error) });
+          failures += 1;
+        }
+      } finally {
+        const connection = imap ?? this.imap;
+        this.imap = null;
+        connection?.close();
       }
-    } finally {
-      this.imap = null;
-      await imap.logout();
+      if (!this.stopping) await sleep(Math.min(60_000, this.reconnectMs * 2 ** Math.min(failures - 1, 6)), () => this.stopping);
     }
   }
 
-  async catchUp(imap, key, cursor, onLine) {
+  async catchUp(imap, key, cursor, onLine, imapMailbox = this.account.imap.mailbox) {
     let uids = await imap.searchUids(cursor.lastUid + 1);
     if (uids.length > MAX_CATCH_UP) {
       this.logger.warn('email_catch_up_skipped', { skipped: uids.length - MAX_CATCH_UP });
@@ -325,7 +392,7 @@ export class EmailClient {
         // One mail that cannot be read is passed over, never retried: the
         // cursor moves on so the mail after it still arrives.
         try {
-          await this.report(item, cursor.uidValidity, onLine);
+          await this.report(item, cursor.uidValidity, onLine, imapMailbox);
         } catch (error) {
           this.logger.warn('email_unreadable', { uid: item.uid, error: safeError(error) });
         }
@@ -338,7 +405,7 @@ export class EmailClient {
     }
   }
 
-  async report(item, uidValidity, onLine) {
+  async report(item, uidValidity, onLine, imapMailbox = this.account.imap.mailbox) {
     if (!item.body) return;
     const mail = parseMail(item.body, { maxTextChars: STORED_TEXT_CHARS });
     if (mail.autoReplied || isOwnMessageId(mail.messageId)) {
@@ -346,14 +413,15 @@ export class EmailClient {
       return;
     }
     if (item.truncated) mail.text = `[mail body not fetched: ${Math.round(item.size / 1_048_576)} MiB]`;
-    const messageId = `mail:${this.tag}:${uidValidity}:${item.uid}`;
+    const identity = mailboxIdentity(this.tag, imapMailbox, uidValidity, item.uid);
+    const messageId = `mail:${identity}`;
     const recipients = replyRecipients(mail, this.account.address);
     const files = mail.attachments.filter((attachment) => !attachment.inline).slice(0, MAX_ATTACHMENTS);
     // undefined: no OV to store in; null: OV could not take this mail.
-    const archive = this.archive ? await this.store(mail, messageId, files) : undefined;
+    const archive = this.archive ? await this.store(mail, messageId, files, imapMailbox) : undefined;
     const line = JSON.stringify(eventMessage('email', {
       instance: this.config.instance ?? 'email',
-      id: `imap:${this.tag}:${uidValidity}:${item.uid}`,
+      id: `imap:${identity}`,
       kind: mail.bulk ? 'email.list' : 'email.received',
       occurred_at: item.internalDate ?? mail.date ?? Date.now(),
       subject: { type: 'thread', id: threadId(item, mail, messageId) },
@@ -366,7 +434,7 @@ export class EmailClient {
       message: { id: messageId, type: 'email' },
       // Who a reply goes to, in full, for the owner to check on the approval
       // card; past the limit only how many. `archive` is where read_email finds it.
-      data: { reply: { from: this.account.address, subject: replySubject(mail.subject),
+      data: { mailbox: imapMailbox, reply: { from: this.account.address, subject: replySubject(mail.subject),
         ...(recipients.length <= MAX_REPLY_RECIPIENTS ? { to: recipients } : { recipients: recipients.length }) },
       ...(archive ? { archive } : {}) },
     }));
@@ -384,13 +452,13 @@ export class EmailClient {
   // body, chars, attachments }. Null when OV could not take it; the event then
   // carries the text itself. A mail seen again (after a restart) is stored
   // again over the same paths.
-  async store(mail, messageId, files) {
+  async store(mail, messageId, files, imapMailbox = this.account.imap.mailbox) {
     try {
       const folder = this.archive.folder(messageId);
       const attachments = await this.archive.storeAttachments(folder, files.map(attachmentFile),
         { deadline: Date.now() + this.attachmentWaitMs });
       const markdown = bodyMarkdown({
-        mail, messageId, mailbox: this.account.address, instance: this.config.instance ?? 'email', attachments,
+        mail, messageId, mailbox: this.account.address, imapMailbox, instance: this.config.instance ?? 'email', attachments,
         inline: mail.attachments.filter((attachment) => attachment.inline).length,
       });
       const body = await this.archive.write(`${folder}/body.md`, markdown);
