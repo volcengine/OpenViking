@@ -53,7 +53,12 @@ function resolveLarkCli(env) {
 }
 
 export function expandHome(value, homeDir = os.homedir()) {
-  return value === '~' ? homeDir : value.replace(/^~(?=\/)/, homeDir);
+  if (value === '~') return homeDir;
+  // Backslashes are separators on Windows, but literal filename characters on POSIX.
+  if (process.platform === 'win32') {
+    return /^~[\\/]/.test(value) ? path.join(homeDir, value.slice(2)) : value;
+  }
+  return value.startsWith('~/') ? homeDir + value.slice(1) : value;
 }
 
 function shortenHome(value, homeDir) {
