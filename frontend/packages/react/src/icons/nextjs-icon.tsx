@@ -18,7 +18,10 @@ import type { SVGProps } from 'react';
  * canonical source for this icon; the only differences are the ID coming from
  * `useId` and the attributes being written as JSX.
  */
-export function NextjsIcon(props: SVGProps<SVGSVGElement>) {
+export function NextjsIcon({
+  'aria-label': ariaLabel,
+  ...props
+}: SVGProps<SVGSVGElement>) {
   const gradientId = `ov-ft-nextjs-${useId().replaceAll(':', '')}`;
   return (
     <svg
@@ -27,7 +30,10 @@ export function NextjsIcon(props: SVGProps<SVGSVGElement>) {
       height={16}
       viewBox="0 0 16 16"
       fill="none"
-      aria-hidden="true"
+      // A labelled icon must stay in the accessibility tree, so only hide it when
+      // the caller supplies no name; an explicit `aria-hidden` still wins.
+      aria-hidden={ariaLabel ? undefined : true}
+      aria-label={ariaLabel}
       {...props}
     >
       <defs>
