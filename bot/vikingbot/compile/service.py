@@ -949,6 +949,7 @@ class BotCompileService:
                     stop_tool_names=["submit_wiki_bundle"],
                     openviking_connection=connection,
                     context_compact_budget=None,
+                    automatic_compaction=False,
                     budget_reminder_thresholds=_COMPILE_BUDGET_REMINDER_THRESHOLDS,
                 )
                 agent_usage = _merge_usage(agent_usage, usage or {})
@@ -1739,6 +1740,7 @@ class BotCompileService:
                 allow_final_fallback=False,
                 inject_write_experience=False,
                 context_compact_budget=None,
+                automatic_compaction=False,
                 status_note_provider=remind_submission,
                 agent_id=child_id,
                 max_iterations=self.limits.subagent_iterations,

@@ -17,12 +17,11 @@ import json_repair
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
-from openviking.models.model_error import ModelError
-from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+from openviking.models.model_error import ModelError, model_error_kind
 from openviking_cli.exceptions import NotFoundError
 from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.compile.hashing import digest
-from vikingbot.compile.models import COMPILE_STAGING_ROOT, CompileFailure
+from vikingbot.compile.models import COMPILE_STAGING_ROOT
 from vikingbot.compile.results import FileResponse, RouteBatchResponse
 from vikingbot.compile.schemas import result_schema
 from vikingbot.compile.skill_resources import EvidenceReader
@@ -32,11 +31,13 @@ T = TypeVar("T")
 R = TypeVar("R", bound=BaseModel)
 ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
 # Cache identity for the processing rules used by model calls.
-PROCESSING_VERSION = "compile-pipeline-37"
+PROCESSING_VERSION = "compile-pipeline-38"
 # Output-token fallback when the configured VLM provides no value.
 DEFAULT_MAX_TOKENS = 32_000
 # Total attempts per operator job or routing record, including the initial execution.
 MAX_JOB_ATTEMPTS = 4
+# Total rejected submissions per direct assignment, even if diagnostics change.
+MAX_OUTPUT_ATTEMPTS = 4
 
 
 def parse_file_result(text: str) -> Any:
@@ -105,11 +106,11 @@ def retry_allowed(failures: Counter, error: str) -> bool:
 
 
 class ModelCallError(OSError):
-    """A failed model request or stalled read loop; output validation errors remain separate."""
+    """A failed model execution; individual output errors first use local repair."""
 
 
 class ModelCallLimitError(ModelCallError):
-    """A local deadline or no-progress limit allows direct generation to use the pipeline."""
+    """A no-progress limit allows direct generation to use the pipeline."""
 
 
 class TaskFiles:
@@ -270,25 +271,27 @@ class JsonModel:
         """Measure one real request, including provider retries and semaphore waits.
 
         Diagnostics contain budgets, usage and failure categories, never reasoning.
-        A cancelled or timed-out request cannot be accepted as a partial response.
+        HTTP timeouts belong to the configured provider, outside shared-slot queueing.
         """
         from vikingbot.agent.loop import _inline_media_bytes
 
-        media_bytes = _inline_media_bytes(messages)
-        if media_bytes > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES:
-            raise CompileFailure(
-                "MEDIA_LIMIT", "Compile image request exceeds the inline media budget", stage=stage
-            )
         self.metrics[f"{stage}_calls"] += 1
         number = self.metrics[f"{stage}_calls"]
         started = time.monotonic()
-        seconds = max(600, self.timeout)
         thinking = self.identity["thinking"].get(stage.split("_", 1)[0])
         report = {
             "stage": stage,
             "call": number,
             "max_tokens": max_tokens,
-            "timeout_seconds": seconds,
+            "http_timeout_seconds": self.timeout,
+            "inline_media_bytes": _inline_media_bytes(messages),
+            "image_count": sum(
+                part.get("type") in {"image_url", "input_image"}
+                for message in messages
+                if isinstance(message.get("content"), list)
+                for part in message["content"]
+                if isinstance(part, dict)
+            ),
             "thinking": thinking
             if thinking is not None
             else self.identity["backend_settings"]["thinking"],
@@ -306,15 +309,14 @@ class JsonModel:
             json.dumps([messages, tools], ensure_ascii=False), text_type="mixed"
         )
         try:
-            async with asyncio.timeout(seconds):
-                response = await self.provider.chat(
-                    messages=messages,
-                    tools=tools,
-                    model=self.model,
-                    temperature=self.temperature,
-                    max_tokens=max_tokens,
-                    thinking=thinking,
-                )
+            response = await self.provider.chat(
+                messages=messages,
+                tools=tools,
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=max_tokens,
+                thinking=thinking,
+            )
             report.update(
                 finish_reason=response.finish_reason,
                 usage={k: v for k, v in (response.usage or {}).items() if isinstance(v, int)},
@@ -335,13 +337,11 @@ class JsonModel:
                     response.content or "Model transport failure; see provider diagnostics"
                 )
             return response
-        except TimeoutError as exc:
-            report["error"] = "TimeoutError"
-            raise ModelCallLimitError(
-                f"{stage}: model call wall-clock budget exhausted ({seconds:g}s)"
-            ) from exc
         except Exception as exc:
             report["error"] = type(exc).__name__
+            kind = model_error_kind(exc)
+            if kind is not None:
+                report["error_kind"] = kind.value
             raise ModelCallError(str(exc)) from exc
         except BaseException as exc:
             report["error"] = type(exc).__name__
@@ -362,20 +362,7 @@ class JsonModel:
         agent=False,
         readers=None,
     ) -> R:
-        """Bound each assignment to twice the model timeout, with a 1200-second minimum."""
-        seconds = max(1200, 2 * self.timeout)
-        try:
-            async with asyncio.timeout(seconds):
-                return await self._ask(
-                    stage, system, data, schema, validate, agent=agent, readers=readers
-                )
-        except TimeoutError as exc:
-            raise ModelCallLimitError(
-                f"{stage}: assignment wall-clock budget exhausted ({seconds:g}s)"
-            ) from exc
-
-    async def _ask(self, stage, system, data, schema, validate, *, agent, readers):
-        """Run a stage with scoped readers; return validated output and cache eligible results."""
+        """Validate/cache a stage with scoped readers and provider-owned HTTP timeouts."""
         if schema is FileResponse and stage != "skill_repair":
             # Inline original excerpts when located; unlocated records retain full shards.
             # The scoped reader can expand partial evidence without catalog access.
@@ -609,12 +596,16 @@ class JsonModel:
                 if stage == "compile" and category == "truncated":
                     raise ValueError(f"{stage}: {error}") from exc
                 # Routing owns retries per primary record, including malformed responses.
-                if schema is RouteBatchResponse or (
-                    failures > 3
-                    if stage in {"review", "compile"}
-                    else failures >= 3
-                    if stage == "skill_repair"
-                    else not retry_allowed(retries, error)
+                if (
+                    schema is RouteBatchResponse
+                    or failures >= MAX_OUTPUT_ATTEMPTS
+                    or (
+                        failures > 3
+                        if stage in {"review", "compile"}
+                        else failures >= 3
+                        if stage == "skill_repair"
+                        else not retry_allowed(retries, error)
+                    )
                 ):
                     raise ValueError(f"{stage}: {category}: {error}") from exc
                 self.metrics["repairs"] += 1

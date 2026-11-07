@@ -9,7 +9,7 @@ from dataclasses import asdict
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock, call, create_autospec
 
 import httpx
 import pytest
@@ -20,17 +20,22 @@ from vikingbot.agent.tools.compile import CompileImageReadTool, CompileSpawnTool
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.queue import MessageBus
-from vikingbot.compile import entry
+from vikingbot.compile import entry, file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops.common import pack, payload
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import ChildProvider, complete_tool_result
 from vikingbot.compile.pipeline_io import ModelCallError
-from vikingbot.compile.results import CombineResponse, FileResponse, RecordResponse
+from vikingbot.compile.results import (
+    CombineResponse,
+    FileResponse,
+    Group,
+    RecordResponse,
+)
 from vikingbot.compile.service import BotCompileService, _CompileProvider
 from vikingbot.compile.skill_resources import EvidenceReader
-from vikingbot.compile.sources import read_source, split_source
+from vikingbot.compile.sources import CompileSourceRange, read_source, split_source
 from vikingbot.config import loader
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.integrations.langfuse import LangfuseClient
@@ -39,6 +44,7 @@ from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
 from openviking.models.model_error import ModelErrorKind
+from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -110,6 +116,35 @@ async def seed(runtime):
 
     records = await pipeline.seed(inputs())
     return records[-1]
+
+
+@pytest.mark.asyncio
+async def test_output_repairs_stop_even_when_invalid_paths_change(runtime):
+    pipeline, _ = runtime
+
+    def respond(**kwargs):
+        attempt = pipeline.model.provider.chat.await_count
+        assert attempt <= 4, "Changing diagnostics must not grant more output attempts"
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    "submit",
+                    "emit",
+                    {"files": [{"path": f".invalid-{attempt}.md", "content": "Fact"}]},
+                    0,
+                )
+            ],
+        )
+
+    pipeline.model.provider.chat.side_effect = respond
+
+    def validate(response):
+        file_ops.validate_files(pipeline, response, Group("files", []), [], {})
+
+    with pytest.raises((ValueError, ModelCallError), match="invalid-4"):
+        await pipeline.model.ask("reduce", "Write supported files.", {}, FileResponse, validate)
+    assert pipeline.model.provider.chat.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -457,9 +492,7 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
     if problem == "format":
         uri = URI.replace(".png", ".svg")
     else:
-        pipeline.client.stat.return_value = {
-            "size": VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES + 1
-        }
+        pipeline.client.stat.return_value = {"size": MAX_MEDIA_FILE_BYTES + 1}
     with pytest.raises(CompileFailure) as caught:
         await read_source(pipeline.client, uri)
     assert caught.value.code == code
@@ -479,16 +512,12 @@ async def test_text_reads_remain_exact_even_without_media_support(runtime, name)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "budget,expected", [("count", [4, 1]), ("bytes", [2, 2, 1]), ("chars", [1] * 5)]
-)
+@pytest.mark.parametrize("budget,expected", [("images", [5]), ("chars", [1] * 5)])
 async def test_memory_image_assignments_are_bounded_references(
     runtime, monkeypatch, budget, expected
 ):
     pipeline, png = runtime
     limits = CompileLimits(source_batch_chars=200 if budget == "chars" else 40_000)
-    if budget == "bytes":
-        monkeypatch.setattr(VikingMultiReadTool, "_MAX_INLINE_MEDIA_BYTES", len(png) * 2)
     service = SimpleNamespace(
         limits=limits, agent_loop=SimpleNamespace(provider=pipeline.model.provider)
     )
@@ -516,7 +545,6 @@ async def test_memory_image_assignments_are_bounded_references(
         native = await reader.execute(ToolContext(), uris=[p.uri for p in batch])
         assert isinstance(native, MultimodalToolResult)
         assert _inline_media_bytes([{"content": native.content}]) == len(batch) * len(png)
-        assert len(batch) * len(png) <= VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
 
 
 @pytest.mark.asyncio
@@ -637,14 +665,59 @@ async def test_runtime_memory_child_fetches_native_image_from_reference(runtime,
 
 
 @pytest.mark.asyncio
-async def test_multi_read_and_request_budget_still_preserve_native_images(runtime, monkeypatch):
+async def test_multi_read_and_compile_preserve_all_requested_images(runtime):
     pipeline, png = runtime
     tool = VikingMultiReadTool()
     tool._get_client, tool._release_client = AsyncMock(return_value=pipeline.client), AsyncMock()
-    result = await tool.execute(ToolContext(), [URI])
+    uris = [URI.replace("diagram", str(i)) for i in range(8)]
+    result = await tool.execute(ToolContext(), uris)
     assert isinstance(result, MultimodalToolResult)
-    assert _inline_media_bytes([{"content": result.content}]) == len(png)
-    monkeypatch.setattr("vikingbot.compile.pipeline_io.MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 1)
-    with pytest.raises(CompileFailure, match="media budget"):
-        await pipeline.model.call("compile", [{"content": result.content}], [], max_tokens=100)
-    pipeline.model.provider.chat.assert_not_awaited()
+    assert _inline_media_bytes([{"content": result.content}]) == len(png) * len(uris)
+    pipeline.model.provider.chat.return_value = LLMResponse(content="ok")
+    await pipeline.model.call("compile", [{"content": result.content}], [], max_tokens=100)
+    pipeline.model.provider.chat.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_large_image_is_compressed_without_changing_source_identity(runtime):
+    import random
+
+    pipeline, _ = runtime
+    image = Image.frombytes("RGB", (1800, 1000), random.Random(6713).randbytes(1800 * 1000 * 3))
+    output = BytesIO()
+    image.save(output, format="PNG")
+    original = output.getvalue()
+    assert len(original) > 3_932_160
+    pipeline.client.stat.return_value = {"size": len(original)}
+    pipeline.client.download_bytes.return_value = original
+    source = await read_source(pipeline.client, URI)
+    assert isinstance(source, CompileSourceRange)
+    assert source.image is not None
+    url = source.image["image_url"]["url"]
+    assert url.startswith("data:image/jpeg;base64,")
+    rendition = base64.b64decode(url.split(",", 1)[1])
+    assert len(rendition) < len(original)
+    assert source.sha256 == content_hash(original)
+    assert Image.open(BytesIO(rendition)).size == (1800, 1000)
+
+
+@pytest.mark.asyncio
+async def test_compile_does_not_add_deadlines_around_provider_queueing(runtime, monkeypatch):
+    pipeline, _ = runtime
+    backend = create_autospec(LLMProvider, instance=True)
+    backend.chat.return_value = LLMResponse(content='{"records":[]}')
+    slots = asyncio.Semaphore(0)
+    pipeline.model.provider = _CompileProvider(backend, slots)
+
+    def extra_deadline(*_args):
+        raise AssertionError("Compile must use the provider's configured HTTP timeout")
+
+    monkeypatch.setattr("vikingbot.compile.pipeline_io.asyncio.timeout", extra_deadline)
+    task = asyncio.create_task(pipeline.model.ask("map", "extract", {}, RecordResponse))
+    await asyncio.sleep(0)
+    assert not task.done()
+    backend.chat.assert_not_awaited()
+    slots.release()
+    result = await task
+    assert result.records == []
+    backend.chat.assert_awaited_once()
