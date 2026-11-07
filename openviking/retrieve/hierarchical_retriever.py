@@ -242,14 +242,20 @@ class HierarchicalRetriever:
         )
         scores = [candidate["_score"] for candidate in candidates]
         reranked = [False] * len(candidates)
-        rerank_used = use_rerank and bool(candidates)
-        if rerank_used:
+        rerank_attempted = use_rerank and bool(candidates)
+        if rerank_attempted:
             rerank = await self._rerank_scores(
                 query.query,
                 [str(candidate.get("abstract", "")) for candidate in candidates],
                 scores,
             )
             scores, reranked = rerank.scores, rerank.reranked
+        # ``reranked`` marks the candidates the model actually scored, so the aggregate
+        # counters follow those flags rather than the intent to rerank: a failed or partly
+        # unusable rerank still leaves candidates on their vector scores and must be
+        # reported as a fallback instead of a successful rerank.
+        rerank_used = any(reranked)
+        rerank_fallback = rerank_attempted and not all(reranked)
 
         # A low vector score can still rerank highly, so filter only after reranking.
         candidates = [
@@ -270,6 +276,7 @@ class HierarchicalRetriever:
             scores=[m.score for m in final],
             latency_ms=elapsed_ms,
             rerank_used=rerank_used,
+            rerank_fallback=rerank_fallback,
         )
 
         return QueryResult(
