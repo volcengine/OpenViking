@@ -176,6 +176,7 @@ describe("context-engine lifecycle service seam", () => {
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       agentId: "runtime-agent",
+      senderId: "telegram:123",
       ovSessionId,
     });
     expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 4096);
@@ -378,6 +379,7 @@ describe("context-engine lifecycle service seam", () => {
     const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
     expect(rememberSessionAgentId).toHaveBeenCalledWith({
       agentId: "runtime-agent",
+      senderId: "telegram:123",
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       ovSessionId,

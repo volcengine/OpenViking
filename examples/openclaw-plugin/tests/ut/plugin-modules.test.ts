@@ -47,6 +47,21 @@ describe("plugin module seams", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it("reuses the sender remembered during context assembly for later tool routing", () => {
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const { resolvePluginSessionRouting, rememberSessionAgentId } = createOpenVikingSessionRoutingRuntime({
+      peerRole: "sender",
+      peerPrefix: "default",
+      logFindRequests: false,
+      logger,
+    });
+
+    rememberSessionAgentId({ sessionId: "session-1", senderId: "ou_01:abc" });
+
+    expect(resolvePluginSessionRouting({ sessionId: "session-1" }).actorPeerId).toBe("ou_01_abc");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("registers only enabled OpenViking tools through the tool-registration seam", () => {
     const api = { registerTool: vi.fn() };
     const logger = { debug: vi.fn() };
