@@ -13,6 +13,7 @@ from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
+from openviking_cli.utils.config.encryption_config import EncryptionConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -20,10 +21,11 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     storage_calls = []
     embedder = SimpleNamespace(is_sparse=False)
     config = SimpleNamespace(
+        service_name="test-service",
         default_account="default",
         default_user="default",
-        service_name="default",
         agent_evolution=AgentEvolutionConfig(),
+        encryption=EncryptionConfig(),
         storage=object(),
         embedding=SimpleNamespace(
             max_concurrent=10,
@@ -65,6 +67,7 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
     assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
     assert storage_calls[0][1]["max_concurrent_external_task"] == 6
+    assert storage_calls[0][1]["service_name"] == "test-service"
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:

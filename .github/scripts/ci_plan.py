@@ -8,8 +8,6 @@ import subprocess
 FULL_OS = [
     "ubuntu-24.04",
     "ubuntu-24.04-arm",
-    "macos-14",
-    "macos-15-intel",
     "windows-latest",
 ]
 CI = r"^\.github/(workflows/(pr|api_test|_build|_test_lite|_test_full)\.yml|actions/|scripts/(ci_plan|native_bundle|test_ci_helpers)\.py)"
@@ -65,6 +63,12 @@ def plan(paths, full=False):
             r"^\.github/workflows/pr\.yml$"
         ),
         "sdk_python_changed": changed(r"^sdk/python/|^\.github/workflows/pr\.yml$"),
+        # Gateway and CLI-only edits have their own workflows. SDK changes also
+        # exercise the main package's compatibility shims and HTTP client.
+        "python_changed": changed(
+            f"{NATIVE}|{PACKAGING}|{CI}|"
+            r"^openviking/|^openviking_cli/|^sdk/python/|^tests/(?!gateway/)"
+        ),
     }
 
 

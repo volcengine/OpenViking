@@ -34,9 +34,10 @@ class TestGitConfigValidation:
         with pytest.raises(ValidationError):
             GitConfig(backend="ftp")
 
-    def test_unknown_field_rejected(self):
-        with pytest.raises(ValidationError):
-            GitConfig(unknown_thing=True)
+    def test_unknown_field_ignored(self):
+        # Server startup ignores unknown config fields (#5165).
+        cfg = GitConfig(unknown_thing=True)
+        assert not hasattr(cfg, "unknown_thing")
 
     def test_enabled_with_local_backend_ok(self):
         cfg = GitConfig(enabled=True, backend="local", local=GitLocalConfig(base_dir="/tmp/git"))
@@ -199,9 +200,10 @@ class TestGitS3ConfigParsing:
         cfg = GitConfig(enabled=False, backend="s3", s3=None)
         assert cfg.s3 is None
 
-    def test_s3_unknown_field_rejected(self):
-        with pytest.raises(ValidationError):
-            GitS3Config(bucket="b", region="r", unknown="x")
+    def test_s3_unknown_field_ignored(self):
+        # Server startup ignores unknown config fields (#5165).
+        s3 = GitS3Config(bucket="b", region="r", unknown="x")
+        assert not hasattr(s3, "unknown")
 
     def test_invalid_cas_mode_rejected(self):
         with pytest.raises(ValidationError):
