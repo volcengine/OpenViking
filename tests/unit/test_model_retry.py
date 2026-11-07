@@ -8,7 +8,12 @@ import httpx
 import openai
 import pytest
 
-from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
+from openviking.models.model_error import (
+    ModelError,
+    ModelErrorKind,
+    model_error_boundary,
+    model_error_kind,
+)
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSConnectionError,
@@ -27,6 +32,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_UNKNOWN,
     classify_api_error,
     extract_metric_error_code,
+    is_retryable_api_error,
     retry_async,
     retry_sync,
 )
@@ -115,6 +121,10 @@ def test_extract_metric_error_code_uses_safe_fallbacks_only():
     wrapped_timeout = RuntimeError("request failed")
     wrapped_timeout.__cause__ = TimeoutError("request timed out")
     assert extract_metric_error_code(wrapped_timeout) == "timeout"
+    branched = RuntimeError("request failed")
+    branched.__cause__ = RuntimeError("primary failure")
+    branched.__context__ = TimeoutError("secondary timeout")
+    assert extract_metric_error_code(branched) == "timeout"
     assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
 
 
@@ -136,6 +146,8 @@ def test_all_credentials_failed_prefers_transient_over_auth():
         ]
     )
     assert err.kind is ModelErrorKind.TRANSIENT_SERVICE_ERROR
+    assert model_error_kind(err) is ModelErrorKind.TRANSIENT_SERVICE_ERROR
+    assert is_retryable_api_error(err)
 
 
 def test_retry_sync_retries_transient_error_until_success(monkeypatch):

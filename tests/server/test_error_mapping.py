@@ -6,6 +6,7 @@
 import httpx
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -198,6 +199,12 @@ def test_upstream_status_survives_circuit_breaker(status, message, expected_code
             assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == status
             assert mapped.details["upstream_status_code"] == status
 
+    # A request that was already in flight must not replace the opening reason.
+    breaker.record_failure(RuntimeError("Late failure from an in-flight request"))
+    with pytest.raises(CircuitBreakerOpen) as blocked:
+        breaker.check()
+    assert map_exception(blocked.value).details["upstream_status_code"] == status
+
     # A failed recovery probe replaces the previous reason; recovery releases it.
     monkeypatch.setattr("openviking.utils.circuit_breaker.time.monotonic", lambda: 1011)
     breaker.check()
@@ -320,6 +327,28 @@ def test_model_api_key_configuration_error_maps_to_failed_precondition():
 
     assert isinstance(mapped, FailedPreconditionError)
     assert mapped.code == "FAILED_PRECONDITION"
+
+
+def test_structured_model_error_maps_without_message_guessing():
+    model_error = ModelError(
+        ModelErrorKind.AUTHENTICATION_ERROR,
+        "MiniMax rejected the credential",
+        provider="minimax",
+        code="1004",
+    )
+    wrapper = ValueError("provider request failed")
+    wrapper.__cause__ = model_error
+    mapped = map_exception(wrapper)
+
+    assert mapped is not None
+    assert mapped.code == "UNAUTHENTICATED"
+    assert mapped.details["model_error_kind"] == "authentication_error"
+    assert mapped.details["provider"] == "minimax"
+    assert mapped.details["provider_error_code"] == "1004"
+    unknown = map_exception(ModelError(ModelErrorKind.UNKNOWN, "internal timeout detail"))
+    assert unknown is not None
+    assert unknown.code == "INTERNAL"
+    assert "internal timeout detail" not in unknown.message
 
 
 def test_bare_model_api_key_required_maps_to_failed_precondition():

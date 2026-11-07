@@ -7,6 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_from_exception
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -298,6 +299,7 @@ def _build_upstream_error(
     status: int | None = None,
     source: BaseException | None = None,
     vlm_context: BaseException | None = None,
+    extra_details: dict[str, Any] | None = None,
 ) -> OpenVikingError:
     labels = {
         "INVALID_ARGUMENT": "Upstream model request was rejected",
@@ -320,6 +322,8 @@ def _build_upstream_error(
         details["upstream_status_code"] = status
     if source is not None:
         details["upstream_error_type"] = type(source).__name__
+    if extra_details:
+        details.update(extra_details)
     # Search for VLM model/api_base annotations. vlm_context is the outermost
     # exception (where failover wrappers attach the annotation); source may be
     # an inner exception from the chain.
@@ -333,6 +337,50 @@ def _build_upstream_error(
         details["vlm_api_base"] = vlm_api_base
         display = f"{display}\n  API base: {vlm_api_base}"
     return OpenVikingError(display, code=code, details=details)
+
+
+_MODEL_ERROR_KIND_TO_PROTOCOL_CODE = {
+    ModelErrorKind.TRANSIENT_SERVICE_ERROR: "UNAVAILABLE",
+    ModelErrorKind.TRANSIENT_NETWORK_ERROR: "UNAVAILABLE",
+    ModelErrorKind.RATE_LIMIT_ERROR: "RESOURCE_EXHAUSTED",
+    ModelErrorKind.AUTHENTICATION_ERROR: "UNAUTHENTICATED",
+    ModelErrorKind.PERMISSION_DENIED: "PERMISSION_DENIED",
+    ModelErrorKind.QUOTA_EXHAUSTED: "RESOURCE_EXHAUSTED",
+    ModelErrorKind.MODEL_NOT_FOUND: "NOT_FOUND",
+    ModelErrorKind.UNSUPPORTED: "INVALID_ARGUMENT",
+    ModelErrorKind.INVALID_REQUEST: "INVALID_ARGUMENT",
+    ModelErrorKind.INPUT_TOO_LARGE: "INVALID_ARGUMENT",
+    ModelErrorKind.CONTENT_SAFETY: "INVALID_ARGUMENT",
+}
+
+
+def _map_structured_model_error(exc: Exception) -> OpenVikingError | None:
+    error = model_error_from_exception(exc)
+    if error is None:
+        return None
+
+    code = _MODEL_ERROR_KIND_TO_PROTOCOL_CODE.get(error.kind, "INTERNAL")
+    if error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR:
+        chain = tuple(_iter_exception_chain(exc))
+        if error.status_code in {408, 504} or any(
+            isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
+            for item in chain
+        ):
+            code = "DEADLINE_EXCEEDED"
+
+    details: dict[str, Any] = {"model_error_kind": error.kind.value}
+    if error.provider:
+        details["provider"] = error.provider
+    if error.code:
+        details["provider_error_code"] = error.code
+    return _build_upstream_error(
+        code=code,
+        message="" if error.kind is ModelErrorKind.UNKNOWN else str(error),
+        status=error.status_code,
+        source=error,
+        vlm_context=exc,
+        extra_details=details,
+    )
 
 
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
@@ -350,6 +398,12 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
                 source=item,
                 vlm_context=exc,
             )
+
+    # Once a provider boundary has attached a ModelError, it is the fact owner.
+    # UNKNOWN is returned as a redacted INTERNAL error instead of falling back
+    # to message heuristics.
+    if any(isinstance(item, ModelError) for item in _iter_exception_chain(exc)):
+        return _map_structured_model_error(exc)
 
     status, source = _extract_structured_http_status(exc)
     if status is None:
@@ -476,6 +530,11 @@ def map_exception(
 ) -> OpenVikingError | None:
     if isinstance(exc, OpenVikingError):
         return exc
+    # A provider boundary that attached ModelError owns the classification.
+    # In particular, UNKNOWN must stop here instead of entering generic text
+    # heuristics that could both misclassify and expose an internal message.
+    if any(isinstance(item, ModelError) for item in _iter_exception_chain(exc)):
+        return _map_structured_model_error(exc)
     if isinstance(exc, ResourceBusyError):
         details: dict[str, Any] = {
             "resource": exc.uri or resource,
