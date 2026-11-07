@@ -616,10 +616,17 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         self,
         tool_call,
     ) -> Any:
+        allowed_tools = self.get_tools()
+        if getattr(tool_call, "id", None) != "" and tool_call.name not in allowed_tools:
+            available = ", ".join(allowed_tools) if allowed_tools else "none"
+            return {"error": f"Unknown tool: {tool_call.name} (available tools: {available})"}
         tool = get_tool(tool_call.name)
         if not tool:
             return {"error": f"Unknown tool: {tool_call.name}"}
-        result = await tool.execute(self.create_tool_context(), **tool_call.arguments)
+        try:
+            result = await tool.execute(self.create_tool_context(), **(tool_call.arguments or {}))
+        except TypeError as exc:
+            return {"error": f"Invalid arguments for tool {tool_call.name}: {exc}"}
         is_expected_read_not_found = (
             tool_call.name == "read"
             and isinstance(result, dict)
