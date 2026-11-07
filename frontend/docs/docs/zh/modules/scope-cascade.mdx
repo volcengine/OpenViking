@@ -1,0 +1,35 @@
+# ScopeCascade 级联选择
+
+只接入三个 API 适配函数，无需在业务侧重写请求状态和级联逻辑。`useScopeCascade` 返回稳定的实例控制器，不订阅三级数据；`ScopeCascade` 的三个叶子选择器分别订阅，保持独立更新，不依赖 `memo`。
+
+## 基础用法
+
+```tsx file="../../_demos/scope-cascade-basic.tsx" preview
+
+```
+
+必填项只有三个接口，返回 `Promise<readonly ScopeSwitcherOption[]>`，即 `{ id, label, icon?, description?, disabled? }`。鉴权、接口地址、响应映射和权限仍由适配函数负责。保持函数引用稳定；任一适配函数变化都会取消请求并重置全部选择。不同账号使用独立实例或 React `key` 隔离。
+
+| 接口            | 参数                                                      |
+| --------------- | --------------------------------------------------------- |
+| `loadLibraries` | `signal: AbortSignal`                                     |
+| `loadSpaces`    | `libraryId: string, signal: AbortSignal`                  |
+| `loadUsers`     | `libraryId: string, spaceId: string, signal: AbortSignal` |
+
+挂载后加载库列表，不自动选择首项。选库后清空空间和用户，再加载空间；选空间后清空用户，再加载用户；选用户只更新本级。重复选择同一身份不更新。协调器取消过期请求，即使接口忽略 signal，旧结果也不能覆盖新数据。卸载取消全部请求，并支持 Strict Mode 的建立/清理流程。
+
+默认视图封装本地搜索、加载/空态/错误、重试及独立展开状态。每级 `refresh()` 仅重载本级；刷新上级不会重载下游，除非当前选中项消失或被禁用，此时清空并禁用下游。接口错误只影响本级。当前版本加载完整列表，不内置服务端搜索和分页；这些场景可使用纯视图组件自行接入。
+
+## 自定义视图
+
+```tsx file="../../_demos/scope-cascade-custom.tsx" preview
+
+```
+
+在各个叶子组件内部调用 `useScopeCascadeLevel(controller.levels[index])`，不要在根组件集中订阅三级。快照提供 `options`、`selected`、`loading`、`error`、`enabled`、`parentIds`、`scopeKey`；每级提供 `select(option)` 和 `refresh()`。自定义视图以 `scopeKey` 为 key 重置上游改变后的局部状态。
+
+业务内容区要获取完整身份时，可独立订阅用户通道：`parentIds[0]` 为库，`parentIds[1]` 为空间，`selected?.id` 为用户。仅在 `enabled && selected` 时请求业务内容；上游切换会先清空下游选择，再通知订阅者。
+
+## 视图属性
+
+`ScopeCascade` 必填 `controller`。可选 `levelNames` 按库/空间/用户顺序指定名称，`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。单独使用 Hook 不需要 CSS；默认视图引入 `@openviking/react/modules/scope-cascade/style.css`。

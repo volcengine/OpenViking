@@ -75,7 +75,10 @@ export default defineConfig({
             },
             {
               text: 'Supporting capabilities',
-              items: [{ text: 'TaskCenter', link: '/modules/task-center' }],
+              items: [
+                { text: 'TaskCenter', link: '/modules/task-center' },
+                { text: 'ScopeCascade', link: '/modules/scope-cascade' },
+              ],
             },
           ],
         },
@@ -142,6 +145,10 @@ export default defineConfig({
                 {
                   text: 'TaskCenter 任务中心',
                   link: '/zh/modules/task-center',
+                },
+                {
+                  text: 'ScopeCascade 级联选择',
+                  link: '/zh/modules/scope-cascade',
                 },
               ],
             },

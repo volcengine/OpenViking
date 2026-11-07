@@ -2,15 +2,25 @@
 
 A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
 
-This is a placeholder implementation: it renders every documented row type and honours the public props, so consumers can integrate against the API before the full view lands. Styling, iconography and interaction details will change, and the view will be rewritten against this contract.
+This is a placeholder: it renders a fixed-size empty shell and consumes no props. The props contract below is the final shape; the view will be written against it.
 
 ## Basic usage
 
-Expand a directory to reveal its children. Rows come from `rows`; selection and expansion are controlled by the consumer.
+Rows come from `rows`; expansion is controlled by the consumer. The example keeps its own expanded set, flattens the tree into `FileTreeRow[]` and renders it, showing all five row kinds and the built-in directory copy in action.
 
 ```tsx file="../../_demos/file-tree-basic.tsx" preview
 
 ```
+
+The example demonstrates three host responsibilities:
+
+- **Async loading**: expanding a directory shows a `Loading…` row for 400 ms before the children appear — `FileTreeLoadingRow`.
+- **Paging**: each page loads three children; while more remain, `Load more` appears and appends one page per click — `FileTreeLoadMoreRow`. `archive` holds nine files and loads in three pages.
+- **Row-end icons**: the mutually exclusive marks rendered by `renderDashboard`. `memories/experiences` shows the Agent experience board icon. `project-wiki` is a Wiki root: its leading folder is replaced by a book icon and the row ends with a green board icon. `archive` is a Wiki root too but has pending conflicts, so its icon turns orange and gains an exclamation mark.
+
+Names like `memories`, `peers` and `privacy` are followed by their built-in description.
+
+The component itself is still a placeholder shell (fixed 280 × 320), so the example renders the rows against the contract rather than mounting `<FileTree />` — that way the data shape and copy are visible.
 
 ## How rows work
 
@@ -27,8 +37,60 @@ Emit only the ones your data source needs. A host that returns all children at o
 ## Slots and host content
 
 - `slots.toolbar` — search, import sources, refresh. The component does not know what is inside.
+- `slots.spinner` — replaces the spinner shown while a directory loads its children, rendered at 12 × 12. Omitted uses the built-in `FileTreeSpinner` (a CSS ring with no icon asset behind it).
 - `renderDashboard` — the row-end indicator, for example a dashboard entry.
 - `renderRowTooltip` — hover content; the component handles the delay and positioning.
+
+## Directory copy
+
+The component derives a directory's meaning from the structure of its `uri` and ships built-in description and trigger copy. A host gets descriptions without passing anything; override copy key by key through `labels.info`.
+
+Matching looks only at the path shape, never the node type. Both `viking://user/{id}/memories` and `viking://user/{id}/memories/` match `memories`; `viking://resources` matches `sharedResources`, while `viking://resources/docs` does not — built-in copy covers fixed levels only, and deeper nodes are the host's call.
+
+| Group            | Keys                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| User scope       | `userRoot`, `memories`, `peers`, `privacy`, `userResources`, `sessions`, `skills`                          |
+| Long-term memory | `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, `experiences` |
+| Shared and roots | `sharedResources`, `agentRoot`, `memoryRoot`, `resourceRoot`, `sessionRoot`, `systemRoot`                  |
+
+The nine long-term-memory keys describe themselves in the tooltip only: the directory names already say what they are, and an inline line would crowd out siblings.
+
+**Copy precedence**: when a row carries `description`, the host's value wins and the built-in one is not used; the built-in copy applies only when it is absent, so a host can always take full control.
+
+```tsx
+<FileTree
+  rows={rows}
+  labels={{
+    info: {
+      description: { userRoot: 'Current user' },
+      triggerBehavior: {
+        memories: 'Distilled whenever a session is committed',
+      },
+      field: {
+        description: 'Description',
+        triggerBehavior: 'Trigger',
+        path: 'Path',
+      },
+    },
+  }}
+/>
+```
+
+Both `labels.info.description` and `triggerBehavior` are `Partial<Record<FileTreeInfoKey, string>>`, so only the keys you change need writing. An empty string hides that key.
+
+The matching rules and copy are also exported as plain functions from the component subpath, so a host can assemble its own view on the same rules:
+
+```ts
+import {
+  resolveFileTreeInfoKey,
+  showsInlineDescription,
+  resolveInfoCopy,
+} from '@openviking/react/components/file-tree';
+
+resolveFileTreeInfoKey('viking://user/alice/memories/profile.md'); // 'profile'
+showsInlineDescription('profile'); // false — tooltip only
+resolveInfoCopy('memories', { description: { memories: 'Custom' } });
+```
 
 ## One-off effects
 
@@ -56,7 +118,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 | `loadingFallback`         | `ReactNode`                               | —        | Shown instead of rows while the first load runs.                               |
 | `errorFallback`           | `ReactNode`                               | —        | Shown when a whole-tree error row is present.                                  |
 | `emptyFallback`           | `ReactNode`                               | —        | Shown when `rows` is empty.                                                    |
-| `slots`                   | `FileTreeSlots`                           | —        | `toolbar` slot above the rows.                                                 |
+| `slots`                   | `FileTreeSlots`                           | —        | `toolbar` and `spinner` slots.                                                 |
 | `labels`                  | `FileTreeLabels`                          | English  | Replaceable copy.                                                              |
 | `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>` | —        | Extra attributes per row; `className` is merged.                               |
 | `renderDashboard`         | `(row) => ReactNode`                      | —        | Row-end indicator; `null` hides it.                                            |
@@ -77,46 +139,13 @@ import '@openviking/react/components/file-tree/style.css';
 
 The tree uses `role="tree"` with `role="treeitem"` rows and reports `aria-level`, `aria-selected` and `aria-expanded`. Arrow keys move between rows, Right/Left expand and collapse, Enter and Space select. Status is carried by visible text, not colour alone.
 
-## Class names
+## Styling
 
-Class names are prefixed with `ov-`. The block is `ov-file-tree`; elements use `ov-file-tree__<element>`.
+Class names are prefixed with `ov-`. The block is `ov-file-tree`; elements use `ov-file-tree__<element>`. The placeholder outputs only the root element and a fixed size; row, toolbar and state-view class names and theme tokens are settled with the real view. The stylesheet has its own entry:
 
-| Class name                  | Element       | Purpose                                  |
-| --------------------------- | ------------- | ---------------------------------------- |
-| `ov-file-tree`              | Root          | Column layout and base typography.       |
-| `ov-file-tree__toolbar`     | Toolbar slot  | Host toolbar above the rows.             |
-| `ov-file-tree__body`        | Scroll body   | The scrolling region.                    |
-| `ov-file-tree__rows`        | Row container | Vertical stack of rows.                  |
-| `ov-file-tree__row`         | Row           | One entry row; carries `data-selected`.  |
-| `ov-file-tree__row:hover`   | Row           | Hover background.                        |
-| `ov-file-tree__toggle`      | Expand button | Expand/collapse control.                 |
-| `ov-file-tree__chevron`     | Chevron icon  | Rotates when `data-expanded` is present. |
-| `ov-file-tree__label`       | Name          | The row's primary text.                  |
-| `ov-file-tree__description` | Description   | Secondary text next to the name.         |
-| `ov-file-tree__level`       | Level badge   | Context level chip.                      |
-| `ov-file-tree__expiry`      | Expiry hint   | Expiry text and its action button.       |
-| `ov-file-tree__tooltip`     | Tooltip       | Row tooltip surface.                     |
-| `ov-file-tree__child-row`   | Child row     | Loading, empty, and error rows.          |
-| `ov-file-tree__state`       | State panel   | Full-height loading, empty, and error.   |
-
-```css
-.my-workbench .ov-file-tree__row {
-  height: 32px;
-}
+```tsx
+import '@openviking/react/components/file-tree/style.css';
 ```
-
-## Theme tokens
-
-| CSS variable           | Default                | Purpose                        |
-| ---------------------- | ---------------------- | ------------------------------ |
-| `--ov-ui-text`         | `#1f2329`              | Row text.                      |
-| `--ov-ui-text-muted`   | `#8f959e`              | Secondary text and icons.      |
-| `--ov-ui-row-hover`    | `rgb(0 0 0 / 4%)`      | Row hover background.          |
-| `--ov-ui-row-selected` | `rgb(37 99 197 / 10%)` | Selected row background.       |
-| `--ov-ui-focus-ring`   | `#2563c5`              | Keyboard focus ring.           |
-| `--ov-ui-chip`         | `rgb(0 0 0 / 6%)`      | Level badge background.        |
-| `--ov-ui-warning`      | `#b26a00`              | Expiry hint text.              |
-| `--ov-ui-radius`       | `6px`                  | Row and tooltip corner radius. |
 
 ## Implementation scope
 

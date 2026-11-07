@@ -1,4 +1,5 @@
 import { pluginReact } from '@rsbuild/plugin-react';
+import { pluginSvgr } from '@rsbuild/plugin-svgr';
 import { defineConfig } from '@rslib/core';
 
 export default defineConfig({
@@ -12,6 +13,7 @@ export default defineConfig({
           index: './src/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
+          'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
           'components/file-tree': './src/components/file-tree/index.ts',
           'components/file-preview': './src/components/file-preview/index.ts',
           'components/tui': './src/components/tui/index.ts',
@@ -33,6 +35,7 @@ export default defineConfig({
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'modules/scope-cascade/style': './src/modules/scope-cascade/style.css',
       'components/style': './src/components/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',
       'components/file-preview/style':
@@ -54,5 +57,5 @@ export default defineConfig({
     })),
   ],
   output: { target: 'web' },
-  plugins: [pluginReact()],
+  plugins: [pluginReact(), pluginSvgr()],
 });

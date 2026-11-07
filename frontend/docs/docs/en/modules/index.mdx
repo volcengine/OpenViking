@@ -2,7 +2,7 @@
 
 Four placeholder components are available for integrating the personal-terminal layout. Their props are settled — request options, controlled state, callbacks, slots and copy — though each component still renders only a module name and a replaceable placeholder message. Business Hooks, API requests, and module interactions will be added as the implementations land.
 
-No prop carries data. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
+Placeholder modules do not carry data props. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
 
 | Module                           | Component     | Target capability |
 | -------------------------------- | ------------- | ----------------- |
@@ -29,3 +29,7 @@ The current placeholders accept `className`, `style`, and `labels`. They do not 
 ## Host responsibilities
 
 Hosts own page layout, authentication, account scope, routing, and permissions. Product onboarding, resource and Skill import flows, and synchronization settings remain in the host. Administration is outside these module boundaries.
+
+## Scope cascade
+
+[ScopeCascade](./scope-cascade) provides working request and cascade Hooks plus a default view. Supply three host API adapters; each level subscribes independently.
