@@ -288,6 +288,9 @@ describe('formatting helpers', () => {
     assert.match(rendered, /features\.plugins=false/);
     assert.match(rendered, /features\.tool_suggest=false/);
     assert.match(rendered, /features\.apps=false/);
+    // OpenViking's own plugin and Codex's own memory stay off (ov-isolation.mjs).
+    assert.match(rendered, /plugins\.openviking-memory@openviking\.enabled=false/);
+    assert.match(rendered, /features\.memories=false/);
     assert.equal(spawnOptions[0].env.LARKSUITE_CLI_PROFILE, 'test-profile');
     assert.ok(spawnOptions[0].env.PATH.startsWith('/fake:/fake-slack:'));
     assert.equal(spawnOptions[0].env.OPENVIKING_USAGE_VIEW, 'off');

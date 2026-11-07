@@ -63,7 +63,7 @@ class FakeChild extends EventEmitter {
 
 const helpFlags = [
   '--mode', '--append-system-prompt', '--thinking', '--session-id', '--session-dir',
-  '--model', '--extension', '--approve', 'rpc',
+  '--model', '--extension', '--approve', '--no-extensions', 'rpc',
 ].join('\n');
 
 function parsedWrites(child) {
@@ -365,7 +365,11 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig));
     assert.doesNotMatch(runtimePrompt, /Agent tools from bash|actions\/cli\.mjs/);
     assert.doesNotMatch(runtimePrompt, /lark-cli im \+messages-reply/);
-    assert.equal(args[args.indexOf('--extension') + 1], PI_MCP_EXTENSION);
+    assert.equal(args[args.lastIndexOf('--extension') + 1], PI_MCP_EXTENSION);
+    // Pi's own OpenViking extension stays off; its built-ins load by name.
+    assert.ok(args.includes('-ne'));
+    assert.deepEqual(args.filter((arg, index) => args[index - 1] === '--extension' && arg.startsWith('builtin:')),
+      ['builtin:mcp', 'builtin:llama.cpp']);
     assert.deepEqual(JSON.parse(env.PERSONAL_AGENT_MCP_CONFIG), {
       command: process.execPath,
       args: [baseConfig.actionMcpPath, '--socket', baseConfig.actionSocketPath, '--authority', agent.authorityToken],
