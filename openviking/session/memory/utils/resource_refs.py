@@ -287,6 +287,9 @@ def _previous_sentence_span(content: str, uri_start: int) -> Optional[tuple[int,
         boundary_search_end = sentence_end - 1
     for idx in range(boundary_search_end - 1, sentence_start - 1, -1):
         is_boundary = content[idx] in _SENTENCE_BOUNDARIES
+        if content[idx] == "." and not content[idx + 1].isspace():
+            # An ASCII period inside a token (SKILL.md, v1.2) does not end a sentence.
+            is_boundary = False
         if is_pipe_table and content[idx] == "|":
             backslashes = 0
             cursor = idx - 1
