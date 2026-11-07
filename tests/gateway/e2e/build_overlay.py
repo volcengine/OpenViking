@@ -30,10 +30,12 @@ def main():
         text=True,
     ).splitlines()
     site = "/app/.venv/lib/python3.13/site-packages/"
-    lines = [f"FROM {args.base}", f"COPY openviking_gateway/ {site}openviking_gateway/"]
+    # Keep per-file selection out of the final image's exported layers.
+    lines = ["FROM scratch AS overlay", "COPY openviking_gateway/ /openviking_gateway/"]
     for name in files:
         if name.endswith(".py"):
-            lines.append(f"COPY {name} {site}{name}")
+            lines.append(f"COPY {name} /{name}")
+    lines.extend([f"FROM {args.base}", f"COPY --from=overlay / {site}"])
     lines.append(
         'RUN python -I -c "import redis; from openviking_gateway.config import GatewayConfig; '
         "assert 'storage' in GatewayConfig.model_fields; "
