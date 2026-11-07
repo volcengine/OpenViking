@@ -3,7 +3,7 @@
 """Shared Watch fixtures over local RAGFS."""
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -45,7 +45,13 @@ async def shape_watch(store: WatchStore, task_id: str, **values: Any) -> None:
     if "next_run_at" in values:
         at = values.pop("next_run_at")
         task = task.model_copy(
-            update={"next_execution_time": datetime.fromtimestamp(at) if at else None}
+            update={
+                # Watch timestamps are aware UTC: a naive value would raise on
+                # the due comparison against an aware "now" (issue #3268).
+                "next_execution_time": datetime.fromtimestamp(at, tz=timezone.utc)
+                if at
+                else None
+            }
         )
     await store._commit({task_id: replace(row, task=task, **values)})
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from heapq import nlargest
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -44,6 +44,7 @@ from openviking.resource.watch_types import (
     WatchRunResult,
     WatchState,
     WatchTask,
+    serialize_storage_timestamp,
     uri_matches_prefix,
 )
 from openviking_cli.exceptions import ConflictError, NotFoundError
@@ -189,7 +190,7 @@ class FileWatchStore(WatchStore):
             self.STORAGE_BAK_URI,
             {
                 "tasks": [row.to_storage_dict() for row in rows.values() if not row.deleted],
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": serialize_storage_timestamp(datetime.now(timezone.utc)),
             },
             indent=2,
         )
@@ -537,7 +538,7 @@ class FileWatchStore(WatchStore):
         if limit <= 0:
             return []
         async with self._lock:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             candidates = []
             skipped = 0
             for row in self._rows.values():
@@ -589,7 +590,7 @@ class FileWatchStore(WatchStore):
     ) -> Optional[WatchRun]:
         self._require_initialized()
         async with self._lock:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             task_id = candidate.task_id
             row = self._rows.get(task_id)
             if (
@@ -655,7 +656,7 @@ class FileWatchStore(WatchStore):
                 or (started_at is not None and row.run_started_at != started_at)
             ):
                 return False
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             task = row.task
             enabled = task.is_active and not result.deactivate
             changes: dict[str, Any] = {
@@ -702,7 +703,7 @@ class FileWatchStore(WatchStore):
                 row.task,
                 is_active=False,
                 next_execution_time=None,
-                last_execution_time=datetime.now(),
+                last_execution_time=datetime.now(timezone.utc),
                 last_task_id=None,
                 last_status="failed",
                 last_error=error,
