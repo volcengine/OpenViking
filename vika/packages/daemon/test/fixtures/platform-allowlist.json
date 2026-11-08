@@ -87,6 +87,9 @@
   "packages/daemon/src/opencode.mjs": [
     "detached: process.platform !== 'win32',"
   ],
+  "packages/daemon/src/ov-isolation.mjs": [
+    "if (process.platform !== 'win32') {"
+  ],
   "packages/daemon/src/pi-runtime.mjs": [
     "export function piPlatformTools(platform = process.platform) {",
     "return platform === 'win32' ? ['--tools', '+powershell,-bash'] : [];"

@@ -58,6 +58,7 @@ export class OpencodeAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this._terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.onTurnAbandoned = options.onTurnAbandoned ?? null;
@@ -243,7 +244,7 @@ export class OpencodeAgent {
           this.child = null;
           this.connected = false;
         }
-        terminateProcessTree(child, 'SIGKILL');
+        this._terminateProcessTree(child, 'SIGKILL');
         this._cleanupRuntimeFiles();
         reject(error);
       };
@@ -598,7 +599,7 @@ export class OpencodeAgent {
       this.stdoutBuffer = appendBounded(this.stdoutBuffer, chunk, 'stdout line');
     } catch (error) {
       this.turnError = error;
-      terminateProcessTree(child, 'SIGKILL');
+      this._terminateProcessTree(child, 'SIGKILL');
       return;
     }
     let index;
@@ -917,7 +918,7 @@ export class OpencodeAgent {
       try { pending.reject(new Error('opencode connection lost')); } catch {}
     }
     this.pendingRpc.clear();
-    if (!this.stopping) terminateProcessTree(child, 'SIGKILL');
+    if (!this.stopping) this._terminateProcessTree(child, 'SIGKILL');
     this._cleanupRuntimeFiles();
     const wasActive = this.turnActive;
     const acceptanceUnknown = wasActive && this.sessionInitialized;
@@ -990,14 +991,14 @@ export class OpencodeAgent {
       return;
     }
     if (child.exitCode !== null) {
-      terminateProcessTree(child, 'SIGKILL');
+      this._terminateProcessTree(child, 'SIGKILL');
       this._cleanupRuntimeFiles();
       return;
     }
     const exited = new Promise((resolve) => child.once('exit', resolve));
-    terminateProcessTree(child, 'SIGTERM');
+    this._terminateProcessTree(child, 'SIGTERM');
     await Promise.race([exited, delay(3_000)]);
-    if (child.exitCode === null) terminateProcessTree(child, 'SIGKILL');
+    if (child.exitCode === null) this._terminateProcessTree(child, 'SIGKILL');
     this._cleanupRuntimeFiles();
   }
 

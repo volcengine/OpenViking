@@ -132,6 +132,9 @@ function newAgent(store = makeStore(), options = {}, config = baseConfig) {
   };
   const agent = new OpencodeAgent(config, store, quietLogger, {
     spawn,
+    // Fake processes must never reach taskkill/process.kill with synthetic PIDs.
+    // Real Windows tree termination is covered by windows-process.test.mjs.
+    terminateProcessTree: (child, signal) => child.kill(signal),
     startTimeoutMs: 1_000,
     startStabilityMs: 1,
     controlTimeoutMs: 500,
@@ -211,7 +214,7 @@ describe('OpencodeAgent ACP backend', () => {
     assert.deepEqual(call.args, ['acp', '--cwd', '/tmp/vika-workspace']);
     const env = call.options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(env.PATH.startsWith('/fake:/fake-slack:'));
+    assert.deepEqual(env.PATH.split(path.delimiter).slice(0, 2), ['/fake', '/fake-slack']);
     assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/vika-opencode-data/actions.sock');
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, 'oc-token');
     const configPath = env.OPENCODE_CONFIG;
