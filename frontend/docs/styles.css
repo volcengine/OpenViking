@@ -6,6 +6,81 @@
   --rp-c-brand-darker: #8e2030;
 }
 
+/*
+ * 内容区宽度上限。Rspress 默认 1000px，会把全屏预览类组件压得很窄；即便提到
+ * 1400px，2K 屏两侧仍各留 300 多像素的空白，而这里的示例正是越宽越能看出
+ * 效果。
+ *
+ * 不能用 `none`：顶导的内边距按
+ * `max(calc((100vw - 内容上限 - 侧栏 - 目录) / 2), 20px)` 计算，`none` 会让
+ * 整个 `calc()` 失效，顶导 padding 退化成 0，标题紧贴屏幕左边缘、右侧留一大
+ * 片空白。给一个足够大的具体值，内容在常见屏幕上都能撑满，同时让那条公式
+ * 继续算得出对称的内边距。
+ *
+ * `html:root` raises specificity: the theme redeclares this variable on `:root`
+ * in a later stylesheet, which would otherwise win.
+ *
+ * Content width cap. Rspress defaults to 1000px, which squeezes a full-screen
+ * preview component; even 1400px leaves 300-odd pixels empty on each side of a
+ * 2K screen, and these demos show more the wider they get.
+ *
+ * `none` is not an option: the top nav computes its horizontal padding as
+ * `max(calc((100vw - content-max-width - sidebar - outline) / 2), 20px)`, and
+ * `none` invalidates that `calc()`, collapsing the nav's padding to zero so the
+ * title sits flush against the left edge. A large concrete value keeps the
+ * content filling ordinary screens while that formula still resolves to
+ * symmetric padding.
+ */
+html:root {
+  --rp-content-max-width: 2400px;
+}
+
+/*
+ * 768–1279px 之间侧边栏原本不能收起：主题在这个区间显示了汉堡按钮，但把
+ * 抽屉样式只写在 ≤768px 的媒体查询里，按钮点了没有反应，侧边栏一直占着
+ * 320px。这里把同一套抽屉行为补到该区间，让侧边栏可以收起。
+ *
+ * Between 768px and 1279px the sidebar could not be collapsed: the theme shows
+ * the hamburger button there but scopes the drawer styles to ≤768px, so the
+ * button did nothing and the sidebar kept its 320px. Extend the same drawer
+ * behaviour to that range so the sidebar can be collapsed.
+ */
+@media (width >= 769px) and (width <= 1279px) {
+  /* 用两段类名抬高权重：主题的 `position: sticky` 写在更晚加载的样式表里，
+     同权重时会被它盖掉。 */
+  .rp-doc-layout__container > .rp-doc-layout__sidebar {
+    z-index: var(--rp-z-index-sidebar);
+    top: calc(var(--rp-nav-height) + var(--rp-banner-height, 0px));
+    height: calc(100vh - var(--rp-nav-height));
+    padding: var(--rp-sidebar-padding) var(--rp-sidebar-padding)
+      calc(var(--rp-sidebar-padding) + 100px);
+    margin-top: 0;
+    background: var(--rp-c-bg);
+    box-shadow: var(--rp-shadow-2);
+    opacity: 0;
+    visibility: hidden;
+    position: fixed;
+    overflow: auto scroll;
+    transform: translate3d(-100%, 0, 0);
+    transition:
+      opacity 0.25s,
+      transform 0.5s cubic-bezier(0.19, 1, 0.22, 1),
+      visibility 0.25s;
+  }
+
+  .rp-doc-layout__container > .rp-doc-layout__sidebar--open {
+    opacity: 1;
+    visibility: visible;
+    transform: translate3d(0, 0, 0);
+  }
+
+  /* 遮罩，与 ≤768px 一致。这个元素只在抽屉或目录打开时才被渲染，因此不需要
+     额外判断状态；同样要抬高权重，主题的 `display: none` 写在更晚的样式表里。 */
+  #__rspress_modal_container .rp-sidebar-menu__mask {
+    display: block;
+  }
+}
+
 .dark {
   --rp-c-brand: #f18b97;
   --rp-c-brand-light: #ffa2ad;
@@ -42,6 +117,75 @@
   gap: 12px;
 }
 
+/*
+ * 贴边卡片。Rspress 给预览卡写的是 `padding: 16px`；只有当卡片里放着
+ * `.ov-demo-surface` 时才清零，其他示例保留默认内边距。用 `:has()` 而不是给
+ * MDX 代码块传类名，是因为 rspress 的 `file=...` 预览语法不支持额外属性。
+ *
+ * 用两级类名抬高特异性：预览插件把同一条 `padding: 16px` 写在更靠后的样式表
+ * 里，同特异性时会被它盖掉。
+ *
+ * A flush card. Rspress pads the preview card by 16px; it is zeroed only when the
+ * card contains `.ov-demo-surface`, so every other example keeps the default
+ * padding. `:has()` rather than a class on the MDX block, because rspress's
+ * `file=...` preview syntax takes no extra attributes.
+ *
+ * Two classes raise specificity: the preview plugin writes the same 16px padding
+ * in a later stylesheet and would otherwise win at equal specificity.
+ */
+.rp-preview .rp-preview--internal__card:has(.ov-demo-surface) {
+  padding: 0;
+  overflow: hidden;
+}
+
+/*
+ * 预览卡的内边距此前被全局清零，为的是让文件预览这类「外壳自己撑满卡片」的
+ * 组件贴边；但卡片由所有示例共用，作用域选择这类普通示例也被顶到了卡片边上。
+ * 现在改成按示例标记：只有包含 `.ov-demo-surface` 的卡片才清零。
+ *
+ * The preview card's padding used to be zeroed globally so a component whose shell
+ * fills the card — the file preview — could sit flush. The card is shared by every
+ * example, so ordinary demos such as the scope switcher were pushed against the
+ * edge too. It is now opt-in: only a card that contains `.ov-demo-surface` is
+ * zeroed.
+ */
+
+/*
+ * 贴边容器：所在卡片会因为它而清零内边距（见上面的 `:has()` 规则），这里只补
+ * 一点纵向呼吸，避免页签行紧贴卡片上边框。
+ *
+ * A flush container: its card zeroes its padding because of it (the `:has()` rule
+ * above). It only adds a little vertical breathing room so a tab row does not sit
+ * against the top border.
+ */
+.ov-demo-surface {
+  box-sizing: border-box;
+  padding: 8px 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+/* 示例自己画的权限标记，模拟宿主传入 `slots.titleExtra`。组件不提供样式，
+   这里用主题变量画一个中性标签。 */
+.ov-demo-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--rp-c-bg-soft);
+  color: var(--rp-c-text-2);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+/* 说明文字紧跟在卡片下方，与卡片同宽。 */
+.ov-demo-hint {
+  margin: 0;
+  color: var(--rp-c-text-2);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .ov-demo-modules {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
@@ -74,4 +218,59 @@
 .ov-demo-controls button:focus-visible {
   outline: 2px solid var(--rp-c-brand);
   outline-offset: 3px;
+}
+
+/*
+ * 代码块补上左右内边距。Rspress 只给 `code` 设了 `padding: 1rem 0`，左右为
+ * 0，代码因此紧贴卡片边缘。用与上下一致的 1rem。
+ *
+ * Code blocks need horizontal padding. Rspress sets only `padding: 1rem 0` on
+ * `code`, so lines sit flush against the card edge; match the vertical 1rem.
+ */
+/* 两级类名抬高特异性：主题把同一规则写在更靠后的样式表里。 */
+.rp-codeblock .rp-codeblock__content :where(code) {
+  padding: 1rem;
+}
+
+/*
+ * 「展开代码」按钮贴在卡片右边缘。它的 `right: 20px` 是相对代码块内容区的，
+ * 而内容区撑满卡片宽度，20px 在宽卡片上显得贴边。加到 24px 并让按钮组在
+ * 窄容器里也不溢出。
+ *
+ * The "show code" button sits against the card's right edge. Its `right: 20px`
+ * is relative to the code content area, which fills the card, so 20px reads as
+ * flush on a wide card. Bump it and keep the group inside on narrow ones.
+ */
+.rp-codeblock .rp-code-button-group {
+  right: 24px;
+}
+
+/*
+ * 预览里的 Markdown 正文不再限制阅读宽度。底座给
+ * `.ark-agentic-file-viewer-markdown__content` 设了 `max-width: 920px` 并居中，
+ * 那是为长文阅读准备的；在文档站这种宽容器里，它表现为两侧各留一大片空白，
+ * 看不出组件实际占了多少宽度。示例需要展示真实铺满效果。
+ *
+ * Markdown bodies inside the preview are no longer capped at a reading width. The
+ * base sets `max-width: 920px` and centres it, which is right for long-form
+ * reading but leaves wide gaps on both sides in a docs layout, hiding how much
+ * width the component really takes.
+ */
+.ov-file-preview .ark-agentic-file-viewer-markdown__content {
+  max-width: none;
+  margin-inline: 0;
+}
+
+/*
+ * 预览卡片的操作区（展开代码等）紧贴右边。Rspress 靠卡片自身的 `padding: 16px`
+ * 给它留位，而这里把卡片 padding 清零让组件贴边，操作区因此顶到了边缘。单独
+ * 补右边距，不影响组件。
+ *
+ * The preview card's operation buttons sit flush against the right edge. Rspress
+ * relies on the card's own `padding: 16px` to inset them; zeroing that padding so
+ * the component reaches the edge left them touching it. Add the inset back on the
+ * buttons alone.
+ */
+.rp-preview--internal__card > .rp-preview-operations {
+  padding-right: 12px;
 }

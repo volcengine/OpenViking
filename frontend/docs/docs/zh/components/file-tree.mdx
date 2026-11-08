@@ -136,11 +136,25 @@ import '@openviking/react/components/file-tree/style.css';
 
 ## 样式
 
-类名带 `ov-` 前缀，块名为 `ov-file-tree`，元素使用 `ov-file-tree__<元素>`。主题变量集中在根节点声明，宿主可整组或逐条覆盖。样式通过独立入口引入：
+类名带 `ov-` 前缀，块名为 `ov-file-tree`，元素使用 `ov-file-tree__<元素>`。颜色取自包级主题基线 `--ov-ui-color-*`（见 [入门](/guide/getting-started) 的样式章节），组件私有变量从基线派生，宿主可整组或逐条覆盖。样式通过独立入口引入：
 
 ```tsx
 import '@openviking/react/components/file-tree/style.css';
 ```
+
+| CSS 变量                         | 默认值                   | 用途           |
+| -------------------------------- | ------------------------ | -------------- |
+| `--ov-ui-file-tree-text`         | `--ov-ui-color-text-1`   | 行文字。       |
+| `--ov-ui-file-tree-text-muted`   | `--ov-ui-color-text-3`   | 次要文字。     |
+| `--ov-ui-file-tree-icon`         | `--ov-ui-color-text-2`   | 行首图标。     |
+| `--ov-ui-file-tree-row-hover`    | `--ov-ui-color-bg-5`     | 悬停背景。     |
+| `--ov-ui-file-tree-row-selected` | `--ov-ui-color-bg-4`     | 选中背景。     |
+| `--ov-ui-file-tree-guide`        | `--ov-ui-color-border-2` | 层级竖线。     |
+| `--ov-ui-file-tree-spinner`      | `--ov-ui-color-primary`  | 加载指示。     |
+| `--ov-ui-file-tree-action`       | `--ov-ui-color-primary`  | 行内文字操作。 |
+| `--ov-ui-file-tree-row-height`   | `32px`                   | 行高。         |
+| `--ov-ui-file-tree-row-radius`   | `4px`                    | 行圆角。       |
+| `--ov-ui-file-tree-indent`       | `20px`                   | 每级缩进。     |
 
 ## 实现范围
 

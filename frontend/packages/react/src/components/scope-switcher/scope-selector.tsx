@@ -1,20 +1,26 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import chevronDown from '../../../../icons/svg/scope-switcher/chevron-down.svg?inline';
+import ChevronDownIcon from '../../../../icons/svg/scope-switcher/chevron-down.svg?react';
 import { ScopePanel } from './scope-panel.js';
 import type { ScopeSelectorProps } from './types.js';
 
-export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
+export function ScopeSelector(props: ScopeSelectorProps) {
+  const { identity, trigger: triggerContent, labels } = props;
+  const selectable = props.kind === 'selectable' ? props : undefined;
+  const data = selectable?.data;
+  const state = selectable?.state;
+  const actions = selectable?.actions;
+  const slots = selectable?.slots;
+
   const [localVisible, setLocalVisible] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const restoreSelectionFocus = useRef(false);
   const panelId = useId();
   const open =
-    level.kind === 'selectable' &&
-    (level.visible ?? localVisible) &&
-    !level.disabled;
-  const onVisibleChange =
-    level.kind === 'selectable' ? level.onVisibleChange : undefined;
+    selectable !== undefined &&
+    (state?.visible ?? localVisible) &&
+    !state?.disabled;
+  const onVisibleChange = actions?.onVisibleChange;
 
   const changeVisible = useCallback(
     (visible: boolean) => {
@@ -68,15 +74,23 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
     }
   }, [open]);
 
+  // The component renders the host's selection as given. Normalising an invalid
+  // selection belongs to whoever owns it — the host or a module such as
+  // ScopeCascade — because it changes the scope, the URL and downstream requests.
+  const selected = data?.options.find((o) => o.id === data.selectedId);
+  const label = triggerContent?.label ?? selected?.label ?? '';
+  const icon = triggerContent?.icon ?? selected?.icon;
   const content = (
     <>
-      {level.icon && (
+      {icon && (
         <span className="ov-scope-switcher__icon" aria-hidden="true">
-          {level.icon}
+          {icon}
         </span>
       )}
-      <span className="ov-scope-switcher__label">{level.selectedLabel}</span>
-      {level.tag && <span className="ov-scope-switcher__tag">{level.tag}</span>}
+      <span className="ov-scope-switcher__label">{label}</span>
+      {identity.tag && (
+        <span className="ov-scope-switcher__tag">{identity.tag}</span>
+      )}
     </>
   );
   return (
@@ -94,11 +108,11 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
         }
       }}
     >
-      {level.kind === 'fixed' ? (
+      {selectable === undefined ? (
         <span
           className="ov-scope-switcher__trigger"
-          aria-label={level.ariaLabel}
-          title={level.selectedLabel}
+          aria-label={identity.ariaLabel}
+          title={label}
         >
           {content}
         </span>
@@ -107,9 +121,9 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
           ref={trigger}
           type="button"
           className="ov-scope-switcher__trigger"
-          aria-label={level.ariaLabel}
-          title={level.selectedLabel}
-          disabled={level.disabled}
+          aria-label={identity.ariaLabel}
+          title={label}
+          disabled={state?.disabled}
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-controls={open ? panelId : undefined}
@@ -129,25 +143,31 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
         >
           {content}
           <span className="ov-scope-switcher__arrow" aria-hidden="true">
-            <img src={chevronDown} alt="" width={14} height={14} />
+            <ChevronDownIcon />
           </span>
         </button>
       )}
-      {open && level.kind === 'selectable' && (
+      {open && selectable !== undefined && data !== undefined && (
         <div
           id={panelId}
-          className="ov-scope-switcher__panel"
+          className={
+            slots?.renderPanel
+              ? 'ov-scope-switcher__panel ov-scope-switcher__panel--custom'
+              : 'ov-scope-switcher__panel'
+          }
           role="dialog"
-          aria-label={level.ariaLabel ?? level.selectedLabel}
+          aria-label={identity.ariaLabel ?? label}
         >
           <ScopePanel
-            level={{
-              ...level,
-              onSelect: (option) => {
-                restoreSelectionFocus.current = true;
-                changeVisible(false);
-                level.onSelect?.(option);
-              },
+            label={identity.ariaLabel ?? label}
+            data={data}
+            state={state}
+            slots={slots}
+            actions={actions}
+            onSelect={(option) => {
+              restoreSelectionFocus.current = true;
+              changeVisible(false);
+              actions?.onSelect?.(option);
             }}
             labels={labels}
           />
