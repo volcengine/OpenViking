@@ -252,7 +252,14 @@
   text-align: center;
 }
 
+/*
+ * 末段不参与 flex 收缩：它是最需要完整显示的一级，空间不够时应当先收起
+ * 祖先段，而不是把文件名压窄。折叠算法已经算好「…」与末段的宽度，这里
+ * 只需保证布局不会再把末段压小。极端窄容器下仍允许它缩到容器宽度。
+ */
 .ov-file-preview__breadcrumb-current {
+  flex: none;
+  max-width: 100%;
   overflow: hidden;
   color: var(--ov-ui-file-preview-text);
   font-weight: 500;

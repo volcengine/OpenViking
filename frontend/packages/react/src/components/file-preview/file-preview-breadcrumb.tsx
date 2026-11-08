@@ -27,6 +27,39 @@ function prefersReducedMotion() {
 }
 
 /**
+ * 面包屑可用的宽度：父行宽度减去行内其他兄弟元素（复制按钮、插槽等）占的
+ * 宽度与间距。
+ *
+ * 不能用面包屑自身的 `clientWidth`：它随折叠结果变化，收起后变窄，下一轮
+ * 测量就会认为空间更不够，从此再也放不回来。父行宽度只由外部布局决定。
+ *
+ * The width available to the breadcrumb: the parent row's width minus the space
+ * its siblings (copy button, slots) and the gaps take.
+ *
+ * The breadcrumb's own `clientWidth` cannot be used here: it shrinks as levels
+ * collapse, so the next measurement would see even less room and never restore
+ * them. The parent row's width is decided by the surrounding layout alone.
+ */
+function measureAvailable(root: HTMLElement) {
+  const row = root.parentElement;
+  if (!row) return root.clientWidth;
+
+  const style = window.getComputedStyle(row);
+  const gap = Number.parseFloat(style.columnGap) || 0;
+  const siblings = Array.from(row.children).filter(
+    (child): child is HTMLElement =>
+      child !== root && child instanceof HTMLElement,
+  );
+  const siblingWidth = siblings.reduce(
+    (sum, child) => sum + child.getBoundingClientRect().width,
+    0,
+  );
+  const siblingGaps = gap * siblings.length;
+
+  return Math.max(0, row.clientWidth - siblingWidth - siblingGaps);
+}
+
+/**
  * 路径面包屑：祖先逐段可点，放不下时按「保两端、缩中间」折叠。
  *
  * 折叠顺序与内部版一致：先保留首段与末段，从紧邻首段的那一级开始逐级收进
@@ -68,7 +101,10 @@ export function FilePreviewBreadcrumb({
       const widths = Array.from(measure.children).map(
         (child) => child.getBoundingClientRect().width,
       );
-      const available = root.clientWidth;
+      // 可用宽度取自父行，而不是面包屑自身：面包屑的宽度随折叠结果变化，
+      // 拿它当基准会形成自反馈——收起后自身变窄，下一轮就认为空间更不够，
+      // 于是永远收不回来。父行宽度由外部布局决定，与折叠状态无关。
+      const available = measureAvailable(root);
       const isOverflowing =
         widths.reduce((sum, width) => sum + width, 0) > available;
       // 先按自然宽度判断是否溢出；确实放不下时才限制祖先段的显示宽度。
@@ -80,17 +116,28 @@ export function FilePreviewBreadcrumb({
           )
         : widths;
       const ancestors = capped.slice(0, -1);
-      let total = capped.reduce((sum, width) => sum + width, 0);
+      const trailing = capped[capped.length - 1] ?? 0;
+      const total = capped.reduce((sum, width) => sum + width, 0);
       setOverflowing(isOverflowing);
 
       // 从紧邻首段的那一级开始收起，首段留到最后。
       let count = 0;
-      while (total > available && count < ancestors.length - 1) {
-        total -= ancestors[count + 1] ?? 0;
-        if (count === 0) total += OVERFLOW_BUTTON_WIDTH;
+      let used = total;
+      while (used > available && count < ancestors.length - 1) {
+        used -= ancestors[count + 1] ?? 0;
+        if (count === 0) used += OVERFLOW_BUTTON_WIDTH;
         count += 1;
       }
-      const hideRoot = total > available && ancestors.length > 0;
+
+      // 中间全部收起仍放不下，才连首段一起藏，把「…」挪到行首。此时布局
+      // 只剩「…」+ 末段；只有这确实比保留首段更省时才值得藏。
+      // 若连「…」+ 末段都超出可用宽度，说明文件名本身太长，交给 CSS 让
+      // 末段自己截断——继续藏层级已经没有东西可藏了。
+      let hideRoot = false;
+      if (used > available && ancestors.length > 0) {
+        const rootCollapsed = OVERFLOW_BUTTON_WIDTH + trailing;
+        hideRoot = rootCollapsed < used;
+      }
       setHiddenCount(hideRoot ? ancestors.length : count);
       setRootHidden(hideRoot);
     };
@@ -99,6 +146,9 @@ export function FilePreviewBreadcrumb({
     const observer = new ResizeObserver(run);
     observer.observe(root);
     observer.observe(measure);
+    // 父行决定可用宽度：面板拉宽、动作组增减都会改变它，必须一并观察，
+    // 否则空间变大时不会重新测量，收起的层级再也放不回来。
+    if (root.parentElement) observer.observe(root.parentElement);
     return () => observer.disconnect();
   }, [segments, title]);
 
