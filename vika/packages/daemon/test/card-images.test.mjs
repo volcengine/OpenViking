@@ -11,6 +11,7 @@ import { resolveContent } from '../src/actions/content.mjs';
 import { MAX_CARD_BYTES, MAX_CARD_IMAGE_BYTES, replaceCardImages } from '../src/card-images.mjs';
 import { LarkClient } from '../src/lark.mjs';
 import { LarkImageCache } from '../src/lark-image-cache.mjs';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { Store } from '../src/store.mjs';
 import { invokeOperation } from '../src/connectors/operations.mjs';
 import { fakeConnectors } from './action-fixture.mjs';
@@ -51,8 +52,10 @@ function fixture(t, options = {}) {
         const file = args[10];
         assert.match(file, /^image=\.\/[a-f0-9]{64}\.(png|gif)$/);
         const filename = path.join(cliOptions.cwd, file.slice('image=./'.length));
-        assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
-        assert.equal(fs.statSync(cliOptions.cwd).mode & 0o777, 0o700);
+        if (supportsFileModes) {
+          assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
+          assert.equal(fs.statSync(cliOptions.cwd).mode & 0o777, 0o700);
+        }
         options.onUpload?.();
         if (options.uploadGate) await options.uploadGate;
         if (options.failUpload === f.uploadAttempts) return { code: 1, stdout: '', stderr: 'upload failed' };
@@ -169,7 +172,10 @@ for (const [name, content] of invalidTemplates) test(`rejects ${name} before upl
 
 for (const [name, pathname, prepare] of [
   ['URL', 'https://example.com/a.png'], ['absolute path', '/tmp/a.png'], ['traversal', '../a.png'],
-  ['symlink escape', 'link.png', (f) => { fs.writeFileSync(path.join(f.root, 'outside.png'), PNG); fs.symlinkSync(path.join(f.root, 'outside.png'), path.join(f.config.workspace, 'link.png')); }],
+  ['symlink escape', 'link/outside.png', (f) => {
+    fs.writeFileSync(path.join(f.root, 'outside.png'), PNG);
+    fs.symlinkSync(f.root, path.join(f.config.workspace, 'link'), 'junction');
+  }],
   ['directory', 'folder', (f) => fs.mkdirSync(path.join(f.config.workspace, 'folder'))],
   ['empty image', 'bad.png', (f) => fs.writeFileSync(path.join(f.config.workspace, 'bad.png'), '')],
   ['renamed non-image', 'bad.png', (f) => fs.writeFileSync(path.join(f.config.workspace, 'bad.png'), '%PDF-1.7 not an image')],

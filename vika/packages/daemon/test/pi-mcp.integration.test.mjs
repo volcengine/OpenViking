@@ -13,6 +13,7 @@ import { ActionService } from '../src/actions/service.mjs';
 import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
 import { PiAgent } from '../src/pi.mjs';
 import { managedPiBin } from '../src/pi-runtime.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { Store } from '../src/store.mjs';
 import { fakeConnectors } from './action-fixture.mjs';
 import { configurePiIsolation } from './pi-isolation-fixture.mjs';
@@ -103,7 +104,7 @@ async function fixture(t, { conflict = false, dialogs = false, openviking = fals
       warn: (message, fields) => logs.push({ message, ...fields }),
     },
   });
-  const socketPath = path.join(root, 'actions.sock');
+  const socketPath = localSocketPath(root);
   let api;
   let agent;
   const requests = [];
