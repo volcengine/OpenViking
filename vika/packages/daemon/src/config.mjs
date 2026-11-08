@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bundledLarkCli } from './lark-cli-bin.mjs';
 import { managedPiBin } from './pi-runtime.mjs';
+import { assertRuntimeBinPath } from './runtime-bin.mjs';
 import { resolveRolePromptPath } from './conversation-policy.mjs';
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
@@ -187,6 +188,14 @@ export function getConfig() {
   // Connector commands run from projectDir; make relative overrides independent
   // of the agent workspace too. Bare command names keep their PATH semantics.
   const cliBin = (value) => value?.includes(path.sep) ? path.resolve(projectDir, value) : value;
+  // A runtime binary, on the other hand, is spawned from the instance
+  // workspace: a relative path there names a different file than it does for
+  // setup or the control process, so it is refused instead of half-working.
+  const runtimeBin = (name, fallback) => {
+    const value = process.env[name];
+    if (value === undefined || value.trim() === '') return fallback;
+    return assertRuntimeBinPath(value.trim(), name);
+  };
   const volcBaseUrl = (process.env.VIKA_VOLC_BASE_URL
     || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/+$/, '');
   let parsedVolcBaseUrl;
@@ -232,11 +241,13 @@ export function getConfig() {
       min: 5_000,
       max: 120_000,
     }),
-    codexBin: process.env.CODEX_BIN || 'codex',
-    traexBin: process.env.TRAEX_BIN || process.env.TRAECLI_BIN || traexCommand(),
-    claudeBin: process.env.CLAUDE_BIN || 'claude',
-    piBin: process.env.PI_BIN || managedPiBin(),
-    opencodeBin: process.env.OPENCODE_BIN || 'opencode',
+    codexBin: runtimeBin('CODEX_BIN', 'codex'),
+    // Every declared key is checked, the same way the manifest loader does, so
+    // a stale value cannot hide behind the higher-priority one.
+    traexBin: runtimeBin('TRAEX_BIN', runtimeBin('TRAECLI_BIN', traexCommand())),
+    claudeBin: runtimeBin('CLAUDE_BIN', 'claude'),
+    piBin: runtimeBin('PI_BIN', managedPiBin()),
+    opencodeBin: runtimeBin('OPENCODE_BIN', 'opencode'),
     initialModel: process.env.VIKA_MODEL || '',
     codexEffort: enumEnv('VIKA_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('VIKA_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),

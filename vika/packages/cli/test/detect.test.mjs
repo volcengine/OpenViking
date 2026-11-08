@@ -344,6 +344,27 @@ test('runtimes: an unexecutable configured binary is not reported as missing', a
   assert.match(runtimes[0].note, /无法执行/);
 });
 
+test('runtimes: a relative *_BIN path is refused where it is read', async () => {
+  const runtimes = await detectRuntimes({
+    env: { PATH: '', CODEX_BIN: './codex', CLAUDE_BIN: 'bin/claude', PI_BIN: 'pi/cli.js',
+      OPENCODE_BIN: './opencode', TRAEX_BIN: 'tools/traex' },
+    piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: '' }),
+  });
+  for (const id of ['codex', 'claude', 'pi', 'traex', 'opencode']) {
+    const runtime = runtimes.find((candidate) => candidate.id === id);
+    assert.ok(runtime, `${id} is still offered as a row`);
+    assert.equal(runtime.bin, null, `${id} is not offered with a relative path`);
+    assert.equal(runtime.available, false);
+    assert.match(runtime.note, /absolute path or a command name on PATH/);
+  }
+  assert.match(runtimes.find(({ id }) => id === 'codex').note, /CODEX_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'claude').note, /CLAUDE_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'pi').note, /PI_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'traex').note, /TRAEX_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'opencode').note, /OPENCODE_BIN/);
+});
+
 function traexFixture(t, names) {
   const bin = tempDir(t, 'vika-traex-');
   for (const name of names) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 });

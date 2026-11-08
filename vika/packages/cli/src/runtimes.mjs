@@ -7,6 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { assertPiVersion, managedPiBin, piCommand } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
+import { runtimeBinKind, runtimeBinProblem } from '../../daemon/src/runtime-bin.mjs';
 import { t } from './i18n.mjs';
 import { probeAcp, probeAppServer } from './runtime-probe.mjs';
 
@@ -33,25 +34,28 @@ function configured(value) {
 
 // A configured *_BIN is authoritative: it names the file the daemon will run,
 // so a broken value is reported as such instead of falling back to a different
-// CLI found on PATH. A bare command name still means PATH lookup; a value with
-// a directory separator is a path.
+// CLI found on PATH. The two accepted forms are owned by runtime-bin.mjs.
 function configuredBin(value, env) {
-  const name = typeof value === 'string' ? value.trim() : '';
+  const name = configured(value);
   if (!name) return null;
-  return /[\\/]/.test(name) ? path.resolve(name) : which(name, env);
+  return runtimeBinKind(name) === 'name' ? which(name, env) : path.resolve(name);
 }
 
 // What detection probes: the configured binary when the key is set (even when
 // it does not resolve, so the note can name it), otherwise the first of
-// `fallback` on PATH.
+// `fallback` on PATH. A value that cannot be used as written comes back as
+// `problem` rather than being resolved against the caller's cwd.
 function probeBin(key, env, ...fallback) {
   const value = configured(env[key]);
-  if (value) return { bin: configuredBin(value, env), configured: value };
+  if (value) {
+    const problem = runtimeBinProblem(value, key);
+    return { bin: problem ? null : configuredBin(value, env), problem, configured: value };
+  }
   for (const name of fallback) {
     const found = which(name, env);
-    if (found) return { bin: found, configured: null };
+    if (found) return { bin: found, problem: null, configured: null };
   }
-  return { bin: null, configured: null };
+  return { bin: null, problem: null, configured: null };
 }
 
 // execFile rejects with a string code when the binary itself could not run
@@ -95,10 +99,10 @@ export async function detectRuntimes({
   runtimes.push({
     id: 'codex', label: 'Codex', model: 'codex:', bin: codex.bin, binEnv: 'CODEX_BIN',
     available: Boolean(codexLogin?.ok),
-    note: !codex.bin ? absentNote(codex)
+    note: codex.problem ?? (!codex.bin ? absentNote(codex)
       : codexFailure ? binaryProblemNote(codexFailure, codex.bin)
         : codexLogin.ok ? t('已登录', 'logged in')
-          : t('未登录：先运行 codex login', 'not logged in: run codex login first'),
+          : t('未登录：先运行 codex login', 'not logged in: run codex login first')),
   });
 
   const claude = probeBin('CLAUDE_BIN', env, 'claude');
@@ -109,17 +113,18 @@ export async function detectRuntimes({
   runtimes.push({
     id: 'claude', label: 'Claude Code', model: 'claude:', bin: claude.bin, binEnv: 'CLAUDE_BIN',
     available: claudeLoggedIn,
-    note: !claude.bin ? absentNote(claude)
+    note: claude.problem ?? (!claude.bin ? absentNote(claude)
       : claudeFailure ? binaryProblemNote(claudeFailure, claude.bin)
         : claudeLoggedIn ? t('已登录', 'logged in')
-          : t('未登录：先运行 claude auth login', 'not logged in: run claude auth login first'),
+          : t('未登录：先运行 claude auth login', 'not logged in: run claude auth login first')),
   });
 
   // An explicit PI_BIN is what the daemon runs; without one, the bundled entry
   // the caller passed (or the release's own) is probed. A bare name goes
   // through PATH, exactly as piCommand resolves it for the daemon.
   const piConfigured = configured(env.PI_BIN);
-  const piEntry = piConfigured ? configuredBin(piConfigured, env) : piBin;
+  const piProblem = runtimeBinProblem(piConfigured, 'PI_BIN');
+  const piEntry = piProblem ? null : (piConfigured ? configuredBin(piConfigured, env) : piBin);
   let models = [];
   let piProbeResult = null;
   let piVersionProblem = null;
@@ -148,9 +153,9 @@ export async function detectRuntimes({
   runtimes.push({
     id: 'pi', label: t('Pi（内置）', 'Pi (built in)'), model: 'pi',
     // Only a configured entry is pinned; the bundled one is not written back.
-    bin: piConfigured ? piEntry : null, binEnv: 'PI_BIN',
+    bin: piConfigured && !piProblem ? piEntry : null, binEnv: 'PI_BIN',
     available: models.length > 0 && !piVersionProblem,
-    note: piVersionProblem ?? (!piEntry ? absentNote({ configured: piConfigured })
+    note: piProblem ?? piVersionProblem ?? (!piEntry ? absentNote({ configured: piConfigured })
       : piFailure ? binaryProblemNote(piFailure, piEntry)
         : models.length > 0 ? t(`用 ~/.pi/agent 里的 ${models[0]}`, `uses ${models[0]} from ~/.pi/agent`)
           : t('没有可用模型：运行 vika pi 后 /login，或编辑 ~/.pi/agent/models.json', 'no model yet: run vika pi and /login, or edit ~/.pi/agent/models.json')),
@@ -230,6 +235,15 @@ async function detectTraex({ env, execFileImpl, probe }) {
   // A configured binary is authoritative. Do not silently replace it with an
   // unrelated login/configuration from PATH when it fails verification.
   const explicit = env.TRAEX_BIN?.trim() || env.TRAECLI_BIN?.trim();
+  const binKey = env.TRAEX_BIN?.trim() ? 'TRAEX_BIN' : 'TRAECLI_BIN';
+  const problem = explicit ? runtimeBinProblem(explicit, binKey) : null;
+  if (problem) {
+    return {
+      id: 'traex', label: 'TraeX', model: 'traex', bin: null, binEnv: 'TRAECLI_BIN',
+      installed: false, protocolCompatible: false, loggedIn: false, available: false,
+      note: problem,
+    };
+  }
   const candidates = explicit ? [explicit] : TRAEX_COMMANDS.map((name) => which(name, env)).filter(Boolean);
   const seen = new Set();
   let best = null;
@@ -282,6 +296,13 @@ async function detectTraex({ env, execFileImpl, probe }) {
 // plus a supported version is what setup verifies (no session, no model call).
 async function detectOpencode({ env, execFileImpl, probe }) {
   const explicit = env.OPENCODE_BIN?.trim();
+  const problem = explicit ? runtimeBinProblem(explicit, 'OPENCODE_BIN') : null;
+  if (problem) {
+    return {
+      id: 'opencode', label: 'OpenCode', model: 'opencode', bin: null, binEnv: 'OPENCODE_BIN',
+      installed: false, available: false, note: problem,
+    };
+  }
   const bin = explicit ? configuredBin(explicit, env) : which('opencode', env);
   if (!bin) {
     return {

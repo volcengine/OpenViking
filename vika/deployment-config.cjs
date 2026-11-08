@@ -5,6 +5,7 @@
 
 const fs = require('node:fs');
 const { homeDir } = require('./packages/daemon/src/platform/index.mjs');
+const { RUNTIME_BIN_KEYS, runtimeBinProblem } = require('./packages/daemon/src/runtime-bin.mjs');
 const path = require('node:path');
 
 const INSTANCE_ID = /^[a-z][a-z0-9-]{0,31}$/;
@@ -207,6 +208,16 @@ function parseDaemonEnv(value, ignored) {
     if (typeof envValue !== 'string') throw new Error(`deployment manifest env.${key} must be a string`);
     if (envValue.length > 4096 || /[\u0000-\u001f\u007f]/.test(envValue)) {
       throw new Error(`deployment manifest env.${key} is invalid`);
+    }
+    // A runtime binary is spawned from the instance workspace; a relative path
+    // names a different file there than it does where it was written.
+    if (RUNTIME_BIN_KEYS.includes(key)) {
+      const binProblem = runtimeBinProblem(envValue, `env.${key}`);
+      if (binProblem) throw new Error(`deployment manifest ${binProblem}`);
+      // The daemon spawns the value as written; normalize the padding here so
+      // setup and the daemon agree on the file being named.
+      result[key] = envValue.trim();
+      continue;
     }
     result[key] = envValue;
   }
