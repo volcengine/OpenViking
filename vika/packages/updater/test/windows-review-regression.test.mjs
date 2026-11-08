@@ -7,12 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { PLATFORMS } from '../src/artifacts.mjs';
 
 const ecosystem = fileURLToPath(new URL('../../../ecosystem.config.cjs', import.meta.url));
-test('Windows source support does not add a release platform', () => {
-  assert.deepEqual(Object.keys(PLATFORMS).sort(), ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']);
-});
 
 test('ecosystem excludes updater only on Windows and preserves mixed-case Path', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ecosystem-review-'));

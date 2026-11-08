@@ -3,7 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { assertWindowsPrivateDirectory } from './windows-acl.mjs';
+import { assertWindowsPrivateDirectory } from '../windows/windows-acl.mjs';
 
 export function assertPrivateDirectory(directory) {
   const info = fs.lstatSync(directory);

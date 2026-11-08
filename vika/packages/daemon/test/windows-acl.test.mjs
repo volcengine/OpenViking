@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { windowsPowerShellEnvironment } from '../src/windows-acl.mjs';
+import { windowsPowerShellEnvironment } from '../windows/windows-acl.mjs';
 import { preparePrivateDirectory, assertPrivateDirectory } from '../src/private-temp.mjs';
 
 const windows = process.platform === 'win32';

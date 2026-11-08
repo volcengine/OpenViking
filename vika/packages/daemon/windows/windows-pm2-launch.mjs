@@ -13,7 +13,7 @@ const env = cleanPm2ControlEnv({
   PM2_HOME: process.env.PM2_HOME || path.join(process.env.HOME || home, '.vika', 'pm2'),
 });
 // Never call node_modules/.bin/pm2: it bypasses our per-home Windows pipes.
-const child = spawn(process.execPath, [path.join(release, 'scripts', 'pm2-windows.cjs'), ...process.argv.slice(2)], {
+const child = spawn(process.execPath, [path.join(release, 'packages', 'daemon', 'windows', 'pm2-windows.cjs'), ...process.argv.slice(2)], {
   env, stdio: 'inherit', windowsHide: true,
 });
 child.once('error', error => { console.error(`Vika PM2: ${error.message}`); process.exitCode = 1; });

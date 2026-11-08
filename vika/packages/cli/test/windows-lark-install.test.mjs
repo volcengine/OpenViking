@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ensureWindowsLarkCli, validateWindowsLarkCli } from '../../../scripts/ensure-windows-lark-cli.mjs';
+import { ensureWindowsLarkCli, validateWindowsLarkCli } from '../../daemon/windows/ensure-windows-lark-cli.mjs';
 
 function fixture(t) {
   const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), "vika lark 用户 ' "));

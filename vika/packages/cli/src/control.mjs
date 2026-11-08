@@ -33,7 +33,7 @@ const UPDATER_APP = 'vika-updater';
 const RELEASE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 export function pm2Defaults(env = process.env) {
-  const releasePm2 = process.platform === 'win32' ? path.join(RELEASE_ROOT, 'scripts', 'pm2-windows.cjs') : path.join(RELEASE_ROOT, 'bin', 'pm2');
+  const releasePm2 = process.platform === 'win32' ? path.join(RELEASE_ROOT, 'packages', 'daemon', 'windows', 'pm2-windows.cjs') : path.join(RELEASE_ROOT, 'bin', 'pm2');
   return {
     pm2Bin: env.PM2_BIN || (fs.existsSync(releasePm2) ? releasePm2 : 'pm2'),
     // Vika's own pm2 daemon, apart from any pm2 the user runs.

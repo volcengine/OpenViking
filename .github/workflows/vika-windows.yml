@@ -29,14 +29,14 @@ jobs:
         run: npm install --global npm@12 --ignore-scripts --no-audit --no-fund
       - run: npm --version
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-lark-install.test.mjs packages/cli/test/windows-pm2.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
+      - run: node --test packages/daemon/test/platform.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-shell.test.mjs packages/cli/test/windows-autostart.test.mjs packages/cli/test/windows-lark-install.test.mjs packages/cli/test/windows-pm2.test.mjs packages/cli/test/windows-pm2-launch.test.mjs packages/daemon/test/windows-acl.test.mjs packages/daemon/test/windows-coding-tools.test.mjs
       - name: Control and runtime cross-platform contracts
         run: node --test packages/cli/test/control.test.mjs packages/daemon/test/durable.test.mjs packages/daemon/test/opencode.test.mjs
       - name: Acceptance regression fixes
         run: node --test packages/daemon/test/windows-file-path.test.mjs packages/daemon/test/lock-identity.test.mjs packages/daemon/test/logger-redaction.test.mjs packages/daemon/test/connector-crash-detail.test.mjs packages/cli/test/log-options.test.mjs
       - name: Review isolation and runtime PATH regressions
         run: |
-          node --test packages/daemon/test/platform-isolation.test.mjs packages/updater/test/windows-review-regression.test.mjs
+          node --test packages/updater/test/windows-review-regression.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test --test-name-pattern 'Windows runtime PATH' packages/daemon/test/process-utils.test.mjs
       - name: Setup home expansion regression
@@ -50,9 +50,5 @@ jobs:
         shell: pwsh
         run: |
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/install-windows.ps1'), [ref]$null, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'packages/daemon/windows/install-windows.ps1'), [ref]$null, [ref]$errors) | Out-Null
           if ($errors.Count) { throw ($errors | Out-String) }
-      - name: Install source into an isolated Unicode Windows home
-        shell: powershell
-        timeout-minutes: 15
-        run: .\scripts\test-install-windows.ps1

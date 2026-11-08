@@ -7,7 +7,7 @@ $node = (Get-Command node.exe -ErrorAction Stop).Source
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 $nodeVersion = (& $node --version).TrimStart('v')
 if ([int]($nodeVersion.Split('.')[0]) -lt 24) { throw 'Install Node.js 24 LTS first.' }
-$source = Split-Path $PSScriptRoot -Parent
+$source = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $base = Join-Path $env:USERPROFILE '.vika'
 $current = Join-Path $base 'current'
 if (Test-Path $current) { throw "An installation already exists at $current. Stop it and move its current junction before reinstalling. Configuration is retained." }
@@ -22,7 +22,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed. Check Node version and native dependency installation.' }
     # npm 12 can block dependency postinstall scripts. Ensure the pinned
     # Windows executable exists and runs before publishing current/launchers.
-    & $node scripts/ensure-windows-lark-cli.mjs
+    & $node packages/daemon/windows/ensure-windows-lark-cli.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Bundled Windows Lark CLI installation or validation failed.' }
     & $node packages/daemon/scripts/check-pi.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Bundled Pi validation failed.' }
@@ -31,12 +31,12 @@ try {
 New-Item -ItemType Junction -Path $current -Target $release | Out-Null
 $bin = Join-Path $base 'bin'
 New-Item -ItemType Directory -Path $bin -Force | Out-Null
-Copy-Item (Join-Path $release 'scripts\windows-launch.mjs') (Join-Path $bin 'vika-launch.mjs')
+Copy-Item (Join-Path $release 'packages\daemon\windows\windows-launch.mjs') (Join-Path $bin 'vika-launch.mjs')
 # Launch through a Node bootstrap so HOME, PATH and PM2_HOME also exist at login.
 $launcher = '@echo off' + "`r`n" + '"' + $node + '" "%~dp0vika-launch.mjs" %*' + "`r`n"
 [IO.File]::WriteAllText((Join-Path $bin 'vika.cmd'), $launcher)
 # Keep the compatibility command on the same private PM2 transport as vika.
-Copy-Item (Join-Path $release 'scripts\windows-pm2-launch.mjs') (Join-Path $bin 'vika-pm2-launch.mjs')
+Copy-Item (Join-Path $release 'packages\daemon\windows\windows-pm2-launch.mjs') (Join-Path $bin 'vika-pm2-launch.mjs')
 $pm2Launcher = '@echo off' + "`r`n" + '"' + $node + '" "%~dp0vika-pm2-launch.mjs" %*' + "`r`n"
 [IO.File]::WriteAllText((Join-Path $bin 'pm2.cmd'), $pm2Launcher)
 

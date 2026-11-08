@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { execFile } from '../../daemon/src/platform.mjs';
 import { pm2Defaults } from '../src/control.mjs';
 import { cleanPm2ControlEnv, startApp, pm2Processes, verifyPm2App } from '../../updater/src/pm2.mjs';
-const { pipePaths } = createRequire(import.meta.url)('../../../scripts/pm2-windows.cjs');
+const { pipePaths } = createRequire(import.meta.url)('../../daemon/windows/pm2-windows.cjs');
 
 test('PM2 Windows pipes are scoped to home and control environment preserves OS essentials', () => {
   assert.deepEqual(pipePaths('C:\\Users\\Alice\\.vika\\pm2'), pipePaths('c:\\users\\alice\\.vika\\pm2'));
