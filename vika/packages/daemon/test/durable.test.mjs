@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 import { DURABLE_VERSION, DURABLE_HOST, sanitizeDurableEnv } from '../src/durable-runtime.mjs';
 import { availableChatModels, loadDurableModels, piDefaultModel } from '../src/durable-models.mjs';
 import { DurableAgent } from '../src/durable.mjs';
+import { localSocketPath } from '../src/platform.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -30,7 +31,7 @@ function baseConfig(overrides = {}) {
     databasePath: path.join(dataDir, 'test.sqlite3'),
     profile: 'test-profile',
     connectors: ['lark'],
-    actionSocketPath: path.join(dataDir, 'actions.sock'),
+    actionSocketPath: localSocketPath(dataDir, 'actions'),
     sendTimeoutMs: 5_000,
     maxReplyChars: 1_000,
     dryRun: true,
@@ -472,7 +473,7 @@ describe('DurableAgent against the real host', () => {
 
   it('executes a Core tool through actions.sock and feeds the result back', async () => {
     const dataDir = tempDir();
-    const socketPath = path.join(dataDir, 'actions.sock');
+    const socketPath = localSocketPath(dataDir, 'actions');
     const calls = [];
     const server = http.createServer((request, response) => {
       let body = '';
@@ -538,7 +539,7 @@ describe('DurableAgent against the real host', () => {
 
   it('registers the Core OpenViking tools from actions.sock like every other runtime tool', async () => {
     const dataDir = tempDir();
-    const socketPath = path.join(dataDir, 'actions.sock');
+    const socketPath = localSocketPath(dataDir, 'actions');
     const calls = [];
     const server = http.createServer((request, response) => {
       let body = '';
@@ -619,7 +620,7 @@ describe('DurableAgent against the real host', () => {
     });
     process.env.DURABLE_FAUX = '1';
     process.env.DURABLE_FAUX_RESPONSES = JSON.stringify([
-      { toolCall: { name: 'bash', arguments: { command: 'printf hello > note.txt && cat note.txt' } } },
+      { toolCall: { name: process.platform === 'win32' ? 'powershell' : 'bash', arguments: { command: process.platform === 'win32' ? "[IO.File]::WriteAllText((Join-Path (Get-Location) 'note.txt'), 'hello'); Get-Content note.txt" : 'printf hello > note.txt && cat note.txt' } } },
       { toolCall: { name: 'read', arguments: { path: 'note.txt' } } },
       { toolCall: { name: 'write', arguments: { path: 'draft.txt', content: 'first' } } },
       { toolCall: { name: 'edit', arguments: { path: 'draft.txt', edits: [{ oldText: 'first', newText: 'second' }] } } },
@@ -636,7 +637,7 @@ describe('DurableAgent against the real host', () => {
       const called = store.activities
         .filter((activity) => activity.kind === 'agent.tool_called')
         .map((activity) => activity.summary);
-      assert.deepEqual(called, ['bash', 'read', 'write', 'edit']);
+      assert.deepEqual(called, [process.platform === 'win32' ? 'powershell' : 'bash', 'read', 'write', 'edit']);
       const completed = store.activities.filter((activity) => activity.kind === 'agent.tool_completed');
       assert.equal(completed.length, 4);
       // A missing tool would settle as a completed error result, which is how
@@ -794,7 +795,7 @@ describe('durable model configuration', () => {
       larkCliBin: '/custom-lark/lark-cli',
       slackCliBin: '/custom-slack/slack',
     });
-    assert.equal(safe.PATH, '/custom-lark:/custom-slack:/usr/bin:/bin');
+    assert.equal(safe.PATH, ['/custom-lark', '/custom-slack', '/usr/bin:/bin'].join(path.delimiter));
   });
 });
 

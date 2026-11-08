@@ -8,6 +8,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { appsFor, restartCommand, startCommand, statusCommand, stopCommand } from '../src/control.mjs';
 
+const windows = process.platform === 'win32';
 const TARGETS = JSON.stringify({
   alpha: { app: 'vika-alpha', readyUrl: 'http://127.0.0.1:3738/ready', upgradeSharedWeb: false },
   beta: { app: 'vika-beta', readyUrl: 'http://127.0.0.1:3739/ready', upgradeSharedWeb: false },
@@ -23,7 +24,7 @@ function fixture(t, online = []) {
   const script = path.join(release, 'packages', 'daemon', 'src', 'main.mjs');
   fs.writeFileSync(script, '');
   const releaseLink = path.join(home, '.vika', 'current');
-  fs.symlinkSync(release, releaseLink);
+  fs.symlinkSync(release, releaseLink, windows ? 'junction' : 'dir');
   const apps = new Map(online.map((name) => [name, 'online']));
   const commands = [];
   const execFileImpl = async (bin, args) => {
@@ -41,7 +42,7 @@ function fixture(t, online = []) {
   const fetchImpl = async (url) => { ready.push(url); return { ok: true }; };
   let output = '';
   const options = {
-    env: { VIKA_UPDATER_TARGETS_JSON: TARGETS, HOME: home }, releaseLink, execFileImpl, fetchImpl,
+    env: { VIKA_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl,
     pm2Bin: 'pm2', socketPath: path.join(home, '.vika', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
     stdout: { write: (text) => { output += text; } },
   };
@@ -51,19 +52,20 @@ function fixture(t, online = []) {
 test('a target names one instance, the Web, the updater, or everything', () => {
   const targets = JSON.parse(TARGETS);
   assert.deepEqual(appsFor('beta', targets).map(({ app }) => app), ['vika-beta']);
-  assert.deepEqual(appsFor(undefined, targets).map(({ app }) => app), ['vika-alpha', 'vika-beta', 'vika-web', 'vika-updater']);
+  assert.deepEqual(appsFor(undefined, targets).map(({ app }) => app), ['vika-alpha', 'vika-beta', 'vika-web', ...(windows ? [] : ['vika-updater'])]);
   assert.deepEqual(appsFor('web', targets).map(({ app }) => app), ['vika-web']);
   assert.throws(() => appsFor('gamma', targets), /unknown instance gamma/);
 });
 
 test('start runs the installed release and leaves online apps alone; nothing is fetched or published', async (t) => {
   const f = fixture(t, ['vika-alpha']);
-  assert.equal(await startCommand(undefined, { ...f.options, socketPath: '/nonexistent.sock' }).catch((error) => error.message),
-    'updater did not become ready on /nonexistent.sock');
+  const result = await startCommand(undefined, { ...f.options, socketPath: '/nonexistent.sock' }).catch((error) => error.message);
+  if (windows) assert.equal(result, 0);
+  else assert.equal(result, 'updater did not become ready on /nonexistent.sock');
   assert.deepEqual(f.commands.filter((command) => command.startsWith('start')), [
     `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only vika-beta --update-env`,
     `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only vika-web --update-env`,
-    `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only vika-updater --update-env`,
+    ...(windows ? [] : [`start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only vika-updater --update-env`]),
   ]);
   assert.match(f.output(), /vika-alpha 已经在运行/);
   assert.deepEqual(f.ready, ['http://127.0.0.1:3738/ready', 'http://127.0.0.1:3739/ready', 'http://127.0.0.1:3737/ready']);
@@ -92,7 +94,7 @@ test('start verifies the identity of an already online app before checking ready
 
 test('start checks an already online updater socket instead of announcing success', async (t) => {
   const f = fixture(t, ['vika-updater']);
-  await assert.rejects(startCommand('updater', f.options), /updater did not become ready/);
+  await assert.rejects(startCommand('updater', f.options), windows ? /do not support the release updater/ : /updater did not become ready/);
   assert.doesNotMatch(f.output(), /已经在运行/);
 });
 
@@ -108,7 +110,8 @@ test('restart replaces a running app; stop leaves a stopped app; both save the p
 
 test('start explains when no release is installed', async (t) => {
   const f = fixture(t);
-  fs.rmSync(f.options.releaseLink);
+  if (windows) fs.rmdirSync(f.options.releaseLink);
+  else fs.unlinkSync(f.options.releaseLink);
   await assert.rejects(startCommand('alpha', f.options), /no Vika release is installed/);
 });
 
@@ -178,7 +181,8 @@ test('status lists every app with its pm2 state and readiness', async (t) => {
   await statusCommand(f.options);
   assert.match(f.output(), /vika-alpha\s+运行中\s+就绪/);
   assert.match(f.output(), /vika-beta\s+未启动\s+-/);
-  assert.match(f.output(), /vika-updater\s+未启动/);
+  if (windows) assert.doesNotMatch(f.output(), /vika-updater/);
+  else assert.match(f.output(), /vika-updater\s+未启动/);
 });
 
 test('status names the manifest settings this version ignores', async (t) => {
