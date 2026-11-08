@@ -224,6 +224,20 @@ describe('buildCustomTimeRange', () => {
     expect(buildCustomTimeRange('', '')).toEqual({ error: 'invalid' })
   })
 
+  it.each(['2026-02-29', '2026-02-30', '2026-04-31', '2100-02-29'])(
+    'rejects the impossible date %s in either bound',
+    (value) => {
+      expect(buildCustomTimeRange(value, '')).toEqual({ error: 'invalid' })
+      expect(buildCustomTimeRange('', value)).toEqual({ error: 'invalid' })
+    },
+  )
+
+  it('preserves valid leap dates and trims surrounding whitespace', () => {
+    expect(buildCustomTimeRange(' 2000-02-29 ', ' 2024-02-29 ')).toEqual({
+      range: { preset: 'all', startDate: '2000-02-29', endDate: '2024-02-29' },
+    })
+  })
+
   it('rejects reversed ranges', () => {
     expect(buildCustomTimeRange('2026-08-10', '2026-08-01')).toEqual({
       error: 'order',

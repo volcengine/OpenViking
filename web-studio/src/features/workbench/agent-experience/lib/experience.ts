@@ -294,9 +294,12 @@ export function markExperiencesSeen(entries: readonly { uri: string }[]): void {
 
 /** Parse a `YYYY-MM-DD` string; returns `undefined` when invalid. */
 export function parseUtcDate(value: string): Date | undefined {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return undefined
-  const date = new Date(`${value.trim()}T00:00:00Z`)
-  return Number.isNaN(date.getTime()) ? undefined : date
+  const normalized = value.trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return undefined
+  const date = new Date(`${normalized}T00:00:00Z`)
+  return !Number.isNaN(date.getTime()) && toUtcDate(date) === normalized
+    ? date
+    : undefined
 }
 
 /**
