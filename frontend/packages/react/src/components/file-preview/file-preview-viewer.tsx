@@ -135,38 +135,52 @@ export function FilePreviewViewer({
   // built once per mount and the body stays mounted across copy, view switch and
   // friends. Switching tabs changes `key`, which remounts everything and refreshes
   // the ref, so it never reads the previous tab's values.
-  const latest = useRef({ text, onDownload, tabSlots: tab.slots });
-  latest.current = { text, onDownload, tabSlots: tab.slots };
+  // `canDownload` 一并存进来：`UnsupportedState` 用 `onDownload` 是否存在决定
+  // 是否渲染下载按钮，而调用方总是传一个 wrapper 函数。没有真实下载能力时
+  // 必须传 `undefined`，否则按钮可点但点了什么都不发生。
+  //
+  // `canDownload` rides along: `UnsupportedState` renders the download button only
+  // when `onDownload` is present, and the caller always passes a wrapper. Without a
+  // real download capability it must pass `undefined`, or the button looks enabled
+  // and does nothing when clicked.
+  const canDownload = Boolean(tab.operations?.download);
+  const latest = useRef({ text, onDownload, tabSlots: tab.slots, canDownload });
+  latest.current = { text, onDownload, tabSlots: tab.slots, canDownload };
 
   const slots = useMemo<FileViewerCoreProps['slots']>(() => {
-    const loading = () => <LoadingState text={latest.current.text} />;
-    const error: NonNullable<FileViewerCoreProps['slots']>['error'] = ({
-      retry,
-    }) => <LoadFailedState text={latest.current.text} onRetry={retry} />;
     const downloadFallback: NonNullable<
       FileViewerCoreProps['slots']
     >['downloadFallback'] = () => (
       <UnsupportedState
         text={latest.current.text}
-        onDownload={latest.current.onDownload}
+        onDownload={
+          latest.current.canDownload ? latest.current.onDownload : undefined
+        }
       />
     );
-    const own = latest.current.tabSlots;
-    // 宿主给了兜底就渲染它，没给才用内置的。写成 `own?.x ? undefined : 内置`
-    // 是反的：那样宿主提供之后底座会退回自己的默认渲染，宿主的节点永远不会
-    // 出现。
+    // 分支在调用时才决定，不在创建时决定：`slots` 只建一次（空依赖），而
+    // 宿主可能在挂载后换页签或增删插槽。创建时就把「用宿主的还是内置的」定死，
+    // 切到没有该插槽的页签后会继续渲染上一页的节点，表现为空白。
     //
-    // Use the host's fallback when it supplies one, the built-in otherwise.
-    // Writing `own?.x ? undefined : builtIn` inverts it: the base would fall back
-    // to its own rendering and the host's node would never show.
-    const loadingSlot = own?.loadingFallback
-      ? () => <>{latest.current.tabSlots?.loadingFallback}</>
-      : loading;
-    const errorSlot: NonNullable<FileViewerCoreProps['slots']>['error'] =
-      own?.errorFallback
-        ? () => <>{latest.current.tabSlots?.errorFallback}</>
-        : error;
-    const confirmFallback = own?.confirmFallback;
+    // Decide the branch when called, not when created: `slots` is built once (empty
+    // dependencies) while the host may switch tabs or add/remove slots afterwards.
+    // Fixing "host's or built-in" at creation time would keep rendering the previous
+    // tab's node after switching, showing up as a blank body.
+    const loadingSlot = () => {
+      const own = latest.current.tabSlots?.loadingFallback;
+      return own ? <>{own}</> : <LoadingState text={latest.current.text} />;
+    };
+    const errorSlot: NonNullable<FileViewerCoreProps['slots']>['error'] = ({
+      retry,
+    }) => {
+      const own = latest.current.tabSlots?.errorFallback;
+      return own ? (
+        <>{own}</>
+      ) : (
+        <LoadFailedState text={latest.current.text} onRetry={retry} />
+      );
+    };
+    const confirmFallback = latest.current.tabSlots?.confirmFallback;
     // 底座按 `slots.downloadFallback` → `unsupportedFallback` → 内置兜底的顺序
     // 取格式不支持时的内容。宿主给了 `unsupportedFallback` 就整体接管这个状态，
     // 组件必须让出自己的 `downloadFallback`，否则永远命中它、宿主的节点轮不到。
@@ -181,7 +195,10 @@ export function FilePreviewViewer({
       error: errorSlot,
       ...(hostUnsupported
         ? {}
-        : { downloadFallback: own?.downloadFallback ?? downloadFallback }),
+        : {
+            downloadFallback:
+              latest.current.tabSlots?.downloadFallback ?? downloadFallback,
+          }),
       ...(confirmFallback ? { confirm: confirmFallback } : {}),
     };
   }, []);
@@ -190,7 +207,10 @@ export function FilePreviewViewer({
     // 连可预览的来源都没有，底座无从判断格式，只能由组件兜底。
     return (
       tab.slots?.unsupportedFallback ?? (
-        <UnsupportedState text={text} onDownload={onDownload} />
+        <UnsupportedState
+          text={text}
+          onDownload={canDownload ? onDownload : undefined}
+        />
       )
     );
   }

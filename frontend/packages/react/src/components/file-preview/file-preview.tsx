@@ -19,6 +19,7 @@ import { TruncatedNotice } from './file-preview-state.js';
 import { FilePreviewTabRow } from './file-preview-tab-row.js';
 import { useFilePreviewActions } from './use-file-preview-actions.js';
 import { useFilePreviewActionsContext } from './use-file-preview-actions-context.js';
+import { useFilePreviewIds } from './use-file-preview-ids.js';
 import { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewComponent,
@@ -86,7 +87,15 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const [viewMode, setViewMode] = useState<FilePreviewViewMode>('preview');
   const [viewModes, setViewModes] = useState<readonly string[]>([]);
   const viewerHandle = useRef<ViewerHandle | null>(null);
+  const { tabId, panelId } = useFilePreviewIds();
+
   const currentKey = activeKey ?? internalKey;
+  const panelProps = {
+    id: panelId(currentKey),
+    role: 'tabpanel' as const,
+    'aria-labelledby': tabId(currentKey),
+  };
+  const panelClass = 'ov-file-preview__panel';
   const editing = useFilePreviewEditing(currentKey);
   const actions = useFilePreviewActions();
 
@@ -190,26 +199,18 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         tabs={tabs}
         activeKey={currentKey}
         disabled={editing.saving}
+        tabId={tabId}
+        panelId={panelId}
         onSelect={(key) => void switchTab(key)}
       />
       {contentTab ? (
         // 内容页签整块交给宿主：组件只画页签行，正文不套任何容器，也没有
         // 标题行——组件不知道该在那里显示什么，套一层只会限制宿主的排版。
-        <div
-          id={`ov-file-preview-panel-${currentKey}`}
-          role="tabpanel"
-          aria-labelledby={`ov-file-preview-tab-${currentKey}`}
-          className="ov-file-preview__panel ov-file-preview__panel--content"
-        >
+        <div {...panelProps} className={`${panelClass} --content`}>
           {contentTab.content}
         </div>
       ) : fileTab ? (
-        <div
-          id={`ov-file-preview-panel-${currentKey}`}
-          role="tabpanel"
-          aria-labelledby={`ov-file-preview-tab-${currentKey}`}
-          className="ov-file-preview__panel"
-        >
+        <div {...panelProps} className={panelClass}>
           <FilePreviewHeader
             fileTab={fileTab}
             actions={actionContext}
@@ -228,7 +229,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
               onViewModesChange={onViewModesChange}
               onDownload={() => void actions.download(fileTab)}
               onLinkClick={linkClickHandler}
-              onCancelEditing={() => editing.discard(activeTab)}
+              onCancelEditing={actionContext.cancelEditing}
             />
           </div>
           {fileTab.source.truncated ? <TruncatedNotice text={tabText} /> : null}

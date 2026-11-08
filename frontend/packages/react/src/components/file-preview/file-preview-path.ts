@@ -13,12 +13,21 @@ export interface PathSegment {
 /**
  * 把完整路径拆成可逐级打开的祖先段，最后一段（文件名）不包含在内。
  *
- * 带协议前缀时首段带 `isFirst` 标记，渲染时补上前缀，与火山版面包屑一致：
- * `viking://a/b/c.md` 拆成 `a`、`b`，首段显示为 `viking://a`。
+ * 带协议前缀时首段带 `isFirst` 标记，渲染时补上前缀：`viking://a/b/c.md` 拆成
+ * `a`、`b`，首段显示为 `viking://a`。
+ *
+ * 绝对路径（`/a/b/c.md`）保留开头的斜杠：丢掉它祖先会变成相对路径 `a`、
+ * `a/b`，宿主按相对路径解析就跳到了错误的目录。相对路径（`a/b/c.md`）保持
+ * 原样，不加斜杠。
  *
  * Splits a full path into the ancestor levels that can be opened one by one,
  * excluding the trailing file name. The first segment carries `isFirst` so the
- * renderer can prepend the scheme, matching the internal breadcrumb.
+ * renderer can prepend the scheme: `viking://a/b/c.md` yields `a` and `b`, the
+ * first rendering as `viking://a`.
+ *
+ * An absolute path (`/a/b/c.md`) keeps its leading slash: dropping it turns the
+ * ancestors into relative paths (`a`, `a/b`) that a host resolves against the
+ * wrong directory. A relative path (`a/b/c.md`) is left as-is with no slash added.
  */
 export function splitPathSegments(path?: string): PathSegment[] {
   const trimmed = path?.trim();
@@ -30,11 +39,13 @@ export function splitPathSegments(path?: string): PathSegment[] {
   const parts = body.split(SEPARATOR).filter(Boolean);
   if (parts.length <= 1) return [];
 
+  // 无协议前缀且以 `/` 开头的是绝对路径，祖先必须保留这个根斜杠。
+  const root = scheme === '' && body.startsWith(SEPARATOR) ? SEPARATOR : '';
   const segments: PathSegment[] = [];
   let uri = scheme;
 
   parts.slice(0, -1).forEach((part, index) => {
-    uri = index === 0 ? `${scheme}${part}` : `${uri}${SEPARATOR}${part}`;
+    uri = index === 0 ? `${scheme}${root}${part}` : `${uri}${SEPARATOR}${part}`;
     segments.push({ label: part, uri, isFirst: index === 0 });
   });
 

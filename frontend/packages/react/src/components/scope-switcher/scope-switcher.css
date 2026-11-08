@@ -40,7 +40,10 @@
 .ov-scope-switcher__level + .ov-scope-switcher__level::before {
   content: '/';
   margin-right: 4px;
-  color: var(--ov-ui-color-text-disabled, #a5a7bb);
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
   font-size: 13px;
   font-weight: 500;
   line-height: 22px;
@@ -187,7 +190,10 @@ button.ov-scope-switcher__trigger {
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
 }
 .ov-scope-switcher__option mark {
-  background: var(--ov-ui-color-warning-light, #fff0b3);
+  background: var(
+    --ov-ui-color-warning-light,
+    var(--ov-ui-warning-light-default, #fff0b3)
+  );
   color: inherit;
 }
 .ov-scope-switcher__check {

@@ -11,6 +11,10 @@ export interface FilePreviewTabRowProps {
   tabs: readonly FilePreviewTab[];
   activeKey: string;
   disabled: boolean;
+  /** 按 key 生成页签的 DOM id，带实例前缀避免多实例重复。 */
+  tabId: (key: string) => string;
+  /** 按 key 生成面板的 DOM id，与 `tabId` 同源。 */
+  panelId: (key: string) => string;
   onSelect: (key: string) => void;
 }
 
@@ -62,6 +66,8 @@ export function FilePreviewTabRow({
   tabs,
   activeKey,
   disabled,
+  tabId,
+  panelId,
   onSelect,
 }: FilePreviewTabRowProps) {
   const trackRef = useRef<HTMLDivElement>(null);
@@ -128,7 +134,7 @@ export function FilePreviewTabRow({
     if (!target) return;
     event.preventDefault();
     target.focus();
-    onSelect(target.id.replace('ov-file-preview-tab-', ''));
+    onSelect(target.dataset.key ?? '');
   };
 
   return (
@@ -153,9 +159,10 @@ export function FilePreviewTabRow({
               key={tab.key}
               type="button"
               role="tab"
-              id={`ov-file-preview-tab-${tab.key}`}
+              data-key={tab.key}
+              id={tabId(tab.key)}
               aria-selected={selected}
-              aria-controls={`ov-file-preview-panel-${tab.key}`}
+              aria-controls={panelId(tab.key)}
               tabIndex={selected ? 0 : -1}
               disabled={tab.disabled || disabled}
               title={typeof tab.title === 'string' ? tab.title : undefined}

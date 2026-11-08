@@ -52,10 +52,16 @@ export function useFilePreviewActionsContext({
     return saved;
   }, [editing, fileTab, setViewMode]);
 
-  const cancelEditing = useCallback(
-    () => editing.discard(activeTab),
-    [activeTab, editing],
-  );
+  // 取消与保存一样回到预览视图：进入编辑时切到了源码，退出时不切回去，用户
+  // 会停在源码上，而不是他进入编辑前的样子。
+  //
+  // Cancelling returns to the preview view just like saving does: entering editing
+  // switches to source, and leaving without switching back would strand the user on
+  // the source view instead of the preview they came from.
+  const cancelEditing = useCallback(() => {
+    editing.discard(activeTab);
+    setViewMode('preview');
+  }, [activeTab, editing, setViewMode]);
 
   const copyContent = useCallback(async () => {
     const copyable = fileTab && readCopyableText(fileTab.source);
