@@ -30,7 +30,7 @@ describe('configuration safety', { concurrency: false }, () => {
     for (const [envKey, configKey] of [['LARK_CLI_BIN', 'larkCliBin'], ['SLACK_CLI_BIN', 'slackCliBin']]) {
       for (const [value, expected] of [
         ['custom-cli', 'custom-cli'],
-        ['/opt/custom tools/renamed-cli', '/opt/custom tools/renamed-cli'],
+        [path.resolve('/opt/custom tools/renamed-cli'), path.resolve('/opt/custom tools/renamed-cli')],
         ['./custom tools/renamed-cli', path.join(projectDir, 'custom tools', 'renamed-cli')],
       ]) {
         setEnv(envKey, value);
@@ -64,10 +64,10 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('VIKA_TEMP_DIR', undefined);
     setEnv('TMPDIR', '/tmp/system-temp');
     const original = getConfig();
-    assert.equal(original.tempDir, '/root/.local/share/vika-primary/tmp');
+    assert.equal(original.tempDir, path.resolve('/root/.local/share/vika-primary', 'tmp'));
     setEnv('VIKA_TEMP_DIR', '/tmp/vika-primary/');
     const configured = getConfig();
-    assert.equal(path.resolve(configured.tempDir), '/tmp/vika-primary');
+    assert.equal(path.resolve(configured.tempDir), path.resolve('/tmp/vika-primary'));
     for (const field of ['dataDir', 'databasePath', 'lockPath', 'workspace']) {
       assert.equal(configured[field], original[field]);
     }

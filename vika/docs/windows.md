@@ -49,8 +49,18 @@ PM2 is the user-installed, unmodified program. Vika does not patch its Windows
 pipes or promise isolation between multiple PM2 homes. Use only the named apps;
 never stop unrelated PM2 applications. These commands start the source checkout.
 The release-oriented `vika start` expects an installed `current` release and is
-not the source startup procedure. Updating a checkout requires restarting these
-apps; it does not update a separate installed release.
+not the source startup procedure. Updating a checkout does not update a separate
+installed release. For source updates, stop the two named apps, then start them from the ecosystem file again:
+
+```powershell
+pm2 stop vika-primary vika-web
+pm2 start ecosystem.config.cjs --only vika-primary,vika-web --update-env
+```
+
+Do not use `pm2 restart` on this Windows preview: PM2 6.0.14 has been observed
+to lose its PID and enter a restart loop. If that already happened, inspect the
+named apps and their actual processes before recovery; do not use `pm2 kill`
+or assume an `online` entry with PID 0 is healthy.
 
 ## Supported scope and limits
 
@@ -85,14 +95,21 @@ checkout/commit and configuration for rollback; do not copy this tree over a
 running installation. The previous logs options and unrelated lock, logging,
 delivery, interruption and PM2 behavior fixes were split out for separate review.
 
-From `vika`, run `npm test`. The development-only `npm run check` needs a POSIX
-shell because its syntax check uses shell loops. On Windows, npm runs scripts
-through `cmd.exe` even when started from Git Bash, so `npm run check` itself
-fails there; run the same loops in Git Bash directly, or point
-`npm_config_script_shell` at Git Bash. Platform isolation and POSIX configuration snapshots
-run in the normal suite; macOS configuration selection on Linux is not a macOS
-runtime test. On Windows, test normal-user startup/stop, descendant cleanup,
-occupied pipes, long instructions and each connector/runtime you actually use.
+From `vika`, `npm run check` runs JavaScript syntax checks natively in Node,
+without Git Bash or an npm shell override. POSIX release shell scripts are
+explicitly skipped on Windows and checked on POSIX hosts.
+
+`npm test` is the full development suite, not a Windows acceptance gate yet:
+it still includes POSIX release fixtures and Windows-incompatible test cleanup.
+Failures must not be counted as passes. The runner now fails a test after 120 seconds and fails/kills its own test
+process tree if the suite exceeds 10 minutes (`VIKA_TEST_TIMEOUT_MS` overrides
+the suite limit). This bounds a hang; it does not repair or hide failing tests.
+Do not use `--test-force-exit` to claim the normal suite exits cleanly.
+For this source preview, run the relevant platform, durable, connector and OV
+tests and record every failure/skip separately. Verify normal-user startup/stop,
+descendant cleanup, occupied pipes, long instructions and the connector/runtime
+you actually use on the real Windows host. Linux runs of configuration tests do
+not establish macOS or Windows runtime parity.
 
 Report issues with the commit, Windows/Node/npm/PM2/PowerShell versions, selected
 runtime and connector, reproduction steps and sanitized error text. Do not post
