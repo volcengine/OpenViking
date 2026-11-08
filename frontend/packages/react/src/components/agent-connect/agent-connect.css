@@ -6,8 +6,8 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--ov-ui-radius, 6px);
-  background: var(--ov-ui-placeholder, #f3f4f7);
-  color: var(--ov-ui-text-muted, #8f959e);
+  background: var(--ov-ui-color-bg-5, #f1f2f9);
+  color: var(--ov-ui-color-text-3, #6e718c);
   font-family: inherit;
   font-size: 12px;
 }

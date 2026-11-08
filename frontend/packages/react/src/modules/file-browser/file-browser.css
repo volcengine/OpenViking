@@ -6,22 +6,22 @@
   border: 0;
   border-radius: var(--ov-ui-radius-sm, 4px);
   background: transparent;
-  color: var(--ov-ui-color-primary, #1664ff);
+  color: var(--ov-ui-color-primary, #5252ff);
   font: inherit;
   cursor: pointer;
 }
 
 .ov-file-browser__toolbar-button:hover:not(:disabled) {
-  background: var(--ov-ui-color-fill-hover, rgba(22, 100, 255, 0.08));
+  background: var(--ov-ui-color-fill-hover, #f1f2f9);
 }
 
 .ov-file-browser__toolbar-button:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, #1664ff);
+  outline: 2px solid var(--ov-ui-color-focus, #5252ff);
   outline-offset: 2px;
 }
 
 .ov-file-browser__toolbar-button:disabled {
-  color: var(--ov-ui-color-text-disabled, rgba(0, 0, 0, 0.25));
+  color: var(--ov-ui-color-text-disabled, #a5a7bb);
   cursor: not-allowed;
 }
 
@@ -48,7 +48,7 @@
   width: 1px;
   height: 16px;
   margin-right: var(--ov-ui-space-2, 8px);
-  background: var(--ov-ui-color-border, rgba(0, 0, 0, 0.12));
+  background: var(--ov-ui-color-border-2, #e1e4f2);
   vertical-align: middle;
 }
 
@@ -62,7 +62,7 @@
   min-width: 0;
   min-height: 160px;
   padding: 24px;
-  border: 1px dashed var(--ov-ui-border, currentColor);
+  border: 1px dashed var(--ov-ui-color-border-2, currentColor);
   border-radius: var(--ov-ui-radius, 6px);
   color: inherit;
   font: inherit;

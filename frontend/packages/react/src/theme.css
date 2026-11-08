@@ -1,0 +1,102 @@
+/**
+ * 包级主题基线。取值来自 OpenViking 控制台使用的设计规范（Arco 主题包
+ * `@arco-design/theme-ve-o-aml-design`）——只取颜色，不引入它的组件样式。
+ *
+ * 声明在组件根选择器上而不是 `:root`：库不修改宿主的全局样式，只在自身根节点
+ * 提供默认值。宿主可在应用入口覆盖任意一条，也可整组替换来换肤。
+ *
+ * 暗色只认宿主放在 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`：
+ * 系统偏好和宿主实际呈现的主题可能不一致（文档站被手动切成浅色、系统仍是
+ * 暗色），跟系统走会让组件底色与周围文字对不上。宿主没有切换主题时保持亮色。
+ *
+ * Package-level theme baseline. Values come from the design system the OpenViking
+ * console uses (the Arco theme package `@arco-design/theme-ve-o-aml-design`) —
+ * the colours only, never its component styles.
+ *
+ * Declared on component roots rather than `:root`: the library never restyles a
+ * host's globals, it only supplies defaults on its own roots. A host overrides any
+ * single variable at its entry point, or the whole set to re-skin.
+ *
+ * Dark mode keys off the `.dark` class a host puts on `<html>`, never
+ * `prefers-color-scheme`: the system preference can disagree with the theme the
+ * host actually renders, and following the OS would leave surfaces clashing with
+ * the surrounding text. A host with no theme switch stays light.
+ */
+.ov-agent-connect,
+.ov-file-browser,
+.ov-file-preview,
+.ov-file-tree,
+.ov-module-placeholder,
+.ov-scope-switcher,
+.ov-tui {
+  /* 主色：面包屑、焦点环、选中态与主要按钮。 */
+  --ov-ui-color-primary: #5252ff;
+  --ov-ui-color-primary-hover: #7075ff;
+  --ov-ui-color-primary-active: #3833d2;
+  /* 主色的浅色底，用于选中行与轻量高亮。 */
+  --ov-ui-color-primary-light: #f5f7ff;
+
+  /* 文字：正文、次级、弱化、禁用。 */
+  --ov-ui-color-text-1: #0b0b0f;
+  --ov-ui-color-text-2: #3f3f51;
+  --ov-ui-color-text-3: #6e718c;
+  --ov-ui-color-text-disabled: #a5a7bb;
+
+  /* 边框：分隔线、控件描边、强调描边。 */
+  --ov-ui-color-border-1: #f0f2fa;
+  --ov-ui-color-border-2: #e1e4f2;
+  --ov-ui-color-border-3: #d7daea;
+
+  /* 底色：面板、次级面板、选中、悬停。 */
+  --ov-ui-color-bg-1: #ffffff;
+  --ov-ui-color-bg-3: #f7f8fd;
+  --ov-ui-color-bg-4: #f6f7fa;
+  --ov-ui-color-bg-5: #f1f2f9;
+
+  /* 语义色。 */
+  --ov-ui-color-focus: #5252ff;
+  --ov-ui-color-fill-hover: #f1f2f9;
+  --ov-ui-color-status-error: #c43838;
+  --ov-ui-color-warning: #b26a00;
+  --ov-ui-color-warning-light: #fff0b3;
+
+  /* 浮层。 */
+  --ov-ui-color-tooltip-bg: #1f2329;
+  --ov-ui-color-tooltip-text: #ffffff;
+}
+
+.dark .ov-agent-connect,
+.dark .ov-file-browser,
+.dark .ov-file-preview,
+.dark .ov-file-tree,
+.dark .ov-module-placeholder,
+.dark .ov-scope-switcher,
+.dark .ov-tui {
+  --ov-ui-color-primary: #5f5fff;
+  --ov-ui-color-primary-hover: #7075ff;
+  --ov-ui-color-primary-active: #4242ba;
+  --ov-ui-color-primary-light: #1a1632;
+
+  --ov-ui-color-text-1: #c7ccd6;
+  --ov-ui-color-text-2: #9da3af;
+  --ov-ui-color-text-3: #737a87;
+  --ov-ui-color-text-disabled: #42464e;
+
+  --ov-ui-color-border-1: #23252a;
+  --ov-ui-color-border-2: #2e3138;
+  --ov-ui-color-border-3: #3a3d45;
+
+  --ov-ui-color-bg-1: #131416;
+  --ov-ui-color-bg-3: #1b1d21;
+  --ov-ui-color-bg-4: #202227;
+  --ov-ui-color-bg-5: #23252a;
+
+  --ov-ui-color-focus: #5f5fff;
+  --ov-ui-color-fill-hover: #23252a;
+  --ov-ui-color-status-error: #ff9595;
+  --ov-ui-color-warning: #e0a04a;
+  --ov-ui-color-warning-light: #3a2f14;
+
+  --ov-ui-color-tooltip-bg: #2a2d33;
+  --ov-ui-color-tooltip-text: #f0f1f3;
+}
