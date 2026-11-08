@@ -20,6 +20,9 @@ export default defineConfig({
           'components/scope-switcher':
             './src/components/scope-switcher/index.ts',
           'components/agent-connect': './src/components/agent-connect/index.ts',
+          'components/viking-bot': './src/components/viking-bot/index.ts',
+          'components/viking-bot/interaction':
+            './src/components/viking-bot/interaction/index.ts',
           'modules/file-browser': './src/modules/file-browser/index.ts',
           'modules/console': './src/modules/console/index.ts',
           'modules/task-center': './src/modules/task-center/index.ts',
@@ -45,6 +48,9 @@ export default defineConfig({
         './src/components/scope-switcher/style.css',
       'components/agent-connect/style':
         './src/components/agent-connect/style.css',
+      'components/viking-bot/style': './src/components/viking-bot/style.css',
+      'components/viking-bot/interaction/style':
+        './src/components/viking-bot/viking-bot-interaction.css',
       'modules/style': './src/modules/style.css',
       'modules/file-browser/style': './src/modules/file-browser/style.css',
       'modules/console/style': './src/modules/console/style.css',

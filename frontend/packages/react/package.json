@@ -50,6 +50,15 @@
       "import": "./dist/components/agent-connect.js"
     },
     "./components/agent-connect/style.css": "./dist/components/agent-connect/style.css",
+    "./components/viking-bot": {
+      "types": "./dist/components/viking-bot/index.d.ts",
+      "import": "./dist/components/viking-bot.js"
+    },
+    "./components/viking-bot/style.css": "./dist/components/viking-bot/style.css",
+    "./components/viking-bot/interaction": {
+      "types": "./dist/components/viking-bot/interaction/index.d.ts",
+      "import": "./dist/components/viking-bot/interaction.js"
+    },
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./modules/file-browser": {

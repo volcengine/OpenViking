@@ -42,7 +42,8 @@
 .ov-module-placeholder,
 .ov-scope-switcher,
 .ov-tooltip,
-.ov-tui {
+.ov-tui,
+.ov-viking-bot {
   /* 主色：面包屑、焦点环、选中态与主要按钮。 */
   --ov-ui-primary-default: #5252ff;
   --ov-ui-primary-hover-default: #7075ff;
@@ -86,7 +87,8 @@
 .dark .ov-module-placeholder,
 .dark .ov-scope-switcher,
 .dark .ov-tooltip,
-.dark .ov-tui {
+.dark .ov-tui,
+.dark .ov-viking-bot {
   --ov-ui-primary-default: #5f5fff;
   --ov-ui-primary-hover-default: #7075ff;
   --ov-ui-primary-active-default: #4242ba;
