@@ -128,8 +128,9 @@ export interface ScopeSwitcherData {
    * 当前选中项 id，由宿主持有。命中项渲染勾选标记并使用
    * `role="option"` + `aria-selected` 表达状态。
    *
-   * 组件只按传入的值渲染，不做归一化：id 为空、不在 `options` 里或指向禁用项
-   * 时，列表里没有任何一行被标记为选中，组件也不会替宿主改选中值或回调
+   * 组件只按传入的值渲染，不做归一化：id 为空或不在 `options` 里时，列表里没有
+   * 任何一行被标记为选中；id 命中一个禁用项时照常标记选中（禁用只阻止交互，不
+   * 抹掉选中态），直到宿主把它归一化掉。组件不会替宿主改选中值，也不会回调
    * `actions.onSelect`。
    *
    * 作用域始终要有一个确定的值，因此**归一化由宿主负责**：在数据到达后检查
@@ -143,9 +144,11 @@ export interface ScopeSwitcherData {
    * mark and expresses its state with `role="option"` and `aria-selected`.
    *
    * The component renders the value it is given and never normalises it: an id
-   * that is empty, absent from `options` or points at a disabled option marks no
-   * row as selected, and the component neither changes the value nor calls
-   * `actions.onSelect` on the host's behalf.
+   * that is empty or absent from `options` marks no row as selected, while an id
+   * matching a disabled option is still rendered as selected — disabled blocks
+   * interaction, it does not clear the selection — until the host normalises it.
+   * The component neither changes the value nor calls `actions.onSelect` on the
+   * host's behalf.
    *
    * A scope still needs a definite value, so **normalisation belongs to the
    * host**: after data arrives, check whether `selectedId` is still valid and

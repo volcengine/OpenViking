@@ -85,7 +85,7 @@ This example now uses `useScopeCascade` and `ScopeCascade`: only three API adapt
 
 ### Selection normalisation belongs to the host
 
-`ScopeSelector` renders `data.selectedId` exactly as given. When the id is empty, absent from `options` or points at a disabled option, no row is marked as selected and the component does not change the value or call `actions.onSelect` on your behalf.
+`ScopeSelector` renders `data.selectedId` exactly as given. When the id is empty or absent from `options`, no row is marked as selected; when it matches a disabled option, the row is still rendered as selected — disabled blocks interaction, it does not clear the selection — until the host normalises it. In neither case does the component change the value or call `actions.onSelect` on your behalf.
 
 A scope still needs a definite value, so check the selection after data arrives and pick the first selectable option when it is no longer valid, then write the result back to the URL and request parameters. `ScopeCascade` ships this: its controller falls back, resets descendants and loads the next level once the authoritative list arrives.
 

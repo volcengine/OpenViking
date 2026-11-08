@@ -98,6 +98,10 @@ test('the component renders the selection it is given, without normalising it', 
   }
   // A valid id is rendered as given.
   assert.match(render({ data: { options, selectedId: 'c' } }), /Gamma/);
+  // A disabled match keeps both flags: disabled blocks interaction, it does not
+  // clear the selection. The host is expected to normalise it away.
+  const disabled = render({ data: { options, selectedId: 'b' } });
+  assert.match(disabled, /aria-selected="true"[^>]*aria-disabled="true"/);
 });
 
 test('a paged subset still shows search when the full set crosses the threshold', () => {

@@ -84,7 +84,7 @@
 
 ### 选中值归一化由宿主负责
 
-`ScopeSelector` 严格按 `data.selectedId` 渲染。id 为空、不在 `options` 里或指向禁用项时，列表里没有任何一行被标记为选中，组件也不会替宿主改值或调用 `actions.onSelect`。
+`ScopeSelector` 严格按 `data.selectedId` 渲染。id 为空或不在 `options` 里时，列表里没有任何一行被标记为选中；id 命中一个禁用项时照常标记选中（禁用只阻止交互，不抹掉选中态），直到宿主把它归一化掉。这两种情况下组件都不会替宿主改值或调用 `actions.onSelect`。
 
 作用域始终要有一个确定的值，因此请在数据到达后检查选中值是否仍然有效，无效则改选第一个可选项，并把结果写回 URL 与请求参数。`ScopeCascade` 已经内置这层：它的 controller 在权威列表到达后完成回退、清空下游并加载下一级。
 
