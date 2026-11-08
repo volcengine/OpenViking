@@ -633,16 +633,6 @@ export class DurableAgent {
     )];
   }
 
-  _finishInterruptedTools(reason) {
-    for (const [toolId, startedAt] of this.toolStarts) {
-      this._recordActivity('agent.tool_completed', {
-        status: 'FAILED', summary: reason,
-        metadata: { runtime: DURABLE_RUNTIME.id, toolId, durationMs: Date.now() - startedAt, error: reason, cancelled: true },
-      });
-    }
-    this.toolStarts.clear();
-  }
-
   _completeTurn(error = null) {
     const turnStartedAtMs = this.turnStartedAtMs;
     const items = this.activeItems.splice(0);
@@ -655,7 +645,7 @@ export class DurableAgent {
     this.turnStartedAtMs = null;
     this.modelWorking = false;
     this.deliveredThroughSeq = this.syncedThroughSeq;
-    this._finishInterruptedTools(error ? safe(error) : 'turn ended before tool completion');
+    this.toolStarts.clear();
     this._recordActivity('agent.turn_completed', {
       inboundSeq: seqs.at(-1) ?? null,
       status: error ? 'failed' : 'completed',
@@ -1072,7 +1062,6 @@ export class DurableAgent {
 
   async stop() {
     this.stopping = true;
-    this._finishInterruptedTools('durable stopped during tool execution');
     this.autoReconnect = false;
     this._rejectPendingRpc(new Error('durable stopped'));
     await this.settingsUpdate;

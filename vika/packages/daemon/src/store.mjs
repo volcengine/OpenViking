@@ -1677,23 +1677,6 @@ export class Store {
       ORDER BY outcome = 'delivered' DESC LIMIT 1`).get(scopeKey, seq)?.outcome ?? null;
   }
 
-  // A decision reserves a delivery before the connector runs. Only a SENT
-  // final delivery proves a reply exists; response_to may refer to an older
-  // input, so use the final decision's seq recorded in the journal.
-  successfulDecisionDelivery(scopeKey, seq) {
-    return Boolean(this.db.prepare(`SELECT 1 FROM outbox o
-      JOIN cognition_journal j ON j.dedupe_key = 'outbox:' || o.id
-      JOIN connector_events e ON e.seq = json_extract(j.detail_json, '$.finalDecisionSeq')
-      WHERE o.caller = 'agent' AND o.status = 'SENT'
-        AND e.scope_key = ? AND e.seq >= ? LIMIT 1`).get(scopeKey, seq));
-  }
-
-  linkFinalDecisionDelivery(outboxId, seq) {
-    this.db.prepare(`UPDATE cognition_journal
-      SET detail_json = json_set(detail_json, '$.finalDecisionSeq', ?)
-      WHERE dedupe_key = ?`).run(seq, `outbox:${outboxId}`);
-  }
-
   // Which connector a message or chat id belongs to, as far as this daemon has
   // seen it: an authenticated inbound or one of its own deliveries.
   connectorForMessage(messageId) {

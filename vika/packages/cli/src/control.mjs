@@ -269,11 +269,6 @@ export async function statusCommand(options) {
 export function logsCommand(target, options = {}) {
   const context = defaults(options);
   const [spec] = appsFor(target, loadTargets(context.env));
-  const args = ['logs', spec.app, '--lines', String(options.lines ?? 100)];
-  if (options.follow === false) args.push('--nostream');
-  const child = spawn(context.pm2Bin, args, { stdio: 'inherit', env: context.pm2Env });
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code) => resolve(code ?? 1));
-  });
+  const child = spawn(context.pm2Bin, ['logs', spec.app, '--lines', '100'], { stdio: 'inherit', env: context.pm2Env });
+  return new Promise((resolve) => child.once('exit', (code) => resolve(code ?? 0)));
 }

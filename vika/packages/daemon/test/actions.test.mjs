@@ -1781,14 +1781,3 @@ describe('staged replies', () => {
     assert.equal(service.reactionRemovals.size, 0);
   });
 });
-
-it('links a deduplicated interim message to its final decision', async (t) => {
-  const { store, call, inbound } = setup(t, { stagedReplies: true, explicitSilence: true });
-  const row = inbound({ messageId: 'om_final123456789', chatId: 'oc_final123456789' });
-  const input = { chat_id: row.chatId, markdown: 'completed', decision_id: row.eventId };
-  await call('send_message', { ...input, interim: true });
-  assert.equal(store.successfulDecisionDelivery(row.scopeKey, row.seq), false);
-  const result = await call('send_message', input);
-  assert.equal(result.data.duplicate, true);
-  assert.equal(store.successfulDecisionDelivery(row.scopeKey, row.seq), true);
-});

@@ -798,15 +798,3 @@ describe('durable model configuration', () => {
     assert.equal(safe.PATH, ['/custom-lark', '/custom-slack', '/usr/bin:/bin'].join(path.delimiter));
   });
 });
-
-it('stopping durable records terminal activity for unfinished tools', async () => {
-  const { agent, store } = fakeHarness();
-  agent.toolStarts.set('unfinished-tool', Date.now() - 50);
-  await agent.stop();
-  const completed = store.activities.filter(row => row.kind === 'agent.tool_completed');
-  assert.equal(completed.length, 1);
-  assert.equal(completed[0].metadata.toolId, 'unfinished-tool');
-  assert.equal(completed[0].metadata.cancelled, true);
-  assert.ok(completed[0].metadata.durationMs >= 50);
-  assert.equal(agent.toolStarts.size, 0);
-});
