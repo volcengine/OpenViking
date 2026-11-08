@@ -66,7 +66,10 @@ apps; it does not update a separate installed release.
   established, and localhost Web access is not per-user authentication.
 - Vika does not provision or verify Windows ACLs. Use private user-owned data,
   workspace and temporary directories. No filesystem sandbox is claimed.
-- Upgrade/updater, autostart, email and Windows release builds are disabled.
+- Upgrade/updater, autostart and Windows release builds are disabled.
+- Email is enabled. On Windows the email account file's mode is not checked
+  (Windows reports 0666 regardless of ACLs); keep account files in a private,
+  user-owned directory.
   Autostart returns an unsupported-preview error. There is no Windows installer,
   VBS startup entry or Windows CI workflow. Slack has no Windows bundled/default
   executable; it requires an explicit `SLACK_CLI_BIN` and separate validation.
