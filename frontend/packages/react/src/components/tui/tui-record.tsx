@@ -1,5 +1,9 @@
 import { resolveTuiSkeleton } from './command-catalog.js';
 import type { TuiCommandDefinition } from './command-catalog.js';
+import {
+  getTuiCommandInputText,
+  matchTuiCommandInput,
+} from './command-input.js';
 import { TuiCommandHelp } from './tui-command-help.js';
 import { TuiCopyButton } from './tui-copy-button.js';
 import type { ResolvedTuiLabels } from './tui-labels.js';
@@ -98,11 +102,28 @@ const STATUS_TEXT = {
 export function TuiRecordItem(props: TuiRecordProps) {
   const { record, labels } = props;
   const statusLabel = labels[STATUS_TEXT[record.status]];
+  const input = props.command
+    ? matchTuiCommandInput(record.command, [props.command])
+    : undefined;
+  const prefix = input ? getTuiCommandInputText(input.command) : '';
+  const commandText = input
+    ? `${input.leadingWhitespace}${prefix}${input.rest}`
+    : record.command;
 
   return (
     <div className="ov-tui__record" data-status={record.status}>
       <div className="ov-tui__bubble">
-        <code className="ov-tui__bubble-text">{record.command}</code>
+        <code className="ov-tui__bubble-text">
+          {input ? (
+            <>
+              {input.leadingWhitespace}
+              <span className="ov-tui__bubble-command">{prefix}</span>
+              {input.rest}
+            </>
+          ) : (
+            record.command
+          )}
+        </code>
         {record.createdAt ? (
           <span className="ov-tui__bubble-time">{record.createdAt}</span>
         ) : null}
@@ -114,7 +135,7 @@ export function TuiRecordItem(props: TuiRecordProps) {
             {statusLabel}
           </span>
           <TuiCopyButton
-            text={record.command}
+            text={commandText}
             label={labels.copy}
             copiedLabel={labels.copied}
             onCopy={props.onCopy}

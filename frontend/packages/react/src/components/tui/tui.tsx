@@ -69,11 +69,15 @@ export function Tui({
   const assistId = useId();
   const [dismissedValue, setDismissedValue] = useState<string | null>(null);
   const [paletteScope, setPaletteScope] = useState<string | null>(null);
+  const [selection, setSelection] = useState({ queryKey: value, index: -1 });
   const dismissCompletion = useCallback((next: string) => {
     setDismissedValue(next);
     setPaletteScope(null);
+    setSelection({ queryKey: next, index: -1 });
   }, []);
   const updateValue = (next: string) => {
+    setDismissedValue(null);
+    setSelection({ queryKey: next, index: -1 });
     if (getTuiCommandQuery(next, commands).scope !== paletteScope)
       setPaletteScope(null);
     onValueChange?.(next);
@@ -89,21 +93,19 @@ export function Tui({
     paletteScope,
   );
   const queryKey = value;
-  const [selection, setSelection] = useState({ queryKey, index: 0 });
   const activeIndex =
-    selection.queryKey === queryKey
-      ? Math.min(selection.index, Math.max(0, completion.options.length - 1))
-      : 0;
+    selection.queryKey === queryKey &&
+    selection.index < completion.options.length
+      ? selection.index
+      : -1;
   const setActiveIndexSafely = useCallback(
     (next: number | ((index: number) => number)) => {
       setSelection((current) => {
         const index =
-          current.queryKey === queryKey
-            ? Math.min(
-                current.index,
-                Math.max(0, completion.options.length - 1),
-              )
-            : 0;
+          current.queryKey === queryKey &&
+          current.index < completion.options.length
+            ? current.index
+            : -1;
         return {
           queryKey,
           index: typeof next === 'function' ? next(index) : next,
@@ -155,6 +157,7 @@ export function Tui({
         onDismiss={dismissCompletion}
         onRequestPalette={() => {
           setDismissedValue(null);
+          setSelection({ queryKey: value, index: -1 });
           setPaletteScope(completion.query.scope);
         }}
         assistId={assistId}

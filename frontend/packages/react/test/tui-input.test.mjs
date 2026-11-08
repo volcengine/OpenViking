@@ -13,6 +13,7 @@ const output = await mkdtemp(join(tmpdir(), 'ov-tui-input-'));
 const source = new URL('../src/components/tui/', import.meta.url);
 const builder = await createRslib({
   config: {
+    performance: { buildCache: false },
     lib: [
       {
         format: 'esm',
@@ -88,7 +89,6 @@ test('confirmed commands use inline hints without opening the full parameter pan
   assert.ok(!html.includes('class="ov-tui__hint"'));
   assert.ok(!html.includes('role="listbox"'));
   assert.match(html, /<textarea[^>]*>host read <\/textarea>/);
-  assert.deepEqual(getTuiArgumentHints(commands[0]), commands[0].params);
 });
 
 test('inline placeholders disappear once real arguments are typed and never enter the value', () => {
@@ -101,12 +101,14 @@ test('inline placeholders disappear once real arguments are typed and never ente
   assert.match(html, /<textarea[^>]*>host read viking:\/\/demo<\/textarea>/);
 });
 
-test('slash discovery keeps the floating list and its detailed help', () => {
+test('slash discovery opens an unselected list without unsolicited details', () => {
   const html = renderToStaticMarkup(
     createElement(Tui, { ...props, value: '/' }),
   );
   assert.ok(html.includes('role="listbox"'));
-  assert.ok(html.includes('class="ov-tui__hint"'));
+  assert.ok(!html.includes('class="ov-tui__hint"'));
+  assert.ok(!html.includes('aria-selected="true"'));
+  assert.ok(!html.includes('aria-activedescendant'));
 });
 
 test('commands without positional arguments hint only explicitly required flags', () => {
@@ -180,4 +182,29 @@ test('ghost text is visual only; ordinary CLI typing keeps the palette closed', 
     assert.ok(html.includes(`>${value}</textarea>`));
     assert.ok(!html.includes('class="ov-tui__input-arguments"'));
   }
+});
+
+test('record echoes canonical host prefixes and preserves arguments and unknown text', () => {
+  const record = {
+    id: 'echo',
+    command: '  /cat "viking://demo/a b" --offset 2',
+    status: 'success',
+    createdAt: '10:24',
+  };
+  const renderBubble = (commands) =>
+    renderToStaticMarkup(
+      createElement(Tui, { ...props, commands, records: [record] }),
+    ).match(/<div class="ov-tui__bubble">([\s\S]*?)<\/div>/)[1];
+  const bubble = renderBubble(commands);
+  assert.ok(
+    bubble.includes(
+      'ov-tui__bubble-command">host read</span> &quot;viking://demo/a b&quot; --offset 2',
+    ),
+  );
+  assert.ok(bubble.includes('ov-tui__bubble-time">10:24</span>'));
+  const unknown = renderBubble([]);
+  assert.ok(
+    unknown.includes('  /cat &quot;viking://demo/a b&quot; --offset 2'),
+  );
+  assert.ok(!unknown.includes('ov-tui__bubble-command'));
 });

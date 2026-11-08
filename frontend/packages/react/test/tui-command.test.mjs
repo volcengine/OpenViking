@@ -14,6 +14,7 @@ const source = new URL('../src/components/tui/', import.meta.url);
 const output = await mkdtemp(join(tmpdir(), 'ov-tui-command-'));
 const builder = await createRslib({
   config: {
+    performance: { buildCache: false },
     lib: [
       {
         format: 'esm',
@@ -136,7 +137,7 @@ const props = {
   onValueChange() {},
 };
 
-test('a new host command renders its candidate, example and parameter details without a library update', () => {
+test('a new host command is discoverable without selecting it or opening its details', () => {
   const next = {
     name: 'brand-new-command',
     group: 'custom',
@@ -155,15 +156,11 @@ test('a new host command renders its candidate, example and parameter details wi
   const html = renderToStaticMarkup(
     createElement(Tui, { ...props, commands: [next], locale: 'zh' }),
   );
-  for (const text of [
-    'brand-new-command',
-    '宿主新增命令',
-    '数量',
-    '25',
-    '快速体验',
-    '参数详情',
-  ])
+  for (const text of ['brand-new-command', '宿主新增命令'])
     assert.ok(html.includes(text), text);
+  assert.ok(!html.includes('class="ov-tui__hint"'));
+  assert.ok(!html.includes('aria-selected="true"'));
+  assert.ok(!html.includes('aria-activedescendant'));
   const empty = renderToStaticMarkup(
     createElement(Tui, { ...props, commands: [] }),
   );
@@ -175,15 +172,7 @@ test('locale changes generic UI, labels override it, and host command copy is pr
   const chinese = renderToStaticMarkup(
     createElement(Tui, { ...props, locale: 'zh' }),
   );
-  for (const text of [
-    '宿主操作',
-    '刷新宿主索引',
-    '快速体验',
-    '参数详情',
-    '必填',
-    '执行成功',
-    '复制',
-  ])
+  for (const text of ['宿主操作', '刷新宿主索引', '执行成功', '复制'])
     assert.ok(chinese.includes(text), text);
   const override = renderToStaticMarkup(
     createElement(Tui, {
@@ -192,14 +181,14 @@ test('locale changes generic UI, labels override it, and host command copy is pr
       labels: {
         copy: 'Custom copy',
         success: 'Custom status',
-        required: 'Mandatory',
+        allCommands: 'Custom catalogue',
       },
     }),
   );
   assert.ok(override.includes('Custom copy'));
   assert.ok(override.includes('Custom status'));
-  assert.ok(override.includes('Mandatory'));
-  assert.ok(chinese.includes('aria-activedescendant'));
+  assert.ok(override.includes('Custom catalogue'));
+  assert.ok(!chinese.includes('aria-activedescendant'));
   const english = renderToStaticMarkup(createElement(Tui, props));
   assert.ok(english.includes('Succeeded'));
   assert.ok(english.includes('刷新宿主索引'));

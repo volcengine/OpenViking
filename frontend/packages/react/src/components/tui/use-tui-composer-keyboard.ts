@@ -99,8 +99,12 @@ export function useTuiComposerKeyboard({
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
           event.preventDefault();
           const delta = event.key === 'ArrowDown' ? 1 : -1;
-          onActiveIndexChange(
-            (index) => (index + delta + options.length) % options.length,
+          onActiveIndexChange((index) =>
+            index < 0
+              ? delta > 0
+                ? 0
+                : options.length - 1
+              : (index + delta + options.length) % options.length,
           );
           return;
         }
@@ -113,10 +117,12 @@ export function useTuiComposerKeyboard({
           (event.key === 'Enter' && !event.shiftKey) ||
           spaceCommand
         ) {
+          event.preventDefault();
           const picked = spaceCommand ?? options[activeIndex];
           if (picked) {
-            event.preventDefault();
             accept(`${getTuiCommandInputText(picked)} `);
+          } else if (event.key === 'Tab' && inline) {
+            accept(inline.value);
           }
           return;
         }
@@ -153,8 +159,8 @@ export function useTuiComposerKeyboard({
       const draft = browsing ? previous.draft : value;
       const next = offset < 0 ? draft : history[history.length - 1 - offset]!;
       historyRef.current = { offset, draft, value: next };
-      onDismiss(next);
       onValueChange?.(next);
+      onDismiss(next);
       inputRef.current?.focus({ preventScroll: true });
       return;
     }

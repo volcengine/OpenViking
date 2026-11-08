@@ -81,16 +81,18 @@
   display: inline-flex;
   min-width: 0;
   max-width: 90%;
-  align-items: center;
+  align-items: stretch;
   align-self: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   border-radius: 12px;
   background: var(--ov-ui-tui-bubble-bg);
   padding: 10px 12px;
 }
 
 .ov-tui__bubble-text {
-  flex: 1;
+  flex: none;
+  white-space: pre-wrap;
   min-width: 0;
   overflow-wrap: anywhere;
   color: inherit;
@@ -101,6 +103,7 @@
 
 .ov-tui__bubble-time {
   flex: none;
+  align-self: flex-end;
   color: var(--ov-ui-text-muted, rgb(128 128 128));
   font-size: 12px;
 }
@@ -831,6 +834,7 @@
   pointer-events: none;
 }
 
+.ov-tui__bubble-command,
 .ov-tui__input-command {
   color: var(--ov-ui-tui-link);
   color: var(--ov-ui-primary, color-mix(in srgb, #5252ff 80%, CanvasText));

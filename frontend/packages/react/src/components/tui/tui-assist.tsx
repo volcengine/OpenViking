@@ -45,7 +45,7 @@ export function TuiAssist({
 }: TuiAssistProps) {
   const options = completion.options;
   const keyword = completion.query.keyword;
-  const selected = options[activeIndex] ?? options[0];
+  const selected = options[activeIndex];
   const command = selected;
   const open = completion.showSuggestions;
   const panelRef = useTuiAssistPosition(anchorRef, open, onDismiss);

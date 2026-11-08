@@ -50,11 +50,14 @@ export function TuiComposer({
   const mirrorRef = useRef<HTMLSpanElement>(null);
   const showSuggestions =
     completion.showSuggestions && completion.options.length > 0;
+  const preview =
+    completion.options[activeIndex] ??
+    (completion.query.keyword ? completion.options[0] : undefined);
   const inline = completion.enabled
     ? getTuiInlineCompletion(
         value,
         completion.query,
-        completion.options[activeIndex],
+        preview,
         completion.showSuggestions,
       )
     : undefined;
@@ -115,7 +118,9 @@ export function TuiComposer({
           aria-haspopup="listbox"
           aria-controls={showSuggestions ? assistId : undefined}
           aria-activedescendant={
-            showSuggestions ? `${assistId}-${activeIndex}` : undefined
+            showSuggestions && activeIndex >= 0
+              ? `${assistId}-${activeIndex}`
+              : undefined
           }
           onChange={(event) => keyboard.change(event.target.value)}
           onScroll={(event) => {
