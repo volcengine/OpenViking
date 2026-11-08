@@ -206,7 +206,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       {contentTab ? (
         // 内容页签整块交给宿主：组件只画页签行，正文不套任何容器，也没有
         // 标题行——组件不知道该在那里显示什么，套一层只会限制宿主的排版。
-        <div {...panelProps} className={`${panelClass} --content`}>
+        <div {...panelProps} className={`${panelClass} ${panelClass}--content`}>
           {contentTab.content}
         </div>
       ) : fileTab ? (
