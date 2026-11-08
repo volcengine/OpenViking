@@ -67,8 +67,10 @@ model (`off` … `max` for reasoning models, `off` otherwise; default from
   OpenViking connection, the `openviking_*` tools are part of that same list —
   there is no Durable-specific OpenViking bridge, and a durable turn sees
   exactly the tools the other local runtimes see.
-- **Coding tools.** pi-durable's `CodingTools` (`bash`, `read`, `write`, `edit`)
-  run in the instance workspace.
+- **Coding tools.** `read`, `write`, and `edit` run in the instance workspace.
+  macOS/Linux use `bash`; Windows uses the upstream `powershell` tool, which
+  tries `pwsh` first and falls back to Windows PowerShell 5.1 on spawn failure.
+  No Bash installation is needed for Windows Durable. Other runtimes are unchanged.
 
 The child environment is sanitized like the other local runtimes: `LARK_*`,
 `FEISHU_*`, `LARKSUITE_*`, `VIKA_*`, `ARK_*` (except `ARK_API_KEY`) and

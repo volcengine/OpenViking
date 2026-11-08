@@ -72,3 +72,6 @@ export const loginService = process.platform === 'darwin' ? 'launchd' : 'systemd
 export const systemEnvironmentKeys = Object.freeze([]);
 export const hostPlatformId = `${process.platform}-${process.arch}`;
 export const environmentCaseSensitive = true;
+
+// Native command tool used by the managed Durable runtime.
+export const codingShell = 'bash';

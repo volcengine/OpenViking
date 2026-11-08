@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import { DURABLE_VERSION, DURABLE_HOST, sanitizeDurableEnv } from '../src/durable-runtime.mjs';
 import { availableChatModels, loadDurableModels, piDefaultModel } from '../src/durable-models.mjs';
 import { DurableAgent } from '../src/durable.mjs';
-import { localSocketPath } from '../src/platform/index.mjs';
+import { localSocketPath, codingShell } from '../src/platform/index.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -620,7 +620,9 @@ describe('DurableAgent against the real host', () => {
     });
     process.env.DURABLE_FAUX = '1';
     process.env.DURABLE_FAUX_RESPONSES = JSON.stringify([
-      { toolCall: { name: 'bash', arguments: { command: 'printf hello > note.txt && cat note.txt' } } },
+      { toolCall: { name: codingShell, arguments: { command: codingShell === 'powershell'
+        ? "Set-Content -LiteralPath note.txt -Value hello -NoNewline; Get-Content -LiteralPath note.txt"
+        : 'printf hello > note.txt && cat note.txt' } } },
       { toolCall: { name: 'read', arguments: { path: 'note.txt' } } },
       { toolCall: { name: 'write', arguments: { path: 'draft.txt', content: 'first' } } },
       { toolCall: { name: 'edit', arguments: { path: 'draft.txt', edits: [{ oldText: 'first', newText: 'second' }] } } },
@@ -637,7 +639,7 @@ describe('DurableAgent against the real host', () => {
       const called = store.activities
         .filter((activity) => activity.kind === 'agent.tool_called')
         .map((activity) => activity.summary);
-      assert.deepEqual(called, ['bash', 'read', 'write', 'edit']);
+      assert.deepEqual(called, [codingShell, 'read', 'write', 'edit']);
       const completed = store.activities.filter((activity) => activity.kind === 'agent.tool_completed');
       assert.equal(completed.length, 4);
       // A missing tool would settle as a completed error result, which is how
