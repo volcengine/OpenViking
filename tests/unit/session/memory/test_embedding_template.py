@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryField, MemoryFile
 from openviking.session.memory.experience_lineage import experience_source_tag
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -16,6 +18,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking.utils.ingest_options import IngestOptions
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestMemoryFieldSchema:
@@ -202,6 +205,38 @@ class TestEmbeddingTextConstruction:
             "search_tag_mode": "append",
             "extracted_memory_type": "trajectories",
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("content", ["", "A searchable memory"])
+    async def test_direct_refresh_reports_empty_embedding_input(self, content, caplog):
+        uri = "viking://user/alice/memories/custom/note.md"
+        ctx = RequestContext(user=UserIdentifier("default", "alice"), role=Role(Role.USER))
+        stored = MemoryFileUtils.write(MemoryFile(content=content, extra_fields={"title": "Note"}))
+        viking_fs = Mock(read_file=AsyncMock(return_value=stored))
+        vikingdb = Mock(has_queue_manager=True, enqueue_embedding_msg=AsyncMock(return_value=True))
+        logger = logging.getLogger("openviking.session.memory.memory_updater")
+        logger.addHandler(caplog.handler)
+        try:
+            with patch(
+                "openviking.session.memory.memory_type_registry.get_default_registry",
+                return_value=MemoryTypeRegistry(load_schemas=False),
+            ):
+                refreshed = await MemoryUpdater.refresh_file_embedding(
+                    viking_fs=viking_fs,
+                    vikingdb=vikingdb,
+                    uri=uri,
+                    memory_type=None,
+                    ctx=ctx,
+                )
+        finally:
+            logger.removeHandler(caplog.handler)
+
+        assert refreshed is bool(content)
+        assert vikingdb.enqueue_embedding_msg.await_count == int(bool(content))
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == (
+            [] if content else [f"Skipping memory vectorization for {uri}: empty embedding input"]
+        )
 
     @pytest.mark.asyncio
     async def test_direct_refresh_does_not_infer_the_memory_type_from_a_peer_path(self):
