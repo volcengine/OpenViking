@@ -1920,7 +1920,11 @@ def _wizard_volcengine() -> dict[str, Any] | object:
             preset = plan
             while True:
                 try:
-                    models = fetch_models(plan.api_base, key)
+                    models = (
+                        account.agent_plan_models()
+                        if scene == "RealAgentPlanPersonal"
+                        else fetch_models(plan.api_base, key)
+                    )
                     if "/api/v3" in plan.api_base:
                         models = activated_models(models, account.model_activations())
                         print("  Showing only models confirmed activated for this account.")

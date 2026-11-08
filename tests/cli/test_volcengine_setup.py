@@ -51,6 +51,10 @@ def account_setup():
         account.model_activations.return_value = {
             p.default_vlm_model: "Available" for p in wizard.VOLCENGINE_PLANS
         } | {p.default_embedding_model: "Available" for p in wizard.VOLCENGINE_PLANS}
+        account.agent_plan_models.return_value = [
+            {"id": wizard.VOLCENGINE_PLANS[0].default_vlm_model, "domain": "VLM"},
+            {"id": wizard.VOLCENGINE_PLANS[0].default_embedding_model, "domain": "Embedding"},
+        ]
         account.api_key.return_value = "ark-test-secret"
         yield account, browser, confirm, probe
 
@@ -513,3 +517,155 @@ def test_subscription_does_not_use_payg_activation(account_setup):
     with patch.object(wizard, "_select_access_plan", return_value=wizard.VOLCENGINE_PLANS[0]):
         assert isinstance(wizard._wizard_volcengine(), dict)
     account_setup[0].model_activations.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "state,tier", [("Expired", "small"), ("Pending", "small"), ("Effective", "")]
+)
+def test_agent_plan_requires_active_subscription_and_tier(session, state, tier):
+    account, _ = session
+    with patch.object(
+        account,
+        "_call",
+        return_value={
+            "InfoList": [
+                {"Status": state, "BizInfo": tier, "ResourceName": "RealAgentPlanPersonal"}
+            ]
+        },
+    ) as call:
+        with pytest.raises(ark.ArkSetupError, match="active personal Agent Plan"):
+            account.agent_plan_models()
+        call.assert_called_once()
+
+
+@pytest.mark.parametrize("subscription_status", ["Effective", "Running"])
+def test_agent_plan_uses_scoped_direct_model_catalog(session, subscription_status):
+    account, _ = session
+    with patch.object(
+        account,
+        "_call",
+        side_effect=[
+            {
+                "InfoList": [
+                    {
+                        "Status": subscription_status,
+                        "BizInfo": "medium",
+                        "ResourceName": "RealAgentPlanPersonal",
+                    }
+                ]
+            },
+            {
+                "Data": [
+                    {
+                        "VirtualModelID": "direct-vision",
+                        "ModelCapability": {
+                            "OutputModalities": ["text"],
+                            "InputModalities": ["text", "image"],
+                        },
+                    },
+                    {
+                        "VirtualModelID": "direct-embed",
+                        "ModelCapability": {"OutputModalities": ["embedding"]},
+                    },
+                    {
+                        "VirtualModelID": "image-generator",
+                        "ModelCapability": {"OutputModalities": ["image"]},
+                    },
+                    {"VirtualModelID": "unknown"},
+                ]
+            },
+        ],
+    ) as call:
+        models = account.agent_plan_models()
+    assert call.call_args_list[0].args == (
+        "ListSubscribeTrade",
+        {
+            "ResourceTypes": ["AgentPlan"],
+            "BizInfos": ["small", "medium", "large", "max"],
+            "ResourceNames": ["RealAgentPlanPersonal"],
+        },
+    )
+    assert call.call_args_list[1].args == (
+        "ListAgentPlanVirtualModelID",
+        {"Edition": "personal", "BizInfo": "medium"},
+    )
+    assert models == [
+        {"id": "direct-vision", "domain": "VLM"},
+        {"id": "direct-embed", "domain": "Embedding"},
+        {"id": "image-generator", "domain": None},
+        {"id": "unknown", "domain": None},
+    ]
+
+
+def test_agent_plan_wizard_never_requests_data_plane_models(account_setup):
+    with (
+        patch.object(wizard, "_select_access_plan", return_value=wizard.VOLCENGINE_PLANS[0]),
+        patch.object(ark, "fetch_models", side_effect=AssertionError("No /models for Agent Plan")),
+    ):
+        assert isinstance(wizard._wizard_volcengine(), dict)
+    account_setup[0].agent_plan_models.assert_called_once()
+
+
+def test_agent_plan_catalog_error_does_not_fall_back_to_payg(account_setup):
+    account_setup[0].agent_plan_models.side_effect = ark.ArkSetupError("catalog unavailable")
+    with (
+        patch.object(wizard, "_select_access_plan", return_value=wizard.VOLCENGINE_PLANS[0]),
+        patch.object(ark, "fetch_models") as catalog,
+    ):
+        assert wizard._wizard_volcengine() is wizard._GO_BACK
+    catalog.assert_not_called()
+    account_setup[3].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "subscription",
+    [
+        {"Status": "Running", "BizInfo": "max", "ResourceName": "OtherPlan"},
+        {
+            "Status": "Running",
+            "BizInfo": "max",
+            "ResourceName": "RealAgentPlanPersonal",
+            "NeedCheckAgreement": True,
+        },
+    ],
+)
+def test_agent_plan_wrong_pool_or_pending_agreement_never_queries_models(session, subscription):
+    account, _ = session
+    with patch.object(account, "_call", return_value={"InfoList": [subscription]}) as call:
+        with pytest.raises(ark.ArkSetupError):
+            account.agent_plan_models()
+    call.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "catalog",
+    [
+        {},
+        {"Data": []},
+        {"Data": [None]},
+        {"Data": [{"ModelID": "routing-target"}]},
+        {"Data": [{"VirtualModelID": "model", "ModelCapability": {"OutputModalities": "text"}}]},
+    ],
+)
+def test_agent_plan_rejects_incomplete_or_malformed_catalog(session, catalog):
+    account, _ = session
+    with (
+        patch.object(
+            account,
+            "_call",
+            side_effect=[
+                {
+                    "InfoList": [
+                        {
+                            "Status": "Running",
+                            "BizInfo": "max",
+                            "ResourceName": "RealAgentPlanPersonal",
+                        }
+                    ]
+                },
+                catalog,
+            ],
+        ),
+        pytest.raises(ark.ArkSetupError),
+    ):
+        account.agent_plan_models()

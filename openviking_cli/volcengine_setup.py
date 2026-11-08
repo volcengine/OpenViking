@@ -232,6 +232,68 @@ class VolcengineSetup:
             )
         ]
 
+    def agent_plan_models(self) -> list[dict[str, Any]]:
+        """Read the personal subscription's direct model IDs, not routing targets."""
+        result = self._call(
+            "ListSubscribeTrade",
+            {
+                "ResourceTypes": ["AgentPlan"],
+                "BizInfos": ["small", "medium", "large", "max"],
+                "ResourceNames": ["RealAgentPlanPersonal"],
+            },
+        )
+        subscriptions = result.get("InfoList")
+        if not isinstance(subscriptions, list) or not all(
+            isinstance(row, dict) for row in subscriptions
+        ):
+            raise ArkSetupError("VolcEngine returned an invalid Agent Plan subscription list.")
+        active = [
+            row
+            for row in subscriptions
+            if row.get("Status") in {"Effective", "Running"}
+            and row.get("ResourceName") == "RealAgentPlanPersonal"
+        ]
+        if (
+            len(active) != 1
+            or not isinstance(active[0].get("BizInfo"), str)
+            or not active[0]["BizInfo"]
+        ):
+            raise ArkSetupError(
+                "Could not identify one active personal Agent Plan subscription and tier. "
+                "Check your subscription in the Ark console."
+            )
+        if active[0].get("NeedCheckAgreement"):
+            raise ArkSetupError("Review the Agent Plan service agreement in the Ark console first.")
+        result = self._call(
+            "ListAgentPlanVirtualModelID",
+            {"Edition": "personal", "BizInfo": active[0]["BizInfo"]},
+        )
+        rows = result.get("Data")
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise ArkSetupError("VolcEngine returned an invalid Agent Plan model catalog.")
+        models = {}
+        for row in rows:
+            model_id = row.get("VirtualModelID")
+            capability = row.get("ModelCapability") or {}
+            if not isinstance(model_id, str) or not model_id or not isinstance(capability, dict):
+                raise ArkSetupError("VolcEngine returned an incomplete Agent Plan model entry.")
+            outputs = capability.get("OutputModalities") or []
+            inputs = capability.get("InputModalities") or []
+            if not all(
+                isinstance(values, list) and all(isinstance(v, str) for v in values)
+                for values in (inputs, outputs)
+            ):
+                raise ArkSetupError("VolcEngine returned invalid Agent Plan model capabilities.")
+            domain = None
+            if "text" in outputs:
+                domain = "VLM" if "image" in inputs or "video" in inputs else "LLM"
+            elif "embedding" in outputs:
+                domain = "Embedding"
+            models[model_id] = {"id": model_id, "domain": domain}
+        if not models:
+            raise ArkSetupError("No direct models were returned for your Agent Plan subscription.")
+        return list(models.values())
+
     def model_activations(self) -> dict[str, str]:
         """Read account activation separately from the public model catalog."""
         states: dict[str, str] = {}
