@@ -6,7 +6,7 @@ Set up your machine (local or a cloud VM) with the software, projects, and tools
 
 Vika supports runtimes such as Codex, Claude Code, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `vika`.
 
-[Quick start](install.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
+[Quick start](install.md) · [Windows source preview](docs/windows.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
 ## Why Vika
 

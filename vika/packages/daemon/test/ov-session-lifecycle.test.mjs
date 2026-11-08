@@ -58,7 +58,16 @@ function fixture(t) {
     assert.equal(action, 'commit');
     // A commit that never answers in time, or one held until the test opens the gate.
     if (remote.slowCommit?.(id)) {
-      await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+      init.signal.throwIfAborted();
+      // A real pending HTTP request holds a socket open. The in-memory mock
+      // needs its own referenced handle because AbortSignal.timeout is unrefed.
+      await new Promise((_, reject) => {
+        const watchdog = setTimeout(() => reject(new Error('mock commit outlived its request timeout')), 2_000);
+        init.signal.addEventListener('abort', () => {
+          clearTimeout(watchdog);
+          reject(init.signal.reason);
+        }, { once: true });
+      });
     }
     if (remote.commitGate) await remote.commitGate;
     remote.commits.push({ id, body });

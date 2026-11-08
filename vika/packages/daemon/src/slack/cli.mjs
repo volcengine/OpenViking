@@ -26,7 +26,7 @@ export class SlackCli {
     signal.throwIfAborted();
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-slack-cli-'));
     const env = {};
-    for (const key of ['PATH', 'HOME', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+    for (const key of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
       'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy']) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }

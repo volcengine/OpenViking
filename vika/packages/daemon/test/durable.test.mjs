@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 import { DURABLE_VERSION, DURABLE_HOST, sanitizeDurableEnv } from '../src/durable-runtime.mjs';
 import { availableChatModels, loadDurableModels, piDefaultModel } from '../src/durable-models.mjs';
 import { DurableAgent } from '../src/durable.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -30,7 +31,7 @@ function baseConfig(overrides = {}) {
     databasePath: path.join(dataDir, 'test.sqlite3'),
     profile: 'test-profile',
     connectors: ['lark'],
-    actionSocketPath: path.join(dataDir, 'actions.sock'),
+    actionSocketPath: localSocketPath(dataDir, 'actions'),
     sendTimeoutMs: 5_000,
     maxReplyChars: 1_000,
     dryRun: true,
@@ -129,8 +130,9 @@ class FakeChild extends EventEmitter {
 // are acknowledged by the test itself.
 function fakeHarness({ config = baseConfig(), store = makeStore(), version = DURABLE_VERSION, ready = {}, agentOptions = {} } = {}) {
   const children = [];
-  const spawn = (_command, _args) => {
+  const spawn = (_command, _args, options) => {
     const child = new FakeChild();
+    child.spawnOptions = options;
     children.push(child);
     const write = child.stdin.write;
     child.stdin.write = (value) => {
@@ -185,6 +187,7 @@ describe('DurableAgent host protocol', () => {
     agent.deliver('current request', 7);
     const submit = lastWrite(child);
     assert.equal(submit.type, 'submit');
+    assert.equal(child.spawnOptions.windowsHide, process.platform === 'win32' ? true : undefined);
     assert.match(submit.text, /current request/);
     assert.match(submit.requestId, new RegExp(`^durable:${agent.threadId}:7$`));
     assert.equal(agent.turnActive, true);
@@ -470,7 +473,7 @@ describe('DurableAgent against the real host', () => {
 
   it('executes a Core tool through actions.sock and feeds the result back', async () => {
     const dataDir = tempDir();
-    const socketPath = path.join(dataDir, 'actions.sock');
+    const socketPath = localSocketPath(dataDir, 'actions');
     const calls = [];
     const server = http.createServer((request, response) => {
       let body = '';
@@ -536,7 +539,7 @@ describe('DurableAgent against the real host', () => {
 
   it('registers the Core OpenViking tools from actions.sock like every other runtime tool', async () => {
     const dataDir = tempDir();
-    const socketPath = path.join(dataDir, 'actions.sock');
+    const socketPath = localSocketPath(dataDir, 'actions');
     const calls = [];
     const server = http.createServer((request, response) => {
       let body = '';
@@ -792,6 +795,6 @@ describe('durable model configuration', () => {
       larkCliBin: '/custom-lark/lark-cli',
       slackCliBin: '/custom-slack/slack',
     });
-    assert.equal(safe.PATH, '/custom-lark:/custom-slack:/usr/bin:/bin');
+    assert.equal(safe.PATH, ['/custom-lark', '/custom-slack', '/usr/bin:/bin'].join(path.delimiter));
   });
 });

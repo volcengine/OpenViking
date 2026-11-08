@@ -1,6 +1,10 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { capabilities } from '../../daemon/src/capabilities.mjs';
+
+import { expandHome as platformExpandHome } from '../../daemon/src/platform/index.mjs';
+
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -52,9 +56,7 @@ function resolveLarkCli(env) {
   return bundled === 'lark-cli' ? which('lark-cli', env) : bundled;
 }
 
-export function expandHome(value, homeDir = os.homedir()) {
-  return value === '~' ? homeDir : value.replace(/^~(?=\/)/, homeDir);
-}
+export function expandHome(value, homeDir = os.homedir()) { return platformExpandHome(value, homeDir); }
 
 function shortenHome(value, homeDir) {
   return value.startsWith(`${homeDir}${path.sep}`) ? path.join('~', path.relative(homeDir, value)) : value;
@@ -91,7 +93,7 @@ const imChoices = () => [
     hint: t('工作区里的 Slack App（新建或用已有的，Socket Mode）；需要粘贴两个 token', 'a new or existing app in your Slack workspace (Socket Mode); paste two tokens') },
   { label: 'QQ', value: 'qq',
     hint: t('腾讯官方机器人；需要 AppID / AppSecret 和本人私聊验证码', 'official Tencent bot; needs AppID / AppSecret and a private-chat verification code') },
-];
+].filter(choice => capabilities.connectors[choice.value] !== false);
 
 // IMs connected by pasting tokens rather than scanning a code.
 const TOKEN_IMS = ['telegram', 'slack', 'qq'];
@@ -1795,7 +1797,7 @@ async function setupFlow({
     // restarts to pick this one up) and the updater are helpers: report, go on.
     for (const [action, target, label] of [
       ['restart', 'web', t(`控制台 http://127.0.0.1:${WEB_PORT}`, `Console http://127.0.0.1:${WEB_PORT}`)],
-      ['start', 'updater', t('自动升级服务', 'Auto-upgrade service')],
+      ...(capabilities.updater ? [['start', 'updater', t('自动升级服务', 'Auto-upgrade service')]] : []),
     ]) {
       const spinning = prompter.spin(t(`启动${label}`, `Starting the ${label.toLowerCase()}`));
       await control[action](target, { env, stdout: quiet }).then(

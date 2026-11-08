@@ -153,6 +153,8 @@ describe('configuration safety', { concurrency: false }, () => {
     const accountFile = path.join(directory, 'email.json');
     const otherFile = path.join(directory, 'other.json');
     fs.writeFileSync(accountFile, '{}', { mode: 0o644 });
+    // The refusal fixture must remain public even under a restrictive umask.
+    if (process.platform !== 'win32') fs.chmodSync(accountFile, 0o644);
     fs.writeFileSync(otherFile, '{}', { mode: 0o600 });
     setEnv('VIKA_CHANNEL', 'lark');
     setEnv('VIKA_CONNECTORS_JSON', '["lark","email"]');

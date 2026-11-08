@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { isNamedPipe } from '../platform/index.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -37,8 +38,10 @@ async function readJson(request) {
 //   GET  /v1/tools -> { tools }
 //   POST /v1/call  { tool, input } -> { ok, result: { text, data, media? } } | { ok: false, error }
 export async function startActionApi({ socketPath, service, logger }) {
-  fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
-  fs.rmSync(socketPath, { force: true });
+  if (!isNamedPipe(socketPath)) {
+    fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
+    fs.rmSync(socketPath, { force: true });
+  }
   const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/v1/tools') {
       send(response, 200, { tools: service.tools() });
@@ -72,7 +75,7 @@ export async function startActionApi({ socketPath, service, logger }) {
       resolve();
     });
   });
-  fs.chmodSync(socketPath, 0o600);
+  if (!isNamedPipe(socketPath)) fs.chmodSync(socketPath, 0o600);
   return server;
 }
 
@@ -80,7 +83,7 @@ export async function stopActionApi(server) {
   if (!server) return;
   const socketPath = server.address();
   await new Promise((resolve) => server.close(resolve));
-  if (typeof socketPath === 'string') fs.rmSync(socketPath, { force: true });
+  if (typeof socketPath === 'string' && !isNamedPipe(socketPath)) fs.rmSync(socketPath, { force: true });
 }
 
 // How an MCP-capable runtime launches the adapter for this daemon's tools.

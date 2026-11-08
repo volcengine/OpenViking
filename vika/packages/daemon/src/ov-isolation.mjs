@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { linkConfig } from './platform/index.mjs';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -166,14 +168,15 @@ function piExtensionPackage(file) {
 // Vika-owned directory that links every other entry of the user's config home
 // back, and whose opencode/ holds the user's global config without
 // OpenViking's plugins and MCP servers. The links keep every other tool the
-// agent runs reading its usual configuration. Returns the directory.
+// agent runs reading its usual configuration. On Windows, directory junctions
+// need no symlink privilege; individual files are snapshots refreshed at launch.
+// Returns the directory.
 export function prepareOpencodeConfigHome(target, env = process.env) {
   const source = env.XDG_CONFIG_HOME || path.join(home(env), '.config');
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.join(target, 'opencode'), { recursive: true, mode: 0o700 });
-  const link = (from, to) => { try { fs.symlinkSync(from, to); } catch { /* raced or unsupported: skip */ } };
   for (const entry of safeList(source)) {
-    if (entry !== 'opencode') link(path.join(source, entry), path.join(target, entry));
+    if (entry !== 'opencode') linkConfig(path.join(source, entry), path.join(target, entry));
   }
   const userFolder = path.join(source, 'opencode');
   for (const entry of safeList(userFolder)) {
@@ -182,10 +185,10 @@ export function prepareOpencodeConfigHome(target, env = process.env) {
     if (/^opencode\.jsonc?$|^config\.json$/.test(entry)) continue;
     if (entry === 'plugin' || entry === 'plugins') {
       fs.mkdirSync(to, { recursive: true });
-      for (const plugin of safeList(from)) if (!isOpenViking(plugin)) link(path.join(from, plugin), path.join(to, plugin));
+      for (const plugin of safeList(from)) if (!isOpenViking(plugin)) linkConfig(path.join(from, plugin), path.join(to, plugin));
       continue;
     }
-    link(from, to);
+    linkConfig(from, to);
   }
   const config = ['opencode.json', 'opencode.jsonc', 'config.json'].map((name) => path.join(userFolder, name))
     .map((file) => readJsonc(file)).find(Boolean) ?? {};

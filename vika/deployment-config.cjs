@@ -4,6 +4,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { homeDir } = require('./packages/daemon/src/platform/index.mjs');
 const path = require('node:path');
 
 const INSTANCE_ID = /^[a-z][a-z0-9-]{0,31}$/;
@@ -117,7 +118,7 @@ function resolveDeploymentManifestPath(env = process.env) {
     }
     return path.normalize(override);
   }
-  const home = typeof env.HOME === 'string' ? env.HOME.trim() : '';
+  const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) throw new Error('HOME must be an absolute path');
   return path.join(path.normalize(home), '.vika', 'config.json');
 }
@@ -136,7 +137,7 @@ function resolveSecretsFilePath(env = process.env) {
     }
     return path.normalize(override);
   }
-  const home = typeof env.HOME === 'string' ? env.HOME.trim() : '';
+  const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) return null;
   return path.join(path.normalize(home), '.vika', 'secrets.env');
 }

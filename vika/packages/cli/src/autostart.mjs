@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import * as defaultPlatform from '../../daemon/src/platform/index.mjs';
+import { capabilitiesFor } from '../../daemon/src/capabilities.mjs';
+
 import { execFile as execFileCallback } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -61,19 +64,19 @@ export function launchAgent({ homeDir, pathValue }) {
 }
 
 function targets(homeDir, platform) {
-  return platform === 'darwin'
+  return platform.loginService === 'launchd'
     ? { file: path.join(homeDir, 'Library', 'LaunchAgents', `${LABEL}.plist`) }
     : { file: path.join(homeDir, '.config', 'systemd', 'user', 'vika.service') };
 }
 
-export function autostartEnabled({ homeDir = os.homedir(), platform = process.platform } = {}) {
-  return fs.existsSync(targets(homeDir, platform).file);
+export function autostartEnabled({ homeDir = os.homedir(), platform = defaultPlatform } = {}) {
+  return capabilitiesFor(platform).autostart && fs.existsSync(targets(homeDir, platform).file);
 }
 
 export async function autostartCommand([action, ...extra], {
   env = process.env,
   homeDir = os.homedir(),
-  platform = process.platform,
+  platform = defaultPlatform,
   execFileImpl = execFile,
   output = process.stdout,
   uid = process.getuid?.(),
@@ -82,18 +85,22 @@ export async function autostartCommand([action, ...extra], {
     output.write('usage: vika autostart <enable|disable>\n');
     return 2;
   }
+  if (!capabilitiesFor(platform).autostart) {
+    output.write('Autostart is not supported in the Windows preview\n');
+    return 1;
+  }
   const { file } = targets(homeDir, platform);
   if (action === 'disable') {
-    if (platform === 'darwin') await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
+    if (platform.loginService === 'launchd') await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
     else await execFileImpl('systemctl', ['--user', 'disable', '--now', 'vika.service']).catch(() => {});
     fs.rmSync(file, { force: true });
-    if (platform !== 'darwin') await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});
+    if (platform.loginService !== 'launchd') await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});
     output.write(t('开机自启已关闭\n', 'Autostart is off\n'));
     return 0;
   }
   const pathValue = env.PATH || '/usr/bin:/bin';
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (platform === 'darwin') {
+  if (platform.loginService === 'launchd') {
     fs.mkdirSync(path.join(homeDir, '.vika', 'logs'), { recursive: true });
     fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
     await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
