@@ -5,8 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRslib } from '@rslib/core';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { Tui } from '@openviking/react/components/tui';
 
-// Exercise the command metadata without adding it to the public package entry.
+// Exercise generic matching without exposing implementation helpers publicly.
+const source = new URL('../src/components/tui/', import.meta.url);
 const output = await mkdtemp(join(tmpdir(), 'ov-tui-command-'));
 const builder = await createRslib({
   config: {
@@ -16,18 +20,8 @@ const builder = await createRslib({
         dts: false,
         source: {
           entry: {
-            commands: fileURLToPath(
-              new URL(
-                '../src/components/tui/command-definitions.ts',
-                import.meta.url,
-              ),
-            ),
-            catalog: fileURLToPath(
-              new URL(
-                '../src/components/tui/command-catalog.ts',
-                import.meta.url,
-              ),
-            ),
+            commands: fileURLToPath(new URL('command-definitions.ts', source)),
+            catalog: fileURLToPath(new URL('command-catalog.ts', source)),
           },
         },
       },
@@ -37,70 +31,176 @@ const builder = await createRslib({
 });
 await builder.build();
 await writeFile(join(output, 'package.json'), '{"type":"module"}');
-const { findTuiCommand, groupTuiCommands, TUI_COMMANDS } = await import(
+const { filterTuiCommands, findTuiCommand, groupTuiCommands } = await import(
   pathToFileURL(join(output, 'commands.js'))
 );
 const { parseTuiCommandInput, resolveTuiCommandName, resolveTuiSkeleton } =
   await import(pathToFileURL(join(output, 'catalog.js')));
 after(() => rm(output, { recursive: true, force: true }));
 
-test('parses a slash command with arguments', () => {
-  assert.deepEqual(parseTuiCommandInput('/find "release notes"'), {
-    name: 'find',
-    rest: ' "release notes"',
+const hostCommands = [
+  {
+    name: 'vendor-refresh',
+    aliases: ['refresh'],
+    group: 'custom',
+    description: '刷新宿主索引',
+    usage: '/vendor-refresh <uri>',
+    skeleton: 'status',
+    params: [{ label: '<uri>', description: '目标索引 URI', required: true }],
+    examples: ['/vendor-refresh viking://demo'],
+  },
+  {
+    name: 'vendor-query',
+    group: 'extra',
+    description: '检索宿主数据',
+    usage: '/vendor-query <query>',
+    skeleton: 'search',
+  },
+];
+const groups = [{ key: 'custom', label: '宿主操作' }];
+
+test('parses slash commands and normalizes command names without business knowledge', () => {
+  assert.deepEqual(parseTuiCommandInput('/vendor-refresh "demo"'), {
+    name: 'vendor-refresh',
+    rest: ' "demo"',
     hasTrailingSpace: true,
   });
-  assert.deepEqual(parseTuiCommandInput('/read'), {
-    name: 'read',
-    rest: '',
-    hasTrailingSpace: false,
-  });
-  assert.equal(parseTuiCommandInput('find docs'), null);
-});
-
-test('resolves command names for records without a leading slash', () => {
-  assert.equal(resolveTuiCommandName('/find "notes"'), 'find');
-  assert.equal(resolveTuiCommandName('  /TREE viking://  '), 'tree');
-  assert.equal(resolveTuiCommandName('stat'), 'stat');
-});
-
-test('finds commands by name and alias', () => {
-  assert.equal(findTuiCommand('find')?.name, 'find');
-  assert.equal(findTuiCommand('/list')?.name, 'ls');
-  assert.equal(findTuiCommand('rename')?.name, 'mv');
-  assert.equal(findTuiCommand('nope'), undefined);
-});
-
-test('groups commands without empty sections', () => {
-  const sections = groupTuiCommands(TUI_COMMANDS);
-  assert.ok(sections.length > 0);
-  assert.ok(sections.every((section) => section.commands.length > 0));
+  assert.equal(parseTuiCommandInput('vendor-refresh demo'), null);
   assert.equal(
-    sections.reduce((total, section) => total + section.commands.length, 0),
-    TUI_COMMANDS.length,
+    resolveTuiCommandName('  /VENDOR-REFRESH viking://demo'),
+    'vendor-refresh',
   );
 });
 
-test('selects pending skeletons by command', () => {
+test('matches host names, aliases and localized descriptions', () => {
   assert.equal(
-    resolveTuiSkeleton('/find notes', findTuiCommand('find')),
-    'search',
+    findTuiCommand('/refresh viking://demo', hostCommands)?.name,
+    'vendor-refresh',
+  );
+  assert.equal(findTuiCommand('/find anything', hostCommands), undefined);
+  assert.equal(filterTuiCommands('检索', hostCommands)[0].name, 'vendor-query');
+  assert.equal(
+    filterTuiCommands('reading', [
+      {
+        ...hostCommands[0],
+        summary: 'Import',
+        description: 'Import content for reading',
+      },
+    ]).length,
+    0,
   );
   assert.equal(
-    resolveTuiSkeleton('/ls viking://', findTuiCommand('ls')),
-    'tree',
+    filterTuiCommands('refresh', hostCommands)[0].name,
+    'vendor-refresh',
   );
+});
+
+test('keeps host group order and appends undeclared groups without empty sections', () => {
+  const sections = groupTuiCommands(hostCommands, [
+    { key: 'empty', label: 'Empty' },
+    ...groups,
+  ]);
+  assert.deepEqual(
+    sections.map(({ group }) => group.key),
+    ['custom', 'extra'],
+  );
+  assert.equal(sections[0].group.label, '宿主操作');
   assert.equal(
-    resolveTuiSkeleton('/stat viking://', findTuiCommand('stat')),
-    'status',
+    sections.flatMap(({ commands }) => commands).length,
+    hostCommands.length,
   );
+});
+
+test('pending shapes come only from the host description', () => {
+  assert.equal(resolveTuiSkeleton(hostCommands[0]), 'status');
+  assert.equal(resolveTuiSkeleton(hostCommands[1]), 'search');
+  assert.equal(resolveTuiSkeleton(undefined), 'generic');
   assert.equal(
-    resolveTuiSkeleton('/rm viking://a', findTuiCommand('rm')),
-    'write',
+    resolveTuiSkeleton({ name: 'find', description: '', usage: '/find' }),
+    'generic',
   );
-  assert.equal(
-    resolveTuiSkeleton('/read viking://a', findTuiCommand('read')),
-    'resource',
+});
+
+const props = {
+  records: [
+    {
+      id: 'demo',
+      command: '/vendor-refresh',
+      status: 'success',
+      content: { variant: 'text', text: 'demo' },
+    },
+  ],
+  value: '/',
+  commands: hostCommands,
+  commandGroups: groups,
+  onValueChange() {},
+};
+
+test('a new host command renders its candidate, example and parameter details without a library update', () => {
+  const next = {
+    name: 'brand-new-command',
+    group: 'custom',
+    description: '宿主新增命令',
+    usage: '/brand-new-command [limit]',
+    params: [
+      {
+        label: '[limit]',
+        description: '数量',
+        required: false,
+        defaultValue: '25',
+      },
+    ],
+    examples: ['/brand-new-command 25'],
+  };
+  const html = renderToStaticMarkup(
+    createElement(Tui, { ...props, commands: [next], locale: 'zh' }),
   );
-  assert.equal(resolveTuiSkeleton('/unknown', undefined), 'generic');
+  for (const text of [
+    'brand-new-command',
+    '宿主新增命令',
+    '数量',
+    '25',
+    '快速体验',
+    '参数详情',
+  ])
+    assert.ok(html.includes(text), text);
+  const empty = renderToStaticMarkup(
+    createElement(Tui, { ...props, commands: [] }),
+  );
+  assert.ok(!empty.includes('role="listbox"'));
+  assert.ok(!empty.includes('add-resource'));
+});
+
+test('locale changes generic UI, labels override it, and host command copy is preserved', () => {
+  const chinese = renderToStaticMarkup(
+    createElement(Tui, { ...props, locale: 'zh' }),
+  );
+  for (const text of [
+    '宿主操作',
+    '刷新宿主索引',
+    '快速体验',
+    '参数详情',
+    '必填',
+    '执行成功',
+    '复制',
+  ])
+    assert.ok(chinese.includes(text), text);
+  const override = renderToStaticMarkup(
+    createElement(Tui, {
+      ...props,
+      locale: 'zh',
+      labels: {
+        copy: 'Custom copy',
+        success: 'Custom status',
+        required: 'Mandatory',
+      },
+    }),
+  );
+  assert.ok(override.includes('Custom copy'));
+  assert.ok(override.includes('Custom status'));
+  assert.ok(override.includes('Mandatory'));
+  assert.ok(chinese.includes('aria-activedescendant'));
+  const english = renderToStaticMarkup(createElement(Tui, props));
+  assert.ok(english.includes('Succeeded'));
+  assert.ok(english.includes('刷新宿主索引'));
 });

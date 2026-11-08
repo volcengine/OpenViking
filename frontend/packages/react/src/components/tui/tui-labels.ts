@@ -1,29 +1,15 @@
 import type { TuiLabels } from './types.js';
+import { ZH_TUI_LABELS } from './tui-labels-zh.js';
 
-/** 组件内部使用的完整文案；公开的 `TuiLabels` 只覆盖其中一部分。 */
-export interface ResolvedTuiLabels {
-  placeholder: string;
-  unavailableMessage: string;
-  send: string;
-  suggestions: string;
-  noSuggestions: string;
-  pending: string;
-  success: string;
-  error: string;
-  copy: string;
-  copied: string;
-  empty: string;
-  parameters: string;
-  options: string;
-  examples: string;
-  noParameters: string;
-  loadMore: string;
-}
+/** 补齐当前语言的默认界面文案。 */
+export type ResolvedTuiLabels = Required<TuiLabels>;
 
 export const DEFAULT_TUI_LABELS: ResolvedTuiLabels = {
-  placeholder: 'Type a command, for example /find "release notes"',
+  placeholder: '>_ Enter CLI commands, e.g. ov find OpenViking',
   unavailableMessage: 'Commands are unavailable right now.',
   send: 'Send',
+  allCommands: 'All commands',
+  historyCommands: 'History',
   suggestions: 'Command suggestions',
   noSuggestions: 'No matching commands',
   pending: 'Running',
@@ -33,31 +19,48 @@ export const DEFAULT_TUI_LABELS: ResolvedTuiLabels = {
   copied: 'Copied',
   empty: 'Run a command to see its result here.',
   parameters: 'Parameters',
-  options: 'Options',
   examples: 'Examples',
   noParameters: 'No parameters',
   loadMore: 'Load more',
+  parameter: 'Parameter',
+  required: 'Required',
+  description: 'Description',
+  defaultValue: 'Default',
+  yes: 'Yes',
+  no: 'No',
 };
 
-export function resolveTuiLabels(labels?: TuiLabels): ResolvedTuiLabels {
-  if (!labels) return DEFAULT_TUI_LABELS;
+export function resolveTuiLabels(
+  labels?: TuiLabels,
+  locale: 'en' | 'zh' = 'en',
+): ResolvedTuiLabels {
+  const defaults = locale === 'zh' ? ZH_TUI_LABELS : DEFAULT_TUI_LABELS;
+  if (!labels) return defaults;
   return {
-    placeholder: labels.placeholder ?? DEFAULT_TUI_LABELS.placeholder,
+    ...defaults,
+    placeholder: labels.placeholder ?? defaults.placeholder,
     unavailableMessage:
-      labels.unavailableMessage ?? DEFAULT_TUI_LABELS.unavailableMessage,
-    send: labels.send ?? DEFAULT_TUI_LABELS.send,
-    suggestions: labels.suggestions ?? DEFAULT_TUI_LABELS.suggestions,
-    noSuggestions: labels.noSuggestions ?? DEFAULT_TUI_LABELS.noSuggestions,
-    pending: labels.pending ?? DEFAULT_TUI_LABELS.pending,
-    success: labels.success ?? DEFAULT_TUI_LABELS.success,
-    error: labels.error ?? DEFAULT_TUI_LABELS.error,
-    copy: labels.copy ?? DEFAULT_TUI_LABELS.copy,
-    copied: labels.copied ?? DEFAULT_TUI_LABELS.copied,
-    empty: labels.empty ?? DEFAULT_TUI_LABELS.empty,
-    parameters: DEFAULT_TUI_LABELS.parameters,
-    options: DEFAULT_TUI_LABELS.options,
-    examples: DEFAULT_TUI_LABELS.examples,
-    noParameters: DEFAULT_TUI_LABELS.noParameters,
-    loadMore: DEFAULT_TUI_LABELS.loadMore,
+      labels.unavailableMessage ?? defaults.unavailableMessage,
+    send: labels.send ?? defaults.send,
+    allCommands: labels.allCommands ?? defaults.allCommands,
+    historyCommands: labels.historyCommands ?? defaults.historyCommands,
+    suggestions: labels.suggestions ?? defaults.suggestions,
+    noSuggestions: labels.noSuggestions ?? defaults.noSuggestions,
+    pending: labels.pending ?? defaults.pending,
+    success: labels.success ?? defaults.success,
+    error: labels.error ?? defaults.error,
+    copy: labels.copy ?? defaults.copy,
+    copied: labels.copied ?? defaults.copied,
+    empty: labels.empty ?? defaults.empty,
+    parameters: labels.parameters ?? defaults.parameters,
+    examples: labels.examples ?? defaults.examples,
+    noParameters: labels.noParameters ?? defaults.noParameters,
+    loadMore: labels.loadMore ?? defaults.loadMore,
+    parameter: labels.parameter ?? defaults.parameter,
+    required: labels.required ?? defaults.required,
+    description: labels.description ?? defaults.description,
+    defaultValue: labels.defaultValue ?? defaults.defaultValue,
+    yes: labels.yes ?? defaults.yes,
+    no: labels.no ?? defaults.no,
   };
 }

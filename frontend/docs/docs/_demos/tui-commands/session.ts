@@ -1,5 +1,5 @@
-import { URI_PARAM } from './command-shared.js';
-import type { TuiCommandEntry } from './command-shared.js';
+import { URI_PARAM } from './shared';
+import type { TuiCommandEntry } from './shared';
 
 /** 状态、会话与交互命令。Status, session and interactive commands. */
 export const SESSION_COMMANDS: readonly TuiCommandEntry[] = [
@@ -77,10 +77,15 @@ export const SESSION_COMMANDS: readonly TuiCommandEntry[] = [
     usage: '/compile --from <uri> --to <uri> --skill <uri>',
     skeleton: 'write',
     options: [
-      { token: '--from <uri>', description: 'Source file or directory' },
-      { token: '--to <uri>', description: 'Target directory' },
+      {
+        token: '--from <uri>',
+        required: true,
+        description: 'Source file or directory',
+      },
+      { token: '--to <uri>', required: true, description: 'Target directory' },
       {
         token: '--skill <uri>',
+        required: true,
         description: 'Skill URI or the literal memory',
       },
     ],

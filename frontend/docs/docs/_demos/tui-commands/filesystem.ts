@@ -1,5 +1,5 @@
-import { LIMIT_OPTION, URI_PARAM } from './command-shared.js';
-import type { TuiCommandEntry } from './command-shared.js';
+import { LIMIT_OPTION, URI_PARAM } from './shared';
+import type { TuiCommandEntry } from './shared';
 
 /** 文件系统命令。Filesystem commands. */
 export const FILESYSTEM_COMMANDS: readonly TuiCommandEntry[] = [

@@ -12,7 +12,7 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 | ---------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
 | [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | Directory tree rendering, expansion, selection and event callbacks              |
 | [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | Read-only preview state and extension tabs; view is a placeholder               |
-| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Command record, result and input views with bundled CLI metadata                |
+| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Command record, result and input views with host-provided command metadata      |
 | [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | Stateless scope layout and independent ScopeSelector options, panels and search |
 | [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Agent connection tab, list and detail contract; view is a placeholder           |
 | [modules](./src/modules/README.md)                                     | `@openviking/react/modules/<module>`          | ScopeCascade Hooks and composition, plus three placeholder business modules     |

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { TuiAssist } from './tui-assist.js';
 import { TuiComposer } from './tui-composer.js';
@@ -6,6 +6,18 @@ import { resolveTuiLabels } from './tui-labels.js';
 import { TuiRecordItem } from './tui-record.js';
 import { useTuiCompletion } from './use-tui-completion.js';
 import type { TuiProps } from './types.js';
+import { getTuiCommandQuery } from './command-completion.js';
+import { formatTuiCommandInput } from './command-input.js';
+import { findTuiCommand } from './command-definitions.js';
+
+export type {
+  TuiCommandDefinition,
+  TuiCommandExample,
+  TuiCommandGroup,
+  TuiCommandParam,
+  TuiCommandOption,
+  TuiSkeletonKind,
+} from './command-catalog.js';
 
 export type {
   TuiCommandHelpContent,
@@ -29,17 +41,20 @@ export type {
 } from './types.js';
 
 /**
- * 命令记录、结果与输入区。宿主负责执行与会话，组件只渲染传入的记录，并在
- * 成功操作后回调。
+ * 命令记录、结果与输入区。宿主负责执行与会话，组件渲染传入的记录，
+ * 上报用户的提交意图与已完成的复制。
  *
  * Command records, results and input. The host owns execution and sessions; the
- * component renders the records it is given and reports successful operations.
+ * component renders supplied records and reports submission intent and successful copies.
  */
 export function Tui({
   records,
   value,
   disabled = false,
   emptyState,
+  locale = 'en',
+  commands = [],
+  commandGroups = [],
   onValueChange,
   onSubmit,
   onOpenUri,
@@ -48,20 +63,58 @@ export function Tui({
   className,
   ...rest
 }: TuiProps) {
-  const text = resolveTuiLabels(labels);
+  const text = resolveTuiLabels(labels, locale);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const assistId = useId();
+  const [dismissedValue, setDismissedValue] = useState<string | null>(null);
+  const [paletteScope, setPaletteScope] = useState<string | null>(null);
+  const dismissCompletion = useCallback((next: string) => {
+    setDismissedValue(next);
+    setPaletteScope(null);
+  }, []);
+  const updateValue = (next: string) => {
+    if (getTuiCommandQuery(next, commands).scope !== paletteScope)
+      setPaletteScope(null);
+    onValueChange?.(next);
+  };
   const readOnly = !onValueChange;
-  const completion = useTuiCompletion(value, !disabled && !readOnly);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const fillCommand = (next: string) =>
+    updateValue(formatTuiCommandInput(next, commands));
+  const completion = useTuiCompletion(
+    value,
+    !disabled && !readOnly && dismissedValue !== value,
+    commands,
+    commandGroups,
+    paletteScope,
+  );
+  const queryKey = value;
+  const [selection, setSelection] = useState({ queryKey, index: 0 });
+  const activeIndex =
+    selection.queryKey === queryKey
+      ? Math.min(selection.index, Math.max(0, completion.options.length - 1))
+      : 0;
   const setActiveIndexSafely = useCallback(
     (next: number | ((index: number) => number)) => {
-      setActiveIndex((index) =>
-        typeof next === 'function' ? next(index) : next,
-      );
+      setSelection((current) => {
+        const index =
+          current.queryKey === queryKey
+            ? Math.min(
+                current.index,
+                Math.max(0, completion.options.length - 1),
+              )
+            : 0;
+        return {
+          queryKey,
+          index: typeof next === 'function' ? next(index) : next,
+        };
+      });
     },
-    [],
+    [queryKey, completion.options.length],
   );
 
+  // useEffect 必要性：记录提交到浏览器 DOM 后滚动实际容器，渲染时无法获取最终高度。
+  // records 更新决定滚动时机；同步写入 scrollTop，不创建订阅或待清理资源。
   useEffect(() => {
     const body = bodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
@@ -75,10 +128,11 @@ export function Tui({
             <TuiRecordItem
               key={record.id}
               record={record}
+              command={findTuiCommand(record.command, commands)}
               labels={text}
               onOpenUri={onOpenUri}
               onCopy={onCopy}
-              onPickCommand={(command) => onValueChange?.(`${command} `)}
+              onPickCommand={(command) => fillCommand(`${command} `)}
             />
           ))
         ) : (
@@ -88,15 +142,28 @@ export function Tui({
         )}
       </div>
       <TuiAssist
-        value={value}
+        assistId={assistId}
+        anchorRef={composerRef}
+        onDismiss={dismissCompletion}
         labels={text}
         completion={completion}
         activeIndex={activeIndex}
         onActiveIndexChange={setActiveIndexSafely}
-        onPick={(next) => onValueChange?.(next)}
+        onPick={updateValue}
       />
       <TuiComposer
+        onDismiss={dismissCompletion}
+        onRequestPalette={() => {
+          setDismissedValue(null);
+          setPaletteScope(completion.query.scope);
+        }}
+        assistId={assistId}
+        anchorRef={composerRef}
+        onFocus={() => setDismissedValue(null)}
         value={value}
+        history={records.map((record) =>
+          formatTuiCommandInput(record.command, commands),
+        )}
         labels={text}
         completion={completion}
         disabled={disabled}
@@ -104,7 +171,7 @@ export function Tui({
         canSubmit={Boolean(onSubmit)}
         activeIndex={activeIndex}
         onActiveIndexChange={setActiveIndexSafely}
-        onValueChange={onValueChange}
+        onValueChange={onValueChange ? updateValue : undefined}
         onSubmit={onSubmit}
       />
     </div>

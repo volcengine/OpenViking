@@ -1,11 +1,20 @@
-import { useEffect, useRef } from 'react';
-import type { KeyboardEvent } from 'react';
+import { useId, useRef } from 'react';
+import type { RefObject } from 'react';
 
+import { getTuiInlineCompletion } from './command-completion.js';
+import { useTuiComposerKeyboard } from './use-tui-composer-keyboard.js';
+import { TuiInputMirror } from './tui-input-mirror.js';
 import type { ResolvedTuiLabels } from './tui-labels.js';
 import type { TuiCompletion } from './use-tui-completion.js';
 
 export interface TuiComposerProps {
+  anchorRef: RefObject<HTMLDivElement | null>;
+  assistId: string;
+  onFocus: () => void;
+  onDismiss: (value: string) => void;
+  onRequestPalette: () => void;
   value: string;
+  history: readonly string[];
   labels: ResolvedTuiLabels;
   completion: TuiCompletion;
   disabled: boolean;
@@ -17,9 +26,15 @@ export interface TuiComposerProps {
   onSubmit?: (command: string) => void;
 }
 
-/** 命令输入区：受控输入、键盘补全与发送。辅助面板在记录区底部展示。 */
+/** 命令输入区：受控输入、键盘补全与提交意图。 */
 export function TuiComposer({
+  anchorRef,
+  assistId,
+  onFocus,
+  onDismiss,
+  onRequestPalette,
   value,
+  history,
   labels,
   completion,
   disabled,
@@ -31,80 +46,100 @@ export function TuiComposer({
   onSubmit,
 }: TuiComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const options = completion.options;
-  const keyword = value.replace(/^\s*\//, '').split(/\s/)[0] ?? '';
-  const showSuggestions = options.length > 0;
-
-  useEffect(() => {
-    onActiveIndexChange(0);
-  }, [keyword, onActiveIndexChange]);
-
-  const fill = (next: string) => {
-    onValueChange?.(next);
-    inputRef.current?.focus();
-  };
-
-  const submit = () => {
-    const command = value.trim();
-    if (!command || disabled || !canSubmit) return;
-    onSubmit?.(command);
-  };
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (showSuggestions) {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        const delta = event.key === 'ArrowDown' ? 1 : -1;
-        onActiveIndexChange(
-          (index) => (index + delta + options.length) % options.length,
-        );
-        return;
-      }
-      if (event.key === 'Tab' || event.key === 'Enter') {
-        const picked = options[activeIndex];
-        if (picked) {
-          event.preventDefault();
-          fill(`/${picked.name} `);
-        }
-        return;
-      }
-    }
-
-    if (
-      event.key === 'Enter' &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
-    ) {
-      event.preventDefault();
-      submit();
-    }
-  };
+  const inputId = useId();
+  const mirrorRef = useRef<HTMLSpanElement>(null);
+  const showSuggestions =
+    completion.showSuggestions && completion.options.length > 0;
+  const inline = completion.enabled
+    ? getTuiInlineCompletion(
+        value,
+        completion.query,
+        completion.options[activeIndex],
+        completion.showSuggestions,
+      )
+    : undefined;
+  const keyboard = useTuiComposerKeyboard({
+    inputRef,
+    value,
+    history,
+    completion,
+    inline,
+    disabled,
+    readOnly,
+    canSubmit,
+    activeIndex,
+    onActiveIndexChange,
+    onValueChange,
+    onSubmit,
+    onDismiss,
+    onRequestPalette,
+  });
 
   return (
-    <div className="ov-tui__composer">
-      <div className="ov-tui__input-row">
-        <span className="ov-tui__prompt" aria-hidden="true">
-          &gt;_
-        </span>
+    <div
+      ref={anchorRef}
+      className="ov-tui__composer"
+      data-disabled={disabled || undefined}
+    >
+      <label
+        className="ov-tui__input-row"
+        htmlFor={inputId}
+        data-value={`${value}\n`}
+      >
+        <span className="ov-tui__input-label">{labels.placeholder}</span>
+        <TuiInputMirror
+          value={value}
+          input={completion.activeInput}
+          inline={inline}
+          colorInput={completion.query.colorInput}
+          mirrorRef={mirrorRef}
+          hintId={`${inputId}-hint`}
+        />
         <textarea
+          id={inputId}
+          name="command"
           ref={inputRef}
           className="ov-tui__input"
           rows={1}
           value={value}
           placeholder={labels.placeholder}
-          readOnly={readOnly || disabled}
-          aria-label={labels.placeholder}
-          onChange={(event) => onValueChange?.(event.target.value)}
-          onKeyDown={handleKeyDown}
+          readOnly={readOnly}
+          disabled={disabled}
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="send"
+          onFocus={onFocus}
+          aria-describedby={`${inputId}-shortcuts ${inputId}-hint`}
+          aria-autocomplete={inline ? 'both' : 'list'}
+          aria-haspopup="listbox"
+          aria-controls={showSuggestions ? assistId : undefined}
+          aria-activedescendant={
+            showSuggestions ? `${assistId}-${activeIndex}` : undefined
+          }
+          onChange={(event) => keyboard.change(event.target.value)}
+          onScroll={(event) => {
+            if (mirrorRef.current) {
+              mirrorRef.current.scrollTop = event.currentTarget.scrollTop;
+              mirrorRef.current.scrollLeft = event.currentTarget.scrollLeft;
+            }
+          }}
+          onKeyDown={keyboard.handleKeyDown}
         />
-        <button
-          type="button"
-          className="ov-tui__send"
-          disabled={disabled || !canSubmit || !value.trim()}
-          onClick={submit}
-        >
+      </label>
+      <div className="ov-tui__shortcuts" id={`${inputId}-shortcuts`}>
+        <span className="ov-tui__shortcut">
+          <kbd>/</kbd>
+          {labels.allCommands}
+        </span>
+        <span className="ov-tui__shortcut">
+          <kbd>↑</kbd>
+          {labels.historyCommands}
+        </span>
+        <span className="ov-tui__shortcut">
+          <kbd>↵</kbd>
           {labels.send}
-        </button>
+        </span>
       </div>
       {disabled ? (
         <div className="ov-tui__unavailable" role="status">

@@ -1,0 +1,27 @@
+import type { ResolvedTuiLabels } from './tui-labels.js';
+
+export const ZH_TUI_LABELS: ResolvedTuiLabels = {
+  placeholder: '>_ 输入 CLI 命令，如 ov find OpenViking',
+  unavailableMessage: '当前无法执行命令。',
+  send: '发送',
+  allCommands: '全部指令',
+  historyCommands: '历史指令',
+  suggestions: '命令建议',
+  noSuggestions: '没有匹配的命令',
+  pending: '执行中',
+  success: '执行成功',
+  error: '执行失败',
+  copy: '复制',
+  copied: '已复制',
+  empty: '运行命令后将在此显示结果。',
+  parameters: '参数详情',
+  examples: '快速体验',
+  noParameters: '此命令不需要参数',
+  loadMore: '加载更多',
+  parameter: '参数',
+  required: '必填',
+  description: '说明',
+  defaultValue: '默认值',
+  yes: '是',
+  no: '否',
+};

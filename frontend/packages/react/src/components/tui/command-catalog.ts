@@ -1,53 +1,53 @@
-export type TuiCommandGroupKey =
-  'core' | 'filesystem' | 'search' | 'status' | 'session' | 'interactive';
-
 /** 等待中的记录按命令选择的骨架。Skeleton chosen for a pending record. */
 export type TuiSkeletonKind =
   'search' | 'resource' | 'tree' | 'status' | 'write' | 'generic';
 
 export interface TuiCommandGroup {
-  key: TuiCommandGroupKey;
+  key: string;
   label: string;
 }
 
 export interface TuiCommandParam {
   label: string;
   description: string;
+  required?: boolean;
+  defaultValue?: string;
 }
 
 export interface TuiCommandOption {
   token: string;
   description: string;
+  required?: boolean;
+  defaultValue?: string;
 }
 
 /**
- * 一条 CLI 命令的元数据。名称、参数、说明与示例与 CLI 的同一份定义对齐，
+ * 一条 CLI 命令的元数据。名称、参数、说明与示例由宿主提供，
  * 组件用它生成补全、参数提示和等待骨架。
  *
- * Metadata of one CLI command. Names, arguments, copy and examples mirror the
- * CLI definitions; the component derives completion, parameter hints and
+ * Metadata of one CLI command. Names, arguments, copy and examples come from
+ * the host; the component derives completion, parameter hints and
  * pending skeletons from them.
  */
-export interface TuiCommandDefinition {
-  name: string;
-  aliases?: readonly string[];
-  group: TuiCommandGroupKey;
-  description: string;
-  usage: string;
-  params?: readonly TuiCommandParam[];
-  options?: readonly TuiCommandOption[];
-  examples?: readonly string[];
-  skeleton?: TuiSkeletonKind;
+export interface TuiCommandExample {
+  value: string;
+  label?: string;
 }
 
-export const TUI_COMMAND_GROUPS: readonly TuiCommandGroup[] = [
-  { key: 'core', label: 'Core workflow' },
-  { key: 'filesystem', label: 'Filesystem' },
-  { key: 'search', label: 'Search & context' },
-  { key: 'status', label: 'Config & status' },
-  { key: 'session', label: 'Import, export & sessions' },
-  { key: 'interactive', label: 'Interactive & admin' },
-];
+export interface TuiCommandDefinition {
+  name: string;
+  /** 接受补全时填入的真实前缀，默认 name；例如由宿主提供 ov read。 */
+  inputText?: string;
+  aliases?: readonly string[];
+  group?: string;
+  description: string;
+  usage: string;
+  summary?: string;
+  params?: readonly TuiCommandParam[];
+  options?: readonly TuiCommandOption[];
+  examples?: readonly (string | TuiCommandExample)[];
+  skeleton?: TuiSkeletonKind;
+}
 
 export interface TuiParsedCommandInput {
   /** 命令名，不含开头的斜杠。Command name without the leading slash. */
@@ -81,44 +81,9 @@ export function resolveTuiCommandName(value: string): string {
   return (value.trim().split(/\s+/)[0] ?? '').replace(/^\//, '').toLowerCase();
 }
 
-const SKELETON_BY_COMMAND: Readonly<Record<string, TuiSkeletonKind>> = {
-  find: 'search',
-  search: 'search',
-  grep: 'search',
-  glob: 'search',
-  read: 'resource',
-  abstract: 'resource',
-  overview: 'resource',
-  ls: 'tree',
-  tree: 'tree',
-  stat: 'status',
-  status: 'status',
-  health: 'status',
-  observer: 'status',
-  task: 'status',
-  wait: 'status',
-  config: 'status',
-  write: 'write',
-  mkdir: 'write',
-  rm: 'write',
-  cp: 'write',
-  mv: 'write',
-  get: 'write',
-  'add-resource': 'write',
-  'add-skill': 'write',
-  'add-memory': 'write',
-  import: 'write',
-  export: 'write',
-  backup: 'write',
-  restore: 'write',
-  compile: 'write',
-};
-
-/** 等待中的记录使用的骨架；未识别的命令使用通用骨架。 */
+/** 骨架由宿主的命令描述提供；未知命令使用通用形态。 */
 export function resolveTuiSkeleton(
-  commandText: string,
   command: TuiCommandDefinition | undefined,
 ): TuiSkeletonKind {
-  const name = resolveTuiCommandName(commandText);
-  return command?.skeleton ?? SKELETON_BY_COMMAND[name] ?? 'generic';
+  return command?.skeleton ?? 'generic';
 }

@@ -1,12 +1,15 @@
-import { LIMIT_OPTION, URI_PARAM } from './command-shared.js';
-import type { TuiCommandEntry } from './command-shared.js';
+import { LIMIT_OPTION, URI_PARAM } from './shared';
+import type { TuiCommandEntry } from './shared';
 
 /** 核心流程与检索命令。Core workflow and retrieval commands. */
 export const CORE_COMMANDS: readonly TuiCommandEntry[] = [
   {
     name: 'add-resource',
+    skeleton: 'write',
     group: 'core',
-    description: 'Add resources into OpenViking',
+    summary: 'Add resources into OpenViking',
+    description:
+      'Import a web URL, repository or accessible path into Resources for searching, reading and citing. Local file upload is not supported here.',
     usage: '/add-resource <path-or-url> [--to <uri>] [--parent <uri>]',
     params: [
       { label: '<path-or-url>', description: 'Local path or URL to import' },
@@ -14,10 +17,14 @@ export const CORE_COMMANDS: readonly TuiCommandEntry[] = [
       { label: '--parent <uri>', description: 'Existing parent directory URI' },
       { label: '--wait', description: 'Wait until processing completes' },
     ],
-    examples: ['/add-resource ./docs --parent viking://projects/acme --wait'],
+    examples: [
+      '/add-resource https://example.com/spec.md --to viking://specs/api.md',
+      '/add-resource ./docs --parent viking://projects/acme --wait',
+    ],
   },
   {
     name: 'add-skill',
+    skeleton: 'write',
     group: 'core',
     description: 'Add skills from a source',
     usage: '/add-skill <source> [--wait]',
@@ -32,6 +39,7 @@ export const CORE_COMMANDS: readonly TuiCommandEntry[] = [
   },
   {
     name: 'add-memory',
+    skeleton: 'write',
     group: 'core',
     description: 'Add memory in one shot',
     usage: '/add-memory <content>',

@@ -1,4 +1,4 @@
-import type { TuiCommandDefinition } from './command-catalog.js';
+import type { TuiCommandDefinition } from '@openviking/react/components/tui';
 
 export const URI_PARAM = { label: '<uri>', description: 'Viking URI' };
 export const LIMIT_OPTION = {

@@ -1,21 +1,26 @@
+import { useEffect, useRef } from 'react';
+import type { RefObject } from 'react';
 import type { ResolvedTuiLabels } from './tui-labels.js';
+import { getTuiCommandInputText } from './command-input.js';
 import { TuiParamHint } from './tui-param-hint.js';
+import { useTuiAssistPosition } from './use-tui-assist-position.js';
 import type { TuiCompletion } from './use-tui-completion.js';
 
 export interface TuiAssistProps {
-  value: string;
+  anchorRef: RefObject<HTMLDivElement | null>;
+  assistId: string;
   labels: ResolvedTuiLabels;
   completion: TuiCompletion;
   activeIndex: number;
   onActiveIndexChange: (index: number) => void;
   onPick: (value: string) => void;
+  onDismiss: (value: string) => void;
 }
 
 function Highlighted({ text, keyword }: { text: string; keyword: string }) {
   const normalized = keyword.trim().toLowerCase();
   const index = normalized ? text.toLowerCase().indexOf(normalized) : -1;
   if (index < 0) return <>{text}</>;
-
   return (
     <>
       {text.slice(0, index)}
@@ -27,43 +32,58 @@ function Highlighted({ text, keyword }: { text: string; keyword: string }) {
   );
 }
 
-/**
- * 输入辅助面板：命令名候选、无匹配提示或参数帮助。它吸附在记录区底部，
- * 不改变输入区位置，也不会溢出组件边界。
- *
- * Input assistance: command-name suggestions, the no-match message or the
- * parameter panel. It docks at the bottom of the record area, so the composer
- * never moves and the panel cannot overflow the component.
- */
+/** 候选浮层和联动详情；现代浏览器使用顶层 Popover，保留宿主主题继承。 */
 export function TuiAssist({
-  value,
+  anchorRef,
+  assistId,
   labels,
   completion,
   activeIndex,
   onActiveIndexChange,
   onPick,
+  onDismiss,
 }: TuiAssistProps) {
   const options = completion.options;
-  const keyword = value.replace(/^\s*\//, '').split(/\s/)[0] ?? '';
+  const keyword = completion.query.keyword;
+  const selected = options[activeIndex] ?? options[0];
+  const command = selected;
+  const open = completion.showSuggestions;
+  const panelRef = useTuiAssistPosition(anchorRef, open, onDismiss);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  if (completion.showParamHint && completion.activeCommand) {
-    return (
-      <div className="ov-tui__assist">
-        <TuiParamHint
-          command={completion.activeCommand}
-          labels={labels}
-          onPick={onPick}
-        />
-      </div>
-    );
-  }
+  // useEffect 必要性：选中行提交到 DOM 后，调整浏览器列表的实际滚动位置。
+  // 候选或键盘序号变化时保持选中项可见；同步滚动不产生订阅，无需清理。
+  useEffect(() => {
+    const list = listRef.current;
+    const option = list?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!list || !option) return;
+    const listBox = list.getBoundingClientRect();
+    const optionBox = option.getBoundingClientRect();
+    if (optionBox.top < listBox.top)
+      list.scrollTop -= listBox.top - optionBox.top;
+    if (optionBox.bottom > listBox.bottom)
+      list.scrollTop += optionBox.bottom - listBox.bottom;
+  }, [activeIndex, options]);
 
-  if (options.length > 0) {
-    return (
-      <div className="ov-tui__assist">
+  if (!open) return null;
+  return (
+    <div
+      ref={panelRef}
+      className="ov-tui__assist"
+      popover="manual"
+      data-details-only={!options.length || undefined}
+    >
+      {command ? (
+        <div className="ov-tui__assist-detail">
+          <TuiParamHint command={command} labels={labels} onPick={onPick} />
+        </div>
+      ) : null}
+      {options.length ? (
         <div
           className="ov-tui__suggestions"
+          ref={listRef}
           role="listbox"
+          id={assistId}
           aria-label={labels.suggestions}
         >
           {completion.suggestions.map((section) => (
@@ -71,27 +91,32 @@ export function TuiAssist({
               <div className="ov-tui__suggestion-label">
                 {section.group.label}
               </div>
-              {section.commands.map((command) => {
-                const index = options.indexOf(command);
+              {section.commands.map((item) => {
+                const index = options.indexOf(item);
                 return (
                   <button
-                    key={command.name}
+                    key={item.name}
+                    id={`${assistId}-${index}`}
                     type="button"
                     role="option"
-                    aria-selected={index === activeIndex}
+                    aria-selected={item === selected}
                     className="ov-tui__suggestion"
                     onMouseEnter={() => onActiveIndexChange(index)}
+                    onFocus={() => onActiveIndexChange(index)}
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => onPick(`/${command.name} `)}
+                    onClick={() => onPick(`${getTuiCommandInputText(item)} `)}
                   >
                     <code className="ov-tui__suggestion-name">
+                      <Highlighted text={item.name} keyword={keyword} />
+                    </code>
+                    <span
+                      className="ov-tui__suggestion-desc"
+                      title={item.summary ?? item.description}
+                    >
                       <Highlighted
-                        text={`/${command.name}`}
+                        text={item.summary ?? item.description}
                         keyword={keyword}
                       />
-                    </code>
-                    <span className="ov-tui__suggestion-desc">
-                      {command.description}
                     </span>
                   </button>
                 );
@@ -99,19 +124,11 @@ export function TuiAssist({
             </div>
           ))}
         </div>
-      </div>
-    );
-  }
-
-  if (completion.showTypingHint) {
-    return (
-      <div className="ov-tui__assist">
+      ) : !command ? (
         <div className="ov-tui__no-suggestions" role="status">
           {labels.noSuggestions}
         </div>
-      </div>
-    );
-  }
-
-  return null;
+      ) : null}
+    </div>
+  );
 }

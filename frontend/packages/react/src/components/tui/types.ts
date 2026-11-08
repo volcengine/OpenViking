@@ -1,4 +1,8 @@
 import type { HTMLAttributes, ReactNode } from 'react';
+import type {
+  TuiCommandDefinition,
+  TuiCommandGroup,
+} from './command-catalog.js';
 
 /**
  * 一条执行记录的状态。
@@ -397,10 +401,14 @@ export interface TuiLabels {
    */
   unavailableMessage?: string;
   /**
-   * 发送按钮文案。
-   * Send button label.
+   * 底部发送快捷键的说明文案。
+   * Label for the send keyboard shortcut.
    */
   send?: string;
+  /** 全部指令快捷键说明。Label for the all-commands shortcut. */
+  allCommands?: string;
+  /** 历史指令快捷键说明。Label for recalling commands from the current records. */
+  historyCommands?: string;
   /**
    * 建议列表的无障碍名称。
    * Accessible name of the suggestion list.
@@ -441,6 +449,19 @@ export interface TuiLabels {
    * Message shown when there are no records.
    */
   empty?: string;
+  /** 参数帮助标题、示例与空参数提示。Parameter help headings and empty copy. */
+  parameters?: string;
+  examples?: string;
+  noParameters?: string;
+  /** 参数表列名与必填值。Parameter columns and required values. */
+  parameter?: string;
+  required?: string;
+  description?: string;
+  defaultValue?: string;
+  yes?: string;
+  no?: string;
+  /** 资源列表分页。Resource list pagination. */
+  loadMore?: string;
 }
 
 /**
@@ -480,18 +501,23 @@ export interface TuiProps extends Omit<
    * passing `null` hides empty-state content.
    */
   emptyState?: ReactNode;
+  /** 内置界面文案的语言，默认英文；命令文案由宿主提供。 */
+  locale?: 'en' | 'zh';
+  /** 宿主提供的命令目录；省略时无候选和参数帮助，仍可提交文本。 */
+  commands?: readonly TuiCommandDefinition[];
+  /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */
+  commandGroups?: readonly TuiCommandGroup[];
   /**
-   * 输入值变化时触发，包括接受补全或参数提示；填入不提交命令。省略时输入框
+   * 输入值变化时触发，包括接受命令或示例；行内占位不改变值，也不提交。省略时输入框
    * 只读，用于展示历史记录。
-   * Invoked when the input changes, including accepted completions and parameter
-   * hints; filling the input does not submit a command. Omission makes the input
+   * Invoked when the input changes, including accepted commands and examples; filling the input does not submit a command. Omission makes the input
    * read-only, for showing history.
    */
   onValueChange?: (value: string) => void;
   /**
-   * 命令发送成功后触发，失败时不触发。省略时不能提交命令。
-   * Called after a command is sent successfully; not called on failure. Omission
-   * disables submission.
+   * 用户显式提交时上报命令意图，宿主负责请求、权限和执行，并通过 records 回填状态。
+   * Reports an explicit submission intent. The host owns requests, permissions
+   * and execution, and supplies subsequent status through records. Omission disables submission.
    */
   onSubmit?: (command: string) => void;
   /**

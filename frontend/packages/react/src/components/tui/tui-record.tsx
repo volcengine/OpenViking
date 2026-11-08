@@ -1,5 +1,5 @@
-import { findTuiCommand } from './command-definitions.js';
 import { resolveTuiSkeleton } from './command-catalog.js';
+import type { TuiCommandDefinition } from './command-catalog.js';
 import { TuiCommandHelp } from './tui-command-help.js';
 import { TuiCopyButton } from './tui-copy-button.js';
 import type { ResolvedTuiLabels } from './tui-labels.js';
@@ -16,6 +16,7 @@ import { TuiWriteResult } from './tui-write-result.js';
 
 export interface TuiRecordProps {
   record: TuiRecord;
+  command?: TuiCommandDefinition;
   labels: ResolvedTuiLabels;
   onOpenUri?: (uri: string) => void;
   onCopy?: (text: string) => void;
@@ -24,6 +25,7 @@ export interface TuiRecordProps {
 
 function RecordBody({
   record,
+  command,
   labels,
   onOpenUri,
   onCopy,
@@ -32,8 +34,7 @@ function RecordBody({
   const { content } = record;
 
   if (record.status === 'pending') {
-    const command = findTuiCommand(record.command);
-    return <TuiSkeleton kind={resolveTuiSkeleton(record.command, command)} />;
+    return <TuiSkeleton kind={resolveTuiSkeleton(command)} />;
   }
 
   if (!content) {
