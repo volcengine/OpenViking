@@ -40,7 +40,15 @@ try {
     if ($metadata.platform -ne 'win32-x64' -or $metadata.channel -ne 'windows-preview') { throw 'Not a Windows x64 preview' }
     & (Join-Path $pending 'vika-preview.ps1') -Action check
     # Directory.Move refuses an existing destination, including one created concurrently.
-    [IO.Directory]::Move($pending, $target)
+    # Freshly extracted executables can stay briefly locked (antivirus scan, the check
+    # process exiting), so retry access-denied/sharing failures before giving up.
+    for ($attempt = 1; ; $attempt++) {
+        try { [IO.Directory]::Move($pending, $target); break }
+        catch [UnauthorizedAccessException], [IO.IOException] {
+            if ((Test-Path -LiteralPath $target) -or $attempt -ge 20) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
     Write-Host "Installed preview at $target"
     Write-Host 'Configure your manifest using docs/windows-preview.md before starting.'
 } finally {
