@@ -118,49 +118,45 @@ html:root {
 }
 
 /*
- * 演示卡片。Rspress 的预览卡片自带 16px 内边距，组件贴不到边，留白看起来
- * 像是组件内部的。这里直接把那张卡片的 padding 清零，并让它自己的边框与
- * 圆角承担卡片外观，组件便与卡片边缘齐平——组件的留白与示例的留白因此可以
- * 分开看。
+ * 贴边卡片。Rspress 给预览卡写的是 `padding: 16px`；只有当卡片里放着
+ * `.ov-demo-surface` 时才清零，其他示例保留默认内边距。用 `:has()` 而不是给
+ * MDX 代码块传类名，是因为 rspress 的 `file=...` 预览语法不支持额外属性。
  *
- * 不用负外边距：内容区带 `overflow: auto`，负边距会把内容推到它外面被裁掉。
+ * 用两级类名抬高特异性：预览插件把同一条 `padding: 16px` 写在更靠后的样式表
+ * 里，同特异性时会被它盖掉。
  *
- * A demo card. Rspress's preview card carries 16px of padding, so the component
- * cannot reach the edge and the gap reads as its own. Zero that padding and let
- * the card's own border and radius carry the frame, and the component sits flush
- * — which keeps the two kinds of spacing distinguishable.
+ * A flush card. Rspress pads the preview card by 16px; it is zeroed only when the
+ * card contains `.ov-demo-surface`, so every other example keeps the default
+ * padding. `:has()` rather than a class on the MDX block, because rspress's
+ * `file=...` preview syntax takes no extra attributes.
  *
- * Negative margins are not an option: the content area scrolls (`overflow: auto`),
- * so pulling content outside it would simply clip.
+ * Two classes raise specificity: the preview plugin writes the same 16px padding
+ * in a later stylesheet and would otherwise win at equal specificity.
  */
-/* 用两级类名抬高特异性：预览插件把同一张卡片的 `padding: 16px` 写在更靠后的
-   样式表里，同特异性时会被它盖掉。 */
-.rp-preview .rp-preview--internal__card {
+.rp-preview .rp-preview--internal__card:has(.ov-demo-surface) {
   padding: 0;
   overflow: hidden;
 }
 
 /*
- * 卡片内容区不留内边距。`overflow` 保持 Rspress 的默认值：它同时承载「代码块
- * 展示」这一形态，把 `auto` 改成 `visible` 会让代码块塌陷成 0 高、内容溢出到
- * 页面外。组件自己的滚动由组件内部容器负责，不需要动这里。
+ * 预览卡的内边距此前被全局清零，为的是让文件预览这类「外壳自己撑满卡片」的
+ * 组件贴边；但卡片由所有示例共用，作用域选择这类普通示例也被顶到了卡片边上。
+ * 现在改成按示例标记：只有包含 `.ov-demo-surface` 的卡片才清零。
  *
- * Zero the padding only. Leave `overflow` at Rspress's default: the same card
- * also renders the "show code" view, and switching `auto` to `visible` collapses
- * that block to zero height and spills its content onto the page. The component's
- * own scrolling lives in its inner containers, so this needs no change.
+ * The preview card's padding used to be zeroed globally so a component whose shell
+ * fills the card — the file preview — could sit flush. The card is shared by every
+ * example, so ordinary demos such as the scope switcher were pushed against the
+ * edge too. It is now opt-in: only a card that contains `.ov-demo-surface` is
+ * zeroed.
  */
-.rp-preview .rp-preview--internal__card__content {
-  padding: 0;
-}
 
 /*
- * 组件与卡片之间留一点纵向呼吸：页签行紧贴卡片上边框会显得拥挤。只加纵向，
- * 横向仍与卡片齐平——组件宽度本就要撑满，左右再缩会看不出实际占位。
+ * 贴边容器：所在卡片会因为它而清零内边距（见上面的 `:has()` 规则），这里只补
+ * 一点纵向呼吸，避免页签行紧贴卡片上边框。
  *
- * A little vertical breathing room between the component and the card edge: a tab
- * row flush against the top border reads as cramped. Vertical only — the component
- * is meant to fill the width, so insetting the sides would hide its real extent.
+ * A flush container: its card zeroes its padding because of it (the `:has()` rule
+ * above). It only adds a little vertical breathing room so a tab row does not sit
+ * against the top border.
  */
 .ov-demo-surface {
   box-sizing: border-box;
