@@ -4,7 +4,7 @@ English / [中文](README_CN.md)
 
 The view and interaction for command records, results and input. The record area, empty state, input, command suggestions and parameter help make up the TUI body. Execution results are passed in from above; command sending, resource opening and copy completion are reported back to the host through callbacks, and a failure does not fire the corresponding callback.
 
-`tui.tsx` maps to `@openviking/react/components/tui`. It is currently a placeholder: it renders a fixed-size empty shell and consumes no props, so the package can be published for hosts to compare against the API. The real implementation will be rewritten against this document and the type declarations; the source is the source of truth and this document does not repeat the field list.
+`tui.tsx` maps to `@openviking/react/components/tui`. The view is implemented against the contract below: it renders the command records and results, the empty state, and the controlled input with completion and parameter hints. The type declarations remain the source of truth for the field list.
 
 ## Responsibilities
 
@@ -20,7 +20,9 @@ The view and interaction for command records, results and input. The record area
 - `emptyState` is the single configuration entry for the complete empty state and can combine a title, description and shortcut entries, with the related interaction handled by the host inside the node. It is shown when there are no records; when omitted, `labels.empty` is used, and passing `null` hides the empty-state content.
 - Component copy and guidance text are configured uniformly through `labels`. `disabled` independently controls whether the command input and submit are available, and `labels.unavailableMessage` provides the hint while disabled; setting the copy alone does not disable the component.
 
-Only the interface boundary is defined today; completion, the help panel and the CLI shared command metadata are not implemented, and automatic sync of new CLI commands needs that link wired up in the real implementation. Metadata loading and transport should go through the shared adapter layer, with no requests or per-command adapters placed in individual hosts.
+Command metadata lives in `command-core.ts`, `command-filesystem.ts` and `command-session.ts`, grouped like the `ov` CLI help. It is bundled data, not fetched: the component stays render-only, so a host that needs server-provided commands converts them to records instead of extending the input. When the CLI adds a command, add it to the matching file to make it appear in completion, parameter hints and the help record.
+
+Result rendering maps the seven `TuiRecordContent` variants onto dedicated views: `text` (plain or Markdown, JSON pretty-printed), `search-list`, `resource-preview`, `resource-tree`, `status`, `write-result` and `command-help`. URIs inside text results become openable entries. `resource-tree` renders a column-aligned table when items carry `detailRows` and pages at 20 rows otherwise.
 
 ## Result content
 
@@ -30,7 +32,7 @@ Only the interface boundary is defined today; completion, the help panel and the
 - Failure is expressed through `TuiRecord.status: 'error'`; the error body uses generic text, and no separate error content variant is defined.
 - Command help is generated from the shared command definitions, and other results are converted uniformly by the shared adapter layer; the host reuses the converted result rather than adapting commands one by one.
 
-These variants define the target contract for unified display; the shared result conversion and the actual view are still to be implemented.
+Hosts still own the conversion from a CLI response to these variants; the component does not parse command output.
 
 ## Optional capabilities
 
@@ -50,4 +52,4 @@ While a record is `pending`, the component matches `command` against the shared 
 
 Development and build commands are in the [frontend workspace README](../../../../../README.md); module conventions are in the [package guide](../../../README.md).
 
-The standalone style entry is `@openviking/react/components/tui/style.css`, which currently contains only the placeholder shell styles.
+The standalone style entry is `@openviking/react/components/tui/style.css`. Class names follow `ov-tui__<element>` and colours derive from `--ov-ui-*` theme variables with theme-neutral fallbacks, so the console works in light and dark hosts.

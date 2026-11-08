@@ -2,7 +2,7 @@
 
 A command console body: current command records, results and input, including the empty state, suggestions and input help. The host owns execution; callbacks report successful command sending, resource opening and copying, and do not fire on failure.
 
-This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can prepare against the published types before the view is migrated. The types below describe the intended view API; the placeholder implementation will be replaced.
+The view is implemented: it renders records and their seven result variants, the empty state, and a controlled input with completion and parameter hints. Command metadata ships with the package and mirrors the `ov` CLI help groups.
 
 ## Basic usage
 
@@ -10,7 +10,7 @@ This is a placeholder component: it renders a fixed-size empty shell and consume
 
 ```
 
-The placeholder is 360 × 560 and represents the records and input area.
+The demo keeps the records and input in its own state: sending appends a pending record, then resolves it, which is exactly how a host drives the component.
 
 ## Component boundary
 
@@ -20,7 +20,7 @@ The host handles session and history actions, then updates `records` and `value`
 
 Command matching, suggestions, highlighting, keyboard selection, parameter hints and help are internal component behavior. Command names, parameters, descriptions and examples use the same metadata as the CLI; hosts do not configure suggestions or render help command by command. Accepting a completion or hint updates the input through `onValueChange`; `onSubmit` is invoked only after an explicitly submitted command is sent successfully.
 
-This update defines the public type contract. Completion, help and shared CLI metadata integration are not implemented yet. A shared adapter layer owns metadata loading and transport; the component does not fetch data itself.
+Completion, parameter hints and the help view are internal behaviour driven by the bundled command metadata in `command-core.ts`, `command-filesystem.ts` and `command-session.ts`. The component does not fetch data; a host that needs server-provided commands converts them to records.
 
 ## Props
 
@@ -36,7 +36,7 @@ import type {
 } from '@openviking/react/components/tui';
 ```
 
-The table describes the published type contract. The placeholder does not accept these props yet.
+The table describes the implemented behaviour.
 
 | Property      | Type                      | Default      | Description                                                                                                                                        |
 | ------------- | ------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,7 +70,7 @@ The table describes the published type contract. The placeholder does not accept
 
 For `text`, `format` accepts `plain` or `markdown` and defaults to `plain`. Format JSON as a string and display it through `text`. Failures use `TuiRecord.status: 'error'`, with the error body in a text result; there is no separate error content variant.
 
-Command help is generated from shared command definitions. A shared adapter layer converts other results so hosts reuse the same conversion. These variants define the target shared view contract; shared result conversion and rendering are not implemented yet.
+Each variant has a dedicated view: plain or Markdown text (JSON is pretty-printed), search rows with optional score details, resource preview, an aligned resource table with paging, status rows, write lines and grouped command help. URIs in text results are openable. Converting CLI output into these variants stays with the host.
 
 ### Copy and guidance
 
@@ -99,7 +99,7 @@ General interface copy is configured through `labels` and defaults to English. C
 
 For a pending `TuiRecord`, the component matches `command` against shared command definitions to select the skeleton. Unrecognized commands use the generic skeleton. `content` can be omitted while pending; the host does not specify a skeleton variant.
 
-Import the placeholder and its scoped stylesheet:
+Import the component and its scoped stylesheet:
 
 ```tsx
 import { Tui } from '@openviking/react/components/tui';
@@ -108,4 +108,4 @@ import '@openviking/react/components/tui/style.css';
 
 ## Implementation scope
 
-The component renders the view and reports completed interactions and successful operations. Execution, data access, persistence, permissions and network connections belong to the integration layer; success notifications do not perform these operations. The placeholder does not implement operation execution or success notifications yet.
+The component renders the view and reports completed interactions and successful operations. Execution, data access, persistence, permissions and network connections belong to the integration layer; success notifications do not perform these operations.

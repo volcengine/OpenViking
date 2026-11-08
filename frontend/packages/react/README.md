@@ -2,24 +2,24 @@
 
 English / [中文](README_CN.md)
 
-React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree and FilePreview provide placeholder views, alongside five file-type icons. Three business module placeholders support early layout integration; ScopeCascade provides a working cascade Hook and composition.
+React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Three business module placeholders support early layout integration; ScopeCascade provides a working cascade Hook and composition.
 
 This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
 ## Module map
 
-| Source directory                                                       | Public entry                                  | Responsibility                                                                            |
-| ---------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | Directory tree rendering, expansion, selection and event callbacks; view is a placeholder |
-| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | Read-only preview state and extension tabs; view is a placeholder                         |
-| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Reviewed command record, result and input types; view is a placeholder                    |
-| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | Stateless scope layout and independent ScopeSelector options, panels and search           |
-| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Agent connection tab, list and detail contract; view is a placeholder                     |
-| [modules](./src/modules/README.md)                                     | `@openviking/react/modules/<module>`          | ScopeCascade Hooks and composition, plus three placeholder business modules               |
-| [client](./src/client/index.ts)                                        | `@openviking/react/client`                    | Framework-neutral request client: `createOvClient`, `OvClient`, `OvClientError`           |
-| [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                                     |
+| Source directory                                                       | Public entry                                  | Responsibility                                                                  |
+| ---------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
+| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | Directory tree rendering, expansion, selection and event callbacks              |
+| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | Read-only preview state and extension tabs; view is a placeholder               |
+| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Command record, result and input views with bundled CLI metadata                |
+| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | Stateless scope layout and independent ScopeSelector options, panels and search |
+| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Agent connection tab, list and detail contract; view is a placeholder           |
+| [modules](./src/modules/README.md)                                     | `@openviking/react/modules/<module>`          | ScopeCascade Hooks and composition, plus three placeholder business modules     |
+| [client](./src/client/index.ts)                                        | `@openviking/react/client`                    | Framework-neutral request client: `createOvClient`, `OvClient`, `OvClientError` |
+| [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                           |
 
-Components implement their reviewed contracts incrementally. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, header actions and the plain-text preview and editing foundation, with its body not yet wired to FileViewer. ScopeSwitcher is a stateless layout container; independently rendered ScopeSelector children own visibility, with host-owned per-level data subscriptions, search and requests. Tui and AgentConnect render a fixed-size shell only. Limits are described in each component's own docs. The package also ships five file-type icons.
+Components implement their reviewed contracts incrementally. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, header actions and the plain-text preview and editing foundation, with its body not yet wired to FileViewer. ScopeSwitcher is a stateless layout container; independently rendered ScopeSelector children own visibility, with host-owned per-level data subscriptions, search and requests. Tui renders records, results and the input; AgentConnect renders a fixed-size shell only. Limits are described in each component's own docs. The package also ships five file-type icons.
 
 Components receive view data and state through props and express user intent through callbacks, following the [component directory conventions](./src/components/AGENTS.md). [modules](./src/modules/README.md) plan Hooks and views per business capability: Hooks load data, hold state and expose operations, and composite views wire them into components. Full pages and product-specific flows belong to the host; the admin console is out of scope for this phase. `file-browser`, `console` and `task-center` currently ship placeholder components, base Props / Labels types and styles so hosts can integrate layout first; business Hooks, data loading and cross-component coordination are not implemented yet.
 
