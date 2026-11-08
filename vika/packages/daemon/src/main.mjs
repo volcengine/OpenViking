@@ -1,8 +1,8 @@
+#!/usr/bin/env node
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { onShutdown } from './platform/index.mjs';
-#!/usr/bin/env node
 
 import { createRequire } from 'node:module';
 import { getConfig, publicConfig } from './config.mjs';
