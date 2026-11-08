@@ -25,9 +25,14 @@ test('both OS implementations and the facade implement exactly the declared inte
 
 test('preview product support has one immutable policy, independent of adapter selection', () => {
   assert.deepEqual(capabilitiesFor({ ...posix, hostPlatformId: 'linux-x64' }), { updater: true, autostart: true, connectors: { email: true } });
-  assert.deepEqual(capabilitiesFor(windows), { updater: false, autostart: false, connectors: { email: false } });
+  assert.deepEqual(capabilitiesFor(windows), { updater: false, autostart: false, connectors: { email: true } });
   const unsupported = capabilitiesFor({ ...windows, hostPlatformId: 'win32-arm64' });
   assert.equal(unsupported.updater, false);
   assert.ok(Object.isFrozen(unsupported));
   assert.ok(Object.isFrozen(unsupported.connectors));
+});
+
+test('file mode enforcement is a platform property: posix enforces it, win32 does not', () => {
+  assert.equal(posix.supportsFileModes, true);
+  assert.equal(windows.supportsFileModes, false);
 });

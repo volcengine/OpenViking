@@ -9,7 +9,7 @@ export function capabilitiesFor(implementation) {
   return Object.freeze({
     updater: implementation.supportsShellScripts && artifactPlatforms[implementation.hostPlatformId]?.sourceOnly !== true,
     autostart: implementation.loginService !== null,
-    connectors: Object.freeze({ email: implementation.supportsFileModes }),
+    connectors: Object.freeze({ email: true }),
   });
 }
 export const capabilities = capabilitiesFor(platform);

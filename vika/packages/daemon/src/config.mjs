@@ -1,9 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { capabilities } from './capabilities.mjs';
 
-import { localSocketPath } from './platform/index.mjs';
+import { localSocketPath, supportsFileModes } from './platform/index.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -107,14 +106,15 @@ function privateRegularFileEnv(name) {
   return privateRegularFile(process.env[name], name);
 }
 
-function privateRegularFile(value, name) {
-  if (!capabilities.connectors.email) throw new Error('Email is not supported in the Windows preview.');
+// Windows lstat reports 0o666 regardless of ACLs, so mode bits are only
+// enforced where the platform has POSIX file modes.
+export function privateRegularFile(value, name, enforceFileMode = supportsFileModes) {
   const raw = String(value ?? '').trim();
   if (!raw || !path.isAbsolute(raw)) throw new Error(`${name} must be an absolute path`);
   const resolved = path.normalize(raw);
   const info = fs.lstatSync(resolved);
   if (!info.isFile() || info.isSymbolicLink()) throw new Error(`${name} must be a regular file`);
-  if ((info.mode & 0o077) !== 0) throw new Error(`${name} must have mode 0600`);
+  if (enforceFileMode && (info.mode & 0o077) !== 0) throw new Error(`${name} must have mode 0600`);
   if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
     throw new Error(`${name} must be owned by the daemon user`);
   }

@@ -6,7 +6,7 @@ import { afterEach, describe, it } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getConfig, projectDir } from '../src/config.mjs';
+import { getConfig, privateRegularFile, projectDir } from '../src/config.mjs';
 import { managedPiBin } from '../src/pi-runtime.mjs';
 
 const saved = new Map();
@@ -163,7 +163,12 @@ describe('configuration safety', { concurrency: false }, () => {
       setEnv('VIKA_EMAIL_ACCOUNTS_JSON', undefined);
       assert.throws(() => getConfig(), /VIKA_EMAIL_ACCOUNTS_JSON must list the mailboxes/);
       accounts([{ id: 'email-gmail', config: accountFile }]);
-      assert.throws(() => getConfig(), /email account file of email-gmail must have mode 0600/);
+      if (process.platform !== 'win32') {
+        assert.throws(() => getConfig(), /email account file of email-gmail must have mode 0600/);
+      }
+      // Posix enforces the mode bits; Windows (no file modes) accepts the file.
+      assert.throws(() => privateRegularFile(accountFile, 'account', true), /account must have mode 0600/);
+      assert.equal(privateRegularFile(accountFile, 'account', false), accountFile);
       fs.chmodSync(accountFile, 0o600);
       accounts([{ id: 'email-gmail', config: accountFile }, { id: 'email-gmail', config: otherFile }]);
       assert.throws(() => getConfig(), /invalid or repeated mailbox id/);
