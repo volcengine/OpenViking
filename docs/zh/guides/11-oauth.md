@@ -297,6 +297,29 @@ curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
 
 ## 故障排查
 
+### 管理已注册应用（仅 ROOT）
+
+启用 OAuth 后，ROOT 可以通过管理 API 查看整个实例的应用注册，并撤销某个应用的授权：
+
+```bash
+curl -H "X-API-Key: $ROOT_API_KEY" \
+  'http://127.0.0.1:1933/api/v1/admin/oauth/clients?offset=0&limit=50'
+curl -X POST -H "X-API-Key: $ROOT_API_KEY" \
+  'http://127.0.0.1:1933/api/v1/admin/oauth/clients/CLIENT_ID/revoke'
+```
+
+列表返回 `result.items`、`total`、`offset`、`limit` 和 `has_more`。
+`limit` 默认 50，范围 1–100；`offset` 不得为负数。每个条目包含公开注册信息，
+以及未过期且未撤销的访问令牌数、未过期且未消费的刷新令牌数，不返回凭据哈希。
+这些计数反映存储中的令牌状态，不代表签发授权所用的 API Key 仍然有效。
+
+撤销会使该应用在**所有账户**下已存储的访问令牌、刷新令牌、未使用授权码和待确认授权失效，
+四类修改在同一事务中提交。返回值是受影响行数，可能包含尚未清理的过期行；其他应用不受影响。
+可以安全重复撤销，没有剩余授权时返回零计数。应用注册信息保留，因此可使用同一个
+`client_id` 重新授权。这是一次性撤销，并非永久禁用，也不会取消已经进行中的令牌交换。
+账户管理员和普通用户不能访问这些接口。未知应用返回 404；有权限的调用方在 OAuth
+未启用时收到 503。首期不包含 CLI 和 Studio 管理入口。
+
 ### Claude.ai 直接报 "We couldn't connect" 没弹出授权页
 
 Claude.ai 第一步是 GET `/.well-known/oauth-protected-resource`。如果这一步

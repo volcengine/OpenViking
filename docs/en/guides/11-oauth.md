@@ -320,6 +320,35 @@ and never mutate, so the fingerprint is stable until the next rotation.
 
 ## Troubleshooting
 
+### Manage registered applications (ROOT only)
+
+With OAuth enabled, ROOT can list instance-wide registrations and revoke one
+application's grants through the admin API:
+
+```bash
+curl -H "X-API-Key: $ROOT_API_KEY" \
+  'http://127.0.0.1:1933/api/v1/admin/oauth/clients?offset=0&limit=50'
+curl -X POST -H "X-API-Key: $ROOT_API_KEY" \
+  'http://127.0.0.1:1933/api/v1/admin/oauth/clients/CLIENT_ID/revoke'
+```
+
+The list returns `result.items`, `total`, `offset`, `limit`, and `has_more`.
+`limit` defaults to 50 (1–100); `offset` must be nonnegative. Each item contains
+public registration metadata and counts of unexpired, unrevoked access tokens
+and unconsumed refresh tokens. Credential hashes are never returned. These counts
+describe stored token state, not whether the authorizing API key is still valid.
+
+Revocation invalidates that application's stored access tokens, refresh tokens,
+unused authorization codes, and pending authorizations **across all accounts**.
+The four changes commit atomically. The response reports affected row counts;
+expired rows not yet collected may be included. Other applications are unaffected.
+Repeating revocation is safe and returns zero counts when nothing remains.
+The registration stays available, so the application can re-authorize using the
+same `client_id`. This is a point-in-time revocation, not a permanent application
+block; it does not cancel exchanges already in flight. Account admins and ordinary
+users cannot access these endpoints. Unknown clients return 404; disabled OAuth
+returns 503 to authorized callers. CLI and Studio management are not included yet.
+
 ### Claude.ai shows "We couldn't connect" without ever opening a popup
 
 The first thing Claude.ai does is GET `/.well-known/oauth-protected-resource`
