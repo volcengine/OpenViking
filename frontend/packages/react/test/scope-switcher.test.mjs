@@ -99,6 +99,18 @@ test('a missing, unknown or disabled selection falls back to the first option', 
   assert.match(render({ data: { options, selectedId: 'c' } }), /Gamma/);
 });
 
+test('a paged subset still shows search when the full set crosses the threshold', () => {
+  const options = Array.from({ length: 20 }, (_, i) => ({
+    id: String(i),
+    label: `Library ${i}`,
+  }));
+  const html = render({
+    data: { options, selectedId: '0', visibleOptions: options.slice(0, 5) },
+    actions: { onSearchKeywordChange() {} },
+  });
+  assert.match(html, /type="search"/);
+});
+
 test('a selection filtered out of view stays selected', () => {
   const options = [
     { id: 'a', label: 'Alpha' },

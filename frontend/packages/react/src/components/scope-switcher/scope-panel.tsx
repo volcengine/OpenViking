@@ -70,10 +70,13 @@ export function ScopePanel({
   const options = data.visibleOptions ?? data.options;
   const keyword = state?.searchKeyword ?? '';
   const hasKeyword = keyword.trim().length > 0;
+  // Base the threshold on the authoritative set, not the rendered subset: a host
+  // that pages or filters passes a handful of `visibleOptions` while the whole
+  // set is well past the threshold, and searching is exactly what it needs.
   const searchVisible =
     actions?.onSearchKeywordChange &&
     (hasKeyword ||
-      Math.max(options.length, data.total ?? 0) >
+      Math.max(options.length, data.options.length, data.total ?? 0) >
         SCOPE_SWITCHER_SEARCH_THRESHOLD);
   const search = searchVisible ? (
     <div className="ov-scope-switcher__search-field">

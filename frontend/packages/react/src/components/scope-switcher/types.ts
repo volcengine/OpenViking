@@ -149,8 +149,17 @@ export interface ScopeSwitcherData {
   selectedId: string;
   /**
    * 该层级的总条数，用于判断搜索框是否可见。不传时以 `options` 的条数为准。
-   * Total number of entries, used to decide whether the search box is shown.
-   * The `options` count is used when omitted.
+   *
+   * 搜索可见性始终取 `options`、`visibleOptions` 与 `total` 三者的最大值，因此
+   * 宿主只传当前一页的 `visibleOptions` 时，只要权威集合超过阈值，搜索框照样
+   * 出现。
+   *
+   * Total number of entries, used to decide whether the search box is shown. The
+   * `options` count is used when omitted.
+   *
+   * Visibility takes the largest of `options`, `visibleOptions` and `total`, so a
+   * host that passes only the current page still gets a search box once the
+   * authoritative set crosses the threshold.
    */
   total?: number;
 }
