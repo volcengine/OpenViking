@@ -44,7 +44,8 @@ test('Linux and macOS config selection match the full upstream POSIX snapshot (h
     TEMP: '/ignored', TMP: '/ignored', SYSTEMROOT: '/ignored', APPDATA: '/ignored', LOCALAPPDATA: '/ignored',
     COMSPEC: '/ignored', PATHEXT: '/ignored', HOMEDRIVE: '/ignored', HOMEPATH: '/ignored', USERNAME: '/ignored',
     UNRELATED_SECRET: 'must-not-propagate' };
-  // Captured from origin/feat/vika a6c43c131047, not from the adapter under test.
+  // Baseline: origin/feat/vika a6c43c131047. The only added field is the
+  // explicit empty capabilities manifest, preventing inherited opt-in config.
   const expected = JSON.parse(fs.readFileSync(new URL('./fixtures/ecosystem-posix.json', import.meta.url), 'utf8'));
   const pm2 = fileURLToPath(new URL('../src/pm2.mjs', import.meta.url));
   for (const platform of ['linux', 'darwin']) {

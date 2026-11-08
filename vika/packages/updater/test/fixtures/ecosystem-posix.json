@@ -35,6 +35,7 @@
         "VIKA_DATA_DIR": "<HOME>/data",
         "VIKA_TEMP_DIR": "",
         "VIKA_WORKSPACE": "<HOME>/work",
+        "VIKA_CAPABILITIES_FILE": "",
         "VIKA_MODEL": "durable",
         "VIKA_VOLC_SESSION_ID": "",
         "VIKA_VOLC_ENVIRONMENT_ID": "",
