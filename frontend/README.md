@@ -16,7 +16,7 @@ npm run dev
 
 Open the `/ui/` URL printed by Rspress. The official workspace development plugin starts the library's Rslib watcher before the documentation server, so no manual library build is required. Demos consume the built package exports and update when the watcher rebuilds them.
 
-The navigation language menu switches between English at `/ui/` and Simplified Chinese at `/ui/zh/`. Existing English URLs remain unchanged.
+The navigation language menu switches between Simplified Chinese at `/ui/` and English at `/ui/en/`.
 
 ```bash
 npm run lint           # Check formatting, lint rules, and types for all workspaces

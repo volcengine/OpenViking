@@ -15,6 +15,52 @@ html:root {
   --rp-content-max-width: 1400px;
 }
 
+/*
+ * 768–1279px 之间侧边栏原本不能收起：主题在这个区间显示了汉堡按钮，但把
+ * 抽屉样式只写在 ≤768px 的媒体查询里，按钮点了没有反应，侧边栏一直占着
+ * 320px。这里把同一套抽屉行为补到该区间，让侧边栏可以收起。
+ *
+ * Between 768px and 1279px the sidebar could not be collapsed: the theme shows
+ * the hamburger button there but scopes the drawer styles to ≤768px, so the
+ * button did nothing and the sidebar kept its 320px. Extend the same drawer
+ * behaviour to that range so the sidebar can be collapsed.
+ */
+@media (width >= 769px) and (width <= 1279px) {
+  /* 用两段类名抬高权重：主题的 `position: sticky` 写在更晚加载的样式表里，
+     同权重时会被它盖掉。 */
+  .rp-doc-layout__container > .rp-doc-layout__sidebar {
+    z-index: var(--rp-z-index-sidebar);
+    top: calc(var(--rp-nav-height) + var(--rp-banner-height, 0px));
+    height: calc(100vh - var(--rp-nav-height));
+    padding: var(--rp-sidebar-padding) var(--rp-sidebar-padding)
+      calc(var(--rp-sidebar-padding) + 100px);
+    margin-top: 0;
+    background: var(--rp-c-bg);
+    box-shadow: var(--rp-shadow-2);
+    opacity: 0;
+    visibility: hidden;
+    position: fixed;
+    overflow: auto scroll;
+    transform: translate3d(-100%, 0, 0);
+    transition:
+      opacity 0.25s,
+      transform 0.5s cubic-bezier(0.19, 1, 0.22, 1),
+      visibility 0.25s;
+  }
+
+  .rp-doc-layout__container > .rp-doc-layout__sidebar--open {
+    opacity: 1;
+    visibility: visible;
+    transform: translate3d(0, 0, 0);
+  }
+
+  /* 遮罩，与 ≤768px 一致。这个元素只在抽屉或目录打开时才被渲染，因此不需要
+     额外判断状态；同样要抬高权重，主题的 `display: none` 写在更晚的样式表里。 */
+  #__rspress_modal_container .rp-sidebar-menu__mask {
+    display: block;
+  }
+}
+
 .dark {
   --rp-c-brand: #f18b97;
   --rp-c-brand-light: #ffa2ad;
