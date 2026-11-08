@@ -338,6 +338,10 @@ export function getConfig() {
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('OV_SUPERAGENT_STAGED_REPLIES', false),
     ovCommitOnly: boolEnv('EXPERIMENTAL_OV_COMMIT_ONLY', false),
+    // agents[].scheduler: legacy puts every input into the running turn at
+    // once; inbox holds inputs while the model works, notifies it, and lets it
+    // read them at a checkpoint (inbox.mjs). Read at start only.
+    scheduler: enumEnv('OV_SUPERAGENT_SCHEDULER', 'legacy', ['legacy', 'inbox']),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),

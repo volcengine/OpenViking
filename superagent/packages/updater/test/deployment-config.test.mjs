@@ -520,6 +520,25 @@ test('explicit silence is on by default except on Ark, an explicit false opts ou
   });
 });
 
+test('the scheduler is legacy unless an instance picks the inbox, and is always pinned in the daemon env', () => {
+  const manifest = validManifest();
+  manifest.agents[1].scheduler = 'inbox';
+  withManifest(manifest, (manifestPath) => {
+    const env = { VIKA_CONFIG: manifestPath, VIKA_SCHEDULER: 'inbox' };
+    const deployment = loadDeploymentManifest(env);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').scheduler, 'legacy');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.VIKA_SCHEDULER, 'legacy');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.VIKA_SCHEDULER, 'inbox');
+  });
+  const broken = validManifest();
+  broken.agents[0].scheduler = 'parallel';
+  withManifest(broken, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.scheduler must be legacy or inbox/);
+  });
+});
+
 test('staged replies are opt-in per instance and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].stagedReplies = true;

@@ -7,6 +7,8 @@ import { Store } from './store.mjs';
 import { ProcessRegistry } from './process-utils.mjs';
 import { AgentRuntime } from './agent-runtime.mjs';
 import { Harness } from './harness.mjs';
+import { MessageInbox } from './inbox.mjs';
+import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { executeCommand } from './commands.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
@@ -288,7 +290,19 @@ export class PersonalAgentDaemon {
         mentionTarget: (event) => this.connectors.mentionTarget(event),
         isStopping: () => this.shuttingDown,
       });
+      // The inbox scheduler (agents[].scheduler): inputs that arrive while
+      // the model works wait here, and the model reads them at a checkpoint.
+      this.inbox = this.config.scheduler === 'inbox' ? new MessageInbox({
+        db: this.store.db,
+        runtime: this.agentRuntime,
+        capabilities: () => getRuntimeDefinition(this.agentRuntime.runtime)?.capabilities,
+        logger: this.logger.child({ component: 'inbox' }),
+        recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
+        maxAgeMs: this.config.maxEventAgeMs,
+      }) : null;
+      this.actions.attachInbox(this.inbox);
       this.harness = new Harness({
+        inbox: this.inbox,
         config: this.config,
         store: this.store,
         logger: this.logger,
@@ -351,6 +365,8 @@ export class PersonalAgentDaemon {
       });
       this.meeting.attachHarness({ runtime: this.agentRuntime });
       await this.agentRuntime.start();
+      // Inputs the previous daemon accepted but never handed to the model.
+      this.inbox?.restore();
       this.timerConnector = new TimerConnector({
         repository: this.timers,
         submitEvent: (event) => this.harness.handleConnectorEvent(event),

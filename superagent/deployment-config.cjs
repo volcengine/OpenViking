@@ -103,6 +103,7 @@ const AGENT_FIELDS = Object.freeze([
   'ovAutoRecall',
   'explicitSilence',
   'stagedReplies',
+  'scheduler',
   'role',
   'naturalWriting',
   'model',
@@ -119,6 +120,11 @@ const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
 // agents[].larkMessageAccess: `owner` reads with the owner's visibility,
 // `bot` only in the chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
+// How inputs reach the model (agents[].scheduler). legacy: every input goes
+// into the running turn as soon as it arrives. inbox: while the model works,
+// inputs wait and it gets a notice; it reads them, oldest first, at a
+// checkpoint (message_check), or they start the next turn.
+const SCHEDULERS = Object.freeze(['legacy', 'inbox']);
 // Each mailbox is its own email Connector instance; the id is how the model
 // and the logs tell them apart.
 const EMAIL_INSTANCE_ID = /^email-[a-z0-9][a-z0-9-]{0,39}$/;
@@ -326,6 +332,13 @@ function parseAgent(value, index, ignored) {
   if (value.stagedReplies !== undefined && typeof value.stagedReplies !== 'boolean') {
     throw new Error(`${label}.stagedReplies must be a boolean`);
   }
+  if (value.scheduler !== undefined && !SCHEDULERS.includes(value.scheduler)) {
+    throw new Error(`${label}.scheduler must be ${SCHEDULERS.join(' or ')}`);
+  }
+  // The inbox is read with a Core tool, which Ark has not got.
+  if (value.scheduler !== undefined && value.scheduler !== 'legacy' && model === 'ark') {
+    throw new Error(`${label}.scheduler ${value.scheduler} needs a runtime with Core tools; ark has none`);
+  }
   if (value.meetingNotes !== undefined && typeof value.meetingNotes !== 'boolean') {
     throw new Error(`${label}.meetingNotes must be a boolean`);
   }
@@ -364,6 +377,7 @@ function parseAgent(value, index, ignored) {
     // explicit false opts out.
     explicitSilence: value.explicitSilence ?? model !== 'ark',
     stagedReplies: value.stagedReplies ?? false,
+    scheduler: value.scheduler ?? 'legacy',
     role: manifestRole(value.role, `${label}.role`),
     naturalWriting: value.naturalWriting ?? true,
     model,
@@ -594,6 +608,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   env.OV_SUPERAGENT_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.OV_SUPERAGENT_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.OV_SUPERAGENT_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
+  env.OV_SUPERAGENT_SCHEDULER = agent.scheduler;
   env.OV_SUPERAGENT_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
   env.OV_SUPERAGENT_DSH_HOME_MODE = agent.dshHomeMode;
   env.OV_SUPERAGENT_DSH_SKILL_ROOTS = JSON.stringify(agent.dshSkillRoots);

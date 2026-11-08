@@ -369,6 +369,40 @@ describe('staged replies are opt-in per instance', () => {
   });
 });
 
+describe('the inbox scheduler is opt-in per instance', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
+  const codexHash = (config) => new CodexAgent(config, {
+    getCognitionState: () => ({ runtime: 'codex', epoch: 1, authorityToken: 'token' }), getSetting: () => null,
+  }, quiet).policyHash;
+  const configs = [['lark'], ['weixin'], ['slack', 'lark']].map((connectors) => ({ ...base, connectors }));
+
+  it('legacy assembles exactly the policy without the setting', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true, stagedReplies: true }]) {
+      const legacy = assembleConversationPolicy({ ...config, scheduler: 'legacy' });
+      assert.equal(legacy, assembleConversationPolicy(config));
+      assert.doesNotMatch(legacy, /message_check|\[daemon inbox\]|## Inbox/);
+      assert.equal(codexHash({ ...config, scheduler: 'legacy' }), codexHash(config));
+    }
+  });
+
+  it('inbox appends its section last and changes nothing above it', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true }]) {
+      const off = assembleConversationPolicy(config);
+      const on = assembleConversationPolicy({ ...config, scheduler: 'inbox' });
+      assert.ok(on.startsWith(`${off}\n\n## Inbox\n`), config.connectors.join('+'));
+      assert.equal(on.split('## Inbox').length, 2);
+      assert.notEqual(codexHash({ ...config, scheduler: 'inbox' }), codexHash(config));
+    }
+    const on = assembleConversationPolicy({ ...base, connectors: ['lark'], scheduler: 'inbox' });
+    assert.match(on, /`\[daemon inbox\]` line may arrive\. It is a daemon notice, not an input/);
+    assert.match(on, /It needs no decision\. Finish the step you are on, then call `message_check`/);
+    assert.match(on, /delivers waiting inputs oldest first, as ordinary input lines right after the call/);
+    assert.match(on, /never answer only the newest line/);
+    assert.match(on, /you need not call `message_check` before ending a turn/);
+  });
+});
+
 describe('Volc', () => {
   it('gets the input grammar, the events section and the role, never the Core tools', () => {
     const config = { agentName: 'Alpha', rolePromptPath: role('qa') };

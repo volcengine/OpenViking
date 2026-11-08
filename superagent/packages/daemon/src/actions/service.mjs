@@ -41,6 +41,7 @@ const HANDLERS = {
   react_to_message: 'reactToMessage',
   retract_message: 'retractMessage',
   stay_silent: 'staySilent',
+  message_check: 'messageCheck',
   list_chats: 'listChats',
   list_chat_members: 'listChatMembers',
   list_chat_messages: 'listChatMessages',
@@ -159,6 +160,43 @@ export class ActionService {
     this.reactionRemovals = new Set();
     // Query context may identify a reply target, but never an input/decision.
     this.queryTargets = new Map();
+    // The inbox scheduler's waiting inputs (inbox.mjs), attached once the
+    // runtime exists; null under the legacy scheduler.
+    this.inbox = null;
+  }
+
+  attachInbox(inbox) {
+    this.inbox = inbox;
+  }
+
+  // message_check: the waiting inputs, oldest first, as the model's next input.
+  async messageCheck(input) {
+    if (!this.inbox) throw blocked('unsupported', `There is no inbox on this instance. ${NO_ACTION}`);
+    const result = this.inbox.check({
+      chatId: input.chat_id ?? null, threadId: input.thread_id ?? null, source: input.source ?? null, limit: input.limit ?? 20,
+    });
+    if (result.error) throw blocked('inbox_unavailable', `Waiting inputs could not be delivered now (${result.error}); try again at your next checkpoint.`);
+    const where = input.chat_id ? ' in that chat' : '';
+    if (result.delivered === 0) {
+      return { text: `No inputs are waiting${where}. ${result.waiting} waiting elsewhere.`, data: { delivered: 0, waiting: result.waiting } };
+    }
+    const when = result.now ? 'They follow as your next input' : 'They arrive when this turn ends';
+    return {
+      text: `Delivered ${result.delivered} waiting input(s)${where}, oldest first. ${when}; decide on each as usual. ${result.waiting} still waiting.`,
+      data: { delivered: result.delivered, waiting: result.waiting },
+    };
+  }
+
+  // Newer input in a decision's scope may still be waiting in the inbox: the
+  // model was never shown it, so a refusal alone would leave it nothing to
+  // reconsider. Deliver that scope's waiting inputs; returns how many.
+  deliverWaiting(scopeKey) {
+    try {
+      return this.inbox?.deliverScope(scopeKey) ?? 0;
+    } catch (error) {
+      this.logger.warn('inbox_scope_delivery_failed', { error: safeError(error) });
+      return 0;
+    }
   }
 
   manifest(connector) {
@@ -194,6 +232,7 @@ export class ActionService {
     if (tool.openviking) return Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
+    if (tool.inbox) return this.config.scheduler === 'inbox';
     return true;
   }
 
@@ -444,6 +483,7 @@ export class ActionService {
     }
     // A superseded input's OnIt may belong to work on the newer one.
     if (!superseded && row.conv_key) await this.clearTemporaryReaction(row.conv_key, 'silent');
+    const waiting = superseded ? this.deliverWaiting(row.scope_key) : 0;
     try {
       this.store.recordActivity({
         eventKey: `decision:silent:${row.connector_instance}:${row.event_id}`, kind: 'delivery.silent',
@@ -456,7 +496,9 @@ export class ActionService {
       this.logger.warn('activity_persist_failed', { kind: 'delivery.silent', error: safeError(error) });
     }
     return {
-      text: `Recorded: nothing is sent for this input.${superseded ? ' A newer input has arrived there; decide on that one from its own line.' : ''}`,
+      text: `Recorded: nothing is sent for this input.${!superseded ? ''
+        : waiting > 0 ? ` ${waiting} newer input(s) there were waiting in your inbox and follow as your next input; decide on the newest from its own line.`
+          : ' A newer input has arrived there; decide on that one from its own line.'}`,
       data: { silent: true, superseded },
     };
   }
@@ -468,6 +510,11 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
+      const waiting = this.deliverWaiting(decision.scope_key);
+      if (waiting > 0) {
+        caller.trace.inboxDelivered = waiting;
+        throw blocked('stale_decision', `Delivery blocked: ${waiting} newer input(s) in the same chat/thread, or about the same subject, were waiting in your inbox; they follow as your next input. Read them, then use the newest event= as decision_id if the action still fits.`);
+      }
       throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
     }
   }
