@@ -149,3 +149,7 @@ and PID-reuse behavior remain unverified acceptance gates. The exited-child
 guard only prevents taskkill for an already-exited leader. Do not deploy on an
 untrusted shared workstation. Localhost Web binding is not per-user
 authentication. Keep state/SQLite directories off OneDrive and network shares.
+
+### OpenCode configuration isolation
+
+On non-elevated Windows, the isolated OpenCode configuration uses directory junctions and copies individual non-OpenViking files. File copies refresh when the runtime launches; edits to source files during a running session require a restart. The source configuration is not rewritten. A junction or copy failure aborts preparation instead of silently omitting unrelated plugins. This does not require switching a Durable instance to OpenCode.

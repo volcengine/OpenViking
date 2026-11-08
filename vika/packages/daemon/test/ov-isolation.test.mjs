@@ -59,7 +59,8 @@ test('Codex and TraeX switch off every OpenViking plugin and MCP server in their
   assert.deepEqual(codexIsolationArgs(path.join(env.HOME, 'missing.toml')),
     ['-c', `plugins.${OV_PLUGIN_ID}.enabled=false`, '-c', 'features.memories=false']);
   assert.equal(traexConfigFile(env), path.join(env.HOME, '.trae', 'traecli.toml'));
-  assert.equal(traexConfigFile({ ...env, TRAE_HOME: '/srv/trae' }), '/srv/trae/traecli.toml');
+  const traeHome = path.join(env.HOME, 'trae home');
+  assert.equal(traexConfigFile({ ...env, TRAE_HOME: traeHome }), path.join(traeHome, 'traecli.toml'));
 });
 
 test('Claude Code gets one settings layer that disables OpenViking\'s plugins and denies its servers, and nothing else', (t) => {
@@ -104,18 +105,24 @@ test('OpenCode reads a Vika-owned config home: the owner\'s config without OpenV
   write('.config/opencode/plugins/wakatime.js', 'export {}');
   write('.config/opencode/agents/reviewer.md', '# reviewer');
   write('.config/git/config', '[user]');
+  write('.config/tool.conf', 'keep top-level file');
   const before = fs.readFileSync(path.join(directory, '.config/opencode/opencode.jsonc'), 'utf8');
   const target = prepareOpencodeConfigHome(path.join(directory, 'vika-home'), env);
   const config = JSON.parse(fs.readFileSync(path.join(target, 'opencode', 'opencode.json'), 'utf8'));
   assert.deepEqual(config.plugin, ['opencode-wakatime']);
   assert.deepEqual(Object.keys(config.mcp), ['github']);
+  assert.equal(fs.readFileSync(path.join(target, 'tool.conf'), 'utf8'), 'keep top-level file');
   assert.equal(config.provider.ark.options.baseURL, 'https://ark.example/api/v3', 'a // inside a string survives');
   assert.deepEqual(fs.readdirSync(path.join(target, 'opencode', 'plugins')), ['wakatime.js']);
   assert.equal(fs.readFileSync(path.join(target, 'opencode', 'agents', 'reviewer.md'), 'utf8'), '# reviewer');
   assert.equal(fs.readFileSync(path.join(target, 'git', 'config'), 'utf8'), '[user]');
   assert.equal(fs.readFileSync(path.join(directory, '.config/opencode/opencode.jsonc'), 'utf8'), before, 'the owner\'s file is untouched');
-  // Built again on the next start, from scratch.
+  // Rebuilding must refresh file snapshots and never delete junction targets.
+  write('.config/opencode/plugins/wakatime.js', 'export const updated = true');
   prepareOpencodeConfigHome(target, env);
+  assert.equal(fs.readFileSync(path.join(target, 'opencode', 'plugins', 'wakatime.js'), 'utf8'), 'export const updated = true');
+  assert.equal(fs.readFileSync(path.join(directory, '.config/git/config'), 'utf8'), '[user]');
+  assert.equal(fs.readFileSync(path.join(directory, '.config/opencode/agents/reviewer.md'), 'utf8'), '# reviewer');
   assert.deepEqual(fs.readdirSync(path.join(target, 'opencode', 'plugins')), ['wakatime.js']);
 });
 
@@ -151,4 +158,11 @@ test('Pi resolves configured and package extensions in both scopes, retaining fi
   for (const file of [disabled, unused, 'builtin:llama.cpp']) assert.ok(!loaded.includes(file), `respects disabling ${path.basename(file)}`);
   assert.equal(loaded.some((file) => /openviking|neutral/.test(file)), false);
   assert.deepEqual([globalSettings, projectSettings].map((file) => fs.readFileSync(file, 'utf8')), before);
+});
+
+test('Windows config projection reports copy failures instead of dropping plugins', { skip: process.platform !== 'win32' }, (t) => {
+  const { write, env, directory } = home(t);
+  write('.config/opencode/plugins/keep.js', 'export {}');
+  t.mock.method(fs, 'copyFileSync', () => { throw Object.assign(new Error('fixture access denied'), { code: 'EACCES' }); });
+  assert.throws(() => prepareOpencodeConfigHome(path.join(directory, 'vika-home'), env), { code: 'EACCES' });
 });

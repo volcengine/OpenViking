@@ -166,12 +166,23 @@ function piExtensionPackage(file) {
 // Vika-owned directory that links every other entry of the user's config home
 // back, and whose opencode/ holds the user's global config without
 // OpenViking's plugins and MCP servers. The links keep every other tool the
-// agent runs reading its usual configuration. Returns the directory.
+// agent runs reading its usual configuration. On Windows, directory junctions
+// need no symlink privilege; individual files are snapshots refreshed at launch.
+// Returns the directory.
 export function prepareOpencodeConfigHome(target, env = process.env) {
   const source = env.XDG_CONFIG_HOME || path.join(home(env), '.config');
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.join(target, 'opencode'), { recursive: true, mode: 0o700 });
-  const link = (from, to) => { try { fs.symlinkSync(from, to); } catch { /* raced or unsupported: skip */ } };
+  const link = (from, to) => {
+    if (process.platform !== 'win32') {
+      try { fs.symlinkSync(from, to); } catch { /* preserve POSIX behavior */ }
+      return;
+    }
+    // Do not silently discard the user's non-OV extensions when symlinks
+    // require elevation. Propagate failures rather than launch incomplete.
+    if (fs.statSync(from).isDirectory()) fs.symlinkSync(path.resolve(from), to, 'junction');
+    else fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+  };
   for (const entry of safeList(source)) {
     if (entry !== 'opencode') link(path.join(source, entry), path.join(target, entry));
   }
