@@ -29,19 +29,24 @@ const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/;
 // still resolved against that drive's working directory.
 const DRIVE_RELATIVE = /^[A-Za-z]:(?![\\/])/;
 
-function absoluteLike(name) {
-  return path.isAbsolute(name) || WINDOWS_ABSOLUTE.test(name);
+function absoluteLike(name, paths) {
+  // Windows accepts \tools and /tools as rooted, but neither fixes a drive.
+  // Normalizing first makes both spellings have the same root on Windows;
+  // POSIX /tools keeps its fully qualified slash root.
+  if (paths.parse(paths.normalize(name)).root === '\\') return false;
+  return paths.isAbsolute(name) || WINDOWS_ABSOLUTE.test(name);
 }
 
 /**
  * Whether a configured binary may be used as written.
  * @param {string} value - the raw environment value.
+ * @param {typeof path} paths - path semantics (defaults to the current host).
  * @returns {'empty'|'name'|'absolute'|'relative'} how the value is read.
  */
-export function runtimeBinKind(value) {
+export function runtimeBinKind(value, paths = path) {
   const name = typeof value === 'string' ? value.trim() : '';
   if (!name) return 'empty';
-  if (absoluteLike(name)) return 'absolute';
+  if (absoluteLike(name, paths)) return 'absolute';
   if (SEPARATOR.test(name) || DRIVE_RELATIVE.test(name)) return 'relative';
   return 'name';
 }
