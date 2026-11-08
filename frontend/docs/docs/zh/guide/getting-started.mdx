@@ -14,7 +14,7 @@ npm ci
 npm run dev
 ```
 
-打开 Rspress 输出的 `/ui/` 地址。英文使用 `/ui/`，简体中文使用 `/ui/zh/`；顶部语言菜单支持在对应页面间切换。
+打开 Rspress 输出的 `/ui/` 地址。简体中文使用 `/ui/`，英文使用 `/ui/en/`；顶部语言菜单支持在对应页面间切换。
 
 workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档示例通过公开导出使用构建产物，不使用源码别名。React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
 
@@ -61,15 +61,29 @@ import '@openviking/react/style.css';
 
 Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。后续单独使用 Hook 无需 CSS。
 
-可以在容器元素上调整主题变量，也可以直接指定具体的组件类名：
+### 主题
+
+颜色来自包级主题基线 `--ov-ui-color-*`（定义在 `packages/react/src/theme.css`），取值对齐 OpenViking 控制台的设计规范。所有组件私有变量都从基线派生，因此改基线即可整体换肤：
+
+```css
+.my-workbench {
+  --ov-ui-color-primary: #5252ff;
+  --ov-ui-color-bg-5: #f1f2f9;
+  --ov-ui-color-border-2: #e1e4f2;
+}
+```
+
+暗色只认宿主放在 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`——系统偏好可能与宿主实际呈现的主题不一致。基线自带一套暗色取值，宿主切换 `.dark` 即可生效；需要精确配色时整组覆盖。
+
+只想调整单个组件时，覆盖它的 `--ov-ui-<组件>-*` 变量，或直接指定类名：
 
 ```css
 .my-workbench {
   --ov-ui-radius: 4px;
-  --ov-ui-row-hover: rgb(0 0 0 / 6%);
 }
 
 .my-workbench .ov-file-tree {
+  --ov-ui-file-tree-row-height: 28px;
   width: 320px;
 }
 ```

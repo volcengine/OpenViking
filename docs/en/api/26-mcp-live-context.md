@@ -177,7 +177,7 @@ With `wait=false`, the registration result may also contain the underlying catal
 
 ### List, inspect, and check status
 
-Without `target_uri`, `GET /api/v1/mcps` merges user and shared servers and identifies each entry with `root_uri`. `GET /api/v1/mcps/{name}` and status default to the user space; pass `target_uri=viking://agent/tools` for a same-named shared server. A connection failure still has a successful HTTP envelope, but `result.status` is `error`.
+Without `target_uri`, `GET /api/v1/mcps` merges user and shared servers and identifies each entry with `root_uri`. `GET /api/v1/mcps/{name}` and `GET /api/v1/mcps/status?name=...` default to the user space; pass `target_uri=viking://agent/tools` for a same-named shared server. A connection failure still has a successful HTTP envelope, but `result.status` is `error`.
 
 **SDK and CLI**
 
