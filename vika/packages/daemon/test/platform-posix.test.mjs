@@ -18,24 +18,14 @@ test('POSIX process APIs are the native functions, including their overloads and
 });
 test('POSIX environment and configuration retain upstream semantics', options, () => {
   const env = { HOME: '/home/test', USERPROFILE: '/ignored', Path: '/ignored', PATH: '/bin', TEMP: '/ignored' };
-  const keys = ['HOME', 'PATH'];
   assert.equal(posix.normalizeEnvironment(env), env);
-  assert.deepEqual(posix.pm2ControlEnvironment(env, keys), { source: env, keys });
   assert.equal(posix.homeDir(env), env.HOME);
   assert.equal(posix.homeDir({ USERPROFILE: '/not-home' }), undefined);
-  assert.equal(posix.ecosystemPath(env, '/fallback'), '/bin:/fallback');
-  assert.equal(posix.ecosystemPath({ Path: '/ignored' }, '/fallback'), ':/fallback');
   assert.equal(posix.localSocketPath('/tmp/test'), path.join('/tmp/test', 'actions.sock'));
-  assert.equal(posix.pm2Bin('/release'), path.join('/release', 'bin', 'pm2'));
   assert.equal(posix.binName('lark-cli'), 'lark-cli');
   assert.equal(posix.isNamedPipe('anything'), false);
-  assert.equal(posix.detached, true);
+  assert.equal(posix.spawnDetached, true);
   assert.deepEqual(posix.processOptions, {});
-  assert.deepEqual(posix.pm2Options, {});
-  assert.equal(posix.supportsUpdater, true);
-  assert.equal(posix.supportsAutostart(), true);
-  assert.equal(posix.supportsConnector('email'), true);
-  assert.equal(posix.assertEmailSupported(), undefined);
   const listeners = process.listenerCount('message');
   posix.onShutdown(() => assert.fail('no POSIX message handler'));
   assert.equal(process.listenerCount('message'), listeners);
@@ -46,12 +36,6 @@ test('POSIX environment and configuration retain upstream semantics', options, (
     const home = '/home/$&';
     assert.equal(posix.expandHome(value, home), value === '~' ? home : value.replace(/^~(?=\/)/, home));
   }
-  assert.equal(posix.opener({}, 'darwin'), 'open');
-  assert.equal(posix.opener({}, 'linux'), null);
-  assert.equal(posix.opener({ DISPLAY: ':0' }, 'linux'), 'xdg-open');
-  assert.deepEqual(posix.claudePromptArgs('policy'), ['--append-system-prompt', 'policy']);
-  assert.deepEqual(posix.appServerPromptArgs('codex', '"policy"'), ['-c', 'developer_instructions="policy"']);
-  assert.deepEqual(posix.appServerThreadParams('codex', 'policy'), {});
 });
 test('POSIX executable lookup, private directory and links use native filesystem behavior', options, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-posix-'));

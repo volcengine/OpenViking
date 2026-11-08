@@ -1,7 +1,7 @@
 import test from 'node:test';
 import * as requireNative from 'node:child_process';
 import * as windows from '../src/platform/win32.mjs';
-const { npmShimEntrypoint } = windows;
+import * as posix from '../src/platform/posix.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,16 +10,16 @@ import { promisify } from 'node:util';
 import { findExecutable, executableInvocation, normalizeEnvironment, execFile, localSocketPath, isNamedPipe } from '../src/platform/index.mjs';
 
 test('pipe identity is stable, case insensitive and scoped to the instance directory', () => {
-  const one = windows.localSocketPath('C:\\Users\\Alice\\.vika\\primary', 'actions', 'win32');
+  const one = windows.localSocketPath('C:\\Users\\Alice\\.vika\\primary', 'actions');
   assert.ok(windows.isNamedPipe(one));
-  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.vika\\primary', 'actions', 'win32'));
-  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.vika\\other', 'actions', 'win32'));
-  assert.equal(localSocketPath('/tmp/vika', 'actions', 'linux'), '/tmp/vika/actions.sock');
+  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.vika\\primary', 'actions'));
+  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.vika\\other', 'actions'));
+  assert.equal(posix.localSocketPath('/tmp/vika', 'actions'), '/tmp/vika/actions.sock');
 });
 
 test('POSIX invocation preserves argv and executable', () => {
   const args = ['a b', '$HOME', '&|<>"'];
-  assert.deepEqual(executableInvocation('/usr/bin/tool', args, { platform: 'linux' }), { command: '/usr/bin/tool', args });
+  assert.deepEqual(posix.executableInvocation('/usr/bin/tool', args), { command: '/usr/bin/tool', args });
 });
 
 test('execFile promisify preserves stdout/stderr object and does not evaluate arguments', async () => {
@@ -56,20 +56,13 @@ test('Windows npm shims run Node without a command shell', { skip: process.platf
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('npm shim parsing accepts extensionless Node entrypoints, not arbitrary batch scripts', () => {
-  const shim = 'IF EXIST "%dp0%\\node.exe" SET "_prog=%dp0%\\node.exe"\r\n"%_prog%" "%dp0%\\node_modules\\tool\\bin\\tool" %*';
-  assert.equal(npmShimEntrypoint(shim), 'node_modules\\tool\\bin\\tool');
-  assert.equal(npmShimEntrypoint('"cmd.exe" "%dp0%\\arbitrary.bat" %*'), null);
-  assert.equal(npmShimEntrypoint('echo "%dp0%\\tool.js"'), null);
-});
-
 test('Windows environment normalization makes lookup and child overrides consistent', () => {
   const inherited = { Path: 'C:\\old', PATH: 'C:\\new', Pathext: '.COM', PATHEXT: '.EXE;.CMD', TOKEN: 'preserved' };
   const normalized = windows.normalizeEnvironment(inherited);
   assert.deepEqual(normalized, { PATH: 'C:\\new', PATHEXT: '.EXE;.CMD', TOKEN: 'preserved' });
   assert.equal(inherited.Path, 'C:\\old');
   assert.deepEqual(windows.normalizeEnvironment({ Path: 'C:\\only', Pathext: '.CMD' }), { PATH: 'C:\\only', PATHEXT: '.CMD' });
-  assert.equal(normalizeEnvironment(inherited, 'linux'), inherited);
+  assert.equal(posix.normalizeEnvironment(inherited), inherited);
 });
 
 test('POSIX process wrappers preserve native overloads and Promise child handle', { skip: process.platform === 'win32' }, async (t) => {
@@ -114,19 +107,6 @@ test('Windows wrappers support omitted args, options-only and inherited null env
     assert.deepEqual(await pending, { stdout: 'ok', stderr: '' });
   }
 });
-test('long system policy uses files for Claude and RPC for Codex without weakening instruction role', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-prompt-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const policy = '系统 policy "&%\\\n'.repeat(10_000);
-  const args = windows.claudePromptArgs(policy, dir);
-  assert.equal(args[0], '--append-system-prompt-file');
-  assert.equal(fs.readFileSync(args[1], 'utf8'), policy);
-  assert.ok(args.join(' ').length < 1000);
-  assert.deepEqual(windows.appServerPromptArgs('codex', JSON.stringify(policy)), []);
-  assert.deepEqual(windows.appServerThreadParams('codex', policy), { developerInstructions: policy });
-  // Do not assume TraeX implements a newer Codex protocol field.
-  assert.deepEqual(windows.appServerThreadParams('traex', policy), {});
-});
 test('pipe names differ across daemon processes, not only instance directories', () => {
   const module = new URL('../src/platform/win32.mjs', import.meta.url).href;
   const script = `import {localSocketPath} from ${JSON.stringify(module)}; console.log(localSocketPath('C:/Users/test/.vika/data'));`;
@@ -134,4 +114,21 @@ test('pipe names differ across daemon processes, not only instance directories',
   const first = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
   const second = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
   assert.notEqual(first, second);
+});
+
+test('npm shim entrypoints remain private while invocation validates standard shims', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-shim-parse-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const entry = path.join(directory, 'node_modules', 'tool', 'bin', 'tool');
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(entry, '// fixture');
+  const shim = path.join(directory, 'tool.cmd');
+  fs.writeFileSync(shim, String.raw`IF EXIST "%dp0%\node.exe" SET "_prog=%dp0%\node.exe"
+"%_prog%" "%dp0%\node_modules\tool\bin\tool" %*`);
+  const args = ['a b', '%PATH%', '& whoami'];
+  assert.deepEqual(windows.executableInvocation(shim, args), { command: process.execPath, args: [entry, ...args] });
+  for (const unsupported of [String.raw`"cmd.exe" "%dp0%\arbitrary.bat" %*`, 'echo arbitrary script']) {
+    fs.writeFileSync(shim, unsupported);
+    assert.throws(() => windows.executableInvocation(shim, args), /Unsupported Windows command shim/);
+  }
 });

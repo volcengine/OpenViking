@@ -62,3 +62,21 @@ test('Linux and macOS config selection match the full upstream POSIX snapshot (h
     assert.deepEqual(result.control, { HOME: home, PATH: '/fixture/bin', VIKA_CONFIG: config }, platform);
   }
 });
+
+test('PM2 helpers use injected OS primitives while preserving environment whitelist behavior', async () => {
+  const posix = await import('../../daemon/src/platform/posix.mjs');
+  const windows = await import('../../daemon/src/platform/win32.mjs');
+  const { allowedPm2Environment, ecosystemSearchPath, pm2Bin, pm2Options } = await import('../src/pm2-platform.mjs');
+  const env = { HOME: '/home/test', Path: 'inherited', PATH: 'explicit', Temp: 'scratch', HomeDrive: 'C:', vika_log_level: 'debug', UNRELATED_SECRET: 'hidden' };
+  const keys = ['HOME', 'PATH', 'VIKA_LOG_LEVEL'];
+  assert.deepEqual(allowedPm2Environment(env, keys, { implementation: posix }), { HOME: '/home/test', PATH: 'explicit' });
+  assert.deepEqual(allowedPm2Environment(env, keys, { implementation: windows }), {
+    HOME: '/home/test', PATH: 'explicit', VIKA_LOG_LEVEL: 'debug', TEMP: 'scratch', HOMEDRIVE: 'C:',
+  });
+  assert.equal(ecosystemSearchPath({ Path: 'inherited' }, '/fallback', windows), 'inherited');
+  assert.equal(ecosystemSearchPath({ Path: 'inherited' }, '/fallback', posix), ':/fallback');
+  assert.deepEqual(pm2Options(posix), {});
+  assert.deepEqual(pm2Options(windows), { shutdown_with_message: true });
+  assert.equal(pm2Bin('/release', posix), path.join('/release', 'bin', 'pm2'));
+  assert.equal(pm2Bin('/release', windows), 'pm2');
+});

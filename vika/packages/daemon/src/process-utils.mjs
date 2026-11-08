@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { detached as defaultDetached } from './platform/index.mjs';
+import { spawnDetached as defaultDetached } from './platform/index.mjs';
 
 import { spawn, normalizeEnvironment } from './platform/index.mjs';
 import path from 'node:path';

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { detached } from '../../daemon/src/platform/index.mjs';
+import { spawnDetached } from '../../daemon/src/platform/index.mjs';
 
 import { spawn } from '../../daemon/src/platform/index.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from '../../daemon/src/process-utils.mjs';
@@ -16,7 +16,7 @@ function probeInitialize(bin, { args, label, request, onAccepted = () => {}, env
     try {
       child = spawnImpl(bin, args, {
         env: sanitizeAgentChildEnv(env), shell: false,
-        detached, stdio: ['pipe', 'pipe', 'pipe'],
+        detached: spawnDetached, stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
       resolve({ compatible: false, reason: safeError(error).slice(0, 2000) });

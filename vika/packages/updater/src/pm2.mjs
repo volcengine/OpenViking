@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { pm2ControlEnvironment } from '../../daemon/src/platform/index.mjs';
+import { allowedPm2Environment } from './pm2-platform.mjs';
 
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -42,12 +42,7 @@ const PM2_CONTROL_ENV_KEYS = Object.freeze([
 ]);
 
 export function cleanPm2ControlEnv(source = process.env) {
-  const normalized = pm2ControlEnvironment(source, PM2_CONTROL_ENV_KEYS);
-  source = normalized.source;
-  return Object.fromEntries(normalized.keys
-    .filter((key) => typeof source[key] === 'string'
-      && (source[key] !== '' || DAEMON_ENV_FIELD_SET.has(key)))
-    .map((key) => [key, source[key]]));
+  return allowedPm2Environment(source, PM2_CONTROL_ENV_KEYS, { allowEmpty: DAEMON_ENV_FIELD_SET });
 }
 
 export function cleanWebPm2ControlEnv(source = {}) {
@@ -179,7 +174,6 @@ export async function pm2Processes({ pm2Bin, execFileImpl, pm2Env }) {
   });
   return parseJlist(result?.stdout);
 }
-
 
 // The Web never sees Ark credentials, even when an older release's ecosystem
 // file would pass them through.

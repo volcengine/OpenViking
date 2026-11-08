@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { detached, appServerPromptArgs, appServerThreadParams } from './platform/index.mjs';
+import { spawnDetached } from './platform/index.mjs';
+import * as platform from './platform/index.mjs';
 
 import { spawn as nodeSpawn } from './platform/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -202,6 +203,7 @@ export class CodexAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this.platform = options.platform ?? platform;
     const runtime = getRuntimeDefinition(options.runtimeId ?? CODEX_RUNTIME.id);
     if (!runtime) throw new Error(`unknown app-server runtime: ${options.runtimeId}`);
     this.runtime = runtime.id;
@@ -913,7 +915,7 @@ export class CodexAgent {
 
       const args = [
         'app-server', '--listen', 'stdio://',
-        ...appServerPromptArgs(this.runtime, tomlString(this.developerInstructionsText)),
+        ...(this._usesRpcInstructions() ? [] : ['-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`]),
         ...this.appServerConfigArgs,
         ...this.ovIsolationArgs(),
       ];
@@ -931,7 +933,7 @@ export class CodexAgent {
           cwd: this.config.workspace,
           env: this._sanitizeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached,
+          detached: spawnDetached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) { reject(error); return; }
@@ -991,9 +993,14 @@ export class CodexAgent {
     });
   }
 
+  _usesRpcInstructions() {
+    // TraeX has not established support for Codex's developerInstructions field.
+    return this.platform.maxCommandLineLength !== null && this.runtime === CODEX_RUNTIME.id;
+  }
+
   _threadParams() {
     return {
-      ...appServerThreadParams(this.runtime, this.developerInstructionsText),
+      ...(this._usesRpcInstructions() ? { developerInstructions: this.developerInstructionsText } : {}),
       cwd: this.config.workspace,
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',

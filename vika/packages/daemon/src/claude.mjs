@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { detached, claudePromptArgs } from './platform/index.mjs';
+import { spawnDetached } from './platform/index.mjs';
+import * as platform from './platform/index.mjs';
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -59,6 +60,7 @@ export class ClaudeAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this.platform = options.platform ?? platform;
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.onTurnAbandoned = options.onTurnAbandoned ?? null;
@@ -234,7 +236,7 @@ export class ClaudeAgent {
           cwd: this.config.workspace,
           env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached,
+          detached: spawnDetached,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (error) { reject(error); return; }
@@ -289,6 +291,15 @@ export class ClaudeAgent {
     return configPath;
   }
 
+  _systemPromptArgs() {
+    if (this.platform.maxCommandLineLength === null) return ['--append-system-prompt', this.developerInstructionsText];
+    // stdin is the conversation transport. Keep policy in the system role via
+    // Claude's documented file option, using the existing directory lifecycle.
+    const file = path.join(this.mcpTempDir, 'system-prompt.md');
+    fs.writeFileSync(file, this.developerInstructionsText, { encoding: 'utf8', mode: 0o600 });
+    return ['--append-system-prompt-file', file];
+  }
+
   _cleanupMcpConfig() {
     const directory = this.mcpTempDir;
     this.mcpTempDir = null;
@@ -317,7 +328,7 @@ export class ClaudeAgent {
         '--mcp-config', mcpConfigPath,
         '--settings', JSON.stringify(claudeIsolationSettings({ env: process.env, workspace: this.config.workspace })),
         '--disallowed-tools', 'EnterPlanMode,ExitPlanMode',
-        ...claudePromptArgs(this.developerInstructionsText, this.mcpTempDir),
+        ...this._systemPromptArgs(),
         '--no-chrome',
       ];
       if (effort) args.push('--effort', effort);
@@ -331,7 +342,7 @@ export class ClaudeAgent {
           cwd: this.config.workspace,
           env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached,
+          detached: spawnDetached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {

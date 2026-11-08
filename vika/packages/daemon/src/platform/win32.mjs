@@ -46,7 +46,7 @@ export function findExecutable(command, env = process.env) {
 // Recognize the Node invocation in npm's generated shim, including extensionless
 // JavaScript entrypoints. Do not interpret arbitrary batch scripts or select the
 // earlier node.exe existence check as the application entrypoint.
-export function npmShimEntrypoint(shim) {
+function npmShimEntrypoint(shim) {
   const match = shim.match(/"(?:%_prog%|%dp0%[\\/]node\.exe|node(?:\.exe)?)"\s+"%dp0%[\\/]([^"\r\n]+)"\s+%\*/i);
   return match?.[1] ?? null;
 }
@@ -106,18 +106,11 @@ execFile[promisify.custom] = (command, args, options = {}) => {
   return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 };
 
-export const detached = false;
+export const spawnDetached = false;
 export const processOptions = Object.freeze({ windowsHide: true });
-export const pm2Options = Object.freeze({ shutdown_with_message: true });
-export const supportsUpdater = false;
-export function supportsAutostart(platform = 'win32') { return platform !== 'win32'; }
 export function homeDir(env = process.env) { return env.HOME || env.USERPROFILE; }
-export function ecosystemPath(env, _fallback) { return normalizeEnvironment(env).PATH || ''; }
-export function pm2Bin(_release) { return 'pm2'; }
 export function binName(name) { return name + '.exe'; }
 export function expandHome(value, home) { return value === '~' ? home : /^~[\\/]/.test(value) ? path.join(home, value.slice(2)) : value; }
-export function supportsConnector(name) { return name !== 'email'; }
-export function assertEmailSupported() { throw new Error('Email is not supported in the Windows preview.'); }
 export function linkConfig(from, to) {
   if (fs.statSync(from).isDirectory()) fs.symlinkSync(path.resolve(from), to, 'junction');
   else fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
@@ -145,28 +138,14 @@ export function preparePrivateDirectory(directory) {
   assertPrivateDirectory(directory);
   return directory;
 }
-export function opener(_env = process.env, platform = 'win32') {
-  if (platform === 'win32') return 'explorer.exe';
-  if (platform === 'darwin') return 'open';
-  if (platform === 'linux' && (_env.DISPLAY || _env.WAYLAND_DISPLAY)) return 'xdg-open';
-  return null;
-}
-export function pm2ControlEnvironment(source, keys) {
-  source = normalizeEnvironment(source);
-  const names = [...keys, 'USERPROFILE', 'SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME'];
-  const canonical = Object.fromEntries(Object.entries(source).map(([key, value]) => [key.toUpperCase(), value]));
-  return { source: canonical, keys: names };
-}
+export function urlOpenCommand() { return 'explorer.exe'; }
 
-// Claude accepts a file containing additional system instructions. stdin remains
-// the stream-json conversation transport, never a substitute for system policy.
-export function claudePromptArgs(text, directory) {
-  const file = path.join(directory, 'system-prompt.md');
-  fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
-  return ['--append-system-prompt-file', file];
-}
-
-// Codex's thread/start and thread/resume schemas support this field.
-// Other app-server runtimes must prove support before using it.
-export function appServerPromptArgs(runtime, encoded) { return runtime === 'codex' ? [] : ['-c', `developer_instructions=${encoded}`]; }
-export function appServerThreadParams(runtime, text) { return runtime === 'codex' ? { developerInstructions: text } : {}; }
+export const maxCommandLineLength = 32767;
+export const supportsPosixSignals = false;
+export const supportsFileModes = false;
+export const supportsShellScripts = false;
+export const pathDelimiter = ';';
+export const loginService = null;
+export const systemEnvironmentKeys = Object.freeze(['USERPROFILE', 'SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME']);
+export const hostPlatformId = `win32-${process.arch}`;
+export const environmentCaseSensitive = false;

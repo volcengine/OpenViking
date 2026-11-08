@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { supportsUpdater } from '../../daemon/src/platform/index.mjs';
+import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 import http from 'node:http';
 import { assertUpgradeTarget, defaultSocketPath, upgradeTargetNames } from '../../updater/src/targets.mjs';
@@ -45,7 +45,7 @@ function requestUpgrade(socketPath, target) {
 }
 
 export async function upgradeCommand(args, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
-  if (!supportsUpdater) {
+  if (!capabilities.updater) {
     stderr.write('Windows source installations do not support automatic release upgrades. Stop Vika and install a new checkout manually.\n');
     return 1;
   }

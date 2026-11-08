@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { detached } from './platform/index.mjs';
+import { spawnDetached } from './platform/index.mjs';
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -255,7 +255,7 @@ export class PiAgent {
           cwd: this.config.workspace,
           env: sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached,
+          detached: spawnDetached,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (error) { reject(error); return; }
@@ -346,7 +346,7 @@ export class PiAgent {
           cwd: this.config.workspace,
           env,
           shell: false,
-          detached,
+          detached: spawnDetached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {

@@ -1,7 +1,11 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { pm2Bin as platformPm2Bin, homeDir, supportsUpdater } from '../../daemon/src/platform/index.mjs';
+import { pm2Bin as platformPm2Bin } from '../../updater/src/pm2-platform.mjs';
+
+import { capabilities } from '../../daemon/src/capabilities.mjs';
+
+import { homeDir } from '../../daemon/src/platform/index.mjs';
 
 import { execFile as execFileCallback, spawn } from '../../daemon/src/platform/index.mjs';
 import fs from 'node:fs';
@@ -65,8 +69,8 @@ export function appsFor(target, targets = loadTargets()) {
   const instances = Object.entries(targets).map(([id, spec]) => ({ id, ...spec }));
   const web = { id: 'web', ...SHARED_WEB };
   const updater = { id: 'updater', app: UPDATER_APP };
-  if (target === undefined) return [...instances, web, ...(supportsUpdater ? [updater] : [])];
-  if (target === 'updater' && !supportsUpdater) throw new Error('Windows source installations do not support the release updater.');
+  if (target === undefined) return [...instances, web, ...(capabilities.updater ? [updater] : [])];
+  if (target === 'updater' && !capabilities.updater) throw new Error('Windows source installations do not support the release updater.');
   if (target === 'web') return [web];
   if (target === 'updater') return [updater];
   const instance = instances.find((spec) => spec.id === target);

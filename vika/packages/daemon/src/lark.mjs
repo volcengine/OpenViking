@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { detached } from './platform/index.mjs';
+import { spawnDetached } from './platform/index.mjs';
 
 import { spawn } from './platform/index.mjs';
 import { createHash } from 'node:crypto';
@@ -241,7 +241,7 @@ export class LarkClient {
       cwd: this.config.projectDir,
       env: sanitizeNonArkChildEnv(process.env),
       shell: false,
-      detached: this.config.connectorWorker ? false : detached,
+      detached: this.config.connectorWorker ? false : spawnDetached,
       stdio: ['ignore', 'pipe', 'pipe'],
     }));
     this.subscriber = child;
