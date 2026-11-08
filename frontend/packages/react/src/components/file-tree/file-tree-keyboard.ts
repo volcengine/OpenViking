@@ -37,7 +37,7 @@ export function handleRowKeyDown(
 
   const isDirectory = row.type === 'directory';
   const expanded = Boolean(row.expanded);
-  const canToggle = isDirectory && !row.disabled;
+  const canToggle = isDirectory && row.hasChildren !== false && !row.disabled;
 
   switch (event.key) {
     case 'ArrowDown':
