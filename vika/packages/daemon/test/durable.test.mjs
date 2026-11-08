@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import { DURABLE_VERSION, DURABLE_HOST, sanitizeDurableEnv } from '../src/durable-runtime.mjs';
 import { availableChatModels, loadDurableModels, piDefaultModel } from '../src/durable-models.mjs';
 import { DurableAgent } from '../src/durable.mjs';
-import { localSocketPath } from '../src/platform.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -187,7 +187,7 @@ describe('DurableAgent host protocol', () => {
     agent.deliver('current request', 7);
     const submit = lastWrite(child);
     assert.equal(submit.type, 'submit');
-    assert.equal(child.spawnOptions.windowsHide, process.platform === 'win32');
+    assert.equal(child.spawnOptions.windowsHide, process.platform === 'win32' ? true : undefined);
     assert.match(submit.text, /current request/);
     assert.match(submit.requestId, new RegExp(`^durable:${agent.threadId}:7$`));
     assert.equal(agent.turnActive, true);
@@ -620,7 +620,7 @@ describe('DurableAgent against the real host', () => {
     });
     process.env.DURABLE_FAUX = '1';
     process.env.DURABLE_FAUX_RESPONSES = JSON.stringify([
-      { toolCall: { name: process.platform === 'win32' ? 'powershell' : 'bash', arguments: { command: process.platform === 'win32' ? "[IO.File]::WriteAllText((Join-Path (Get-Location) 'note.txt'), 'hello'); Get-Content note.txt" : 'printf hello > note.txt && cat note.txt' } } },
+      { toolCall: { name: 'bash', arguments: { command: 'printf hello > note.txt && cat note.txt' } } },
       { toolCall: { name: 'read', arguments: { path: 'note.txt' } } },
       { toolCall: { name: 'write', arguments: { path: 'draft.txt', content: 'first' } } },
       { toolCall: { name: 'edit', arguments: { path: 'draft.txt', edits: [{ oldText: 'first', newText: 'second' }] } } },
@@ -637,7 +637,7 @@ describe('DurableAgent against the real host', () => {
       const called = store.activities
         .filter((activity) => activity.kind === 'agent.tool_called')
         .map((activity) => activity.summary);
-      assert.deepEqual(called, [process.platform === 'win32' ? 'powershell' : 'bash', 'read', 'write', 'edit']);
+      assert.deepEqual(called, ['bash', 'read', 'write', 'edit']);
       const completed = store.activities.filter((activity) => activity.kind === 'agent.tool_completed');
       assert.equal(completed.length, 4);
       // A missing tool would settle as a completed error result, which is how

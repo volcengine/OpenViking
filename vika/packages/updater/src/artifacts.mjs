@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { hostPlatformId, windowsX64 } from '../../daemon/src/platform/index.mjs';
+
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,11 +13,11 @@ import { pipeline } from 'node:stream/promises';
 // the build and publish scripts and the updater.
 
 // The platforms a Vika release ships for, and how Node.js and lark-cli name them.
-// musl (Alpine) and Windows are not built: Node's official musl builds are
-// unofficial, and the daemon is Unix-only. WSL2 runs the linux build.
+// Source-only targets may download dependencies but cannot build releases.
+// musl (Alpine) remains unsupported.
 
 export const PLATFORMS = Object.freeze({
-  'win32-x64': { os: 'win32', arch: 'x64', node: 'win-x64', larkCli: 'windows-amd64' },
+  [windowsX64]: { os: windowsX64.split('-')[0], arch: 'x64', node: 'win-x64', larkCli: 'windows-amd64', sourceOnly: true },
   'linux-x64': { os: 'linux', arch: 'x64', node: 'linux-x64', larkCli: 'linux-amd64' },
   'linux-arm64': { os: 'linux', arch: 'arm64', node: 'linux-arm64', larkCli: 'linux-arm64' },
   'darwin-x64': { os: 'darwin', arch: 'x64', node: 'darwin-x64', larkCli: 'darwin-amd64' },
@@ -23,7 +25,7 @@ export const PLATFORMS = Object.freeze({
 });
 
 export function hostPlatform() {
-  const id = `${process.platform}-${process.arch}`;
+  const id = hostPlatformId;
   if (!PLATFORMS[id]) throw new Error(`no Vika build for ${id}`);
   return id;
 }

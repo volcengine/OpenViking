@@ -4,6 +4,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { homeDir: platformHomeDir, ecosystemPath, pm2Options, supportsUpdater } = require('./packages/daemon/src/platform/index.mjs');
 const path = require('node:path');
 const {
   CONTROL_ENV_MAX_BYTES,
@@ -27,7 +28,7 @@ const releaseNode = path.join(releaseDir, 'node', 'bin', 'node');
 const common = Object.freeze({
   interpreter: fs.existsSync(releaseNode) ? releaseNode : process.execPath,
   exec_mode: 'fork',
-  ...(process.platform === 'win32' ? { shutdown_with_message: true } : {}),
+  ...pm2Options,
   instances: 1,
   autorestart: true,
   wait_ready: true,
@@ -41,10 +42,9 @@ function defined(values) {
 }
 
 function buildEcosystem(sourceEnv = process.env) {
-  const homeDir = sourceEnv.HOME || sourceEnv.USERPROFILE;
+  const homeDir = platformHomeDir(sourceEnv);
   if (!homeDir || !path.isAbsolute(homeDir)) throw new Error('HOME must be an absolute path');
   const baseDir = path.join(homeDir, '.vika');
-  const inheritedPath = sourceEnv.PATH || (process.platform === 'win32' ? sourceEnv.Path : '') || '';
   const deployment = loadDeploymentManifest(sourceEnv);
   if (deployment.agents.some((agent) => agent.port === 3737)) {
     throw new Error('agent port 3737 conflicts with the shared Web port');
@@ -88,7 +88,7 @@ function buildEcosystem(sourceEnv = process.env) {
       VIKA_VOLC_SESSION_ID: agent.volcSessionId || '',
       VIKA_VOLC_ENVIRONMENT_ID: agent.volcEnvironmentId || '',
       ...openVikingAgentEnv(agent),
-      PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,
+      PATH: ecosystemPath(sourceEnv, fallbackPath),
     }),
   }));
 
@@ -133,10 +133,10 @@ function buildEcosystem(sourceEnv = process.env) {
           VIKA_WEB_PORT: '3737',
           VIKA_WEB_DEFAULT_INSTANCE: deployment.defaultInstance,
           VIKA_WEB_INSTANCES: webTargetsJson,
-          PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,
+          PATH: ecosystemPath(sourceEnv, fallbackPath),
         },
       },
-      ...(process.platform === 'win32' ? [] : [{
+      ...(supportsUpdater ? [{
         ...common,
         name: 'vika-updater',
         script: path.join(updaterDir, 'src', 'main.mjs'),
@@ -155,9 +155,9 @@ function buildEcosystem(sourceEnv = process.env) {
           // The updater drives the same pm2 daemon the vika command uses.
           PM2_HOME: sourceEnv.PM2_HOME || path.join(baseDir, 'pm2'),
           PM2_BIN: path.join(releaseDir, 'bin', 'pm2'),
-          PATH: process.platform === 'win32' ? inheritedPath : `${inheritedPath}:${fallbackPath}`,
+          PATH: ecosystemPath(sourceEnv, fallbackPath),
         },
-      }]),
+      }] : []),
     ],
   };
 }

@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { detached, claudePromptArgs } from './platform/index.mjs';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn as nodeSpawn } from './platform.mjs';
+import { spawn as nodeSpawn } from './platform/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
@@ -232,7 +234,7 @@ export class ClaudeAgent {
           cwd: this.config.workspace,
           env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached: process.platform !== 'win32',
+          detached,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (error) { reject(error); return; }
@@ -315,7 +317,7 @@ export class ClaudeAgent {
         '--mcp-config', mcpConfigPath,
         '--settings', JSON.stringify(claudeIsolationSettings({ env: process.env, workspace: this.config.workspace })),
         '--disallowed-tools', 'EnterPlanMode,ExitPlanMode',
-        '--append-system-prompt', this.developerInstructionsText,
+        ...claudePromptArgs(this.developerInstructionsText, this.mcpTempDir),
         '--no-chrome',
       ];
       if (effort) args.push('--effort', effort);
@@ -329,7 +331,7 @@ export class ClaudeAgent {
           cwd: this.config.workspace,
           env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached: process.platform !== 'win32',
+          detached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {

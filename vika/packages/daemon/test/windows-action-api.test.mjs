@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { localSocketPath } from '../src/platform.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
 import { requestAction } from '../src/actions/client.mjs';
 

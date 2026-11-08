@@ -1,16 +1,18 @@
 import test from 'node:test';
+import * as windows from '../src/platform/win32.mjs';
+const { npmShimEntrypoint } = windows;
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { findExecutable, executableInvocation, npmShimEntrypoint, normalizeEnvironment, execFile, localSocketPath, isNamedPipe } from '../src/platform.mjs';
+import { findExecutable, executableInvocation, normalizeEnvironment, execFile, localSocketPath, isNamedPipe } from '../src/platform/index.mjs';
 
 test('pipe identity is stable, case insensitive and scoped to the instance directory', () => {
-  const one = localSocketPath('C:\\Users\\Alice\\.vika\\primary', 'actions', 'win32');
-  assert.ok(isNamedPipe(one));
-  assert.equal(one, localSocketPath('c:\\users\\alice\\.vika\\primary', 'actions', 'win32'));
-  assert.notEqual(one, localSocketPath('C:\\Users\\Alice\\.vika\\other', 'actions', 'win32'));
+  const one = windows.localSocketPath('C:\\Users\\Alice\\.vika\\primary', 'actions', 'win32');
+  assert.ok(windows.isNamedPipe(one));
+  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.vika\\primary', 'actions', 'win32'));
+  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.vika\\other', 'actions', 'win32'));
   assert.equal(localSocketPath('/tmp/vika', 'actions', 'linux'), '/tmp/vika/actions.sock');
 });
 
@@ -62,10 +64,10 @@ test('npm shim parsing accepts extensionless Node entrypoints, not arbitrary bat
 
 test('Windows environment normalization makes lookup and child overrides consistent', () => {
   const inherited = { Path: 'C:\\old', PATH: 'C:\\new', Pathext: '.COM', PATHEXT: '.EXE;.CMD', TOKEN: 'preserved' };
-  const normalized = normalizeEnvironment(inherited, 'win32');
+  const normalized = windows.normalizeEnvironment(inherited);
   assert.deepEqual(normalized, { PATH: 'C:\\new', PATHEXT: '.EXE;.CMD', TOKEN: 'preserved' });
   assert.equal(inherited.Path, 'C:\\old');
-  assert.deepEqual(normalizeEnvironment({ Path: 'C:\\only', Pathext: '.CMD' }, 'win32'), { PATH: 'C:\\only', PATHEXT: '.CMD' });
+  assert.deepEqual(windows.normalizeEnvironment({ Path: 'C:\\only', Pathext: '.CMD' }), { PATH: 'C:\\only', PATHEXT: '.CMD' });
   assert.equal(normalizeEnvironment(inherited, 'linux'), inherited);
 });
 
@@ -75,7 +77,7 @@ test('POSIX process wrappers preserve native overloads and Promise child handle'
   const command = path.join(directory, 'fixture');
   fs.writeFileSync(command, `#!${process.execPath}\nprocess.stdout.write('ok');`, { mode: 0o700 });
   const native = await import('node:child_process');
-  const { spawn } = await import('../src/platform.mjs');
+  const { spawn } = await import('../src/platform/index.mjs');
   const options = { env: { PATH: process.env.PATH }, timeout: 2000 };
   for (const args of [[], [options], [undefined, options], [[], options], [['-e', 'process.stdout.write("ok")'], options]]) {
     const expected = await promisify(native.execFile)(command, ...args);
@@ -95,7 +97,7 @@ test('POSIX process wrappers preserve native overloads and Promise child handle'
 
  test('Windows rejects unsupported direct script entrypoints before spawning', () => {
   for (const command of ['C:\\tools\\test.ps1', 'script.PS1', 'script.py', 'script.sh', 'script.vbs']) {
-    assert.throws(() => executableInvocation(command, [], { platform: 'win32', env: { PATH: '' } }), /Unsupported Windows executable entrypoint/);
+    assert.throws(() => windows.executableInvocation(command, [], { env: { PATH: '' } }), /Unsupported Windows executable entrypoint/);
   }
-  assert.deepEqual(executableInvocation('pwsh.exe', ['-File', 'test.ps1'], { platform: 'win32', env: { PATH: '' } }), { command: 'pwsh.exe', args: ['-File', 'test.ps1'] });
+  assert.deepEqual(windows.executableInvocation('pwsh.exe', ['-File', 'test.ps1'], { env: { PATH: '' } }), { command: 'pwsh.exe', args: ['-File', 'test.ps1'] });
 });

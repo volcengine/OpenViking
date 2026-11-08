@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { isNamedPipe } from '../platform.mjs';
+import { isNamedPipe } from '../platform/index.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';

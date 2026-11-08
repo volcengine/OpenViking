@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { detached } from './platform/index.mjs';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn as nodeSpawn } from './platform.mjs';
+import { spawn as nodeSpawn } from './platform/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
@@ -219,7 +221,7 @@ export class OpencodeAgent {
           cwd: this.config.workspace,
           env,
           shell: false,
-          detached: process.platform !== 'win32',
+          detached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {

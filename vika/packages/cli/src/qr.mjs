@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { opener, platformName } from '../../daemon/src/platform/index.mjs';
+
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,14 +24,9 @@ export function qrLines(url) {
 }
 
 // The program that opens a link on this machine's desktop; none on a server.
-export function opener(env = process.env, platform = process.platform) {
-  if (platform === 'win32') return 'explorer.exe';
-  if (platform === 'darwin') return 'open';
-  if (platform === 'linux' && (env.DISPLAY || env.WAYLAND_DISPLAY)) return 'xdg-open';
-  return null;
-}
+export { opener } from '../../daemon/src/platform/index.mjs';
 
-export function openUrl(url, { env = process.env, platform = process.platform } = {}) {
+export function openUrl(url, { env = process.env, platform = platformName } = {}) {
   const program = opener(env, platform);
   if (!program) return false;
   try {

@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { detached, processOptions } from './platform/index.mjs';
+
 import { spawn as nodeSpawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
@@ -207,8 +209,8 @@ export class DurableAgent {
           cwd: this.config.workspace,
           env,
           shell: false,
-          detached: process.platform !== 'win32',
-          windowsHide: process.platform === 'win32',
+          detached,
+          ...processOptions,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {

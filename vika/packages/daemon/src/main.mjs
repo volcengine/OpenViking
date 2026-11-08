@@ -1,6 +1,8 @@
-#!/usr/bin/env node
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
+
+import { onShutdown } from './platform/index.mjs';
+#!/usr/bin/env node
 
 import { createRequire } from 'node:module';
 import { getConfig, publicConfig } from './config.mjs';
@@ -48,13 +50,7 @@ async function handleSignal(signal) {
   clearTimeout(forceTimer);
 }
 
-if (process.platform === 'win32') {
-  process.on('message', (message) => {
-    if (message === 'shutdown') void handleSignal('shutdown').then(() => {
-      if (process.connected) process.disconnect();
-    });
-  });
-}
+onShutdown(handleSignal);
 
 process.on('SIGINT', () => void handleSignal('SIGINT'));
 process.on('SIGTERM', () => void handleSignal('SIGTERM'));

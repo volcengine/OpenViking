@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { pm2ControlEnvironment } from '../../daemon/src/platform/index.mjs';
+
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -40,7 +42,9 @@ const PM2_CONTROL_ENV_KEYS = Object.freeze([
 ]);
 
 export function cleanPm2ControlEnv(source = process.env) {
-  return Object.fromEntries(PM2_CONTROL_ENV_KEYS
+  const normalized = pm2ControlEnvironment(source, PM2_CONTROL_ENV_KEYS);
+  source = normalized.source;
+  return Object.fromEntries(normalized.keys
     .filter((key) => typeof source[key] === 'string'
       && (source[key] !== '' || DAEMON_ENV_FIELD_SET.has(key)))
     .map((key) => [key, source[key]]));

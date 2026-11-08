@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn } from '../../daemon/src/platform.mjs';
+import { spawn } from '../../daemon/src/platform/index.mjs';
 
 // The lark-cli calls setup needs: write the bot profile, authorize the owner
 // as a user (the second QR code), read who authorized, send a greeting, list

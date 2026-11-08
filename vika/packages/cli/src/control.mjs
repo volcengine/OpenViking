@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { execFile as execFileCallback, spawn } from '../../daemon/src/platform.mjs';
+import { pm2Bin as platformPm2Bin, homeDir, supportsUpdater } from '../../daemon/src/platform/index.mjs';
+
+import { execFile as execFileCallback, spawn } from '../../daemon/src/platform/index.mjs';
 import fs from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import http from 'node:http';
@@ -33,11 +35,11 @@ const UPDATER_APP = 'vika-updater';
 const RELEASE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 export function pm2Defaults(env = process.env) {
-  const releasePm2 = process.platform === 'win32' ? 'pm2' : path.join(RELEASE_ROOT, 'bin', 'pm2');
+  const releasePm2 = platformPm2Bin(RELEASE_ROOT);
   return {
     pm2Bin: env.PM2_BIN || (fs.existsSync(releasePm2) ? releasePm2 : 'pm2'),
     // Vika's own pm2 daemon, apart from any pm2 the user runs.
-    pm2Env: cleanPm2ControlEnv({ ...env, PM2_HOME: env.PM2_HOME || path.join(env.HOME || env.USERPROFILE || '', '.vika', 'pm2') }),
+    pm2Env: cleanPm2ControlEnv({ ...env, PM2_HOME: env.PM2_HOME || path.join(homeDir(env) || '', '.vika', 'pm2') }),
   };
 }
 
@@ -63,8 +65,8 @@ export function appsFor(target, targets = loadTargets()) {
   const instances = Object.entries(targets).map(([id, spec]) => ({ id, ...spec }));
   const web = { id: 'web', ...SHARED_WEB };
   const updater = { id: 'updater', app: UPDATER_APP };
-  if (target === undefined) return [...instances, web, ...(process.platform === 'win32' ? [] : [updater])];
-  if (target === 'updater' && process.platform === 'win32') throw new Error('Windows source installations do not support the release updater.');
+  if (target === undefined) return [...instances, web, ...(supportsUpdater ? [updater] : [])];
+  if (target === 'updater' && !supportsUpdater) throw new Error('Windows source installations do not support the release updater.');
   if (target === 'web') return [web];
   if (target === 'updater') return [updater];
   const instance = instances.find((spec) => spec.id === target);

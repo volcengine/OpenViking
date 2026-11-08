@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn as nodeSpawn } from './platform.mjs';
+import { detached, appServerPromptArgs, appServerThreadParams } from './platform/index.mjs';
+
+import { spawn as nodeSpawn } from './platform/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';
@@ -911,7 +913,7 @@ export class CodexAgent {
 
       const args = [
         'app-server', '--listen', 'stdio://',
-        '-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`,
+        ...appServerPromptArgs(this.runtime, tomlString(this.developerInstructionsText)),
         ...this.appServerConfigArgs,
         ...this.ovIsolationArgs(),
       ];
@@ -929,7 +931,7 @@ export class CodexAgent {
           cwd: this.config.workspace,
           env: this._sanitizeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached: process.platform !== 'win32',
+          detached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) { reject(error); return; }
@@ -991,6 +993,7 @@ export class CodexAgent {
 
   _threadParams() {
     return {
+      ...appServerThreadParams(this.runtime, this.developerInstructionsText),
       cwd: this.config.workspace,
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',

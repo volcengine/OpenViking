@@ -1,6 +1,8 @@
-#!/usr/bin/env node
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
+
+import { onShutdown } from '../../daemon/src/platform/index.mjs';
+#!/usr/bin/env node
 
 import { getConfig, publicConfig } from './config.mjs';
 import { ActivityWebServer } from './server.mjs';
@@ -53,13 +55,7 @@ async function stop(signal, exitCode = 0) {
   process.exitCode = exitCode;
 }
 
-if (process.platform === 'win32') {
-  process.on('message', (message) => {
-    if (message === 'shutdown') void stop('shutdown').then(() => {
-      if (process.connected) process.disconnect();
-    });
-  });
-}
+onShutdown(stop);
 
 process.on('SIGINT', () => void stop('SIGINT'));
 process.on('SIGTERM', () => void stop('SIGTERM'));

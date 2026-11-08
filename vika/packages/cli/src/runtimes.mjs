@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { execFile as execFileCallback } from '../../daemon/src/platform.mjs';
+import { execFile as execFileCallback } from '../../daemon/src/platform/index.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -15,8 +15,8 @@ import { probeAcp, probeAppServer } from './runtime-probe.mjs';
 
 const execFile = promisify(execFileCallback);
 
-export { findExecutable as which } from '../../daemon/src/platform.mjs';
-import { findExecutable as which } from '../../daemon/src/platform.mjs';
+export { findExecutable as which } from '../../daemon/src/platform/index.mjs';
+import { findExecutable as which } from '../../daemon/src/platform/index.mjs';
 
 async function run(execFileImpl, command, args, env) {
   try {

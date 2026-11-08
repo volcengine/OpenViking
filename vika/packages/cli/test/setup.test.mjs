@@ -1739,7 +1739,8 @@ test('what an instance lacks: the app\'s scopes, events and callback, and scopes
 test('expandHome expands home prefixes without changing literal paths', () => {
   const home = path.resolve('Users', 'example $& 中文');
   assert.equal(expandHome('~', home), home);
-  assert.equal(expandHome('~/vika-workspace/primary', home), path.join(home, 'vika-workspace', 'primary'));
+  assert.equal(expandHome('~/vika-workspace/primary', home), process.platform === 'win32'
+    ? path.join(home, 'vika-workspace', 'primary') : '~/vika-workspace/primary'.replace(/^~(?=\/)/, home));
   const windowsInput = String.raw`~\vika-workspace\primary`;
   assert.equal(expandHome(windowsInput, home), process.platform === 'win32'
     ? path.join(home, 'vika-workspace', 'primary') : windowsInput);

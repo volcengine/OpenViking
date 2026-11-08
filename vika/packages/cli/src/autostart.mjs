@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { platformName, supportsAutostart } from '../../daemon/src/platform/index.mjs';
+
 import { execFile as execFileCallback } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -66,14 +68,14 @@ function targets(homeDir, platform) {
     : { file: path.join(homeDir, '.config', 'systemd', 'user', 'vika.service') };
 }
 
-export function autostartEnabled({ homeDir = os.homedir(), platform = process.platform } = {}) {
-  return platform !== 'win32' && fs.existsSync(targets(homeDir, platform).file);
+export function autostartEnabled({ homeDir = os.homedir(), platform = platformName } = {}) {
+  return supportsAutostart(platform) && fs.existsSync(targets(homeDir, platform).file);
 }
 
 export async function autostartCommand([action, ...extra], {
   env = process.env,
   homeDir = os.homedir(),
-  platform = process.platform,
+  platform = platformName,
   execFileImpl = execFile,
   output = process.stdout,
   uid = process.getuid?.(),
@@ -82,7 +84,7 @@ export async function autostartCommand([action, ...extra], {
     output.write('usage: vika autostart <enable|disable>\n');
     return 2;
   }
-  if (platform === 'win32') {
+  if (!supportsAutostart(platform)) {
     output.write('Autostart is not supported in the Windows preview\n');
     return 1;
   }

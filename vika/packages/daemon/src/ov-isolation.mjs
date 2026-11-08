@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { linkConfig } from './platform/index.mjs';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,18 +175,8 @@ export function prepareOpencodeConfigHome(target, env = process.env) {
   const source = env.XDG_CONFIG_HOME || path.join(home(env), '.config');
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.join(target, 'opencode'), { recursive: true, mode: 0o700 });
-  const link = (from, to) => {
-    if (process.platform !== 'win32') {
-      try { fs.symlinkSync(from, to); } catch { /* preserve POSIX behavior */ }
-      return;
-    }
-    // Do not silently discard the user's non-OV extensions when symlinks
-    // require elevation. Propagate failures rather than launch incomplete.
-    if (fs.statSync(from).isDirectory()) fs.symlinkSync(path.resolve(from), to, 'junction');
-    else fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
-  };
   for (const entry of safeList(source)) {
-    if (entry !== 'opencode') link(path.join(source, entry), path.join(target, entry));
+    if (entry !== 'opencode') linkConfig(path.join(source, entry), path.join(target, entry));
   }
   const userFolder = path.join(source, 'opencode');
   for (const entry of safeList(userFolder)) {
@@ -193,10 +185,10 @@ export function prepareOpencodeConfigHome(target, env = process.env) {
     if (/^opencode\.jsonc?$|^config\.json$/.test(entry)) continue;
     if (entry === 'plugin' || entry === 'plugins') {
       fs.mkdirSync(to, { recursive: true });
-      for (const plugin of safeList(from)) if (!isOpenViking(plugin)) link(path.join(from, plugin), path.join(to, plugin));
+      for (const plugin of safeList(from)) if (!isOpenViking(plugin)) linkConfig(path.join(from, plugin), path.join(to, plugin));
       continue;
     }
-    link(from, to);
+    linkConfig(from, to);
   }
   const config = ['opencode.json', 'opencode.jsonc', 'config.json'].map((name) => path.join(userFolder, name))
     .map((file) => readJsonc(file)).find(Boolean) ?? {};
