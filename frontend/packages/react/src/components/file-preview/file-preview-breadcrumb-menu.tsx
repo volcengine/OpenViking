@@ -1,3 +1,4 @@
+import { Tooltip } from '../../shared/components/tooltip/index.js';
 import type { PathSegment } from './file-preview-path.js';
 
 export interface FilePreviewBreadcrumbMenuProps {
@@ -8,12 +9,12 @@ export interface FilePreviewBreadcrumbMenuProps {
 }
 
 /**
- * 折叠层级的菜单。用 `details` 提供键盘与点击，同时由 CSS 在悬停时展开——
- * 鼠标划过「…」就能看到被收起的层级，不必先点一下。
+ * 折叠层级的菜单。用 Tooltip 的 `click` 形态承载：点击「…」展开，按 Esc 或
+ * 点外部关闭，浮层渲染到 body，因此不受面包屑容器的布局约束。
  *
- * The menu of collapsed levels. `details` supplies keyboard and click behaviour,
- * while CSS opens it on hover so passing over "…" reveals the hidden levels
- * without a click first.
+ * The menu of collapsed levels, carried by Tooltip's `click` shape: clicking "…"
+ * opens it, Escape or a press outside closes it, and because the surface renders
+ * into `body` the breadcrumb's own layout cannot clip it.
  */
 export function FilePreviewBreadcrumbMenu({
   segments,
@@ -22,29 +23,35 @@ export function FilePreviewBreadcrumbMenu({
   onOpen,
 }: FilePreviewBreadcrumbMenuProps) {
   return (
-    <details className="ov-file-preview__breadcrumb-more">
-      <summary
+    <Tooltip
+      trigger="click"
+      placement="bottom"
+      className="ov-file-preview__breadcrumb-menu-surface"
+      content={
+        <ul className="ov-file-preview__breadcrumb-menu" role="menu">
+          {segments.map((segment) => (
+            <li key={segment.uri} role="none">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!canOpen || disabled}
+                onClick={() => onOpen(segment.uri)}
+              >
+                {segment.label}/
+              </button>
+            </li>
+          ))}
+        </ul>
+      }
+    >
+      <button
+        type="button"
+        className="ov-file-preview__breadcrumb-more"
         aria-label="Show hidden path levels"
         aria-haspopup="menu"
-        className="ov-file-preview__breadcrumb-more-summary"
       >
         …
-      </summary>
-      <ul className="ov-file-preview__breadcrumb-menu" role="menu">
-        {segments.map((segment) => (
-          <li key={segment.uri} role="none">
-            <button
-              type="button"
-              role="menuitem"
-              disabled={!canOpen || disabled}
-              title={segment.uri}
-              onClick={() => onOpen(segment.uri)}
-            >
-              {segment.label}/
-            </button>
-          </li>
-        ))}
-      </ul>
-    </details>
+      </button>
+    </Tooltip>
   );
 }

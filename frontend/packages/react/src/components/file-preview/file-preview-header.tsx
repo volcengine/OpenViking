@@ -1,72 +1,45 @@
+import type { ReactNode } from 'react';
+
 import { FilePreviewBreadcrumb } from './file-preview-breadcrumb.js';
-import {
-  CopyIcon,
-  DownloadIcon,
-  IconButton,
-} from './file-preview-header-icons.js';
+import { FilePreviewCopyPath } from './file-preview-copy-path.js';
 import { getPathFileName, splitPathSegments } from './file-preview-path.js';
-import { readCopyableText } from './file-preview-source.js';
-import type {
-  FilePreviewFileTab,
-  FilePreviewLabels,
-  FilePreviewTab,
-  FilePreviewViewMode,
-} from './types.js';
+import type { FilePreviewActions, FilePreviewFileTab } from './types.js';
 
 export interface FilePreviewHeaderProps {
-  activeTab: FilePreviewTab;
-  fileTab?: FilePreviewFileTab;
-  text: Required<FilePreviewLabels>;
-  viewMode: FilePreviewViewMode;
-  showViewModeSwitch: boolean;
-  editing: boolean;
-  saving: boolean;
-  canEdit: boolean;
-  onViewModeChange: (mode: FilePreviewViewMode) => void;
+  fileTab: FilePreviewFileTab;
+  actions: FilePreviewActions;
+  text: { copyPath: string };
   onOpenParent: (uri: string) => void;
-  onCopyPath: () => void;
-  onCopyContent: () => void;
-  onDownload: () => void;
-  onEditStart: () => void;
-  onEditSave: () => void;
-  onEditCancel: () => void;
 }
 
 /**
- * 内容区标题行：路径面包屑、复制、下载、视图切换、编辑与页签级插槽。
- * The content header: path breadcrumb, copy, download, view switch, editing and
- * per-tab slots.
+ * 内容区标题行：路径面包屑、复制路径与宿主提供的动作区。
+ *
+ * 复制路径是外壳的一部分——有 `source.path` 的文件在任何宿主下都需要它，因此
+ * 内置在面包屑末尾。其余动作（复制正文、下载、视图切换、编辑）依赖宿主的产品
+ * 语义与文案，由宿主在 `slots.actions` 里用 `actions` 上下文自行渲染。
+ *
+ * The content header: the path breadcrumb, copy-path, and a host-supplied action
+ * area.
+ *
+ * Copy-path belongs to the shell — any file with a `source.path` needs it under
+ * every host — so it sits at the end of the breadcrumb. The other actions (copy
+ * body, download, view switch, edit) carry host product semantics and copy, and
+ * the host renders them in `slots.actions` from the `actions` context.
  */
 export function FilePreviewHeader({
-  activeTab,
   fileTab,
+  actions,
   text,
-  viewMode,
-  showViewModeSwitch,
-  editing,
-  saving,
-  canEdit,
-  onViewModeChange,
   onOpenParent,
-  onCopyPath,
-  onCopyContent,
-  onDownload,
-  onEditStart,
-  onEditSave,
-  onEditCancel,
 }: FilePreviewHeaderProps) {
-  const path = fileTab?.source.path;
+  const path = fileTab.source.path;
   const segments = splitPathSegments(path);
-  const title =
-    getPathFileName(path) ??
-    (fileTab
-      ? fileTab.source.fileName
-      : typeof activeTab.title === 'string'
-        ? activeTab.title
-        : activeTab.key);
-  const copyable = fileTab ? readCopyableText(fileTab.source) : undefined;
-  const canOpenParent = Boolean(fileTab?.operations?.openParent);
-  const canDownload = Boolean(fileTab?.operations?.download);
+  const title = getPathFileName(path) ?? fileTab.source.fileName;
+
+  const slotActions = fileTab.slots?.actions;
+  const actionNode: ReactNode =
+    typeof slotActions === 'function' ? slotActions(actions) : slotActions;
 
   return (
     <div className="ov-file-preview__header">
@@ -74,91 +47,22 @@ export function FilePreviewHeader({
         <FilePreviewBreadcrumb
           segments={segments}
           title={title}
-          canOpen={canOpenParent}
-          disabled={saving}
+          canOpen={Boolean(fileTab.operations?.openParent)}
+          disabled={actions.busy}
           onOpen={onOpenParent}
         />
-        {path ? (
-          <IconButton
+        {actions.canCopyPath ? (
+          <FilePreviewCopyPath
             label={text.copyPath}
-            disabled={saving}
-            onClick={onCopyPath}
-          >
-            <CopyIcon />
-          </IconButton>
+            disabled={actions.busy}
+            onClick={() => void actions.copyPath()}
+          />
         ) : null}
-        {activeTab.slots?.titleExtra}
+        {fileTab.slots?.titleExtra}
       </div>
-      <div className="ov-file-preview__header-actions">
-        {activeTab.slots?.actions}
-        {fileTab && !editing ? (
-          <IconButton
-            label={text.copyContent}
-            disabled={saving || !copyable}
-            outlined
-            onClick={onCopyContent}
-          >
-            <CopyIcon />
-          </IconButton>
-        ) : null}
-        {fileTab && canDownload && !editing ? (
-          <IconButton
-            label={text.download}
-            disabled={saving}
-            outlined
-            onClick={onDownload}
-          >
-            <DownloadIcon />
-          </IconButton>
-        ) : null}
-        {fileTab && showViewModeSwitch && !editing ? (
-          <div className="ov-file-preview__switch" role="group">
-            {(['preview', 'source'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className="ov-file-preview__switch-item"
-                data-active={viewMode === mode || undefined}
-                aria-pressed={viewMode === mode}
-                disabled={saving}
-                onClick={() => onViewModeChange(mode)}
-              >
-                {mode === 'preview' ? text.preview : text.source}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {fileTab && canEdit && !editing ? (
-          <button
-            type="button"
-            className="ov-file-preview__button"
-            disabled={saving}
-            onClick={onEditStart}
-          >
-            {text.edit}
-          </button>
-        ) : null}
-        {fileTab && editing ? (
-          <>
-            <button
-              type="button"
-              className="ov-file-preview__button"
-              disabled={saving}
-              onClick={onEditCancel}
-            >
-              {text.cancel}
-            </button>
-            <button
-              type="button"
-              className="ov-file-preview__button ov-file-preview__button--primary"
-              disabled={saving}
-              onClick={onEditSave}
-            >
-              {text.save}
-            </button>
-          </>
-        ) : null}
-      </div>
+      {actionNode ? (
+        <div className="ov-file-preview__header-actions">{actionNode}</div>
+      ) : null}
     </div>
   );
 }

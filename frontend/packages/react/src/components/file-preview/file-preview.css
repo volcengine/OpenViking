@@ -150,6 +150,18 @@
   min-height: 0;
 }
 
+/*
+ * 内容页签的正文整块由宿主渲染：这里只负责让它铺满页签行以下的区域，
+ * 不加内边距、不套滚动容器——滚动与排版都是宿主的决定。
+ *
+ * A content tab's body belongs to the host. This only makes it fill the area
+ * below the tab row: no padding and no scroll container, since both are the
+ * host's call.
+ */
+.ov-file-preview__panel--content {
+  overflow: hidden;
+}
+
 .ov-file-preview__header {
   display: flex;
   flex: none;
@@ -253,12 +265,23 @@
 }
 
 /*
- * 末段不参与 flex 收缩：它是最需要完整显示的一级，空间不够时应当先收起
- * 祖先段，而不是把文件名压窄。折叠算法已经算好「…」与末段的宽度，这里
- * 只需保证布局不会再把末段压小。极端窄容器下仍允许它缩到容器宽度。
+ * 末段优先保留完整：`flex: 0 1 auto` 且 `min-width: 0` 让它在正常情况下按
+ * 自然宽度显示，只有在「连「…」+ 末段都放不下」时才会被压缩并出现省略号。
+ *
+ * 不能用 `flex: none`：那样末段永不收缩，极端窄容器下会撑破面包屑、把内容
+ * 顶到容器外面，形成横向溢出而不是省略。
+ *
+ * The trailing name keeps its full width in the normal case: `flex: 0 1 auto`
+ * with `min-width: 0` shows it at its natural width and only shrinks it — with an
+ * ellipsis — when even "…" plus the name does not fit.
+ *
+ * `flex: none` cannot be used: it would never shrink, so a very narrow container
+ * would push the name past the breadcrumb and overflow horizontally instead of
+ * ellipsing.
  */
 .ov-file-preview__breadcrumb-current {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   color: var(--ov-ui-file-preview-text);
@@ -267,85 +290,78 @@
   white-space: nowrap;
 }
 
+/* 「…」按钮：点击展开被收起的层级。 */
 .ov-file-preview__breadcrumb-more {
-  position: relative;
-  flex: none;
-}
-
-/*
- * 「…」按钮。`details` 默认只在点击后展开，这里同时让悬停展开：鼠标划过就
- * 能看到被收起的层级。悬停用 `:focus-within` 一并覆盖键盘聚焦，键盘用户
- * 仍可用回车/空格切换。
- */
-.ov-file-preview__breadcrumb-more-summary {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 22px;
   padding: 0;
   border: 0;
+  background: none;
   color: var(--ov-ui-file-preview-text-path);
+  font: inherit;
   cursor: pointer;
-  list-style: none;
   transition: color 160ms ease;
 }
 
-.ov-file-preview__breadcrumb-more-summary:hover,
-.ov-file-preview__breadcrumb-more[open]
-  > .ov-file-preview__breadcrumb-more-summary {
+.ov-file-preview__breadcrumb-more:hover {
   color: var(--ov-ui-file-preview-accent-hover);
 }
 
-.ov-file-preview__breadcrumb-more-summary::-webkit-details-marker {
-  display: none;
+/*
+ * 菜单浮层：Tooltip 的点击形态默认带 `min-width: 120px`（为短提示留出宽度），
+ * 这里取消掉，让菜单按内容收缩。
+ *
+ * The menu surface. Tooltip's click shape carries a `min-width: 120px` meant for
+ * short hints; drop it here so the menu shrinks to its content.
+ */
+/* 需要带上 `[role='dialog']`：Tooltip 的规则写在 `.ov-tooltip[role='dialog']`
+   上，只写类名特异性不够，会被它盖掉。 */
+.ov-tooltip.ov-file-preview__breadcrumb-menu-surface[role='dialog'] {
+  min-width: 0;
 }
 
 /*
- * 悬停即展开：`details` 未展开时浏览器默认隐藏内容，这里显式接管，让它同时
- * 响应悬停与聚焦。菜单本身也在悬停范围内，鼠标从「…」移进菜单不会收起。
+ * 菜单本体渲染在 Tooltip 的浮层里，定位与背景由浮层负责，这里只管列表的
+ * 排布与项样式。
+ *
+ * 宽度随内容自适应，不设最小宽度——只有一两级时留一大片空白反而显得空。
+ * 层级名过长时由每项的 `max-width` 截断并加省略号，菜单因此不会无限变宽。
+ *
+ * The menu sizes to its content with no minimum width: one or two short levels
+ * would otherwise sit in a wide empty box. A long level name is capped per item
+ * with an ellipsis, so the menu never grows without bound.
  */
-.ov-file-preview__breadcrumb-more:not([open])
-  > .ov-file-preview__breadcrumb-menu {
-  display: none;
-}
-
-.ov-file-preview__breadcrumb-more:hover > .ov-file-preview__breadcrumb-menu,
-.ov-file-preview__breadcrumb-more:focus-within
-  > .ov-file-preview__breadcrumb-menu {
-  display: block;
-}
-
 .ov-file-preview__breadcrumb-menu {
-  position: absolute;
-  z-index: 1;
-  top: 100%;
-  left: 0;
-  min-width: 160px;
-  margin: 4px 0 0;
-  padding: 4px;
-  border: 1px solid var(--ov-ui-file-preview-border);
-  border-radius: var(--ov-ui-radius, 6px);
-  background: var(--ov-ui-file-preview-surface);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
   list-style: none;
 }
 
 .ov-file-preview__breadcrumb-menu button {
-  width: 100%;
+  display: block;
+  box-sizing: border-box;
+  max-width: 320px;
   padding: 4px 6px;
+  overflow: hidden;
   border: 0;
   border-radius: calc(var(--ov-ui-radius, 6px) - 2px);
   background: none;
   color: inherit;
   font: inherit;
   text-align: left;
+  text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .ov-file-preview__breadcrumb-menu button:hover:not(:disabled) {
-  background: var(--ov-ui-file-preview-row-hover);
+  background: var(--ov-ui-color-bg-5, #f1f2f9);
 }
 
 /*

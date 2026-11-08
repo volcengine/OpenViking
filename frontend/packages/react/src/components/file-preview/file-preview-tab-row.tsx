@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 
-import { ContentTabIcon, FileTypeIcon } from './file-preview-icons.js';
 import type { FilePreviewTab } from './types.js';
 
 /** 轮廓在页签上沿与底部收口处的圆角半径，与宿主一致。 */
@@ -125,14 +124,11 @@ export function FilePreviewTabRow({
                 .join(' ')}
               onClick={() => onSelect(tab.key)}
             >
-              <span className="ov-file-preview__tab-icon" aria-hidden="true">
-                {tab.icon ??
-                  (tab.kind === 'file' ? (
-                    <FileTypeIcon fileName={tab.source.fileName} />
-                  ) : (
-                    <ContentTabIcon />
-                  ))}
-              </span>
+              {tab.icon ? (
+                <span className="ov-file-preview__tab-icon" aria-hidden="true">
+                  {tab.icon}
+                </span>
+              ) : null}
               <span className="ov-file-preview__tab-title">
                 {tab.title ??
                   (tab.kind === 'file' ? tab.source.fileName : tab.key)}

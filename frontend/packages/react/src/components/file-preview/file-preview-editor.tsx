@@ -51,7 +51,7 @@ export function FilePreviewEditor({
         className="ov-file-preview__textarea"
         value={draft}
         readOnly={saving}
-        aria-label={text.edit}
+        aria-label={text.editor}
         spellCheck={false}
         onChange={(event) => onChange(event.target.value)}
       />

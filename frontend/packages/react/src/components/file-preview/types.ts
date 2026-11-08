@@ -81,9 +81,19 @@ export interface FilePreviewTabBase {
    */
   title?: ReactNode;
   /**
-   * 页签图标。省略时按文件格式自动选择，内容页签使用内置的看板图标。
-   * Tab icon. Chosen from the file format when omitted; a content tab uses the
-   * built-in dashboard icon.
+   * 页签图标，由宿主提供；省略时该页签只显示标题，不占图标位。
+   *
+   * 组件不按文件名推断类型：格式识别属于上层职责，内置图标集会把整包图标
+   * 拖进产物。需要按格式取图标的宿主可从 `@openviking/react/icons` 引入
+   * `getFileTypeIcon`，把结果传进来。
+   *
+   * The tab icon, supplied by the host. Omit it and the tab shows only its title,
+   * with no icon slot.
+   *
+   * The component does not infer a type from the file name: format detection
+   * belongs to the caller, and bundling the icon set would pull every icon into
+   * the output. A host that wants a per-format icon can import
+   * `getFileTypeIcon` from `@openviking/react/icons` and pass the result in.
    */
   icon?: ReactNode;
   /**
@@ -111,20 +121,6 @@ export interface FilePreviewTabBase {
    * show the copy-path button.
    */
   onCopyPath?: (path: string) => void;
-  /**
-   * 是否显示预览/源码切换，默认 `true`。格式本身没有源码视图时自动隐藏。
-   * 只在文件页签上生效；内容页签的正文由宿主渲染，组件没有可切换的两种视图。
-   * Whether to show the preview/source switch, `true` by default. Hidden
-   * automatically when the format has no source view. Only meaningful on file
-   * tabs; a content tab renders whatever views it needs inside `content`.
-   */
-  showViewModeSwitch?: boolean;
-  /**
-   * 内容区标题行的插槽。页签行本身只显示标题与图标，其余元素都在这一层。
-   * Slots of the content header row. The tab row itself shows only a title and
-   * an icon; everything else renders in this layer.
-   */
-  slots?: FilePreviewHeaderSlots;
 }
 
 /**
@@ -183,18 +179,28 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    */
   onDownload?: () => void;
   /**
-   * 正文中的资源成功打开后触发，参数为已打开的 URI；失败时不触发。
-   * Called after a content resource opens, with its URI; not called on failure.
+   * 正文中的链接成功打开后触发，参数为被点击的 URI；失败时不触发。只有
+   * Markdown 正文会触发。
+   *
+   * Called after a link inside the body opens, with the clicked URI; not called on
+   * failure. Only Markdown bodies fire this.
    */
   onOpenUri?: (uri: string) => void;
 }
 
 /**
  * 展示宿主自定义内容的页签，例如看板或图谱。
- * 标题行可通过 `slots` 补充内容与操作；正文及其加载、错误提示由 `content` 提供。
- * A tab with host-provided content, such as a dashboard or graph. Use `slots`
- * for extra header content and actions, and `content` for the body and any
- * loading or error messages.
+ *
+ * 这类页签只有页签行由组件负责，正文整块交给宿主——组件不渲染内容区标题行，
+ * 也不在中间套任何容器。宿主想加工具栏、标题或状态提示，都写在自己的
+ * `content` 里，按需要怎么排就怎么排。
+ *
+ * A tab with host-provided content, such as a dashboard or graph.
+ *
+ * The component only renders the tab row for these; the whole body belongs to the
+ * host. No content header row is rendered and no wrapper is placed in between, so
+ * a host that wants a toolbar, a title or a status line puts it inside `content`
+ * and lays it out however it needs.
  */
 export interface FilePreviewContentTab extends FilePreviewTabBase {
   /**
@@ -209,8 +215,8 @@ export interface FilePreviewContentTab extends FilePreviewTabBase {
    */
   title: ReactNode;
   /**
-   * 页签正文，由宿主渲染。
-   * The tab body, rendered by the host.
+   * 页签正文，由宿主渲染，铺满页签行以下的整个区域。
+   * The tab body, rendered by the host and filling everything below the tab row.
    */
   content: ReactNode;
 }
@@ -229,7 +235,20 @@ export interface FilePreviewOperations {
   openParent?: (uri: string) => Promise<void>;
   /** 下载当前文件，完成后返回。Downloads the current file and resolves on completion. */
   download?: () => Promise<void>;
-  /** 打开正文引用的资源。Opens a resource referenced by the content. */
+  /**
+   * 打开正文里被点击的链接，完成后返回。传入后由宿主接管导航，组件阻止默认
+   * 跳转；相对路径的解析也归宿主，组件给出的是 Markdown 里的原始目标。
+   *
+   * 目前只有 Markdown 正文会触发：其它格式的渲染器不提供链接点击回调。
+   *
+   * Opens a link clicked inside the body and resolves on completion. Supplying it
+   * hands navigation to the host — the component prevents the default jump — and
+   * resolving relative paths is the host's job too; the component passes the raw
+   * target as written in the Markdown.
+   *
+   * Only Markdown bodies fire this today: the other renderers expose no link-click
+   * callback.
+   */
   openUri?: (uri: string) => Promise<void>;
 }
 
@@ -269,17 +288,72 @@ export interface FilePreviewEditing {
 }
 
 /**
- * 所有页签共用的内容区标题行插槽。
- * Content-header slots shared by every tab.
+ * 交给宿主的动作上下文：组件持有的视图与编辑状态，以及改变它们的方法。
+ *
+ * 组件只渲染外壳与正文，不内置复制、下载、视图切换、编辑这些按钮；宿主在
+ * `slots.actions` 里用这份上下文自己拼。状态仍由组件维护，宿主不必接管。
+ *
+ * The action context handed to the host: the view and editing state the component
+ * owns, plus the methods that change it.
+ *
+ * The component renders only the shell and the body — it ships no copy, download,
+ * view-switch or edit buttons. A host composes them in `slots.actions` from this
+ * context. The state stays with the component; the host does not take it over.
+ */
+export interface FilePreviewActions {
+  /** 当前视图模式。The current view mode. */
+  viewMode: FilePreviewViewMode;
+  /** 切换到指定视图模式。Switches to the given view mode. */
+  setViewMode: (mode: FilePreviewViewMode) => void;
+  /**
+   * 该页签的格式是否同时支持预览与源码。为 `false` 时不该渲染切换控件。
+   * Whether the format supports both preview and source. Do not render a switch
+   * when it is `false`.
+   */
+  canSwitchView: boolean;
+  /** 是否处于编辑态。Whether the tab is being edited. */
+  editing: boolean;
+  /** 是否有保存或读取在进行中。Whether a save or load is in flight. */
+  busy: boolean;
+  /** 该页签是否可编辑，即可提供 `editing`。Whether the tab is editable. */
+  canEdit: boolean;
+  /** 进入编辑态。Enters editing. */
+  startEditing: () => void;
+  /** 保存草稿，成功返回 `true`。Saves the draft, resolving to `true` on success. */
+  saveEditing: () => Promise<boolean>;
+  /** 放弃草稿并退出编辑态。Discards the draft and leaves editing. */
+  cancelEditing: () => void;
+  /** 该页签是否有可复制的正文。Whether the tab has copyable body text. */
+  canCopyContent: boolean;
+  /** 复制正文，成功返回 `true`。Copies the body, resolving to `true` on success. */
+  copyContent: () => Promise<boolean>;
+  /** 该页签是否有可复制的路径。Whether the tab has a copyable path. */
+  canCopyPath: boolean;
+  /** 复制路径，成功返回 `true`。Copies the path, resolving to `true` on success. */
+  copyPath: () => Promise<boolean>;
+  /** 该页签是否可下载。Whether the tab can be downloaded. */
+  canDownload: boolean;
+  /** 下载当前文件。Downloads the current file. */
+  download: () => void;
+}
+
+/**
+ * 文件页签内容区标题行的插槽。内容页签不消费这些——它整块正文由宿主渲染，
+ * 没有组件提供的标题行可言。
+ *
+ * Slots of a file tab's content header. Content tabs do not use them: their whole
+ * body is the host's, so there is no component-provided header to fill.
  */
 export interface FilePreviewHeaderSlots {
   /**
-   * 标题行右侧的额外动作，例如权限设置或删除。
-   * 复制与下载使用已有按钮，不需要在这里重复添加。
-   * Extra actions on the right of the header, for example permissions or delete.
-   * Use the existing copy and download buttons instead of adding duplicates here.
+   * 标题行右侧的动作区。组件不内置任何按钮，复制、下载、视图切换、编辑都由
+   * 宿主用上下文里的状态与方法自行渲染。
+   *
+   * The action area on the right of the header. The component ships no buttons of
+   * its own: copy, download, view switch and editing are all rendered by the host
+   * from the state and methods in the context.
    */
-  actions?: ReactNode;
+  actions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
   /**
    * 标题旁的额外内容，例如权限标记、状态徽标或版本号；不需要时不传。
    * Extra content next to the title, for example a permission tag, a status badge
@@ -314,9 +388,15 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
    */
   errorFallback?: ReactNode;
   /**
-   * 格式不支持时的兜底内容。不传时使用内置提示。
-   * Fallback when the format cannot be previewed. A built-in message is used
-   * when omitted.
+   * 格式不支持时的兜底内容。格式是否可预览由底座判定，因此这个节点会交给
+   * 底座，而不是在组件这边提前判断。传了就由它接管整个不支持态（含底座原本
+   * 会给出的下载入口）；不传时使用内置提示。
+   *
+   * Fallback when the format cannot be previewed. Whether a format can be
+   * previewed is the base component's call, so this node is handed to it rather
+   * than decided here. Supplying it takes over the whole unsupported state,
+   * including the download entry the base would otherwise offer; omit it for the
+   * built-in message.
    */
   unsupportedFallback?: ReactNode;
   /**
@@ -343,28 +423,17 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
  * Replaceable copy; the component ships English defaults.
  */
 export interface FilePreviewLabels {
-  /** 复制内容按钮的文案。Label of the copy-content button. */
-  copyContent?: string;
-  /** 复制内容成功后的提示。Message shown after the content was copied. */
-  copyContentSuccess?: string;
-  /** 没有内容可复制时的提示。Message shown when there is no content to copy. */
-  copyContentEmpty?: string;
-  /** 复制路径按钮的文案。Label of the copy-path button. */
+  /**
+   * 复制路径按钮的文案。这是组件自己渲染的唯一按钮——其余动作按钮由宿主在
+   * `slots.actions` 里自绘，文案也归宿主。
+   *
+   * Label of the copy-path button. It is the only button the component renders
+   * itself; every other action button belongs to the host's `slots.actions`,
+   * copy included.
+   */
   copyPath?: string;
-  /** 复制路径成功后的提示。Message shown after the path was copied. */
-  copyPathSuccess?: string;
-  /** 打开上级目录的按钮文案。Label of the control that opens an ancestor. */
-  openParent?: string;
-  /** 进入编辑状态的按钮文案。Label of the control that enters editing. */
-  edit?: string;
-  /** 保存按钮文案。Save button label. */
-  save?: string;
-  /** 取消编辑的按钮文案。Label of the control that leaves editing. */
-  cancel?: string;
-  /** 预览视图的文案。Label of the preview view. */
-  preview?: string;
-  /** 源码视图的文案。Label of the source view. */
-  source?: string;
+  /** 编辑区文本框的无障碍名称。Accessible name of the editor textarea. */
+  editor?: string;
   /** 重试按钮文案。Retry button label. */
   retry?: string;
   /** 读取失败时的提示。Message shown when reading failed. */
@@ -377,8 +446,6 @@ export interface FilePreviewLabels {
   loading?: string;
   /** 下载按钮文案。Label of the download button. */
   download?: string;
-  /** 无法预览二进制文件时的提示。Message shown when a binary file cannot be previewed. */
-  binaryUnsupported?: string;
   /** 文件长度为 0 时的提示。Message shown when the file itself is empty. */
   fileEmpty?: string;
   /** 文件非空但没有可展示内容时的提示。Message shown for a non-empty file with nothing to render. */

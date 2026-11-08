@@ -4,6 +4,7 @@ import { html } from '@ark-design/ui/file-viewer/adapters/html';
 import { image } from '@ark-design/ui/file-viewer/adapters/image';
 import { json } from '@ark-design/ui/file-viewer/adapters/json';
 import { markdown } from '@ark-design/ui/file-viewer/adapters/markdown';
+import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import { media } from '@ark-design/ui/file-viewer/adapters/media';
 import { pdf } from '@ark-design/ui/file-viewer/adapters/pdf';
 import { powerpoint } from '@ark-design/ui/file-viewer/adapters/powerpoint';
@@ -32,17 +33,31 @@ import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
  * pulls in browser-only packages, and a top-level import would break server
  * rendering.
  */
-export const FILE_PREVIEW_ADAPTERS: FileViewerCoreProps['adapters'] = [
-  code({ showLineNumbers: true }),
-  text({ showLineNumbers: true }),
-  json({ defaultExpandDepth: 4 }),
-  markdown(),
-  html(),
-  table(),
-  pdf({ initialFit: 'fit-width' }),
-  word({ initialFit: 'fit-width' }),
-  powerpoint({ initialFit: 'fit-width' }),
-  image(),
-  media(),
-  diff(),
-];
+export function createFilePreviewAdapterList({
+  onLinkClick,
+}: {
+  /**
+   * Markdown 正文里的链接被点击时调用。传入后由回调接管导航，底座不再自行
+   * 跳转；只有 Markdown Adapter 支持这个回调，其余格式忽略它。
+   *
+   * Called when a link inside a Markdown body is clicked. Supplying it hands
+   * navigation to the callback and the base no longer jumps on its own. Only the
+   * Markdown adapter supports this; other formats ignore it.
+   */
+  onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+} = {}): FileViewerCoreProps['adapters'] {
+  return [
+    code({ showLineNumbers: true }),
+    text({ showLineNumbers: true }),
+    json({ defaultExpandDepth: 4 }),
+    markdown({ onLinkClick }),
+    html(),
+    table(),
+    pdf({ initialFit: 'fit-width' }),
+    word({ initialFit: 'fit-width' }),
+    powerpoint({ initialFit: 'fit-width' }),
+    image(),
+    media(),
+    diff(),
+  ];
+}

@@ -10,13 +10,15 @@ import {
   useState,
 } from 'react';
 
+import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
+
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import { DEFAULT_LABELS } from './file-preview-labels.js';
-import { readCopyableText } from './file-preview-source.js';
 import { TruncatedNotice } from './file-preview-state.js';
 import { FilePreviewTabRow } from './file-preview-tab-row.js';
 import { useFilePreviewActions } from './use-file-preview-actions.js';
+import { useFilePreviewActionsContext } from './use-file-preview-actions-context.js';
 import { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewComponent,
@@ -29,6 +31,7 @@ import type {
 } from './types.js';
 
 export type {
+  FilePreviewActions,
   FilePreviewComponent,
   FilePreviewContentTab,
   FilePreviewEditing,
@@ -93,6 +96,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const contentTab: FilePreviewContentTab | undefined = fileTab
     ? undefined
     : (activeTab as FilePreviewContentTab);
+  // 文件页签恒显示 URI 行——路径、复制、视图切换与编辑都在那一行。
 
   const switchTab = useCallback(
     (key: string) => {
@@ -117,7 +121,12 @@ export const FilePreview: FilePreviewComponent = forwardRef<
 
   const onViewModesChange = useCallback(
     (modes: readonly ViewerViewModeOption[]) => {
-      setViewModes(modes.map((mode) => mode.value));
+      // 内容没变就保留原引用：每次写入新数组都会触发一次重渲染，而适配器
+      // 可能在每次渲染后再次上报，形成反复更新。
+      const next = modes.map((mode) => mode.value);
+      setViewModes((previous) =>
+        previous.join() === next.join() ? previous : next,
+      );
     },
     [],
   );
@@ -132,14 +141,45 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     [currentKey, fileTab, switchTab],
   );
 
-  const canEdit = Boolean(fileTab?.editing) && !editing.editing;
-  // 只在该格式确实同时支持预览与源码时显示切换：图片、音视频、PDF 等没有
+  // 只在该格式确实同时支持预览与源码时认为可切换：图片、音视频、PDF 等没有
   // 源码视图，Adapter 不会声明这两个模式。
-  const showViewModeSwitch =
+  const canSwitchView =
     Boolean(fileTab) &&
-    activeTab.showViewModeSwitch !== false &&
     viewModes.includes('preview') &&
     viewModes.includes('source');
+
+  // Markdown 正文里的链接：把原始目标交给宿主的 `openUri`，由它决定怎么解析
+  // 与跳转。组件不做相对路径补全——那需要知道当前文档的地址，属于宿主。
+  //
+  // Links inside a Markdown body: hand the raw target to the host's `openUri` and
+  // let it resolve and navigate. The component does not resolve relative paths —
+  // that needs the current document's location, which only the host knows.
+  const onLinkClick = useCallback<
+    NonNullable<MarkdownAdapterOptions['onLinkClick']>
+  >(
+    (_event, link) => {
+      if (fileTab) void actions.openUri(fileTab, link.url);
+    },
+    [actions, fileTab],
+  );
+  // 只有宿主给了 `openUri` 才接管导航：传入回调后底座会阻止默认跳转，宿主
+  // 没提供能力时接管等于把链接点死。
+  //
+  // Hand navigation over only when the host supplies `openUri`: passing the
+  // callback makes the base skip the default jump, so taking over without a
+  // handler would leave links dead.
+  const linkClickHandler = fileTab?.operations?.openUri
+    ? onLinkClick
+    : undefined;
+  const actionContext = useFilePreviewActionsContext({
+    activeTab,
+    fileTab,
+    viewMode,
+    canSwitchView,
+    setViewMode,
+    editing,
+    operations: actions,
+  });
 
   return (
     <div
@@ -152,69 +192,52 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         disabled={editing.saving}
         onSelect={(key) => void switchTab(key)}
       />
-      <div
-        id={`ov-file-preview-panel-${currentKey}`}
-        role="tabpanel"
-        aria-labelledby={`ov-file-preview-tab-${currentKey}`}
-        className="ov-file-preview__panel"
-      >
-        <FilePreviewHeader
-          activeTab={activeTab}
-          fileTab={fileTab}
-          text={tabText}
-          viewMode={viewMode}
-          showViewModeSwitch={showViewModeSwitch}
-          editing={editing.editing}
-          saving={editing.saving}
-          canEdit={canEdit}
-          onViewModeChange={setViewMode}
-          onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
-          onCopyPath={() =>
-            fileTab?.source.path
-              ? void actions.copyPath(activeTab, fileTab.source.path)
-              : undefined
-          }
-          onCopyContent={() => {
-            const copyable = fileTab && readCopyableText(fileTab.source);
-            if (fileTab && copyable)
-              void actions.copyContent(fileTab, copyable);
-          }}
-          onDownload={() => fileTab && void actions.download(fileTab)}
-          onEditStart={() => {
-            if (!fileTab) return;
-            setViewMode('source');
-            void editing.start(fileTab);
-          }}
-          onEditSave={() => {
-            if (!fileTab) return;
-            void editing.save(fileTab).then((saved) => {
-              // 保存成功后回到预览视图，与进入编辑前的视图状态对齐。
-              if (saved) setViewMode('preview');
-            });
-          }}
-          onEditCancel={() => editing.discard(activeTab)}
-        />
-        <div className="ov-file-preview__body">
-          <FilePreviewBody
-            fileTab={fileTab}
-            contentTab={contentTab}
-            text={tabText}
-            locale={locale}
-            viewMode={viewMode}
-            editing={editing}
-            onViewModeChange={setViewMode}
-            onHandleChange={onHandleChange}
-            onViewModesChange={onViewModesChange}
-            onDownload={() => fileTab && void actions.download(fileTab)}
-          />
+      {contentTab ? (
+        // 内容页签整块交给宿主：组件只画页签行，正文不套任何容器，也没有
+        // 标题行——组件不知道该在那里显示什么，套一层只会限制宿主的排版。
+        <div
+          id={`ov-file-preview-panel-${currentKey}`}
+          role="tabpanel"
+          aria-labelledby={`ov-file-preview-tab-${currentKey}`}
+          className="ov-file-preview__panel ov-file-preview__panel--content"
+        >
+          {contentTab.content}
         </div>
-        {fileTab?.source.truncated ? <TruncatedNotice text={tabText} /> : null}
-        {activeTab.slots?.footer ? (
-          <div className="ov-file-preview__footer">
-            {activeTab.slots.footer}
+      ) : fileTab ? (
+        <div
+          id={`ov-file-preview-panel-${currentKey}`}
+          role="tabpanel"
+          aria-labelledby={`ov-file-preview-tab-${currentKey}`}
+          className="ov-file-preview__panel"
+        >
+          <FilePreviewHeader
+            fileTab={fileTab}
+            actions={actionContext}
+            text={tabText}
+            onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
+          />
+          <div className="ov-file-preview__body">
+            <FilePreviewBody
+              fileTab={fileTab}
+              text={tabText}
+              locale={locale}
+              viewMode={viewMode}
+              editing={editing}
+              onViewModeChange={setViewMode}
+              onHandleChange={onHandleChange}
+              onViewModesChange={onViewModesChange}
+              onDownload={() => void actions.download(fileTab)}
+              onLinkClick={linkClickHandler}
+            />
           </div>
-        ) : null}
-      </div>
+          {fileTab.source.truncated ? <TruncatedNotice text={tabText} /> : null}
+          {fileTab.slots?.footer ? (
+            <div className="ov-file-preview__footer">
+              {fileTab.slots.footer}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 });

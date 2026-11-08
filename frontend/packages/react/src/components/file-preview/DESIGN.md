@@ -339,9 +339,9 @@ noContent?: string;   // 空白内容
 
 两边的衔接点：
 
-- 图标从 `@openviking/react/icons` 导入，组件按扩展名映射到对应图标组件
-- 图标未覆盖的格式回退到通用文件图标
-- 映射表放在组件模块内（`file-preview-icons.ts`），图标分支合并后只需补映射，不改组件结构
+- 页签图标由宿主通过 `icon` 提供，组件不按文件名推断类型，也不做兜底
+- 省略 `icon` 时页签只显示标题，不占图标位
+- 需要按格式取图标的宿主从 `@openviking/react/icons` 引入 `getFileTypeIcon`，把结果传给 `icon`；这样只装文件预览的消费者不会被拖进整包图标（约 74 KB）
 
 ### 5.13 样式与 peer 的消费成本（已定：接受）
 
@@ -473,6 +473,6 @@ Core 的滚动与布局并不在 `__body` 上。实测 `style/file-viewer-core.l
 2. **写外壳**：tab row + header（面包屑逐段可点 + 溢出下拉 + 切换动画）+ 空态 + 编辑态，正文先接纯文本。这一步不依赖底座新版本。
 3. **接 `FileViewerCore`**：按分支的 12 种 kind 建 adapters 表，markdown 走 `resources` 注入鉴权图片，`toolbar={false}`，`locale` 透传，`slots` 接管兜底态。
 4. **接视图切换**：直接用受控 `viewMode`（`beta.6` 已支持）。
-5. **补图标映射**：图标分支合并后补 `file-preview-icons.ts`。
+5. **图标由宿主提供**：`icon` 省略时不显示，组件不内置映射表。
 6. **补文档**：5.6 的 content tab 约定、5.13 的样式与 peer、5.14 的 `arco-theme` 要求。
 7. **文档站示例**：空文件 / 空白内容 / 不支持格式 / 大文件 / 编辑失败 / 暗色。
