@@ -52,8 +52,14 @@ def _markdown_to_telegram_html(text: str) -> str:
     # 5. Escape HTML special characters
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    # 6. Links [text](url) - must be before bold/italic to handle nested cases
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
+    # 6. Protect link destinations from formatting while leaving labels available.
+    link_urls: list[str] = []
+
+    def save_link(m: re.Match) -> str:
+        link_urls.append(m.group(2).replace('"', "&quot;"))
+        return f'<a href="\x00URL{len(link_urls) - 1}\x00">{m.group(1)}</a>'
+
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", save_link, text)
 
     # 7. Bold **text** or __text__
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
@@ -67,6 +73,9 @@ def _markdown_to_telegram_html(text: str) -> str:
 
     # 10. Bullet lists - item -> • item
     text = re.sub(r"^[-*]\s+", "• ", text, flags=re.MULTILINE)
+
+    for i, url in enumerate(link_urls):
+        text = text.replace(f"\x00URL{i}\x00", url)
 
     # 11. Restore inline code with HTML tags
     for i, code in enumerate(inline_codes):
