@@ -1,4 +1,5 @@
 import test from 'node:test';
+import * as requireNative from 'node:child_process';
 import * as windows from '../src/platform/win32.mjs';
 const { npmShimEntrypoint } = windows;
 import assert from 'node:assert/strict';
@@ -100,4 +101,37 @@ test('POSIX process wrappers preserve native overloads and Promise child handle'
     assert.throws(() => windows.executableInvocation(command, [], { env: { PATH: '' } }), /Unsupported Windows executable entrypoint/);
   }
   assert.deepEqual(windows.executableInvocation('pwsh.exe', ['-File', 'test.ps1'], { env: { PATH: '' } }), { command: 'pwsh.exe', args: ['-File', 'test.ps1'] });
+});
+
+test('Windows wrappers support omitted args, options-only and inherited null env', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-win-overloads-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const fixture = path.join(dir, 'fixture.mjs');
+  fs.writeFileSync(fixture, 'process.stdout.write("ok");');
+  for (const args of [[], [{ env: null }], [undefined, { env: null }], [[], null]]) {
+    const pending = promisify(windows.execFile)(fixture, ...args);
+    assert.ok(pending.child?.pid);
+    assert.deepEqual(await pending, { stdout: 'ok', stderr: '' });
+  }
+});
+test('long system policy uses files for Claude and RPC for Codex without weakening instruction role', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-prompt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const policy = '系统 policy "&%\\\n'.repeat(10_000);
+  const args = windows.claudePromptArgs(policy, dir);
+  assert.equal(args[0], '--append-system-prompt-file');
+  assert.equal(fs.readFileSync(args[1], 'utf8'), policy);
+  assert.ok(args.join(' ').length < 1000);
+  assert.deepEqual(windows.appServerPromptArgs('codex', JSON.stringify(policy)), []);
+  assert.deepEqual(windows.appServerThreadParams('codex', policy), { developerInstructions: policy });
+  // Do not assume TraeX implements a newer Codex protocol field.
+  assert.deepEqual(windows.appServerThreadParams('traex', policy), {});
+});
+test('pipe names differ across daemon processes, not only instance directories', () => {
+  const module = new URL('../src/platform/win32.mjs', import.meta.url).href;
+  const script = `import {localSocketPath} from ${JSON.stringify(module)}; console.log(localSocketPath('C:/Users/test/.vika/data'));`;
+  const { execFileSync } = requireNative;
+  const first = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  const second = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.notEqual(first, second);
 });

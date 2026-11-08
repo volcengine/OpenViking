@@ -215,6 +215,7 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
       if (msg.method === 'initialize') { send({ id: msg.id, result: {} }); return; }
       if (msg.method === 'initialized') { return; }
       if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
+        fs.appendFileSync(SPAWN_LOG + '.threads', JSON.stringify(msg.params) + '\\n');
         send({ id: msg.id, result: { thread: { id: 'thread-mock' } } });
         send({ method: 'thread/started', params: { thread: { id: 'thread-mock' } } });
         return;
@@ -375,6 +376,9 @@ export async function startMockEnv({
 
     // argv of every fake codex spawn (policy assertions live here:
     // developer_instructions is a `-c` config override).
+    codexThreadParams() {
+      return readLines(path.join(dir, 'codex-spawns.ndjson.threads')).map((line) => JSON.parse(line));
+    },
     codexSpawnArgs() {
       return readLines(path.join(dir, 'codex-spawns.ndjson')).map((line) => JSON.parse(line));
     },

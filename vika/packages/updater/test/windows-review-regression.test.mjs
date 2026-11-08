@@ -31,3 +31,34 @@ test('ecosystem excludes updater only on Windows and preserves mixed-case Path',
     else assert.equal(daemon.env.PATH, ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin');
   }
 });
+
+test('Linux and macOS config selection match the full upstream POSIX snapshot (host OS is not simulated execution)', { skip: process.platform === 'win32' }, t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-posix-snapshot-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const config = path.join(home, 'config.json');
+  fs.writeFileSync(config, JSON.stringify({ version: 1, env: {}, defaultInstance: 'primary', agents: [{
+    id: 'primary', displayName: 'Primary', profile: 'test', port: 3738, dataDir: path.join(home, 'data'),
+    workspace: path.join(home, 'work'), ovConfig: path.join(home, 'ov.json'), model: 'durable',
+  }] }));
+  const source = { HOME: home, VIKA_CONFIG: config, PATH: '/fixture/bin', USERPROFILE: '/ignored', Path: '/ignored',
+    TEMP: '/ignored', TMP: '/ignored', SYSTEMROOT: '/ignored', APPDATA: '/ignored', LOCALAPPDATA: '/ignored',
+    COMSPEC: '/ignored', PATHEXT: '/ignored', HOMEDRIVE: '/ignored', HOMEPATH: '/ignored', USERNAME: '/ignored',
+    UNRELATED_SECRET: 'must-not-propagate' };
+  // Captured from origin/feat/vika a6c43c131047, not from the adapter under test.
+  const expected = JSON.parse(fs.readFileSync(new URL('./fixtures/ecosystem-posix.json', import.meta.url), 'utf8'));
+  const pm2 = fileURLToPath(new URL('../src/pm2.mjs', import.meta.url));
+  for (const platform of ['linux', 'darwin']) {
+    const output = execFileSync(process.execPath, ['-e', `
+      Object.defineProperty(process, 'platform', {value: ${JSON.stringify(platform)}});
+      const {buildEcosystem} = require(${JSON.stringify(ecosystem)});
+      const {cleanPm2ControlEnv} = require(${JSON.stringify(pm2)});
+      const source = ${JSON.stringify(source)};
+      console.log(JSON.stringify({ecosystem:buildEcosystem(source),control:cleanPm2ControlEnv(source)}));
+    `], { env: { ...process.env, HOME: home, VIKA_CONFIG: config }, encoding: 'utf8' });
+    const result = JSON.parse(output);
+    const normalized = JSON.parse(JSON.stringify(result.ecosystem).replaceAll(home, '<HOME>')
+      .replaceAll(path.dirname(ecosystem), '<RELEASE>').replaceAll(process.execPath, '<NODE>'));
+    assert.deepEqual(normalized, expected, platform);
+    assert.deepEqual(result.control, { HOME: home, PATH: '/fixture/bin', VIKA_CONFIG: config }, platform);
+  }
+});

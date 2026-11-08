@@ -517,8 +517,9 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     fs.writeFileSync(rolePromptPath, '<!-- editor note -->\nYou are {{AGENT_NAME}}. Role fixture marker: zircon-e2e-7742\n');
     const env = await startMockEnv({ config: { rolePromptPath, agentName: 'Alpha' } });
     try {
-      const instructions = env.codexSpawnArgs()[0].find((argument) => argument.startsWith('developer_instructions='));
-      assert.ok(instructions, 'codex is spawned with developer_instructions');
+      const instructions = process.platform === 'win32' ? env.codexThreadParams()[0].developerInstructions
+        : env.codexSpawnArgs()[0].find((argument) => argument.startsWith('developer_instructions='));
+      assert.ok(instructions, 'codex receives developer instructions in the platform-selected transport');
       assert.match(instructions, /## Role/);
       assert.match(instructions, /You are Alpha\. Role fixture marker: zircon-e2e-7742/);
       assert.doesNotMatch(instructions, /editor note/);

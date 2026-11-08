@@ -163,3 +163,13 @@ test('Windows runtime PATH preserves inherited mixed-case Path before adding CLI
   assert.equal(env.Path, undefined);
   assert.equal(original.Path, 'C:\\Git\\bin;C:\\Node');
 });
+
+test('ProcessRegistry honors a caller disabling process detachment', { skip: process.platform === 'win32' }, async () => {
+  const { ProcessRegistry } = await import('../src/process-utils.mjs');
+  const logger = { debug() {}, info() {}, warn() {}, error() {} };
+  const script = 'try { process.kill(-process.pid, 0); process.stdout.write("group-leader"); } catch { process.stdout.write("inherited-group"); }';
+  const inherited = await new ProcessRegistry(logger, { detached: false }).run(process.execPath, ['-e', script]);
+  const detached = await new ProcessRegistry(logger, { detached: true }).run(process.execPath, ['-e', script]);
+  assert.equal(inherited.stdout, 'inherited-group');
+  assert.equal(detached.stdout, 'group-leader');
+});

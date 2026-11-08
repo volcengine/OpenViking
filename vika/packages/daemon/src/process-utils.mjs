@@ -65,7 +65,7 @@ import { terminateProcessTree } from './platform/index.mjs';
 export class ProcessRegistry {
   constructor(logger, { detached = defaultDetached } = {}) {
     this.logger = logger;
-    this.detached = defaultDetached;
+    this.detached = detached;
     this.children = new Set();
   }
 

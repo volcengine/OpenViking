@@ -12,6 +12,7 @@ import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process
 // `PATH` override. Node otherwise chooses one duplicate lexicographically.
 // Use the explicit uppercase override consistently for lookup and the child.
 export function normalizeEnvironment(env = process.env) {
+  env ??= process.env;
   const result = { ...env };
   for (const name of ['PATH', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'SYSTEMROOT', 'COMSPEC', 'APPDATA', 'LOCALAPPDATA']) {
     const keys = Object.keys(env).filter(key => key.toUpperCase() === name);
@@ -28,7 +29,7 @@ export function findExecutable(command, env = process.env) {
   env = normalizeEnvironment(env);
   const extensions = !paths.extname(command)
     ? [...String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), ''] : [''];
-  const directories = paths.isAbsolute(command) || command.includes(paths.sep)
+  const directories = paths.isAbsolute(command) || command.includes(paths.sep) || command.includes('/')
     ? [''] : String(env.PATH || '').split(';').filter(Boolean);
   for (const directory of directories) {
     for (const extension of extensions) {
@@ -74,7 +75,7 @@ export function executableInvocation(command, args, { env = process.env } = {}) 
 
 export function spawn(command, args = [], options = {}) {
   if (!Array.isArray(args)) { options = args ?? {}; args = []; }
-  const invocation = executableInvocation(command, args, { env: options.env });
+  const invocation = executableInvocation(command, args, { env: options?.env });
   return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 }
 
@@ -101,7 +102,7 @@ export function isNamedPipe(value) {
 
 execFile[promisify.custom] = (command, args, options = {}) => {
   if (!Array.isArray(args)) { options = args ?? options; args = []; }
-  const invocation = executableInvocation(command, args, { env: options.env });
+  const invocation = executableInvocation(command, args, { env: options?.env });
   return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
 };
 

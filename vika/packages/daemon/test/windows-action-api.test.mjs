@@ -29,3 +29,13 @@ test('action API uses native local transport and passes runtime authority', asyn
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('a pre-bound Windows pipe is refused rather than reusing an unverified server', { skip: process.platform !== 'win32' }, async () => {
+  const { createServer } = await import('node:net');
+  const socketPath = localSocketPath(path.join(os.tmpdir(), 'vika-squatting-test'), 'occupied');
+  const occupied = createServer();
+  await new Promise((resolve, reject) => occupied.once('error', reject).listen(socketPath, resolve));
+  try {
+    await assert.rejects(startActionApi({ socketPath, service: {}, logger: {} }), { code: 'EADDRINUSE' });
+  } finally { await new Promise(resolve => occupied.close(resolve)); }
+});
