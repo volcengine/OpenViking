@@ -24,6 +24,24 @@ const {
 
 export { ROLE_PRESETS };
 
+/**
+ * The environment runtime detection should look at: the manifest's validated
+ * `env` first, overridden by the caller's. A binary path pinned there
+ * (`CODEX_BIN`, `PI_BIN`, ...) is what the daemon will run, so a probe that
+ * only read `process.env` would call a machine without the CLI on PATH "not
+ * installed" while the daemon starts it every day. The operator's environment
+ * wins, which is the same precedence the daemon applies.
+ *
+ * Only the keys the loader applies are passed in: an ignored key (PATH, a
+ * stray secret) must not change what setup finds when the daemon never sees it.
+ * @param {object} env - the caller's environment.
+ * @param {object|null} manifestEnv - the validated `env` of the manifest.
+ * @returns {object} the environment to probe with.
+ */
+export function detectionEnv(env, manifestEnv) {
+  return { ...(manifestEnv ?? {}), ...env };
+}
+
 export const WEB_PORT = 3737;
 const FIRST_INSTANCE_PORT = 3738;
 
@@ -55,9 +73,9 @@ export function manifestPath(env = process.env) {
 // but does not load is an error: setup never overwrites a broken manifest.
 export function readManifest(env = process.env) {
   const filePath = manifestPath(env);
-  if (!fs.existsSync(filePath)) return { path: filePath, value: null, ignored: [] };
-  const { ignoredFields } = loadDeploymentManifest({ ...env, VIKA_CONFIG: filePath });
-  return { path: filePath, value: JSON.parse(fs.readFileSync(filePath, 'utf8')), ignored: ignoredFields };
+  if (!fs.existsSync(filePath)) return { path: filePath, value: null, env: null, ignored: [] };
+  const { ignoredFields, env: manifestEnv } = loadDeploymentManifest({ ...env, VIKA_CONFIG: filePath });
+  return { path: filePath, value: JSON.parse(fs.readFileSync(filePath, 'utf8')), env: manifestEnv, ignored: ignoredFields };
 }
 
 export function availableInstanceOvConfig(env, id, reserved = new Set()) {

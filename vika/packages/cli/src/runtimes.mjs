@@ -5,7 +5,7 @@ import { execFile as execFileCallback } from '../../daemon/src/platform/index.mj
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
+import { assertPiVersion, managedPiBin, piCommand } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
 import { t } from './i18n.mjs';
 import { probeAcp, probeAppServer } from './runtime-probe.mjs';
@@ -23,11 +23,62 @@ async function run(execFileImpl, command, args, env) {
     const { stdout } = await execFileImpl(command, args, { env, timeout: 20_000 });
     return { ok: true, stdout: String(stdout) };
   } catch (error) {
-    return { ok: false, stdout: String(error?.stdout ?? '') };
+    return { ok: false, stdout: String(error?.stdout ?? ''), error };
   }
 }
 
-// [{ id, label, model, bin, binEnv, available, note }], in the order setup offers them.
+function configured(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+// A configured *_BIN is authoritative: it names the file the daemon will run,
+// so a broken value is reported as such instead of falling back to a different
+// CLI found on PATH. A bare command name still means PATH lookup; a value with
+// a directory separator is a path.
+function configuredBin(value, env) {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (!name) return null;
+  return /[\\/]/.test(name) ? path.resolve(name) : which(name, env);
+}
+
+// What detection probes: the configured binary when the key is set (even when
+// it does not resolve, so the note can name it), otherwise the first of
+// `fallback` on PATH.
+function probeBin(key, env, ...fallback) {
+  const value = configured(env[key]);
+  if (value) return { bin: configuredBin(value, env), configured: value };
+  for (const name of fallback) {
+    const found = which(name, env);
+    if (found) return { bin: found, configured: null };
+  }
+  return { bin: null, configured: null };
+}
+
+// execFile rejects with a string code when the binary itself could not run
+// (ENOENT, EACCES, ENOEXEC) and with a numeric exit code when it ran and
+// failed; only the former says anything about the path.
+function binaryProblem(result) {
+  const code = result?.error?.code;
+  if (typeof code !== 'string') return null;
+  return code === 'ENOENT' ? 'missing' : 'unusable';
+}
+
+function binaryProblemNote(problem, bin) {
+  return problem === 'missing'
+    ? t(`找不到可执行文件：${bin}`, `Executable not found: ${bin}`)
+    : t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
+}
+
+function missingNote(bin) {
+  return binaryProblemNote('missing', bin);
+}
+
+// Nothing configured and nothing on PATH is "not installed"; a configured value
+// that does not resolve is named, because the user has to fix that value.
+function absentNote(probe) {
+  return probe.configured ? missingNote(probe.configured) : t('未安装', 'not installed');
+}
+
 // [{ id, label, model, bin, binEnv, available, note }], in the order setup offers them.
 export async function detectRuntimes({
   env = process.env,
@@ -38,32 +89,71 @@ export async function detectRuntimes({
 } = {}) {
   const runtimes = [];
 
-  const codex = which('codex', env);
-  const codexLogin = codex ? await run(execFileImpl, codex, ['login', 'status'], env) : null;
+  const codex = probeBin('CODEX_BIN', env, 'codex');
+  const codexLogin = codex.bin ? await run(execFileImpl, codex.bin, ['login', 'status'], env) : null;
+  const codexFailure = binaryProblem(codexLogin);
   runtimes.push({
-    id: 'codex', label: 'Codex', model: 'codex:', bin: codex, binEnv: 'CODEX_BIN',
+    id: 'codex', label: 'Codex', model: 'codex:', bin: codex.bin, binEnv: 'CODEX_BIN',
     available: Boolean(codexLogin?.ok),
-    note: !codex ? t('未安装', 'not installed') : codexLogin.ok ? t('已登录', 'logged in') : t('未登录：先运行 codex login', 'not logged in: run codex login first'),
+    note: !codex.bin ? absentNote(codex)
+      : codexFailure ? binaryProblemNote(codexFailure, codex.bin)
+        : codexLogin.ok ? t('已登录', 'logged in')
+          : t('未登录：先运行 codex login', 'not logged in: run codex login first'),
   });
 
-  const claude = which('claude', env);
-  const claudeStatus = claude ? await run(execFileImpl, claude, ['auth', 'status'], env) : null;
+  const claude = probeBin('CLAUDE_BIN', env, 'claude');
+  const claudeStatus = claude.bin ? await run(execFileImpl, claude.bin, ['auth', 'status'], env) : null;
   let claudeLoggedIn = false;
   try { claudeLoggedIn = JSON.parse(claudeStatus?.stdout || '{}').loggedIn === true; } catch {}
+  const claudeFailure = binaryProblem(claudeStatus);
   runtimes.push({
-    id: 'claude', label: 'Claude Code', model: 'claude:', bin: claude, binEnv: 'CLAUDE_BIN',
+    id: 'claude', label: 'Claude Code', model: 'claude:', bin: claude.bin, binEnv: 'CLAUDE_BIN',
     available: claudeLoggedIn,
-    note: !claude ? t('未安装', 'not installed') : claudeLoggedIn ? t('已登录', 'logged in') : t('未登录：先运行 claude auth login', 'not logged in: run claude auth login first'),
+    note: !claude.bin ? absentNote(claude)
+      : claudeFailure ? binaryProblemNote(claudeFailure, claude.bin)
+        : claudeLoggedIn ? t('已登录', 'logged in')
+          : t('未登录：先运行 claude auth login', 'not logged in: run claude auth login first'),
   });
 
-  const piModels = await run(execFileImpl, process.execPath, [piBin, '--list-models'], { ...env, PI_OFFLINE: '1' });
-  const models = piModels.stdout.split('\n').slice(1).map((line) => line.trim().split(/\s+/))
-    .filter((columns) => columns.length >= 2).map(([provider, model]) => `${provider}/${model}`);
+  // An explicit PI_BIN is what the daemon runs; without one, the bundled entry
+  // the caller passed (or the release's own) is probed. A bare name goes
+  // through PATH, exactly as piCommand resolves it for the daemon.
+  const piConfigured = configured(env.PI_BIN);
+  const piEntry = piConfigured ? configuredBin(piConfigured, env) : piBin;
+  let models = [];
+  let piProbeResult = null;
+  let piVersionProblem = null;
+  if (piEntry) {
+    // The bundled entry is a Node script this process runs itself, exactly as
+    // the daemon does; an explicit PI_BIN is run as given (piCommand).
+    const command = piConfigured
+      ? piCommand(piEntry, ['--list-models'])
+      : { command: process.execPath, args: [piEntry, '--list-models'] };
+    piProbeResult = await run(execFileImpl, command.command, command.args, { ...env, PI_OFFLINE: '1' });
+    models = piProbeResult.stdout.split('\n').slice(1).map((line) => line.trim().split(/\s+/))
+      .filter((columns) => columns.length >= 2).map(([provider, model]) => `${provider}/${model}`);
+    // The daemon's preflight rejects a version this release was not built for;
+    // probing it here keeps setup from offering a Pi that cannot start.
+    if (piConfigured && !binaryProblem(piProbeResult)) {
+      const version = piCommand(piEntry, ['--version']);
+      const versionResult = await run(execFileImpl, version.command, version.args, env);
+      const versionFailure = binaryProblem(versionResult);
+      if (versionFailure) piVersionProblem = binaryProblemNote(versionFailure, piEntry);
+      else {
+        try { assertPiVersion(versionResult.stdout); } catch (error) { piVersionProblem = error.message; }
+      }
+    }
+  }
+  const piFailure = binaryProblem(piProbeResult);
   runtimes.push({
-    id: 'pi', label: t('Pi（内置）', 'Pi (built in)'), model: 'pi', bin: null, binEnv: null,
-    available: models.length > 0,
-    note: models.length > 0 ? t(`用 ~/.pi/agent 里的 ${models[0]}`, `uses ${models[0]} from ~/.pi/agent`)
-      : t('没有可用模型：运行 vika pi 后 /login，或编辑 ~/.pi/agent/models.json', 'no model yet: run vika pi and /login, or edit ~/.pi/agent/models.json'),
+    id: 'pi', label: t('Pi（内置）', 'Pi (built in)'), model: 'pi',
+    // Only a configured entry is pinned; the bundled one is not written back.
+    bin: piConfigured ? piEntry : null, binEnv: 'PI_BIN',
+    available: models.length > 0 && !piVersionProblem,
+    note: piVersionProblem ?? (!piEntry ? absentNote({ configured: piConfigured })
+      : piFailure ? binaryProblemNote(piFailure, piEntry)
+        : models.length > 0 ? t(`用 ~/.pi/agent 里的 ${models[0]}`, `uses ${models[0]} from ~/.pi/agent`)
+          : t('没有可用模型：运行 vika pi 后 /login，或编辑 ~/.pi/agent/models.json', 'no model yet: run vika pi and /login, or edit ~/.pi/agent/models.json')),
   });
 
   const durable = await detectDurable({ env, execFileImpl });
@@ -192,7 +282,7 @@ async function detectTraex({ env, execFileImpl, probe }) {
 // plus a supported version is what setup verifies (no session, no model call).
 async function detectOpencode({ env, execFileImpl, probe }) {
   const explicit = env.OPENCODE_BIN?.trim();
-  const bin = explicit ? path.resolve(explicit) : which('opencode', env);
+  const bin = explicit ? configuredBin(explicit, env) : which('opencode', env);
   if (!bin) {
     return {
       id: 'opencode', label: 'OpenCode', model: 'opencode', bin: null, binEnv: 'OPENCODE_BIN',
