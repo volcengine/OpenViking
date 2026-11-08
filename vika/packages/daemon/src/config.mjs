@@ -210,8 +210,9 @@ export function getConfig() {
     naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
     capabilitiesFile: process.env.VIKA_CAPABILITIES_FILE || null,
-    // Opt-in per instance: preferences are always shown; this also searches OV.
-
+    // Opt-in per instance (agents[].ovAutoRecall, config file only): besides
+    // the preferences it always shows, the daemon runs one OV search per line
+    // someone sends (ov-recall.mjs).
     ovAutoRecall: boolEnv('VIKA_OV_AUTO_RECALL', false),
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).

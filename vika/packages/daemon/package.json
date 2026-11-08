@@ -13,8 +13,8 @@
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
+    "@earendil-works/pi-mcp": "1.4.0",
     "@larksuite/cli": "1.0.94",
-    "@modelcontextprotocol/sdk": "1.32.2",
     "@tencent-connect/qqbot-nodejs": "1.0.5",
     "image-size": "2.0.4",
     "qrcode-terminal": "0.12.0"

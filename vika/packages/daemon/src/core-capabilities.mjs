@@ -4,8 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { McpClient, StdioTransport } from '@earendil-works/pi-mcp';
+import { executableInvocation, normalizeEnvironment, systemEnvironmentKeys } from './platform/index.mjs';
 
 const MAX_BYTES = 128 * 1024;
 const ID = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -78,31 +78,36 @@ export class CoreCapabilities {
     if (!Object.hasOwn(this.servers, id)) throw new Error('Unknown MCP server');
     if (!this.connections.has(id)) {
       const server = this.servers[id];
-      const pending = (async () => {
-        const client = new Client({ name: 'vika-core', version: '0.4.0' }, { capabilities: {} });
-        const transport = new StdioClientTransport({ command: server.command, args: server.args ?? [], env: server.env ?? {}, cwd: this.workspace, stderr: 'ignore' });
+      const client = new McpClient({ name: 'vika-core', version: '0.4.0', requestTimeoutMs: 10_000 });
+      const inherited = normalizeEnvironment(process.env);
+      const env = normalizeEnvironment({
+        ...Object.fromEntries(['HOME', 'PATH', ...systemEnvironmentKeys]
+          .filter(key => typeof inherited[key] === 'string').map(key => [key, inherited[key]])),
+        ...normalizeEnvironment(server.env ?? {}),
+      });
+      const invocation = executableInvocation(server.command, server.args ?? [], { env });
+      const transport = new StdioTransport({ ...invocation, env, inheritEnv: false,
+        cwd: this.workspace, maxMessageBytes: MAX_BYTES, maxStderrBytes: 1024 });
+      const ready = (async () => {
         try {
-          await client.connect(transport, { timeout: 10_000 });
-          const tools = [];
-          let cursor;
-          for (let page = 0; page < 16; page++) {
-            const result = await client.listTools(cursor ? { cursor } : {}, { timeout: 10_000 });
-            tools.push(...result.tools.filter(tool => server.tools.includes(tool.name)));
-            if (tools.length > 128 || Buffer.byteLength(JSON.stringify(tools)) > MAX_BYTES) throw new Error('MCP tool catalogue is too large');
-            cursor = result.nextCursor;
-            if (!cursor) break;
+          await client.connect(transport);
+          const tools = (await client.listTools({ signal: AbortSignal.timeout(10_000) }))
+            .filter(tool => server.tools.includes(tool.name));
+          if (tools.length > 128 || Buffer.byteLength(JSON.stringify(tools)) > MAX_BYTES
+            || server.tools.some(name => !tools.some(tool => tool.name === name))) {
+            throw new Error('MCP tool catalogue is incomplete or too large');
           }
-          if (cursor || server.tools.some(name => !tools.some(tool => tool.name === name))) throw new Error('MCP tool catalogue is incomplete');
           return { client, tools };
         } catch {
           await client.close().catch(() => {});
           throw new Error(`MCP server ${id} could not initialize; check its configuration`);
         }
       })();
-      // Failed connections remain failed until restart: never respawn on every model call.
-      this.connections.set(id, pending);
+      // Keep the client before initialization finishes so shutdown cancels it.
+      // Failed connections remain failed until restart; never respawn per call.
+      this.connections.set(id, { client, ready });
     }
-    return this.connections.get(id);
+    return this.connections.get(id).ready;
   }
 
   async listMcp(id) { return (await this.connection(id)).tools; }
@@ -112,7 +117,7 @@ export class CoreCapabilities {
     const { client } = await this.connection(id);
     assertAuthority(); // Initialization may have outlived the invoking runtime.
     try {
-      const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 30_000 });
+      const result = await client.callTool(name, args, { timeoutMs: 30_000 });
       assertAuthority();
       if (Buffer.byteLength(JSON.stringify(result)) > MAX_BYTES) throw new Error('oversized');
       return result;
@@ -124,6 +129,6 @@ export class CoreCapabilities {
 
   async close() {
     this.closed = true;
-    await Promise.allSettled([...this.connections.values()].map(async pending => (await pending).client.close()));
+    await Promise.allSettled([...this.connections.values()].map(({ client }) => client.close()));
   }
 }

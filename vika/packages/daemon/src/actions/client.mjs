@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import http from 'node:http';
+import { inlineImageBlocks } from '../inline-images.mjs';
 import { AUTHORITY_HEADER, CLIENT_HEADER } from './api.mjs';
 
 // Used by the MCP adapter. The socket path and runtime authority
@@ -46,4 +47,9 @@ export async function callTool(endpoint, tool, input, options) {
   const response = await requestAction(endpoint, 'POST', '/v1/call', { tool, input }, options);
   if (!response.ok) throw new Error(response.error || 'agent tool failed');
   return response.result;
+}
+
+// The MCP adapter and Durable expose the same Core text/media representation.
+export async function toolContent(result) {
+  return [{ type: 'text', text: String(result?.text ?? '') }, ...await inlineImageBlocks(result?.media)];
 }

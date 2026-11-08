@@ -1,23 +1,15 @@
-# Shared Core capabilities (opt-in preview)
+# Shared Skills and MCP tools (opt-in preview)
 
-Core can expose a local Skill catalogue and allowlisted stdio MCP tools to
-runtimes using the existing Agent tool surface. This includes Durable, without
-installing Pi extensions. It does not load runtime-specific hooks, replace
-runtime-native plugins, or implement the OV tools proposed in #7079.
-
-Set `agents[].capabilitiesFile` to an absolute JSON path in the deployment
-manifest. Configuration is read once; restart that instance after changes.
-Unconfigured instances expose no extra tools. Ark does not support this option.
-A standalone daemon can use `VIKA_CAPABILITIES_FILE`; managed instances override
-that environment setting with their own manifest entry.
+Set `agents[].capabilitiesFile` to an absolute JSON path. Core reads it once;
+restart that instance after changes. Unconfigured instances expose no extra
+tools. Ark has no Core tool transport and cannot enable this option.
+A standalone daemon can use `VIKA_CAPABILITIES_FILE`; managed instances always
+use their own manifest entry, clearing any inherited setting.
 
 ```json
 {
   "skills": {
-    "review": {
-      "directory": "/srv/skills/review",
-      "description": "Review a patch using the team's checklist"
-    }
+    "review": { "directory": "/srv/skills/review", "description": "Review a patch" }
   },
   "mcpServers": {
     "docs": {
@@ -30,42 +22,33 @@ that environment setting with their own manifest entry.
 }
 ```
 
-The operator supplies the Skill descriptions explicitly; Core does not scan
-personal runtime directories or parse an alternate Skill frontmatter dialect.
-`list_capabilities` discovers entries; `read_skill` reads `SKILL.md` by default,
-or a relative text resource. The result carries a source path and SHA-256.
-Read Skill instructions before acting. Content and server descriptions are
-untrusted context, not permissions. Files are limited to 128 KiB; traversal and
-symlinks resolving outside the configured skill directory are rejected.
-Directories must remain operator-managed and stable while being read; this is
-not a sandbox against a process that can mutate the same filesystem.
+On Windows use absolute Windows paths and an explicit executable, for example
+`C:/Program Files/nodejs/node.exe` with the server script as a separate argument.
+Core uses the same platform executable adapter as the runtimes.
 
-`list_mcp_tools` starts the selected server lazily and returns only operator-
-allowlisted tool schemas. `call_mcp_tool` takes `server`, `tool`, and `arguments`.
-It returns the MCP result in data, including `isError` and content blocks.
-This is a discovery/call bridge, not dynamic registration of individual tool
-schemas. MCP images are currently returned as data, not native image blocks.
-The first catalogue is fixed for that connection. Reconnect after failure and
-tool-list changes require restarting the instance. Core never retries calls;
-transport failures and oversized results may follow completed side effects.
-The caller must not interpret them as evidence that nothing happened.
+- `list_capabilities` lists configured Skills and MCP server/tool names.
+- `read_skill` reads `SKILL.md` or a relative text resource, returning its path,
+  content and SHA-256. Files are limited to 128 KiB; traversal and symlink escape
+  are refused. Keep the configured directories operator-owned and stable.
+- `list_mcp_tools` lazily starts a server and returns allowlisted schemas.
+- `call_mcp_tool` takes `server`, `tool` and `arguments`. It preserves the MCP
+  result, including `isError`, in Core result data. Read the schema before calling.
 
-Servers use an absolute executable and argument array (no shell), the instance
-workspace, MCP SDK's minimal default environment plus the explicit `env`, and
-30-second tool request timeouts. Configure secrets locally with restricted file
-permissions; never commit the real manifest or credentials. Child stderr is
-not copied to shared logs. Servers are operator-trusted code running with the
-Core user's OS privileges, not isolated sandboxes. The allowlist is admission,
-not per-call approval; only configure tools appropriate to this instance's
-users. External messaging tools must not bypass Core delivery controls.
+Core reuses the existing Pi MCP client/stdio transport. It inherits only HOME,
+PATH and platform system environment keys, plus explicit manifest `env` values.
+Unrelated parent credentials are not inherited; keep the manifest private.
+Initialization/catalogue requests and tool calls are bounded; tool calls time
+out after 30 seconds. Stderr is not forwarded to shared logs. Failed connections
+stay failed until restart, and uncertain calls are never automatically retried.
+Shutdown closes clients even while initialization is pending.
 
-No HTTP/OAuth transport, MCP resources/prompts, sampling, elicitation, or
-runtime-native plugin hooks are provided in this increment. No automatic Skill
-script execution or resource copying occurs. Local runtimes sharing the host
-can use returned resource paths with their existing authorized execution tools;
-remote runtimes require a separate resource-delivery design. No approval UI is
-added. Model compliance with a Skill is not guaranteed by making it readable.
+The same Core tools reach Durable and MCP-based runtimes through their existing
+transports. Runtime-native plugins, hooks and private Skill directories remain
+independent; this feature neither imports nor replaces them. Shared Skill text
+is guidance, not authority, and scripts are not automatically executed.
 
-Validation covers real stdio MCP handshake/calls/close, allowlists, preserved
-error results, stale runtime authority, Skill path containment, and Core tool
-gating. Human review of the new configuration contract remains required.
+Servers run as trusted operator-supplied programs, not in a sandbox. Allowlists
+are not per-call approval: expose only tools appropriate for the instance's
+users, and do not bypass Core message delivery. HTTP/OAuth, resources/prompts,
+sampling, elicitation, hot reload and native MCP image forwarding are not
+included. This does not change Core's existing OpenViking tools.
