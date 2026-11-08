@@ -102,7 +102,7 @@ def test_probe_failure_does_not_return_saveable_config(account_setup):
 def test_empty_key_list_offers_console_creation_without_copying_key(account_setup):
     account, browser, confirm, _ = account_setup
     account.list_keys.side_effect = [[], [{"Id": 18, "Name": "new"}]]
-    confirm.side_effect = [True, True, False]
+    confirm.side_effect = [True, False]
     assert isinstance(wizard._wizard_volcengine(), dict)
     assert browser.call_count == 2
     account.api_key.assert_called_once_with({"Id": 18, "Name": "new"})
@@ -388,7 +388,8 @@ def test_change_project_after_error_keeps_authorization_session(account_setup):
     account.wait_for_authorization.assert_called_once()
 
 
-def test_model_probes_use_expected_protocol_and_do_not_follow_redirects():
+@pytest.mark.parametrize("input_type", ["text", "multimodal"])
+def test_model_probes_use_expected_protocol_and_do_not_follow_redirects(input_type):
     config = {
         "embedding": {
             "dense": {
@@ -396,6 +397,7 @@ def test_model_probes_use_expected_protocol_and_do_not_follow_redirects():
                 "api_key": "ark-test-secret",
                 "model": "embedding",
                 "dimension": 2,
+                "input": input_type,
             }
         },
         "vlm": {
@@ -406,14 +408,20 @@ def test_model_probes_use_expected_protocol_and_do_not_follow_redirects():
     }
     client = MagicMock()
     client.__enter__.return_value = client
+    embedding = {"embedding": [0.1, 0.2, 0.3]}
     client.post.side_effect = [
-        httpx.Response(200, json={"data": {"embedding": [0.1, 0.2, 0.3]}}),
+        httpx.Response(200, json={"data": [embedding] if input_type == "text" else embedding}),
         httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]}),
     ]
     with patch("httpx.Client", return_value=client) as factory:
         assert all(ok for _, ok, _ in ark.probe_models(config))
     factory.assert_called_once_with(timeout=30, follow_redirects=False)
-    assert client.post.call_args_list[0].args[0].endswith("/embeddings/multimodal")
+    endpoint = "/embeddings" if input_type == "text" else "/embeddings/multimodal"
+    assert client.post.call_args_list[0].args[0].endswith(endpoint)
+    payload = client.post.call_args_list[0].kwargs["json"]
+    assert payload["input"] == (
+        "Hello" if input_type == "text" else [{"type": "text", "text": "Hello"}]
+    )
     assert client.post.call_args_list[1].args[0].endswith("/chat/completions")
     client.post.side_effect = [
         httpx.Response(403, text="ark-test-secret"),
@@ -669,3 +677,170 @@ def test_agent_plan_rejects_incomplete_or_malformed_catalog(session, catalog):
         pytest.raises(ark.ArkSetupError),
     ):
         account.agent_plan_models()
+
+
+def test_empty_key_list_can_switch_projects_without_reauthorizing(account_setup):
+    account = account_setup[0]
+    account.list_keys.side_effect = [[], [{"Id": 42, "ProjectName": "demo"}]]
+    with (
+        patch.object(wizard, "_prompt_choice", side_effect=[2, 1, 1]),
+        patch.object(wizard, "_prompt_required_input", return_value="demo"),
+    ):
+        assert isinstance(wizard._wizard_volcengine(), dict)
+    assert [call.args for call in account.list_keys.call_args_list] == [("default",), ("demo",)]
+    account.wait_for_authorization.assert_called_once()
+    account.api_key.assert_called_once_with({"Id": 42, "ProjectName": "demo"})
+
+
+def test_empty_key_list_can_return_without_creating_key(account_setup):
+    account_setup[0].list_keys.return_value = []
+    with patch.object(wizard, "_prompt_choice", return_value=3):
+        assert wizard._wizard_volcengine() is wizard._GO_BACK
+    account_setup[0].api_key.assert_not_called()
+    assert account_setup[1].call_count == 1
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_key_creation_browser_failure_keeps_authorization(account_setup, capsys, raises):
+    import webbrowser
+
+    account, browser, confirm, _ = account_setup
+    account.list_keys.side_effect = [[], [{"Id": 42}]]
+    browser.side_effect = [True, webbrowser.Error("unavailable") if raises else False]
+    confirm.side_effect = [True, False]
+    assert isinstance(wizard._wizard_volcengine(), dict)
+    account.wait_for_authorization.assert_called_once()
+    assert account.list_keys.call_count == 2
+    assert "Open this link in your browser:" in capsys.readouterr().out
+
+
+def test_activation_browser_failure_still_refreshes_models(account_setup, capsys):
+    import webbrowser
+
+    account, browser, confirm, _ = account_setup
+    active = account.model_activations.return_value
+    account.model_activations.side_effect = [{}, active]
+    browser.side_effect = [True, webbrowser.Error("unavailable")]
+    confirm.side_effect = [True, True, False]
+    assert isinstance(wizard._wizard_volcengine(), dict)
+    account.wait_for_authorization.assert_called_once()
+    assert account.model_activations.call_count == 2
+    assert "Open this link in your browser:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reported_input", [None, "text", "multimodal"])
+def test_embedding_protocol_is_saved_and_passed_to_verification(account_setup, reported_input):
+    plan = wizard.VOLCENGINE_PLANS[0]
+    embedding = {"id": "custom-embedding", "domain": "Embedding"}
+    if reported_input:
+        embedding["input"] = reported_input
+    account, _, confirm, probe = account_setup
+    account.agent_plan_models.return_value = [
+        {"id": plan.default_vlm_model, "domain": "VLM"},
+        embedding,
+    ]
+    confirm.return_value = True
+    probe.return_value = [("Embedding", True, "ready"), ("VLM", True, "ready")]
+    choices = [1, 1, 2] if reported_input is None else [1, 1]
+    with (
+        patch.object(wizard, "_select_access_plan", return_value=plan),
+        patch.object(wizard, "_prompt_choice", side_effect=choices),
+        patch.object(wizard, "_prompt_required_int", return_value=1024),
+    ):
+        config = wizard._wizard_volcengine()
+    assert config["embedding"]["dense"]["input"] == (reported_input or "text")
+    probe.assert_called_once_with(config)
+
+
+def test_embedding_protocol_can_go_back_without_verifying(account_setup):
+    plan = wizard.VOLCENGINE_PLANS[0]
+    account_setup[0].agent_plan_models.return_value = [
+        {"id": plan.default_vlm_model, "domain": "VLM"},
+        {"id": "unknown-protocol", "domain": "Embedding"},
+    ]
+    with (
+        patch.object(wizard, "_select_access_plan", return_value=plan),
+        patch.object(wizard, "_prompt_choice", side_effect=[1, 1, 0]),
+    ):
+        assert wizard._wizard_volcengine() is wizard._GO_BACK
+    account_setup[3].assert_not_called()
+
+
+def test_text_only_llm_cannot_be_saved_as_vlm(account_setup):
+    plan = wizard.VOLCENGINE_PLANS[0]
+    account_setup[0].agent_plan_models.return_value = [
+        {"id": "text-only", "domain": "LLM"},
+        {"id": plan.default_embedding_model, "domain": "Embedding"},
+    ]
+    with patch.object(wizard, "_select_access_plan", return_value=plan):
+        assert wizard._wizard_volcengine() is wizard._GO_BACK
+    account_setup[3].assert_not_called()
+
+
+def test_vlm_menu_excludes_llm_when_vision_model_is_available(account_setup):
+    plan = wizard.VOLCENGINE_PLANS[0]
+    account_setup[0].agent_plan_models.return_value = [
+        {"id": "text-only", "domain": "LLM"},
+        {"id": plan.default_vlm_model, "domain": "VLM"},
+        {"id": plan.default_embedding_model, "domain": "Embedding"},
+    ]
+    with (
+        patch.object(wizard, "_select_access_plan", return_value=plan),
+        patch.object(wizard, "_prompt_choice", return_value=1) as choice,
+    ):
+        config = wizard._wizard_volcengine()
+    assert choice.call_args_list[0].args[1] == [(plan.default_vlm_model, "VLM")]
+    assert config["vlm"]["model"] == plan.default_vlm_model
+
+
+@pytest.mark.parametrize("inputs,expected", [(["text"], "text"), (["text", "image"], "multimodal")])
+def test_agent_plan_preserves_embedding_input_capability(session, inputs, expected):
+    with patch.object(
+        session[0],
+        "_call",
+        side_effect=[
+            {
+                "InfoList": [
+                    {"Status": "Running", "BizInfo": "max", "ResourceName": "RealAgentPlanPersonal"}
+                ]
+            },
+            {
+                "Data": [
+                    {
+                        "VirtualModelID": "embed",
+                        "ModelCapability": {
+                            "OutputModalities": ["embedding"],
+                            "InputModalities": inputs,
+                        },
+                    }
+                ]
+            },
+        ],
+    ):
+        assert session[0].agent_plan_models() == [
+            {"id": "embed", "domain": "Embedding", "input": expected}
+        ]
+
+
+def test_null_vlm_message_is_a_failed_probe_instead_of_crashing():
+    config = {
+        "embedding": {
+            "dense": {
+                "api_base": "https://example.invalid",
+                "api_key": "test",
+                "model": "embed",
+                "dimension": 2,
+            }
+        },
+        "vlm": {"api_base": "https://example.invalid", "api_key": "test", "model": "vlm"},
+    }
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.side_effect = [
+        httpx.Response(200, json={"data": {"embedding": [0.1, 0.2]}}),
+        httpx.Response(200, json={"choices": [{"message": None}]}),
+    ]
+    with patch("httpx.Client", return_value=client):
+        results = ark.probe_models(config)
+    assert results[0][1] is True
+    assert results[1] == ("VLM", False, "unexpected model output")

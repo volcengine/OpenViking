@@ -1827,10 +1827,20 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
         return config, ollama_running
 
 
-def _wizard_volcengine() -> dict[str, Any] | object:
-    """Authorize directly in the browser and configure both models."""
+def _open_setup_browser(url: str) -> None:
+    """Keep setup usable when the browser must be opened manually."""
     import webbrowser
 
+    try:
+        opened = webbrowser.open(url)
+    except webbrowser.Error:
+        opened = False
+    if not opened:
+        print(f"  Open this link in your browser: {url}")
+
+
+def _wizard_volcengine() -> dict[str, Any] | object:
+    """Authorize directly in the browser and configure both models."""
     from openviking_cli.volcengine_setup import (
         ArkSetupError,
         VolcengineSetup,
@@ -1859,10 +1869,7 @@ def _wizard_volcengine() -> dict[str, Any] | object:
             print(f"\n  Authorize OpenViking: {browser_url}")
             print(f"  Device code: {authorization['user_code']}")
             print("  Waiting for browser authorization... (Ctrl-C to cancel)", flush=True)
-            try:
-                webbrowser.open(browser_url)
-            except webbrowser.Error:
-                print("  Open the authorization link above in your browser.")
+            _open_setup_browser(browser_url)
             account.wait_for_authorization(authorization)
             print(f"  {_green('Authorized. Fetching ' + plan.label + ' API keys...')}")
             project = "default"
@@ -1877,9 +1884,22 @@ def _wizard_volcengine() -> dict[str, Any] | object:
                             else "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"
                         )
                         print(f"  Create a key in the Ark console: {console_url}")
-                        if not _prompt_confirm("Open the console to create a key?", default=False):
+                        action = _prompt_choice(
+                            "No API keys found. What next?",
+                            [
+                                ("Create a key in the console", ""),
+                                ("Use another project", ""),
+                                ("Return to setup menu", ""),
+                            ],
+                        )
+                        if action == 3:
                             return _GO_BACK
-                        webbrowser.open(console_url)
+                        if action == 2:
+                            project = _prompt_required_input("Project name", default=project)
+                            if not project:
+                                return _GO_BACK
+                            continue
+                        _open_setup_browser(console_url)
                         if not _prompt_confirm("Created the key? Fetch it automatically now?"):
                             return _GO_BACK
                         continue
@@ -1935,16 +1955,16 @@ def _wizard_volcengine() -> dict[str, Any] | object:
                     return _GO_BACK
                 if not all(
                     any(m.get("domain") in domains for m in models)
-                    for domains in ({"VLM", "LLM"}, {"Embedding"})
+                    for domains in ({"VLM"}, {"Embedding"})
                 ):
-                    print("  No confirmed usable VLM/LLM and Embedding pair in this catalog.")
+                    print("  No confirmed usable VLM and Embedding pair in this catalog.")
                     print("  Models with unknown capabilities or activation are excluded.")
                     console_url = "https://console.volcengine.com/ark/region:ark+cn-beijing/model"
                     print(f"  Check model activation in the Ark console: {console_url}")
                     if _prompt_confirm(
                         "Open the console to review model activation?", default=False
                     ):
-                        webbrowser.open(console_url)
+                        _open_setup_browser(console_url)
                         if _prompt_confirm(
                             "Refresh models after reviewing activation?", default=False
                         ):
@@ -1952,7 +1972,7 @@ def _wizard_volcengine() -> dict[str, Any] | object:
                     return _GO_BACK
                 selected_models = []
                 for label, domains, recommended in (
-                    ("VLM", {"VLM", "LLM"}, preset.default_vlm_model),
+                    ("VLM", {"VLM"}, preset.default_vlm_model),
                     ("Embedding", {"Embedding"}, preset.default_embedding_model),
                 ):
                     candidates = [m for m in models if m.get("domain") in domains]
@@ -1974,6 +1994,22 @@ def _wizard_volcengine() -> dict[str, Any] | object:
                         return _GO_BACK
                     selected_models.append(candidates[choice - 1])
                 vlm_model, embedding_model = (m["id"] for m in selected_models)
+                embedding_input = selected_models[1].get("input")
+                if embedding_input not in ("text", "multimodal"):
+                    if embedding_model == preset.default_embedding_model:
+                        embedding_input = "multimodal"
+                    else:
+                        choice = _prompt_choice(
+                            "Embedding API protocol (check the model documentation):",
+                            [
+                                ("Multimodal", "embeddings/multimodal"),
+                                ("Text", "embeddings"),
+                            ],
+                            allow_back=True,
+                        )
+                        if choice == 0:
+                            return _GO_BACK
+                        embedding_input = "multimodal" if choice == 1 else "text"
                 if embedding_model == preset.default_embedding_model:
                     dimension = preset.default_embedding_dim
                     print(f"  Dimension: {dimension} (auto-filled)")
@@ -1987,7 +2023,12 @@ def _wizard_volcengine() -> dict[str, Any] | object:
                 config = {
                     "storage": {"workspace": _workspace_path()},
                     "embedding": {
-                        "dense": {**common, "model": embedding_model, "dimension": dimension}
+                        "dense": {
+                            **common,
+                            "model": embedding_model,
+                            "dimension": dimension,
+                            "input": embedding_input,
+                        }
                     },
                     "vlm": {**common, "model": vlm_model, "max_retries": 2},
                 }

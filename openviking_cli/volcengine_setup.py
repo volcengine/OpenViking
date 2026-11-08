@@ -289,7 +289,13 @@ class VolcengineSetup:
                 domain = "VLM" if "image" in inputs or "video" in inputs else "LLM"
             elif "embedding" in outputs:
                 domain = "Embedding"
-            models[model_id] = {"id": model_id, "domain": domain}
+            model = {"id": model_id, "domain": domain}
+            if domain == "Embedding":
+                if "image" in inputs or "video" in inputs:
+                    model["input"] = "multimodal"
+                elif "text" in inputs:
+                    model["input"] = "text"
+            models[model_id] = model
         if not models:
             raise ArkSetupError("No direct models were returned for your Agent Plan subscription.")
         return list(models.values())
@@ -392,12 +398,16 @@ def probe_models(config: dict[str, Any]) -> list[tuple[str, bool, str]]:
 
     dense = config["embedding"]["dense"]
     vlm = config["vlm"]
+    text_embedding = dense.get("input", "multimodal") == "text"
     probes = [
         (
             "Embedding",
             dense,
-            "embeddings/multimodal",
-            {"model": dense["model"], "input": [{"type": "text", "text": "Hello"}]},
+            "embeddings" if text_embedding else "embeddings/multimodal",
+            {
+                "model": dense["model"],
+                "input": "Hello" if text_embedding else [{"type": "text", "text": "Hello"}],
+            },
         ),
         (
             "VLM",
@@ -441,11 +451,16 @@ def probe_models(config: dict[str, Any]) -> list[tuple[str, bool, str]]:
                     continue
                 body = response.json()
                 if label == "Embedding":
-                    vector = body["data"]["embedding"]
+                    vector = (
+                        body["data"][0]["embedding"]
+                        if text_embedding
+                        else body["data"]["embedding"]
+                    )
                     # The runtime truncates and normalizes the provider vector.
                     valid = isinstance(vector, list) and len(vector) >= dense["dimension"]
                 else:
-                    valid = bool(body["choices"][0]["message"].get("content"))
+                    message = body["choices"][0]["message"]
+                    valid = isinstance(message, dict) and bool(message.get("content"))
                 results.append((label, valid, "ready" if valid else "unexpected model output"))
             except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
                 results.append((label, False, "request failed or unexpected response"))
