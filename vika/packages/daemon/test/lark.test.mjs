@@ -13,28 +13,104 @@ import { ConnectorProcess } from '../src/connectors/process.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
-it('retries a transient lark-cli preflight failure once before failing startup', async () => {
-  let subscribeHelpCalls = 0;
-  const client = new LarkClient({ profile: 'test-profile', larkCliBin: '/fake/lark-cli', projectDir: '/tmp' }, {
+const okResult = (stdout) => ({ code: 0, signal: null, stdout, stderr: '', timedOut: false });
+const failedResult = (code, stderr = '') => ({ code, signal: null, stdout: '', stderr, timedOut: false });
+const defaultPreflightResult = (args) => {
+  if (args.includes('im') && args.includes('--help')) return okResult(' +chat-list +messages-reply +messages-send');
+  if (args.includes('+subscribe')) return okResult('Usage: --event-types --quiet');
+  if (args.includes('doctor')) return okResult('{"ok":true}');
+  if (args.includes('--version')) return okResult('lark-cli version 1.0.99');
+  return okResult('{"ok":true,"data":{}}');
+};
+
+function preflightClient(handler) {
+  const calls = [];
+  const counts = new Map();
+  const client = new LarkClient({
+    profile: 'test-profile', larkCliBin: '/fake/lark-cli', projectDir: '/tmp', preflightRetryDelayMs: 0,
+  }, {
     async run(_command, args) {
-      if (args.includes('+subscribe') && args.includes('--help')) {
-        subscribeHelpCalls += 1;
-        return subscribeHelpCalls === 1
-          ? { code: -1, signal: null, stdout: '', stderr: 'spawn failed', timedOut: false }
-          : { code: 0, signal: null, stdout: 'Usage: --event-types --quiet', stderr: '', timedOut: false };
-      }
-      if (args.includes('im') && args.includes('--help')) {
-        return { code: 0, signal: null, stdout: ' +chat-list +messages-reply +messages-send', stderr: '', timedOut: false };
-      }
-      if (args.includes('doctor')) return { code: 0, signal: null, stdout: '{"ok":true}', stderr: '', timedOut: false };
-      if (args.includes('--version')) return { code: 0, signal: null, stdout: 'lark-cli version 1.0.99', stderr: '', timedOut: false };
-      return { code: 0, signal: null, stdout: '{"ok":true,"data":{}}', stderr: '', timedOut: false };
+      calls.push(args);
+      const key = args.join(' ');
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return handler ? handler(args, count) : defaultPreflightResult(args);
     },
   }, quietLogger);
-  const info = await client.preflight();
-  assert.equal(subscribeHelpCalls, 2);
-  assert.equal(info.version, 'lark-cli version 1.0.99');
-  assert.equal(info.profile, 'test-profile');
+  const subscribeCalls = () => calls.filter((args) => args.includes('+subscribe')).length;
+  return { client, calls, subscribeCalls };
+}
+
+describe('Lark preflight retry', () => {
+  it('retries a probe whose output misses a required shortcut, then succeeds', async () => {
+    const { client, subscribeCalls } = preflightClient((args, count) => {
+      if (args.includes('+subscribe') && count === 1) return okResult('Usage: --quiet');
+      return defaultPreflightResult(args);
+    });
+    const info = await client.preflight();
+    assert.equal(subscribeCalls(), 2);
+    assert.equal(info.version, 'lark-cli version 1.0.99');
+  });
+
+  it('fails when both probes still miss the required shortcut', async () => {
+    const { client, subscribeCalls } = preflightClient((args) => {
+      if (args.includes('+subscribe')) return okResult('Usage: --quiet');
+      return defaultPreflightResult(args);
+    });
+    await assert.rejects(client.preflight(), (error) => {
+      assert.match(error.message, /missing --event-types/);
+      assert.match(error.message, /last attempt: code=0/);
+      return true;
+    });
+    assert.equal(subscribeCalls(), 2);
+  });
+
+  it('retries a thrown spawn error and succeeds on the second probe', async () => {
+    const { client, subscribeCalls } = preflightClient((args, count) => {
+      if (args.includes('+subscribe') && count === 1) {
+        throw Object.assign(new Error('spawn lark-cli ENOENT'), { code: 'ENOENT' });
+      }
+      return defaultPreflightResult(args);
+    });
+    const info = await client.preflight();
+    assert.equal(subscribeCalls(), 2);
+    assert.equal(info.profile, 'test-profile');
+  });
+
+  it('fails after two thrown spawn errors and keeps the last diagnostic', async () => {
+    const { client, subscribeCalls } = preflightClient((args) => {
+      if (args.includes('+subscribe')) {
+        throw Object.assign(new Error('spawn lark-cli EACCES'), { code: 'EACCES' });
+      }
+      return defaultPreflightResult(args);
+    });
+    await assert.rejects(client.preflight(), (error) => {
+      assert.match(error.message, /last attempt: code=EACCES/);
+      assert.equal(error.cause?.code, 'EACCES');
+      return true;
+    });
+    assert.equal(subscribeCalls(), 2);
+  });
+
+  it('fails after two failed exit codes, not more', async () => {
+    const { client, subscribeCalls } = preflightClient((args) => {
+      if (args.includes('+subscribe')) return failedResult(7, 'boom');
+      return defaultPreflightResult(args);
+    });
+    await assert.rejects(client.preflight(), (error) => {
+      assert.match(error.message, /last attempt: code=7; boom/);
+      return true;
+    });
+    assert.equal(subscribeCalls(), 2);
+  });
+
+  it('probes once when the first probe already succeeds', async () => {
+    const { client, calls, subscribeCalls } = preflightClient();
+    await client.preflight();
+    assert.equal(subscribeCalls(), 1);
+    assert.equal(calls.filter((args) => args.includes('doctor')).length, 1);
+    assert.equal(calls.filter((args) => args.includes('--version')).length, 1);
+  });
 });
 
 it('updates an answered card using bot message patch without callback credentials', async () => {
