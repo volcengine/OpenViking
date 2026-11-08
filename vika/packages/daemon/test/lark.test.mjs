@@ -13,6 +13,30 @@ import { ConnectorProcess } from '../src/connectors/process.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
+it('retries a transient lark-cli preflight failure once before failing startup', async () => {
+  let subscribeHelpCalls = 0;
+  const client = new LarkClient({ profile: 'test-profile', larkCliBin: '/fake/lark-cli', projectDir: '/tmp' }, {
+    async run(_command, args) {
+      if (args.includes('+subscribe') && args.includes('--help')) {
+        subscribeHelpCalls += 1;
+        return subscribeHelpCalls === 1
+          ? { code: -1, signal: null, stdout: '', stderr: 'spawn failed', timedOut: false }
+          : { code: 0, signal: null, stdout: 'Usage: --event-types --quiet', stderr: '', timedOut: false };
+      }
+      if (args.includes('im') && args.includes('--help')) {
+        return { code: 0, signal: null, stdout: ' +chat-list +messages-reply +messages-send', stderr: '', timedOut: false };
+      }
+      if (args.includes('doctor')) return { code: 0, signal: null, stdout: '{"ok":true}', stderr: '', timedOut: false };
+      if (args.includes('--version')) return { code: 0, signal: null, stdout: 'lark-cli version 1.0.99', stderr: '', timedOut: false };
+      return { code: 0, signal: null, stdout: '{"ok":true,"data":{}}', stderr: '', timedOut: false };
+    },
+  }, quietLogger);
+  const info = await client.preflight();
+  assert.equal(subscribeHelpCalls, 2);
+  assert.equal(info.version, 'lark-cli version 1.0.99');
+  assert.equal(info.profile, 'test-profile');
+});
+
 it('updates an answered card using bot message patch without callback credentials', async () => {
   const calls = [];
   const client = new LarkClient({ profile: 'test-profile', larkCliBin: '/fake/lark-cli',

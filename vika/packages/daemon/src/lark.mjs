@@ -144,10 +144,24 @@ export class LarkClient {
   }
 
   async preflight() {
+    // A Windows start can lose the first spawn of the bundled CLI to an
+    // antivirus scan or a still-exiting subscriber. Retry each probe once
+    // before treating it as a real failure; the probes stay read-only.
+    const spawn = async (args, timeoutMs) => {
+      try {
+        return await this.registry.run(this.config.larkCliBin, args, { timeoutMs });
+      } catch (error) {
+        return { code: -1, signal: null, stdout: '', stderr: String(error?.message ?? error), timedOut: false };
+      }
+    };
+    const probe = async (args, timeoutMs, accept = (result) => result.code === 0 && !result.timedOut) => {
+      const first = await spawn(args, timeoutMs);
+      if (accept(first)) return first;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return spawn(args, timeoutMs);
+    };
     if (!this.profile) {
-      const listed = await this.registry.run(this.config.larkCliBin, ['profile', 'list'], {
-        timeoutMs: 10_000,
-      });
+      const listed = await probe(['profile', 'list'], 10_000);
       if (listed.code !== 0) throw new Error('lark-cli profile list failed');
       let profiles;
       try { profiles = JSON.parse(listed.stdout); } catch {}
@@ -164,9 +178,12 @@ export class LarkClient {
     ];
     const outputs = [];
     for (const check of checks) {
-      const result = await this.registry.run(this.config.larkCliBin, [...prefix, ...check.args], {
-        timeoutMs: 10_000,
-      });
+      const accepts = (result) => {
+        if (result.code !== 0 || result.timedOut) return false;
+        const text = `${result.stdout}\n${result.stderr}`;
+        return check.required.every((flag) => text.includes(flag));
+      };
+      const result = await probe([...prefix, ...check.args], 10_000, accepts);
       const text = `${result.stdout}\n${result.stderr}`;
       const missing = check.required.filter((flag) => !text.includes(flag));
       if (result.code !== 0 || missing.length > 0) {
@@ -174,13 +191,9 @@ export class LarkClient {
       }
       outputs.push(text.trim().split(/\r?\n/).at(-1) || 'unknown');
     }
-    const doctor = await this.registry.run(this.config.larkCliBin, [...prefix, 'doctor'], {
-      timeoutMs: 30_000,
-    });
+    const doctor = await probe([...prefix, 'doctor'], 30_000);
     if (doctor.code !== 0) throw new Error('lark-cli doctor failed for the selected profile');
-    const version = await this.registry.run(this.config.larkCliBin, ['--version'], {
-      timeoutMs: 10_000,
-    });
+    const version = await probe(['--version'], 10_000);
     if (version.code !== 0) throw new Error('lark-cli --version failed');
     return {
       profile: this.profile,
