@@ -8,6 +8,10 @@ repository's Actions page. GitHub sign-in is required; artifacts expire after
 14 days. This is not a public TOS release or an entry in the stable updater feed.
 The package's `release.json` identifies the exact built commit (a PR run normally
 builds GitHub's merge commit), Node version and ZIP SHA-256.
+For a manual Windows-only test run, select the branch under **Vika Release → Run
+workflow** and enable `windows_preview_only`. This skips the POSIX build and TOS
+publisher. Leaving that option off preserves the existing manual POSIX publishing
+behavior as well as building the Windows artifact.
 
 The ZIP includes committed Vika source, Windows Node/npm, production dependencies,
 PM2 and the pinned Windows lark-cli. It needs no system Node/npm/PM2 installation.

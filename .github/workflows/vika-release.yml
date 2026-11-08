@@ -24,6 +24,10 @@ on:
         type: choice
         options: [all, linux-x64]
         default: all
+      windows_preview_only:
+        description: "Build only the Windows artifact; do not publish to TOS"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "vika/**"
@@ -47,6 +51,7 @@ env:
 jobs:
   build:
     name: Test and build
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_preview_only) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -110,7 +115,7 @@ jobs:
   publish:
     name: Publish to TOS
     needs: build
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !inputs.windows_preview_only
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: vika-release
