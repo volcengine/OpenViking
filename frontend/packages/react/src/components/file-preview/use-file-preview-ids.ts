@@ -14,10 +14,18 @@ import { useId } from 'react';
  * other instance's elements. `useId` supplies a unique prefix per instance, shared
  * by the tab row and the panels.
  */
-export function useFilePreviewIds() {
+export function useFilePreviewIds(activeKey: string) {
   const instanceId = useId();
+  const tabId = (key: string) => `${instanceId}-tab-${key}`;
+  const panelId = (key: string) => `${instanceId}-panel-${key}`;
   return {
-    tabId: (key: string) => `${instanceId}-tab-${key}`,
-    panelId: (key: string) => `${instanceId}-panel-${key}`,
+    tabId,
+    panelId,
+    /** 面板的公共属性：id、role 与 aria 关联，随当前页签变化。 */
+    panelProps: {
+      id: panelId(activeKey),
+      role: 'tabpanel' as const,
+      'aria-labelledby': tabId(activeKey),
+    },
   };
 }

@@ -87,26 +87,13 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const [viewMode, setViewMode] = useState<FilePreviewViewMode>('preview');
   const [viewModes, setViewModes] = useState<readonly string[]>([]);
   const viewerHandle = useRef<ViewerHandle | null>(null);
-  const { tabId, panelId } = useFilePreviewIds();
 
+  const panelClass = 'ov-file-preview__panel';
   const currentKey = activeKey ?? internalKey;
   const activeTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
-  const panelProps = {
-    id: panelId(activeTab.key),
-    role: 'tabpanel' as const,
-    'aria-labelledby': tabId(activeTab.key),
-  };
-  const panelClass = 'ov-file-preview__panel';
-  // 用解析后的 `activeTab.key` 而不是请求的 `currentKey`：宿主可能把当前页签从
-  // `tabs` 里移除而 `activeKey` 仍指向它，此时 `activeTab` 已回落到 `tabs[0]`，
-  // 拿 `currentKey` 会让编辑态以为还停在那个已不存在的页签上，保存时把草稿写进
-  // 新页签。
-  //
-  // Use the resolved `activeTab.key`, not the requested `currentKey`: a host may
-  // remove the active tab from `tabs` while `activeKey` still names it. `activeTab`
-  // has already fallen back to `tabs[0]`, so keying editing off `currentKey` would
-  // leave it thinking it is still on a tab that no longer exists, and a save would
-  // write the draft into the new one.
+  const { tabId, panelId, panelProps } = useFilePreviewIds(activeTab.key);
+  // 编辑态跟着实际渲染的页签走，理由见 `switchTab`。
+  // Editing follows the tab that actually renders; see `switchTab`.
   const editing = useFilePreviewEditing(activeTab.key);
   const actions = useFilePreviewActions();
 
@@ -119,13 +106,13 @@ export const FilePreview: FilePreviewComponent = forwardRef<
 
   const switchTab = useCallback(
     (key: string) => {
-      // 与 `activeTab.key` 比较，不是请求的 `currentKey`：当前页签已被移除时
-      // `currentKey` 仍指向它，点第一个页签会被误判成「已在该页签」而拒绝切换。
-      //
-      // Compare against `activeTab.key`, not the requested `currentKey`: when the
-      // active tab was removed `currentKey` still names it, so clicking the first
-      // tab would be rejected as "already there".
-      if (key === activeTab.key || editing.saving) return false;
+      if (editing.saving) return false;
+      // 只有「请求的 key 就是目标」才算已在该页签。当前页签被移除时 `currentKey`
+      // 仍指向它、`activeTab` 已回落到 `tabs[0]`，此时点 `tabs[0]` 必须放行让宿主
+      // 同步 `activeKey`，否则正文显示 B 而页签栏无选中项，无法修正。
+      // Only "requested key is the target" counts as already there; a stale
+      // `currentKey` must not block selecting the tab that actually renders.
+      if (key === currentKey && key === activeTab.key) return false;
       const target = tabs.find((tab) => tab.key === key);
       if (!target || target.disabled) return false;
       editing.discard(activeTab);
@@ -137,7 +124,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       onActiveKeyChange?.(key);
       return true;
     },
-    [activeKey, activeTab, editing, onActiveKeyChange, tabs],
+    [activeKey, activeTab, currentKey, editing, onActiveKeyChange, tabs],
   );
 
   const onHandleChange = useCallback((handle: ViewerHandle | null) => {
@@ -160,14 +147,15 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     ref,
     () => ({
       setActiveTab: switchTab,
-      getActiveTab: () => currentKey,
+      getActiveTab: () => activeTab.key,
       getViewerHandle: () => (fileTab ? viewerHandle.current : null),
     }),
-    [currentKey, fileTab, switchTab],
+    [activeTab.key, fileTab, switchTab],
   );
 
-  // 只在该格式确实同时支持预览与源码时认为可切换：图片、音视频、PDF 等没有
-  // 源码视图，Adapter 不会声明这两个模式。
+  // 只有该格式同时声明了预览与源码才可切换：图片、音视频、PDF 没有源码视图。
+  // Switchable only when the adapter declares both; images, media and PDFs have
+  // no source view.
   const canSwitchView =
     Boolean(fileTab) &&
     viewModes.includes('preview') &&
@@ -213,10 +201,11 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     >
       <FilePreviewTabRow
         tabs={tabs}
-        activeKey={currentKey}
+        activeKey={activeTab.key}
         disabled={editing.saving}
         tabId={tabId}
         panelId={panelId}
+
         onSelect={(key) => void switchTab(key)}
       />
       {contentTab ? (
