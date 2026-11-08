@@ -7,6 +7,7 @@ in `config.json` (`VIKA_SCHEDULER` in the daemon env), read once at start.
 |---|---|
 | `legacy` (default) | Every input goes into the running turn as soon as it arrives (Codex/TraeX `turn/steer`, Pi `steer`, ...); an idle runtime starts a turn with it. Group lines that arrive within 400 ms start one turn together. |
 | `inbox` | While the model works, inputs wait and the model is told they are there; it reads them at a checkpoint. |
+| `workers` | The inbox, and the main session becomes a router: it hands longer work to worker sessions on the same runtime and relays their results. |
 
 With `legacy`, the prompt, the tool list, the policyHash and the database schema
 are exactly what they were before the setting existed.
@@ -85,3 +86,116 @@ Connector event → Harness (validate, dedupe, ledger) → inbox_pending
 Activities `inbox.notified` (how many wait, how many are new) and
 `inbox.delivered` (`reason`: `wake`, `check`, `held_delivery` or `drain`, the
 inbound seqs, and `waitedMs`, the longest wait among them).
+
+## Workers
+
+With `workers`, the main session is a **router**. It still reads every input,
+through the inbox above, and answers what is quick. A request that needs real
+work (running or changing code, investigating, research, writing a document)
+becomes a **task** (`packages/daemon/src/tasks.mjs`), and a **worker** does it:
+a separate session on the router's own runtime. The worker never talks to
+people; it reports, and the router relays the report where the request was
+made. The router stays the only outlet, so every check on the delivery path
+(authority, freshness fence, thread placement, bot fuse, approvals, outbox
+idempotency) applies to what a worker produced, without a second copy.
+
+```
+input ─▶ inbox ─▶ router ──task_create / task_route──▶ task (SQLite) ──▶ worker turn
+                    ▲                                                      │
+                    └──────── [task report] (through the inbox) ◀── task_report
+router ──reply_message / send_message──▶ ActionService ──▶ Connector
+```
+
+### Tasks
+
+A task is a row in `tasks` (created on first use, like `inbox_pending`): its
+origin (the input the result answers: `event=`, `msg=`, chat, thread, requester),
+title, the router's note (≤ 30 words of routing facts, never a plan), status,
+the worker's session, and the latest summary, draft, question and artifacts.
+`task_inputs` holds every line routed to it, in order, each delivered to the
+worker once; `task_reports` is the append-only list of reports.
+
+Status: `queued` (waiting for a slot), `running`, `waiting` (a question for a
+person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`. A
+requester's follow-up resumes an ended task, except a stopped one.
+
+### Router tools
+
+| Tool | Does |
+|---|---|
+| `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title and an optional note. |
+| `task_route` | More lines for a task: `owner` (adds to, changes or answers the request; resumes an ended task) or `context` (background). |
+| `task_stop` | Stops a task and its worker; only when the requester or the owner asks. |
+| `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, or a search over titles. |
+
+Routing an input to a task records it as decided (`decisions`, `silent`), so the
+turn-end check does not ask again; the relayed result records the delivery over
+it. A `[daemon tasks]` line on an input names the tasks it may belong to and why:
+same thread, a reply to the task's messages, a person the task is waiting for,
+the same requester, similar words (character-pair overlap, ranking only). Only
+the owner's lines are matched against tasks in other chats.
+
+### Workers
+
+A worker turn is one run of the router's runtime CLI in its non-interactive
+mode, resuming the task's own session (`worker-executor.mjs`):
+
+| Runtime | Turn |
+|---|---|
+| Pi | `pi --mode json -p --session-id <task> ...` |
+| Codex | `codex exec --json ...`, then `codex exec resume <thread>` |
+| Claude Code | `claude --print --output-format stream-json --session-id/--resume <task>` |
+
+No process runs between turns, so an idle task holds nothing; Durable,
+OpenCode, TraeX and Ark have no worker mode, and `task_create` tells the router
+to handle the request itself there. A task keeps the runtime it started on.
+Three turns run at once, plus one slot only a follow-up to an existing task may
+take. Each task works in `<workspace>/tasks/<id>/`.
+
+A worker's policy is `agent/worker.md` plus the instance Role. Its first input
+is the brief: the original input lines, who asked and where, the router's note
+and its directory. Its Core tools are `task_check` (lines routed to it since it
+last looked), `task_report` and the reads (chat and thread history, search,
+media, mail, OpenViking reads); never a delivery, a decision, a timer or a
+memory write. Its authority token is valid for its turn only.
+
+A turn ends with the latest final `task_report` (`done` with a ready-to-send
+draft, `needs_user` with one question, `blocked`, `dropped`, `failed`), or,
+without one, the worker's last words as an `unstructured=1` result. Before a
+report is relayed, inputs the requester added during the turn must be in it:
+if any were not read, the worker runs again (up to three times). A turn that
+failed for a passing reason (429, 5xx, a reset connection) runs again, twice at
+most.
+
+### What the router sees
+
+```
+[task report] task=t3 state=done title="排查飞书名字泄露" requester=陈锦
+origin: chat=oc_... thread=omt_... source=lark msg=om_... event=...
+summary:
+| ...
+draft:
+| ...
+```
+
+Worker text is quoted (`| `), so it cannot pass for an input line. The router
+relays it once with `reply_message` to the origin `msg=`.
+
+### Interplay with the Core
+
+- **OnIt.** The router acknowledges a task with a temporary OnIt. A turn's end
+  takes OnIt reactions down except in a scope where a task is still `queued` or
+  `running`; the relayed result takes those down.
+- **Router tools.** On Pi the router's own bash commands are capped at 30
+  seconds and may not `sleep`, and each run gets six calls of its own work
+  tools (`bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`); past them the
+  call is refused with a pointer to `task_create` (a `tool_call` handler in
+  `pi-mcp-extension.mjs`). A per-command cap alone did not stop a router from
+  investigating with many short commands. Core reads are not counted. On Codex
+  and Claude Code this is policy text only.
+- **Restart.** Tasks, inputs and reports are in SQLite. A turn cut by a
+  shutdown is not reported; at start its task runs again, told to check what it
+  already did before repeating an outside action.
+
+Activities: `task.created`, `task.turn_started`, `task.turn_completed` (with
+usage), `task.reported`, `task.ended`.

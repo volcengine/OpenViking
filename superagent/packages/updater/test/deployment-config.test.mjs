@@ -535,7 +535,7 @@ test('the scheduler is legacy unless an instance picks the inbox, and is always 
   const broken = validManifest();
   broken.agents[0].scheduler = 'parallel';
   withManifest(broken, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.scheduler must be legacy or inbox/);
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.scheduler must be legacy or inbox or workers/);
   });
 });
 
