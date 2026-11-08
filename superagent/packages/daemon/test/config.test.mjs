@@ -148,8 +148,10 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal(getConfig().scheduler, 'legacy');
     setEnv('VIKA_SCHEDULER', 'inbox');
     assert.equal(getConfig().scheduler, 'inbox');
+    setEnv('VIKA_SCHEDULER', 'workers');
+    assert.equal(getConfig().scheduler, 'workers');
     setEnv('VIKA_SCHEDULER', 'parallel');
-    assert.throws(() => getConfig(), /VIKA_SCHEDULER must be one of: legacy, inbox/);
+    assert.throws(() => getConfig(), /VIKA_SCHEDULER must be one of: legacy, inbox, workers/);
     setEnv('VIKA_SCHEDULER', undefined);
   });
   it('searches OV per line only on an instance that opts in; preferences need no switch', () => {

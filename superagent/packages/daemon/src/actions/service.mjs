@@ -42,6 +42,12 @@ const HANDLERS = {
   retract_message: 'retractMessage',
   stay_silent: 'staySilent',
   message_check: 'messageCheck',
+  task_create: 'taskCreate',
+  task_route: 'taskRoute',
+  task_stop: 'taskStop',
+  task_list: 'taskList',
+  task_check: 'taskCheck',
+  task_report: 'taskReport',
   list_chats: 'listChats',
   list_chat_members: 'listChatMembers',
   list_chat_messages: 'listChatMessages',
@@ -64,6 +70,15 @@ const HANDLERS = {
   openviking_add_resource: 'openvikingAddResource',
   openviking_remember: 'openvikingRemember',
 };
+
+// What a worker's authority may call (workers scheduler): its own task's
+// tools and reads. Never a delivery, a decision, a timer or a memory write:
+// the router is the only outlet.
+const WORKER_TOOLS = new Set([
+  'task_check', 'task_report', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
+  'list_thread_messages', 'get_message_media', 'read_email', 'read_meeting_note', 'read_openviking_session_context',
+  'get_time', 'openviking_find', 'openviking_search', 'openviking_read', 'openviking_list',
+]);
 
 // A refusal the model can act on; `code` is what logs and activities record.
 function blocked(code, message) {
@@ -163,10 +178,115 @@ export class ActionService {
     // The inbox scheduler's waiting inputs (inbox.mjs), attached once the
     // runtime exists; null under the legacy scheduler.
     this.inbox = null;
+    this.tasks = null;
   }
 
   attachInbox(inbox) {
     this.inbox = inbox;
+  }
+
+  // The workers scheduler's tasks (tasks.mjs), and the router's runtime, on
+  // which new tasks run.
+  attachTasks(tasks, { runtime = () => null, supports = () => false } = {}) {
+    this.tasks = tasks;
+    this.taskRuntime = runtime;
+    this.taskRuntimeSupported = supports;
+  }
+
+  // The accepted inputs a router names by event=, oldest first.
+  taskInputs(ids, instance) {
+    const rows = ids.map((id) => {
+      const found = this.inputEvents(id, instance ?? null);
+      if (found.length !== 1) {
+        throw blocked(found.length ? 'decision_ambiguous' : 'unknown_decision',
+          `trigger_ids must be event= values of accepted inputs, each on one instance (${id}). ${NO_ACTION}`);
+      }
+      return found[0];
+    });
+    return [...new Map(rows.map((row) => [row.seq, row])).values()].sort((a, b) => a.seq - b.seq);
+  }
+
+  // Routing an input to a task is the router's decision on it: the turn-end
+  // check must not ask for another. The relayed result later records the
+  // delivery over it.
+  routedDecisions(rows) {
+    if (!this.config.explicitSilence) return;
+    for (const row of rows) {
+      try { this.store.recordDecision({ row, outcome: 'silent' }); } catch (error) {
+        this.logger.warn('decision_record_failed', { error: safeError(error) });
+      }
+    }
+  }
+
+  requireTasks() {
+    if (!this.tasks) throw blocked('unsupported', `There are no workers on this instance. ${NO_ACTION}`);
+    return this.tasks;
+  }
+
+  async taskCreate(input) {
+    const tasks = this.requireTasks();
+    const runtime = this.taskRuntime();
+    if (!this.taskRuntimeSupported(runtime)) {
+      throw blocked('unsupported', `Workers run on pi, codex or claude; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
+    }
+    const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
+    const requester = senderLabel(this.store.inboundBySeq(rows[0].seq));
+    const task = tasks.create({ rows, title: input.title, note: input.note ?? '', requester, runtime });
+    this.routedDecisions(rows);
+    return {
+      text: `Created ${task.id}: a worker is on it. Tell the requester once that you are on it; the result comes back as a [task report] input.`,
+      data: { task_id: task.id, status: task.status },
+    };
+  }
+
+  async taskRoute(input) {
+    const tasks = this.requireTasks();
+    const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
+    let task;
+    try { task = tasks.route(input.task_id, rows, input.role); } catch (error) {
+      throw blocked('unknown_task', `${error.message}. ${NO_ACTION}`);
+    }
+    this.routedDecisions(rows);
+    return {
+      text: `Routed ${rows.length} input(s) to ${task.id} as ${input.role}; status ${task.status}.`,
+      data: { task_id: task.id, status: task.status },
+    };
+  }
+
+  async taskStop(input) {
+    let task;
+    try { task = this.requireTasks().stop(input.task_id, input.reason ?? ''); } catch (error) {
+      if (error.code) throw error;
+      throw blocked('unknown_task', `${error.message}. ${NO_ACTION}`);
+    }
+    return { text: `${task.id} is ${task.status}.`, data: { task_id: task.id, status: task.status } };
+  }
+
+  async taskList(input) {
+    const lines = this.requireTasks().list({ taskId: input.task_id ?? null, query: input.query ?? '', includeEnded: Boolean(input.include_ended) });
+    return { text: lines.length ? lines.join('\n') : 'No tasks.', data: { count: lines.length } };
+  }
+
+  async taskCheck(_input, caller) {
+    const rows = this.requireTasks().check(caller.task);
+    if (rows.length === 0) return { text: 'No new inputs for your task.', data: { count: 0 } };
+    const text = rows.map((row) => (row.role === 'owner' ? row.text : `[context] ${row.text}`)).join('\n');
+    return { text: `New inputs for your task, oldest first:\n${text}`, data: { count: rows.length } };
+  }
+
+  async taskReport(input, caller) {
+    try {
+      this.requireTasks().report(caller.task, {
+        state: input.state, summary: input.summary ?? '', draft: input.draft ?? '', question: input.question ?? '', artifacts: input.artifacts ?? [],
+      });
+    } catch (error) {
+      throw blocked('invalid_input', `${error.message}. ${NO_ACTION}`);
+    }
+    return {
+      text: input.state === 'progress' ? 'Recorded. Keep working; finish with a final report.'
+        : 'Recorded. End your turn now: the agent relays your report.',
+      data: { state: input.state },
+    };
   }
 
   // message_check: the waiting inputs, oldest first, as the model's next input.
@@ -232,12 +352,26 @@ export class ActionService {
     if (tool.openviking) return Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
-    if (tool.inbox) return this.config.scheduler === 'inbox';
+    if (tool.inbox) return ['inbox', 'workers'].includes(this.config.scheduler);
+    if (tool.router) return this.config.scheduler === 'workers';
+    if (tool.worker) return false;
     return true;
   }
 
-  tools() {
+  // The tools this authority may call: a worker's own set, or the instance's.
+  tools({ authority = null } = {}) {
+    if (this.workerTask(authority)) {
+      return TOOLS.filter((tool) => this.workerMay(tool)).map((tool) => publicTool(this.definition(tool)));
+    }
     return TOOLS.filter((tool) => this.offered(tool)).map((tool) => publicTool(this.definition(tool)));
+  }
+
+  workerTask(authority) {
+    return this.tasks?.workerFor(authority) ?? null;
+  }
+
+  workerMay(tool) {
+    return Boolean(tool) && WORKER_TOOLS.has(tool.name) && (tool.worker || this.offered(tool));
   }
 
   definition(tool) {
@@ -260,9 +394,11 @@ export class ActionService {
     // tool is offered (explicitSilence on).
     const silence = name === 'stay_silent' && Boolean(this.config.explicitSilence);
     try {
-      if (!tool || !this.offered(tool)) throw blocked('unknown_tool', `unknown tool: ${name}`);
+      caller.task = this.workerTask(authority);
+      if (caller.task ? !this.workerMay(tool) : !tool || !this.offered(tool)) throw blocked('unknown_tool', `unknown tool: ${name}`);
       try { validateInput(this.definition(tool).inputSchema, input); } catch (error) { throw blocked('invalid_input', error.message); }
       this.assertAuthority(authority);
+      if (caller.task) trace.task = caller.task;
       trace.runtime = this.store.getCognitionState().runtime;
       if (tool.timer && this.timers.needsRefresh) {
         try { await this.timers.load(); } catch {
@@ -369,12 +505,14 @@ export class ActionService {
   // A turn that ended is no longer working on anything, whatever it delivered:
   // its OnIt reactions go too. Each is forgotten at once, before any removal is
   // awaited, so one a later turn sets is never taken for it.
-  async clearTemporaryReactions(reason) {
-    const scopes = [...this.temporaryReactions.keys()];
+  async clearTemporaryReactions(reason, { keep = () => false } = {}) {
+    const scopes = [...this.temporaryReactions.keys()].filter((scope) => !keep(scope));
     await Promise.allSettled(scopes.map((scope) => this.clearTemporaryReaction(scope, reason)));
   }
 
   assertAuthority(authority) {
+    // A worker's authority holds for its turn only (TaskManager.runTurn).
+    if (this.workerTask(authority)) return;
     if (!authority || authority !== this.store.getCognitionState().authorityToken) {
       throw blocked('authority_revoked', `Blocked: this model runtime no longer owns tool authority. ${NO_ACTION}`);
     }

@@ -14,6 +14,7 @@ import {
   assembleConversationPolicy,
   assembleVolcConversationPolicy,
   assembleVolcSelfHostedConversationPolicy,
+  assembleWorkerPolicy,
   docCommentNotice,
   resolveRolePromptPath,
   rolePrompt,
@@ -400,6 +401,32 @@ describe('the inbox scheduler is opt-in per instance', () => {
     assert.match(on, /delivers waiting inputs oldest first, as ordinary input lines right after the call/);
     assert.match(on, /never answer only the newest line/);
     assert.match(on, /you need not call `message_check` before ending a turn/);
+  });
+});
+
+describe('the workers scheduler', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague'), connectors: ['lark'] };
+
+  it('gives the router the inbox and then its workers section, and nothing else changes', () => {
+    const inbox = assembleConversationPolicy({ ...base, scheduler: 'inbox' });
+    const workers = assembleConversationPolicy({ ...base, scheduler: 'workers' });
+    assert.ok(workers.startsWith(`${inbox}\n\n## Workers\n`));
+    assert.match(workers, /Never rewrite the request or add a plan: the worker reads the original messages\./);
+    assert.match(workers, /A similar topic is a new request; when unsure, create a new task\./);
+    assert.match(workers, /A `\[task report\]` line is a worker's result for one task, not an input from a person\./);
+    assert.match(workers, /for `dropped`, tell the requester in one line why nothing needed doing/);
+    assert.match(workers, /a command is cut off after 30 seconds and may not sleep, and a turn gets a few calls of them/);
+    assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
+  });
+
+  it('gives a worker its own policy: the task, no deliveries, a report, and the instance Role', () => {
+    const text = assembleWorkerPolicy({ ...base, scheduler: 'workers' });
+    assert.match(text, /^## Worker\n\nYou are a worker for Tester\./);
+    assert.match(text, /Finish every turn with task_report/);
+    assert.match(text, /You have no tool to send, reply, react or notify/);
+    assert.match(text, /## Role\n/);
+    assert.doesNotMatch(text, /## Decisions and delivery|stay_silent|message_check|## Inbox/);
   });
 });
 

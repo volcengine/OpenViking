@@ -28,6 +28,10 @@ const RECONNECT_CAP_MS = 30_000;
 const RPC_TIMEOUT_MS = 8_000;
 
 const PI_RUNTIME = getRuntimeDefinition('pi');
+// Seconds a router's own shell command may run (workers scheduler).
+export const ROUTER_SHELL_LIMIT_S = 30;
+// Calls of its own work tools (shell, files) a router run gets.
+export const ROUTER_WORK_TOOL_BUDGET = 6;
 export const PI_EFFORTS = PI_RUNTIME.efforts;
 
 // Pi events the daemon can lose when one is too long for MAX_LINE_BYTES. They
@@ -347,6 +351,12 @@ export class PiAgent {
         ...agentToolServer(this.config, this.authorityToken),
         timeout: Math.max(10, Math.ceil(this.config.sendTimeoutMs / 1_000) + 5),
       });
+      // The router of the workers scheduler must not be held by its own
+      // shell: the extension caps its commands and refuses sleep.
+      if (this.config.scheduler === 'workers') {
+        env.PERSONAL_AGENT_SHELL_LIMIT_S = String(ROUTER_SHELL_LIMIT_S);
+        env.PERSONAL_AGENT_WORK_TOOL_BUDGET = String(ROUTER_WORK_TOOL_BUDGET);
+      }
 
       let child;
       try {

@@ -19,6 +19,7 @@ import { eventMessage } from '../src/connectors/protocol.mjs';
 import { normalizeEvent } from '../src/event.mjs';
 import { Harness } from '../src/harness.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
+import { TaskManager } from '../src/tasks.mjs';
 import { formatInboundLine } from '../src/runtime-input.mjs';
 import { personDirectory, personId } from '../src/ov-person.mjs';
 import { localSocketPath, supportsFileModes } from '../src/platform/index.mjs';
@@ -1979,5 +1980,82 @@ describe('inbox scheduler', () => {
   it('message_check is refused where no inbox is attached', async (t) => {
     const { call } = setup(t, { scheduler: 'inbox' });
     await assert.rejects(call('message_check', {}), (error) => error.code === 'unsupported');
+  });
+});
+
+describe('workers scheduler', () => {
+  function attachTasks(service, store, workspace, runtime = 'pi') {
+    const turns = [];
+    const executor = {
+      start({ task, prompt, authority }) {
+        let finish;
+        const turn = { task, prompt, authority, done: new Promise((resolve) => { finish = resolve; }) };
+        turn.finish = finish;
+        turns.push(turn);
+        return { done: turn.done, stop: () => finish({ text: '', error: 'stopped' }) };
+      },
+    };
+    const tasks = new TaskManager({ db: store.db, config: { workspace }, executor, relay: () => {}, lineFor: (row) => `line ${row.seq}` });
+    service.attachTasks(tasks, { runtime: () => runtime, supports: (id) => ['pi', 'codex', 'claude'].includes(id) });
+    return { tasks, turns };
+  }
+
+  it('offers the router its task tools only with the workers scheduler; workers see only their own set', (t) => {
+    const legacy = setup(t).service.tools().map((tool) => tool.name);
+    assert.ok(!legacy.some((name) => name.startsWith('task_')));
+    const { service, store, workspace } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const router = service.tools().map((tool) => tool.name);
+    assert.deepEqual(router.filter((name) => name.startsWith('task_') || name === 'message_check'),
+      ['message_check', 'task_create', 'task_route', 'task_stop', 'task_list']);
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    tasks.create({ rows: [store.ingest(chatEvent({ messageId: 'om_workerTool1234', chatType: 'group' })).inbound]
+      .map((inbound) => store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(inbound.seq)), title: 'x', runtime: 'pi' });
+    const worker = service.tools({ authority: turns[0].authority }).map((tool) => tool.name);
+    assert.ok(worker.includes('task_report') && worker.includes('task_check') && worker.includes('list_chat_messages'));
+    for (const name of ['send_message', 'reply_message', 'react_to_message', 'notify_owner', 'stay_silent', 'message_check', 'task_create', 'create_timer']) {
+      assert.ok(!worker.includes(name), name);
+    }
+  });
+
+  it('a worker reports and reads under its own authority, and can deliver nothing', async (t) => {
+    const { service, store, workspace, call, connectors } = setup(t, { scheduler: 'workers' });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    const inbound = store.ingest(chatEvent({ messageId: 'om_workerAuth1234', chatType: 'group' })).inbound;
+    tasks.create({ rows: [store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(inbound.seq)], title: 'x', runtime: 'pi' });
+    const token = turns[0].authority;
+    assert.match((await call('task_check', {}, token)).text, /^No new inputs for your task\./);
+    const reported = await call('task_report', { state: 'done', draft: 'answer', artifacts: ['https://x/pr/1'] }, token);
+    assert.match(reported.text, /^Recorded\. End your turn now/);
+    assert.equal(tasks.get('t1').draft, 'answer');
+    await assert.rejects(call('send_message', { chat_id: 'oc-chat', markdown: 'hi', decision_id: 'message:om_workerAuth1234' }, token),
+      (error) => error.code === 'unknown_tool');
+    await assert.rejects(call('task_report', { state: 'done' }), (error) => error.code === 'unknown_tool', 'not for the router');
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(call('task_check', {}, token), (error) => error.code === 'unknown_tool', 'the authority ends with the turn');
+    assert.equal(connectors.calls.length, 0);
+  });
+
+  it('task_create hands the named inputs to a worker and counts as the decision on them', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { turns } = attachTasks(service, store, workspace);
+    const first = store.ingest(chatEvent({ messageId: 'om_taskOrigin1234', chatType: 'group', content: '帮我查下 X' })).inbound;
+    const second = store.ingest(chatEvent({ messageId: 'om_taskMore123456', chatType: 'group', content: '只看上周' })).inbound;
+    const created = await call('task_create', { trigger_ids: ['message:om_taskMore123456', 'message:om_taskOrigin1234'], title: '查 X', note: 'Alice asked' });
+    assert.match(created.text, /^Created t1: a worker is on it\./);
+    assert.match(turns[0].prompt, new RegExp(`line ${first.seq}\nline ${second.seq}`), 'oldest first; the origin answers');
+    assert.equal(store.coveringDecision(first.scopeKey, first.seq), 'silent');
+    assert.match((await call('task_list', {})).text, /^t1 \[running\] "查 X"/);
+    await assert.rejects(call('task_route', { task_id: 't9', trigger_ids: ['message:om_taskMore123456'], role: 'owner' }),
+      (error) => error.code === 'unknown_task');
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_neverSeen12345'], title: 'x' }), (error) => error.code === 'unknown_decision');
+  });
+
+  it('refuses a task on a runtime workers do not run on', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers' });
+    attachTasks(service, store, workspace, 'durable');
+    store.ingest(chatEvent({ messageId: 'om_durableTask123', chatType: 'group' }));
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_durableTask123'], title: 'x' }),
+      (error) => error.code === 'unsupported' && /Workers run on pi, codex or claude; this runtime is durable/.test(error.message));
   });
 });

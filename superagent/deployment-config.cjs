@@ -123,8 +123,9 @@ const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 // How inputs reach the model (agents[].scheduler). legacy: every input goes
 // into the running turn as soon as it arrives. inbox: while the model works,
 // inputs wait and it gets a notice; it reads them, oldest first, at a
-// checkpoint (message_check), or they start the next turn.
-const SCHEDULERS = Object.freeze(['legacy', 'inbox']);
+// checkpoint (message_check), or they start the next turn. workers: the inbox,
+// and the main session hands longer work to worker sessions (tasks).
+const SCHEDULERS = Object.freeze(['legacy', 'inbox', 'workers']);
 // Each mailbox is its own email Connector instance; the id is how the model
 // and the logs tell them apart.
 const EMAIL_INSTANCE_ID = /^email-[a-z0-9][a-z0-9-]{0,39}$/;

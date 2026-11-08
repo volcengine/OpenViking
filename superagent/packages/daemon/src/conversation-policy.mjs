@@ -136,7 +136,23 @@ function explicitSilencePromptSection(config = {}) {
 // their notices work. Appended last, and only then, so the legacy scheduler
 // assembles exactly the policy (and policyHash) it had before.
 function inboxSection(config = {}) {
-  return config.scheduler === 'inbox' ? renderPrompt(config, 'inbox.md') : '';
+  return ['inbox', 'workers'].includes(config.scheduler) ? renderPrompt(config, 'inbox.md') : '';
+}
+
+// The workers scheduler adds the router's part after the inbox's: when to
+// hand work to a task, and how to relay what a worker reports.
+function workersSection(config = {}) {
+  return config.scheduler === 'workers' ? renderPrompt(config, 'workers.md') : '';
+}
+
+// A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
+// keeps the instance's Role, for the domain and the voice of its drafts.
+export function assembleWorkerPolicy(config = {}) {
+  return joinSections([
+    renderPrompt(config, 'worker.md'),
+    roleSection(config),
+    naturalWritingSection(config),
+  ]);
 }
 
 // How a decision is delivered: one final delivery, or (agents[].stagedReplies)
@@ -170,6 +186,7 @@ export function assembleConversationPolicy(config = {}) {
     naturalWritingSection(config),
     explicitSilencePromptSection(config),
     inboxSection(config),
+    workersSection(config),
   ]);
 }
 
