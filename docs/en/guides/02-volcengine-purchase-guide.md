@@ -16,6 +16,40 @@ OpenViking requires the following model services:
 - A valid mobile phone number or email address
 - Completed real-name authentication (Individual or Enterprise)
 
+## Configure with VolcEngine account authorization
+
+For a self-hosted server, use browser authorization to configure VLM and embedding without installing ArkCLI or copying an API key:
+
+```bash
+openviking-server init
+```
+
+In an interactive terminal, select **VolcEngine account setup (火山账号授权配置)**. Choose **Agent Plan, Coding Plan, or pay-as-you-go** first. The installer opens the official VolcEngine authorization page. Confirm the displayed device code and authorize; OpenViking retrieves matching API keys in the `default` project. A single key is used automatically; multiple keys are offered by name. If retrieval fails, retry or enter another project name within the same authorization session. If none is available, open the Ark console to create one, then return to the installer to fetch it automatically, without copying it.
+
+After authorization, select VLM and embedding from the selected endpoint’s `/models` catalog. Known embedding models fill the dimension automatically; other models require dimension confirmation. Catalog visibility does not establish activation or invocation access. Optional verification sends one small request per model, billed by Ark. Failed verification lets you retry model selection or return to the setup menu. Verification can also be skipped before any model requests are made.
+
+Current limitation: Agent Plan browser authorization and dedicated key retrieval have been verified, but `/api/plan/v3/models` returned HTTP 404 in testing, so automatic model selection is not yet supported end to end. Use step-by-step setup when this occurs. Pay-as-you-go also checks account activation status; models without capability metadata are currently omitted. Successful invocation does not verify subscription quota deductions.
+
+The selected access mode determines the credentials, endpoint and model defaults:
+
+| Access mode | Key source | API path | Default embedding model |
+| --- | --- | --- | --- |
+| Personal Agent Plan | Dedicated personal plan key | `/api/plan/v3` | `doubao-embedding-vision` |
+| Personal Coding Plan | Ordinary Ark key | `/api/coding/v3` | `doubao-embedding-vision` |
+| Pay-as-you-go | Ordinary Ark key | `/api/v3` | `doubao-embedding-vision-251215` |
+
+Automatic authorization currently targets Beijing. Use step-by-step setup to enter team-seat credentials or other regions. Real-name verification, agreements, subscription entitlements, model activation, balance, and project permissions still apply.
+
+Authorization uses VolcEngine's public device-code protocol. Temporary OAuth / STS credentials stay in the installer process; ArkCLI and ve CLI configuration and login state are neither read nor modified. Saving requires confirmation. The selected model API key is stored in `ov.conf` with `0600` permissions and omitted from the summary.
+
+For isolated testing, use a separate configuration file. Its data directory will be next to it:
+
+```bash
+openviking-server init --config /tmp/openviking-volcengine-test/ov.conf
+```
+
+For existing configurations, choose **Start over** to use account setup; the old configuration is backed up on save. To change one model, use **Update VLM** or **Update embedding**.
+
 ## Purchase Process
 
 ### 1. Register an Account
