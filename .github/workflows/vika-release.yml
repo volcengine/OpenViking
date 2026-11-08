@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Platforms to build"
+        description: "POSIX platforms to build (Windows preview is also built)"
         type: choice
         options: [all, linux-x64]
         default: all
@@ -284,3 +284,66 @@ jobs:
             ${PRERELEASE[@]+"${PRERELEASE[@]}"} \
             --title "Vika ${VERSION}" \
             --notes "Install this version: \`curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}\`"
+
+  windows-preview:
+    name: Windows x64 preview
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: vika
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test installer failure handling (PowerShell 7 and 5.1)
+        run: |
+          & ./scripts/windows/test-install-preview.ps1
+          powershell.exe -NoProfile -File ./scripts/windows/test-install-preview.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell installer tests failed' }
+      - name: Build committed Windows preview
+        run: |
+          node scripts/build-windows-preview.mjs "$env:RUNNER_TEMP/vika-windows-dist"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+      - name: Install and check relocated package without global Node or PM2
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'vika-windows-dist'
+          $archive = (Get-ChildItem $dist -Filter '*.zip').FullName
+          $destination = Join-Path $env:RUNNER_TEMP 'Vika 测试 package'
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+            & "$dist/install-preview.ps1" -File $archive -Destination $destination
+            & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -File "$dist/install-preview.ps1" -File $archive -Destination "$destination PS51"
+            if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 package installation failed' }
+          } finally { $env:PATH = $originalPath }
+          $node = Join-Path $destination 'runtime/node.exe'
+          Push-Location $destination
+          try {
+            & $node --test packages/daemon/test/durable-coding-tools.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/updater/test/windows-artifacts.test.mjs
+            if ($LASTEXITCODE -ne 0) { throw 'Windows regression tests failed' }
+          } finally { Pop-Location }
+      - uses: actions/upload-artifact@v7
+        id: upload
+        with:
+          name: vika-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vika-windows-dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Download instructions
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          @"
+          ## Windows x64 preview
+          [Download ZIP + SHA-256 + installer + instructions]($env:ARTIFACT_URL)
+
+          Extract the Actions artifact first, then follow README.md.
+          This package passed offline runtime checks, not real connector/account acceptance.
+          No TOS upload, stable latest update, autostart or automatic upgrade is performed.
+          "@ >> $env:GITHUB_STEP_SUMMARY
