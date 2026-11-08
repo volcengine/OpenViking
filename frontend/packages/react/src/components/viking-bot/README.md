@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-The conversation view: message list, composer and the pending-interaction area. One component serves both OpenViking hosts, which speak different protocols, by taking an already normalized message model and letting each host replace the parts it renders differently.
+The conversation view: message list, composer and the pending-interaction area. It renders with **Ark Design** (`@ark-design/ui`) — the same library the commercial console uses — and takes an already normalized message model so neither host's protocol leaks in.
 
 > **Status: placeholder.** The API contract is settled and a working view renders against it, but the view has not been through design review and will be rewritten. Treat the props and the interaction model as the deliverable; treat the visuals as provisional.
 
@@ -23,10 +23,10 @@ Host-specific protocol adaptation stays in each host repository: the component n
 
 ## What the component owns
 
-- Rendering the message list, including reasoning, tool calls and results, context references, images, attachments and iteration dividers.
+- Rendering the message list with Ark's `ChatMessageList`, `Bubble`, `ActivityTimeline`, `MDRenderer` and `ErrorCard`.
+- Rendering the composer with Ark's `Sender`.
+- Rendering the four built-in interaction forms with Ark's `AskHuman`: `choice`, `text`, `schedule` and `repair`.
 - Copying a message body and reporting the intent; the host performs the copy.
-- Rendering the composer, its attachment list and the send/stop switch.
-- Rendering the four built-in interaction forms: `choice`, `text`, `schedule` and `repair`.
 - Grouping consecutive assistant messages of one turn and grouping parts by `groupId`.
 
 ## What the host owns
@@ -60,8 +60,12 @@ A pending question is host state, not a backend pause: the host derives it from 
 
 `choice`, `text`, `schedule` and `repair` render built in. `custom` receives `{ disabled, submitting, submit, cancel }` and renders whatever the host needs, so a tree picker or a skill uploader never has to enter the public package.
 
+## Ark is lazily loaded
+
+Ark pulls in browser-only dependencies that cannot be resolved in a plain Node process, so every entry that renders with it sits behind `lazy()` — the same boundary `FilePreview` uses for its body. The package's top-level entries import without `window`, and Ark is compiled into its own chunks. `@ark-design/ui` stays an optional peer.
+
 ## Development entry
 
 Development and build commands are in the [frontend workspace README](../../../../../README.md); module conventions are in the [package guide](../../../README.md).
 
-The standalone style entry is `@openviking/react/components/viking-bot/style.css`, which includes the message list, composer and interaction styles.
+The standalone style entry is `@openviking/react/components/viking-bot/style.css`. It imports the theme baseline and the Ark component stylesheets the view uses.

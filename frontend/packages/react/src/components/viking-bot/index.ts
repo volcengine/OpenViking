@@ -1,5 +1,5 @@
 export { VikingBot } from './viking-bot.js';
-export { VikingBotComposer } from './viking-bot-composer.js';
+export { VikingBotComposer } from './lazy-composer.js';
 export { VikingBotMessageList } from './viking-bot-message-list.js';
 export {
   VikingBotInteraction,

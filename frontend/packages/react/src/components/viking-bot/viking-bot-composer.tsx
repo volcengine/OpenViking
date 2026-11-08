@@ -1,20 +1,32 @@
-import {
-  forwardRef,
-  useImperativeHandle,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from 'react';
+import { Sender } from '@ark-design/ui/sender';
+import type { RichTextValue, SenderInstance } from '@ark-design/ui/sender';
+import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
 
 import { DEFAULT_LABELS } from './labels.js';
-import type { VikingBotAttachment, VikingBotDraft } from './model.js';
+import type { VikingBotDraft } from './model.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
 
-/** 占位组件：仅按 props 契约渲染可用视图，未经设计评审，真实实现待重写。 */
-export const VikingBotComposer = forwardRef<
+/** 从富文本里取纯文本，忽略附件与标签。 */
+const toPlainText = (content: RichTextValue[]): string =>
+  content
+    .map((item) => {
+      if (item.type === 'hardBreak') return '\n';
+      return item.type === 'text' ? (item.text ?? '') : '';
+    })
+    .join('')
+    .trim();
+
+const toRichText = (text: string): RichTextValue[] =>
+  text ? [{ type: 'text', text }] : [];
+
+/**
+ * 输入区。发送与停止都由宿主决定，组件只上报意图。
+ * The composer. The host owns sending and stopping; the component reports intent.
+ */
+export const VikingBotComposerView = forwardRef<
   VikingBotComposerRef,
   VikingBotComposerProps
->(function VikingBotComposer(
+>(function VikingBotComposerView(
   {
     value,
     className,
@@ -23,8 +35,6 @@ export const VikingBotComposer = forwardRef<
     disabledReason,
     isSending,
     variant = 'default',
-    accept,
-    maxAttachments = 10,
     actions,
     onValueChange,
     onFilesAdded,
@@ -36,31 +46,33 @@ export const VikingBotComposer = forwardRef<
   ref,
 ) {
   const labels = { ...DEFAULT_LABELS, ...overrides };
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const senderRef = useRef<SenderInstance>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [composing, setComposing] = useState(false);
   const readOnly = !onValueChange;
-  const limitReached = attachments.length >= maxAttachments;
+
+  const setText = useCallback(
+    (text: string) => {
+      senderRef.current?.setValue(toRichText(text));
+      onValueChange?.(text);
+    },
+    [onValueChange],
+  );
 
   useImperativeHandle(ref, () => ({
-    setText: (text: string) => onValueChange?.(text),
-    appendText: (text: string) => onValueChange?.(`${value}${text}`),
+    setText,
+    appendText: (text: string) => setText(`${value}${text}`),
     addFiles: (files: readonly File[]) => onFilesAdded?.(files),
-    isAttachmentLimitReached: () => limitReached,
-    clear: () => onValueChange?.(''),
-    focus: () => inputRef.current?.focus(),
+    isAttachmentLimitReached: () => false,
+    clear: () => setText(''),
+    focus: () => senderRef.current?.getEditor()?.commands.focus('end'),
   }));
 
   const submit = () => {
     if (!onSend || disabled || isSending) return;
-    onSend({ text: value, attachments });
-  };
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    if (composing || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    submit();
+    const text = toPlainText(
+      senderRef.current?.getValue() ?? toRichText(value),
+    );
+    onSend({ text, attachments } satisfies VikingBotDraft);
   };
 
   return (
@@ -83,11 +95,11 @@ export const VikingBotComposer = forwardRef<
           {attachments.map((attachment) => (
             <li key={attachment.key}>
               <span>{attachment.name}</span>
-              <span className="ov-viking-bot__attachment-status">
-                {attachment.status === 'error'
-                  ? (attachment.errorMessage ?? labels.toolError)
-                  : null}
-              </span>
+              {attachment.status === 'error' ? (
+                <span className="ov-viking-bot__attachment-status">
+                  {attachment.errorMessage ?? labels.toolError}
+                </span>
+              ) : null}
               {onAttachmentRemove ? (
                 <button
                   type="button"
@@ -102,61 +114,52 @@ export const VikingBotComposer = forwardRef<
           ))}
         </ul>
       ) : null}
-      <textarea
-        ref={inputRef}
-        className="ov-viking-bot__input"
-        value={value}
-        placeholder={labels.placeholder}
-        aria-label={labels.placeholder}
-        disabled={disabled}
-        readOnly={readOnly}
-        onChange={(event) => onValueChange?.(event.target.value)}
-        onKeyDown={handleKeyDown}
-        onCompositionStart={() => setComposing(true)}
-        onCompositionEnd={() => setComposing(false)}
-      />
-      <div className="ov-viking-bot__composer-actions">
-        {onFilesAdded ? (
-          <>
-            <input
-              ref={fileRef}
-              type="file"
-              accept={accept}
-              multiple
-              hidden
-              onChange={(event) => {
-                const files = [...(event.target.files ?? [])];
-                if (files.length) onFilesAdded(files);
-                event.target.value = '';
-              }}
-            />
-            <button
-              type="button"
-              aria-label={labels.attach}
-              disabled={disabled || limitReached}
-              onClick={() => fileRef.current?.click()}
-            >
-              {labels.attach}
-            </button>
-          </>
-        ) : null}
-        {actions}
-        {isSending ? (
-          <button type="button" onClick={() => onCancel?.()}>
-            {labels.stop}
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={disabled || !onSend}
-            onClick={() => submit()}
-          >
-            {labels.send}
-          </button>
+      <Sender
+        ref={senderRef}
+        className="ov-viking-bot__sender"
+        defaultContent={toRichText(value)}
+        sending={isSending}
+        sendDisabled={disabled || readOnly}
+        onContentChange={(content) => {
+          if (!readOnly) onValueChange?.(toPlainText(content));
+        }}
+        onSend={() => {
+          submit();
+        }}
+        onStop={() => onCancel?.()}
+        richTextAreaProps={{
+          placeholder: labels.placeholder,
+          disabled,
+        }}
+        renderFooter={({ components }) => (
+          <div className="ov-viking-bot__composer-actions">
+            {components.sendBtnComponent}
+            {onFilesAdded ? (
+              <>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => {
+                    const files = [...(event.target.files ?? [])];
+                    if (files.length) onFilesAdded(files);
+                    event.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  {labels.attach}
+                </button>
+              </>
+            ) : null}
+            {actions}
+          </div>
         )}
-      </div>
+      />
     </div>
   );
 });
-
-export type { VikingBotAttachment, VikingBotDraft };

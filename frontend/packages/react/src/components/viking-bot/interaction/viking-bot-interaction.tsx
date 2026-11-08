@@ -1,76 +1,43 @@
-import { ChoiceField } from './fields/choice.js';
-import { RepairField } from './fields/repair.js';
-import { ScheduleField } from './fields/schedule.js';
-import { TextField } from './fields/text.js';
-import {
-  DEFAULT_INTERACTION_LABELS,
-  type InteractionLabels,
-} from './labels.js';
+import { AskHuman } from '@ark-design/ui/ask-human';
+import type { AskHumanStep } from '@ark-design/ui/ask-human';
+
+import { toAnswer, toFields } from './ask-human-fields.js';
+import { ScheduleInput } from './schedule-input.js';
+import { DEFAULT_INTERACTION_LABELS } from './labels.js';
 import type {
-  VikingBotInteractionAnswer,
   VikingBotInteractionProps,
+  VikingBotInteractionRequest,
 } from './types.js';
 
-function renderBody(
-  props: VikingBotInteractionProps,
-  labels: InteractionLabels,
-  blocked: boolean,
-  submit: (answer: VikingBotInteractionAnswer) => void,
-) {
-  const { request } = props;
-  if (request.kind === 'custom') {
-    return request.render({
-      disabled: blocked,
-      submitting: props.submitting,
-      submit: (value) => submit({ kind: 'custom', value }),
-      cancel: () => props.onCancel?.(),
-    });
-  }
-  if (request.kind === 'choice') {
-    return (
-      <ChoiceField
-        request={request}
-        disabled={blocked}
-        labels={labels}
-        onSubmit={submit}
-      />
-    );
-  }
-  if (request.kind === 'text') {
-    return (
-      <TextField
-        initialValue={request.initialValue}
-        description={request.description}
-        multiline={request.multiline}
-        disabled={blocked}
-        labels={labels}
-        onSubmit={submit}
-      />
-    );
-  }
-  if (request.kind === 'schedule') {
-    return (
-      <ScheduleField
-        initialValue={request.initialValue}
-        timezone={request.timezone}
-        disabled={blocked}
-        labels={labels}
-        onSubmit={submit}
-      />
-    );
-  }
-  return (
-    <RepairField
-      request={request}
-      disabled={blocked}
-      labels={labels}
-      onSubmit={submit}
+const TextInput = ({
+  request,
+  disabled,
+  onChange,
+}: {
+  request: Extract<VikingBotInteractionRequest, { kind: 'text' }>;
+  disabled?: boolean;
+  onChange: (value: unknown) => void;
+}) => (
+  <>
+    {request.description ? <p>{request.description}</p> : null}
+    <textarea
+      className="ov-viking-bot__interaction-input"
+      defaultValue={request.initialValue}
+      disabled={disabled}
+      aria-label="answer"
+      onChange={(event) => onChange(event.target.value)}
     />
-  );
-}
+  </>
+);
 
-/** 占位组件：仅按 props 契约渲染可用视图，未经设计评审，真实实现待重写。 */
-export function VikingBotInteraction({
+/**
+ * 待确认交互区。表单由 Ark 的 AskHuman 渲染；需要树选择器、上传器等宿主
+ * 能力时，`custom` 直接交给宿主渲染。
+ *
+ * The pending-interaction area. Ark's AskHuman renders the form; when a question
+ * needs a tree picker or an uploader, `custom` hands rendering to the host.
+ */
+export function VikingBotInteractionView({
   request,
   className,
   index = 0,
@@ -84,29 +51,50 @@ export function VikingBotInteraction({
 }: VikingBotInteractionProps) {
   const labels = { ...DEFAULT_INTERACTION_LABELS, ...overrides };
   const blocked = Boolean(disabled || submitting);
-  const submit = (answer: VikingBotInteractionAnswer) => {
-    void onSubmit?.(answer);
-  };
+  const rootClass = ['ov-viking-bot__interaction', className]
+    .filter(Boolean)
+    .join(' ');
+
+  if (request.kind === 'custom') {
+    return (
+      <section
+        className={rootClass}
+        aria-label={labels.title}
+        aria-busy={submitting || undefined}
+      >
+        {error ? (
+          <p className="ov-viking-bot__interaction-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {request.render({
+          disabled: blocked,
+          submitting,
+          submit: (value) => void onSubmit?.({ kind: 'custom', value }),
+          cancel: () => onCancel?.(),
+        })}
+      </section>
+    );
+  }
+
+  const steps: AskHumanStep[] = [
+    {
+      key: request.kind,
+      title: request.question,
+      fields: toFields(request),
+      extra: { index, total },
+    },
+  ];
 
   return (
     <section
-      className={['ov-viking-bot__interaction', className]
-        .filter(Boolean)
-        .join(' ')}
+      className={rootClass}
       aria-label={labels.title}
       aria-busy={submitting || undefined}
     >
-      <header className="ov-viking-bot__interaction-header">
-        <span className="ov-viking-bot__interaction-title">{labels.title}</span>
-        {total > 1 ? (
-          <span className="ov-viking-bot__interaction-progress">
-            {labels.progress(index, total)}
-          </span>
-        ) : null}
-      </header>
-      {request.question ? (
-        <p className="ov-viking-bot__interaction-question">
-          {request.question}
+      {total > 1 ? (
+        <p className="ov-viking-bot__interaction-progress">
+          {labels.progress(index, total)}
         </p>
       ) : null}
       {error ? (
@@ -114,17 +102,43 @@ export function VikingBotInteraction({
           {error}
         </p>
       ) : null}
-      {renderBody({ request, submitting, onCancel }, labels, blocked, submit)}
-      {onCancel ? (
-        <button
-          type="button"
-          className="ov-viking-bot__interaction-cancel"
-          disabled={blocked}
-          onClick={() => onCancel()}
-        >
-          {labels.cancel}
-        </button>
-      ) : null}
+      <AskHuman
+        steps={steps}
+        current={0}
+        showSkip={Boolean(onCancel)}
+        skipText={labels.cancel}
+        submitText={labels.submit}
+        onSkip={() => onCancel?.()}
+        onSubmit={(value) => {
+          void onSubmit?.(toAnswer(request, value));
+        }}
+        customRenderFields={{
+          'viking-bot-text': ({ field, onChange }) => (
+            <TextInput
+              request={
+                field.extra?.request as Extract<
+                  VikingBotInteractionRequest,
+                  { kind: 'text' }
+                >
+              }
+              disabled={blocked}
+              onChange={onChange}
+            />
+          ),
+          'viking-bot-schedule': ({ field, onChange }) => (
+            <ScheduleInput
+              request={
+                field.extra?.request as Extract<
+                  VikingBotInteractionRequest,
+                  { kind: 'schedule' }
+                >
+              }
+              disabled={blocked}
+              onChange={onChange}
+            />
+          ),
+        }}
+      />
     </section>
   );
 }

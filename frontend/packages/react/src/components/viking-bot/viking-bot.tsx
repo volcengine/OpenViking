@@ -1,6 +1,6 @@
 import { DEFAULT_LABELS } from './labels.js';
 import type { VikingBotProps } from './types.js';
-import { VikingBotComposer } from './viking-bot-composer.js';
+import { VikingBotComposer } from './lazy-composer.js';
 import { VikingBotInteraction } from './interaction/index.js';
 import { VikingBotMessageList } from './viking-bot-message-list.js';
 

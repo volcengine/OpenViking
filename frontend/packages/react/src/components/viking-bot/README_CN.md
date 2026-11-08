@@ -2,7 +2,7 @@
 
 [English](README.md) / 中文
 
-对话视图：消息列表、输入区与待确认交互区。开源版和火山版两套宿主协议不同，组件只接收已归一化的消息模型，并把两版渲染方式不同的区域交给宿主替换。
+对话视图：消息列表、输入区与待确认交互区。渲染使用 **Ark Design**（`@ark-design/ui`）——与火山版控制台同一套组件库——只接收已归一化的消息模型，宿主协议不进入组件。
 
 > **当前状态：占位实现。** API 契约已确定，并按契约渲染出可用视图，但视图尚未经过设计评审，真实实现会被重写。请把 props 与交互模型当作交付物，视觉表现视为临时方案。
 
@@ -23,10 +23,10 @@
 
 ## 组件负责
 
-- 渲染消息列表，包括推理、工具调用与结果、上下文引用、图片、附件与迭代分隔。
+- 用 Ark 的 `ChatMessageList`、`Bubble`、`ActivityTimeline`、`MDRenderer`、`ErrorCard` 渲染消息列表。
+- 用 Ark 的 `Sender` 渲染输入区。
+- 用 Ark 的 `AskHuman` 渲染 `choice`、`text`、`schedule`、`repair` 四种内置交互表单。
 - 复制消息正文并上报意图，复制动作由宿主执行。
-- 渲染输入区、附件列表与发送/停止切换。
-- 渲染 `choice`、`text`、`schedule`、`repair` 四种内置交互表单。
 - 合并同一轮的连续助手消息，并按 `groupId` 归并片段。
 
 ## 宿主负责
@@ -60,8 +60,12 @@
 
 `choice`、`text`、`schedule`、`repair` 由组件内置渲染。`custom` 收到 `{ disabled, submitting, submit, cancel }` 后自行渲染，因此树选择器、Skill 上传器这类能力不需要进入公共库。
 
+## Ark 走懒加载
+
+Ark 依赖浏览器专用模块，在纯 Node 进程里无法解析，因此所有用到它的入口都放在 `lazy()` 之后——与 `FilePreview` 正文入口同一做法。包的顶层入口在没有 `window` 的环境下可以正常导入，Ark 被编译进独立 chunk，`@ark-design/ui` 保持 optional peer。
+
 ## 开发入口
 
 开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
 
-独立样式入口为 `@openviking/react/components/viking-bot/style.css`，包含消息列表、输入区与交互区样式。
+独立样式入口为 `@openviking/react/components/viking-bot/style.css`，引入主题基线与视图用到的 Ark 组件样式。
