@@ -126,19 +126,6 @@ function commentItems(data) {
   return Array.isArray(data?.items) ? data.items : Array.isArray(data?.comments) ? data.comments : [];
 }
 
-// One sanitized line that says why a preflight probe failed: the exit code or
-// spawn error code, and the first stderr line. Enough to locate ENOENT/EACCES
-// or a CLI refusal without dumping the full output or the environment.
-function describePreflightFailure(failure) {
-  if (!failure) return 'no probe ran';
-  const parts = [];
-  if (failure.code !== undefined && failure.code !== null) parts.push(`code=${failure.code}`);
-  if (failure.timedOut) parts.push('timed out');
-  const detail = redactSensitive(String(failure.stderr ?? '')).trim().split(/\r?\n/)[0].slice(0, 200);
-  if (detail) parts.push(detail);
-  return parts.join('; ') || 'unknown failure';
-}
-
 export class LarkClient {
   constructor(config, registry, logger) {
     this.config = config;
@@ -157,38 +144,11 @@ export class LarkClient {
   }
 
   async preflight() {
-    // A Windows start can lose the first spawn of the bundled CLI to an
-    // antivirus scan or a still-exiting subscriber. Retry each probe once
-    // before treating it as a real failure; the probes stay read-only.
-    // The delay is configurable so tests do not wait on a real timer.
-    const retryDelayMs = Number(this.config.preflightRetryDelayMs ?? 250);
-    let lastFailure = null;
-    const spawn = async (args, timeoutMs) => {
-      try {
-        return await this.registry.run(this.config.larkCliBin, args, { timeoutMs });
-      } catch (error) {
-        const failure = { code: error?.code ?? 'spawn_error', signal: null, stdout: '',
-          stderr: String(error?.message ?? error), timedOut: false, cause: error };
-        lastFailure = failure;
-        return failure;
-      }
-    };
-    const probe = async (args, timeoutMs, accept = (result) => result.code === 0 && !result.timedOut) => {
-      let result = await spawn(args, timeoutMs);
-      lastFailure = result;
-      if (accept(result)) return result;
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-      result = await spawn(args, timeoutMs);
-      lastFailure = result;
-      return result;
-    };
-    const failed = (message) => new Error(
-      `${message}; last attempt: ${describePreflightFailure(lastFailure)}`,
-      lastFailure?.cause ? { cause: lastFailure.cause } : undefined,
-    );
     if (!this.profile) {
-      const listed = await probe(['profile', 'list'], 10_000);
-      if (listed.code !== 0 || listed.timedOut) throw failed('lark-cli profile list failed');
+      const listed = await this.registry.run(this.config.larkCliBin, ['profile', 'list'], {
+        timeoutMs: 10_000,
+      });
+      if (listed.code !== 0) throw new Error('lark-cli profile list failed');
       let profiles;
       try { profiles = JSON.parse(listed.stdout); } catch {}
       const active = Array.isArray(profiles) ? profiles.filter((profile) => profile?.active) : [];
@@ -204,23 +164,24 @@ export class LarkClient {
     ];
     const outputs = [];
     for (const check of checks) {
-      const accepts = (result) => {
-        if (result.code !== 0 || result.timedOut) return false;
-        const text = `${result.stdout}\n${result.stderr}`;
-        return check.required.every((flag) => text.includes(flag));
-      };
-      const result = await probe([...prefix, ...check.args], 10_000, accepts);
+      const result = await this.registry.run(this.config.larkCliBin, [...prefix, ...check.args], {
+        timeoutMs: 10_000,
+      });
       const text = `${result.stdout}\n${result.stderr}`;
       const missing = check.required.filter((flag) => !text.includes(flag));
-      if (result.code !== 0 || result.timedOut || missing.length > 0) {
-        throw failed(`lark-cli preflight failed for ${check.args.join(' ')}${missing.length ? `; missing ${missing.join(', ')}` : ''}`);
+      if (result.code !== 0 || missing.length > 0) {
+        throw new Error(`lark-cli preflight failed for ${check.args.join(' ')}${missing.length ? `; missing ${missing.join(', ')}` : ''}`);
       }
       outputs.push(text.trim().split(/\r?\n/).at(-1) || 'unknown');
     }
-    const doctor = await probe([...prefix, 'doctor'], 30_000);
-    if (doctor.code !== 0 || doctor.timedOut) throw failed('lark-cli doctor failed for the selected profile');
-    const version = await probe(['--version'], 10_000);
-    if (version.code !== 0 || version.timedOut) throw failed('lark-cli --version failed');
+    const doctor = await this.registry.run(this.config.larkCliBin, [...prefix, 'doctor'], {
+      timeoutMs: 30_000,
+    });
+    if (doctor.code !== 0) throw new Error('lark-cli doctor failed for the selected profile');
+    const version = await this.registry.run(this.config.larkCliBin, ['--version'], {
+      timeoutMs: 10_000,
+    });
+    if (version.code !== 0) throw new Error('lark-cli --version failed');
     return {
       profile: this.profile,
       version: `${version.stdout}\n${version.stderr}`.trim().split(/\r?\n/).at(-1),
@@ -379,7 +340,7 @@ export class LarkClient {
       const cover = await videoCover(this.registry, content.path, work, this.logger);
       try {
         return await this.im([...target, '--video', `./${path.basename(content.path)}`,
-          '--video-cover', `./${path.relative(dir, cover).split(path.sep).join('/')}`, ...suffix], 'send video', { cwd: dir });
+          '--video-cover', `./${path.relative(dir, cover)}`, ...suffix], 'send video', { cwd: dir });
       } catch (error) {
         throw new Error(`${error.message}; if it keeps failing, upload the video to Drive and send the link instead`);
       }
@@ -395,7 +356,7 @@ export class LarkClient {
     // Check every frozen resource before the first external side effect.
     const root = path.join(this.config.tempDir, 'outbox');
     for (const asset of assets) {
-      const { bytes } = readWorkspaceFile(path.relative(root, asset.path).split(path.sep).join('/'), root, MAX_CARD_IMAGE_BYTES);
+      const { bytes } = readWorkspaceFile(path.relative(root, asset.path), root, MAX_CARD_IMAGE_BYTES);
       cardImageFormat(bytes);
       if (createHash('sha256').update(bytes).digest('hex') !== asset.digest) throw new Error('card image snapshot changed');
     }

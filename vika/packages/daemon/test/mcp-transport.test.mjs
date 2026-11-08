@@ -1,4 +1,3 @@
-import { localSocketPath } from '../src/platform/index.mjs';
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -18,7 +17,7 @@ const deferred = () => Promise.withResolvers();
 
 async function fixture(t, run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-transport-'));
-  const socketPath = localSocketPath(root, 'actions');
+  const socketPath = path.join(root, 'actions.sock');
   const server = http.createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;

@@ -1,4 +1,3 @@
-import { localSocketPath } from '../src/platform/index.mjs';
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -330,7 +329,7 @@ export async function startMockEnv({
     lockPath: path.join(dir, 'data', 'daemon.lock'),
     // getConfig() derives the socket from the live dataDir; binding it would
     // unlink a running daemon's socket.
-    actionSocketPath: localSocketPath(path.join(dir, 'data'), 'actions'),
+    actionSocketPath: path.join(dir, 'data', 'actions.sock'),
     tempDir: path.join(dir, 'data', 'tmp'),
     workspace: path.join(dir, 'workspace'),
     larkCliBin: fakeLark,

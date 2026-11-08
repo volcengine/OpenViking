@@ -1,4 +1,3 @@
-import { localSocketPath } from '../src/platform/index.mjs';
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -104,7 +103,7 @@ async function fixture(t, { conflict = false, dialogs = false, openviking = fals
       warn: (message, fields) => logs.push({ message, ...fields }),
     },
   });
-  const socketPath = localSocketPath(root, 'actions');
+  const socketPath = path.join(root, 'actions.sock');
   let api;
   let agent;
   const requests = [];

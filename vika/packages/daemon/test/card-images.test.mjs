@@ -1,4 +1,3 @@
-import { supportsFileModes } from '../src/platform/index.mjs';
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -52,8 +51,8 @@ function fixture(t, options = {}) {
         const file = args[10];
         assert.match(file, /^image=\.\/[a-f0-9]{64}\.(png|gif)$/);
         const filename = path.join(cliOptions.cwd, file.slice('image=./'.length));
-        if (supportsFileModes) assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
-        if (supportsFileModes) assert.equal(fs.statSync(cliOptions.cwd).mode & 0o777, 0o700);
+        assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
+        assert.equal(fs.statSync(cliOptions.cwd).mode & 0o777, 0o700);
         options.onUpload?.();
         if (options.uploadGate) await options.uploadGate;
         if (options.failUpload === f.uploadAttempts) return { code: 1, stdout: '', stderr: 'upload failed' };

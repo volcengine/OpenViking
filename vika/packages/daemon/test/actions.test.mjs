@@ -1,4 +1,3 @@
-import { localSocketPath, supportsFileModes } from '../src/platform/index.mjs';
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -360,9 +359,9 @@ describe('agent tools', () => {
               assert.equal(path.dirname(cwd), path.join(tempDir, 'outbox'));
               snapshot = path.join(cwd, name);
               for (const dir of [tempDir, path.dirname(cwd), cwd]) {
-                if (supportsFileModes) assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+                assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
               }
-              if (supportsFileModes) assert.equal(fs.statSync(snapshot).mode & 0o777, 0o600);
+              assert.equal(fs.statSync(snapshot).mode & 0o777, 0o600);
               assert.equal(fs.readFileSync(snapshot, 'utf8'), 'original bytes');
               return fails
                 ? { code: 1, stdout: '', stderr: 'simulated upload failure' }
@@ -394,13 +393,11 @@ describe('agent tools', () => {
     fs.mkdirSync(tempDir);
     fs.chmodSync(tempDir, 0o755);
     const send = () => call('send_message', { chat_id: 'oc_chat12345678', file_path: 'chart.png', decision_id: 'message:om_decision123456' });
-    if (supportsFileModes) {
-      await assert.rejects(send, /mode 0700/);
-      assert.equal(fs.statSync(tempDir).mode & 0o777, 0o755);
-    }
+    await assert.rejects(send, /mode 0700/);
+    assert.equal(fs.statSync(tempDir).mode & 0o777, 0o755);
     fs.chmodSync(tempDir, 0o700);
-    fs.symlinkSync(directory, path.join(tempDir, 'outbox'), supportsFileModes ? 'dir' : 'junction');
-    await assert.rejects(send, /must be a directory/);
+    fs.symlinkSync(directory, path.join(tempDir, 'outbox'));
+    await assert.rejects(send, /owned by the daemon user/);
     assert.equal(connectors.calls.length, 0);
   });
 
@@ -762,7 +759,7 @@ describe('OpenViking tools', () => {
 
   it('relays the same OpenViking surface through the MCP adapter', async (t) => {
     const state = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() });
-    const socketPath = localSocketPath(state.directory, 'actions');
+    const socketPath = path.join(state.directory, 'actions.sock');
     const server = await startActionApi({ socketPath, service: state.service, logger });
     t.after(() => stopActionApi(server));
     const handle = createMcpHandler({ socketPath, authority: TOKEN, client: 'mcp' });
@@ -782,10 +779,10 @@ describe('OpenViking tools', () => {
 describe('agent tool front-ends', () => {
   async function serve(t, options) {
     const state = setup(t, options);
-    const socketPath = localSocketPath(state.directory, 'actions');
+    const socketPath = path.join(state.directory, 'actions.sock');
     const server = await startActionApi({ socketPath, service: state.service, logger });
     t.after(() => stopActionApi(server));
-    if (supportsFileModes) assert.equal(fs.statSync(socketPath).mode & 0o077, 0);
+    assert.equal(fs.statSync(socketPath).mode & 0o077, 0);
     return { ...state, socketPath };
   }
 

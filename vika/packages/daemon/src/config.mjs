@@ -186,7 +186,7 @@ export function getConfig() {
   }
   // Connector commands run from projectDir; make relative overrides independent
   // of the agent workspace too. Bare command names keep their PATH semantics.
-  const cliBin = (value) => (value?.includes('/') || value?.includes(path.sep)) ? path.resolve(projectDir, value) : value;
+  const cliBin = (value) => value?.includes(path.sep) ? path.resolve(projectDir, value) : value;
   const volcBaseUrl = (process.env.VIKA_VOLC_BASE_URL
     || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/+$/, '');
   let parsedVolcBaseUrl;

@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { setTimeout as delay } from 'node:timers/promises';
 import { MAX_OCCURRENCE_CHECK_ATTEMPTS, OCCURRENCE_CHECK_RETENTION_MS, TimerSchedule } from './timers.mjs';
 
 export class OVTimerRepository {
-  constructor(client, instanceId, { retryDelay = delay } = {}) {
+  constructor(client, instanceId) {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(instanceId)) throw new Error('OV timers require a valid instance id');
     this.client = client;
-    this.retryDelay = retryDelay;
     // OV resolves ~ using the authenticated identity, including API keys.
     // Keep the instance directory even when two instances choose to share a user.
     this.uri = `viking://~/resources/vika/${instanceId}/timers-state.json`;
@@ -53,8 +51,8 @@ export class OVTimerRepository {
   mutate(change) {
     return this.run(async () => {
       if (this.needsRefresh) await this.readState();
-      let state = structuredClone(this.state);
-      let result = change(state);
+      const state = structuredClone(this.state);
+      const result = change(state);
       if (isDeepStrictEqual(state, this.state)) return result;
       let failure;
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -67,18 +65,6 @@ export class OVTimerRepository {
           return result;
         } catch (error) {
           failure = error;
-          if (attempt < 2) {
-            // OV can retain its indexing lock after a write. Immediate retries
-            // hit the same lock; wait, reload, and reapply the operation instead
-            // of overwriting a newer snapshot after a conflict.
-            await this.retryDelay(1000 * (2 ** attempt));
-            if (error.httpStatus === 409) {
-              await this.readState();
-              state = structuredClone(this.state);
-              result = change(state);
-              if (isDeepStrictEqual(state, this.state)) return result;
-            }
-          }
         }
       }
       this.needsRefresh = true;
