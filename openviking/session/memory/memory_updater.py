@@ -1134,39 +1134,37 @@ class MemoryUpdater:
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
-        # Apply unified operations - _apply_edit returns True if edited, False if written
+        # Account for each target independently so a failed sibling cannot hide a successful write.
         uri_memory_type_map = {}
         for resolved_op in applicable_upserts:
-            try:
-                from openviking.observability.reporting.facts import bind_memory_type
+            for uri in resolved_op.uris:
+                try:
+                    from openviking.observability.reporting.facts import bind_memory_type
 
-                with bind_memory_type(
-                    resolved_op.memory_type,
-                    task_id=getattr(resolved_op.source, "task_id", None),
-                    source_task_ids=getattr(resolved_op.source, "task_ids", None),
-                ):
-                    await self._apply_upsert(
-                        resolved_op,
-                        ctx,
-                        extract_context=extract_context,
-                        lease_ref=self._transaction_handle,
-                        uri_remap=uri_remap,
+                    with bind_memory_type(
+                        resolved_op.memory_type,
+                        task_id=getattr(resolved_op.source, "task_id", None),
+                        source_task_ids=getattr(resolved_op.source, "task_ids", None),
+                    ):
+                        await self._apply_upsert(
+                            resolved_op.model_copy(update={"uris": [uri]}),
+                            ctx,
+                            extract_context=extract_context,
+                            lease_ref=self._transaction_handle,
+                            uri_remap=uri_remap,
+                        )
+                    add_result = (
+                        result.add_edited
+                        if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
+                        else result.add_written
                     )
-                # Add all uris to result (uris is List[str])
-                add_result = (
-                    result.add_edited
-                    if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
-                    else result.add_written
-                )
-                for uri in resolved_op.uris:
                     add_result(uri)
                     uri_memory_type_map[uri] = resolved_op.memory_type
-            except Exception as e:
-                tracer.error(
-                    f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",
-                    e,
-                )
-                for uri in resolved_op.uris:
+                except Exception as e:
+                    tracer.error(
+                        f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={[uri]}",
+                        e,
+                    )
                     result.add_error(uri, e)
 
         failed_upsert_uris = {uri for uri, _error in result.errors}
@@ -1321,7 +1319,9 @@ class MemoryUpdater:
                     uri: memory_file
                     for uri, memory_file in link_file_contents.items()
                     if uri not in result.edited_uris
-                } if self._transaction_handle is not None else None,
+                }
+                if self._transaction_handle is not None
+                else None,
             )
 
         # Referential-integrity guard (issue #5904): after apply, no in-batch

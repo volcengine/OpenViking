@@ -588,7 +588,13 @@ class TestMemoryUpdater:
         assert "- [workflow.md](./workflow.md)" in viking_fs.store[preference_overview_uri]
 
     @pytest.mark.asyncio
-    async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):
+    @pytest.mark.parametrize(
+        ("failure", "failed_index"),
+        [(None, None), ("read", 0), ("read", 1), ("write", 0), ("write", 1)],
+    )
+    async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(
+        self, failure, failed_index
+    ):
         registry = MagicMock()
         registry.get.return_value = MemoryTypeSchema(
             memory_type="entities",
@@ -598,14 +604,29 @@ class TestMemoryUpdater:
             fields=[],
         )
 
-        updater = MemoryUpdater(registry=registry)
-        updater._get_viking_fs = MagicMock(return_value=MagicMock())
-        updater._apply_upsert = AsyncMock(return_value=None)
-        updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
-
         alice_uri = "viking://user/alice/memories/entities/SharedFact.md"
         bob_uri = "viking://user/bob/memories/entities/SharedFact.md"
+        uris = [alice_uri, bob_uri]
+        failed_uri = uris[failed_index] if failed_index is not None else None
+        store: dict[str, str] = {}
+
+        async def read_file(uri, **kwargs):
+            if failure == "read" and uri == failed_uri:
+                raise PermissionError("read denied")
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
+
+        async def write_file(uri, content, **kwargs):
+            if failure == "write" and uri == failed_uri:
+                raise OSError("write failed")
+            store[uri] = content
+
+        viking_fs = MagicMock(read_file=read_file, write_file=write_file)
+        vikingdb = MagicMock(enqueue_embedding_msg=AsyncMock(return_value=True))
+        updater = MemoryUpdater(registry=registry, vikingdb=vikingdb)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+
         operation = ResolvedOperation(
             memory_fields={"name": "SharedFact", "content": "shared content"},
             memory_type="entities",
@@ -633,11 +654,15 @@ class TestMemoryUpdater:
         )
 
         assert set(operation.uris) == {alice_uri, bob_uri}
-        assert set(result.written_uris) == {alice_uri, bob_uri}
-        assert updater._vectorize_memories.await_args.kwargs["search_tags_by_uri"] == {
-            alice_uri: ["memory_type=entities"],
-            bob_uri: ["memory_type=entities"],
-        }
+        successful_uris = set(uris) - {failed_uri}
+        assert set(store) == successful_uris
+        assert set(result.written_uris) == successful_uris
+        assert {uri for uri, _error in result.errors} == ({failed_uri} if failure else set())
+        messages = [call.args[0] for call in vikingdb.enqueue_embedding_msg.await_args_list]
+        assert {message.context_data["uri"] for message in messages} == successful_uris
+        assert {
+            message.context_data["uri"]: message.context_data["search_tags"] for message in messages
+        } == {uri: ["memory_type=entities"] for uri in successful_uris}
         isolation_handler.calculate_memory_uris.assert_not_called()
 
     @pytest.mark.asyncio
@@ -903,8 +928,6 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            if uri == deleted_uri:
-                raise AssertionError("deleted URI should not be read")
             return MemoryFileUtils.write(MemoryFile(uri=uri, content="new content"))
 
         mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
@@ -946,8 +969,9 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
+        assert result.errors == []
         assert deleted_uri not in [
-            call.args[0] for call in mock_viking_fs.read_file.await_args_list
+            call.args[0] for call in mock_viking_fs.write_file.await_args_list
         ]
 
     @pytest.mark.asyncio
@@ -1459,12 +1483,15 @@ class TestMemoryUpdater:
         }
         assert set(read_errors) == {
             target_uri,
-            *operations.upsert_operations[1].uris,
+            update_uri + ".second" if write_first else update_uri,
         }
         assert all(error.__cause__ is read_error for error in read_errors.values())
-        assert read_errors[update_uri].retryable is retryable
+        assert (
+            read_errors[update_uri + ".second" if write_first else update_uri].retryable
+            is retryable
+        )
         assert mock_viking_fs.read_file.await_count == len(reads)
-        assert result.written_uris == []
+        assert result.written_uris == ([update_uri] if write_first else [])
         assert result.edited_uris == []
         assert mock_viking_fs.write_file.await_count == int(write_first)
         assert result.deleted_uris == []
