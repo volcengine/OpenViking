@@ -17,6 +17,7 @@ const defaultWorkerPath = fileURLToPath(new URL('./worker.mjs', import.meta.url)
 // backoff starts over. An expired login starts fine and fails seconds later.
 const RESTART_DELAYS_MS = [5_000, 15_000, 60_000, 300_000];
 const STABLE_AFTER_MS = 30_000;
+const EXIT_DETAIL_LIMIT = 240;
 
 function unavailable(id) {
   return Object.assign(new Error(`connector ${id} is temporarily unavailable`), { code: 'connector_unavailable' });
@@ -38,9 +39,9 @@ function selfIdentity(value) {
   return Object.freeze({ id: value.id });
 }
 
-function appendTail(current, chunk, limit = 8_000) {
-  const next = current + chunk;
-  return next.length <= limit ? next : next.slice(-limit);
+function summarizeExitDetail(value) {
+  const detail = safeError(value).replace(/\s+/g, ' ').trim();
+  return detail.length <= EXIT_DETAIL_LIMIT ? detail : `${detail.slice(0, EXIT_DETAIL_LIMIT - 1)}…`;
 }
 
 // The Connector processes an instance runs: one per IM, and one per mailbox
@@ -89,7 +90,7 @@ export class ConnectorProcess {
     this.logger = logger;
     this.child = null;
     this.stdoutBuffer = '';
-    this.stderrTail = '';
+    this.stderrError = '';
     this.stderrBuffer = '';
     this.pending = new Map();
     this.manifest = null;
@@ -116,7 +117,7 @@ export class ConnectorProcess {
     if (this.child) return;
     if (this.stopping) throw new Error(`connector ${this.id} is stopping`);
     this.stdoutBuffer = '';
-    this.stderrTail = '';
+    this.stderrError = '';
     this.stderrBuffer = '';
     this.reportedError = null;
     const workerPath = this.config.connectorWorkerPath || defaultWorkerPath;
@@ -135,14 +136,12 @@ export class ConnectorProcess {
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk) => this.handleStdout(chunk));
-    child.stderr?.on('data', (chunk) => {
-      this.stderrTail = appendTail(this.stderrTail, chunk);
-      this.forwardLogs(chunk);
-    });
+    child.stderr?.on('data', (chunk) => this.forwardLogs(chunk));
     child.once('error', (error) => this.failPending(error));
     child.once('exit', (code, signal) => {
       // Already discarded: a failed attempt that is not reported as an exit.
       if (this.child !== child) return;
+      if (this.stderrBuffer) this.forwardLogs('\n');
       const wasStopping = this.stopping;
       const onUnexpectedExit = this.onUnexpectedExit;
       this.child = null;
@@ -150,8 +149,8 @@ export class ConnectorProcess {
       this.started = false;
       this.onUnexpectedExit = null;
       // The worker's own failure report says why (an expired login, say);
-      // the stderr tail is the fallback for a crash.
-      const detail = this.reportedError || this.stderrTail.trim().slice(-2_000);
+      // the last actual stderr error is the fallback for a crash.
+      const detail = this.reportedError || this.stderrError;
       const error = new Error(`connector ${this.id} exited ${code ?? signal ?? 'unknown'}${detail ? `: ${detail}` : ''}`);
       this.failPending(error);
       if (!wasStopping) {
@@ -161,18 +160,29 @@ export class ConnectorProcess {
     });
   }
 
-  // The worker's own log records (JSON lines on stderr) go on in the daemon
-  // log, through its redaction; anything else is only kept for a crash report.
+  // Forward worker records to the daemon log and remember the latest error
+  // for the exit summary. Node can also print an unstructured exception.
   forwardLogs(chunk) {
     this.stderrBuffer += chunk;
     let newline;
     while ((newline = this.stderrBuffer.indexOf('\n')) >= 0) {
       const line = this.stderrBuffer.slice(0, newline);
       this.stderrBuffer = this.stderrBuffer.slice(newline + 1);
-      let record = null;
-      try { record = JSON.parse(line); } catch {}
+      let record;
+      try { record = JSON.parse(line); } catch {
+        const error = line.trim();
+        if (/^(?:[a-z]*error(?: \[[^\]]+\])?|fatal):/i.test(error)) {
+          this.stderrError = summarizeExitDetail(error);
+          this.logger.error('connector_stderr_error', { connector: this.id, error });
+        }
+        continue;
+      }
       const { time: _time, level, message, ...fields } = record && typeof record === 'object' ? record : {};
       if (typeof message === 'string' && ['debug', 'info', 'warn', 'error'].includes(level)) {
+        if (level === 'error') {
+          const detail = typeof fields.error === 'string' && fields.error.trim() ? fields.error : message;
+          this.stderrError = summarizeExitDetail(detail) || this.stderrError;
+        }
         this.logger[level]?.(message, { ...fields, connector: this.id });
       }
     }
@@ -218,7 +228,9 @@ export class ConnectorProcess {
       return;
     }
     if (message.type === 'STATUS' && message.status === 'failed' && !this.stopping) {
-      if (typeof message.detail?.error === 'string') this.reportedError = message.detail.error.slice(-2_000);
+      if (typeof message.detail?.error === 'string') {
+        this.reportedError = summarizeExitDetail(message.detail.error) || this.reportedError;
+      }
       this.logger.error('connector_reported_failure', {
         connector: this.id,
         error: message.detail?.error,
