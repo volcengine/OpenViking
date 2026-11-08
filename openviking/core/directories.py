@@ -222,6 +222,7 @@ class DirectoryInitializer:
         *,
         sync_system_assets: bool = True,
         lease_ref: Any = None,
+        initialize_vectors: bool = True,
     ) -> tuple[int, int]:
         """Initialize account and first-user preset directories as one batch."""
         if sync_system_assets and self._system_asset_synchronizer is not None:
@@ -232,6 +233,7 @@ class DirectoryInitializer:
             (*account_roots, user_root),
             (*account_children, *user_children),
             lease_ref=lease_ref,
+            initialize_vectors=initialize_vectors,
         )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
@@ -270,6 +272,7 @@ class DirectoryInitializer:
         children: Sequence[_DirectoryTarget],
         *,
         lease_ref: Any = None,
+        initialize_vectors: bool = True,
     ) -> list[_DirectoryTarget]:
         """Initialize roots before children and index successful writes as one batch."""
         results = await asyncio.gather(
@@ -284,7 +287,8 @@ class DirectoryInitializer:
             )
             created_children, error = self._partition_directory_results(results)
             created.extend(created_children)
-        await self._ensure_directory_l0_l1_vectors(created)
+        if initialize_vectors:
+            await self._ensure_directory_l0_l1_vectors(created)
         if error is not None:
             raise error
         return created

@@ -228,7 +228,9 @@ class OpenVikingService:
 
         # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
-            vectordb_config=config.vectordb, queue_manager=self._queue_manager
+            vectordb_config=config.vectordb,
+            queue_manager=self._queue_manager,
+            runtime_mode=self._config.runtime_mode,
         )
         self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
 
@@ -358,6 +360,8 @@ class OpenVikingService:
             return
 
         storage = self._config.storage
+        if getattr(self._config, "runtime_mode", "dedicated") == "serverless":
+            return
         if storage.vectordb.backend not in {"local", "cuvs"}:
             return
 
@@ -532,7 +536,8 @@ class OpenVikingService:
         # Create context collection
         if self._vikingdb_manager is None:
             raise RuntimeError("VikingDBManager not initialized")
-        await init_context_collection(self._vikingdb_manager)
+        if self._config.runtime_mode == "dedicated":
+            await init_context_collection(self._vikingdb_manager)
 
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
@@ -574,10 +579,29 @@ class OpenVikingService:
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        account_count, user_count = await directory_initializer.initialize_account_workspace(
-            default_ctx,
-            sync_system_assets=False,
-        )
+        if self._config.runtime_mode == "serverless":
+            # Pods share the internal workspace. Hold its Tree lease while
+            # filling missing files instead of racing zero-wait file writes.
+            agfs = self._viking_fs._async_agfs
+            path = self._viking_fs._uri_to_path("viking://", ctx=default_ctx)
+            guard = PathLockGuard(agfs)
+            try:
+                lease = await guard.acquire(
+                    lambda: agfs.pathlock_acquire_tree(path, timeout_secs=300.0)
+                )
+                account_count, user_count = await directory_initializer.initialize_account_workspace(
+                    default_ctx,
+                    sync_system_assets=False,
+                    initialize_vectors=False,
+                    lease_ref=lease,
+                )
+            finally:
+                await guard.close()
+        else:
+            account_count, user_count = await directory_initializer.initialize_account_workspace(
+                default_ctx,
+                sync_system_assets=False,
+            )
         logger.info(
             "Initialized preset directories account=%d user=%d",
             account_count,

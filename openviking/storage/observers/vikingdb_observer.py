@@ -54,7 +54,11 @@ class VikingDBObserver(BaseObserver):
                 },
             }
 
-        if not await self._vikingdb_manager.collection_exists():
+        backend = (
+            await self._vikingdb_manager.get_account_backend(ctx.account_id)
+            if ctx is not None else self._vikingdb_manager
+        )
+        if not await backend.collection_exists():
             return {
                 "collections": [],
                 "summary": {
@@ -65,7 +69,7 @@ class VikingDBObserver(BaseObserver):
             }
 
         statuses = await self._get_collection_statuses(
-            [self._vikingdb_manager.collection_name], ctx=ctx
+            [backend.collection_name], ctx=ctx
         )
         collections = []
         total_indexes = 0

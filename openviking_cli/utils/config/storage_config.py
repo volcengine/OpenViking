@@ -72,7 +72,7 @@ class StorageConfig(BaseModel):
         description="Transaction mechanism configuration",
     )
 
-    vectordb: VectorDBBackendConfig = Field(
+    vectordb: VectorDBBackendConfig | None = Field(
         default_factory=VectorDBBackendConfig,
         description="VectorDB backend configuration",
     )
@@ -144,7 +144,8 @@ class StorageConfig(BaseModel):
         workspace_path.mkdir(parents=True, exist_ok=True)
         self.workspace = str(workspace_path)
         self.agfs.path = self.workspace
-        self.vectordb.path = self.workspace
+        if self.vectordb is not None:
+            self.vectordb.path = self.workspace
         # logger.info(f"StorageConfig: Using workspace '{self.workspace}' for storage")
         return self
 
