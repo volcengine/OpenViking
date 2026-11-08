@@ -33,7 +33,7 @@ function executable(t) {
       process.exitCode = 1;
     } else {
       console.log(JSON.stringify({ ok: true, args, params, cwd: process.cwd(),
-        config: args[args.indexOf('--config-dir') + 1],
+        config: fs.realpathSync(args[args.indexOf('--config-dir') + 1]),
         tokenPresent: process.env.SLACK_BOT_TOKEN === ${JSON.stringify(token)},
         telemetry: process.env.SLACK_DISABLE_TELEMETRY,
         unwanted: Object.keys(process.env).filter(key => /^(SLACK_USER_TOKEN|SLACK_API_HOST|LARK_SECRET|NODE_OPTIONS)$/.test(key)),

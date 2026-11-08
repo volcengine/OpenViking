@@ -128,7 +128,7 @@ test('a link too long to print waits for l, and the page speaks the run\'s langu
   const scan = showScan(s.prompter, { url: FEISHU, title: 'Create', where: 'Lark', env: {} });
   t.after(() => scan.stop());
   assert.ok(!s.text().includes(FEISHU));
-  assert.match(stripAnsi(s.text()), /Waiting for the scan 0:00 +│ l show link/);
+  assert.match(stripAnsi(s.text()), /Waiting for the scan 0:00 +│ [^\r\n]*\bl show link/);
   s.input.write('l');
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(stripAnsi(s.text()), new RegExp(`Can't scan it\\? Open in Lark: ${FEISHU.replace(/[?.]/g, '\\$&')}`));
