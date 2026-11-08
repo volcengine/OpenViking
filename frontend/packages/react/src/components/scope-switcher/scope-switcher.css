@@ -266,6 +266,20 @@ button.ov-scope-switcher__trigger[aria-expanded='true'] {
   right: 0;
   left: auto;
 }
+/**
+ * 面板内层包裹。它夹在面板与内容之间，必须一起参与 flex 收缩，否则列表的
+ * `min-height: 0` 传不下去，面板又裁掉了溢出，短视口下最后几行就够不着了。
+ *
+ * The inner wrapper between the panel and its content. It has to take part in the
+ * flex shrink chain, or the list's `min-height: 0` never propagates and the
+ * panel's clipped overflow hides the last rows in a short viewport.
+ */
+.ov-scope-switcher__panel-inner {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
 .ov-scope-switcher__panel-body {
   display: flex;
   flex: 1 1 auto;

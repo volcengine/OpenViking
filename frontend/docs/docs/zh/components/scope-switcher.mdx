@@ -82,7 +82,7 @@
 | `slots`   | `renderOption(content, option)`            | 扩展或替换行内容，内嵌按钮/链接不触发行选择。                       |
 | `slots`   | `emptyFallback`、`errorFallback`           | 自定义空态、错误态和重试入口。                                      |
 
-选中值缺失、为空、不在列表里或指向禁用项时，组件回退到第一个可选项，并通过 `actions.onSelect` 通知宿主，让 URL 与请求参数跟上。
+选中值缺失、为空、不在 `options` 里或指向禁用项时，组件回退到 `options` 里第一个可选项，并通过 `actions.onSelect` 通知宿主，让 URL 与请求参数跟上。判定只看 `options`：当前值只是被搜索过滤出 `visibleOptions` 时仍然有效，不会因为搜索就切走作用域。
 
 选项必填 `id`、`label`，可选 `icon`、`description`、`disabled`。文案包含 `loading`、`searchPlaceholder`、`empty`、`noMatch`、`error`，默认英文，本地化文案传给各级选择器。
 

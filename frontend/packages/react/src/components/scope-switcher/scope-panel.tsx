@@ -64,12 +64,16 @@ export function ScopePanel({
       );
     (target ?? node)?.focus();
   }, []);
+  // Render the visible subset; fall back to the authoritative set when the host
+  // does not filter. Validity of the selection is decided by the caller from
+  // `data.options`, so filtering here never changes the scope.
+  const options = data.visibleOptions ?? data.options;
   const keyword = state?.searchKeyword ?? '';
   const hasKeyword = keyword.trim().length > 0;
   const searchVisible =
     actions?.onSearchKeywordChange &&
     (hasKeyword ||
-      Math.max(data.options.length, data.total ?? 0) >
+      Math.max(options.length, data.total ?? 0) >
         SCOPE_SWITCHER_SEARCH_THRESHOLD);
   const search = searchVisible ? (
     <div className="ov-scope-switcher__search-field">
@@ -99,7 +103,7 @@ export function ScopePanel({
         {slots?.errorFallback ?? labels?.error ?? 'Unable to load options'}
       </div>
     );
-  } else if (!data.options.length) {
+  } else if (!options.length) {
     list = (
       <div className="ov-scope-switcher__state" role="status">
         {slots?.emptyFallback ??
@@ -121,7 +125,7 @@ export function ScopePanel({
           actions?.onScroll?.({ scrollTop, scrollHeight, clientHeight });
         }}
       >
-        {data.options.map((option) => {
+        {options.map((option) => {
           const selected = option.id === data.selectedId;
           const content = (
             <>
@@ -191,6 +195,7 @@ export function ScopePanel({
       role="group"
       tabIndex={-1}
       ref={focusPanel}
+      className="ov-scope-switcher__panel-inner"
       onKeyDownCapture={moveScopeFocus}
     >
       {slots?.renderPanel ? (

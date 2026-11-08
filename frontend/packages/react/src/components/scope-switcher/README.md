@@ -15,7 +15,7 @@ English / [中文](README_CN.md)
 ## Responsibilities
 
 - The host determines the number, order and meaning of children. Omit unavailable levels; a `fixed` level displays a value without a dropdown.
-- Selection, options, search keywords, loading, errors and pagination belong to the host. The component performs no requests, persistence or routing. `actions.onScroll` reports metrics for host-managed pagination.
+- Selection, options, search keywords, loading, errors and pagination belong to the host. `data.options` is the authoritative set that decides whether the selection is valid; `data.visibleOptions` is the render subset, so search filtering never invalidates the current scope. The component performs no requests, persistence or routing. `actions.onScroll` reports metrics for host-managed pagination.
 - For library → space → user requests, use `useScopeCascade` and `ScopeCascade` from `@openviking/react/modules/scope-cascade`. The module coordinates requests and independent subscriptions while these components remain pure views.
 
 ## Visibility and selection

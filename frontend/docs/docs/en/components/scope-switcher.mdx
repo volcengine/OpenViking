@@ -70,7 +70,8 @@ This example now uses `useScopeCascade` and `ScopeCascade`: only three API adapt
 
 | Group     | Field                                      | Behavior                                                                        |
 | --------- | ------------------------------------------ | ------------------------------------------------------------------------------- |
-| `data`    | `options`, `selectedId`                    | Required host-owned data and selection; use `''` before selecting.              |
+| `data`    | `options`, `selectedId`                    | Required authoritative options and selection; use `''` before selecting.        |
+| `data`    | `visibleOptions`                           | Options actually rendered; `options` when omitted. Search and paging go here.   |
 | `data`    | `total`                                    | Search appears when loaded count or total exceeds 10, or a keyword is nonempty. |
 | `state`   | `loading`, `error`                         | Replace the list with loading/error content.                                    |
 | `state`   | `disabled`, `busy`                         | Disable the trigger or all option rows.                                         |
@@ -82,7 +83,7 @@ This example now uses `useScopeCascade` and `ScopeCascade`: only three API adapt
 | `slots`   | `renderOption(content, option)`            | Extend/replace rows; nested buttons/links do not select the row.                |
 | `slots`   | `emptyFallback`, `errorFallback`           | Custom empty/error content, including retry actions.                            |
 
-When the selection is missing, empty, not in the list or points at a disabled option, the component falls back to the first selectable option and reports it through `actions.onSelect` so the URL and request parameters follow.
+When the selection is missing, empty, absent from `options` or points at a disabled option, the component falls back to the first selectable option in `options` and reports it through `actions.onSelect` so the URL and request parameters follow. Validity is decided from `options` alone: a value merely filtered out of `visibleOptions` by a search is still valid, so searching never switches the scope.
 
 Options require `id`, `label`; optional fields are `icon`, `description`, `disabled`. Labels include `loading`, `searchPlaceholder`, `empty`, `noMatch`, `error`, with English defaults. Pass localized labels to each selector.
 

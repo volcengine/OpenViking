@@ -38,7 +38,10 @@ function LevelView({
       data={{
         selectedId: state.selected?.id ?? '',
         total: state.options.length,
-        options: state.options.filter((option) =>
+        // Keep the full list authoritative so a search that hides the current
+        // selection does not look like an invalid scope; filter for display only.
+        options: state.options,
+        visibleOptions: state.options.filter((option) =>
           option.label
             .toLocaleLowerCase()
             .includes(keyword.toLocaleLowerCase()),

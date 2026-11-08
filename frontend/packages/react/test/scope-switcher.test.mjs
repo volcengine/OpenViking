@@ -99,6 +99,22 @@ test('a missing, unknown or disabled selection falls back to the first option', 
   assert.match(render({ data: { options, selectedId: 'c' } }), /Gamma/);
 });
 
+test('a selection filtered out of view stays selected', () => {
+  const options = [
+    { id: 'a', label: 'Alpha' },
+    { id: 'b', label: 'Beta' },
+  ];
+  // 'a' is selected but the search only shows 'b'. It is still valid, so the
+  // panel must not mark 'b' as selected or fall back to it.
+  const html = render({
+    data: { options, selectedId: 'a', visibleOptions: [options[1]] },
+    state: { searchKeyword: 'bet' },
+    actions: { onSearchKeywordChange() {} },
+  });
+  assert.match(html, /Beta/);
+  assert.doesNotMatch(html, /aria-selected="true"/);
+});
+
 test('busy disables all options; disabled and fixed levels have no panel', () => {
   assert.equal(
     (render({ state: { busy: true } }).match(/aria-disabled="true"/g) ?? [])

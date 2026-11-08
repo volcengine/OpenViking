@@ -13,13 +13,20 @@ export function ScopeSelector(props: ScopeSelectorProps) {
 
   /**
    * 回退到第一个可选项。作用域始终有一个确定的值：宿主传入的选中值缺失、为空、
-   * 不在列表里或指向禁用项时，改由第一项承担，并把结果通知宿主，让 URL 与请求
-   * 参数跟上。
+   * 不在权威集合 `data.options` 里或指向禁用项时，改由第一项承担，并把结果通知
+   * 宿主，让 URL 与请求参数跟上。
+   *
+   * 判定只认 `data.options`，不认 `data.visibleOptions`：后者是搜索过滤后的渲染
+   * 子集，当前值被过滤掉不代表它失效，否则用户一搜索就会被切到别的作用域。
    *
    * Falls back to the first selectable option. A scope always has a definite
-   * value: when the host's selection is missing, empty, not in the list or points
-   * at a disabled option, the first option takes over and the host is notified so
-   * the URL and request parameters follow.
+   * value: when the host's selection is missing, empty, absent from the
+   * authoritative `data.options` or points at a disabled option, the first option
+   * takes over and the host is notified so the URL and request parameters follow.
+   *
+   * Validity is decided from `data.options` alone, never `data.visibleOptions`:
+   * the latter is the search-filtered render subset, and a value filtered out of
+   * the view is still valid — otherwise typing a search would switch the scope.
    */
   const fallback = data
     ? (data.options.find(

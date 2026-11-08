@@ -105,32 +105,52 @@ export interface ScopeSwitcherTrigger {
  */
 export interface ScopeSwitcherData {
   /**
-   * 可选项列表，按宿主给定的顺序渲染。
-   * Selectable options, rendered in the order the host gives.
+   * 该层级的权威选项集合，按宿主给定的顺序渲染。它是判断当前选中值是否仍然
+   * 有效的依据，因此不要只放当前搜索结果：搜索过滤后的子集请通过
+   * `visibleOptions` 传入。
+   *
+   * The level's authoritative option set, rendered in the order the host gives.
+   * It is what decides whether the current selection is still valid, so do not
+   * pass only the current search result: hand a filtered subset in through
+   * `visibleOptions` instead.
    */
   options: readonly ScopeSwitcherOption[];
+  /**
+   * 面板里实际渲染的选项。不传时渲染 `options`。搜索过滤、分页追加的下一屏都
+   * 走这里，不影响选中值是否有效的判断。
+   *
+   * Options actually rendered in the panel; `options` is rendered when omitted.
+   * Search filtering and an appended page go here and never affect whether the
+   * current selection is still valid.
+   */
+  visibleOptions?: readonly ScopeSwitcherOption[];
   /**
    * 当前选中项 id，由宿主持有。命中项渲染勾选标记并使用
    * `role="option"` + `aria-selected` 表达状态。
    *
    * 可切换层级始终有一个当前作用域，没有「尚未选中」的形态：宿主若还没取到
-   * 数据，传空字符串。选中值缺失、为空、不在列表里或指向禁用项时，组件回退到
-   * 第一个可选项，并通过 `actions.onSelect` 通知宿主。
+   * 数据，传空字符串。选中值缺失、为空、不在 `options` 里或指向禁用项时，组件
+   * 回退到 `options` 里第一个可选项，并通过 `actions.onSelect` 通知宿主。
+   *
+   * 只出现在 `visibleOptions` 之外不算失效：那只说明它被搜索过滤掉了。
    *
    * Selected option id, owned by the host. The matching option renders a check
    * mark and expresses its state with `role="option"` and `aria-selected`.
    *
    * A selectable level always has a current scope and has no "nothing selected"
    * form: a host that has not loaded data yet passes an empty string. When the
-   * value is missing, empty, not in the list or points at a disabled option, the
-   * component falls back to the first selectable option and reports it through
-   * `actions.onSelect`.
+   * value is missing, empty, absent from `options` or points at a disabled
+   * option, the component falls back to the first selectable option in `options`
+   * and reports it through `actions.onSelect`.
+   *
+   * Being absent from `visibleOptions` alone does not invalidate it: that only
+   * means the current search filtered it out.
    */
   selectedId: string;
   /**
-   * 该层级的总条数，用于判断搜索框是否可见。不传时以已加载条数为准。
+   * 该层级的总条数，用于判断搜索框是否可见。不传时以 `options` 的条数为准。
    * Total number of entries, used to decide whether the search box is shown.
-   * The loaded count is used when omitted.
+   * The `options` count is used when omitted.
    */
   total?: number;
 }
