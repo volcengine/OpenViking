@@ -5,7 +5,7 @@
 // the daemon speaks JSON lines on stdin/stdout and never shares the model loop
 // or tool execution process. Chat replies go through the Core agent tools this
 // host registers from <dataDir>/actions.sock, exactly like the MCP adapter, and
-// local work goes through pi-durable's coding tools (bash, read, write, edit).
+// local work goes through pi-durable's coding tools (native shell, read, write, edit).
 //
 // The protocol (version 2) is documented in docs/pi-durable-runtime.md.
 
@@ -30,7 +30,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
-import { CodingTools } from '@earendil-works/pi-durable/tools';
+import { durableCodingTools } from './durable-coding-tools.mjs';
 import { availableChatModels, loadDurableModels } from './durable-models.mjs';
 import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
 import { DURABLE_PROTOCOL } from './durable-runtime.mjs';
@@ -352,7 +352,7 @@ class Host {
     // configured workspace"), and a delivery body may be a file in it. The
     // coding tools resolve their cwd from the same per-run NodeExecutionEnv as
     // the Core tools, so nothing else is wired here.
-    registry.install(CodingTools);
+    registry.install(durableCodingTools());
     const storage = await openNodeSqliteStorage(this.storagePath());
     const env = ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? this.workspace });
     this.harness = await Harness.open(storage, { models: this.models, registry, env }, context);

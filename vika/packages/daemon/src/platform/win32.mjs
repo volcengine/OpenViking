@@ -149,3 +149,6 @@ export const loginService = null;
 export const systemEnvironmentKeys = Object.freeze(['USERPROFILE', 'SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME']);
 export const hostPlatformId = `win32-${process.arch}`;
 export const environmentCaseSensitive = false;
+
+// Native command tool used by the managed Durable runtime.
+export const codingShell = 'powershell';

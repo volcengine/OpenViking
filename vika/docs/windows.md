@@ -8,9 +8,12 @@ fork do not certify this version.
 
 ## Prerequisites and startup
 
-Install Node.js 24 LTS (minimum 22.19.0), npm, PM2, Git and Git Bash yourself.
-Ensure `node`, `npm`, `pm2` and `bash` are on PATH. Pi and Durable retain their
-upstream Bash tools; there is no PowerShell tool replacement. Configure and
+Install Node.js 24 LTS (minimum 22.19.0), npm, PM2 and Git yourself.
+Ensure `node`, `npm` and `pm2` are on PATH. Durable uses the native `powershell`
+tool: `pwsh` (PowerShell 7) first, then `powershell` (Windows PowerShell 5.1)
+if the executable cannot start. At least one must be on the service PATH.
+Durable does not require Git Bash. Pi still requires Git Bash; this change
+does not replace the shell of other runtimes. Configure and
 log in to the model runtime you intend to use. No administrator rights are
 required by Vika, but Windows policy may restrict junctions or process management.
 
@@ -82,12 +85,25 @@ checkout/commit and configuration for rollback; do not copy this tree over a
 running installation. The previous logs options and unrelated lock, logging,
 delivery, interruption and PM2 behavior fixes were split out for separate review.
 
-From `vika`, run `npm test`. Run `npm run check` from Git Bash because the syntax
+From `vika`, run `npm test`. The development-only `npm run check` still needs
+Git Bash because the syntax
 check uses POSIX shell loops. Platform isolation and POSIX configuration snapshots
 run in the normal suite; macOS configuration selection on Linux is not a macOS
 runtime test. On Windows, test normal-user startup/stop, descendant cleanup,
 occupied pipes, long instructions and each connector/runtime you actually use.
 
-Report issues with the commit, Windows/Node/npm/PM2/Git Bash versions, selected
+Report issues with the commit, Windows/Node/npm/PM2/PowerShell versions, selected
 runtime and connector, reproduction steps and sanitized error text. Do not post
 raw configuration, credentials, `pm2 jlist` output or conversation contents.
+
+### Durable native shell acceptance
+
+From `vika`, run `node --test packages/daemon/test/durable-coding-tools.test.mjs`.
+The Windows cases execute the native shell with an invalid Bash path and also
+force the Windows PowerShell fallback. On other systems these cases are skipped.
+For real acceptance, start a fresh Durable session with Git Bash unavailable to
+its process, confirm that `powershell` (not `bash`) is registered, and check
+`$PSVersionTable.PSVersion`, Chinese/space paths, native exit codes, timeout and
+cancellation of a harmless child process. Repeat with only Windows PowerShell
+available. Verify Lark and OV after a normal restart. Do not remove Git or alter
+the global PATH to run these checks; use a dedicated test process environment.
