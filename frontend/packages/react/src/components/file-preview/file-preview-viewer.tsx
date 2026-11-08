@@ -147,6 +147,11 @@ export function FilePreviewViewer({
   const latest = useRef({ text, onDownload, tabSlots: tab.slots, canDownload });
   latest.current = { text, onDownload, tabSlots: tab.slots, canDownload };
 
+  const slotPresence = [
+    Boolean(tab.slots?.confirmFallback),
+    Boolean(tab.slots?.downloadFallback),
+    Boolean(tab.slots?.unsupportedFallback),
+  ].join();
   const slots = useMemo<FileViewerCoreProps['slots']>(() => {
     // 分支在调用时才决定，不在创建时决定：`slots` 只建一次（空依赖），而
     // 宿主可能在挂载后换页签或增删插槽。创建时就把「用宿主的还是内置的」定死，
@@ -170,50 +175,60 @@ export function FilePreviewViewer({
         <LoadFailedState text={latest.current.text} onRetry={retry} />
       );
     };
-    // `confirm` 与 `downloadFallback` 同样在调用时才取宿主的插槽。它们在创建
-    // 时定死会有两种残留：切到不提供插槽的页签后仍渲染上一页的节点；宿主提供了
-    // `confirmFallback` 之后组件再也没机会让位。
+    // `confirm` 与 `downloadFallback` 不能恒传一个 wrapper：底座只看这两个
+    // slot 是否存在，存在就直接渲染它，不会再看内置界面或 `unsupportedFallback`。
+    // 恒传一个返回 `null` 的 wrapper 会让大文件确认态与不支持态都变成空白。
     //
-    // `confirm` and `downloadFallback` also read the host's slots at call time.
-    // Fixing them at creation leaves two kinds of residue: the previous tab's node
-    // keeps rendering after switching to a tab without that slot, and once the host
-    // supplies `confirmFallback` this component never steps aside for it.
-    const confirmSlot: NonNullable<FileViewerCoreProps['slots']>['confirm'] = (
-      props,
-    ) => {
-      const Host = latest.current.tabSlots?.confirmFallback;
-      return Host ? <Host {...props} /> : null;
-    };
-    // 宿主给了 `downloadFallback` 就用它；给了 `unsupportedFallback` 则整体让位
-    // （底座的解析顺序是 downloadFallback → unsupportedFallback → 内置），所以
-    // 这时返回 `null` 让底座继续往下找。都没给才用组件自己的不支持态。
+    // 所以按当前页签实际有没有宿主的插槽决定传不传；memo 依赖页签 key 与这两个
+    // 插槽的存在性，宿主增删插槽时重建。`unsupportedFallback` 存在时让出
+    // `downloadFallback`，底座才会走到它。
     //
-    // Use the host's `downloadFallback` when present; when it supplies
-    // `unsupportedFallback` instead, return `null` so the base keeps resolving
-    // (downloadFallback → unsupportedFallback → its own) and reaches the host's.
-    // Only with neither does this component render its own unsupported state.
-    const downloadSlot: NonNullable<
-      FileViewerCoreProps['slots']
-    >['downloadFallback'] = () => {
-      const own = latest.current.tabSlots;
-      if (own?.downloadFallback) return <>{own.downloadFallback}</>;
-      if (own?.unsupportedFallback) return null;
-      return (
-        <UnsupportedState
-          text={latest.current.text}
-          onDownload={
-            latest.current.canDownload ? latest.current.onDownload : undefined
-          }
-        />
-      );
-    };
+    // `confirm` and `downloadFallback` must not be permanently wrapped: the base
+    // only checks whether the slot exists, and renders it directly when it does —
+    // it never falls through to the built-in UI or to `unsupportedFallback`. A
+    // permanent wrapper returning `null` blanks both the large-file confirmation and
+    // the unsupported state.
+    //
+    // So pass them only when the current tab actually supplies one; the memo keys on
+    // the tab key and on those slots' presence, so adding or removing a slot
+    // rebuilds it. `downloadFallback` also steps aside for `unsupportedFallback`.
+    const own = tab.slots;
+    const confirmFallback = own?.confirmFallback;
+    const hostDownload = own?.downloadFallback;
+    const hostUnsupported = own?.unsupportedFallback;
+    // 宿主两个都没给时用组件自己的不支持态（按 `canDownload` 决定要不要下载
+    // 按钮）；给了 `unsupportedFallback` 就让位，让底座走到它。
+    //
+    // With neither, this component's own unsupported state applies (its download
+    // button follows `canDownload`); a host `unsupportedFallback` takes over instead.
+    const fallback = hostDownload
+      ? hostDownload
+      : hostUnsupported
+        ? undefined
+        : () => (
+            <UnsupportedState
+              text={latest.current.text}
+              onDownload={
+                latest.current.canDownload
+                  ? latest.current.onDownload
+                  : undefined
+              }
+            />
+          );
     return {
       loading: loadingSlot,
       error: errorSlot,
-      downloadFallback: downloadSlot,
-      confirm: confirmSlot,
+      ...(confirmFallback ? { confirm: confirmFallback } : {}),
+      ...(fallback ? { downloadFallback: fallback } : {}),
     };
-  }, []);
+    // 依赖用「哪些插槽存在」而不是对象身份：宿主每次渲染都会重建 `slots`，
+    // 用对象会让 memo 每帧重建、底座重挂渲染器（表现为点击后正文闪一下）。
+    //
+    // Key on which slots exist rather than on object identity: the host rebuilds
+    // `slots` every render, and keying on it would rebuild this memo each frame and
+    // remount the base renderer — the body "flashing" after any click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.key, slotPresence]);
 
   if (!source) {
     // 连可预览的来源都没有，底座无从判断格式，只能由组件兜底。
