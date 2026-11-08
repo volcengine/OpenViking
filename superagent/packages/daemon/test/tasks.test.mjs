@@ -6,8 +6,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
+import { MessageInbox } from '../src/inbox.mjs';
 
 // A worker that finishes when the test says so, after doing what the test
 // scripted for that turn (a report, an input arriving mid-turn, ...).
@@ -45,18 +48,30 @@ function setup(t, options = {}) {
   const executor = fakeExecutor();
   const relayed = [];
   const activities = [];
+  const inbox = new MessageInbox({ db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
+  const publish = inbox.publish.bind(inbox);
+  inbox.publish = (entry) => { relayed.push({ item: entry.item, meta: entry.meta }); publish(entry); };
   const tasks = new TaskManager({
-    db, config: { workspace }, executor,
-    relay: (item, meta) => relayed.push({ item, meta }),
+    db, config: { workspace }, executor, inbox,
     lineFor: (input) => `[chat=${input.chat_id} msg=${input.message_id} event=${input.event_id}] ${input.content}`,
     recordActivity: (kind, fields) => activities.push({ kind, ...fields }),
     ...options,
   });
+  t.after(() => { tasks.shutdown(); inbox.stop(); });
   const ingest = (input) => db.prepare('INSERT INTO connector_events(seq, message_id) VALUES (?, ?)').run(input.seq, input.message_id);
-  return { db, tasks, executor, relayed, activities, workspace, ingest };
+  return { db, tasks, executor, inbox, relayed, activities, workspace, ingest };
 }
 
 describe('TaskManager', () => {
+  it('does not leave a runnable task with a partially recorded request', (t) => {
+    const { tasks, db, executor } = setup(t);
+    db.exec("CREATE TRIGGER fail_input BEFORE INSERT ON task_inputs WHEN NEW.text LIKE '%FAIL_INPUT%' BEGIN SELECT RAISE(ABORT, 'injected input failure'); END;");
+    assert.throws(() => tasks.create({ rows: [row(), row({ content: 'FAIL_INPUT' })], title: 'X', runtime: 'pi' }), /injected input failure/);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM tasks').get().n, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM task_inputs').get().n, 0);
+    assert.equal(executor.turns.length, 0);
+  });
+
   it('starts a worker with the brief, under an authority that holds for its turn only', async (t) => {
     const { tasks, executor, workspace } = setup(t);
     const origin = row({ thread_id: 'omt_1', content: '帮我查下 X 为什么慢' });
@@ -189,26 +204,164 @@ describe('TaskManager', () => {
   });
 
   it('starts the turns a previous daemon was running again, with a recovery note', async (t) => {
-    const { tasks, executor, db, workspace } = setup(t);
-    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    const { tasks, executor, db, workspace, inbox } = setup(t);
+    tasks.create({ rows: [row({ content: 'original request: never publish' })], title: 'X', runtime: 'pi' });
     tasks.shutdown();
     executor.turns[0].finish({ text: '', error: 'stopped' });
     await settle();
     assert.equal(tasks.get('t1').status, 'running');
 
     const next = fakeExecutor();
-    const restored = new TaskManager({ db, config: { workspace }, executor: next, relay: () => {}, lineFor: () => '' });
+    const restored = new TaskManager({ db, config: { workspace }, executor: next, inbox, lineFor: () => '' });
+    t.after(() => restored.shutdown());
     restored.restore();
     assert.equal(next.turns.length, 1);
     assert.match(next.turns[0].prompt, /^The daemon restarted while you were working on this task\./);
+    assert.match(next.turns[0].prompt, /original request: never publish/);
+    assert.equal(next.turns[0].task.native_session, null);
+    assert.notEqual(next.turns[0].task.session_id, executor.turns[0].task.session_id);
   });
 
   it('runs a turn that failed for a passing reason again', async (t) => {
     const { tasks, executor, relayed } = setup(t);
-    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    tasks.create({ rows: [row({ content: 'original request: never publish' })], title: 'X', note: 'keep the evidence', runtime: 'pi' });
     executor.turns[0].finish({ text: '', error: 'HTTP 429', transient: true });
     await settle();
     assert.equal(executor.turns.length, 2);
     assert.equal(relayed.length, 0);
+    assert.match(executor.turns[1].prompt, /original request: never publish/);
+    assert.match(executor.turns[1].prompt, /keep the evidence/);
+    assert.equal(executor.turns[1].task.native_session, null);
   });
+
+  it('acknowledges inputs only after success, including inputs read through task_check', async (t) => {
+    const { tasks, executor, db } = setup(t);
+    tasks.create({ rows: [row({ content: 'original constraints' })], title: 'X', runtime: 'pi' });
+    tasks.route('t1', [row({ content: 'do not publish' })], 'owner');
+    assert.equal(tasks.check('t1').length, 1);
+    assert.deepEqual(tasks.check('t1'), [], 'a claimed input is not repeatedly returned in the same turn');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM task_inputs WHERE delivered_at_ms IS NOT NULL').get().n, 0);
+    executor.turns[0].finish({ error: 'HTTP 429', transient: true });
+    await settle();
+    assert.match(executor.turns[1].prompt, /original constraints/);
+    assert.match(executor.turns[1].prompt, /do not publish/);
+    executor.turns[1].finish({ text: 'done' });
+    await settle();
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM task_inputs WHERE delivered_at_ms IS NOT NULL').get().n, 2);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM task_input_claims').get().n, 0);
+  });
+
+  it('keeps retries bounded even though failed inputs remain unacknowledged', async (t) => {
+    const { tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    for (let index = 0; index < 3; index += 1) {
+      executor.turns[index].finish({ error: 'HTTP 429', transient: true });
+      await settle();
+    }
+    assert.equal(executor.turns.length, 3);
+    assert.equal(tasks.get('t1').status, 'failed');
+    assert.equal(relayed.length, 1);
+  });
+
+  it('retries an inbox insert failure automatically, without duplicate delivery after consumption', async (t) => {
+    const { tasks, executor, db, inbox, relayed } = setup(t);
+    db.exec("CREATE TRIGGER fail_inbox BEFORE INSERT ON inbox_pending BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;");
+    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: 'complete result' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'done');
+    assert.equal(db.prepare('SELECT relayed_at_ms FROM task_reports').get().relayed_at_ms, null);
+    assert.equal(db.prepare('SELECT inbox_id FROM task_report_deliveries').get().inbox_id, null);
+    assert.equal(inbox.size, 0);
+    db.exec('DROP TRIGGER fail_inbox');
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    assert.equal(inbox.size, 1);
+    assert.equal(relayed.length, 1);
+    assert.match(relayed[0].item.text, /complete result/);
+    inbox.remove([...inbox.entries]);
+    tasks.flushReports();
+    tasks.restore();
+    assert.equal(relayed.length, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM inbox_pending').get().n, 0);
+    assert.equal(executor.turns.length, 1);
+  });
+
+  it('keeps a report pending when the inbox is stopped and recovers it on restart', async (t) => {
+    const { tasks, executor, db, workspace, inbox } = setup(t);
+    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    inbox.stop();
+    executor.turns[0].finish({ text: 'complete result' });
+    await settle();
+    assert.equal(db.prepare('SELECT relayed_at_ms FROM task_reports').get().relayed_at_ms, null);
+    tasks.shutdown();
+    const nextInbox = new MessageInbox({ db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
+    const next = fakeExecutor();
+    const restored = new TaskManager({ db, config: { workspace }, executor: next, inbox: nextInbox, lineFor: () => '' });
+    t.after(() => { restored.shutdown(); nextInbox.stop(); });
+    restored.restore();
+    assert.equal(nextInbox.size, 1);
+    assert.equal(next.turns.length, 0);
+  });
+
+  it('relays the complete allowed draft, preserving its tail and quoting every line', async (t) => {
+    const { tasks, executor, relayed } = setup(t);
+    const tail = '\nESSENTIAL_END_OF_REPORT';
+    const draft = 'x'.repeat(20_000 - tail.length) + tail;
+    assert.equal(draft.length, 20_000);
+    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.ok(relayed[0].item.text.endsWith(`draft:\n${draft.split('\n').map((line) => `| ${line}`).join('\n')}`));
+  });
+
+  it('recovers an old unmarked final report, excluding progress and superseded reports', (t) => {
+    const { tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: 'superseded result' });
+    tasks.report('t1', { state: 'done', draft: 'latest result' });
+    tasks.setStatus('t1', 'done');
+    tasks.create({ rows: [row()], title: 'B', runtime: 'pi' });
+    tasks.report('t2', { state: 'progress', summary: 'still working' });
+    tasks.setStatus('t2', 'blocked');
+    tasks.restore();
+    assert.equal(relayed.length, 1);
+    assert.match(relayed[0].item.text, /latest result/);
+    assert.doesNotMatch(relayed[0].item.text, /superseded result/);
+    assert.equal(executor.turns.length, 2);
+  });
+
+  for (const stage of ['start', 'check', 'ended', 'insert', 'commit', 'publish']) {
+    it(`recovers after SIGKILL at ${stage}`, { skip: process.platform === 'win32' }, (t) => {
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'task-crash-'));
+      const child = spawnSync(process.execPath, [fileURLToPath(new URL('./task-crash-fixture.mjs', import.meta.url)), stage, workspace],
+        { encoding: 'utf8', timeout: 15_000 });
+      assert.equal(child.signal, 'SIGKILL', child.stderr);
+      const db = new DatabaseSync(path.join(workspace, 'state.sqlite3'));
+      const inbox = new MessageInbox({ db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
+      const executor = fakeExecutor();
+      const tasks = new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: () => '' });
+      t.after(() => { tasks.shutdown(); inbox.stop(); db.close(); fs.rmSync(workspace, { recursive: true, force: true }); });
+      inbox.restore();
+      tasks.restore();
+      if (stage === 'start' || stage === 'check') {
+        assert.equal(executor.turns.length, 1);
+        assert.match(executor.turns[0].prompt, /ORIGINAL_REQUEST: never publish/);
+        if (stage === 'check') assert.match(executor.turns[0].prompt, /FOLLOW_UP: include test evidence/);
+        assert.equal(executor.turns[0].task.native_session, null);
+        assert.equal(inbox.size, 0);
+      } else {
+        assert.equal(executor.turns.length, 0);
+        assert.equal(tasks.get('t1').status, 'done');
+        assert.equal(inbox.size, 1);
+        assert.match(inbox.entries[0].item.text, /COMPLETE_RESULT/);
+        assert.ok(db.prepare('SELECT relayed_at_ms FROM task_reports').get().relayed_at_ms);
+        inbox.restore();
+        tasks.restore();
+        assert.equal(inbox.size, 1, 'restoring twice does not publish the same receipt twice');
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM inbox_pending').get().n, 1);
+      }
+    });
+  }
 });

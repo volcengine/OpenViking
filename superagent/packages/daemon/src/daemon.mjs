@@ -323,7 +323,7 @@ export class PersonalAgentDaemon {
           db: this.store.db,
           config: this.config,
           executor,
-          relay: (item, meta) => this.inbox.add(item, meta),
+          inbox: this.inbox,
           lineFor: (row) => {
             const event = this.store.inboundBySeq(row.seq);
             return formatInboundLine(event, null, {

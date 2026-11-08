@@ -112,8 +112,11 @@ A task is a row in `tasks` (created on first use, like `inbox_pending`): its
 origin (the input the result answers: `event=`, `msg=`, chat, thread, requester),
 title, the router's note (≤ 30 words of routing facts, never a plan), status,
 the worker's session, and the latest summary, draft, question and artifacts.
-`task_inputs` holds every line routed to it, in order, each delivered to the
-worker once; `task_reports` is the append-only list of reports.
+`task_inputs` holds every line routed to it, in order. `task_input_claims`
+associates inputs with the turn reading them (including `task_check`); only a
+successful turn acknowledges them. Failed or interrupted turns release their
+claims so the inputs can be replayed. `task_reports` is the append-only list of
+reports.
 
 Status: `queued` (waiting for a slot), `running`, `waiting` (a question for a
 person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`. A
@@ -167,6 +170,13 @@ if any were not read, the worker runs again (up to three times). A turn that
 failed for a passing reason (429, 5xx, a reset connection) runs again, twice at
 most.
 
+A successful turn records a session checkpoint. A failed or interrupted turn
+starts a new session with the persisted request history, routing note, previous
+summary/draft and artifacts, and an instruction to check existing work before
+repeating outside actions. A preallocated session ID or turn counter alone is
+never evidence that Claude can resume a session. Recovery can repeat work;
+outside actions are not guaranteed to run exactly once.
+
 ### What the router sees
 
 ```
@@ -179,7 +189,17 @@ draft:
 ```
 
 Worker text is quoted (`| `), so it cannot pass for an input line. The router
-relays it once with `reply_message` to the origin `msg=`.
+receives the full stored draft (up to the 20,000-character reporting limit)
+and relays it with `reply_message` to the origin `msg=`.
+
+Ending a task and selecting its final report for delivery are committed together
+in SQLite (`task_report_deliveries`). The inbox row, report's delivery timestamp
+and report-to-inbox receipt then commit in one transaction, before waking the
+router. The report ID is the idempotency key; consuming the inbox row does not
+erase its receipt. Failed writes retry automatically and pending deliveries are
+recovered at startup, without rerunning the worker. Task reports in the inbox
+do not expire under the incoming-event age limit. This guarantees the handoff
+to the inbox, not that the model ultimately sends the report to the requester.
 
 ### Interplay with the Core
 
@@ -194,8 +214,10 @@ relays it once with `reply_message` to the origin `msg=`.
   investigating with many short commands. Core reads are not counted. On Codex
   and Claude Code this is policy text only.
 - **Restart.** Tasks, inputs and reports are in SQLite. A turn cut by a
-  shutdown is not reported; at start its task runs again, told to check what it
-  already did before repeating an outside action.
+  shutdown is not reported; at start its task runs again from the persisted
+  request history, told to check what it already did before repeating an outside
+  action. Selected final reports still awaiting the inbox are delivered again
+  through their idempotent receipt.
 
 Activities: `task.created`, `task.turn_started`, `task.turn_completed` (with
 usage), `task.reported`, `task.ended`.

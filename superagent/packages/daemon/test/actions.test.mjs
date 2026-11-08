@@ -1995,7 +1995,8 @@ describe('workers scheduler', () => {
         return { done: turn.done, stop: () => finish({ text: '', error: 'stopped' }) };
       },
     };
-    const tasks = new TaskManager({ db: store.db, config: { workspace }, executor, relay: () => {}, lineFor: (row) => `line ${row.seq}` });
+    const inbox = new MessageInbox({ db: store.db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
+    const tasks = new TaskManager({ db: store.db, config: { workspace }, executor, inbox, lineFor: (row) => `line ${row.seq}` });
     service.attachTasks(tasks, { runtime: () => runtime, supports: (id) => ['pi', 'codex', 'claude'].includes(id) });
     return { tasks, turns };
   }
