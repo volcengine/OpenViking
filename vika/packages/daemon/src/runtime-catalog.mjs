@@ -5,6 +5,16 @@ function frozenStrings(values) {
   return Object.freeze([...values]);
 }
 
+// How a runtime keeps its own OpenViking plugin out, so that Vika's memory
+// (the daemon and the Core's openviking_* tools) is the only one the agent
+// sees. Every runtime must declare one (see ov-isolation.mjs and
+// docs/openviking-ownership.md):
+// - launch-args: the launcher passes arguments that switch the plugin off;
+// - config-home: the launcher points the runtime at a Vika-owned config home;
+// - closed: the runtime loads no plugins at all (Durable's own registry);
+// - remote: the runtime runs elsewhere and loads nothing from this machine.
+export const OV_ISOLATION = Object.freeze(['launch-args', 'config-home', 'closed', 'remote']);
+
 function runtimeDefinition({
   id,
   aliases,
@@ -13,10 +23,15 @@ function runtimeDefinition({
   canonicalDefault = defaultModel,
   models = [],
   efforts = [],
+  ovIsolation,
   capabilities,
 }) {
+  if (!OV_ISOLATION.includes(ovIsolation)) {
+    throw new Error(`runtime ${id} must declare how it keeps its own OpenViking plugin out (ovIsolation: ${OV_ISOLATION.join(' | ')}); see docs/openviking-ownership.md`);
+  }
   return Object.freeze({
     id,
+    ovIsolation,
     aliases: frozenStrings(aliases),
     directAliases: frozenStrings(directAliases),
     defaultModel,
@@ -32,6 +47,7 @@ export const DEFAULT_RUNTIME_ID = 'codex';
 export const RUNTIME_CATALOG = Object.freeze({
   codex: runtimeDefinition({
     id: 'codex',
+    ovIsolation: 'launch-args',
     aliases: ['codex'],
     efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
     capabilities: {
@@ -47,6 +63,7 @@ export const RUNTIME_CATALOG = Object.freeze({
   }),
   traex: runtimeDefinition({
     id: 'traex',
+    ovIsolation: 'launch-args',
     aliases: ['traex', 'trae', 'traecli', 'trae-cli'],
     directAliases: ['traex', 'trae', 'traecli', 'trae-cli'],
     canonicalDefault: 'traex',
@@ -63,6 +80,7 @@ export const RUNTIME_CATALOG = Object.freeze({
   }),
   claude: runtimeDefinition({
     id: 'claude',
+    ovIsolation: 'launch-args',
     aliases: ['claude'],
     canonicalDefault: 'claude',
     models: ['sonnet', 'opus', 'haiku', 'fable'],
@@ -79,6 +97,7 @@ export const RUNTIME_CATALOG = Object.freeze({
   }),
   volc: runtimeDefinition({
     id: 'volc',
+    ovIsolation: 'remote',
     aliases: ['volc', 'volcengine', 'ark'],
     directAliases: ['volc', 'volcengine', 'ark'],
     defaultModel: 'ark',
@@ -96,6 +115,7 @@ export const RUNTIME_CATALOG = Object.freeze({
   }),
   pi: runtimeDefinition({
     id: 'pi',
+    ovIsolation: 'launch-args',
     aliases: ['pi'],
     directAliases: ['pi'],
     canonicalDefault: 'pi',
@@ -115,6 +135,7 @@ export const RUNTIME_CATALOG = Object.freeze({
   // resumes a run the previous daemon generation left unfinished.
   durable: runtimeDefinition({
     id: 'durable',
+    ovIsolation: 'closed',
     aliases: ['durable', 'pi-durable', 'pidurable'],
     directAliases: ['durable', 'pi-durable', 'pidurable'],
     canonicalDefault: 'durable',
@@ -131,6 +152,7 @@ export const RUNTIME_CATALOG = Object.freeze({
   }),
   opencode: runtimeDefinition({
     id: 'opencode',
+    ovIsolation: 'config-home',
     aliases: ['opencode'],
     directAliases: ['opencode'],
     canonicalDefault: 'opencode',

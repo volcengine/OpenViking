@@ -6,7 +6,7 @@ import { afterEach, describe, it } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getConfig, projectDir } from '../src/config.mjs';
+import { getConfig, privateRegularFile, projectDir } from '../src/config.mjs';
 import { managedPiBin } from '../src/pi-runtime.mjs';
 
 const saved = new Map();
@@ -120,19 +120,14 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /VIKA_STAGED_REPLIES must be a boolean/);
     setEnv('VIKA_STAGED_REPLIES', undefined);
   });
-  it('recalls from OV only on an instance that opts in, over every peer unless limited to the sender', () => {
+  it('searches OV per line only on an instance that opts in; preferences need no switch', () => {
     setEnv('VIKA_OV_AUTO_RECALL', undefined);
-    setEnv('VIKA_OV_RECALL_SCOPE', undefined);
     assert.equal(getConfig().ovAutoRecall, false);
-    assert.equal(getConfig().ovRecallScope, 'all');
     setEnv('VIKA_OV_AUTO_RECALL', 'true');
-    setEnv('VIKA_OV_RECALL_SCOPE', 'actor');
     assert.equal(getConfig().ovAutoRecall, true);
-    assert.equal(getConfig().ovRecallScope, 'actor');
-    setEnv('VIKA_OV_RECALL_SCOPE', 'everyone');
-    assert.throws(() => getConfig(), /VIKA_OV_RECALL_SCOPE/);
+    assert.equal('ovRecallScope' in getConfig(), false);
+    assert.equal('ovRemember' in getConfig(), false);
     setEnv('VIKA_OV_AUTO_RECALL', undefined);
-    setEnv('VIKA_OV_RECALL_SCOPE', undefined);
   });
   it('reads Lark messages with the owner\'s visibility unless the instance keeps to the bot\'s chats', () => {
     setEnv('VIKA_LARK_MESSAGE_ACCESS', undefined);
@@ -158,6 +153,8 @@ describe('configuration safety', { concurrency: false }, () => {
     const accountFile = path.join(directory, 'email.json');
     const otherFile = path.join(directory, 'other.json');
     fs.writeFileSync(accountFile, '{}', { mode: 0o644 });
+    // The refusal fixture must remain public even under a restrictive umask.
+    if (process.platform !== 'win32') fs.chmodSync(accountFile, 0o644);
     fs.writeFileSync(otherFile, '{}', { mode: 0o600 });
     setEnv('VIKA_CHANNEL', 'lark');
     setEnv('VIKA_CONNECTORS_JSON', '["lark","email"]');
@@ -166,7 +163,12 @@ describe('configuration safety', { concurrency: false }, () => {
       setEnv('VIKA_EMAIL_ACCOUNTS_JSON', undefined);
       assert.throws(() => getConfig(), /VIKA_EMAIL_ACCOUNTS_JSON must list the mailboxes/);
       accounts([{ id: 'email-gmail', config: accountFile }]);
-      assert.throws(() => getConfig(), /email account file of email-gmail must have mode 0600/);
+      if (process.platform !== 'win32') {
+        assert.throws(() => getConfig(), /email account file of email-gmail must have mode 0600/);
+      }
+      // Posix enforces the mode bits; Windows (no file modes) accepts the file.
+      assert.throws(() => privateRegularFile(accountFile, 'account', true), /account must have mode 0600/);
+      assert.equal(privateRegularFile(accountFile, 'account', false), accountFile);
       fs.chmodSync(accountFile, 0o600);
       accounts([{ id: 'email-gmail', config: accountFile }, { id: 'email-gmail', config: otherFile }]);
       assert.throws(() => getConfig(), /invalid or repeated mailbox id/);

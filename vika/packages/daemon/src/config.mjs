@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+
+import { localSocketPath, supportsFileModes } from './platform/index.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -104,13 +106,15 @@ function privateRegularFileEnv(name) {
   return privateRegularFile(process.env[name], name);
 }
 
-function privateRegularFile(value, name) {
+// Windows lstat reports 0o666 regardless of ACLs, so mode bits are only
+// enforced where the platform has POSIX file modes.
+export function privateRegularFile(value, name, enforceFileMode = supportsFileModes) {
   const raw = String(value ?? '').trim();
   if (!raw || !path.isAbsolute(raw)) throw new Error(`${name} must be an absolute path`);
   const resolved = path.normalize(raw);
   const info = fs.lstatSync(resolved);
   if (!info.isFile() || info.isSymbolicLink()) throw new Error(`${name} must be a regular file`);
-  if ((info.mode & 0o077) !== 0) throw new Error(`${name} must have mode 0600`);
+  if (enforceFileMode && (info.mode & 0o077) !== 0) throw new Error(`${name} must have mode 0600`);
   if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
     throw new Error(`${name} must be owned by the daemon user`);
   }
@@ -206,11 +210,12 @@ export function getConfig() {
     naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
     capabilitiesFile: process.env.VIKA_CAPABILITIES_FILE || null,
-    // Opt-in per instance (agents[].ovAutoRecall): the daemon recalls from OV
-    // for every line someone sends (ov-recall.mjs), over every peer or, with
-    // agents[].ovRecallScope "actor", only the sender's.
+    // Opt-in per instance: preferences are always shown; this also searches OV.
+
     ovAutoRecall: boolEnv('VIKA_OV_AUTO_RECALL', false),
-    ovRecallScope: enumEnv('VIKA_OV_RECALL_SCOPE', 'all', ['all', 'actor']),
+    // One OpenViking tool request, bounded for the model-facing tools (the
+    // faster read/list paths get half of it).
+    openVikingToolTimeoutMs: intEnv('VIKA_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
     agentName: process.env.VIKA_AGENT_NAME || process.env.VIKA_INSTANCE_ID || 'Agent',
     instanceId: process.env.VIKA_INSTANCE_ID || 'default',
     timerStorage: enumEnv('VIKA_TIMER_STORAGE', 'ov', ['ov', 'sqlite']),
@@ -218,7 +223,7 @@ export function getConfig() {
     channel,
     connectors: Object.freeze(connectors),
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
-    actionSocketPath: path.join(dataDir, 'actions.sock'),
+    actionSocketPath: localSocketPath(dataDir),
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),
     larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),

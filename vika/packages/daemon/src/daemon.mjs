@@ -220,6 +220,8 @@ export class PersonalAgentDaemon {
         ovClient,
         timers: this.timers,
         onTimersChanged: () => this.timerConnector?.wake(),
+        // A stored or removed preference shows from the person's next line.
+        onPreferencesChanged: () => this.harness?.recall?.forgetPreferences(),
         // A model that keeps redoing a settled decision: end its turn so the
         // inputs it holds go on (AgentRuntime.breakLoop).
         onNoProgress: (info) => this.agentRuntime?.breakLoop(info),
@@ -293,8 +295,9 @@ export class PersonalAgentDaemon {
         runtime: this.agentRuntime,
         roster: this.roster,
         liveness: this.liveness,
-        recall: this.config.ovAutoRecall && this.config.openVikingConfigPath
-          ? new OVRecall({ configPath: this.config.openVikingConfigPath, scope: this.config.ovRecallScope,
+        // Preferences are always shown; the per-line search only with ovAutoRecall.
+        recall: this.config.openVikingConfigPath
+          ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
             store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
           : null,
         prepareEvent: (event) => event.source === 'lark' && event.kind === 'message.action'

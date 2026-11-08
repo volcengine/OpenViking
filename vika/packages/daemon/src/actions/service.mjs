@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { CoreCapabilities } from '../capabilities.mjs';
+import { CoreCapabilities } from '../core-capabilities.mjs';
 
 import { createHash, randomUUID } from 'node:crypto';
-import { conversationKeyFor, eventIdentity } from '../event.mjs';
+import { conversationKeyFor, eventIdentity, normalizeEvent } from '../event.mjs';
 import { registerCard } from '../card-messages.mjs';
 import {
   cancelApproval, claimApproval, createApproval, editApproval, finishApproval, getApproval, supersedeApprovals,
@@ -14,8 +14,10 @@ import { meetingFolder, meetingNotesRoot, meetingReadTarget } from '../meeting/n
 import { meetingContextLines } from '../meeting/index.mjs';
 import { OVUnavailableError } from '../ov-connection.mjs';
 import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs';
+import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
-import { BOT_SENDERS, readMetadataTag } from '../runtime-input.mjs';
+import { BOT_SENDERS, isoMinute, readMetadataTag, senderLabel } from '../runtime-input.mjs';
+import { personDirectory, personId } from '../ov-person.mjs';
 import { TimerSchedule } from '../timers.mjs';
 import {
   APPROVAL_SECONDS, approvalCard, approvalMessage, approvalNote, approvalQuestion, approvalStatusText, approvedText,
@@ -60,6 +62,12 @@ const HANDLERS = {
   list_timers: 'listTimers',
   cancel_timer: 'cancelTimer',
   finish_timer_occurrence: 'finishTimerOccurrence',
+  openviking_find: 'openvikingFind',
+  openviking_search: 'openvikingSearch',
+  openviking_read: 'openvikingRead',
+  openviking_list: 'openvikingList',
+  openviking_add_resource: 'openvikingAddResource',
+  openviking_remember: 'openvikingRemember',
 };
 
 // A refusal the model can act on; `code` is what logs and activities record.
@@ -69,10 +77,14 @@ function blocked(code, message) {
 
 // Tools whose success changes something (a delivery, a decision, a timer), as
 // against reads. Only these count as progress for the loop guard; marking a
-// timer occurrence done counts only when it was marked.
+// timer occurrence done counts only when it was marked. An OpenViking write
+// counts only when the server took it (a task_id came back, or a preference
+// was stored or removed): the rest are reads, and a write that failed lands
+// nothing.
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
   if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
+  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri || result?.data?.stored || result?.data?.removed);
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -129,15 +141,17 @@ export class ActionService {
     liveness = null,
     meetingEnabled = false,
     ovClient = null,
+    ovTools = null,
     timers = null,
     clock = () => Date.now(),
     onTimersChanged = () => {},
+    onPreferencesChanged = () => {},
     onNoProgress = null,
     loopBreakAfter = LOOP_BREAK_AFTER,
     logger,
   }) {
     Object.assign(this, {
-      config, store, connectors, roster, liveness, meetingEnabled, ovClient, timers, clock, onTimersChanged,
+      config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, timers, clock, onTimersChanged, onPreferencesChanged,
       onNoProgress, loopBreakAfter, logger,
     });
     // Loop guard: duplicate outcomes per input in the current turn, cleared
@@ -196,7 +210,7 @@ export class ActionService {
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);
     if (tool.meeting) return this.meetingEnabled;
     if (tool.meetingNotes) return Boolean(this.config.meetingNotes);
-    if (tool.openviking) return Boolean(this.ovClient || this.config.openVikingConfigPath);
+    if (tool.openviking) return Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
     return true;
@@ -1535,4 +1549,92 @@ export class ActionService {
       data: { ...delivery?.data, occurrence_id: input.occurrence_id, completed: true, status: 'completed' },
     };
   }
+
+  // OpenViking long-term memory, the same six tools for every runtime. The
+  // client is built from the instance's own ovConfig on first use, never at
+  // boot, so a daemon without a usable config still starts; tests inject
+  // their own. The tools are not deliveries: no decision, no outbox.
+  ovToolClient() {
+    this.ovTools ??= new OVToolClient({
+      configPath: this.config.openVikingConfigPath, timeoutMs: this.config.openVikingToolTimeoutMs ?? 20_000,
+    });
+    return this.ovTools;
+  }
+
+  // Reads re-check authority after the remote answer, like the other remote
+  // reads: a runtime retired mid-call must not consume the result.
+  async openvikingFind(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().find(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingSearch(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().search(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingRead(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().read(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingList(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovToolClient().list(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  // Writes check authority only before the request leaves, which call() did:
+  // a write the server took must not be reported failed because the runtime
+  // was retired while it landed. Neither is ever retried automatically.
+  async openvikingAddResource(input, caller) {
+    caller.trace.invoked = true;
+    return await this.ovToolClient().addResource({ ...input, workspace: this.config.workspace });
+  }
+
+  // A preference of the person who sent the input decision_id names, kept in
+  // that person's directory (ov-person.mjs). The Core names the person from
+  // the authenticated sender, so the model can neither file a preference under
+  // someone else nor speak for them; what it writes is its statement of what
+  // that person asked, stored with where it came from.
+  async openvikingRemember(input, caller) {
+    const row = this.resolveDecision(input, caller, 'Not remembered');
+    const event = normalizeEvent(JSON.parse(row.event_json));
+    const owner = this.isOwnerEvent(event);
+    const directory = personDirectory(event, { owner });
+    if (!directory) {
+      throw blocked('not_rememberable', `Not remembered: a preference belongs to the person who stated it, and that input has no person behind it. ${NO_ACTION}`);
+    }
+    const person = owner ? { owner: true } : { id: personId(event), directory };
+    const preference = String(input.preference ?? '').trim();
+    if (input.forget !== true && !preference) {
+      throw blocked('invalid_input', 'Pass the preference, or forget: true to remove the one under this topic');
+    }
+    caller.trace.invoked = true;
+    let result;
+    if (input.forget === true) {
+      result = await this.ovToolClient().forgetPreference({ person, topic: input.topic });
+    } else {
+      const who = owner ? 'the owner' : senderLabel(event);
+      const text = `${preference}\n\n(Stated by ${who} via ${event.source}, ${isoMinute(event.createTimeMs).slice(0, 10)}, event=${event.eventId}.)`;
+      result = await this.ovToolClient().setPreference({ person, topic: input.topic, text });
+    }
+    this.onPreferencesChanged?.();
+    return result;
+  }
+
+  // Whether the owner sent an event, by the connector's authenticated identity.
+  isOwnerEvent(event) {
+    if (typeof this.connectors.isOwner === 'function') return this.connectors.isOwner(event);
+    const owner = this.connectors.owner?.(event.connectorInstance ?? event.source);
+    return Boolean(owner?.id && event.senderId && owner.id === event.senderId);
+  }
+
 }

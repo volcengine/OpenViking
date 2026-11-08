@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { bannerLines, miniLines, openingBanner, playBanner, sceneFrame } from '../src/banner.mjs';
 import { Prompter } from '../src/prompt.mjs';
-import { opener, qrLines, showScan } from '../src/qr.mjs';
+import { urlOpenCommand, qrLines, showScan } from '../src/qr.mjs';
 import { ansi256, box, colorDepth, mix, stripAnsi, width } from '../src/ui.mjs';
 
 // A colour terminal of a given size, recording what is written.
@@ -205,7 +205,6 @@ test('a code too big for the window waits for the window to grow, then draws its
 });
 
 test('a link opens in a browser only where there is a desktop', () => {
-  assert.equal(opener({}, 'darwin'), 'open');
-  assert.equal(opener({ DISPLAY: ':0' }, 'linux'), 'xdg-open');
-  assert.equal(opener({}, 'linux'), null, 'a server over ssh');
+  assert.equal(urlOpenCommand({ DISPLAY: ':0' }), process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open');
+  assert.equal(urlOpenCommand({}), process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : null);
 });

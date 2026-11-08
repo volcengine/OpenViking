@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn } from 'node:child_process';
+import { spawnDetached as defaultDetached } from './platform/index.mjs';
+
+import { spawn, normalizeEnvironment } from './platform/index.mjs';
 import path from 'node:path';
 import { agentCliCommands } from './agent-clis.mjs';
 import { applyOpenVikingChildEnv } from './openviking.mjs';
@@ -26,7 +28,7 @@ export function sanitizeAgentChildEnv(environment, {
   cliBins = agentCliCommands().map(({ bin }) => bin),
 } = {}) {
   const safeEnv = {
-    ...sanitizeNonArkChildEnv(environment),
+    ...sanitizeNonArkChildEnv(normalizeEnvironment(environment)),
     FORCE_COLOR: '0',
     NO_COLOR: '1',
   };
@@ -57,22 +59,11 @@ function appendTail(current, chunk, limit) {
   return next.length <= limit ? next : next.slice(next.length - limit);
 }
 
-export function terminateProcessTree(child, signal = 'SIGTERM') {
-  if (!child?.pid) return;
-  if (process.platform !== 'win32') {
-    try {
-      // The group may outlive its leader, so always signal by the original pgid
-      // even after the leader exited — otherwise grandchildren leak.
-      process.kill(-child.pid, signal);
-      return;
-    } catch {}
-  }
-  if (child.exitCode !== null) return;
-  try { child.kill(signal); } catch {}
-}
+export { terminateProcessTree } from './platform/index.mjs';
+import { terminateProcessTree } from './platform/index.mjs';
 
 export class ProcessRegistry {
-  constructor(logger, { detached = process.platform !== 'win32' } = {}) {
+  constructor(logger, { detached = defaultDetached } = {}) {
     this.logger = logger;
     this.detached = detached;
     this.children = new Set();

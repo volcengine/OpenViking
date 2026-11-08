@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { spawnDetached, processOptions } from '../platform/index.mjs';
+
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { sanitizeNonArkChildEnv, terminateProcessTree } from '../process-utils.mjs';
@@ -124,7 +126,8 @@ export class ConnectorProcess {
       cwd: this.config.projectDir,
       env,
       shell: false,
-      detached: process.platform !== 'win32',
+      detached: spawnDetached,
+      ...processOptions,
       stdio: ['pipe', 'pipe', 'pipe'],
     }));
     this.child = child;

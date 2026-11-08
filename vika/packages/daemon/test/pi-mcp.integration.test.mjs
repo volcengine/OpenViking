@@ -15,6 +15,8 @@ import { PiAgent } from '../src/pi.mjs';
 import { managedPiBin } from '../src/pi-runtime.mjs';
 import { Store } from '../src/store.mjs';
 import { fakeConnectors } from './action-fixture.mjs';
+import { configurePiIsolation } from './pi-isolation-fixture.mjs';
+import { fakeOV } from './ov-server-fixture.mjs';
 import { chatEvent } from './event-fixture.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -25,7 +27,7 @@ function completion(response, index, tool = null) {
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   const delta = tool ? { role: 'assistant', tool_calls: [{
     index: 0, id: `call_${index}`, type: 'function',
-    function: { name: `mcp__personal_agent__${tool.name}`, arguments: JSON.stringify(tool.input) },
+    function: { name: tool.fullName ?? `mcp__personal_agent__${tool.name}`, arguments: JSON.stringify(tool.input) },
   }] } : { role: 'assistant', content: 'done' };
   for (const choice of [
     { index: 0, delta, finish_reason: null },
@@ -34,7 +36,7 @@ function completion(response, index, tool = null) {
   response.end('data: [DONE]\n\n');
 }
 
-async function fixture(t, { conflict = false, dialogs = false } = {}) {
+async function fixture(t, { conflict = false, dialogs = false, openviking = false, isolation = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-mcp-'));
   const workspace = path.join(root, 'workspace');
   const agentDir = path.join(root, 'pi-config');
@@ -58,6 +60,16 @@ async function fixture(t, { conflict = false, dialogs = false } = {}) {
       }
     `);
   }
+  if (openviking) {
+    // OpenViking's own Pi extension, installed by the owner: never loaded.
+    fs.mkdirSync(path.join(agentDir, 'extensions', 'openviking'), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'extensions', 'openviking', 'index.js'), `
+      import fs from 'node:fs';
+      export default function(pi) {
+        fs.writeFileSync(process.env.PI_CODING_AGENT_DIR + '/openviking-loaded', 'yes');
+      }
+    `);
+  }
   // pm2 puts /usr/bin ahead of the user's Node; a stale node first on PATH
   // must not be the one that runs Pi.
   const staleNodeDir = path.join(root, 'stale-node');
@@ -68,6 +80,13 @@ async function fixture(t, { conflict = false, dialogs = false } = {}) {
   for (const file of [path.join(agentDir, 'mcp.json'), path.join(workspace, '.pi', 'mcp.json')]) {
     fs.writeFileSync(file, mcpContents);
   }
+  const isolated = isolation ? configurePiIsolation(root, agentDir, workspace) : null;
+  const ov = isolation ? await fakeOV(t) : null;
+  const ovConfig = path.join(root, 'ov.json');
+  if (ov) {
+    fs.writeFileSync(ovConfig, JSON.stringify({ url: ov.url, user: 'fixture' }));
+    ov.state.searchResult = { memories: [{ uri: 'viking://user/fixture/memories/events/fixture.md', score: 0.9, abstract: 'Core memory fixture' }], resources: [], skills: [], total: 1 };
+  }
   const store = new Store(path.join(root, 'state.sqlite3'), logger);
   store.initializeCognition('pi', 'pi-test-authority');
   const imagePath = path.join(root, 'image.png');
@@ -77,7 +96,7 @@ async function fixture(t, { conflict = false, dialogs = false } = {}) {
     : { message_id: 'om_delivered123456' } });
   const logs = [];
   const service = new ActionService({
-    config: { workspace, tempDir: path.join(root, 'tmp'), maxReplyChars: 1_000 },
+    config: { workspace, tempDir: path.join(root, 'tmp'), maxReplyChars: 1_000, ...(ov ? { openVikingConfigPath: ovConfig } : {}) },
     store, connectors,
     logger: { ...logger,
       info: (message, fields) => logs.push({ message, ...fields }),
@@ -94,7 +113,17 @@ async function fixture(t, { conflict = false, dialogs = false } = {}) {
     for await (const chunk of request) body += chunk;
     requests.push(JSON.parse(body));
     const index = requests.length;
-    if (index === 1) {
+    if (isolation) {
+      const steps = [
+        { name: 'openviking_find', input: { query: 'fixture memory' } },
+        ...['configured_tool', 'packaged_tool', 'project_tool', 'project_configured_tool', 'project_packaged_tool',
+          'mcp__global_tools__ping', 'mcp__project_tools__ping'].map((fullName) => ({ fullName, input: {} })),
+        { fullName: 'codemode', input: { code: 'text(await tools.mcp__indirect__ping({}));' } },
+        { fullName: 'tool_search', input: { query: 'mcp__deferred__ping' } },
+        { fullName: 'mcp__deferred__ping', input: {} },
+      ];
+      completion(response, index, steps[index - 1] ?? null);
+    } else if (index === 1) {
       completion(response, index, { name: 'get_message_media', input: { message_id: 'om_first12345678', key: 'img_test12345678' } });
     } else if (index === 2) {
       store.ingest(chatEvent({ messageId: 'om_newer12345678', chatId: 'oc_chat12345678' }));
@@ -135,8 +164,13 @@ async function fixture(t, { conflict = false, dialogs = false } = {}) {
       PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: '1', PI_TELEMETRY: '0',
     } }),
   };
+  // The daemon and its Pi share PI_CODING_AGENT_DIR, as in production: the
+  // launcher reads the same agent directory to load the owner's extensions.
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   agent = new PiAgent(config, store, logger, options);
-  return { agent, config, options, store, connectors, logs, requests, incoming, failures, agentDir, workspace, mcpContents };
+  return { agent, config, options, store, connectors, logs, requests, incoming, failures, agentDir, workspace, mcpContents, isolated, ov };
 }
 
 test('real managed Pi discovers direct MCP tools, sees images, and obeys the Core freshness fence', { timeout: 30_000 }, async (t) => {
@@ -193,9 +227,52 @@ test('real Pi cancels user-extension dialogs and can still complete a tool turn'
   assert.equal(f.connectors.calls.filter(({ action }) => action === 'message.reply').length, 1);
 });
 
+test('real Pi runs without OpenViking\'s own extension while the owner\'s others still load', { timeout: 30_000 }, async (t) => {
+  const f = await fixture(t, { dialogs: true, openviking: true });
+  await f.agent.start();
+  f.agent.deliver('inspect the image and reply', f.incoming.seq);
+  await f.agent.whenIdle();
+  assert.ok(fs.existsSync(path.join(f.agentDir, 'dialog-results.json')), 'the owner\'s extension ran');
+  assert.equal(fs.existsSync(path.join(f.agentDir, 'openviking-loaded')), false, 'OpenViking\'s did not');
+  assert.deepEqual(f.failures, []);
+});
+
 test('real Pi fails startup explicitly when an extension asks before its RPC input reader exists', { timeout: 5_000 }, async (t) => {
   const f = await fixture(t, { dialogs: 'startup' });
   await assert.rejects(f.agent.start(), /interactive dialog during startup/);
   assert.equal(f.agent.child, null);
   assert.equal(f.requests.length, 0);
+});
+
+
+test('real Pi keeps Core OV, built-in, configured/package/project and other MCP tools while blocking OV extensions', { timeout: 45_000 }, async (t) => {
+  const f = await fixture(t, { isolation: true });
+  await f.agent.start();
+  f.agent.deliver('exercise the installed tools', f.incoming.seq);
+  await f.agent.whenIdle();
+  assert.deepEqual(f.failures, []);
+  const names = f.requests[0].tools.map(({ function: tool }) => tool.name);
+  for (const name of ['read', 'bash', 'edit', 'write', 'configured_tool', 'packaged_tool', 'project_tool',
+    'project_configured_tool', 'project_packaged_tool', 'mcp__global_tools__ping', 'mcp__project_tools__ping']) {
+    assert.ok(names.includes(name), `${name} is declared to the real model request`);
+  }
+  for (const name of ['find', 'search', 'read', 'list', 'add_resource', 'remember']) {
+    assert.ok(names.includes(`mcp__personal_agent__openviking_${name}`), `${name} is exposed by Vika`);
+  }
+  assert.equal(names.some((name) => name.startsWith('openviking_') || name === 'disabled_tool'), false);
+  for (const marker of f.isolated.markers) assert.equal(fs.existsSync(marker), false, `${path.basename(marker)} never executed`);
+  const results = JSON.stringify(f.requests.at(-1).messages.filter(({ role }) => role === 'tool'));
+  assert.match(results, /Core memory fixture/);
+  for (const name of ['configured_tool', 'packaged_tool', 'project_tool', 'project_configured_tool', 'project_packaged_tool',
+    'global_tools', 'project_tools', 'indirect', 'deferred']) assert.ok(results.includes(`${name} worked`), `${name} was actually callable`);
+  assert.ok(f.requests.some((request) => request.tools.some(({ function: tool }) => tool.name === 'codemode')));
+  assert.ok(f.requests.some((request) => request.tools.some(({ function: tool }) => tool.name === 'tool_search')));
+  assert.equal(f.ov.state.requests.filter(({ route }) => route === 'POST /api/v1/search/find').length, 1);
+  for (const [file, original] of f.isolated.originals) {
+    const actual = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const expected = JSON.parse(original);
+    // Pi's existing set_steering_mode RPC persists this setting itself.
+    if (file === path.join(f.agentDir, 'settings.json')) expected.steeringMode = 'all';
+    assert.deepEqual(actual, expected, 'extension and MCP configuration is preserved');
+  }
 });

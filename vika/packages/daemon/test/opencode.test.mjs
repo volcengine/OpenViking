@@ -132,6 +132,9 @@ function newAgent(store = makeStore(), options = {}, config = baseConfig) {
   };
   const agent = new OpencodeAgent(config, store, quietLogger, {
     spawn,
+    // Fake processes must never reach taskkill/process.kill with synthetic PIDs.
+    // Real Windows tree termination is covered by windows-process.test.mjs.
+    terminateProcessTree: (child, signal) => child.kill(signal),
     startTimeoutMs: 1_000,
     startStabilityMs: 1,
     controlTimeoutMs: 500,
@@ -211,11 +214,14 @@ describe('OpencodeAgent ACP backend', () => {
     assert.deepEqual(call.args, ['acp', '--cwd', '/tmp/vika-workspace']);
     const env = call.options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(env.PATH.startsWith('/fake:/fake-slack:'));
+    assert.deepEqual(env.PATH.split(path.delimiter).slice(0, 2), ['/fake', '/fake-slack']);
     assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/vika-opencode-data/actions.sock');
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, 'oc-token');
     const configPath = env.OPENCODE_CONFIG;
     assert.ok(configPath.startsWith(path.join(os.tmpdir(), 'vika-opencode-')));
+    // The global config folder is a Vika-owned copy without OpenViking.
+    assert.equal(env.XDG_CONFIG_HOME, path.join(path.dirname(configPath), 'config-home'));
+    assert.ok(fs.existsSync(path.join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.json')));
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.equal(config.mcp.personal_agent.type, 'local');
     assert.deepEqual(config.mcp.personal_agent.command, [

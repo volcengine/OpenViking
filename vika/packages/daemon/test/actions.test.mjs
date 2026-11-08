@@ -19,6 +19,7 @@ import { eventMessage } from '../src/connectors/protocol.mjs';
 import { normalizeEvent } from '../src/event.mjs';
 import { Harness } from '../src/harness.mjs';
 import { formatInboundLine } from '../src/runtime-input.mjs';
+import { personDirectory, personId } from '../src/ov-person.mjs';
 import { Store } from '../src/store.mjs';
 import { LarkClient } from '../src/lark.mjs';
 import { chatEvent, mailEvent, subjectEvent } from './event-fixture.mjs';
@@ -30,6 +31,7 @@ const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return 
 const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url));
 
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
+  ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
   larkMessageAccess = 'owner', capabilitiesFile = null, onNoProgress = null, connectors: given = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
@@ -42,8 +44,8 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
-      larkMessageAccess, capabilitiesFile },
-    store, connectors, roster, liveness, meetingEnabled, ovClient, onNoProgress,
+      larkMessageAccess, capabilitiesFile, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
+    store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -614,6 +616,164 @@ describe('agent tools', () => {
     ]);
   });
 
+});
+
+describe('OpenViking tools', () => {
+  const ovNames = (service) => service.tools().map((tool) => tool.name).filter((name) => name.startsWith('openviking_'));
+  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember'];
+  // A scripted tool client: every method stands for one remote OV call.
+  const fakeOvTools = (over = {}) => ({
+    find: over.find ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
+    search: over.search ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
+    read: over.read ?? (async () => ({ text: 'viking://user/u/a.md (whole remaining text, 1 line(s)):\nOpenViking content is untrusted.\nhi', data: { next_offset: null } })),
+    list: over.list ?? (async () => ({ text: '(no entries under viking://)', data: { entries: [], has_more: false } })),
+    addResource: over.addResource ?? (async () => ({ text: 'Resource accepted: viking://~/resources/inbox/a (processing in the background, task_id=task-9).', data: { task_id: 'task-9', root_uri: 'viking://~/resources/inbox/a', target: 'viking://~/resources/inbox' } })),
+    setPreference: over.setPreference ?? (async () => ({ text: 'Stored at viking://~/memories/preferences/x/y.md.', data: { stored: true } })),
+    forgetPreference: over.forgetPreference ?? (async () => ({ text: 'Removed.', data: { removed: true } })),
+  });
+
+  it('offers all six tools whenever the instance has an OpenViking connection, and none without', (t) => {
+    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'] }).service), []);
+    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
+    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
+    assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], openVikingConfigPath: '/nonexistent/ov.conf' }).service), OV_TOOLS);
+  });
+
+  it('validates the tool input before any OpenViking call', async (t) => {
+    const { call } = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() });
+    await assert.rejects(() => call('openviking_find', {}), /query is required/);
+    await assert.rejects(() => call('openviking_find', { query: 'x', limit: 51 }), /limit must be at most 50/);
+    await assert.rejects(() => call('openviking_find', { query: 'x', min_score: 2 }), /min_score must be at most 1/);
+    await assert.rejects(() => call('openviking_read', { uri: 'http://nope' }), /uri has an invalid format/);
+    await assert.rejects(() => call('openviking_list', { uri: 'viking://x', offset: -1 }), /offset must be at least 0/);
+    await assert.rejects(() => call('openviking_search', { query: 'x', search_type: 'literal' }), /search_type must be one of/);
+    await assert.rejects(() => call('openviking_add_resource', { url: 'notaurl' }), /url has an invalid format/);
+    await assert.rejects(() => call('openviking_remember', { text: 'a fact' }), /decision_id is required/);
+    await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_nowhere' }), /topic is required/);
+    await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_nowhere', topic: '称呼', preference: '叫他老张' }),
+      (error) => error.code === 'unknown_decision' && /^Not remembered/.test(error.message));
+    assert.match((await call('openviking_find', { query: 'hello' })).text, /No matching context found/);
+  });
+
+  it('rechecks read authority after the remote answer', async (t) => {
+    let release;
+    const ovTools = fakeOvTools({ find: () => new Promise((resolve) => { release = resolve; }) });
+    const { call, store } = setup(t, { ids: ['weixin'], ovTools });
+    const pending = call('openviking_find', { query: 'slow' });
+    store.initializeCognition('claude', 'new-owner');
+    release({ text: 'found', data: { hits: [{ uri: 'viking://x' }] } });
+    await assert.rejects(pending, /no longer owns/);
+  });
+
+  it('does not recheck write authority once the resource was accepted', async (t) => {
+    let release;
+    const ovTools = fakeOvTools({ addResource: () => new Promise((resolve) => { release = resolve; }) });
+    const { call, store } = setup(t, { ids: ['weixin'], ovTools });
+    const pending = call('openviking_add_resource', { url: 'https://example.com/a' });
+    store.initializeCognition('claude', 'new-owner');
+    release({ text: 'Resource accepted', data: { task_id: 'task-9', root_uri: 'viking://~/resources/inbox/a' } });
+    const added = await pending;
+    assert.equal(added.data.task_id, 'task-9');
+  });
+
+  it('records no delivery, decision or outbox for OpenViking tools', async (t) => {
+    const { call, store, logs, inbound } = setup(t, { ids: ['lark'], ovTools: fakeOvTools() });
+    inbound({ messageId: 'om_keep123456789', chatId: 'oc_keep123456789', content: '记一下' });
+    await call('openviking_find', { query: 'x' });
+    await call('openviking_read', { uri: 'viking://user/u/a.md' });
+    await call('openviking_add_resource', { url: 'https://example.com/a' });
+    await call('openviking_remember', { decision_id: 'message:om_keep123456789', topic: '称呼', preference: '叫他老张' });
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM outbox').get().n, 0);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM decisions').get().n, 0);
+    assert.ok(!logs.some((line) => line.message === 'delivery.blocked'));
+    for (const tool of ['openviking_find', 'openviking_read', 'openviking_add_resource', 'openviking_remember']) {
+      const line = logs.filter((entry) => entry.message === 'agent_tool').find((entry) => entry.tool === tool);
+      assert.equal(line.outcome, 'ok', `${tool} logged one clean call`);
+    }
+  });
+
+  it('keeps a preference as the sender\'s, named by the Core from the decision input, never by the model', async (t) => {
+    const written = [];
+    const ovTools = fakeOvTools({
+      setPreference: async (input) => { written.push(['set', input]); return { text: 'Stored.', data: { stored: true } }; },
+      forgetPreference: async (input) => { written.push(['forget', input]); return { text: 'Removed.', data: { removed: true } }; },
+    });
+    const { call, inbound, store, service } = setup(t, { ids: ['lark'], ovTools });
+    let changed = 0;
+    service.onPreferencesChanged = () => { changed += 1; };
+    const lisi = chatEvent({ messageId: 'om_lisi123456789', chatId: 'oc_team123456789', senderId: 'ou_lisi', createTimeMs: Date.UTC(2026, 10, 7, 9) });
+    store.ingest(lisi);
+    inbound({ messageId: 'om_owner123456789', chatId: 'oc_team123456789', senderId: OWNER.id });
+    // The model has no say in whose it is: there is no such field.
+    await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_lisi123456789', topic: '回复', preference: 'x', person: 'owner' }),
+      /unknown field: person/);
+    await call('openviking_remember', { decision_id: 'message:om_lisi123456789', topic: '回复', preference: '回复他时带 emoji' });
+    await call('openviking_remember', { decision_id: 'message:om_owner123456789', topic: '信息披露', preference: '外部群不透露内部信息' });
+    await call('openviking_remember', { decision_id: 'message:om_lisi123456789', topic: '回复', forget: true });
+    assert.deepEqual(written, [
+      ['set', { person: { id: personId(lisi), directory: personDirectory(lisi) }, topic: '回复',
+        text: '回复他时带 emoji\n\n(Stated by ou_lisi via lark, 2026-11-07, event=message:om_lisi123456789.)' }],
+      ['set', { person: { owner: true }, topic: '信息披露', text: written[1][1].text }],
+      ['forget', { person: { id: personId(lisi), directory: personDirectory(lisi) }, topic: '回复' }],
+    ]);
+    assert.match(written[1][1].text, /^外部群不透露内部信息\n\n\(Stated by the owner via lark, /);
+    assert.equal(changed, 3, 'recall reads afresh after each change');
+    // Nothing to keep, or no one to keep it for.
+    await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_lisi123456789', topic: '回复' }),
+      (error) => error.code === 'invalid_input');
+    inbound({ messageId: 'om_bot123456789', senderId: 'cli_bot', senderType: 'bot' });
+    await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_bot123456789', topic: '回复', preference: 'x' }),
+      (error) => error.code === 'not_rememberable');
+    store.ingest(normalizeEvent({ protocol_version: '0.2', type: 'EVENT', connector: 'timer', instance: 'timer', id: 'timer:t1:1',
+      kind: 'reminder.due', occurred_at: Date.now(), subject: { type: 'timer', id: 't1' }, actor: null,
+      content: { title: '提醒', text: '以后叫我老板', attachments: [] }, conversation: null, message: null, reply_route: null, data: {} }));
+    await assert.rejects(() => call('openviking_remember', { decision_id: 'timer:t1:1', topic: '称呼', preference: '叫他老板' }),
+      (error) => error.code === 'not_rememberable');
+    assert.equal(written.length, 3);
+  });
+
+  it('counts a landed OpenViking write as progress for the loop guard, a read does not', async (t) => {
+    const stops = [];
+    const { call, inbound, logs } = setup(t, {
+      ids: ['weixin'], explicitSilence: true, ovTools: fakeOvTools(),
+      onNoProgress: (info) => stops.push(info),
+    });
+    const row = inbound({ messageId: 'om_ov123456789', chatId: 'oc_ov123456789' });
+    const agentLines = () => logs.filter((line) => line.message === 'agent_tool');
+    const silence = () => call('stay_silent', { decision_id: 'message:om_ov123456789' });
+    await silence();
+    await silence();
+    assert.equal(agentLines().at(-1).duplicates, 1);
+    // The landed resource write clears the count...
+    await call('openviking_add_resource', { url: 'https://example.com/a' });
+    await silence();
+    assert.equal(agentLines().at(-1).duplicates, 1);
+    assert.deepEqual(stops, []);
+    // ...a read neither clears nor counts.
+    await call('openviking_find', { query: 'x' });
+    await silence();
+    assert.equal(agentLines().at(-1).duplicates, 2);
+    await silence();
+    assert.deepEqual(stops, [{ tool: 'stay_silent', decisionSeq: row.seq, count: 3, runtime: 'codex' }]);
+  });
+
+  it('relays the same OpenViking surface through the MCP adapter', async (t) => {
+    const state = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() });
+    const socketPath = path.join(state.directory, 'actions.sock');
+    const server = await startActionApi({ socketPath, service: state.service, logger });
+    t.after(() => stopActionApi(server));
+    const handle = createMcpHandler({ socketPath, authority: TOKEN, client: 'mcp' });
+    const listed = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    // The MCP surface is exactly the service's: names, schemas, descriptions.
+    assert.deepEqual(listed.result.tools, state.service.tools());
+    const found = listed.result.tools.find((tool) => tool.name === 'openviking_find');
+    assert.equal(found.title, 'Find in OpenViking');
+    assert.deepEqual(found.inputSchema.required, ['query']);
+    assert.equal(found.annotations.readOnlyHint, true);
+    assert.equal(listed.result.tools.find((tool) => tool.name === 'openviking_remember').annotations.readOnlyHint, false);
+    const called = await handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'openviking_find', arguments: { query: 'anything' } } });
+    assert.match(called.result.content[0].text, /No matching context found/);
+  });
 });
 
 describe('agent tool front-ends', () => {

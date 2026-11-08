@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import * as defaultPlatform from '../../daemon/src/platform/index.mjs';
+
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,14 +24,10 @@ export function qrLines(url) {
 }
 
 // The program that opens a link on this machine's desktop; none on a server.
-export function opener(env = process.env, platform = process.platform) {
-  if (platform === 'darwin') return 'open';
-  if (platform === 'linux' && (env.DISPLAY || env.WAYLAND_DISPLAY)) return 'xdg-open';
-  return null;
-}
+export { urlOpenCommand } from '../../daemon/src/platform/index.mjs';
 
-export function openUrl(url, { env = process.env, platform = process.platform } = {}) {
-  const program = opener(env, platform);
+export function openUrl(url, { env = process.env, platform = defaultPlatform } = {}) {
+  const program = platform.urlOpenCommand(env);
   if (!program) return false;
   try {
     spawn(program, [url], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
@@ -81,8 +79,8 @@ export function showScan(prompter, {
     fs.writeFileSync(imagePath, qrPng(matrix), { mode: 0o600, flag: 'wx' });
     process.on('exit', cleanupImage);
   } catch { cleanupImage(); imageDirectory = null; imagePath = null; }
-  const canOpen = Boolean(opener(env));
-  const imageOpener = env.TERM_PROGRAM === 'vscode' || env.VSCODE_IPC_HOOK_CLI ? 'code' : opener(env);
+  const canOpen = Boolean(defaultPlatform.urlOpenCommand(env));
+  const imageOpener = env.TERM_PROGRAM === 'vscode' || env.VSCODE_IPC_HOOK_CLI ? 'code' : defaultPlatform.urlOpenCommand(env);
   const unopened = () => say(t(`打不开，图片在 ${imagePath}`, `Could not open it; the image is at ${imagePath}`));
   const actions = {
     ...(canOpen ? { o: [t('浏览器打开', 'open in browser'), () => {

@@ -1,7 +1,10 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawnDetached } from './platform/index.mjs';
+import * as platform from './platform/index.mjs';
+
+import { spawn as nodeSpawn } from './platform/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';
@@ -13,6 +16,7 @@ import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { codexConfigFile, codexIsolationArgs } from './ov-isolation.mjs';
 
 const CODEX_RUNTIME = getRuntimeDefinition('codex');
 const CODEX_APP_SERVER_CONFIG_ARGS = Object.freeze([
@@ -199,6 +203,7 @@ export class CodexAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this.platform = options.platform ?? platform;
     const runtime = getRuntimeDefinition(options.runtimeId ?? CODEX_RUNTIME.id);
     if (!runtime) throw new Error(`unknown app-server runtime: ${options.runtimeId}`);
     this.runtime = runtime.id;
@@ -213,6 +218,8 @@ export class CodexAgent {
     this.modelSettingKey = options.modelSettingKey ?? `${runtime.id}_model`;
     this.effortSettingKey = options.effortSettingKey ?? (this.supportsEffort ? `${runtime.id}_effort` : '');
     this.appServerConfigArgs = options.appServerConfigArgs ?? CODEX_APP_SERVER_CONFIG_ARGS;
+    // The runtime's own OpenViking plugin stays off (ov-isolation.mjs).
+    this.ovIsolationArgs = options.ovIsolationArgs ?? (() => codexIsolationArgs(codexConfigFile(process.env)));
     this._sanitizeEnv = options.sanitizeEnv ?? sanitizeCodexEnv;
     this.policyVersion = options.policyVersion ?? 'steer-v2';
     this.reconnectBaseMs = options.reconnectBaseMs ?? 1000;
@@ -908,8 +915,9 @@ export class CodexAgent {
 
       const args = [
         'app-server', '--listen', 'stdio://',
-        '-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`,
+        ...(this._usesRpcInstructions() ? [] : ['-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`]),
         ...this.appServerConfigArgs,
+        ...this.ovIsolationArgs(),
       ];
       // The daemon's agent tools ride along as an MCP stdio adapter to the Core.
       const tools = agentToolServer(this.config, this.authorityToken);
@@ -925,7 +933,7 @@ export class CodexAgent {
           cwd: this.config.workspace,
           env: this._sanitizeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
-          detached: process.platform !== 'win32',
+          detached: spawnDetached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) { reject(error); return; }
@@ -985,8 +993,14 @@ export class CodexAgent {
     });
   }
 
+  _usesRpcInstructions() {
+    // TraeX has not established support for Codex's developerInstructions field.
+    return this.platform.maxCommandLineLength !== null && this.runtime === CODEX_RUNTIME.id;
+  }
+
   _threadParams() {
     return {
+      ...(this._usesRpcInstructions() ? { developerInstructions: this.developerInstructionsText } : {}),
       cwd: this.config.workspace,
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',

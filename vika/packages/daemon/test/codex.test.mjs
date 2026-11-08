@@ -288,6 +288,9 @@ describe('formatting helpers', () => {
     assert.match(rendered, /features\.plugins=false/);
     assert.match(rendered, /features\.tool_suggest=false/);
     assert.match(rendered, /features\.apps=false/);
+    // OpenViking's own plugin and Codex's own memory stay off (ov-isolation.mjs).
+    assert.match(rendered, /plugins\.openviking-memory@openviking\.enabled=false/);
+    assert.match(rendered, /features\.memories=false/);
     assert.equal(spawnOptions[0].env.LARKSUITE_CLI_PROFILE, 'test-profile');
     assert.ok(spawnOptions[0].env.PATH.startsWith('/fake:/fake-slack:'));
     assert.equal(spawnOptions[0].env.OPENVIKING_USAGE_VIEW, 'off');
@@ -1364,4 +1367,38 @@ describe('CodexAgent session rotation (slash commands)', () => {
     assert.match(completed.metadata.error, /Unsupported value/);
     assert.doesNotMatch(JSON.stringify(completed), /object Object/);
   });
+});
+
+it('routes long developer instructions through Codex start/resume RPC only when argv is bounded', async () => {
+  const posix = await import('../src/platform/posix.mjs');
+  const windows = await import('../src/platform/win32.mjs');
+  const policy = 'system policy 中文 & "\n'.repeat(4000);
+  for (const platform of [posix, windows]) {
+    const store = makeStore();
+    const calls = [];
+    const { agent, children } = newAgent(store, { platform, spawn: (_command, args) => {
+      const child = new FakeChild(); children.push(child); calls.push(args); return child;
+    } });
+    agent.developerInstructionsText = policy;
+    const child = await handshake(agent, children);
+    const start = child.ofMethod('thread/start').at(-1);
+    if (platform === windows) {
+      assert.equal(start.params.developerInstructions, policy);
+      assert.equal(calls[0].some(arg => arg.startsWith('developer_instructions=')), false);
+    } else {
+      assert.equal(start.params.developerInstructions, undefined);
+      assert.ok(calls[0].some(arg => arg.startsWith('developer_instructions=') && arg.includes('system policy')));
+    }
+    agent.storedThreadId = agent.threadId;
+    const resumed = agent._startOrResumeThread();
+    const resume = child.ofMethod('thread/resume').at(-1);
+    assert.equal(resume.params.developerInstructions, platform === windows ? policy : undefined);
+    child.feed({ id: resume.id, result: { thread: { id: 'th-1' } } });
+    await resumed;
+    child.simulateExit();
+    await agent.stop();
+  }
+  const { agent: traex } = newAgent(makeStore(), { platform: windows, runtimeId: 'traex' });
+  assert.equal(traex._usesRpcInstructions(), false, 'unverified TraeX protocol support is not inferred');
+  assert.equal(traex._threadParams().developerInstructions, undefined);
 });

@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { spawnDetached } from './platform/index.mjs';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn } from './platform/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
@@ -15,6 +17,7 @@ import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { prepareOpencodeConfigHome } from './ov-isolation.mjs';
 
 const OPENCODE_RUNTIME = getRuntimeDefinition('opencode');
 const MAX_LINE_BYTES = 5_000_000;
@@ -57,6 +60,7 @@ export class OpencodeAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this._terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.onTurnAbandoned = options.onTurnAbandoned ?? null;
@@ -207,6 +211,9 @@ export class OpencodeAgent {
         // Pins the conversation policy instruction and the personal_agent MCP
         // server without editing the user's own opencode.json.
         OPENCODE_CONFIG: configPath,
+        // OpenCode's own OpenViking plugin stays off: its global config folder
+        // is a Vika-owned copy without it (ov-isolation.mjs).
+        XDG_CONFIG_HOME: prepareOpencodeConfigHome(path.join(this.runtimeDir, 'config-home'), process.env),
       };
       let child;
       try {
@@ -214,7 +221,7 @@ export class OpencodeAgent {
           cwd: this.config.workspace,
           env,
           shell: false,
-          detached: process.platform !== 'win32',
+          detached: spawnDetached,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {
@@ -239,7 +246,7 @@ export class OpencodeAgent {
           this.child = null;
           this.connected = false;
         }
-        terminateProcessTree(child, 'SIGKILL');
+        this._terminateProcessTree(child, 'SIGKILL');
         this._cleanupRuntimeFiles();
         reject(error);
       };
@@ -594,7 +601,7 @@ export class OpencodeAgent {
       this.stdoutBuffer = appendBounded(this.stdoutBuffer, chunk, 'stdout line');
     } catch (error) {
       this.turnError = error;
-      terminateProcessTree(child, 'SIGKILL');
+      this._terminateProcessTree(child, 'SIGKILL');
       return;
     }
     let index;
@@ -913,7 +920,7 @@ export class OpencodeAgent {
       try { pending.reject(new Error('opencode connection lost')); } catch {}
     }
     this.pendingRpc.clear();
-    if (!this.stopping) terminateProcessTree(child, 'SIGKILL');
+    if (!this.stopping) this._terminateProcessTree(child, 'SIGKILL');
     this._cleanupRuntimeFiles();
     const wasActive = this.turnActive;
     const acceptanceUnknown = wasActive && this.sessionInitialized;
@@ -986,14 +993,14 @@ export class OpencodeAgent {
       return;
     }
     if (child.exitCode !== null) {
-      terminateProcessTree(child, 'SIGKILL');
+      this._terminateProcessTree(child, 'SIGKILL');
       this._cleanupRuntimeFiles();
       return;
     }
     const exited = new Promise((resolve) => child.once('exit', resolve));
-    terminateProcessTree(child, 'SIGTERM');
+    this._terminateProcessTree(child, 'SIGTERM');
     await Promise.race([exited, delay(3_000)]);
-    if (child.exitCode === null) terminateProcessTree(child, 'SIGKILL');
+    if (child.exitCode === null) this._terminateProcessTree(child, 'SIGKILL');
     this._cleanupRuntimeFiles();
   }
 

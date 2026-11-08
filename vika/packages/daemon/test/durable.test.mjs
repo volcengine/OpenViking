@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 import { DURABLE_VERSION, DURABLE_HOST, sanitizeDurableEnv } from '../src/durable-runtime.mjs';
 import { availableChatModels, loadDurableModels, piDefaultModel } from '../src/durable-models.mjs';
 import { DurableAgent } from '../src/durable.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -30,7 +31,7 @@ function baseConfig(overrides = {}) {
     databasePath: path.join(dataDir, 'test.sqlite3'),
     profile: 'test-profile',
     connectors: ['lark'],
-    actionSocketPath: path.join(dataDir, 'actions.sock'),
+    actionSocketPath: localSocketPath(dataDir, 'actions'),
     sendTimeoutMs: 5_000,
     maxReplyChars: 1_000,
     dryRun: true,
@@ -129,8 +130,9 @@ class FakeChild extends EventEmitter {
 // are acknowledged by the test itself.
 function fakeHarness({ config = baseConfig(), store = makeStore(), version = DURABLE_VERSION, ready = {}, agentOptions = {} } = {}) {
   const children = [];
-  const spawn = (_command, _args) => {
+  const spawn = (_command, _args, options) => {
     const child = new FakeChild();
+    child.spawnOptions = options;
     children.push(child);
     const write = child.stdin.write;
     child.stdin.write = (value) => {
@@ -185,6 +187,7 @@ describe('DurableAgent host protocol', () => {
     agent.deliver('current request', 7);
     const submit = lastWrite(child);
     assert.equal(submit.type, 'submit');
+    assert.equal(child.spawnOptions.windowsHide, process.platform === 'win32' ? true : undefined);
     assert.match(submit.text, /current request/);
     assert.match(submit.requestId, new RegExp(`^durable:${agent.threadId}:7$`));
     assert.equal(agent.turnActive, true);
@@ -470,7 +473,7 @@ describe('DurableAgent against the real host', () => {
 
   it('executes a Core tool through actions.sock and feeds the result back', async () => {
     const dataDir = tempDir();
-    const socketPath = path.join(dataDir, 'actions.sock');
+    const socketPath = localSocketPath(dataDir, 'actions');
     const calls = [];
     const server = http.createServer((request, response) => {
       let body = '';
@@ -525,6 +528,78 @@ describe('DurableAgent against the real host', () => {
       const completed = store.activities.find((activity) => activity.kind === 'agent.tool_completed');
       assert.equal(completed.status, 'COMPLETED');
       assert.ok(store.activities.some((activity) => activity.kind === 'agent.note' && activity.summary === 'done'));
+    } finally {
+      await agent.stop();
+      await new Promise((resolve) => server.close(resolve));
+      delete process.env.DURABLE_FAUX;
+      delete process.env.DURABLE_FAUX_RESPONSES;
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('registers the Core OpenViking tools from actions.sock like every other runtime tool', async () => {
+    const dataDir = tempDir();
+    const socketPath = localSocketPath(dataDir, 'actions');
+    const calls = [];
+    const server = http.createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        if (request.method === 'GET' && request.url === '/v1/tools') {
+          response.setHeader('content-type', 'application/json');
+          // The Core's list with an OpenViking tool on it, as service.tools()
+          // serves it; the host has no OpenViking bridge of its own.
+          response.end(JSON.stringify({ tools: [
+            {
+              name: 'send_message', description: 'Send a text message',
+              inputSchema: {
+                type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false,
+              },
+            },
+            {
+              name: 'openviking_find', title: 'Find in OpenViking',
+              description: 'Fast semantic search of the OpenViking long-term memory.',
+              inputSchema: {
+                type: 'object',
+                properties: { query: { type: 'string', minLength: 1, maxLength: 1000 } },
+                required: ['query'], additionalProperties: false,
+              },
+              annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+            },
+          ] }));
+          return;
+        }
+        if (request.method === 'POST' && request.url === '/v1/call') {
+          calls.push(JSON.parse(body));
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({ ok: true, result: { text: 'No matching context found.', data: { hits: [], total: 0 } } }));
+          return;
+        }
+        response.statusCode = 404;
+        response.end();
+      });
+    });
+    await new Promise((resolve) => server.listen(socketPath, resolve));
+    const config = baseConfig({ dataDir });
+    config.actionSocketPath = socketPath;
+    const store = makeStore();
+    const successes = [];
+    const agent = new DurableAgent(config, store, quietLogger, {
+      onTurnSucceeded: (success) => successes.push(success),
+    });
+    process.env.DURABLE_FAUX = '1';
+    process.env.DURABLE_FAUX_RESPONSES = JSON.stringify([
+      { toolCall: { name: 'openviking_find', arguments: { query: 'what do I already know' } } },
+      { text: 'nothing stored yet' },
+    ]);
+    try {
+      await agent.start();
+      agent.deliver('look in memory', 7);
+      await waitFor(() => successes.length === 1, 15_000);
+      assert.deepEqual(calls, [{ tool: 'openviking_find', input: { query: 'what do I already know' } }]);
+      const completed = store.activities.find((activity) => activity.kind === 'agent.tool_completed');
+      assert.equal(completed.status, 'COMPLETED');
+      assert.ok(store.activities.some((activity) => activity.kind === 'agent.note' && activity.summary === 'nothing stored yet'));
     } finally {
       await agent.stop();
       await new Promise((resolve) => server.close(resolve));
@@ -720,6 +795,6 @@ describe('durable model configuration', () => {
       larkCliBin: '/custom-lark/lark-cli',
       slackCliBin: '/custom-slack/slack',
     });
-    assert.equal(safe.PATH, '/custom-lark:/custom-slack:/usr/bin:/bin');
+    assert.equal(safe.PATH, ['/custom-lark', '/custom-slack', '/usr/bin:/bin'].join(path.delimiter));
   });
 });

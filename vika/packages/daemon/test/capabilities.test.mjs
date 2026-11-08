@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { CoreCapabilities } from '../src/capabilities.mjs';
+import { CoreCapabilities } from '../src/core-capabilities.mjs';
 const fixture = fileURLToPath(new URL('./fixtures/capability-mcp.mjs', import.meta.url));
 function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capabilities-'));

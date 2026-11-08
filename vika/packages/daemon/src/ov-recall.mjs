@@ -1,83 +1,101 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { lookupMemberName } from './roster.mjs';
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
-import { peerForEvent } from './ov-peer.mjs';
+import { OV_PREFERENCES, directoryPerson, findPersonDirectory, personDirectory, personId, scanPeople } from './ov-person.mjs';
 
-// Automatic recall, one OpenViking context search per line someone sent, run by
-// the daemon so every runtime gets the same and the sender can be named: the
-// runtime plugins see one process, never who wrote a line.
+// What the daemon shows of OpenViking memory after a line someone sent, the
+// same for every runtime. The instance is one OV user; everything it took part
+// in is its own memory, and a person's preferences sit in the directory the
+// Core keeps for that person (preferences/owner/, preferences/<name>~<id>/;
+// ov-person.mjs), found by its key, never by a name.
 //
-// The search covers the owner's own memory and stored material, and the peers'
-// (ov-peer.mjs). With scope `all` every peer is searched and the sender's
-// memories rank first; with `actor` only the sender's are (an instance facing
-// outsiders, where one person's memory is never another's context). The
-// sender's profile goes first when OV has one: search never returns profiles.
+// Always, when OV holds them:
+// - the owner's preferences: the owner's standing instructions, which govern
+//   the agent everywhere (what it may tell whom, how it answers);
+// - the sender's preferences, when the sender is someone else.
+// With agents[].ovAutoRecall, also one context search on the line itself.
+// Anything else the agent looks up with the openviking_* tools.
 //
 // Bounded like the roster warm-up beside it: past the deadline, or on any
-// failure, the line goes on without recall. Each entry says whose it is; the
-// policy (core.md) says what that means for disclosure.
+// failure, the line goes on with what arrived in time. The policy (core.md)
+// says what each part means for disclosure.
 
 const DEFAULT_TIMEOUT_MS = 3_000;
 const MAX_TOKENS = 1_600;
 const SCORE_THRESHOLD = 0.35;
 // Entries served for the session's last few turns are not served again.
 const DEDUP_TURNS = 5;
-const PROFILE_CHARS = 1_500;
-const PROFILE_TTL_MS = 10 * 60_000;
+// How much of a person's preferences shows after a line: the owner's are the
+// standing rules, so they get more. Topics go newest first and whole; the
+// ones that do not fit are named, to be read on demand.
+const OWNER_CHARS = 3_000;
+const PERSON_CHARS = 1_500;
+const READ_BATCH = 8;
+const CACHE_TTL_MS = 10 * 60_000;
 const MIN_QUERY_CHARS = 2;
 
 const escapeAttribute = (value) => String(value).replace(/[&"<>]/g, (char) => (
   { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]));
 
-// The peer a memory URI is filed under, or null for the owner's own.
-function peerOfUri(uri) {
-  const match = /^viking:\/\/(?:~|user\/[^/]+)\/peers\/([^/]+)\//.exec(String(uri));
-  return match ? match[1] : null;
-}
+const leaf = (uri) => String(uri).replace(/\/+$/, '').split('/').pop() ?? '';
+// OV appends its bookkeeping to a memory file it stores.
+const withoutFields = (text) => String(text).replace(/\n*<!-- MEMORY_FIELDS[\s\S]*?-->\s*$/, '').trim();
 
 export class OVRecall {
-  constructor({ configPath, scope = 'all', store = null, logger, fetchImpl = globalThis.fetch,
+  constructor({ configPath, autoRecall = false, store = null, logger, fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS, clock = Date.now } = {}) {
-    this.connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl, timeoutMs });
-    this.scope = scope === 'actor' ? 'actor' : 'all';
+    this.configPath = configPath;
+    this.fetchImpl = fetchImpl;
+    this.connectionValue = null;
+    this.autoRecall = Boolean(autoRecall);
     this.store = store;
     this.logger = logger;
     this.timeoutMs = timeoutMs;
     this.clock = clock;
-    this.profiles = new Map();
+    this.cache = new Map();
+  }
+
+  // The instance's connection, built on first use so a daemon whose OV config
+  // is unusable still starts: recall then just shows nothing.
+  get connection() {
+    this.connectionValue ??= new OVConnection(readOVConfig(this.configPath), { fetch: this.fetchImpl, timeoutMs: this.timeoutMs });
+    return this.connectionValue;
   }
 
   // The recall block to show after an event's line, or '' when there is none.
   // Never rejects.
   async forEvent(event, { owner = false } = {}) {
     const query = String(event.content ?? '').trim();
-    if (query.length < MIN_QUERY_CHARS) return '';
-    const peer = owner ? null : peerForEvent(event);
-    try {
-      // A profile that cannot be read leaves the search results standing.
-      const [entries, profile] = await Promise.all([this.search(query, peer),
-        peer ? this.profile(peer).catch(() => null) : null]);
-      return this.render(event, { peer, entries, profile });
-    } catch (error) {
+    const sender = owner ? null : personId(event);
+    const senderDirectory = sender ? personDirectory(event) : null;
+    const settled = (promise) => Promise.resolve().then(() => promise).catch((error) => {
       this.logger.debug('ov_recall_skipped', { status: error.httpStatus ?? null });
-      return '';
+      return null;
+    });
+    let timer;
+    const deadline = new Promise((resolve) => { timer = setTimeout(resolve, this.timeoutMs); });
+    const bounded = (promise) => (promise ? Promise.race([settled(promise), deadline.then(() => null)]) : null);
+    try {
+      const [ownerPreferences, senderPreferences, entries] = await Promise.all([
+        bounded(this.preferences({ owner: true })),
+        sender ? bounded(this.preferences({ id: sender, directory: senderDirectory })) : null,
+        this.autoRecall && query.length >= MIN_QUERY_CHARS ? bounded(this.search(query)) : null,
+      ]);
+      return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [] });
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  async search(query, peer) {
+  async search(query) {
     const session = this.sessionId();
     const body = {
       query, mode: 'context', score_threshold: SCORE_THRESHOLD, max_tokens: MAX_TOKENS,
-      ...(this.scope === 'actor' ? { peer_scope: 'actor' } : {}),
       ...(session ? { session_id: session, dedup_turns: DEDUP_TURNS, query_expansion: 'off' } : {}),
     };
-    // The actor peer ranks the sender's memories first (all) or limits the
-    // peers searched to the sender (actor). The owner is no peer.
-    const headers = { ...this.connection.headers, ...(peer ? { 'X-OpenViking-Actor-Peer': peer } : {}) };
     const { result } = await this.connection.send('/api/v1/search/search',
-      { method: 'POST', headers, body: JSON.stringify(body) }, this.timeoutMs);
+      { method: 'POST', headers: this.connection.headers, body: JSON.stringify(body) }, this.timeoutMs);
     return Array.isArray(result?.entries) ? result.entries : [];
   }
 
@@ -88,41 +106,109 @@ export class OVRecall {
     return this.store?.ovSessionFor(this.store.getCognitionState().epoch)?.session_id ?? null;
   }
 
-  // The sender's profile, cached a while (a missing one too).
-  async profile(peer) {
-    const cached = this.profiles.get(peer);
-    if (cached && this.clock() - cached.atMs < PROFILE_TTL_MS) return cached.text;
-    const uri = `viking://~/peers/${peer}/memories/profile.md`;
-    let text = null;
+  // Preferences changed (openviking_remember): read them afresh next time.
+  forgetPreferences() {
+    for (const key of this.cache.keys()) if (key.startsWith('preferences:')) this.cache.delete(key);
+  }
+
+  // A cached read, a missing value too; a failure is not cached.
+  async cached(key, load) {
+    const hit = this.cache.get(key);
+    if (hit && this.clock() - hit.atMs < CACHE_TTL_MS) return hit.value;
+    const value = await load();
+    this.cache.set(key, { value, atMs: this.clock() });
+    return value;
+  }
+
+  async read(uri) {
     try {
       const { result } = await this.connection.json(`/api/v1/content/read?uri=${encodeURIComponent(uri)}`);
-      text = typeof result === 'string' && result.trim() ? result.trim() : null;
+      return typeof result === 'string' && result.trim() ? result.trim() : null;
     } catch (error) {
-      if (error.httpStatus !== 404) throw error;
+      if (error.httpStatus === 404) return null;
+      throw error;
     }
-    this.profiles.set(peer, { text, atMs: this.clock() });
-    return text;
   }
 
-  // Who a memory is from, for the model: the owner, the sender of this line,
-  // or another person, by the name this chat knows them by where it can.
-  who(event, uri, peer) {
-    const filed = peerOfUri(uri);
-    if (!filed) return 'owner';
-    if (filed === peer) return 'sender';
-    const lark = /^lark-(ou_[A-Za-z0-9_-]+)$/.exec(filed);
-    return (lark && event.chatId && lookupMemberName(event.chatId, lark[1])) || filed;
+  // One person's preferences ({ owner } or { id, directory }), their topics
+  // joined under their names within the person's budget. Their directory is
+  // found under their name now, or, renamed since, in a whole-tree scan kept a
+  // while like everything else here.
+  preferences(person) {
+    const key = person.owner ? 'owner' : person.id;
+    if (!key) return Promise.resolve(null);
+    return this.cached(`preferences:${key}`, async () => {
+      const json = (route) => this.connection.json(route);
+      const found = await findPersonDirectory(json, person, () => this.cached('preferences:', () => scanPeople(json)));
+      if (!found) return null;
+      const files = found.entries
+        .filter((entry) => !entry?.isDir && /\.md$/.test(entry?.uri ?? '') && !leaf(entry.uri).startsWith('.'))
+        .sort((a, b) => String(b.modTime ?? '').localeCompare(String(a.modTime ?? '')));
+      return this.within(files, person.owner ? OWNER_CHARS : PERSON_CHARS, `${OV_PREFERENCES}/${found.name}/`);
+    });
   }
 
-  render(event, { peer, entries, profile }) {
+  // Topics newest first, each whole, while they fit; the rest by name, so the
+  // model knows they exist and where to read them. Files past the budget are
+  // not read at all.
+  async within(files, budget, directory) {
+    const topic = (file) => leaf(file.uri).replace(/\.md$/, '');
+    const shown = [];
+    const rest = [];
+    let used = 0;
+    let full = false;
+    for (let start = 0; start < files.length; start += READ_BATCH) {
+      if (full) {
+        rest.push(...files.slice(start).map(topic));
+        break;
+      }
+      const batch = files.slice(start, start + READ_BATCH);
+      const texts = await Promise.all(batch.map((file) => this.read(file.uri)));
+      batch.forEach((file, index) => {
+        const text = withoutFields(texts[index] ?? '');
+        if (!text) return;
+        const block = `## ${topic(file)}\n${text}`;
+        if (used + block.length <= budget) {
+          shown.push(block);
+          used += block.length + 2;
+        } else if (shown.length === 0) {
+          shown.push(`${block.slice(0, budget)}…`);
+          used = budget;
+          full = true;
+        } else {
+          rest.push(topic(file));
+          full = true;
+        }
+      });
+    }
+    if (shown.length === 0) return null;
+    return shown.join('\n\n')
+      + (rest.length ? `\n\n(Not shown, older: ${rest.join(', ')}. Read them with openviking_read under ${directory}.)` : '');
+  }
+
+  // Whose a searched memory is, where its path says: a person's preferences
+  // name them; everything else is the agent's own record.
+  who(uri, { sender }) {
+    const match = /\/memories\/preferences\/([^/]+)\//.exec(String(uri));
+    if (!match) return null;
+    const whose = directoryPerson(match[1]);
+    if (whose?.owner) return 'owner';
+    if (sender && whose?.id === sender) return 'sender';
+    return match[1];
+  }
+
+  render(event, { sender, ownerPreferences, senderPreferences, entries }) {
     const memories = [];
-    if (profile) {
-      const text = profile.length > PROFILE_CHARS ? `${profile.slice(0, PROFILE_CHARS)}…` : profile;
-      memories.push(`<memory who="sender" type="profile">\n${text}\n</memory>`);
+    if (ownerPreferences) {
+      memories.push(`<memory who="owner" type="preferences">\n${ownerPreferences}\n</memory>`);
+    }
+    if (senderPreferences) {
+      memories.push(`<memory who="sender" type="preferences">\n${senderPreferences}\n</memory>`);
     }
     for (const entry of entries) {
       if (!entry.uri) continue;
-      const attributes = `who="${escapeAttribute(this.who(event, entry.uri, peer))}" type="${escapeAttribute(entry.category ?? '')}"`
+      const who = this.who(entry.uri, { sender });
+      const attributes = `${who ? `who="${escapeAttribute(who)}" ` : ''}type="${escapeAttribute(entry.category ?? '')}"`
         + ` uri="${escapeAttribute(entry.uri)}"`;
       const text = String(entry.text ?? '').trim();
       memories.push(text ? `<memory ${attributes}>\n${text}\n</memory>` : `<memory ${attributes} />`);
