@@ -83,7 +83,13 @@ This example now uses `useScopeCascade` and `ScopeCascade`: only three API adapt
 | `slots`   | `renderOption(content, option)`            | Extend/replace rows; nested buttons/links do not select the row.                |
 | `slots`   | `emptyFallback`, `errorFallback`           | Custom empty/error content, including retry actions.                            |
 
-When the selection is missing, empty, absent from `options` or points at a disabled option, the component falls back to the first selectable option in `options` and reports it through `actions.onSelect` so the URL and request parameters follow. Validity is decided from `options` alone: a value merely filtered out of `visibleOptions` by a search is still valid, so searching never switches the scope.
+### Selection normalisation belongs to the host
+
+`ScopeSelector` renders `data.selectedId` exactly as given. When the id is empty, absent from `options` or points at a disabled option, no row is marked as selected and the component does not change the value or call `actions.onSelect` on your behalf.
+
+A scope still needs a definite value, so check the selection after data arrives and pick the first selectable option when it is no longer valid, then write the result back to the URL and request parameters. `ScopeCascade` ships this: its controller falls back, resets descendants and loads the next level once the authoritative list arrives.
+
+Validity is decided from `options` alone: a value merely filtered out of `visibleOptions` by a search is still valid, so searching never switches the scope.
 
 Options require `id`, `label`; optional fields are `icon`, `description`, `disabled`. Labels include `loading`, `searchPlaceholder`, `empty`, `noMatch`, `error`, with English defaults. Pass localized labels to each selector.
 

@@ -128,20 +128,31 @@ export interface ScopeSwitcherData {
    * 当前选中项 id，由宿主持有。命中项渲染勾选标记并使用
    * `role="option"` + `aria-selected` 表达状态。
    *
-   * 可切换层级始终有一个当前作用域，没有「尚未选中」的形态：宿主若还没取到
-   * 数据，传空字符串。选中值缺失、为空、不在 `options` 里或指向禁用项时，组件
-   * 回退到 `options` 里第一个可选项，并通过 `actions.onSelect` 通知宿主。
+   * 组件只按传入的值渲染，不做归一化：id 为空、不在 `options` 里或指向禁用项
+   * 时，列表里没有任何一行被标记为选中，组件也不会替宿主改选中值或回调
+   * `actions.onSelect`。
+   *
+   * 作用域始终要有一个确定的值，因此**归一化由宿主负责**：在数据到达后检查
+   * `selectedId` 是否仍有效，无效则改选第一个可选项，并把结果写回 URL 与请求
+   * 参数。使用 `ScopeCascade` 时这层已经内置——它的 controller 在权威列表到达
+   * 后完成回退、清空下游并加载下一级。
    *
    * 只出现在 `visibleOptions` 之外不算失效：那只说明它被搜索过滤掉了。
    *
    * Selected option id, owned by the host. The matching option renders a check
    * mark and expresses its state with `role="option"` and `aria-selected`.
    *
-   * A selectable level always has a current scope and has no "nothing selected"
-   * form: a host that has not loaded data yet passes an empty string. When the
-   * value is missing, empty, absent from `options` or points at a disabled
-   * option, the component falls back to the first selectable option in `options`
-   * and reports it through `actions.onSelect`.
+   * The component renders the value it is given and never normalises it: an id
+   * that is empty, absent from `options` or points at a disabled option marks no
+   * row as selected, and the component neither changes the value nor calls
+   * `actions.onSelect` on the host's behalf.
+   *
+   * A scope still needs a definite value, so **normalisation belongs to the
+   * host**: after data arrives, check whether `selectedId` is still valid and
+   * pick the first selectable option when it is not, then write the result back
+   * to the URL and request parameters. `ScopeCascade` already does this — its
+   * controller falls back, resets descendants and loads the next level once the
+   * authoritative list arrives.
    *
    * Being absent from `visibleOptions` alone does not invalidate it: that only
    * means the current search filtered it out.
