@@ -20,6 +20,7 @@ import { normalizeEvent } from '../src/event.mjs';
 import { Harness } from '../src/harness.mjs';
 import { formatInboundLine } from '../src/runtime-input.mjs';
 import { personDirectory, personId } from '../src/ov-person.mjs';
+import { localSocketPath, supportsFileModes } from '../src/platform/index.mjs';
 import { Store } from '../src/store.mjs';
 import { LarkClient } from '../src/lark.mjs';
 import { chatEvent, mailEvent, subjectEvent } from './event-fixture.mjs';
@@ -358,10 +359,12 @@ describe('agent tools', () => {
               assert.equal(args[args.indexOf(flag) + 1], `./${name}`);
               assert.equal(path.dirname(cwd), path.join(tempDir, 'outbox'));
               snapshot = path.join(cwd, name);
-              for (const dir of [tempDir, path.dirname(cwd), cwd]) {
-                assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+              if (supportsFileModes) {
+                for (const dir of [tempDir, path.dirname(cwd), cwd]) {
+                  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+                }
+                assert.equal(fs.statSync(snapshot).mode & 0o777, 0o600);
               }
-              assert.equal(fs.statSync(snapshot).mode & 0o777, 0o600);
               assert.equal(fs.readFileSync(snapshot, 'utf8'), 'original bytes');
               return fails
                 ? { code: 1, stdout: '', stderr: 'simulated upload failure' }
@@ -391,13 +394,15 @@ describe('agent tools', () => {
     fs.writeFileSync(path.join(workspace, 'chart.png'), 'image');
     const tempDir = service.config.tempDir;
     fs.mkdirSync(tempDir);
-    fs.chmodSync(tempDir, 0o755);
     const send = () => call('send_message', { chat_id: 'oc_chat12345678', file_path: 'chart.png', decision_id: 'message:om_decision123456' });
-    await assert.rejects(send, /mode 0700/);
-    assert.equal(fs.statSync(tempDir).mode & 0o777, 0o755);
-    fs.chmodSync(tempDir, 0o700);
-    fs.symlinkSync(directory, path.join(tempDir, 'outbox'));
-    await assert.rejects(send, /owned by the daemon user/);
+    if (supportsFileModes) {
+      fs.chmodSync(tempDir, 0o755);
+      await assert.rejects(send, /mode 0700/);
+      assert.equal(fs.statSync(tempDir).mode & 0o777, 0o755);
+      fs.chmodSync(tempDir, 0o700);
+    }
+    fs.symlinkSync(directory, path.join(tempDir, 'outbox'), 'junction');
+    await assert.rejects(send, /Temporary directory must be a directory/);
     assert.equal(connectors.calls.length, 0);
   });
 
@@ -759,7 +764,7 @@ describe('OpenViking tools', () => {
 
   it('relays the same OpenViking surface through the MCP adapter', async (t) => {
     const state = setup(t, { ids: ['weixin'], ovTools: fakeOvTools() });
-    const socketPath = path.join(state.directory, 'actions.sock');
+    const socketPath = localSocketPath(state.directory);
     const server = await startActionApi({ socketPath, service: state.service, logger });
     t.after(() => stopActionApi(server));
     const handle = createMcpHandler({ socketPath, authority: TOKEN, client: 'mcp' });
@@ -779,10 +784,10 @@ describe('OpenViking tools', () => {
 describe('agent tool front-ends', () => {
   async function serve(t, options) {
     const state = setup(t, options);
-    const socketPath = path.join(state.directory, 'actions.sock');
+    const socketPath = localSocketPath(state.directory);
     const server = await startActionApi({ socketPath, service: state.service, logger });
     t.after(() => stopActionApi(server));
-    assert.equal(fs.statSync(socketPath).mode & 0o077, 0);
+    if (supportsFileModes) assert.equal(fs.statSync(socketPath).mode & 0o077, 0);
     return { ...state, socketPath };
   }
 

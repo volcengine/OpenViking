@@ -93,7 +93,7 @@ describe('Lark IM operations', () => {
     assert.equal(send.options.cwd, tempDir);
     assert.ok(send.args.includes('--reply-in-thread'));
     assert.equal(send.args[send.args.indexOf('--video') + 1], './demo.MOV');
-    assert.match(send.args[send.args.indexOf('--video-cover') + 1], /^\.\/\.video-[^/]+\/cover\.jpg$/);
+    assert.match(send.args[send.args.indexOf('--video-cover') + 1], /^\.\/\.video-[^/\\]+[/\\]cover\.jpg$/);
     assert.ok(!send.args.includes('--file'));
     assert.equal(send.args[send.args.indexOf('--idempotency-key') + 1], 'kv');
     assert.deepEqual(fs.readdirSync(tempDir), [], 'temporary cover is removed');
@@ -115,7 +115,7 @@ describe('Lark IM operations', () => {
     const sent = await lark.sendMessage({ chat_id: 'oc_chat12345678',
       content: { type: 'file', path: path.join(tempDir, 'demo.mp4'), name: 'demo.mp4' }, idempotency_key: 'kp' });
     assert.equal(sent.message_id, 'om_video12345678');
-    assert.match(calls[0].args[calls[0].args.indexOf('--video-cover') + 1], /^\.\/\.video-[^/]+\/cover\.png$/);
+    assert.match(calls[0].args[calls[0].args.indexOf('--video-cover') + 1], /^\.\/\.video-[^/\\]+[/\\]cover\.png$/);
     assert.deepEqual([...calls[0].cover.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'a PNG cover');
     assert.deepEqual(warnings.map(({ event, fields }) => [event, fields.error]),
       [['lark_video_cover_placeholder', 'spawn ffmpeg ENOENT']]);
