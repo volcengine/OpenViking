@@ -17,7 +17,7 @@ export type OpenVikingPromptRecallHookApi = {
   on: (
     hookName: string,
     handler: (event: unknown, ctx?: PromptRecallHookContext) => unknown,
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
   ) => void;
 };
 
@@ -28,6 +28,8 @@ export type OpenVikingPromptRecallHookDeps = Omit<PromptHookRecallParams, "sessi
 };
 
 const RECALLED_TURNS_MAX = 64;
+// Covers the health precheck and client setup that run outside autoRecallTimeoutMs.
+const RECALL_HOOK_HEADROOM_MS = 2_000;
 
 /**
  * OpenClaw registers before_prompt_build for a non-bundled plugin only with an
@@ -86,5 +88,8 @@ export function registerOpenVikingPromptRecallHook(deps: OpenVikingPromptRecallH
       }
     }
     return block ? { prependContext: block } : undefined;
+  }, {
+    // OpenClaw otherwise bounds before_prompt_build at 15s; explicit host hook policy still wins.
+    timeoutMs: cfg.autoRecallTimeoutMs + RECALL_HOOK_HEADROOM_MS,
   });
 }

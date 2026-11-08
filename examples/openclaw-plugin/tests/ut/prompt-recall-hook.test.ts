@@ -71,6 +71,20 @@ describe("prompt recall hook grant", () => {
 });
 
 describe("before_prompt_build auto-recall", () => {
+  it("bounds the hook by the configured recall timeout instead of the host default", () => {
+    const on = vi.fn();
+    registerOpenVikingPromptRecallHook({
+      api: { on },
+      cfg: { ...cfg, autoRecallTimeoutMs: 30_000 },
+      logger: makeLogger(),
+      getClient: vi.fn(),
+      resolveAgentId: (sessionId: string) => `agent:${sessionId}`,
+      isBypassedSession: () => false,
+      recall: vi.fn(),
+    });
+    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), { timeoutMs: 32_000 });
+  });
+
   it("prepends recall for the current request rather than the rebuilt prompt", async () => {
     const { hookName, handler, recall } = registerHook();
     expect(hookName).toBe("before_prompt_build");

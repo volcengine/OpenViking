@@ -143,7 +143,7 @@ type OpenClawPluginApi = {
   on: (
     hookName: string,
     handler: (event: unknown, ctx?: HookAgentContext) => unknown,
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
   ) => void;
 };
 
