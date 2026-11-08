@@ -210,6 +210,19 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
     let turnSeq = 0;
     const interrupted = new Set();
     const steered = new Set();
+    // 'inbox': a turn whose input says LONG stays open; an inbox notice makes
+    // it call message_check, and the lines that follow get one reply that
+    // ends the turn. Any other turn replies to its newest line at once.
+    let heldTurn = null;
+    const logError = (error) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
+    const replyToNewest = (text) => {
+      const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
+      const target = [...text.matchAll(/ msg=(\\S+)/g)].at(-1)?.[1];
+      if (!decision) return Promise.resolve();
+      return callTool(actionEndpoint('fake-codex'), 'reply_message', { decision_id: decision, message_id: target, markdown: 'mock reply' })
+        .catch(logError);
+    };
+    const complete = (turnId) => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
     rl.on('line', (line) => {
       let msg;
       try { msg = JSON.parse(line); } catch { return; }
@@ -268,6 +281,9 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
             silence('loop wording ' + calls).then(() => setTimeout(loop, 10));
           };
           loop();
+        } else if (BEHAVIOR === 'inbox') {
+          if (/LONG/.test(text)) heldTurn = turnId;
+          else replyToNewest(text).then(() => complete(turnId));
         } else if (BEHAVIOR === 'fail') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'failed', error: { message: FAIL_BLOB } } } });
         }
@@ -278,6 +294,16 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/steer', text }) + '\\n');
         steered.add(msg.params.expectedTurnId);
         send({ id: msg.id, result: {} });
+        if (BEHAVIOR === 'inbox' && heldTurn) {
+          if (text.startsWith('[daemon inbox]')) {
+            callTool(actionEndpoint('fake-codex'), 'message_check', {})
+              .then((result) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-result', text: result.text }) + '\\n'), logError);
+          } else if (/ event=/.test(text)) {
+            const turnId = heldTurn;
+            heldTurn = null;
+            replyToNewest(text).then(() => complete(turnId));
+          }
+        }
         return;
       }
       if (msg.method === 'turn/interrupt') {

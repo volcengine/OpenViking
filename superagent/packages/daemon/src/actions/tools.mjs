@@ -16,7 +16,8 @@ import { CONTENT_PROPERTIES } from './content.mjs';
 // with `identityInput` reads only as the bot, and `botOnlyDescription` is
 // what it says instead (see toolDefinition); `openviking` marks the
 // OpenViking memory tools, offered when the instance has an OpenViking
-// connection.
+// connection; `inbox` marks message_check, offered only with the inbox
+// scheduler (agents[].scheduler).
 
 const ID = '^[A-Za-z0-9_.:@=+-]{1,256}$';
 const SOURCE = {
@@ -174,6 +175,20 @@ export const TOOLS = [
       reason: { type: 'string', maxLength: 120, description: 'Optional short private reason, e.g. "chatter between others", "waiting for another bot", "newsletter". Kept only in the local Activity log; never sent.' },
     }, ['decision_id']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    // The inbox scheduler's read: offered only with agents[].scheduler inbox.
+    name: 'message_check',
+    inbox: true,
+    title: 'Read waiting inputs',
+    description: 'Deliver inputs that are waiting in your inbox, oldest first. They arrive as your next input lines, in the usual format, right after this call returns; decide on each like any other input. Call it at a checkpoint in your current work when a [daemon inbox] notice says inputs are waiting. Without chat_id it delivers the oldest waiting inputs from every chat; with chat_id (and thread_id) only that chat or thread.',
+    inputSchema: schema({
+      chat_id: { type: 'string', pattern: ID, description: 'Optional: only inputs from this chat, as in the chat= tag of the notice.' },
+      thread_id: { type: 'string', pattern: ID, description: 'Optional, with chat_id: only inputs from this thread, as in the thread= tag.' },
+      source: SOURCE,
+      limit: LIMIT(50, 20),
+    }),
+    annotations: LOCAL_WRITE,
   },
   {
     name: 'list_chats',
