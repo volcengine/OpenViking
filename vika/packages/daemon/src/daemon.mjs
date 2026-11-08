@@ -25,6 +25,7 @@ import { resolveCardAction, settledChoiceCard } from './card-messages.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
 import { OVUnavailableError } from './ov-connection.mjs';
+import { loadOVPersonality } from './ov-identity.mjs';
 import { OVRecall } from './ov-recall.mjs';
 import { TimerConnector, TimerRepository } from './timers.mjs';
 import { OVTimerRepository } from './ov-timers.mjs';
@@ -141,6 +142,9 @@ export class PersonalAgentDaemon {
         status: 'STARTING',
       }, 'starting');
       await this.checkOpenViking(ovClient);
+      this.config.personalityPrompt = await loadOVPersonality(ovClient, this.config, {
+        onCached: () => this.logger.warn('ov_personality_cached_at_startup'),
+      });
       this.timers = this.config.timerStorage === 'sqlite'
         ? new TimerRepository(this.store.db)
         : new OVTimerRepository(ovClient, this.config.instanceId);

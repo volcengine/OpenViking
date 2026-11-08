@@ -69,7 +69,7 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
 }
 
 test('a startup failure points to the instance logs before retrying start', async (t) => {
-  const h = harness(t, ['Vika', '', '', '1', '1', '', '', 'y'], { failStart: true });
+  const h = harness(t, ['Vika', '', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(h.options), 1);
   assert.match(h.written(), /vika logs primary 查看具体错误/);
   assert.match(h.written(), /vika start primary/);
@@ -82,7 +82,7 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
   const ov = { configPath: ovSource, url: 'https://ov.example', usable: true, user: 'amy', authMode: 'api_key', reason: null };
   // The first instance is `primary` without asking.
   //                   name  role  workspace  runtime IMs    channel feishu reads-as-you confirm
-  const h = harness(t, ['小V', '',   '',        '1',    '1,2', '2',    '',    '',          'y'], { ov });
+  const h = harness(t, ['小V', '', '',   '',        '1',    '1,2', '2',    '',    '',          'y'], { ov });
   assert.equal(await setupCommand(h.options), 0);
 
   const manifest = h.manifest();
@@ -106,6 +106,7 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     // The first AI colleague on Feishu stores the owner's meeting notes.
     meetingNotes: true,
     role: 'colleague',
+    personality: 'outgoing',
     model: 'codex:',
   }]);
   // Under an API key the key is the instance's identity; the copy names no peer.
@@ -143,7 +144,7 @@ test('without a usable OV, a new instance goes no further than the OV form', asy
 
 test('the real OV form accepts remote credentials before any IM questions or authorization', async (t) => {
   const h = harness(t, ['3', 'https://memory.example:9443', '1', 'private-key', 'team', 'owner', '',
-    'Vika', '', '', '1', '2', 'y']);
+    'Vika', '', '', '', '1', '2', 'y']);
   h.options.configureOV = configureOpenViking;
   h.options.detect.openViking = detectOpenViking;
   h.options.fetchImpl = async (url, init) => {
@@ -167,7 +168,7 @@ test('the real OV form accepts remote credentials before any IM questions or aut
 
 test('editing the OV connection drops the old peer and keeps the old file; Save applies it and Discard removes the pending copy', async (t) => {
   for (const save of [true, false]) {
-    const h = harness(t, ['2', '9', '4', 'https://memory.example:9443', '1', 'new-key', '', '', '', save ? '11' : '12']);
+    const h = harness(t, ['2', '9', '4', 'https://memory.example:9443', '1', 'new-key', '', '', '', save ? '12' : '13']);
     const before = existing(h, { ovAutoRecall: true });
     fs.mkdirSync(path.dirname(before.ovConfig), { recursive: true });
     const original = JSON.stringify({ url: 'https://old.example', api_key: 'old-key', actor_peer_id: 'original-actor' });
@@ -203,7 +204,7 @@ test('editing the OV connection drops the old peer and keeps the old file; Save 
 });
 
 test('adding an instance offers shared OV connections only and makes it a Trusted user of its own', async (t) => {
-  const h = harness(t, ['1', '1', 'fresh', 'Fresh', '', '', '1', '2', 'y']);
+  const h = harness(t, ['1', '1', 'fresh', 'Fresh', '', '', '', '1', '2', 'y']);
   const before = existing(h);
   fs.mkdirSync(path.dirname(before.ovConfig), { recursive: true });
   const original = JSON.stringify({ url: 'https://other-instance.example', actor_peer_id: 'other-actor' });
@@ -241,7 +242,7 @@ test('adding an instance offers shared OV connections only and makes it a Truste
 
 test('setup prepares and checks the instance OV identity before IM selection, email credentials or scans', async (t) => {
   //                   name role ws  runtime IMs        channel feishu reads-as-you another-mailbox confirm
-  const h = harness(t, ['', '',  '', '1',    '1,2,3,4', '1',    '',    '',          'n',            'y']);
+  const h = harness(t, ['', '', '',  '', '1',    '1,2,3,4', '1',    '',    '',          'n',            'y']);
   const checked = [];
   h.options.detect.openViking = async ({ configPath }) => {
     if (configPath) {
@@ -270,7 +271,7 @@ test('cancelling setup after an administrator key created the instance its user 
   const ov = { configPath: null, url: 'https://ov.example', usable: true, authMode: 'api_key', role: 'admin', account: 'team', user: 'boss',
     identity: { mode: 'register' }, config: { url: 'https://ov.example', api_key: 'admin-key' } };
   // Stops at the IM question, after the instance's OV config was prepared.
-  const h = harness(t, ['', '', '', '1'], { ov });
+  const h = harness(t, ['', '', '', '', '1'], { ov });
   const calls = [];
   h.options.fetchImpl = async (url, init) => {
     calls.push([init.method ?? 'GET', url.replace('https://ov.example', ''), init.headers['X-API-Key']]);
@@ -289,7 +290,7 @@ test('cancelling setup after an administrator key created the instance its user 
 });
 
 test('an unusable generated OV identity fails before IM selection and removes the new config', async (t) => {
-  const h = harness(t, ['', '', '', '1']);
+  const h = harness(t, ['', '', '', '', '1']);
   h.options.detect.openViking = async ({ configPath }) => ({
     configPath: null, url: 'http://127.0.0.1:1933', usable: !configPath, reason: 'identity denied',
   });
@@ -301,7 +302,7 @@ test('an unusable generated OV identity fails before IM selection and removes th
 });
 
 test('an unwritable OV config fails before IM selection without touching existing files', async (t) => {
-  const h = harness(t, ['', '', '', '1']);
+  const h = harness(t, ['', '', '', '', '1']);
   fs.mkdirSync(path.join(h.home, '.vika'), { recursive: true });
   const blocked = path.join(h.home, '.vika', 'ov');
   fs.writeFileSync(blocked, 'existing file');
@@ -312,7 +313,7 @@ test('an unwritable OV config fails before IM selection without touching existin
 });
 
 test('OV going down while answers are collected blocks scans and email credential prompts', async (t) => {
-  for (const answers of [['', '', '', '1', '1', '', '', 'y'], ['', '', '', '1', '1,3', '', '']]) {
+  for (const answers of [['', '', '', '', '1', '1', '', '', 'y'], ['', '', '', '', '1', '1,3', '', '']]) {
     const h = harness(t, answers);
     let checks = 0;
     h.options.detect.openViking = async () => ({
@@ -326,7 +327,7 @@ test('OV going down while answers are collected blocks scans and email credentia
 });
 
 test('editing ordinary settings never probes OV or opens its form and preserves the identity and recall setting', async (t) => {
-  const h = harness(t, ['2', '1', 'Renamed', '11']);
+  const h = harness(t, ['2', '1', 'Renamed', '12']);
   const before = existing(h, { ovAutoRecall: true });
   const checked = [];
   h.options.configureOV = configureOpenViking;
@@ -341,7 +342,7 @@ test('editing ordinary settings never probes OV or opens its form and preserves 
 });
 
 test('returning from OV configuration keeps other unsaved settings and the original OV config', async (t) => {
-  const h = harness(t, ['2', '1', 'Renamed', '9', '7', '11']);
+  const h = harness(t, ['2', '1', 'Renamed', '9', '7', '12']);
   const before = existing(h);
   fs.mkdirSync(path.dirname(before.ovConfig), { recursive: true });
   const original = JSON.stringify({ url: 'https://old.example', actor_peer_id: 'original-actor' });
@@ -358,7 +359,7 @@ test('returning from OV configuration keeps other unsaved settings and the origi
 });
 
 test('reopening OV edits the pending connection under the instance identity, and discarding removes every temporary config', async (t) => {
-  const h = harness(t, ['2', '9', '9', '12']);
+  const h = harness(t, ['2', '9', '9', '13']);
   const before = existing(h);
   fs.mkdirSync(path.dirname(before.ovConfig), { recursive: true });
   const original = JSON.stringify({ url: 'https://old.example', actor_peer_id: 'original-actor' });
@@ -383,7 +384,7 @@ test('reopening OV edits the pending connection under the instance identity, and
 
 test('Telegram-only setup binds a private Start challenge and saves no token in the manifest', async (t) => {
   const token = '123456:abcdefghijklmnopqrstuvwxyz_TEST';
-  const h = harness(t, ['TG Agent', '', '', '3', '4', 'y', token]);
+  const h = harness(t, ['TG Agent', '', '', '', '3', '4', 'y', token]);
   h.options.connect.telegram = connectTelegram;
   h.options.fetchImpl = async (url, init) => {
     const method = url.split('/').at(-1);
@@ -407,7 +408,7 @@ test('Telegram-only setup binds a private Start challenge and saves no token in 
 });
 
 test('QQ-only setup needs no Lark profile, selects QQ as primary and binds before saving', async (t) => {
-  const h = harness(t, ['QQ Agent', '', '', '3', '6', 'y']);
+  const h = harness(t, ['QQ Agent', '', '', '', '3', '6', 'y']);
   h.options.connect.qq = async ({ plan }) => {
     assert.equal(fs.existsSync(path.join(h.home, '.vika', 'config.json')), false);
     h.calls.push(['qq', plan.dataDir]);
@@ -422,7 +423,7 @@ test('QQ-only setup needs no Lark profile, selects QQ as primary and binds befor
 });
 
 test('adding QQ to an existing instance binds only QQ and can choose it as primary', async (t) => {
-  const h = harness(t, ['2', '5', '1,6', '7', '2', '11']);
+  const h = harness(t, ['2', '5', '1,6', '7', '2', '12']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'qq'], channel: 'qq' }]);
@@ -431,7 +432,7 @@ test('adding QQ to an existing instance binds only QQ and can choose it as prima
 });
 
 test('adding Telegram to an existing instance verifies only the new IM and can change the primary', async (t) => {
-  const h = harness(t, ['2', '5', '1,4', '7', '2', '11']);
+  const h = harness(t, ['2', '5', '1,4', '7', '2', '12']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'telegram'], channel: 'telegram' }]);
@@ -442,7 +443,7 @@ test('adding Telegram to an existing instance verifies only the new IM and can c
 });
 
 test('adding Slack to an existing instance pastes tokens for the new IM only and can make it primary', async (t) => {
-  const h = harness(t, ['2', '5', '1,5', '7', '2', '11']);
+  const h = harness(t, ['2', '5', '1,5', '7', '2', '12']);
   const before = existing(h, {});
   h.options.connect.slack = async ({ plan }) => { h.calls.push(['slack', plan.dataDir]); };
   assert.equal(await setupCommand(h.options), 0);
@@ -454,7 +455,7 @@ test('adding Slack to an existing instance pastes tokens for the new IM only and
 });
 
 test('setup detects a primary command that changed the manifest while it was connecting an IM', async (t) => {
-  const h = harness(t, ['2', '5', '1,4', '7', '2', '11']);
+  const h = harness(t, ['2', '5', '1,4', '7', '2', '12']);
   const before = existing(h, { connectors: ['lark', 'slack'] });
   h.options.connect.telegram = async () => {
     updateManifest(path.join(h.home, '.vika', 'config.json'), (value) => { value.agents[0].channel = 'slack'; });
@@ -465,7 +466,7 @@ test('setup detects a primary command that changed the manifest while it was con
 });
 
 test('mixed Telegram setup describes each authorization method and keeps email available', async (t) => {
-  const h = harness(t, ['', '', '', '3', '1,2,3,4', '3', '', '', 'n', 'y']);
+  const h = harness(t, ['', '', '', '', '3', '1,2,3,4', '3', '', '', 'n', 'y']);
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents[0].connectors, ['lark', 'weixin', 'telegram', 'email']);
   assert.equal(h.manifest().agents[0].channel, 'telegram');
@@ -474,10 +475,10 @@ test('mixed Telegram setup describes each authorization method and keeps email a
 });
 
 test('a second instance keeps the shared env and the default instance', async (t) => {
-  const h = harness(t, ['', '', '', '3', '1', '', '', 'y']);
+  const h = harness(t, ['', '', '', '', '3', '1', '', '', 'y']);
   assert.equal(await setupCommand(h.options), 0);
   //                        new  id
-  const second = harness(t, ['1', '', 'Second', '', '', '3', '1', '', '', 'y']);
+  const second = harness(t, ['1', '', 'Second', '', '', '', '3', '1', '', '', 'y']);
   fs.mkdirSync(path.join(second.home, '.vika'), { recursive: true });
   fs.copyFileSync(path.join(h.home, '.vika', 'config.json'), path.join(second.home, '.vika', 'config.json'));
   second.options.allocate = async () => 3739;
@@ -489,13 +490,13 @@ test('a second instance keeps the shared env and the default instance', async (t
 });
 
 test('declining before the scans writes nothing; a Weixin-only instance has no profile and no lark-cli need', async (t) => {
-  const declined = harness(t, ['', '', '', '1', '2', 'n']);
+  const declined = harness(t, ['', '', '', '', '1', '2', 'n']);
   assert.equal(await setupCommand(declined.options), 1);
   assert.equal(fs.existsSync(path.join(declined.home, '.vika', 'config.json')), false);
   assert.deepEqual(fs.readdirSync(path.join(declined.home, '.vika', 'ov')), []);
   assert.deepEqual(declined.calls, []);
 
-  const weixin = harness(t, ['', '', '', '1', '2', 'y']);
+  const weixin = harness(t, ['', '', '', '', '1', '2', 'y']);
   weixin.options.env.LARK_CLI_BIN = '';
   assert.equal(await setupCommand(weixin.options), 0);
   const [agent] = weixin.manifest().agents;
@@ -509,7 +510,7 @@ test('declining before the scans writes nothing; a Weixin-only instance has no p
 
 test('mailboxes come with an IM, are checked before the scans and saved with the manifest', async (t) => {
   //                          IMs: email alone, then Weixin + email; two mailboxes
-  const h = harness(t, ['', '', '', '1', '3', '2,3', 'y', 'n', 'y']);
+  const h = harness(t, ['', '', '', '', '1', '3', '2,3', 'y', 'n', 'y']);
   const accounts = ['alice.example@gmail.com', '10001@qq.com'];
   const taken = [];
   h.options.connect.email = async ({ taken: given }) => {
@@ -529,7 +530,7 @@ test('mailboxes come with an IM, are checked before the scans and saved with the
   assert.match(h.written(), /邮箱\s+alice\.example@gmail\.com、10001@qq\.com\n/);
   assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'email', 'weixin', 'start', 'restart', 'start']);
 
-  const declined = harness(t, ['', '', '', '1', '1,3', '', '', 'n', 'n']);
+  const declined = harness(t, ['', '', '', '', '1', '1,3', '', '', 'n', 'n']);
   assert.equal(await setupCommand(declined.options), 1);
   assert.equal(fs.existsSync(path.join(declined.home, '.vika', 'email')), false, 'nothing is saved before the scans');
 });
@@ -539,14 +540,14 @@ function existing(h, agent) {
   fs.mkdirSync(path.join(h.home, '.vika'), { recursive: true });
   const full = { id: 'asd', displayName: 'ASD', channel: 'lark', connectors: ['lark'], profile: 'vika-asd', port: 3738,
     dataDir: path.join(h.home, '.vika', 'data', 'asd'), workspace: path.join(h.home, 'ws'), ovConfig: path.join(h.home, '.vika', 'ov', 'asd.json'), ovAutoRecall: false,
-    stagedReplies: false, naturalWriting: true, explicitSilence: false, meetingNotes: false, model: 'codex:', ...agent };
+    personality: 'outgoing', stagedReplies: false, naturalWriting: true, explicitSilence: false, meetingNotes: false, model: 'codex:', ...agent };
   fs.writeFileSync(path.join(h.home, '.vika', 'config.json'),
     JSON.stringify({ version: 1, defaultInstance: full.id, env: {}, agents: [full] }));
   return full;
 }
 
 test('setup saves the safe temporary directory for /root data without moving the data or workspace', async (t) => {
-  const h = harness(t, ['2', '1', 'New name', '11']);
+  const h = harness(t, ['2', '1', 'New name', '12']);
   const before = existing(h, { dataDir: '/root/.vika/data/asd' });
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, displayName: 'New name', tempDir: '/tmp/vika-asd' }]);
@@ -555,7 +556,7 @@ test('setup saves the safe temporary directory for /root data without moving the
 
 test('setup keeps per-instance, manifest and shell temporary directory overrides', async (t) => {
   for (const source of ['instance', 'manifest', 'shell']) {
-    const h = harness(t, ['2', '1', 'New name', '11']);
+    const h = harness(t, ['2', '1', 'New name', '12']);
     const before = existing(h, { dataDir: '/root/.vika/data/asd',
       ...(source === 'instance' ? { tempDir: '/tmp/custom' } : {}) });
     if (source === 'shell') h.options.env.VIKA_TEMP_DIR = '/tmp/custom';
@@ -596,20 +597,20 @@ test('removal confirmation defaults to cancel, in Chinese and English', async (t
 // The change menu: 1 名字 2 角色 3 工作目录 4 运行时 5 IM 6 飞书应用 7 主渠道 8 邮箱 9 OpenViking 10 保存 11 放弃.
 test('changing an instance lists every setting; only the ones opened change', async (t) => {
   //                    change asd  IMs  lark+weixin  primary  weixin  save
-  const h = harness(t, ['2',        '5', '1,2',       '7',     '2',    '11']);
+  const h = harness(t, ['2',        '5', '1,2',       '7',     '2',    '12']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   const [after] = h.manifest().agents;
   assert.deepEqual(after, { ...before, connectors: ['lark', 'weixin'], channel: 'weixin' });
   // The list shows every value; what was changed is marked.
-  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+没有设置（只用默认规则）\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.vika\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
-  assert.match(h.written(), /5\) 接入的 IM\s+飞书、微信（已改）[\s\S]*7\) 主渠道\s+微信（已改）\n[\s\S]*11\) 保存（2 项改动）/);
+  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+没有设置（只用默认规则）\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.vika\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 性格\s+外向活泼\n  12\) 保存\n  13\) 放弃修改/);
+  assert.match(h.written(), /5\) 接入的 IM\s+飞书、微信（已改）[\s\S]*7\) 主渠道\s+微信（已改）\n[\s\S]*12\) 保存（2 项改动）/);
   assert.match(h.written(), /将修改 ASD（asd）：\n  接入微信（需要扫码）\n  主渠道：飞书 → 微信\n/);
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['weixin', before.dataDir], ['restart', 'asd']]);
   assert.match(h.written(), /ASD（asd）已更新。\n  微信：先给它发一句「你好」/);
 
   // Saving nothing, or leaving, writes and restarts nothing.
-  for (const [answers, said] of [[['2', '11'], /没有改动/], [['2', '1', '新名字', '12'], /已放弃，没有保存任何改动/]]) {
+  for (const [answers, said] of [[['2', '12'], /没有改动/], [['2', '1', '新名字', '13'], /已放弃，没有保存任何改动/]]) {
     const idle = harness(t, answers);
     const config = existing(idle, {});
     assert.equal(await setupCommand(idle.options), 0);
@@ -621,7 +622,7 @@ test('changing an instance lists every setting; only the ones opened change', as
 
 test('changing an instance runtime saves the setup selector before restarting it', async (t) => {
   //                    change runtime Pi save
-  const h = harness(t, ['2',    '4',    '3', '11']);
+  const h = harness(t, ['2',    '4',    '3', '12']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, model: 'pi' }]);
@@ -631,7 +632,7 @@ test('changing an instance runtime saves the setup selector before restarting it
 
 test('其他设置 switches each setting where it is, says what changes, and saves it in the manifest', async (t) => {
   //                    change  other  staged  natural  staged  silence  done  save
-  const h = harness(t, ['2',    '10',  '1',    '2',     '1',    '3',     '5',  '11']);
+  const h = harness(t, ['2',    '10',  '1',    '2',     '1',    '3',     '5',  '12']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, naturalWriting: false, explicitSilence: true }]);
@@ -645,7 +646,7 @@ test('其他设置 switches each setting where it is, says what changes, and sav
 
   // OpenViking memory has no switch: a manifest's own ovAutoRecall stays as
   // written, and the retired peer-scope and remember options are dropped on save.
-  const recall = harness(t, ['2', '10', '1', '5', '11']);
+  const recall = harness(t, ['2', '10', '1', '5', '12']);
   const old = existing(recall, { ovAutoRecall: true, ovRemember: true, ovRecallScope: 'actor' });
   assert.equal(await setupCommand(recall.options), 0);
   const { ovRemember: _remember, ovRecallScope: _scope, ...kept } = old;
@@ -655,7 +656,7 @@ test('其他设置 switches each setting where it is, says what changes, and sav
 
 test('a new instance takes a shipped role by what it is for', async (t) => {
   //                   name  role:assistant  workspace  runtime IMs  confirm
-  const h = harness(t, ['',  '2',            '',        '1',    '2', 'y']);
+  const h = harness(t, ['',  '2', '',            '',        '1',    '2', 'y']);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(h.manifest().agents[0].role, 'assistant');
   assert.match(h.written(), /1\) AI 同事  你的 AI 分身[^\n]*\n  2\) 个人助理  只为你工作[^\n]*\n  3\) 答疑助手  [^\n]*\n  4\) 自己写 prompt/);
@@ -666,7 +667,7 @@ test('a new instance takes a shipped role by what it is for', async (t) => {
 test('an instance can use its own role file, begun from a shipped role, written only when saved', async (t) => {
   const roleFile = (h) => path.join(h.home, '.vika', 'roles', 'asd.md');
   //                    change  role  own  default path  start from qa  save
-  const h = harness(t, ['2',    '2',  '4', '',           '3',           '11']);
+  const h = harness(t, ['2',    '2',  '4', '',           '3',           '12']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, role: roleFile(h) }]);
@@ -678,7 +679,7 @@ test('an instance can use its own role file, begun from a shipped role, written 
   assert.deepEqual(h.calls, [['restart', 'asd']]);
 
   // A file that is there already is used as it is; discarding writes nothing.
-  const kept = harness(t, ['2', '2', '4', '~/mine.md', '11']);
+  const kept = harness(t, ['2', '2', '4', '~/mine.md', '12']);
   existing(kept, { role: 'colleague' });
   fs.writeFileSync(path.join(kept.home, 'mine.md'), 'my own words\n');
   assert.equal(await setupCommand(kept.options), 0);
@@ -686,7 +687,7 @@ test('an instance can use its own role file, begun from a shipped role, written 
   assert.equal(fs.readFileSync(path.join(kept.home, 'mine.md'), 'utf8'), 'my own words\n');
   assert.doesNotMatch(kept.written(), /先用哪个角色的 prompt 填上/);
 
-  const discarded = harness(t, ['2', '2', '4', '', '1', '12']);
+  const discarded = harness(t, ['2', '2', '4', '', '1', '13']);
   const config = existing(discarded, {});
   assert.equal(await setupCommand(discarded.options), 0);
   assert.deepEqual(discarded.manifest().agents, [config]);
@@ -695,7 +696,7 @@ test('an instance can use its own role file, begun from a shipped role, written 
 
 test('dropping the primary IM moves the primary to what is left; a change the daemon would reject goes back to the list', async (t) => {
   //                    change  IMs  weixin  save
-  const h = harness(t, ['2',    '5', '2',    '11']);
+  const h = harness(t, ['2',    '5', '2',    '12']);
   existing(h, { connectors: ['lark', 'weixin'], channel: 'lark' });
   assert.equal(await setupCommand(h.options), 0);
   const [after] = h.manifest().agents;
@@ -704,18 +705,18 @@ test('dropping the primary IM moves the primary to what is left; a change the da
   assert.deepEqual(h.calls, [['restart', 'asd']]);
 
   //                     change IMs  +weixin save  (refused)  leave
-  const ark = harness(t, ['2',  '5', '1,2',  '11',            '12']);
+  const ark = harness(t, ['2',  '5', '1,2',  '12',            '13']);
   const config = existing(ark, { model: 'ark', volcSessionId: 'sesn-seed12345678', volcEnvironmentId: 'env-12345678' });
   assert.equal(await setupCommand(ark.options), 0);
   assert.match(ark.written(), /4\) Agent 运行时\s+ark\n/);
-  assert.match(ark.written(), /这样改不行：.*cannot use the ark runtime[\s\S]*12\) 放弃修改/);
+  assert.match(ark.written(), /这样改不行：.*cannot use the ark runtime[\s\S]*13\) 放弃修改/);
   assert.deepEqual(ark.manifest().agents, [config]);
   assert.deepEqual(ark.calls, []);
 });
 
 test('an instance\'s mailboxes are changed from their own menu until done', async (t) => {
   //                    change  mailboxes  remove gmail  done  save
-  const h = harness(t, ['2',    '8',       '5',          '1',  '11']);
+  const h = harness(t, ['2',    '8',       '5',          '1',  '12']);
   const file = (id) => path.join(h.home, '.vika', 'email', 'asd', `${id}.json`);
   for (const [id, address] of [['email-gmail', 'me@gmail.com'], ['email-qq', 'me@qq.com']]) {
     fs.mkdirSync(path.dirname(file(id)), { recursive: true });
@@ -737,13 +738,13 @@ test('setup stops early when no runtime can run, and reports a start failure aft
   assert.equal(await setupCommand(none.options), 1);
   assert.match(none.written(), /没有可用的 agent 运行时/);
 
-  const webDown = harness(t, ['', '', '', '1', '1', '', '', 'y']);
+  const webDown = harness(t, ['', '', '', '', '1', '1', '', '', 'y']);
   webDown.options.control.restart = async () => { throw new Error('port 3737 is in use'); };
   assert.equal(await setupCommand(webDown.options), 0);
   assert.match(webDown.written(), /vika-web 没有起来：port 3737 is in use/);
   assert.deepEqual(webDown.calls.map(([kind]) => kind), ['lark', 'start', 'start', 'greet']);
 
-  const failing = harness(t, ['', '', '', '1', '1', '', '', 'y'], { failStart: true });
+  const failing = harness(t, ['', '', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(failing.options), 1);
   assert.equal(failing.manifest().agents.length, 1);
   assert.match(failing.written(), /配置已保存，但启动没有完成：pm2 is not installed/);
@@ -818,7 +819,7 @@ test('QQ verification cannot go back after Slack has already bound in the same s
   h.options.connect.slack = async ({ canGoBack }) => { verified.push(['slack', canGoBack]); };
   h.options.connect.qq = async ({ canGoBack }) => { verified.push(['qq', canGoBack]); };
   const driving = h.drive([
-    ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
+    ['机器人名字', RIGHT], ['它的角色', RIGHT], ['它的性格', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
     ['接入哪些 IM', ' ', DOWN, DOWN, DOWN, DOWN, ' ', DOWN, ' ', RIGHT],
     ['主渠道', DOWN, RIGHT], ['开始接入', '\r'],
   ]);
@@ -847,7 +848,7 @@ test('back from Telegram key entry returns to setup confirmation without saving 
   const h = terminalHarness(t);
   h.options.connect.telegram = connectTelegram;
   const driving = h.drive([
-    ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
+    ['机器人名字', RIGHT], ['它的角色', RIGHT], ['它的性格', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
     ['接入哪些 IM', ' ', DOWN, DOWN, DOWN, ' ', RIGHT],
     ['开始接入', '\r'], ['Telegram Bot token', LEFT], ['开始接入', 'n', '\r'],
   ]);
@@ -874,7 +875,7 @@ test('back during Telegram verification cancels polling and returns an existing 
   const driving = h.drive([
     ['要做什么', DOWN, '\r'], ['放弃修改', DOWN, DOWN, DOWN, DOWN, '\r'],
     ['接入哪些 IM', DOWN, DOWN, DOWN, ' ', RIGHT],
-    ['放弃修改', DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, '\r'],
+    ['放弃修改', DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, '\r'],
     ['Telegram Bot token', '123456:abcdefghijklmnopqrstuvwxyz_TEST', '\r'], ['点 Start', LEFT],
     ['放弃修改', '\x03'],
   ]);
@@ -894,7 +895,7 @@ test('← goes back a question with its answer kept, → takes the value shown, 
     ['机器人名字', '小', 'V', '\r'],
     ['它的角色', LEFT],
     ['机器人名字', RIGHT],
-    ['它的角色', RIGHT],
+    ['它的角色', RIGHT], ['它的性格', RIGHT],
     ['工作目录', RIGHT],
     ['Agent 运行时', RIGHT],
     ['接入哪些 IM', RIGHT],
@@ -939,13 +940,13 @@ test('a new instance\'s OV menu is a step like the others: ← leaves it, ← co
     ['要做什么', '\r'],
     // The connection typed in setup last time is listed first.
     ['选择 OpenViking 连接', '\r'],
-    ['实例名称', 'fresh', '\r'], ['机器人名字', 'Fresh', '\r'], ['它的角色', '\r'], ['工作目录', '\r'], ['Agent 运行时', '\r'],
+    ['实例名称', 'fresh', '\r'], ['机器人名字', 'Fresh', '\r'], ['它的角色', '\r'], ['它的性格', '\r'], ['工作目录', '\r'], ['Agent 运行时', '\r'],
     // The instance's OV identity is written by now; all the way back to the menu.
-    ['接入哪些 IM', LEFT], ['Agent 运行时', LEFT], ['工作目录', LEFT], ['它的角色', LEFT], ['机器人名字', LEFT], ['实例名称', LEFT],
+    ['接入哪些 IM', LEFT], ['Agent 运行时', LEFT], ['工作目录', LEFT], ['它的性格', LEFT], ['它的角色', LEFT], ['机器人名字', LEFT], ['实例名称', LEFT],
     ['选择 OpenViking 连接', DOWN, '\r'],
     // The CLI's own key: sharing its identity is a choice of its own.
     ['这个实例在 OpenViking 里的身份', '\r'],
-    ['实例名称', RIGHT], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
+    ['实例名称', RIGHT], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['它的性格', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
     ['接入哪些 IM', '\r'], ['飞书机器人', '\r'], ['允许机器人以你的身份', '\r'], ['开始扫码', '\r'],
   ]);
   assert.equal(await setupCommand(h.options), 0);
@@ -967,9 +968,9 @@ test('changing the instance name on the way back replaces the pending OV identit
     return { configPath: null, url: 'http://127.0.0.1:1933', usable: true };
   };
   const driving = h.drive([
-    ['要做什么', '\r'], ['实例名称', RIGHT], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
-    ['接入哪些 IM', LEFT], ['Agent 运行时', LEFT], ['工作目录', LEFT], ['它的角色', LEFT], ['机器人名字', LEFT],
-    ['实例名称', 'renamed', '\r'], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
+    ['要做什么', '\r'], ['实例名称', RIGHT], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['它的性格', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
+    ['接入哪些 IM', LEFT], ['Agent 运行时', LEFT], ['工作目录', LEFT], ['它的性格', LEFT], ['它的角色', LEFT], ['机器人名字', LEFT],
+    ['实例名称', 'renamed', '\r'], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['它的性格', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
     ['接入哪些 IM', '\x03'],
   ]);
   await assert.rejects(setupCommand(h.options), { name: 'PromptAborted' });
@@ -1089,7 +1090,7 @@ function recordLark(h, result = {}) {
 
 test('a new instance can pick an existing Feishu bot: the scan is told so, and the owner is warned about sharing it', async (t) => {
   //                   name role ws  runtime IMs  feishu: pick existing  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '2',                   '',           'y']);
+  const h = harness(t, ['', '', '',  '', '1',    '1', '2',                   '',           'y']);
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(given[0].source, 'select');
@@ -1104,7 +1105,7 @@ test('a new instance can pick an existing Feishu bot: the scan is told so, and t
 
 test('typing the App ID and App Secret is a question like the others: checked at once, one scan left', async (t) => {
   //                   name role ws  runtime IMs  feishu: by hand  App ID     secret  tenant  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '3',             'cli_abc', 'sec',  '2',    '',           'y']);
+  const h = harness(t, ['', '', '',  '', '1',    '1', '3',             'cli_abc', 'sec',  '2',    '',           'y']);
   const given = recordLark(h);
   const checked = [];
   h.options.fetchImpl = async (url, init) => {
@@ -1127,7 +1128,7 @@ test('typing the App ID and App Secret is a question like the others: checked at
 
 test('Feishu is offered with the account it needs; a scan by one that cannot run bots comes back to the confirmation with the answers kept', async (t) => {
   //                   name    role ws  runtime IMs  feishu  reads-as-you  confirm  confirm again
-  const h = harness(t, ['小V', '',  '', '1',    '1', '',     '',           'y',     'y']);
+  const h = harness(t, ['小V', '', '',  '', '1',    '1', '',     '',           'y',     'y']);
   const notice = '飞书不给应用 cli_doubao 发访问凭证：豆包账号';
   let tries = 0;
   h.options.connect.lark = async ({ plan, profile }) => {
@@ -1147,7 +1148,7 @@ test('Feishu is offered with the account it needs; a scan by one that cannot run
 
 test('changing the app to one whose account cannot run bots comes back to the list, saying why, with nothing saved', async (t) => {
   //                    change asd  飞书应用  create  reads-as-you  save  discard
-  const h = harness(t, ['2',        '6',      '2',    '',           '11', '12']);
+  const h = harness(t, ['2',        '6',      '2',    '',           '12', '13']);
   const before = existing(h, {});
   h.options.connect.lark = async () => { throw new GoBack('飞书不给应用 cli_doubao 发访问凭证'); };
   assert.equal(await setupCommand(h.options), 0);
@@ -1158,7 +1159,7 @@ test('changing the app to one whose account cannot run bots comes back to the li
 
 test('an App ID typed in whose account cannot run bots is told so, not called wrong', async (t) => {
   //                   name role ws  runtime IMs  by hand  App ID        secret  tenant  again?
-  const h = harness(t, ['', '',  '', '1',    '1', '3',     'cli_doubao', 's',    '',     'n']);
+  const h = harness(t, ['', '', '',  '', '1',    '1', '3',     'cli_doubao', 's',    '',     'n']);
   h.options.fetchImpl = async () => ({ json: async () => ({ code: 21001, msg: 'access denied by access control policy' }) });
   await assert.rejects(setupCommand(h.options), { name: 'PromptAborted' });
   const output = h.written();
@@ -1168,7 +1169,7 @@ test('an App ID typed in whose account cannot run bots is told so, not called wr
 
 test('an instance with Feishu can switch to another app; the bot takes the app\'s name unless the owner keeps theirs', async (t) => {
   //                    change asd  飞书应用  pick existing  reads-as-you  save  call it 小助手
-  const h = harness(t, ['2',        '6',      '3',           '',           '11', 'y']);
+  const h = harness(t, ['2',        '6',      '3',           '',           '12', 'y']);
   const before = existing(h, {});
   fs.mkdirSync(path.join(h.home, '.vika'), { recursive: true });
   const given = recordLark(h, { name: '小助手' });
@@ -1182,7 +1183,7 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['lark', 'asd'], ['restart', 'asd'], ['greet', 'ou_owner']]);
 
   // A bot long called something else keeps that name.
-  const keeping = harness(t, ['2', '6', '3', '', '11', 'n']);
+  const keeping = harness(t, ['2', '6', '3', '', '12', 'n']);
   const kept0 = existing(keeping, {});
   recordLark(keeping, { name: '小助手' });
   assert.equal(await setupCommand(keeping.options), 0);
@@ -1190,7 +1191,7 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
   assert.match(keeping.calls.find(([kind]) => kind === 'greet')[2], /我是 ASD/);
 
   // Keeping the app connects nothing.
-  const kept = harness(t, ['2', '6', '1', '11']);
+  const kept = harness(t, ['2', '6', '1', '12']);
   existing(kept, {});
   assert.equal(await setupCommand(kept.options), 0);
   assert.match(kept.written(), /没有改动/);
@@ -1199,7 +1200,7 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
 
 test('a new Feishu bot asks whether it may read as the owner; no keeps it to its own chats, and that is saved', async (t) => {
   //                   name role ws  runtime IMs  feishu  reads-as-you: no  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '',     '2',              'y']);
+  const h = harness(t, ['', '', '',  '', '1',    '1', '',     '2',              'y']);
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
   assert.match(h.written(), /允许机器人以你的身份搜索和读取飞书消息？[\s\S]*授权后飞书不会收回，这个机器人以后改不回来/);
@@ -1208,28 +1209,28 @@ test('a new Feishu bot asks whether it may read as the owner; no keeps it to its
   assert.equal(h.manifest().agents[0].larkMessageAccess, 'bot');
 
   // Allowing it, the default, leaves the manifest as it always was.
-  const allowed = harness(t, ['', '', '', '1', '1', '', '', 'y']);
+  const allowed = harness(t, ['', '', '', '', '1', '1', '', '', 'y']);
   const allowedGiven = recordLark(allowed);
   assert.equal(await setupCommand(allowed.options), 0);
   assert.equal(allowedGiven[0].access, 'owner');
   assert.equal('larkMessageAccess' in allowed.manifest().agents[0], false);
 
   // Without Feishu there is nothing to ask.
-  const weixin = harness(t, ['', '', '', '1', '2', 'y']);
+  const weixin = harness(t, ['', '', '', '', '1', '2', 'y']);
   assert.equal(await setupCommand(weixin.options), 0);
   assert.doesNotMatch(weixin.written(), /以你的身份搜索和读取/);
 });
 
 test('an instance keeps how its app reads; another app is asked again, starting from the current answer', async (t) => {
   // Kept: nothing is asked, and it still reads only its own chats.
-  const kept = harness(t, ['2', '1', 'Renamed', '11']);
+  const kept = harness(t, ['2', '1', 'Renamed', '12']);
   const before = existing(kept, { larkMessageAccess: 'bot' });
   assert.equal(await setupCommand(kept.options), 0);
   assert.doesNotMatch(kept.written(), /以你的身份搜索和读取/);
   assert.deepEqual(kept.manifest().agents, [{ ...before, displayName: 'Renamed' }]);
 
   //                         change asd  飞书应用  pick existing  reads-as-you (as it was)  save  call it 小助手
-  const switched = harness(t, ['2',        '6',      '3',           '',                       '11', 'n']);
+  const switched = harness(t, ['2',        '6',      '3',           '',                       '12', 'n']);
   const was = existing(switched, { larkMessageAccess: 'bot' });
   const given = recordLark(switched, { name: '小助手' });
   assert.equal(await setupCommand(switched.options), 0);
@@ -1237,7 +1238,7 @@ test('an instance keeps how its app reads; another app is asked again, starting 
   assert.deepEqual(switched.manifest().agents, [was]);
 
   // Allowed this time: the next app reads as the owner.
-  const widened = harness(t, ['2', '6', '3', '1', '11', 'n']);
+  const widened = harness(t, ['2', '6', '3', '1', '12', 'n']);
   existing(widened, { larkMessageAccess: 'bot' });
   recordLark(widened, { name: '小助手' });
   assert.equal(await setupCommand(widened.options), 0);
@@ -1246,7 +1247,7 @@ test('an instance keeps how its app reads; another app is asked again, starting 
 
 test('ticking Feishu on an instance that had none asks where its bot comes from, right away', async (t) => {
   //                    change asd  IMs  lark+weixin  pick existing  reads-as-you  save
-  const h = harness(t, ['2',        '5', '1,2',       '2',           '',           '11']);
+  const h = harness(t, ['2',        '5', '1,2',       '2',           '',           '12']);
   const before = existing(h, { channel: 'weixin', connectors: ['weixin'], profile: undefined });
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
@@ -1257,7 +1258,7 @@ test('ticking Feishu on an instance that had none asks where its bot comes from,
 
 test('an App ID typed in for a bot on a webhook is refused there, and another one can be typed', async (t) => {
   //                   name role ws  runtime IMs  by hand  App ID      secret  tenant  another?  App ID      secret  tenant  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '3',     'cli_hook', 's1',   '',     'y',      'cli_good', 's2',   '',     '',           'y']);
+  const h = harness(t, ['', '', '',  '', '1',    '1', '3',     'cli_hook', 's1',   '',     'y',      'cli_good', 's2',   '',     '',           'y']);
   const given = recordLark(h);
   h.options.fetchImpl = async (url, init = {}) => ({ json: async () => {
     if (url.endsWith('/tenant_access_token/internal')) return { code: 0, tenant_access_token: `t-${JSON.parse(init.body).app_id}` };
@@ -1307,7 +1308,7 @@ test('on a terminal, setup asks the owner to reply on Feishu and waits; s skips 
         : new Promise((resolve) => signal.addEventListener('abort', () => resolve(false)))) };
     };
     const driving = h.drive([
-      ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT], ['接入哪些 IM', RIGHT], ['飞书机器人', RIGHT],
+      ['机器人名字', RIGHT], ['它的角色', RIGHT], ['它的性格', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT], ['接入哪些 IM', RIGHT], ['飞书机器人', RIGHT],
       ['允许机器人以你的身份', RIGHT], ['开始扫码', '\r'], ['确认它收得到你的消息', ...(arrives ? [] : ['s'])],
     ]);
     assert.equal(await setupCommand(h.options), 0);
@@ -1557,7 +1558,7 @@ test('when the scan confirmation never arrives, m switches to typing the App ID 
 const ENGLISH_RUNTIMES = RUNTIMES.map((runtime) => ({ ...runtime, label: runtime.id === 'pi' ? 'Pi (built in)' : runtime.label, note: 'ok' }));
 
 test('English setup offers QQ and describes credentials and private-chat binding', async (t) => {
-  const h = harness(t, ['QQ Agent', '', '', '1', '6', 'y'], { runtimes: ENGLISH_RUNTIMES });
+  const h = harness(t, ['QQ Agent', '', '', '', '1', '6', 'y'], { runtimes: ENGLISH_RUNTIMES });
   h.options.env.VIKA_LANG = 'en';
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(h.manifest().agents[0].channel, 'qq');
@@ -1569,7 +1570,7 @@ test('English setup offers QQ and describes credentials and private-chat binding
 
 test('in English, a first setup says it all in English, and the bot says hello in English', async (t) => {
   //                   name   role  workspace  runtime IMs    channel feishu reads-as-you confirm
-  const h = harness(t, ['Vee', '',   '',        '1',    '1,2', '1',    '',    '',          'y'], { runtimes: ENGLISH_RUNTIMES });
+  const h = harness(t, ['Vee', '', '',   '',        '1',    '1,2', '1',    '',    '',          'y'], { runtimes: ENGLISH_RUNTIMES });
   h.options.env.VIKA_LANG = 'en';
   assert.equal(await setupCommand(h.options), 0);
   const text = h.written();
@@ -1605,7 +1606,7 @@ test('with a locale that is not Chinese, a terminal setup asks the language firs
   assert.doesNotMatch(again.screen(), /Language/);
 
   // Without a terminal nothing is asked or kept: Chinese it is.
-  const piped = harness(t, ['', '', '', '1', '1', '', '', 'n']);
+  const piped = harness(t, ['', '', '', '', '1', '1', '', '', 'n']);
   piped.options.env.LANG = 'en_US.UTF-8';
   assert.equal(await setupCommand(piped.options), 1);
   assert.match(piped.written(), /什么都没保存；准备好了再运行 ~\/\.vika\/bin\/vika setup。/);
@@ -1614,29 +1615,29 @@ test('with a locale that is not Chinese, a terminal setup asks the language firs
 
 test('in English, changing an instance: the list, what a setting says, the changes and the result', async (t) => {
   //                    change asd  IMs  lark+weixin  primary  weixin  save
-  const h = harness(t, ['2', '5', '1,2', '7', '2', '11'], { runtimes: ENGLISH_RUNTIMES });
+  const h = harness(t, ['2', '5', '1,2', '7', '2', '12'], { runtimes: ENGLISH_RUNTIMES });
   h.options.env.VIKA_LANG = 'en';
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'weixin'], channel: 'weixin' }]);
   const text = h.written();
   assert.doesNotMatch(text, /[一-鿿]/);
-  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+none \(default rules only\)\n  3\) Workspace\s+~\/ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Save\n  12\) Discard changes/);
+  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+none \(default rules only\)\n  3\) Workspace\s+~\/ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Personality\s+Outgoing\n  12\) Save\n  13\) Discard changes/);
   // What a setting says shows above the list drawn after it.
   assert.doesNotMatch(text, /No OpenViking found|Stop using it/);
-  assert.match(text, /11\) Save \(2 changes\)/);
+  assert.match(text, /12\) Save \(2 changes\)/);
   assert.match(text, /Changing ASD \(asd\):\n  Connect WeChat \(needs a scan\)\n  Primary channel: Feishu\/Lark → WeChat\n/);
   assert.match(text, /ASD \(asd\) is updated\.\n  WeChat: Say "hi" to it first/);
 });
 
 test('meeting notes: on for the first assistant or colleague on Feishu, off for a Q&A bot and for a second instance', async (t) => {
   //                   name role workspace runtime IMs feishu reads-as-you confirm
-  const h = harness(t, ['', '',  '',       '3',    '1', '',    '',          'y']);
+  const h = harness(t, ['', '', '',  '',       '3',    '1', '',    '',          'y']);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(h.manifest().agents[0].meetingNotes, true);
   assert.match(h.written(), /其他设置\s+开着：自然写作、显式不回复、会议纪要入库（以后在修改实例里调）/);
 
-  const second = harness(t, ['1', '', 'Second', '', '', '3', '1', '', '', 'y']);
+  const second = harness(t, ['1', '', 'Second', '', '', '', '3', '1', '', '', 'y']);
   fs.mkdirSync(path.join(second.home, '.vika'), { recursive: true });
   fs.copyFileSync(path.join(h.home, '.vika', 'config.json'), path.join(second.home, '.vika', 'config.json'));
   second.options.allocate = async () => 3739;
@@ -1644,14 +1645,14 @@ test('meeting notes: on for the first assistant or colleague on Feishu, off for 
   assert.deepEqual(second.manifest().agents.map(({ id, meetingNotes }) => [id, meetingNotes]), [['primary', true], ['agent2', false]]);
 
   //                    name role:qa workspace runtime IMs feishu reads-as-you confirm
-  const qa = harness(t, ['', '3',    '',       '3',    '1', '',    '',          'y']);
+  const qa = harness(t, ['', '3', '',    '',       '3',    '1', '',    '',          'y']);
   assert.equal(await setupCommand(qa.options), 0);
   assert.equal(qa.manifest().agents[0].meetingNotes, false);
 });
 
 test('会议纪要入库 is one instance\'s: refused while another has it, switched on like any other setting', async (t) => {
   //                    change asd  other  notes  done  discard
-  const h = harness(t, ['2',        '10',  '4',   '5',  '12']);
+  const h = harness(t, ['2',        '10',  '4',   '5',  '13']);
   const asd = existing(h, {});
   const bee = { ...asd, id: 'bee', displayName: 'BEE', profile: 'vika-bee', port: 3739, dataDir: path.join(h.home, '.vika', 'data', 'bee'),
     workspace: path.join(h.home, 'ws-bee'), ovConfig: path.join(h.home, '.vika', 'ov', 'bee.json'), meetingNotes: true };
@@ -1663,7 +1664,7 @@ test('会议纪要入库 is one instance\'s: refused while another has it, switc
   assert.deepEqual(h.calls, []);
 
   //                     change asd  other  notes  done  save
-  const on = harness(t, ['2',        '10',  '4',   '5',  '11']);
+  const on = harness(t, ['2',        '10',  '4',   '5',  '12']);
   const before = existing(on, {});
   assert.equal(await setupCommand(on.options), 0);
   assert.deepEqual(on.manifest().agents, [{ ...before, meetingNotes: true }]);
@@ -1673,7 +1674,7 @@ test('会议纪要入库 is one instance\'s: refused while another has it, switc
 
 test('an instance whose Feishu app lacks what this release needs says so; its 飞书应用 setting completes it on saving', async (t) => {
   //                   change asd  feishu app  add what is missing  save
-  const h = harness(t, ['2',        '6',        '1',                 '11']);
+  const h = harness(t, ['2',        '6',        '1',                 '12']);
   const before = existing(h, {});
   const needs = (agent) => ({ agent, count: 3, missing: { scopes: { tenant: ['im:message'], user: [] }, events: ['im.message.receive_v1', 'drive.notice.comment_add_v1'], callbacks: [] }, login: [] });
   h.options.detect.larkApps = async ({ manifest }) => [needs(manifest.agents[0])];
@@ -1747,4 +1748,25 @@ test('expandHome expands home prefixes without changing literal paths', () => {
   for (const literal of ['~other/workspace', 'workspace', path.join(home, 'existing')]) {
     assert.equal(expandHome(literal, home), literal);
   }
+});
+
+test('personality is asked after role, defaults to outgoing, and can be changed independently', async (t) => {
+  const h = harness(t, ['', '2', '', '', '1', '2', 'y']);
+  assert.equal(await setupCommand(h.options), 0);
+  assert.equal(h.manifest().agents[0].personality, 'outgoing');
+  assert.ok(h.written().indexOf('它的性格') > h.written().indexOf('它的角色'));
+  assert.match(h.written(), /性格\s+外向活泼/);
+
+  const reserved = harness(t, ['', '3', '2', '', '1', '2', 'y']);
+  assert.equal(await setupCommand(reserved.options), 0);
+  assert.equal(reserved.manifest().agents[0].role, 'qa');
+  assert.equal(reserved.manifest().agents[0].personality, 'reserved');
+  assert.match(reserved.written(), /被叫到才说话，也接着回答追问/);
+
+  const changed = harness(t, ['2', '11', '2', '12']);
+  const before = existing(changed, { role: 'assistant' });
+  assert.equal(await setupCommand(changed.options), 0);
+  assert.deepEqual(changed.manifest().agents[0], { ...before, personality: 'reserved' });
+  assert.match(changed.written(), /性格：外向活泼 → 沉静内敛/);
+  assert.deepEqual(changed.calls, [['restart', 'asd']]);
 });

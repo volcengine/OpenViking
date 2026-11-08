@@ -267,6 +267,7 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     // roleSeed is the role a new file of theirs starts from (written on save).
     role: current ? current.role ?? null : ROLE_PRESETS[0],
     roleSeed: null,
+    personality: current?.personality ?? 'outgoing',
     workspace: current?.workspace ?? path.join(homeDir, 'vika-workspace', id),
     runtime: kept ?? runtimes.find((runtime) => runtime.available && (!current || runtime.model === current.model)),
     connectors,
@@ -324,13 +325,24 @@ const ROLE_CHOICES = () => ({
   },
   assistant: {
     label: t('个人助理', 'Personal assistant'),
-    hint: t('只为你工作：记事、提醒，主动把值得知道的事告诉你', 'works for you alone: remembers, reminds, and tells you what is worth knowing'),
+    hint: t('只为你工作：记事、提醒，处理个人事务', 'works for you alone: notes, reminders, and personal tasks'),
   },
   qa: {
     label: t('答疑助手', 'Q&A assistant'),
-    hint: t('在答疑群里查证后把问题讲明白，注意隐私，无关的话题不接', 'answers questions in Q&A groups after checking the sources, guards privacy, skips what is off-topic'),
+    hint: t('服务产品或项目的使用者：查证后解答问题', 'serves product or project users: answers questions after checking sources'),
   },
 });
+
+const PERSONALITY_CHOICES = () => [
+  { value: 'outgoing', label: t('外向活泼', 'Outgoing'), hint: t('相关的话题、能帮上忙的都会接话，不重复其他 agent 的回答', 'joins relevant discussions when useful, without repeating other agents') },
+  { value: 'reserved', label: t('沉静内敛', 'Reserved'), hint: t('被叫到才说话，也接着回答追问；群里的讨论只听不插嘴，适合人多的大群', 'speaks when addressed and follows up; listens to other discussions, suited to large groups') },
+];
+const personalityShown = (state) => PERSONALITY_CHOICES().find(({ value }) => value === state.personality)?.label;
+async function askPersonality({ prompter }, state) {
+  const choices = PERSONALITY_CHOICES();
+  state.personality = await prompter.select(t('它的性格（在群里多主动）', 'Its personality (group participation)'), choices,
+    { initial: Math.max(0, choices.findIndex(({ value }) => value === state.personality)), label: t('性格', 'Personality') });
+}
 
 const customRole = (role) => Boolean(role) && path.isAbsolute(role);
 
@@ -652,6 +664,7 @@ const SETTINGS = [
   { key: 'ovConfig', label: () => 'OpenViking', ask: (ctx) => ctx.editOV(),
     shown: (state, { homeDir }) => shortenHome(state.ovConfig, homeDir) },
   { key: 'switches', label: () => t('其他设置', 'Other settings'), ask: askSwitches, shown: switchesShown },
+  { key: 'personality', label: () => t('性格', 'Personality'), ask: askPersonality, shown: personalityShown },
 ];
 
 const mailChanged = (state) => state.mail.added.length + state.mail.updated.size + state.mail.removed.length > 0;
@@ -1590,6 +1603,7 @@ async function setupFlow({
       workspace: state.workspace,
       model: state.runtime.model,
     };
+    agent.personality = state.personality;
     if (state.role) agent.role = state.role;
     else delete agent.role;
     if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `vika-${state.id}`;
@@ -1651,6 +1665,7 @@ async function setupFlow({
     table(prompter, t(`将添加实例 ${state.id}`, `New instance ${state.id}`), [
       [t('机器人', 'Bot'), `${state.displayName} · ${state.runtime.label}`],
       [t('角色', 'Role'), roleShown(state, homeDir)],
+      [t('性格', 'Personality'), personalityShown(state)],
       [t('消息渠道', 'Channels'), channels],
       ...(larkSource(state, null) ? [[t('飞书机器人', 'Feishu/Lark bot'), larkAppShown(state, null)]] : []),
       ...(addresses.length ? [[t('邮箱', 'Email'), list(addresses)]] : []),
@@ -1669,7 +1684,7 @@ async function setupFlow({
 
   const steps = current ? [] : [
     { section: { title: t('OpenViking 记忆', 'OpenViking memory'), step: 1, total: 4 }, ask: chooseOV },
-    { section: { title: t('机器人', 'Bot'), step: 2, total: 4 }, ask: askId }, { ask: askName }, { ask: askRole }, { ask: askWorkspace }, { ask: askRuntime },
+    { section: { title: t('机器人', 'Bot'), step: 2, total: 4 }, ask: askId }, { ask: askName }, { ask: askRole }, { ask: askPersonality }, { ask: askWorkspace }, { ask: askRuntime },
     { ask: prepareOV },
     { section: { title: t('消息渠道', 'Channels'), step: 3, total: 4 }, ask: askIms }, { ask: askChannel }, { ask: askLarkApp }, { ask: askMail },
     { section: { title: t('确认', 'Confirm'), step: 4, total: 4 }, ask: confirmNew },
@@ -1886,6 +1901,10 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
   const was = connectorsOf(before);
   if (before.ovConfig !== after.ovConfig) changes.push(t('更新 OpenViking 连接', 'Update the OpenViking connection'));
   if (before.displayName !== after.displayName) changes.push(`${t('机器人名字：', 'Bot name: ')}${before.displayName} → ${after.displayName}`);
+  if ((before.personality ?? 'outgoing') !== after.personality) {
+    changes.push(t(`性格：${personalityShown({ personality: before.personality ?? 'outgoing' })} → ${personalityShown(after)}`,
+      `Personality: ${personalityShown({ personality: before.personality ?? 'outgoing' })} → ${personalityShown(after)}`));
+  }
   if (before.role !== after.role) {
     const shown = (agent) => roleShown(agent, homeDir);
     changes.push(t(`角色：${shown(before)} → ${shown(after)}（模型会开一次新的会话）`, `Role: ${shown(before)} → ${shown(after)} (the model starts a new session)`));
