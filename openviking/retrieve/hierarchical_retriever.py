@@ -157,8 +157,8 @@ class HierarchicalRetriever:
 
         if not await vector_proxy.collection_exists_bound():
             logger.warning(
-                "[HierarchicalRetriever] Collection %s does not exist",
-                vector_proxy.collection_name,
+                "[HierarchicalRetriever] Collection for account %s does not exist",
+                ctx.account_id,
             )
             return QueryResult(
                 query=query,

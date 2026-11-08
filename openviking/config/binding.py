@@ -14,7 +14,11 @@ from typing import Optional
 
 from openviking.config.account_config import AccountConfig
 from openviking.config.assembly import build_config_source, resolve_config_source_settings
-from openviking.config.manager import AccountCandidateValidator, RuntimeConfigManager
+from openviking.config.manager import (
+    AccountCandidateContext,
+    AccountCandidateValidator,
+    RuntimeConfigManager,
+)
 from openviking.config.merge import apply_three_state_patch
 from openviking.config.source.base import ConfigSource
 from openviking.config.source.file_source import FileConfigSource
@@ -51,6 +55,8 @@ def _build_cluster(old: OpenVikingConfig, override: dict) -> OpenVikingConfig:
     stored override may contain top-level fields from a newer binary, so that
     runtime-only rebuild intentionally ignores those fields.
     """
+    if override and "runtime_mode" in override:
+        raise ValueError("runtime_mode is startup-only and cannot be set in dynamic configuration")
     runtime_override = filter_runtime_fields(OpenVikingConfig, override or {})
     merged = apply_three_state_patch(
         old.model_dump(by_alias=True, exclude_unset=True),
@@ -87,6 +93,21 @@ def _validate_request(patch: dict, is_account: bool, creating: bool) -> None:
         if "global" in patch["ttl"]:
             patch["ttl"]["global_"] = patch["ttl"].pop("global")
     validate_patch(model, patch, creating=creating)
+
+
+def _validate_serverless_account(context: AccountCandidateContext) -> None:
+    if context.new_view.cluster.runtime_mode != "serverless":
+        return
+    account = context.new_view.account
+    sections = ("vlm", "embedding", "vectordb")
+    has_business_settings = any(getattr(account, section) is not None for section in sections)
+    had_business_settings = context.old_view is not None and any(
+        getattr(context.old_view.account, section) is not None for section in sections
+    )
+    if context.creating or has_business_settings or had_business_settings:
+        missing = [section for section in sections if getattr(account, section) is None]
+        if missing:
+            raise ValueError("Serverless account requires settings." + ", settings.".join(missing))
 
 
 def build_runtime_config_manager(
@@ -131,6 +152,10 @@ def manager_over_source(
         build_account=_build_account,
         validate_request=_validate_request,
         account_candidate_validators=[
+            AccountCandidateValidator(
+                sections=frozenset({"vlm", "embedding", "vectordb"}),
+                validate=_validate_serverless_account,
+            ),
             AccountCandidateValidator(
                 sections=frozenset({"embedding", "vectordb"}),
                 validate=validate_account_vector_candidate,
