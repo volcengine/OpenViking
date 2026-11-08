@@ -56,6 +56,20 @@ export default defineConfig({
       source: { entry: { [name]: entry } },
     })),
   ],
-  output: { target: 'web' },
+  output: {
+    target: 'web',
+    // 默认的 `'auto'` 会在每次构建前清空 `dist/`，重建期间产物短暂消失。文档站的
+    // dev server 正盯着这个目录，一旦在那几毫秒里解析模块就会报「找不到模块」，
+    // 且文件回来后不会自动恢复。产物文件名稳定、就地覆盖，因此这里不清空；需要
+    // 干净构建时用 `npm run clean:lib`。
+    //
+    // The default `'auto'` empties `dist/` before every build, so the output is
+    // briefly absent while it rebuilds. The docs dev server watches that
+    // directory and fails with "module not found" if it resolves during those
+    // milliseconds, without recovering once the file returns. Output names are
+    // stable and overwritten in place, so skip the clean; use `npm run clean:lib`
+    // when a from-scratch build is needed.
+    cleanDistPath: false,
+  },
   plugins: [pluginReact(), pluginSvgr()],
 });

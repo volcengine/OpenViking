@@ -18,6 +18,7 @@
     "typecheck": "npm run build:lib && tsc --noEmit -p packages/react/tsconfig.json && tsc --noEmit -p packages/react/tsconfig.config.json && tsc --noEmit -p docs/tsconfig.json",
     "test": "npm run build:lib && node --test scripts/package.test.mjs \"packages/react/test/*.test.mjs\"",
     "build:lib": "npm run build --workspace @openviking/react",
+    "clean:lib": "node -e \"require('node:fs').rmSync('packages/react/dist',{recursive:true,force:true})\"",
     "build:docs": "npm run build --workspace @openviking/ui-docs",
     "build": "npm run build:lib && npm run build:docs",
     "preview": "npm run preview --workspace @openviking/ui-docs --",
