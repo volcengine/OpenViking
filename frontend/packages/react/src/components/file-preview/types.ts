@@ -434,6 +434,8 @@ export interface FilePreviewLabels {
   copyPath?: string;
   /** 编辑区文本框的无障碍名称。Accessible name of the editor textarea. */
   editor?: string;
+  /** 读取失败后退出编辑态的按钮文案。Label of the button that leaves editing after a failed load. */
+  leaveEditing?: string;
   /** 重试按钮文案。Retry button label. */
   retry?: string;
   /** 读取失败时的提示。Message shown when reading failed. */

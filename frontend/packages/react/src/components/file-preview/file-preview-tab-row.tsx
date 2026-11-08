@@ -100,9 +100,52 @@ export function FilePreviewTabRow({
     return () => observer.disconnect();
   }, [activeKey, tabs]);
 
+  // roving tabindex 的键盘导航：未选中的页签 `tabIndex=-1`，只有方向键能把
+  // 焦点移过去。缺了它，键盘用户 Tab 到当前页签后就被挡在正文里，永远选不到
+  // 其他页签。
+  //
+  // Keyboard navigation for the roving tabindex: unselected tabs are `tabIndex=-1`
+  // and only the arrow keys can reach them. Without this a keyboard user tabs to
+  // the active tab and then straight into the body, never reaching another tab.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!keys.includes(event.key)) return;
+    const buttons = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+        '[role="tab"]:not(:disabled)',
+      ),
+    );
+    if (buttons.length === 0) return;
+    const current = buttons.indexOf(event.target as HTMLButtonElement);
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? buttons.length - 1
+          : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) %
+            buttons.length;
+    const target = buttons[next];
+    if (!target) return;
+    event.preventDefault();
+    target.focus();
+    onSelect(target.id.replace('ov-file-preview-tab-', ''));
+  };
+
   return (
     <div className="ov-file-preview__tab-row">
-      <div role="tablist" className="ov-file-preview__tab-track" ref={trackRef}>
+      <div
+        role="tablist"
+        className="ov-file-preview__tab-track"
+        ref={trackRef}
+        // `tabIndex=-1` 让 tablist 可被编程聚焦（ARIA 要求带交互角色且监听
+        // 键盘的元素可聚焦），但不进入 Tab 顺序——焦点仍由各个 tab 承载。
+        //
+        // `tabIndex=-1` keeps the tablist programmatically focusable, as ARIA
+        // requires of an interactive role that handles keys, without putting it in
+        // the tab order — the individual tabs carry focus.
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+      >
         {tabs.map((tab) => {
           const selected = tab.key === activeKey;
           return (

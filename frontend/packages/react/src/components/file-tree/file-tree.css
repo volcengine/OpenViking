@@ -14,18 +14,48 @@
   --ov-ui-file-tree-row-height: 32px;
   --ov-ui-file-tree-row-radius: 4px;
   --ov-ui-file-tree-indent: 20px;
-  --ov-ui-file-tree-text: var(--ov-ui-color-text-1, #0b0b0f);
-  --ov-ui-file-tree-text-muted: var(--ov-ui-color-text-3, #6e718c);
-  --ov-ui-file-tree-icon: var(--ov-ui-color-text-2, #3f3f51);
-  --ov-ui-file-tree-row-hover: var(--ov-ui-color-bg-5, #f1f2f9);
+  --ov-ui-file-tree-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-ui-file-tree-text-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default, #6e718c)
+  );
+  --ov-ui-file-tree-icon: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default, #3f3f51)
+  );
+  --ov-ui-file-tree-row-hover: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default, #f1f2f9)
+  );
   /* 选中态用中性底而非主色浅底：主色浅底在白底上几乎看不出差别，
      且与宿主的树一致，选中只靠底色深浅区分，不额外引入品牌色。 */
-  --ov-ui-file-tree-row-selected: var(--ov-ui-color-bg-4, #f6f7fa);
-  --ov-ui-file-tree-guide: var(--ov-ui-color-border-2, #e1e4f2);
-  --ov-ui-file-tree-spinner-track: var(--ov-ui-color-border-3, #d7daea);
-  --ov-ui-file-tree-spinner: var(--ov-ui-color-primary, #5252ff);
-  --ov-ui-file-tree-action: var(--ov-ui-color-primary, #5252ff);
-  --ov-ui-file-tree-warning: var(--ov-ui-color-warning, #b26a00);
+  --ov-ui-file-tree-row-selected: var(
+    --ov-ui-color-bg-4,
+    var(--ov-ui-bg-4-default, #f6f7fa)
+  );
+  --ov-ui-file-tree-guide: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+  --ov-ui-file-tree-spinner-track: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default, #d7daea)
+  );
+  --ov-ui-file-tree-spinner: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-ui-file-tree-action: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-ui-file-tree-warning: var(
+    --ov-ui-color-warning,
+    var(--ov-ui-warning-default, #b26a00)
+  );
 
   display: flex;
   box-sizing: border-box;
@@ -234,8 +264,14 @@
   max-width: 320px;
   padding: 6px 8px;
   border-radius: var(--ov-ui-file-tree-row-radius);
-  background: var(--ov-ui-color-tooltip-bg, #1f2329);
-  color: var(--ov-ui-color-tooltip-text, #fff);
+  background: var(
+    --ov-ui-color-tooltip-bg,
+    var(--ov-ui-tooltip-bg-default, #1f2329)
+  );
+  color: var(
+    --ov-ui-color-tooltip-text,
+    var(--ov-ui-tooltip-text-default, #fff)
+  );
   font-size: 12px;
   line-height: 18px;
   pointer-events: none;
@@ -282,7 +318,10 @@
 }
 
 .ov-file-tree__state-row[data-tone='error'] {
-  color: var(--ov-ui-color-status-error, #c43838);
+  color: var(
+    --ov-ui-color-status-error,
+    var(--ov-ui-status-error-default, #c43838)
+  );
 }
 
 .ov-file-tree__state {

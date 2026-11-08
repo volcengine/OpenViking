@@ -176,13 +176,22 @@ export function Tooltip({
       (
         childProps.onMouseEnter as ((e: React.MouseEvent) => void) | undefined
       )?.(event);
-      show();
+      // 只有悬停形态在鼠标进入时打开。点击形态的 `show` 是 toggle，鼠标移入
+      // 会先打开、紧接着的点击又把它关掉，菜单看起来「点不开」。
+      //
+      // Only the hover shape opens on mouse enter. Under the click shape `show`
+      // toggles, so hovering opens it and the click that follows closes it again
+      // — the menu appears not to open.
+      if (trigger === 'hover') show();
     },
     onMouseLeave: (event: React.MouseEvent) => {
       (
         childProps.onMouseLeave as ((e: React.MouseEvent) => void) | undefined
       )?.(event);
-      hide();
+      // 同上：点击形态的关闭由点击或 Esc 决定，鼠标移开不应该收起菜单。
+      //
+      // Same here: the click shape closes on click or Escape, not on mouse leave.
+      if (trigger === 'hover') hide();
     },
     onFocus: (event: React.FocusEvent) => {
       (childProps.onFocus as ((e: React.FocusEvent) => void) | undefined)?.(

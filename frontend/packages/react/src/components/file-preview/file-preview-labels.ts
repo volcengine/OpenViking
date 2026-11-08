@@ -17,6 +17,7 @@ import type { FilePreviewLabels } from './types.js';
 export const DEFAULT_LABELS: Required<FilePreviewLabels> = {
   copyPath: 'Copy path',
   editor: 'Edit content',
+  leaveEditing: 'Cancel',
   retry: 'Retry',
   loadFailed: 'Failed to load the file',
   saveFailed: 'Failed to save',

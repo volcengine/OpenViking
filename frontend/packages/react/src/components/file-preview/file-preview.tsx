@@ -86,10 +86,10 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const [viewMode, setViewMode] = useState<FilePreviewViewMode>('preview');
   const [viewModes, setViewModes] = useState<readonly string[]>([]);
   const viewerHandle = useRef<ViewerHandle | null>(null);
-  const editing = useFilePreviewEditing();
+  const currentKey = activeKey ?? internalKey;
+  const editing = useFilePreviewEditing(currentKey);
   const actions = useFilePreviewActions();
 
-  const currentKey = activeKey ?? internalKey;
   const activeTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
   const tabText = { ...text, ...activeTab.labels };
   const fileTab = isFileTab(activeTab) ? activeTab : undefined;
@@ -228,6 +228,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
               onViewModesChange={onViewModesChange}
               onDownload={() => void actions.download(fileTab)}
               onLinkClick={linkClickHandler}
+              onCancelEditing={() => editing.discard(activeTab)}
             />
           </div>
           {fileTab.source.truncated ? <TruncatedNotice text={tabText} /> : null}

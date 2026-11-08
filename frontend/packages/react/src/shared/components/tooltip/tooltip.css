@@ -8,8 +8,14 @@
  */
 .ov-tooltip {
   /* 提示形态：深色底、浅色字，与周围内容拉开层次，读一眼就够。 */
-  --ov-ui-tooltip-bg: var(--ov-ui-color-tooltip-bg, #1f2329);
-  --ov-ui-tooltip-text: var(--ov-ui-color-tooltip-text, #ffffff);
+  --ov-ui-tooltip-bg: var(
+    --ov-ui-color-tooltip-bg,
+    var(--ov-ui-tooltip-bg-default, #1f2329)
+  );
+  --ov-ui-tooltip-text: var(
+    --ov-ui-color-tooltip-text,
+    var(--ov-ui-tooltip-text-default, #ffffff)
+  );
   --ov-ui-tooltip-border: transparent;
   --ov-ui-tooltip-radius: var(--ov-ui-radius, 6px);
   --ov-ui-tooltip-offset: 6px;
@@ -40,9 +46,18 @@
  * hierarchy of a list nor matches the host's menu styling.
  */
 .ov-tooltip[role='dialog'] {
-  --ov-ui-tooltip-bg: var(--ov-ui-color-bg-1, #ffffff);
-  --ov-ui-tooltip-text: var(--ov-ui-color-text-1, #0b0b0f);
-  --ov-ui-tooltip-border: var(--ov-ui-color-border-2, #e1e4f2);
+  --ov-ui-tooltip-bg: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-ui-tooltip-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-ui-tooltip-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
 
   max-width: 360px;
   min-width: 120px;

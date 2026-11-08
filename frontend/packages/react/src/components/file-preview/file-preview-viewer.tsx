@@ -23,27 +23,25 @@ import type {
 } from './types.js';
 
 /**
- * 给 `source` 取一个内容指纹，作为 memo 依赖。长度加首尾片段足以区分换文件与
- * 编辑改动，同时不必每次深比较整份正文。
+ * `source` 的 memo 依赖。逐项列出而不是取摘要：字符串按值比较，长度与首尾
+ * 片段相同的两份正文会被摘要判成同一份，底座就会一直显示旧内容；`File`/`Blob`
+ * 按对象身份比较，同名同路径换一个实例也能被认出来。
  *
- * A content fingerprint for `source`, used as a memo dependency. Length plus the
- * first and last slice distinguishes a new file from an edit without deep-comparing
- * the whole body on every render.
+ * The memo dependency for `source`. Every field is listed rather than hashed:
+ * strings compare by value, and a digest built from length plus edges would treat
+ * two same-length bodies with matching ends as identical, leaving the base on the
+ * old content; `File`/`Blob` compare by identity, so a different instance under
+ * the same name and path is still detected.
  */
-function sourceFingerprint(source: FilePreviewSource): string {
-  const content = source.content;
-  const body =
-    typeof content === 'string'
-      ? `${content.length}:${content.slice(0, 32)}:${content.slice(-32)}`
-      : '';
+function sourceDeps(source: FilePreviewSource) {
   return [
+    source.content,
+    source.file,
+    source.url,
     source.fileName,
-    source.fileType ?? '',
-    source.path ?? '',
-    source.url ?? '',
-    source.file ? 'file' : '',
-    body,
-  ].join('\u0000');
+    source.fileType,
+    source.path,
+  ] as const;
 }
 
 export interface FilePreviewViewerProps {
@@ -96,11 +94,16 @@ export function FilePreviewViewer({
   // whole renderer. Derive the memo dependency from the content so it only changes
   // when the file really does. `content` can be large, so a length-plus-edges
   // fingerprint stands in for a deep comparison of the whole body.
-  const sourceKey = sourceFingerprint(tab.source);
   const source = useMemo(
     () => toFileSource(tab.source),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey 是 tab.source 的内容指纹
-    [sourceKey],
+    // 逐项列出 source 的字段而不是传整个对象：宿主每次渲染都会重建 tabs，
+    // `tab.source` 的引用每帧都变，直接传它会让底座当成换了文件而重挂渲染器。
+    //
+    // List the fields instead of passing the object: the host rebuilds its tabs on
+    // every render, so `tab.source`'s identity changes each frame and passing it
+    // would make the base treat it as a new file and remount the renderer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    sourceDeps(tab.source),
   );
   const adapters = useMemo(
     () =>

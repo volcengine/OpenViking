@@ -8,12 +8,20 @@ import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
  * 进入编辑前用请求号作废旧请求，避免快速切换页签时迟到的结果写进新草稿；
  * 保存期间拦住重复提交与页签切换，失败时保留草稿。
  *
+ * 受控模式下宿主可以直接改 `activeKey`，不经过 `switchTab`；因此这里比对页签
+ * key，变化时在渲染期间就把草稿丢掉，否则会拿上一个页签的草稿去保存新页签。
+ *
  * Editing state of a file tab. The full text is requested when editing starts,
  * and the draft only leaves editing after a successful save. A request id
  * invalidates stale loads when the tab changes quickly; duplicate saves and tab
  * switches are blocked while saving, and a failed save keeps the draft.
+ *
+ * Under a controlled `activeKey` the host can switch tabs without going through
+ * `switchTab`, so the hook compares the active key and drops the draft during
+ * render when it changes — otherwise the previous tab's draft would be saved to
+ * the new one.
  */
-export function useFilePreviewEditing() {
+export function useFilePreviewEditing(activeTabKey: string) {
   const [editing, setEditing] = useState(false);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [editFailed, setEditFailed] = useState(false);
@@ -23,6 +31,20 @@ export function useFilePreviewEditing() {
   const requestId = useRef(0);
   const loading = useRef(false);
   const pendingSave = useRef(false);
+  // 上一次渲染时的页签 key。变化说明换了文件，草稿必须作废——在渲染期间直接
+  // 处理，不放进 Effect，避免先渲染一帧旧草稿。
+  const lastKey = useRef(activeTabKey);
+
+  if (lastKey.current !== activeTabKey) {
+    lastKey.current = activeTabKey;
+    requestId.current += 1;
+    loading.current = false;
+    if (editing) setEditing(false);
+    if (loadingEdit) setLoadingEdit(false);
+    if (editFailed) setEditFailed(false);
+    if (saveFailed) setSaveFailed(false);
+    if (draft) setDraft('');
+  }
 
   function discard(tab: FilePreviewTab) {
     requestId.current += 1;

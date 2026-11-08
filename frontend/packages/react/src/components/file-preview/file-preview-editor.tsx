@@ -8,6 +8,7 @@ export interface FilePreviewEditorProps {
   saveFailed: boolean;
   saving: boolean;
   onChange: (value: string) => void;
+  onCancel: () => void;
 }
 
 /**
@@ -28,6 +29,7 @@ export function FilePreviewEditor({
   saveFailed,
   saving,
   onChange,
+  onCancel,
 }: FilePreviewEditorProps) {
   if (loading) {
     return (
@@ -38,9 +40,21 @@ export function FilePreviewEditor({
   }
 
   if (failed) {
+    // 读取失败后必须留一条退路：否则用户停在错误提示上，既没有草稿可编辑，
+    // 也没有办法回到普通预览。
+    //
+    // A failed load needs a way out: otherwise the user is stranded on the error
+    // with no draft to edit and no way back to the plain preview.
     return (
       <div className="ov-file-preview__state" role="alert">
         <p className="ov-file-preview__state-title">{text.loadFailed}</p>
+        <button
+          type="button"
+          className="ov-file-preview__button"
+          onClick={onCancel}
+        >
+          {text.leaveEditing}
+        </button>
       </div>
     );
   }

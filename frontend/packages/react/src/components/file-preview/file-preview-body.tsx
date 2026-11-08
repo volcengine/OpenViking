@@ -27,6 +27,8 @@ export interface FilePreviewBodyProps {
   onDownload: () => void;
   /** Markdown 正文里的链接被点击时调用。 */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+  /** 读取失败后退出编辑态。Leaves editing after a failed load. */
+  onCancelEditing: () => void;
 }
 
 /**
@@ -47,8 +49,15 @@ export function FilePreviewBody({
   onViewModesChange,
   onDownload,
   onLinkClick,
+  onCancelEditing,
 }: FilePreviewBodyProps) {
-  if (editing.editing || editing.loadingEdit) {
+  // `editFailed` 也要走编辑器分支：读取失败时 `editing` 与 `loadingEdit` 都是
+  // false，只检查这两项会直接落回普通预览，用户看不到读取失败的提示。
+  //
+  // `editFailed` belongs here too: on a failed load both `editing` and
+  // `loadingEdit` are false, so checking only those two falls back to the plain
+  // preview and the failure message never shows.
+  if (editing.editing || editing.loadingEdit || editing.editFailed) {
     return (
       <FilePreviewEditor
         draft={editing.draft}
@@ -58,6 +67,7 @@ export function FilePreviewBody({
         saveFailed={editing.saveFailed}
         saving={editing.saving}
         onChange={editing.updateDraft}
+        onCancel={onCancelEditing}
       />
     );
   }
