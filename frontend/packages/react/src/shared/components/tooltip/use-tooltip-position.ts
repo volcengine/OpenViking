@@ -119,6 +119,21 @@ export function useTooltipPosition(
     const trigger = triggerRef.current;
     if (!trigger || !surface) return;
 
+    // 浮层渲染到 `body`，拿不到宿主设在组件容器上的主题变量——CSS 变量沿 DOM
+    // 树继承，跨 portal 就断了。把触发元素上的 `--ov-ui-*` 计算值复制到浮层，
+    // 宿主对局部的主题覆盖才能跟着浮层走。
+    //
+    // The surface renders into `body`, so it cannot see theme variables a host sets
+    // on a component container — CSS variables inherit down the DOM tree and the
+    // portal breaks that chain. Copy the trigger's computed `--ov-ui-*` values onto
+    // the surface so a local theme override follows it.
+    const triggerStyle = window.getComputedStyle(trigger);
+    for (const name of Array.from(triggerStyle)) {
+      if (!name.startsWith('--ov-ui-')) continue;
+      const value = triggerStyle.getPropertyValue(name).trim();
+      if (value) surface.style.setProperty(name, value);
+    }
+
     const update = () => {
       const triggerRect = trigger.getBoundingClientRect();
       const surfaceRect = surface.getBoundingClientRect();

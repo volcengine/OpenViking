@@ -90,16 +90,26 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const { tabId, panelId } = useFilePreviewIds();
 
   const currentKey = activeKey ?? internalKey;
+  const activeTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
   const panelProps = {
-    id: panelId(currentKey),
+    id: panelId(activeTab.key),
     role: 'tabpanel' as const,
-    'aria-labelledby': tabId(currentKey),
+    'aria-labelledby': tabId(activeTab.key),
   };
   const panelClass = 'ov-file-preview__panel';
-  const editing = useFilePreviewEditing(currentKey);
+  // 用解析后的 `activeTab.key` 而不是请求的 `currentKey`：宿主可能把当前页签从
+  // `tabs` 里移除而 `activeKey` 仍指向它，此时 `activeTab` 已回落到 `tabs[0]`，
+  // 拿 `currentKey` 会让编辑态以为还停在那个已不存在的页签上，保存时把草稿写进
+  // 新页签。
+  //
+  // Use the resolved `activeTab.key`, not the requested `currentKey`: a host may
+  // remove the active tab from `tabs` while `activeKey` still names it. `activeTab`
+  // has already fallen back to `tabs[0]`, so keying editing off `currentKey` would
+  // leave it thinking it is still on a tab that no longer exists, and a save would
+  // write the draft into the new one.
+  const editing = useFilePreviewEditing(activeTab.key);
   const actions = useFilePreviewActions();
 
-  const activeTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
   const tabText = { ...text, ...activeTab.labels };
   const fileTab = isFileTab(activeTab) ? activeTab : undefined;
   const contentTab: FilePreviewContentTab | undefined = fileTab
@@ -109,7 +119,13 @@ export const FilePreview: FilePreviewComponent = forwardRef<
 
   const switchTab = useCallback(
     (key: string) => {
-      if (key === currentKey || editing.saving) return false;
+      // 与 `activeTab.key` 比较，不是请求的 `currentKey`：当前页签已被移除时
+      // `currentKey` 仍指向它，点第一个页签会被误判成「已在该页签」而拒绝切换。
+      //
+      // Compare against `activeTab.key`, not the requested `currentKey`: when the
+      // active tab was removed `currentKey` still names it, so clicking the first
+      // tab would be rejected as "already there".
+      if (key === activeTab.key || editing.saving) return false;
       const target = tabs.find((tab) => tab.key === key);
       if (!target || target.disabled) return false;
       editing.discard(activeTab);
@@ -121,7 +137,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       onActiveKeyChange?.(key);
       return true;
     },
-    [activeKey, activeTab, currentKey, editing, onActiveKeyChange, tabs],
+    [activeKey, activeTab, editing, onActiveKeyChange, tabs],
   );
 
   const onHandleChange = useCallback((handle: ViewerHandle | null) => {
