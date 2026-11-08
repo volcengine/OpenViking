@@ -55,7 +55,9 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 
 创建接口同步校验输入、权限及可见的目录标签，必要时创建 `to`，并持久入队独立的内部补标 Task；不等待目录索引、embedding 或 tag 可见性。`to` 是文件或内部任务未能持久入队时返回错误。QueueFS 消费者负责根目录索引和 `compile_target=true` 补齐，失败后重试，不递归标记子目录，并保留已有内容、摘要和其他 tag。目标路径不存在时停止该路径的补标，不重建目录。创建配置本身不执行 Compile、不创建 run、不拍来源快照。
 
-调度控制与 Runtime 参数分开保存。非空计划默认开启自动更新，除非显式指定 `auto_update=false`。计划必填 `frequency`（`daily` 或 `weekly`）；`hour`（0–23）、`minute`（0–59）默认均为 0。每周计划增加 `weekday`（1 为周一、7 为周日，默认 1）。使用 `Asia/Shanghai` 时区。
+调度控制与 Runtime 参数分开保存。非空计划默认开启自动更新，除非显式指定 `auto_update=false`。计划必填 `frequency`（`daily` 或 `weekly`），使用北京时间（`Asia/Shanghai`）。
+
+只传频率时，服务端在 00:00–03:59 中为计划分配固定时间。每周计划省略 `weekday` 时也会分配固定执行日（1 为周一，7 为周日）。只传 `hour`（0–23）时，在该小时内分配固定分钟，例如 `hour: 10` 对应 10:00–10:59。只传 `minute`（0–59）时，小时取 0。查询配置的 `update_schedule` 可查看分配结果。
 
 定时执行要求开启 `compile_api.scheduler_enabled=true` 并配置 Redis expiry 服务。凭据加密保存，每次触发时重新验证凭据及当前用户组权限。调度未启用或不可用时返回错误，不会退化为立即执行。禁用计划后 `next_triggered_slot` 为 null。
 

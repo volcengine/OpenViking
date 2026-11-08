@@ -19,6 +19,7 @@ from openviking.service.compile_service import (
     CompileSessionAccepted,
     CompileSessionStatus,
 )
+from openviking.service.compile_targets import parse_schedule
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import get_queue_manager
@@ -387,6 +388,15 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     )
 
 
+@pytest.mark.parametrize("rule", [{"frequency": "daily", "hour": 10}, {"frequency": "weekly"}])
+def test_omitted_schedule_fields_spread_across_plans(rule):
+    slots = [parse_schedule(rule, ("account", "owner", str(i))) for i in range(100)]
+    assert len({slot["minute"] for slot in slots}) > 1
+    assert {slot["hour"] for slot in slots} == ({10} if "hour" in rule else set(range(4)))
+    if rule["frequency"] == "weekly":
+        assert {slot["weekday"] for slot in slots} == set(range(1, 8))
+
+
 async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, app, monkeypatch):
     ctx, _ = await prepare(service, app, monkeypatch)
     store = service.compile.lifecycle.store
@@ -403,13 +413,9 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
         return_value=(executor, {"account_id": ctx.account_id, "user_id": executor.user.user_id})
     )
     service.compile.configure_scheduler(scheduler)
+    rule = {"frequency": "daily", "hour": 10}
     result = await service.compile.create_compile_task(
-        CompileCreateRequest.model_validate(
-            {
-                **SAVED_INPUTS,
-                "args": {"update_schedule": {"frequency": "daily", "hour": 10, "minute": 0}},
-            }
-        ),
+        CompileCreateRequest.model_validate({**SAVED_INPUTS, "args": {"update_schedule": rule}}),
         ctx=ctx,
     )
     compile_name = result["compile_name"]
@@ -461,6 +467,11 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
                 ctx.account_id, ctx.user.user_id, compile_name, due + timedelta(days=1)
             )
     assert await store.get(ctx.account_id, ctx.user.user_id, compile_name) == after
+    update = CompileConfigUpdate.model_validate(
+        {**SAVED_INPUTS, "auto_update": True, "update_schedule": rule}
+    )
+    saved = await service.compile.update_config(update, ctx)
+    assert saved["next_triggered_slot"] == after["next_triggered_slot"]
 
 
 async def test_configuration_update_preserves_times_and_retry_payload(service, app, monkeypatch):

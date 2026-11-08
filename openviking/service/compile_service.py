@@ -23,6 +23,7 @@ from openviking.service.compile_targets import (
     execution_signature,
     is_versioned,
     new_record,
+    parse_schedule,
     split_control_args,
     validate_compile_name,
 )
@@ -518,7 +519,9 @@ class CompileService:
         record["auto_update"] = auto_update
         record["update_schedule"] = schedule
 
-    async def _settings(self, request: CompileInputs, ctx: RequestContext) -> dict[str, Any]:
+    async def _settings(
+        self, request: CompileInputs, ctx: RequestContext, owner_user_id: str, compile_name: str
+    ) -> dict[str, Any]:
         """Build validated settings with encrypted private args before creating any output nodes."""
         if request.is_memory_mode:
             raise InvalidArgumentError("Persistent Compile does not support skill=memory")
@@ -526,13 +529,15 @@ class CompileService:
         CompileLifecycle.validate_layout(normalized.to, normalized.from_)
         public, private = self._split_payload(normalized)
         control, runtime_args = split_control_args(public.get("args"))
+        schedule = control.get("update_schedule")
+        if schedule is not None:
+            schedule = parse_schedule(schedule, (ctx.account_id, owner_user_id, compile_name))
         public["args"] = runtime_args
         record = new_record(public)
         if private:
             record["execution_context"]["private_args"] = await self._encrypt_private_args(
                 ctx.account_id, private
             )
-        schedule = control.get("update_schedule")
         await self._configure_schedule(
             record, ctx, control.get("auto_update", schedule is not None), schedule
         )
@@ -545,7 +550,7 @@ class CompileService:
         lifecycle = self._require_lifecycle()
         compile_name = validate_compile_name(request.compile_name)
         owner_user_id = (request.args or {}).get("owner_id", ctx.user.user_id)
-        record = await self._settings(request, ctx)
+        record = await self._settings(request, ctx, owner_user_id, compile_name)
 
         async def prepare_target_and_schedule() -> None:
             await self._fs.ensure_compile_target(record["to"], ctx)
@@ -862,7 +867,7 @@ class CompileService:
             )
         args.update(
             auto_update=body.auto_update,
-            update_schedule=body.update_schedule.model_dump() if body.update_schedule else None,
+            update_schedule=body.update_schedule,
         )
         inputs = CompileInputs.model_validate(
             {
@@ -873,7 +878,7 @@ class CompileService:
                 "args": args,
             }
         )
-        replacement = await self._settings(inputs, ctx)
+        replacement = await self._settings(inputs, ctx, owner_user_id, body.compile_name)
         await self._fs.ensure_compile_target(replacement["to"], ctx)
         lifecycle = self._require_lifecycle()
         async with lifecycle.store.edit(ctx.account_id, owner_user_id, body.compile_name) as record:

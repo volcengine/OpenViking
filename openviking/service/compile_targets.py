@@ -34,7 +34,8 @@ from typing import (
 )
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, TypedDict
 
 from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri
@@ -139,33 +140,45 @@ def execution_signature(record: Mapping[str, Any]) -> str:
     ).hexdigest()
 
 
-class DailySchedule(BaseModel):
-    """Daily Beijing-time trigger; hour and minute use the 24-hour clock."""
+@with_config(ConfigDict(extra="forbid"))
+class ScheduleTime(TypedDict, total=False):
+    """Beijing wall-clock time. Omit both parts to assign a minute before 04:00."""
 
-    model_config = ConfigDict(extra="forbid")
+    hour: Annotated[int, Field(ge=0, le=23)]
+    minute: Annotated[int, Field(ge=0, le=59)]
+
+
+class DailySchedule(ScheduleTime):
+    """Run every day at the same Beijing time."""
+
     frequency: Literal["daily"]
-    hour: int = Field(default=0, ge=0, le=23)
-    minute: int = Field(default=0, ge=0, le=59)
 
 
-class WeeklySchedule(DailySchedule):
-    """Weekly trigger with ISO weekday numbering, Monday=1 through Sunday=7."""
+class WeeklySchedule(ScheduleTime):
+    """Run on one ISO weekday (Monday=1 through Sunday=7), assigned if omitted."""
 
     frequency: Literal["weekly"]
-    weekday: int = Field(default=1, ge=1, le=7)
+    weekday: NotRequired[Annotated[int, Field(ge=1, le=7)]]
 
 
 UpdateSchedule = Annotated[Union[DailySchedule, WeeklySchedule], Field(discriminator="frequency")]
 
 
-def parse_schedule(value: Any) -> dict:
-    """Validate a schedule and return its explicit defaults."""
+def parse_schedule(value: Any, schedule_key: tuple[str, str, str]) -> dict:
+    """Validate the rule and fill omitted fields from the stable (account, owner, name) seed."""
     try:
-        return TypeAdapter(UpdateSchedule).validate_python(value).model_dump()
+        schedule: UpdateSchedule = TypeAdapter(UpdateSchedule).validate_python(value)
     except ValidationError as exc:
         raise InvalidArgumentError(
             f"Invalid update_schedule: {exc.errors(include_url=False)[0]['msg']}"
         ) from exc
+    rng = random.Random(json.dumps(schedule_key))
+    if schedule["frequency"] == "weekly":
+        schedule.setdefault("weekday", rng.randint(1, 7))
+    hour, minute = divmod(rng.randrange(4 * 60), 60)
+    schedule.setdefault("hour", 0 if "minute" in schedule else hour)
+    schedule.setdefault("minute", minute)
+    return dict(schedule)
 
 
 def split_control_args(args: Optional[Mapping[str, Any]]) -> tuple[dict, dict]:
@@ -179,8 +192,6 @@ def split_control_args(args: Optional[Mapping[str, Any]]) -> tuple[dict, dict]:
     }
     if "auto_update" in control and not isinstance(control["auto_update"], bool):
         raise InvalidArgumentError("args.auto_update must be a boolean")
-    if control.get("update_schedule") is not None:
-        control["update_schedule"] = parse_schedule(control["update_schedule"])
     return control, runtime
 
 

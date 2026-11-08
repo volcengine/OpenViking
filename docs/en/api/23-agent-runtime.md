@@ -55,7 +55,9 @@ Missing or invalid `compile_name` is rejected; the server never generates a fall
 
 Creation synchronously validates inputs, permissions and visible directory tags, creates `to` if needed, and durably enqueues an independent internal tagging Task. It does not wait for directory indexes, embeddings or tag visibility. A file at `to` or failure to durably enqueue the internal task returns an error. A QueueFS consumer prepares the root directory index and applies `compile_target=true`, retrying failures without recursively tagging descendants or replacing existing content, summaries and other tags. If the target path no longer exists, tagging stops for that path without recreating it. Configuration creation does not execute Compile, create a run, or snapshot sources.
 
-Scheduling controls are stored separately from Runtime arguments. A non-null schedule enables updates unless `auto_update=false` is explicit. A schedule requires `frequency` (`daily` or `weekly`); `hour` (0–23) and `minute` (0–59) default to zero. Weekly schedules add `weekday` (1=Monday through 7=Sunday, default 1). Times use `Asia/Shanghai`.
+Scheduling controls are stored separately from Runtime arguments. A non-null schedule enables updates unless `auto_update=false` is explicit. A schedule requires `frequency` (`daily` or `weekly`) and uses Beijing time (`Asia/Shanghai`).
+
+With only the frequency, the server assigns a fixed time between 00:00 and 03:59. Weekly schedules also get a fixed `weekday` (1=Monday through 7=Sunday) when omitted. Supplying only `hour` (0–23) assigns a fixed minute within that hour, so `hour: 10` runs between 10:00 and 10:59. Supplying only `minute` (0–59) sets the hour to zero. Read the configuration's `update_schedule` to see the assigned values.
 
 Scheduled execution requires `compile_api.scheduler_enabled=true` and the configured Redis expiry service. Credentials are encrypted and revalidated, including current group permissions, at each trigger. Disabled or unavailable scheduling returns an error; creation never submits an execution as a fallback. A disabled schedule has `next_triggered_slot: null`.
 
