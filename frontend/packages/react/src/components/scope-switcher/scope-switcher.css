@@ -9,17 +9,45 @@
  * the whole set or any single variable.
  */
 .ov-scope-switcher {
-  /* 层级分隔符「/」的颜色。 */
-  --ov-ui-scope-switcher-divider: #c9cbd4;
-  /* 触发器上图标与展开箭头的颜色。 */
-  --ov-ui-scope-switcher-icon: #3f3f51;
-  /* 选项行首图标的颜色。 */
-  --ov-ui-scope-switcher-option-icon: #3f3f51;
-  /* 选项行的悬停底色。选中态走主色浅底。 */
-  --ov-ui-scope-switcher-row-hover: #f6f7fa;
-  /* 触发器末尾标记的底色与文字色。 */
-  --ov-ui-scope-switcher-tag-background: #f1f2f9;
-  --ov-ui-scope-switcher-tag-text: #3f3f51;
+  /*
+   * 层级分隔符「/」的颜色，取主题的禁用文字色：亮色下浅灰，暗色下由基线换成
+   * 对应的暗色值。
+   *
+   * Separator colour, from the theme's disabled text colour so the baseline can
+   * swap it in dark mode.
+   */
+  --ov-ui-scope-switcher-divider: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  /*
+   * 触发器上图标与展开箭头的颜色。取主题的次级文字色：亮色下是深灰，暗色下
+   * 由基线换成浅灰，写死深色会在暗色底上几乎看不见。
+   *
+   * Icon and chevron colour. Uses the theme's secondary text colour: dark grey in
+   * light mode, and the baseline swaps it for a light grey in dark mode. A fixed
+   * dark value would be nearly invisible on a dark surface.
+   */
+  --ov-ui-scope-switcher-icon: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default, #3f3f51)
+  );
+  /* 选项行首图标的颜色，同触发器图标。 */
+  --ov-ui-scope-switcher-option-icon: var(--ov-ui-scope-switcher-icon);
+  /* 选项行的悬停底色，取主题的悬停填充色。选中态走主色浅底。 */
+  --ov-ui-scope-switcher-row-hover: var(
+    --ov-ui-color-fill-hover,
+    var(--ov-ui-fill-hover-default, #f1f2f9)
+  );
+  /* 触发器末尾标记的底色与文字色，取主题的次级底色与次级文字色。 */
+  --ov-ui-scope-switcher-tag-background: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default, #f1f2f9)
+  );
+  --ov-ui-scope-switcher-tag-text: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default, #3f3f51)
+  );
   /* 下拉面板宽度、选项行高度与相邻行间距。 */
   --ov-ui-scope-switcher-panel-width: 272px;
   --ov-ui-scope-switcher-option-height: 44px;
