@@ -72,7 +72,7 @@ test('OV failures and invalid contents never silently change personality', async
 test('reserved retains ordered addressing, continuation, silence and freshness instructions', async () => {
   const text = await loadOVPersonality(memoryClient(), { personality: 'reserved' });
   const steps = [...text.matchAll(/^\d\. /gm)].map((m) => Number(m[0].slice(0, 1)));
-  assert.deepEqual(steps, [1, 2, 3, 4, 5]);
+  assert.deepEqual(steps, [1, 2, 3, 4, 5, 6]);
   assert.match(text, /same thread/);
   assert.match(text, /nobody intervening/);
   assert.match(text, /Continuation ends/);
@@ -130,4 +130,25 @@ test('the OV HTTP client reads stored content and strips memory metadata before 
   const text = await loadOVPersonality(client, { personality: 'reserved' });
   assert.equal(text, stored.content.replaceAll('{{AGENT_NAME}}', 'the bot').trim());
   assert.doesNotMatch(text, /MEMORY_FIELDS/);
+});
+
+
+test('collective requests survive reserved filtering and both presets override duplicate-answer silence', async () => {
+  for (const personality of PERSONALITIES) {
+    const personalityPrompt = await loadOVPersonality(memoryClient(), { personality });
+    const injected = assembleConversationPolicy({ personalityPrompt });
+    assert.ok(injected.includes('所有agent都发表下看法'));
+    assert.ok(injected.includes('每个agent都要回答'));
+    assert.match(injected, /(?:Do not skip yours just because another|even if another)\n? ?agent/);
+    assert.match(injected, /not an\ninstruction to adopt it yourself/);
+  }
+  const reserved = await loadOVPersonality(memoryClient(), { personality: 'reserved' });
+  for (const example of ['所有 agent 都说说看法', '所有机器人都回答', '只限agent回答', '仅限 agent 回答']) {
+    assert.ok(reserved.includes(example), example);
+  }
+  assert.ok(reserved.indexOf('3. The message explicitly calls') < reserved.indexOf('5. It addresses @everyone'));
+  assert.match(reserved, /regardless of whether the requester is the owner/);
+  assert.match(reserved, /bare @everyone\n   announcement, a quotation, or merely discussing agents does not count/);
+  assert.match(reserved, /a question they address to someone else does not/);
+  assert.match(reserved, /until completed, withdrawn,/);
 });
