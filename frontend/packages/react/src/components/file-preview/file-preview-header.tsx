@@ -1,6 +1,9 @@
-import type { ReactNode } from 'react';
-
 import { FilePreviewBreadcrumb } from './file-preview-breadcrumb.js';
+import {
+  CopyIcon,
+  DownloadIcon,
+  IconButton,
+} from './file-preview-header-icons.js';
 import { getPathFileName, splitPathSegments } from './file-preview-path.js';
 import { readCopyableText } from './file-preview-source.js';
 import type {
@@ -9,32 +12,6 @@ import type {
   FilePreviewTab,
   FilePreviewViewMode,
 } from './types.js';
-
-/** 图标按钮：方形、只有图标，无障碍名称通过 `aria-label` 提供。 */
-function IconButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      className="ov-file-preview__action"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
 
 export interface FilePreviewHeaderProps {
   activeTab: FilePreviewTab;
@@ -107,7 +84,7 @@ export function FilePreviewHeader({
             disabled={saving}
             onClick={onCopyPath}
           >
-            <span aria-hidden="true">⧉</span>
+            <CopyIcon />
           </IconButton>
         ) : null}
         {activeTab.slots?.titleExtra}
@@ -118,18 +95,20 @@ export function FilePreviewHeader({
           <IconButton
             label={text.copyContent}
             disabled={saving || !copyable}
+            outlined
             onClick={onCopyContent}
           >
-            <span aria-hidden="true">⎘</span>
+            <CopyIcon />
           </IconButton>
         ) : null}
         {fileTab && canDownload && !editing ? (
           <IconButton
             label={text.download}
             disabled={saving}
+            outlined
             onClick={onDownload}
           >
-            <span aria-hidden="true">↓</span>
+            <DownloadIcon />
           </IconButton>
         ) : null}
         {fileTab && showViewModeSwitch && !editing ? (

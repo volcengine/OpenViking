@@ -129,16 +129,34 @@ import '@openviking/react/components/file-preview/style.css';
 
 ## 主题变量
 
-| CSS 变量             | 默认值                    | 用途               |
-| -------------------- | ------------------------- | ------------------ |
-| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         | 分隔线与边框。     |
-| `--ov-ui-text-muted` | `#8f959e`                 | 次要文字与图标。   |
-| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         | 悬停背景。         |
-| `--ov-ui-accent`     | `#2563c5`                 | 面包屑与主按钮。   |
-| `--ov-ui-focus-ring` | `#2563c5`                 | 键盘焦点环。       |
-| `--ov-ui-radius`     | `6px`                     | 圆角。             |
-| `--ov-ui-surface`    | `canvas`                  | 选中页签背景。     |
-| `--ov-ui-font-mono`  | `ui-monospace, monospace` | 正文与编辑器文字。 |
+颜色取自 OpenViking 控制台使用的设计规范，只取色值，不引入它的组件样式。暗色只认宿主放在 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`——系统偏好可能与宿主实际呈现的主题不一致。
+
+**主题基线**（`--ov-ui-color-*`，定义在包级 `theme.css`，与 FileTree 等组件共用）。组件私有变量都从这些值派生，宿主改基线即可整体换肤：
+
+| CSS 变量                      | 亮色      | 暗色      | 用途           |
+| ----------------------------- | --------- | --------- | -------------- |
+| `--ov-ui-color-primary`       | `#5252ff` | `#5f5fff` | 主色。         |
+| `--ov-ui-color-primary-hover` | `#7075ff` | `#7075ff` | 主色悬停。     |
+| `--ov-ui-color-text-1`        | `#0b0b0f` | `#c7ccd6` | 正文。         |
+| `--ov-ui-color-text-3`        | `#6e718c` | `#737a87` | 次要文字。     |
+| `--ov-ui-color-border-2`      | `#e1e4f2` | `#2e3138` | 分隔线与边框。 |
+| `--ov-ui-color-bg-1`          | `#ffffff` | `#131416` | 面板底色。     |
+| `--ov-ui-color-bg-5`          | `#f1f2f9` | `#23252a` | 悬停背景。     |
+
+**组件变量**（`--ov-ui-file-preview-*`），需要只调这一处时直接覆盖：
+
+| CSS 变量                            | 默认值                           | 用途                     |
+| ----------------------------------- | -------------------------------- | ------------------------ |
+| `--ov-ui-file-preview-accent`       | 同 `--ov-ui-color-primary`       | 面包屑与主按钮。         |
+| `--ov-ui-file-preview-accent-hover` | 同 `--ov-ui-color-primary-hover` | 链接与「…」悬停。        |
+| `--ov-ui-file-preview-border`       | 同 `--ov-ui-color-border-2`      | 分隔线与边框。           |
+| `--ov-ui-file-preview-row-hover`    | 同 `--ov-ui-color-bg-5`          | 悬停背景。               |
+| `--ov-ui-file-preview-surface`      | 同 `--ov-ui-color-bg-1`          | 页签与菜单背景。         |
+| `--ov-ui-file-preview-text`         | 同 `--ov-ui-color-text-1`        | 正文。                   |
+| `--ov-ui-file-preview-text-muted`   | 同 `--ov-ui-color-text-3`        | 次要文字与图标。         |
+| `--ov-ui-file-preview-focus-ring`   | 同 `--ov-ui-color-primary`       | 键盘焦点环。             |
+| `--ov-ui-radius`                    | `6px`                            | 圆角。                   |
+| `--ov-ui-font-mono`                 | `ui-monospace, monospace`        | 路径、正文与编辑器文字。 |
 
 ## 实现范围
 

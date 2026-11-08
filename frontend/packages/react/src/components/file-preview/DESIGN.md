@@ -366,18 +366,18 @@ noContent?: string;   // 空白内容
 
 组件库不绑定第三方 UI 库和它的样式，外壳与正文各自独立配色。
 
-**外壳**用自己的 `--ov-ui-*` 变量，每个都带兜底值，宿主不提供也能正常显示：
+**外壳**用自己的 `--ov-ui-file-preview-*` 变量，在根节点集中声明，每个都带兜底值，宿主不提供也能正常显示。叠加色取中灰加透明度（明暗主题通吃），次要文字从继承的文字色派生：
 
-| 变量                 | 兜底值                    |
-| -------------------- | ------------------------- |
-| `--ov-ui-accent`     | `#2563c5`                 |
-| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         |
-| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         |
-| `--ov-ui-surface`    | `canvas`                  |
-| `--ov-ui-text-muted` | `#8f959e`                 |
-| `--ov-ui-focus-ring` | `#2563c5`                 |
-| `--ov-ui-radius`     | `6px`                     |
-| `--ov-ui-font-mono`  | `ui-monospace, monospace` |
+| 变量                              | 兜底值                                     |
+| --------------------------------- | ------------------------------------------ |
+| `--ov-ui-file-preview-accent`     | `#2563c5`                                  |
+| `--ov-ui-file-preview-border`     | `rgb(128 128 128 / 20%)`                   |
+| `--ov-ui-file-preview-row-hover`  | `rgb(128 128 128 / 12%)`                   |
+| `--ov-ui-file-preview-surface`    | `canvas`                                   |
+| `--ov-ui-file-preview-text-muted` | `color-mix(currentColor 60%, transparent)` |
+| `--ov-ui-file-preview-focus-ring` | `#2563c5`                                  |
+| `--ov-ui-radius`                  | `6px`                                      |
+| `--ov-ui-font-mono`               | `ui-monospace, monospace`                  |
 
 **正文**由底座渲染，它的 `--agentic-file-viewer-*` 指向 Arco 的 `--color-*` / `--primary-*`。这些变量定义在 `.ark-agentic-file-viewer`（本组件的子级）上，宿主需要在应用入口提供 Arco 主题层，否则正文会退化成浏览器默认色。
 

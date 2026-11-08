@@ -1,19 +1,24 @@
 /**
- * 文件预览的主题变量。默认值取自对齐的宿主实现，宿主可按自己的主题整组覆盖；
- * 逐条覆盖时只需重设对应变量。组件私有的变量用 `--ov-ui-file-preview-` 前缀，
- * 与包内其他组件互不干扰。
+ * 文件预览的组件变量，全部从包级主题基线 `src/theme.css` 的 `--ov-ui-color-*`
+ * 派生。宿主想换肤时改基线即可；只想调这一处时，也可以直接覆盖下面任意一条。
+ * 组件私有变量用 `--ov-ui-file-preview-` 前缀，与包内其他组件互不干扰。
  *
- * Theme variables of the file preview. Defaults come from the host implementation
- * this component aligns with; a host overrides the whole set or any single
- * variable. Component-private variables carry the `--ov-ui-file-preview-` prefix
- * so they never collide with other components in the package.
+ * Component variables of the file preview, all derived from the package-level
+ * baseline in `src/theme.css` (`--ov-ui-color-*`). A host re-skins by overriding
+ * the baseline; to adjust just this component it can override any variable below
+ * instead. Private variables carry the `--ov-ui-file-preview-` prefix so they
+ * never collide with other components in the package.
  */
 .ov-file-preview {
-  --ov-ui-file-preview-accent: #2563c5;
-  --ov-ui-file-preview-border: rgb(0 0 0 / 8%);
-  --ov-ui-file-preview-focus-ring: #2563c5;
-  --ov-ui-file-preview-row-hover: rgb(0 0 0 / 4%);
-  --ov-ui-file-preview-surface: canvas;
+  --ov-ui-file-preview-accent: var(--ov-ui-color-primary, #5252ff);
+  --ov-ui-file-preview-accent-hover: var(--ov-ui-color-primary-hover, #7075ff);
+  --ov-ui-file-preview-border: var(--ov-ui-color-border-2, #e1e4f2);
+  --ov-ui-file-preview-focus-ring: var(--ov-ui-color-primary, #5252ff);
+  --ov-ui-file-preview-row-hover: var(--ov-ui-color-bg-5, #f1f2f9);
+  --ov-ui-file-preview-surface: var(--ov-ui-color-bg-1, #ffffff);
+  --ov-ui-file-preview-text: var(--ov-ui-color-text-1, #0b0b0f);
+  --ov-ui-file-preview-text-muted: var(--ov-ui-color-text-3, #6e718c);
+  --ov-ui-file-preview-text-path: var(--ov-ui-color-text-3, #6e718c);
 
   display: flex;
   flex-direction: column;
@@ -28,39 +33,78 @@
   line-height: 20px;
 }
 
+/*
+ * 页签行是文件夹卡片式：页签贴在一条共同基线上，选中页签与下方内容同底色，
+ * 再由一条 SVG 轮廓把它的三条边和基线连成一体，看起来像卡片从内容区里凸
+ * 出来。轨道两端各留 8px，轮廓仍按整行宽度绘制，基线因此铺满整个面板。
+ */
 .ov-file-preview__tab-row {
-  display: flex;
   flex: none;
-  gap: 2px;
-  align-items: stretch;
   min-width: 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--ov-ui-file-preview-border);
   scrollbar-width: thin;
 }
 
+.ov-file-preview__tab-track {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  box-sizing: border-box;
+  min-width: 100%;
+  height: 28px;
+  padding: 0 8px;
+}
+
 .ov-file-preview__tab {
+  position: relative;
   display: inline-flex;
   flex: 0 0 auto;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
-  max-width: 200px;
-  padding: 6px 10px;
+  box-sizing: border-box;
+  max-width: 160px;
+  height: 28px;
+  padding: 0 12px;
   border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--ov-ui-text-muted, #8f959e);
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
   font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 
 .ov-file-preview__tab:hover:not(:disabled) {
   background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
 }
 
 .ov-file-preview__tab--active {
-  border-bottom-color: var(--ov-ui-file-preview-accent);
-  color: inherit;
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+  font-weight: 500;
+}
+
+/*
+ * 轮廓画在页签之后，只描边不填充，并且不吃指针事件，因此不会挡住点击。
+ * 1px 的线向内收半像素，避免在高分屏上糊成两像素。
+ */
+.ov-file-preview__tab-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  fill: none;
+  stroke: var(--ov-ui-file-preview-border);
+  stroke-width: 1;
 }
 
 .ov-file-preview__tab:disabled {
@@ -83,10 +127,19 @@
   align-items: center;
 }
 
+.ov-file-preview__tab-icon > svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
 .ov-file-preview__tab-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: inherit;
 }
 
 .ov-file-preview__panel {
@@ -115,21 +168,41 @@
   min-width: 0;
 }
 
+/* 路径行左侧按内容排布，剩余空间留在末尾，复制按钮因此紧挨路径。 */
 .ov-file-preview__path-row {
   flex: 1 1 auto;
+  justify-content: flex-start;
 }
 
 .ov-file-preview__header-actions {
   flex: none;
 }
 
+/*
+ * 路径用等宽字体，与宿主一致；祖先段是次要色，末段是正文色且加粗。
+ * 面包屑按内容宽度、最多占满可用空间：它后面的复制按钮因此紧跟路径末尾，
+ * 而不是被推到整行最右边、看起来像右侧动作组的一员。
+ */
+/*
+ * 这里不能设 `overflow: hidden`：折叠菜单是绝对定位的子元素，容器裁剪会把
+ * 它整个切掉。各段自己负责裁剪（祖先段限宽加省略号，末段同样），因此不需要
+ * 容器再兜一层。
+ *
+ * No `overflow: hidden` here: the collapse menu is an absolutely positioned child,
+ * so clipping at the container level would cut it off entirely. Each part clips
+ * itself instead — ancestors by a capped width with an ellipsis, the trailing
+ * name likewise.
+ */
 .ov-file-preview__breadcrumb {
   display: flex;
-  flex: 1 1 auto;
-  gap: 2px;
+  flex: 0 1 auto;
+  gap: 0;
   align-items: center;
   min-width: 0;
-  overflow: hidden;
+  max-width: 100%;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 14px;
+  line-height: 22px;
   white-space: nowrap;
 }
 
@@ -149,19 +222,23 @@
 .ov-file-preview__breadcrumb-link {
   max-width: 172px;
   overflow: hidden;
-  padding: 0 2px;
+  padding: 0;
   border: 0;
   background: none;
-  color: var(--ov-ui-text-muted, #8f959e);
+  color: var(--ov-ui-file-preview-text-path);
   font: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
 
+/* 溢出时祖先段收窄，与宿主一致；末段宽度不受影响。 */
+.ov-file-preview__breadcrumb--overflowing .ov-file-preview__breadcrumb-link {
+  max-width: 160px;
+}
+
 .ov-file-preview__breadcrumb-link:hover:not(:disabled) {
-  color: var(--ov-ui-file-preview-accent);
-  text-decoration: underline;
+  color: var(--ov-ui-file-preview-accent-hover);
 }
 
 .ov-file-preview__breadcrumb-link:disabled {
@@ -170,11 +247,15 @@
 
 .ov-file-preview__breadcrumb-separator {
   flex: none;
-  color: var(--ov-ui-text-muted, #8f959e);
+  width: 12px;
+  color: var(--ov-ui-file-preview-text-path);
+  text-align: center;
 }
 
 .ov-file-preview__breadcrumb-current {
   overflow: hidden;
+  color: var(--ov-ui-file-preview-text);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -184,16 +265,48 @@
   flex: none;
 }
 
-.ov-file-preview__breadcrumb-more > summary {
-  padding: 0 4px;
+/*
+ * 「…」按钮。`details` 默认只在点击后展开，这里同时让悬停展开：鼠标划过就
+ * 能看到被收起的层级。悬停用 `:focus-within` 一并覆盖键盘聚焦，键盘用户
+ * 仍可用回车/空格切换。
+ */
+.ov-file-preview__breadcrumb-more-summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
   border: 0;
-  color: var(--ov-ui-text-muted, #8f959e);
+  color: var(--ov-ui-file-preview-text-path);
   cursor: pointer;
   list-style: none;
+  transition: color 160ms ease;
 }
 
-.ov-file-preview__breadcrumb-more > summary::-webkit-details-marker {
+.ov-file-preview__breadcrumb-more-summary:hover,
+.ov-file-preview__breadcrumb-more[open]
+  > .ov-file-preview__breadcrumb-more-summary {
+  color: var(--ov-ui-file-preview-accent-hover);
+}
+
+.ov-file-preview__breadcrumb-more-summary::-webkit-details-marker {
   display: none;
+}
+
+/*
+ * 悬停即展开：`details` 未展开时浏览器默认隐藏内容，这里显式接管，让它同时
+ * 响应悬停与聚焦。菜单本身也在悬停范围内，鼠标从「…」移进菜单不会收起。
+ */
+.ov-file-preview__breadcrumb-more:not([open])
+  > .ov-file-preview__breadcrumb-menu {
+  display: none;
+}
+
+.ov-file-preview__breadcrumb-more:hover > .ov-file-preview__breadcrumb-menu,
+.ov-file-preview__breadcrumb-more:focus-within
+  > .ov-file-preview__breadcrumb-menu {
+  display: block;
 }
 
 .ov-file-preview__breadcrumb-menu {
@@ -228,24 +341,45 @@
   background: var(--ov-ui-file-preview-row-hover);
 }
 
+/*
+ * 图标按钮。默认无边框、悬停才显出底槽，用于紧跟在路径后面的复制按钮——
+ * 与宿主的 `plain` 外观一致，避免它看起来像右侧动作组的一员。动作组里的
+ * 按钮用 `--outlined` 变体，带描边与浅色底槽。
+ */
 .ov-file-preview__action {
   display: inline-flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: 1px solid var(--ov-ui-file-preview-border);
-  border-radius: var(--ov-ui-radius, 6px);
+  border: 1px solid transparent;
+  border-radius: 6px;
   background: none;
-  color: inherit;
+  color: var(--ov-ui-file-preview-text-path);
   font: inherit;
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
 }
 
 .ov-file-preview__action:hover:not(:disabled) {
   background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
+}
+
+/* 动作组里的按钮：带描边与浅色底槽，与宿主的次级按钮一致。 */
+.ov-file-preview__action--outlined {
+  border-color: var(--ov-ui-file-preview-border);
+  background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__action--outlined:hover:not(:disabled) {
+  border-color: var(--ov-ui-file-preview-text-muted);
 }
 
 .ov-file-preview__action:disabled {
@@ -253,26 +387,54 @@
   opacity: 0.4;
 }
 
+/*
+ * 预览/源码切换：分段控件，外框是一块浅色底槽，选中项浮在它上面并带一圈描边。
+ * 与宿主一致——28px 高、8px 外圆角、6px 内圆角。
+ */
 .ov-file-preview__switch {
-  display: inline-flex;
+  display: inline-grid;
   flex: none;
-  overflow: hidden;
-  border: 1px solid var(--ov-ui-file-preview-border);
-  border-radius: var(--ov-ui-radius, 6px);
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 0;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ov-ui-file-preview-row-hover);
 }
 
 .ov-file-preview__switch-item {
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 50px;
+  height: 24px;
+  margin: 0;
+  padding: 0 12px;
   border: 0;
+  border-radius: 6px;
   background: none;
-  color: var(--ov-ui-text-muted, #8f959e);
+  color: var(--ov-ui-file-preview-text-muted);
   font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.ov-file-preview__switch-item:hover:not([data-active]):not(:disabled) {
+  color: var(--ov-ui-file-preview-text);
 }
 
 .ov-file-preview__switch-item[data-active] {
-  background: var(--ov-ui-file-preview-row-hover);
-  color: inherit;
+  background: var(--ov-ui-file-preview-surface);
+  box-shadow: 0 0 0 1px var(--ov-ui-file-preview-border);
+  color: var(--ov-ui-file-preview-text);
   font-weight: 500;
 }
 
@@ -331,7 +493,7 @@
   min-width: 0;
   min-height: 120px;
   padding: 24px;
-  color: var(--ov-ui-text-muted, #8f959e);
+  color: var(--ov-ui-file-preview-text-muted);
   text-align: center;
 }
 
@@ -373,7 +535,7 @@
   flex: none;
   margin: 0;
   padding: 4px 10px;
-  color: var(--ov-ui-text-muted, #8f959e);
+  color: var(--ov-ui-file-preview-text-muted);
   font-size: 12px;
 }
 
@@ -381,6 +543,6 @@
   flex: none;
   padding: 4px 10px;
   border-top: 1px solid var(--ov-ui-file-preview-border);
-  color: var(--ov-ui-text-muted, #8f959e);
+  color: var(--ov-ui-file-preview-text-muted);
   font-size: 12px;
 }

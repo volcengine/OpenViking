@@ -129,16 +129,34 @@ Class names are prefixed with `ov-`. The block is `ov-file-preview`; elements us
 
 ## Theme tokens
 
-| CSS variable         | Default                   | Purpose                        |
-| -------------------- | ------------------------- | ------------------------------ |
-| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         | Row separators and borders.    |
-| `--ov-ui-text-muted` | `#8f959e`                 | Secondary text and icons.      |
-| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         | Hover background.              |
-| `--ov-ui-accent`     | `#2563c5`                 | Breadcrumb and primary button. |
-| `--ov-ui-focus-ring` | `#2563c5`                 | Keyboard focus ring.           |
-| `--ov-ui-radius`     | `6px`                     | Corner radius.                 |
-| `--ov-ui-surface`    | `canvas`                  | Selected tab background.       |
-| `--ov-ui-font-mono`  | `ui-monospace, monospace` | Body and editor text.          |
+Colours come from the design system the OpenViking console uses — the values only, never its component styles. Dark mode keys off the `.dark` class a host puts on `<html>`, never `prefers-color-scheme`, since the system preference can disagree with the theme the host renders.
+
+**Baseline** (`--ov-ui-color-*`, declared in the package-level `theme.css` and shared with FileTree and other components). Every component variable derives from these, so overriding the baseline re-skins the component:
+
+| CSS variable                  | Light     | Dark      | Purpose                 |
+| ----------------------------- | --------- | --------- | ----------------------- |
+| `--ov-ui-color-primary`       | `#5252ff` | `#5f5fff` | Primary.                |
+| `--ov-ui-color-primary-hover` | `#7075ff` | `#7075ff` | Primary on hover.       |
+| `--ov-ui-color-text-1`        | `#0b0b0f` | `#c7ccd6` | Body text.              |
+| `--ov-ui-color-text-3`        | `#6e718c` | `#737a87` | Secondary text.         |
+| `--ov-ui-color-border-2`      | `#e1e4f2` | `#2e3138` | Separators and borders. |
+| `--ov-ui-color-bg-1`          | `#ffffff` | `#131416` | Panel surface.          |
+| `--ov-ui-color-bg-5`          | `#f1f2f9` | `#23252a` | Hover background.       |
+
+**Component variables** (`--ov-ui-file-preview-*`), to adjust only this component:
+
+| CSS variable                        | Default                       | Purpose                        |
+| ----------------------------------- | ----------------------------- | ------------------------------ |
+| `--ov-ui-file-preview-accent`       | `--ov-ui-color-primary`       | Breadcrumb and primary button. |
+| `--ov-ui-file-preview-accent-hover` | `--ov-ui-color-primary-hover` | Link and "…" hover.            |
+| `--ov-ui-file-preview-border`       | `--ov-ui-color-border-2`      | Separators and borders.        |
+| `--ov-ui-file-preview-row-hover`    | `--ov-ui-color-bg-5`          | Hover background.              |
+| `--ov-ui-file-preview-surface`      | `--ov-ui-color-bg-1`          | Tab and menu surface.          |
+| `--ov-ui-file-preview-text`         | `--ov-ui-color-text-1`        | Body text.                     |
+| `--ov-ui-file-preview-text-muted`   | `--ov-ui-color-text-3`        | Secondary text and icons.      |
+| `--ov-ui-file-preview-focus-ring`   | `--ov-ui-color-primary`       | Keyboard focus ring.           |
+| `--ov-ui-radius`                    | `6px`                         | Corner radius.                 |
+| `--ov-ui-font-mono`                 | `ui-monospace, monospace`     | Path, body and editor text.    |
 
 ## Implementation scope
 

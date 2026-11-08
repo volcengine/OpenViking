@@ -1,5 +1,12 @@
+import { useLayoutEffect, useRef, useState } from 'react';
+
 import { ContentTabIcon, FileTypeIcon } from './file-preview-icons.js';
 import type { FilePreviewTab } from './types.js';
+
+/** 轮廓在页签上沿与底部收口处的圆角半径，与宿主一致。 */
+const OUTLINE_RADIUS = 7;
+/** 描边向内收半个线宽，1px 的线才能落在像素中心上。 */
+const STROKE_INSET = 0.5;
 
 export interface FilePreviewTabRowProps {
   tabs: readonly FilePreviewTab[];
@@ -9,9 +16,48 @@ export interface FilePreviewTabRowProps {
 }
 
 /**
- * 页签行：只显示图标与标题，其余元素都在内容区标题行。
- * The tab row shows only an icon and a title; everything else lives in the
- * content header.
+ * 选中页签与基线连成一条轮廓线：从左下角起画到页签左沿，绕过左上、右上
+ * 两个圆角，再落到页签右沿并接到右边界。基线本身也由这条线画出，因此不会
+ * 和页签描边重复叠加。
+ *
+ * The selected tab and the baseline are one continuous outline: it runs from the
+ * bottom-left along the baseline, up the tab's left edge, around both top
+ * corners and back down to the baseline. The baseline is part of the same path,
+ * so it never double-paints with the tab border.
+ */
+function buildOutline(
+  width: number,
+  top: number,
+  bottom: number,
+  left: number,
+  right: number,
+) {
+  const radius = OUTLINE_RADIUS;
+  // 页签太窄时圆角放不下，退化成一条直线，避免出现自交的轮廓。
+  if (right - left < radius * 2 + 1) return `M0 ${bottom} H${width}`;
+
+  // 首个页签的左沿就是基线起点，没有可画的引入段，直接从它的左下角起笔。
+  const lead =
+    left > radius
+      ? [`M0 ${bottom}`, `H${left - radius}`]
+      : [`M${left} ${bottom}`];
+
+  return [
+    ...lead,
+    `Q${left} ${bottom} ${left} ${bottom - radius}`,
+    `V${top + radius}`,
+    `Q${left} ${top} ${left + radius} ${top}`,
+    `H${right - radius}`,
+    `Q${right} ${top} ${right} ${top + radius}`,
+    `V${bottom - radius}`,
+    `Q${right} ${bottom} ${right + radius} ${bottom}`,
+    `H${width}`,
+  ].join(' ');
+}
+
+/**
+ * 页签行：文件夹卡片式页签，选中页签与内容区连成一体。
+ * The tab row: folder-style tabs where the selected one joins the content area.
  */
 export function FilePreviewTabRow({
   tabs,
@@ -19,44 +65,85 @@ export function FilePreviewTabRow({
   disabled,
   onSelect,
 }: FilePreviewTabRowProps) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [outline, setOutline] = useState('');
+
+  // useLayoutEffect 必要性：轮廓的坐标来自页签与轨道的实际布局盒，只有 DOM
+  // 提交后才可测量，且标题变化、容器缩放都会改变结果，无法在渲染或点击事件
+  // 里算出。轨道尺寸变化时由 ResizeObserver 重新测量，卸载时 disconnect。
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+
+    const measure = () => {
+      const trackRect = track.getBoundingClientRect();
+      const bottom = trackRect.height - STROKE_INSET;
+      const active = track.querySelector<HTMLElement>('[aria-selected="true"]');
+      if (!active) {
+        setOutline(`M0 ${bottom} H${trackRect.width}`);
+        return;
+      }
+      const rect = active.getBoundingClientRect();
+      setOutline(
+        buildOutline(
+          trackRect.width,
+          rect.top - trackRect.top + STROKE_INSET,
+          rect.bottom - trackRect.top - STROKE_INSET,
+          rect.left - trackRect.left,
+          rect.right - trackRect.left,
+        ),
+      );
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, [activeKey, tabs]);
+
   return (
-    <div role="tablist" className="ov-file-preview__tab-row">
-      {tabs.map((tab) => {
-        const selected = tab.key === activeKey;
-        return (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            id={`ov-file-preview-tab-${tab.key}`}
-            aria-selected={selected}
-            aria-controls={`ov-file-preview-panel-${tab.key}`}
-            tabIndex={selected ? 0 : -1}
-            disabled={tab.disabled || disabled}
-            title={typeof tab.title === 'string' ? tab.title : undefined}
-            className={[
-              'ov-file-preview__tab',
-              selected ? 'ov-file-preview__tab--active' : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            onClick={() => onSelect(tab.key)}
-          >
-            <span className="ov-file-preview__tab-icon" aria-hidden="true">
-              {tab.icon ??
-                (tab.kind === 'file' ? (
-                  <FileTypeIcon fileName={tab.source.fileName} />
-                ) : (
-                  <ContentTabIcon />
-                ))}
-            </span>
-            <span className="ov-file-preview__tab-title">
-              {tab.title ??
-                (tab.kind === 'file' ? tab.source.fileName : tab.key)}
-            </span>
-          </button>
-        );
-      })}
+    <div className="ov-file-preview__tab-row">
+      <div role="tablist" className="ov-file-preview__tab-track" ref={trackRef}>
+        {tabs.map((tab) => {
+          const selected = tab.key === activeKey;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              id={`ov-file-preview-tab-${tab.key}`}
+              aria-selected={selected}
+              aria-controls={`ov-file-preview-panel-${tab.key}`}
+              tabIndex={selected ? 0 : -1}
+              disabled={tab.disabled || disabled}
+              title={typeof tab.title === 'string' ? tab.title : undefined}
+              className={[
+                'ov-file-preview__tab',
+                selected ? 'ov-file-preview__tab--active' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => onSelect(tab.key)}
+            >
+              <span className="ov-file-preview__tab-icon" aria-hidden="true">
+                {tab.icon ??
+                  (tab.kind === 'file' ? (
+                    <FileTypeIcon fileName={tab.source.fileName} />
+                  ) : (
+                    <ContentTabIcon />
+                  ))}
+              </span>
+              <span className="ov-file-preview__tab-title">
+                {tab.title ??
+                  (tab.kind === 'file' ? tab.source.fileName : tab.key)}
+              </span>
+            </button>
+          );
+        })}
+        <svg className="ov-file-preview__tab-outline" aria-hidden="true">
+          <path d={outline} />
+        </svg>
+      </div>
     </div>
   );
 }

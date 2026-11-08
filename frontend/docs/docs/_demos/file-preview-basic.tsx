@@ -1,16 +1,75 @@
 import { useState } from 'react';
+import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
 import type { FilePreviewTab } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 
-const markdown = `# LLM Wiki
+/**
+ * 示例文案。文档站中英文页面共用这份示例，因此文案跟随页面语言。
+ *
+ * Demo copy. Both language pages share this demo, so the copy follows the page
+ * language.
+ */
+const COPY = {
+  en: {
+    markdown: `# LLM Wiki
 
 Compile heterogeneous knowledge sources into durable, connected knowledge.
 
 ## Objective
 
 Turn the supplied sources into reusable pages instead of a pile of summaries.
-`;
+`,
+    dashboard:
+      'A content tab renders whatever the host passes — a dashboard, a graph, a summary. The component does not know what it is.',
+    dashboardTitle: 'Dashboard',
+    hint: 'Switch tabs, copy the path or the content, or toggle preview and source.',
+    contentCopied: 'Content copied',
+    pathCopied: 'Path copied',
+    parentOpened: (path: string) => `Simulated parent navigation: ${path}`,
+    saved: 'Content saved',
+    cancelled: 'Editing cancelled',
+    previewLabel: 'File preview',
+    labels: {
+      copyContent: 'Copy content',
+      copyPath: 'Copy path',
+      edit: 'Edit',
+      save: 'Save',
+      cancel: 'Cancel',
+      preview: 'Preview',
+      source: 'Source',
+    },
+  },
+  zh: {
+    markdown: `# LLM Wiki
+
+把异构的知识来源编译成可长期使用、彼此关联的知识。
+
+## 目标
+
+把素材变成可复用的页面，而不是一堆摘要。
+`,
+    dashboard:
+      '内容页签原样渲染宿主传入的节点——可以是看板、图谱或摘要，组件不关心它是什么。',
+    dashboardTitle: '看板',
+    hint: '切换页签、复制路径或正文，或在预览与源码之间切换。',
+    contentCopied: '正文已复制',
+    pathCopied: '路径已复制',
+    parentOpened: (path: string) => `已模拟跳转到上级：${path}`,
+    saved: '正文已保存',
+    cancelled: '已取消编辑',
+    previewLabel: '文件预览',
+    labels: {
+      copyContent: '复制正文',
+      copyPath: '复制路径',
+      edit: '编辑',
+      save: '保存',
+      cancel: '取消',
+      preview: '预览',
+      source: '源码',
+    },
+  },
+};
 
 const diagramSvg =
   'data:image/svg+xml;charset=utf-8,' +
@@ -23,16 +82,21 @@ const diagramSvg =
       '</svg>',
   );
 
-const dashboard = (
-  <div style={{ padding: 16, color: '#8f959e', fontSize: 13 }}>
-    A content tab renders whatever the host passes — a dashboard, a graph, a
-    summary. The component does not know what it is.
-  </div>
-);
-
 export default function FilePreviewBasic() {
+  const lang = useLang() === 'zh' ? 'zh' : 'en';
+  const t = COPY[lang];
   const [activeHint, setActiveHint] = useState('');
-  const [content, setContent] = useState(markdown);
+  // 正文按语言分别保存：切换语言时展示该语言的初始正文，编辑过的内容不丢。
+  const [drafts, setDrafts] = useState<Partial<Record<string, string>>>({});
+  const content = drafts[lang] ?? t.markdown;
+  const setContent = (value: string) =>
+    setDrafts((current) => ({ ...current, [lang]: value }));
+
+  const dashboard = (
+    <div style={{ padding: 16, color: '#8f959e', fontSize: 13 }}>
+      {t.dashboard}
+    </div>
+  );
 
   const tabs: [FilePreviewTab, ...FilePreviewTab[]] = [
     {
@@ -44,18 +108,17 @@ export default function FilePreviewBasic() {
         fileName: 'SKILL.md',
         path: 'viking://system/compile/llm-wiki/SKILL.md',
       },
-      onCopyContent: () => setActiveHint('Content copied'),
-      onCopyPath: () => setActiveHint('Path copied'),
+      onCopyContent: () => setActiveHint(t.contentCopied),
+      onCopyPath: () => setActiveHint(t.pathCopied),
       operations: { openParent: async () => {} },
-      onOpenParent: (path) =>
-        setActiveHint(`Simulated parent navigation: ${path}`),
+      onOpenParent: (path) => setActiveHint(t.parentOpened(path)),
       editing: {
         save: (value) => {
           setContent(value);
           return Promise.resolve();
         },
-        onSave: () => setActiveHint('Content saved'),
-        onCancel: () => setActiveHint('Editing cancelled'),
+        onSave: () => setActiveHint(t.saved),
+        onCancel: () => setActiveHint(t.cancelled),
       },
     },
     {
@@ -71,7 +134,7 @@ export default function FilePreviewBasic() {
     {
       kind: 'content',
       key: 'dashboard',
-      title: 'Dashboard',
+      title: t.dashboardTitle,
       content: dashboard,
     },
   ];
@@ -79,11 +142,15 @@ export default function FilePreviewBasic() {
   return (
     <div style={{ display: 'grid', gap: 8 }}>
       <div style={{ height: 560 }}>
-        <FilePreview tabs={tabs} aria-label="File preview" />
+        <FilePreview
+          tabs={tabs}
+          locale={lang === 'zh' ? 'zh-CN' : 'en-US'}
+          labels={t.labels}
+          aria-label={t.previewLabel}
+        />
       </div>
       <p style={{ margin: 0, color: '#8f959e', fontSize: 12 }}>
-        {activeHint ||
-          'Switch tabs, copy the path or the content, or toggle preview and source.'}
+        {activeHint || t.hint}
       </p>
     </div>
   );
