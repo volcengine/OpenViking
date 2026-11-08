@@ -104,6 +104,38 @@ describe('Lark preflight retry', () => {
     assert.equal(subscribeCalls(), 2);
   });
 
+  it('redacts stderr before truncating the first diagnostic line', async () => {
+    const secret = 's'.repeat(300);
+    const { client } = preflightClient((args) => {
+      if (args.includes('+subscribe')) return failedResult(7, `access_token=${secret}\nsecond-line`);
+      return defaultPreflightResult(args);
+    });
+    await assert.rejects(client.preflight(), (error) => {
+      assert.match(error.message, /access_token=\[REDACTED\]/);
+      assert.ok(!error.message.includes('ssss'));
+      assert.ok(!error.message.includes('second-line'));
+      return true;
+    });
+  });
+
+  for (const probe of ['profile', '+subscribe', 'im', 'doctor', '--version']) {
+    it(`rejects a second timed-out ${probe} probe even with exit code zero`, async () => {
+      let attempts = 0;
+      const { client } = preflightClient((args) => {
+        if (args.includes(probe)) {
+          attempts += 1;
+          const result = probe === 'profile'
+            ? okResult('[{"name":"test-profile","active":true}]') : defaultPreflightResult(args);
+          return { ...result, timedOut: true };
+        }
+        return defaultPreflightResult(args);
+      });
+      if (probe === 'profile') client.profile = null;
+      await assert.rejects(client.preflight(), /last attempt: code=0; timed out/);
+      assert.equal(attempts, 2);
+    });
+  }
+
   it('probes once when the first probe already succeeds', async () => {
     const { client, calls, subscribeCalls } = preflightClient();
     await client.preflight();

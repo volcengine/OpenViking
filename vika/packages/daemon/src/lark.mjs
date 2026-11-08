@@ -134,7 +134,7 @@ function describePreflightFailure(failure) {
   const parts = [];
   if (failure.code !== undefined && failure.code !== null) parts.push(`code=${failure.code}`);
   if (failure.timedOut) parts.push('timed out');
-  const detail = String(failure.stderr ?? '').trim().split(/\r?\n/)[0].slice(0, 200);
+  const detail = redactSensitive(String(failure.stderr ?? '')).trim().split(/\r?\n/)[0].slice(0, 200);
   if (detail) parts.push(detail);
   return parts.join('; ') || 'unknown failure';
 }
@@ -188,7 +188,7 @@ export class LarkClient {
     );
     if (!this.profile) {
       const listed = await probe(['profile', 'list'], 10_000);
-      if (listed.code !== 0) throw failed('lark-cli profile list failed');
+      if (listed.code !== 0 || listed.timedOut) throw failed('lark-cli profile list failed');
       let profiles;
       try { profiles = JSON.parse(listed.stdout); } catch {}
       const active = Array.isArray(profiles) ? profiles.filter((profile) => profile?.active) : [];
@@ -212,15 +212,15 @@ export class LarkClient {
       const result = await probe([...prefix, ...check.args], 10_000, accepts);
       const text = `${result.stdout}\n${result.stderr}`;
       const missing = check.required.filter((flag) => !text.includes(flag));
-      if (result.code !== 0 || missing.length > 0) {
+      if (result.code !== 0 || result.timedOut || missing.length > 0) {
         throw failed(`lark-cli preflight failed for ${check.args.join(' ')}${missing.length ? `; missing ${missing.join(', ')}` : ''}`);
       }
       outputs.push(text.trim().split(/\r?\n/).at(-1) || 'unknown');
     }
     const doctor = await probe([...prefix, 'doctor'], 30_000);
-    if (doctor.code !== 0) throw failed('lark-cli doctor failed for the selected profile');
+    if (doctor.code !== 0 || doctor.timedOut) throw failed('lark-cli doctor failed for the selected profile');
     const version = await probe(['--version'], 10_000);
-    if (version.code !== 0) throw failed('lark-cli --version failed');
+    if (version.code !== 0 || version.timedOut) throw failed('lark-cli --version failed');
     return {
       profile: this.profile,
       version: `${version.stdout}\n${version.stderr}`.trim().split(/\r?\n/).at(-1),
