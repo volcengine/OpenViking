@@ -136,20 +136,45 @@ export function useTooltipPosition(
     // `--ov-ui-*-default`: inlining those would freeze the surface's theme at the
     // moment it opened instead of following `.dark`. Re-sync when the theme changes
     // (a class change on `html`) so an open surface follows along.
+    // 记录上一次写进浮层的变量名，重新同步时先把不再出现的清掉——否则宿主
+    // 移除某个覆盖后，浮层还留着旧值。
+    //
+    // Remember which names were written so a re-sync can drop the ones that no
+    // longer apply — otherwise the surface keeps an old value after the host
+    // removes its override.
+    const written = new Set<string>();
     const syncTheme = () => {
       const triggerStyle = window.getComputedStyle(trigger);
+      const seen = new Set<string>();
       for (const name of Array.from(triggerStyle)) {
         if (!name.startsWith('--ov-ui-color-')) continue;
         const value = triggerStyle.getPropertyValue(name).trim();
-        if (value) surface.style.setProperty(name, value);
+        if (!value) continue;
+        seen.add(name);
+        surface.style.setProperty(name, value);
       }
+      for (const name of written) {
+        if (seen.has(name)) continue;
+        surface.style.removeProperty(name);
+      }
+      written.clear();
+      seen.forEach((name) => written.add(name));
     };
     syncTheme();
+    // 观察整条祖先链而不只是 `html`：宿主把主题覆盖写在某个容器上时，改的是
+    // 那个元素的 `style`/class，`html` 不变，只盯根节点收不到通知。
+    //
+    // Watch the whole ancestor chain, not just `html`: a host that scopes its theme
+    // override to a container changes that element's `style`/class while `html`
+    // stays put, so observing only the root would miss it.
     const themeObserver = new MutationObserver(syncTheme);
-    themeObserver.observe(document.documentElement, {
+    const observerOptions: MutationObserverInit = {
       attributes: true,
       attributeFilter: ['class', 'style', 'data-theme'],
-    });
+    };
+    for (let node: Element | null = trigger; node; node = node.parentElement) {
+      themeObserver.observe(node, observerOptions);
+    }
 
     const update = () => {
       const triggerRect = trigger.getBoundingClientRect();

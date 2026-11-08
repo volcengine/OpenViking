@@ -193,33 +193,50 @@ export function FilePreviewViewer({
     // the tab key and on those slots' presence, so adding or removing a slot
     // rebuilds it. `downloadFallback` also steps aside for `unsupportedFallback`.
     const own = tab.slots;
-    const confirmFallback = own?.confirmFallback;
-    const hostDownload = own?.downloadFallback;
-    const hostUnsupported = own?.unsupportedFallback;
-    // 宿主两个都没给时用组件自己的不支持态（按 `canDownload` 决定要不要下载
-    // 按钮）；给了 `unsupportedFallback` 就让位，让底座走到它。
+    const hasConfirm = Boolean(own?.confirmFallback);
+    const hasHostDownload = Boolean(own?.downloadFallback);
+    const hasUnsupported = Boolean(own?.unsupportedFallback);
+    // 传的是稳定 wrapper，内部从 `latest.current` 读当前组件并转发 props。
+    // 直接把宿主组件本身传进去会把它冻在这一帧：同一个 key 下宿主换了组件
+    // （新的文案或回调闭包），memo 不重建，界面仍停在旧组件上。
     //
-    // With neither, this component's own unsupported state applies (its download
-    // button follows `canDownload`); a host `unsupportedFallback` takes over instead.
-    const fallback = hostDownload
-      ? hostDownload
-      : hostUnsupported
-        ? undefined
-        : () => (
-            <UnsupportedState
-              text={latest.current.text}
-              onDownload={
-                latest.current.canDownload
-                  ? latest.current.onDownload
-                  : undefined
-              }
-            />
-          );
+    // What goes in is a stable wrapper that reads the current component from
+    // `latest.current` and forwards props. Passing the host's component directly
+    // freezes it at this frame: a new component under the same key (fresh copy or
+    // callback closure) would not take effect while the memo holds.
+    const confirmSlot: NonNullable<FileViewerCoreProps['slots']>['confirm'] = (
+      props,
+    ) => {
+      const Host = latest.current.tabSlots?.confirmFallback;
+      return Host ? <Host {...props} /> : null;
+    };
+    const downloadSlot: NonNullable<
+      FileViewerCoreProps['slots']
+    >['downloadFallback'] = (props) => {
+      const tabSlots = latest.current.tabSlots;
+      const Host = tabSlots?.downloadFallback;
+      if (Host) return <Host {...props} />;
+      // 宿主没给下载插槽时用组件自己的不支持态；给了 `unsupportedFallback`
+      // 就让位（不传 `downloadFallback`，见下方）。
+      //
+      // Without a host download slot, this component's own unsupported state
+      // applies; a host `unsupportedFallback` takes over instead (see below).
+      return (
+        <UnsupportedState
+          text={latest.current.text}
+          onDownload={
+            latest.current.canDownload ? latest.current.onDownload : undefined
+          }
+        />
+      );
+    };
     return {
       loading: loadingSlot,
       error: errorSlot,
-      ...(confirmFallback ? { confirm: confirmFallback } : {}),
-      ...(fallback ? { downloadFallback: fallback } : {}),
+      ...(hasConfirm ? { confirm: confirmSlot } : {}),
+      ...(hasHostDownload || !hasUnsupported
+        ? { downloadFallback: downloadSlot }
+        : {}),
     };
     // 依赖用「哪些插槽存在」而不是对象身份：宿主每次渲染都会重建 `slots`，
     // 用对象会让 memo 每帧重建、底座重挂渲染器（表现为点击后正文闪一下）。
