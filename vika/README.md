@@ -17,7 +17,7 @@ Vika supports runtimes such as Codex, Claude Code, and Pi, and connects to Feish
 
 ## Quick start
 
-You need macOS or Linux, a configured model runtime, and **an OpenViking service (required; local or remote)**. Use WSL2 on Windows with this published release.
+You need macOS or Linux, a configured model runtime, and **an OpenViking service (required; local or remote)**. On Windows, use WSL2 with this published release, or try the experimental [Windows x64 preview package](docs/windows-preview.md) (a GitHub Actions artifact; GitHub sign-in required, kept for 14 days).
 
 ```bash
 curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/0.4.0-24e73d5a3f7a/install.sh | sh -s -- --version 0.4.0-24e73d5a3f7a
