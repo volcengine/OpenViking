@@ -14,6 +14,9 @@ OpenViking 以 HTTP 服务运行。安装服务端之前，先选择由谁运行
 
 本页后续内容适用于自建服务。
 
+默认专属部署使用 `runtime_mode: dedicated`；共享实例可选择
+[`serverless` 运行模式](25-runtime-modes.md)，由各业务 Account 提供模型和向量配置。
+
 容量规划应使用有代表性的数据集和预期并发量测量内存、磁盘占用，为原始文件、索引和快照预留空间。扩大工作负载前，通过[可观测性](../guides/05-observability.md)检查容量余量。
 
 ## 快速开始

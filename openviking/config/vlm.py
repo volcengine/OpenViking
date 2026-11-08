@@ -232,6 +232,8 @@ class AccountVLMProvider:
     def _select_vlm(self, account_id: str, view: _VLMView) -> _VLMSelection:
         account_vlm = view.account.vlm
         if account_vlm is None:
+            if view.cluster.runtime_mode == "serverless":
+                raise ValueError(f"Serverless account '{account_id}' requires its own vlm settings")
             return _VLMSelection(
                 ("account", account_id, "vlm"),
                 view.cluster.vlm,
@@ -255,6 +257,8 @@ class AccountVLMProvider:
                 self._account_tracker(self._planner_usage, account_id),
             )
         if view.account.vlm is not None:
+            return self._select_vlm(account_id, view)
+        if view.cluster.runtime_mode == "serverless":
             return self._select_vlm(account_id, view)
         if view.cluster.query_planner is not None and view.cluster.query_planner._has_any_config():
             return _VLMSelection(
@@ -406,6 +410,8 @@ class AccountVLMProvider:
         view = await self._view(account_id)
         if view.account.query_planner is not None or view.account.vlm is not None:
             return True
+        if view.cluster.runtime_mode == "serverless":
+            return False
         planner = view.cluster.query_planner
         return planner is not None and planner._has_any_config()
 
