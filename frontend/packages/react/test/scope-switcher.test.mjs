@@ -7,23 +7,31 @@ import {
   ScopeSelector,
 } from '@openviking/react/components/scope-switcher';
 
-const level = {
-  kind: 'selectable',
-  key: 'library',
+const identity = { key: 'library' };
+const trigger = { label: 'Current library' };
+const data = {
   selectedId: 'one',
-  selectedLabel: 'Current library',
   options: [
     { id: 'one', label: 'One' },
     { id: 'two', label: 'Two', disabled: true },
   ],
-  visible: true,
 };
-const render = (overrides = {}) =>
+const state = { visible: true };
+/** Renders one selectable level, with any group overridden per test. */
+const render = ({ data: d, state: st, actions, slots } = {}) =>
   renderToStaticMarkup(
     createElement(
       ScopeSwitcher,
       null,
-      createElement(ScopeSelector, { level: { ...level, ...overrides } }),
+      createElement(ScopeSelector, {
+        kind: 'selectable',
+        identity,
+        trigger,
+        data: { ...data, ...d },
+        state: { ...state, ...st },
+        actions,
+        slots,
+      }),
     ),
   );
 
@@ -35,11 +43,11 @@ test('renders selected and disabled options without browser globals or API depen
 });
 
 test('loading and failure hide stale options and support host recovery content', () => {
-  assert.doesNotMatch(render({ loading: true }), /role="option"/);
-  assert.match(render({ loading: true }), /Loading/);
+  assert.doesNotMatch(render({ state: { loading: true } }), /role="option"/);
+  assert.match(render({ state: { loading: true } }), /Loading/);
   const html = render({
-    error: true,
-    errorFallback: createElement('button', null, 'Retry request'),
+    state: { error: true },
+    slots: { errorFallback: createElement('button', null, 'Retry request') },
   });
   assert.match(html, /role="alert"/);
   assert.match(html, /Retry request/);
@@ -47,37 +55,65 @@ test('loading and failure hide stale options and support host recovery content',
 });
 
 test('search requires a callback and respects total or an active query', () => {
-  assert.doesNotMatch(render({ total: 30 }), /type="search"/);
+  assert.doesNotMatch(render({ data: { total: 30 } }), /type="search"/);
   assert.doesNotMatch(
-    render({ total: 10, onSearchKeywordChange() {} }),
+    render({ data: { total: 10 }, actions: { onSearchKeywordChange() {} } }),
     /type="search"/,
   );
   assert.match(
-    render({ total: 11, onSearchKeywordChange() {} }),
+    render({ data: { total: 11 }, actions: { onSearchKeywordChange() {} } }),
     /type="search"/,
   );
   assert.match(
-    render({ searchKeyword: 'on', onSearchKeywordChange() {} }),
+    render({
+      state: { searchKeyword: 'on' },
+      actions: { onSearchKeywordChange() {} },
+    }),
     /<mark>On<\/mark>e/,
   );
 });
 
+test('every keyword hit is highlighted, case-insensitively', () => {
+  const html = render({
+    data: { options: [{ id: 'one', label: 'One and one' }] },
+    state: { searchKeyword: 'ONE' },
+    actions: { onSearchKeywordChange() {} },
+  });
+  assert.equal((html.match(/<mark>/g) ?? []).length, 2);
+  assert.match(html, /<mark>One<\/mark> and <mark>one<\/mark>/);
+});
+
+test('a missing, unknown or disabled selection falls back to the first option', () => {
+  const options = [
+    { id: 'a', label: 'Alpha' },
+    { id: 'b', label: 'Beta', disabled: true },
+    { id: 'c', label: 'Gamma' },
+  ];
+  for (const selectedId of ['', 'missing', 'b']) {
+    assert.match(render({ data: { options, selectedId } }), /Alpha/);
+    assert.match(
+      render({ data: { options, selectedId } }),
+      /aria-selected="true"[^>]*>[\s\S]*?Alpha/,
+    );
+  }
+  assert.match(render({ data: { options, selectedId: 'c' } }), /Gamma/);
+});
+
 test('busy disables all options; disabled and fixed levels have no panel', () => {
   assert.equal(
-    (render({ busy: true }).match(/aria-disabled="true"/g) ?? []).length,
+    (render({ state: { busy: true } }).match(/aria-disabled="true"/g) ?? [])
+      .length,
     2,
   );
-  assert.doesNotMatch(render({ disabled: true }), /role="dialog"/);
+  assert.doesNotMatch(render({ state: { disabled: true } }), /role="dialog"/);
   const html = renderToStaticMarkup(
     createElement(
       ScopeSwitcher,
       null,
       createElement(ScopeSelector, {
-        level: {
-          kind: 'fixed',
-          key: 'library',
-          selectedLabel: 'Fixed library',
-        },
+        kind: 'fixed',
+        identity: { key: 'library' },
+        trigger: { label: 'Fixed library' },
       }),
     ),
   );
@@ -85,12 +121,24 @@ test('busy disables all options; disabled and fixed levels have no panel', () =>
   assert.doesNotMatch(html, /<button|role="dialog"/);
 });
 
+test('a host-owned panel is marked so it shares the default height cap', () => {
+  const custom = render({
+    slots: {
+      renderPanel: ({ list }) => createElement('section', null, list),
+    },
+  });
+  assert.match(custom, /ov-scope-switcher__panel--custom/);
+  assert.doesNotMatch(render(), /ov-scope-switcher__panel--custom/);
+});
+
 test('panel and row slots compose with default contents', () => {
   const html = render({
-    renderPanel: ({ list }) =>
-      createElement('section', null, 'Libraries', list),
-    renderOption: (content) =>
-      createElement('span', null, content, 'Custom suffix'),
+    slots: {
+      renderPanel: ({ list }) =>
+        createElement('section', null, 'Libraries', list),
+      renderOption: (content) =>
+        createElement('span', null, content, 'Custom suffix'),
+    },
   });
   assert.match(html, /<section>Libraries/);
   assert.match(html, /Custom suffix/);

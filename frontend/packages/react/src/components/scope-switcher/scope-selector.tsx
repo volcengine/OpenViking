@@ -1,20 +1,61 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import chevronDown from '../../../../icons/svg/scope-switcher/chevron-down.svg?inline';
+import ChevronDownIcon from '../../../../icons/svg/scope-switcher/chevron-down.svg?react';
 import { ScopePanel } from './scope-panel.js';
 import type { ScopeSelectorProps } from './types.js';
 
-export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
+export function ScopeSelector(props: ScopeSelectorProps) {
+  const { identity, trigger: triggerContent, labels } = props;
+  const selectable = props.kind === 'selectable' ? props : undefined;
+  const data = selectable?.data;
+  const state = selectable?.state;
+  const actions = selectable?.actions;
+  const slots = selectable?.slots;
+
+  /**
+   * 回退到第一个可选项。作用域始终有一个确定的值：宿主传入的选中值缺失、为空、
+   * 不在列表里或指向禁用项时，改由第一项承担，并把结果通知宿主，让 URL 与请求
+   * 参数跟上。
+   *
+   * Falls back to the first selectable option. A scope always has a definite
+   * value: when the host's selection is missing, empty, not in the list or points
+   * at a disabled option, the first option takes over and the host is notified so
+   * the URL and request parameters follow.
+   */
+  const fallback = data
+    ? (data.options.find(
+        (option) => option.id === data.selectedId && !option.disabled,
+      ) ?? data.options.find((option) => !option.disabled))
+    : undefined;
+  const needsFallback =
+    data !== undefined &&
+    fallback !== undefined &&
+    fallback.id !== data.selectedId;
+
+  // Synchronize the host with a corrected selection. The host owns the value and
+  // the URL derived from it, so a render-time fix alone would leave them stale.
+  // The effect keys off the option id, not the option object: the host rebuilds
+  // its list on every render, and depending on the object would re-fire while the
+  // host is still writing the value back. No cleanup is needed — this is a
+  // one-shot notification, not a subscription.
+  const onSelect = actions?.onSelect;
+  const fallbackOption = useRef<typeof fallback>(undefined);
+  fallbackOption.current = needsFallback ? fallback : undefined;
+  const fallbackId = needsFallback ? fallback?.id : undefined;
+  useEffect(() => {
+    const option = fallbackOption.current;
+    if (option) onSelect?.(option);
+  }, [fallbackId, onSelect]);
+
   const [localVisible, setLocalVisible] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const restoreSelectionFocus = useRef(false);
   const panelId = useId();
   const open =
-    level.kind === 'selectable' &&
-    (level.visible ?? localVisible) &&
-    !level.disabled;
-  const onVisibleChange =
-    level.kind === 'selectable' ? level.onVisibleChange : undefined;
+    selectable !== undefined &&
+    (state?.visible ?? localVisible) &&
+    !state?.disabled;
+  const onVisibleChange = actions?.onVisibleChange;
 
   const changeVisible = useCallback(
     (visible: boolean) => {
@@ -68,15 +109,21 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
     }
   }, [open]);
 
+  const selected =
+    fallback ?? data?.options.find((o) => o.id === data.selectedId);
+  const label = triggerContent?.label ?? selected?.label ?? '';
+  const icon = triggerContent?.icon ?? selected?.icon;
   const content = (
     <>
-      {level.icon && (
+      {icon && (
         <span className="ov-scope-switcher__icon" aria-hidden="true">
-          {level.icon}
+          {icon}
         </span>
       )}
-      <span className="ov-scope-switcher__label">{level.selectedLabel}</span>
-      {level.tag && <span className="ov-scope-switcher__tag">{level.tag}</span>}
+      <span className="ov-scope-switcher__label">{label}</span>
+      {identity.tag && (
+        <span className="ov-scope-switcher__tag">{identity.tag}</span>
+      )}
     </>
   );
   return (
@@ -94,11 +141,11 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
         }
       }}
     >
-      {level.kind === 'fixed' ? (
+      {selectable === undefined ? (
         <span
           className="ov-scope-switcher__trigger"
-          aria-label={level.ariaLabel}
-          title={level.selectedLabel}
+          aria-label={identity.ariaLabel}
+          title={label}
         >
           {content}
         </span>
@@ -107,9 +154,9 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
           ref={trigger}
           type="button"
           className="ov-scope-switcher__trigger"
-          aria-label={level.ariaLabel}
-          title={level.selectedLabel}
-          disabled={level.disabled}
+          aria-label={identity.ariaLabel}
+          title={label}
+          disabled={state?.disabled}
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-controls={open ? panelId : undefined}
@@ -129,25 +176,31 @@ export function ScopeSelector({ level, labels }: ScopeSelectorProps) {
         >
           {content}
           <span className="ov-scope-switcher__arrow" aria-hidden="true">
-            <img src={chevronDown} alt="" width={14} height={14} />
+            <ChevronDownIcon />
           </span>
         </button>
       )}
-      {open && level.kind === 'selectable' && (
+      {open && selectable !== undefined && data !== undefined && (
         <div
           id={panelId}
-          className="ov-scope-switcher__panel"
+          className={
+            slots?.renderPanel
+              ? 'ov-scope-switcher__panel ov-scope-switcher__panel--custom'
+              : 'ov-scope-switcher__panel'
+          }
           role="dialog"
-          aria-label={level.ariaLabel ?? level.selectedLabel}
+          aria-label={identity.ariaLabel ?? label}
         >
           <ScopePanel
-            level={{
-              ...level,
-              onSelect: (option) => {
-                restoreSelectionFocus.current = true;
-                changeVisible(false);
-                level.onSelect?.(option);
-              },
+            label={identity.ariaLabel ?? label}
+            data={{ ...data, selectedId: fallback?.id ?? data.selectedId }}
+            state={state}
+            slots={slots}
+            actions={actions}
+            onSelect={(option) => {
+              restoreSelectionFocus.current = true;
+              changeVisible(false);
+              actions?.onSelect?.(option);
             }}
             labels={labels}
           />

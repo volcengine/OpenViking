@@ -29,28 +29,35 @@ function LevelView({
   return (
     <ScopeSelector
       labels={labels}
-      level={{
-        kind: 'selectable',
-        key: name,
-        ariaLabel: name,
-        selectedId: state.selected?.id ?? '',
-        selectedLabel: state.selected?.label ?? name,
+      kind="selectable"
+      identity={{ key: name, ariaLabel: name }}
+      trigger={{
+        label: state.selected?.label ?? name,
         icon: state.selected?.icon,
-        disabled: !state.enabled,
+      }}
+      data={{
+        selectedId: state.selected?.id ?? '',
+        total: state.options.length,
         options: state.options.filter((option) =>
           option.label
             .toLocaleLowerCase()
             .includes(keyword.toLocaleLowerCase()),
         ),
-        total: state.options.length,
+      }}
+      state={{
+        disabled: !state.enabled,
         loading: state.loading,
         error: state.error !== null,
         searchKeyword: keyword,
+      }}
+      actions={{
         onSearchKeywordChange: setKeyword,
         onSelect: (option) => {
           level.select(option);
           setKeyword('');
         },
+      }}
+      slots={{
         errorFallback: (
           <>
             {labels?.error ?? 'Unable to load options'}{' '}
