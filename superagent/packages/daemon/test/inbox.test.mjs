@@ -207,6 +207,38 @@ describe('MessageInbox while the model works', () => {
 });
 
 describe('MessageInbox durability and fallback', () => {
+  it('publishes a producer entry only after its transaction commits', () => {
+    const { db, inbox, runtime, clock } = setup();
+    db.exec('BEGIN IMMEDIATE');
+    inbox.persist(...input('oc_a'));
+    db.exec('ROLLBACK');
+    clock.advance(WAKE_DELAY_MS);
+    assert.equal(inbox.size, 0);
+    assert.equal(runtime.submissions.length, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM inbox_pending').get().n, 0);
+    db.exec('BEGIN IMMEDIATE');
+    const entry = inbox.persist(...input('oc_b'));
+    db.exec('COMMIT');
+    inbox.publish(entry);
+    inbox.publish(entry);
+    clock.advance(WAKE_DELAY_MS);
+    assert.equal(runtime.submissions.length, 1);
+    assert.equal(runtime.submissions[0].items.length, 1);
+  });
+
+  it('retains task reports across outages longer than the event age limit', () => {
+    const { db, inbox, runtime, clock } = setup();
+    runtime.busy = true;
+    inbox.add(...input('oc_a'));
+    inbox.add({ text: 'complete task result', scopeKey: 'task:t1' }, { kind: 'task.report' });
+    inbox.stop();
+    clock.advance(20_000);
+    const second = setup({ db, clock, maxAgeMs: 10_000 });
+    assert.equal(second.inbox.restore(), 1);
+    clock.advance(0);
+    assert.deepEqual(texts(second.runtime.submissions[0]), ['complete task result']);
+  });
+
   it('keeps waiting inputs across a restart and drops ones older than the event age limit', () => {
     const db = new DatabaseSync(':memory:');
     const clock = fakeClock();
