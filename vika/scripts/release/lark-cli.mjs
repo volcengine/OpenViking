@@ -37,10 +37,11 @@ export async function installLarkCliBinary({ packageDir, platformId, fetchImpl =
       }
     }
     if (lastError) throw lastError;
-    execFileSync('tar', ['-xzf', file, '-C', work, 'lark-cli']);
-    const bin = path.join(packageDir, 'bin', 'lark-cli');
+    const executable = platformId.startsWith('win32-') ? 'lark-cli.exe' : 'lark-cli';
+    execFileSync('tar', ['-xzf', file, '-C', work, executable]);
+    const bin = path.join(packageDir, 'bin', executable);
     fs.mkdirSync(path.dirname(bin), { recursive: true });
-    fs.copyFileSync(path.join(work, 'lark-cli'), bin);
+    fs.copyFileSync(path.join(work, executable), bin);
     fs.chmodSync(bin, 0o755);
     return { bin, version };
   } finally {

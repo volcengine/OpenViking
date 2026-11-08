@@ -15,6 +15,7 @@ import { pipeline } from 'node:stream/promises';
 // unofficial, and the daemon is Unix-only. WSL2 runs the linux build.
 
 export const PLATFORMS = Object.freeze({
+  'win32-x64': { os: 'win32', arch: 'x64', node: 'win-x64', larkCli: 'windows-amd64' },
   'linux-x64': { os: 'linux', arch: 'x64', node: 'linux-x64', larkCli: 'linux-amd64' },
   'linux-arm64': { os: 'linux', arch: 'arm64', node: 'linux-arm64', larkCli: 'linux-arm64' },
   'darwin-x64': { os: 'darwin', arch: 'x64', node: 'darwin-x64', larkCli: 'darwin-amd64' },

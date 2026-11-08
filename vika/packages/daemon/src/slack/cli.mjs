@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { SlackError, validToken } from './api.mjs';
 
 export const SLACK_CLI_VERSION = '4.10.0';
-export const bundledSlackCli = () => process.platform === 'win32' ? 'slack.exe' : fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
+export const bundledSlackCli = () => fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
 const READ_METHODS = new Set(['users.conversations', 'conversations.history', 'conversations.replies',
   'conversations.members', 'users.info']);
 
