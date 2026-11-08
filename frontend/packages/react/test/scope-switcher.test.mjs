@@ -83,19 +83,20 @@ test('every keyword hit is highlighted, case-insensitively', () => {
   assert.match(html, /<mark>One<\/mark> and <mark>one<\/mark>/);
 });
 
-test('a missing, unknown or disabled selection falls back to the first option', () => {
+test('the component renders the selection it is given, without normalising it', () => {
   const options = [
     { id: 'a', label: 'Alpha' },
     { id: 'b', label: 'Beta', disabled: true },
     { id: 'c', label: 'Gamma' },
   ];
-  for (const selectedId of ['', 'missing', 'b']) {
-    assert.match(render({ data: { options, selectedId } }), /Alpha/);
-    assert.match(
-      render({ data: { options, selectedId } }),
-      /aria-selected="true"[^>]*>[\s\S]*?Alpha/,
-    );
+  // Normalising an invalid selection changes the scope and its requests, so it
+  // belongs to whoever owns the selection. The view must not invent one: an
+  // empty or unknown id marks nothing, and the trigger keeps the host's label.
+  for (const selectedId of ['', 'missing']) {
+    const html = render({ data: { options, selectedId } });
+    assert.doesNotMatch(html, /aria-selected="true"/);
   }
+  // A valid id is rendered as given.
   assert.match(render({ data: { options, selectedId: 'c' } }), /Gamma/);
 });
 

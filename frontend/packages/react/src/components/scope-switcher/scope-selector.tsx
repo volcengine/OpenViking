@@ -11,48 +11,6 @@ export function ScopeSelector(props: ScopeSelectorProps) {
   const actions = selectable?.actions;
   const slots = selectable?.slots;
 
-  /**
-   * 回退到第一个可选项。作用域始终有一个确定的值：宿主传入的选中值缺失、为空、
-   * 不在权威集合 `data.options` 里或指向禁用项时，改由第一项承担，并把结果通知
-   * 宿主，让 URL 与请求参数跟上。
-   *
-   * 判定只认 `data.options`，不认 `data.visibleOptions`：后者是搜索过滤后的渲染
-   * 子集，当前值被过滤掉不代表它失效，否则用户一搜索就会被切到别的作用域。
-   *
-   * Falls back to the first selectable option. A scope always has a definite
-   * value: when the host's selection is missing, empty, absent from the
-   * authoritative `data.options` or points at a disabled option, the first option
-   * takes over and the host is notified so the URL and request parameters follow.
-   *
-   * Validity is decided from `data.options` alone, never `data.visibleOptions`:
-   * the latter is the search-filtered render subset, and a value filtered out of
-   * the view is still valid — otherwise typing a search would switch the scope.
-   */
-  const fallback = data
-    ? (data.options.find(
-        (option) => option.id === data.selectedId && !option.disabled,
-      ) ?? data.options.find((option) => !option.disabled))
-    : undefined;
-  const needsFallback =
-    data !== undefined &&
-    fallback !== undefined &&
-    fallback.id !== data.selectedId;
-
-  // Synchronize the host with a corrected selection. The host owns the value and
-  // the URL derived from it, so a render-time fix alone would leave them stale.
-  // The effect keys off the option id, not the option object: the host rebuilds
-  // its list on every render, and depending on the object would re-fire while the
-  // host is still writing the value back. No cleanup is needed — this is a
-  // one-shot notification, not a subscription.
-  const onSelect = actions?.onSelect;
-  const fallbackOption = useRef<typeof fallback>(undefined);
-  fallbackOption.current = needsFallback ? fallback : undefined;
-  const fallbackId = needsFallback ? fallback?.id : undefined;
-  useEffect(() => {
-    const option = fallbackOption.current;
-    if (option) onSelect?.(option);
-  }, [fallbackId, onSelect]);
-
   const [localVisible, setLocalVisible] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -116,8 +74,10 @@ export function ScopeSelector(props: ScopeSelectorProps) {
     }
   }, [open]);
 
-  const selected =
-    fallback ?? data?.options.find((o) => o.id === data.selectedId);
+  // The component renders the host's selection as given. Normalising an invalid
+  // selection belongs to whoever owns it — the host or a module such as
+  // ScopeCascade — because it changes the scope, the URL and downstream requests.
+  const selected = data?.options.find((o) => o.id === data.selectedId);
   const label = triggerContent?.label ?? selected?.label ?? '';
   const icon = triggerContent?.icon ?? selected?.icon;
   const content = (
@@ -200,7 +160,7 @@ export function ScopeSelector(props: ScopeSelectorProps) {
         >
           <ScopePanel
             label={identity.ariaLabel ?? label}
-            data={{ ...data, selectedId: fallback?.id ?? data.selectedId }}
+            data={data}
             state={state}
             slots={slots}
             actions={actions}
