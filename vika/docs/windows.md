@@ -1,4 +1,8 @@
-# Windows source preview
+# Windows preview
+
+For an experimental downloadable Windows x64 package, see
+[the preview Action and local installer](windows-preview.md). The instructions
+below describe a source checkout; stable Windows releases remain unsupported.
 
 This is a source-only preview for a trusted, single-user Windows 10/11 x64
 workstation. It does not install the separate OpenViking server; configure an
@@ -69,12 +73,13 @@ apps; it does not update a separate installed release.
   established, and localhost Web access is not per-user authentication.
 - Vika does not provision or verify Windows ACLs. Use private user-owned data,
   workspace and temporary directories. No filesystem sandbox is claimed.
-- Upgrade/updater, autostart and Windows release builds are disabled.
+- Upgrade/updater, autostart and stable Windows release builds are disabled.
 - Email is enabled. On Windows the email account file's mode is not checked
   (Windows reports 0666 regardless of ACLs); keep account files in a private,
   user-owned directory.
-  Autostart returns an unsupported-preview error. There is no Windows installer,
-  VBS startup entry or Windows CI workflow. Slack has no Windows bundled/default
+  Autostart returns an unsupported-preview error. The separate preview Action
+  provides a ZIP and local installer, but no VBS startup entry or stable release.
+  Slack has no Windows bundled/default
   executable; it requires an explicit `SLACK_CLI_BIN` and separate validation.
 
 ## Migration and validation
