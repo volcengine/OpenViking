@@ -303,6 +303,10 @@ export function getConfig() {
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('VIKA_STAGED_REPLIES', false),
+    // agents[].scheduler: legacy puts every input into the running turn at
+    // once; inbox holds inputs while the model works, notifies it, and lets it
+    // read them at a checkpoint (inbox.mjs). Read at start only.
+    scheduler: enumEnv('VIKA_SCHEDULER', 'legacy', ['legacy', 'inbox']),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('VIKA_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),

@@ -132,6 +132,13 @@ function explicitSilencePromptSection(config = {}) {
   return config.explicitSilence ? EXPLICIT_SILENCE_PROMPT : '';
 }
 
+// The inbox scheduler (agents[].scheduler inbox): how waiting inputs and
+// their notices work. Appended last, and only then, so the legacy scheduler
+// assembles exactly the policy (and policyHash) it had before.
+function inboxSection(config = {}) {
+  return config.scheduler === 'inbox' ? renderPrompt(config, 'inbox.md') : '';
+}
+
 // How a decision is delivered: one final delivery, or (agents[].stagedReplies)
 // the OnIt acknowledgement and interim findings of a longer task before it.
 // Each instance gets one of the two, in the Core's own place for it.
@@ -162,6 +169,7 @@ export function assembleConversationPolicy(config = {}) {
     roleSection(config),
     naturalWritingSection(config),
     explicitSilencePromptSection(config),
+    inboxSection(config),
   ]);
 }
 
