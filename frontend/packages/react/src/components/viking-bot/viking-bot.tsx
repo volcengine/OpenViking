@@ -34,6 +34,7 @@ export function VikingBot({
   messageList,
   composer,
   interaction,
+  interactionSlot,
   listKey,
   composerRef,
   onDraftChange,
@@ -90,25 +91,25 @@ export function VikingBot({
         )}
       </div>
       {footer ? <div className="ov-viking-bot__footer">{footer}</div> : null}
-      {interaction ? (
-        <VikingBotInteraction {...interaction} />
-      ) : (
-        (composer ?? (
-          <VikingBotComposer
-            ref={composerRef}
-            value={draft ?? ''}
-            attachments={attachments}
-            disabled={!isAvailable}
-            isSending={isSending}
-            onValueChange={onDraftChange}
-            onFilesAdded={onFilesAdded}
-            onAttachmentRemove={onAttachmentRemove}
-            onSend={onSend}
-            onCancel={onCancel}
-            labels={overrides}
-          />
-        ))
-      )}
+      {interaction
+        ? (interactionSlot ?? <VikingBotInteraction {...interaction} />)
+        : (composer ??
+          // 省略 draft 表示只读会话，此时不渲染默认输入区。
+          (draft !== undefined ? (
+            <VikingBotComposer
+              ref={composerRef}
+              value={draft}
+              attachments={attachments}
+              disabled={!isAvailable}
+              isSending={isSending}
+              onValueChange={onDraftChange}
+              onFilesAdded={onFilesAdded}
+              onAttachmentRemove={onAttachmentRemove}
+              onSend={onSend}
+              onCancel={onCancel}
+              labels={overrides}
+            />
+          ) : null))}
     </div>
   );
 }

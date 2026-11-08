@@ -1,6 +1,7 @@
 import { ChatMessageList } from '@ark-design/ui/message-list';
 
 import { toRenderItems, type VikingBotRenderItem } from './ark-adapter.js';
+import { groupMessages } from './message-groups.js';
 import {
   VikingBotMessageRow,
   VikingBotStreamingRow,
@@ -49,7 +50,8 @@ export function VikingBotMessageListView({
   labels: overrides,
 }: VikingBotMessageListProps) {
   const labels = { ...DEFAULT_LABELS, ...overrides };
-  const items = toRenderItems(messages, streaming);
+  // 同一轮的连续 assistant 消息先合并，列表才按轮次呈现而不是逐条堆叠。
+  const items = toRenderItems(groupMessages(messages), streaming);
 
   return (
     <div

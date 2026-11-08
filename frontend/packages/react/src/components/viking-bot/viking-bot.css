@@ -116,6 +116,33 @@
   white-space: normal;
 }
 
+.ov-viking-bot__activity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 整组折叠入口：一个执行块只有一个开关，组内片段不再各自折叠。 */
+.ov-viking-bot__activity-toggle {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  color: var(--ov-viking-bot-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ov-viking-bot__activity-toggle:hover {
+  color: var(--ov-viking-bot-text);
+}
+
+.ov-viking-bot__activity-toggle:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 2px;
+}
+
 .ov-viking-bot__reasoning,
 .ov-viking-bot__tool {
   border-radius: var(--ov-viking-bot-radius);

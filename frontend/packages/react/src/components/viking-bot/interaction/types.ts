@@ -122,7 +122,11 @@ export type VikingBotInteractionAnswer =
   | { kind: 'repair'; value: string }
   | { kind: 'custom'; value: unknown };
 
-/** 交互区文案。Copy of the interaction area. */
+/**
+ * 交互区文案。组件内置英文默认值，宿主可按需覆盖。
+ * Copy of the interaction area. The component ships English defaults; a host
+ * overrides any field it needs.
+ */
 export interface VikingBotInteractionLabels {
   /** 区域标题，缺省为「待确认」。Area title, "Needs your input" by default. */
   title?: string;
@@ -138,6 +142,18 @@ export interface VikingBotInteractionLabels {
   cancelled?: string;
   /** 步骤进度，接收当前序号与总数。Step progress, given index and total. */
   progress?: (index: number, total: number) => string;
+  /** 不启用定时的选项文案。Label of the "no schedule" option. */
+  scheduleNone?: string;
+  /** 每天的选项文案。Label of the daily option. */
+  scheduleDaily?: string;
+  /** 每周的选项文案。Label of the weekly option. */
+  scheduleWeekly?: string;
+  /** 时间输入的无障碍名称。Accessible name of the time input. */
+  scheduleTime?: string;
+  /** 星期选择的无障碍名称。Accessible name of the weekday select. */
+  scheduleWeekday?: string;
+  /** 星期名称，按周一至周日排列。Weekday names, Monday first. */
+  weekdays?: readonly string[];
 }
 
 /**
@@ -149,6 +165,12 @@ export interface VikingBotInteractionLabels {
 export interface VikingBotInteractionProps {
   /** 当前问题。The current question. */
   request: VikingBotInteractionRequest;
+  /**
+   * 问题的稳定身份；变化时重置表单状态。省略时按 `request.kind` 与序号判定。
+   * Stable identity of the question; changes reset the form state. Defaults to
+   * the request kind plus the step index.
+   */
+  requestKey?: string;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 当前步骤序号，从 0 开始。Current step index, starting at 0. */

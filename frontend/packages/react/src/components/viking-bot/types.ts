@@ -118,8 +118,17 @@ export interface VikingBotProps extends Omit<
   messageList?: ReactNode;
   /** 替换输入区，用于宿主自带输入组件。Replaces the composer. */
   composer?: ReactNode;
-  /** 待确认交互；存在时替代输入区。A pending interaction; replaces the composer. */
+  /**
+   * 待确认交互的配置；存在时替代输入区。
+   * Configuration of a pending interaction; replaces the composer.
+   */
   interaction?: VikingBotInteractionProps;
+  /**
+   * 整块替换交互区；传值时忽略 `interaction` 的内置渲染，宿主自行渲染。
+   * Replaces the whole interaction area; when set, the built-in rendering of
+   * `interaction` is skipped and the host renders its own.
+   */
+  interactionSlot?: ReactNode;
   /** 当前身份作用域的标识；值变化时重置展示状态。Identity scope; changes reset display state. */
   listKey?: string;
   /** 输入区的命令式入口。Imperative handle of the composer. */

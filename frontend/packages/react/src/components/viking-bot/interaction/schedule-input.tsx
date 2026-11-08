@@ -1,19 +1,10 @@
 import { useState } from 'react';
 
+import type { InteractionLabels } from './labels.js';
 import type {
   VikingBotInteractionRequest,
   VikingBotScheduleValue,
 } from './types.js';
-
-const WEEKDAYS = [
-  'monday',
-  'tuesday',
-  'wednesday',
-  'thursday',
-  'friday',
-  'saturday',
-  'sunday',
-] as const;
 
 type ScheduleRequest = Extract<
   VikingBotInteractionRequest,
@@ -26,10 +17,12 @@ const DEFAULT_TIME = '09:00';
 /** 定时输入。Schedule input. */
 export function ScheduleInput({
   request,
+  labels,
   disabled,
   onChange,
 }: {
   request: ScheduleRequest;
+  labels: InteractionLabels;
   disabled?: boolean;
   onChange: (value: unknown) => void;
 }) {
@@ -50,7 +43,7 @@ export function ScheduleInput({
         className="ov-viking-bot__interaction-input"
         value={value.mode}
         disabled={disabled}
-        aria-label="schedule frequency"
+        aria-label={labels.scheduleWeekly}
         onChange={(event) => {
           const mode = event.target.value as VikingBotScheduleValue['mode'];
           if (mode === 'none') update({ mode: 'none' });
@@ -58,9 +51,9 @@ export function ScheduleInput({
           else update({ mode: 'weekly', time, weekday });
         }}
       >
-        <option value="none">Do not schedule</option>
-        <option value="daily">Every day</option>
-        <option value="weekly">Every week</option>
+        <option value="none">{labels.scheduleNone}</option>
+        <option value="daily">{labels.scheduleDaily}</option>
+        <option value="weekly">{labels.scheduleWeekly}</option>
       </select>
       {value.mode !== 'none' ? (
         <input
@@ -68,7 +61,7 @@ export function ScheduleInput({
           className="ov-viking-bot__interaction-input"
           value={time}
           disabled={disabled}
-          aria-label="schedule time"
+          aria-label={labels.scheduleTime}
           onChange={(event) =>
             update(
               value.mode === 'weekly'
@@ -83,7 +76,7 @@ export function ScheduleInput({
           className="ov-viking-bot__interaction-input"
           value={weekday}
           disabled={disabled}
-          aria-label="schedule weekday"
+          aria-label={labels.scheduleWeekday}
           onChange={(event) =>
             update({
               mode: 'weekly',
@@ -92,7 +85,7 @@ export function ScheduleInput({
             })
           }
         >
-          {WEEKDAYS.map((name, index) => (
+          {labels.weekdays.map((name, index) => (
             <option key={name} value={index + 1}>
               {name}
             </option>

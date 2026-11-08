@@ -52,7 +52,9 @@ Host-specific protocol adaptation stays in each host repository: the component n
 />
 ```
 
-`children` replaces the whole body. `interaction` takes precedence over `composer`, which is what both hosts do while a question is pending.
+`children` replaces the whole body. `interaction` takes precedence over `composer`, which is what both hosts do while a question is pending; `interactionSlot` replaces that area wholesale when a host renders its own.
+
+Omitting `draft` renders no composer at all, which is what a read-only transcript needs.
 
 ## Interaction
 

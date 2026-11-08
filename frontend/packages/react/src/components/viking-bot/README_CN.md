@@ -52,7 +52,9 @@
 />
 ```
 
-`children` 替换整个主体。`interaction` 优先于 `composer`，两版宿主在待确认时都是这个行为。
+`children` 替换整个主体。`interaction` 优先于 `composer`，两版宿主在待确认时都是这个行为；宿主自带交互区时用 `interactionSlot` 整块替换。
+
+省略 `draft` 时不渲染输入区，只读会话因此不会多出一个不可用的输入框。
 
 ## 交互
 

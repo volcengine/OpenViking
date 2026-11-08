@@ -1,14 +1,10 @@
 import type { VikingBotInteractionLabels } from './types.js';
 
-/** 交互区实际使用的文案类型，含表单控件所需的频率与星期名称。 */
+/** 内部完整文案类型，从公开类型派生，保证宿主可覆盖每一处文案。 */
 export type InteractionLabels = Required<
   Omit<VikingBotInteractionLabels, 'progress'>
 > & {
   progress: (index: number, total: number) => string;
-  scheduleNone: string;
-  scheduleDaily: string;
-  scheduleWeekly: string;
-  weekdays: readonly string[];
 };
 
 /** 内置交互区文案。Built-in interaction copy. */
@@ -23,6 +19,8 @@ export const DEFAULT_INTERACTION_LABELS: InteractionLabels = {
   scheduleNone: 'Do not schedule',
   scheduleDaily: 'Every day',
   scheduleWeekly: 'Every week',
+  scheduleTime: 'Time',
+  scheduleWeekday: 'Weekday',
   weekdays: [
     'Monday',
     'Tuesday',

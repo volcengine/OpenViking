@@ -1,5 +1,6 @@
 import { ActivityTimeline } from '@ark-design/ui/activity-timeline';
 import { MDRenderer } from '@ark-design/ui/markdown-renderer';
+import { useState } from 'react';
 
 import { groupActivityParts } from './ark-adapter.js';
 import type { VikingBotMessage, VikingBotMessagePart } from './model.js';
@@ -30,32 +31,50 @@ export function MessageText({
   );
 }
 
-/** 执行块：推理与工具片段按 groupId 聚合成 Ark 时间线。 */
-function ActivityBlock({
-  parts,
+/** 一个执行块：整组共用一个折叠入口，而不是每个片段各自折叠。 */
+function ActivityGroup({
+  id,
+  items,
+  running,
+  labels,
   onOpenUri,
 }: {
-  parts: readonly VikingBotMessagePart[];
+  id: string;
+  items: Parameters<typeof ActivityTimeline>[0]['items'];
+  running: boolean;
+  labels: Labels;
   onOpenUri?: (uri: string) => void;
 }) {
-  const { groups, order } = groupActivityParts(parts);
-  if (order.length === 0) return null;
+  const [expanded, setExpanded] = useState(running);
+  const duration = items.reduce(
+    (total, item) => total + (item.durationMs ?? 0),
+    0,
+  );
+  const summary = running
+    ? labels.thinking
+    : duration > 0
+      ? `${labels.reasoning} · ${Math.round(duration / 1000)}s`
+      : labels.reasoning;
+
   return (
-    <div className="ov-viking-bot__activity">
-      {order.map((key) => {
-        const group = groups.get(key);
-        if (!group) return null;
-        return (
-          <ActivityTimeline
-            key={group.id}
-            items={group.items}
-            density="compact"
-            defaultCollapseCompleted
-            onOpenSearchResult={(result) => onOpenUri?.(result.url)}
-          />
-        );
-      })}
-    </div>
+    <section className="ov-viking-bot__activity" data-group={id}>
+      <button
+        type="button"
+        className="ov-viking-bot__activity-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        {summary}
+      </button>
+      {expanded ? (
+        <ActivityTimeline
+          items={items}
+          density="compact"
+          defaultExpanded
+          onOpenSearchResult={(result) => onOpenUri?.(result.url)}
+        />
+      ) : null}
+    </section>
   );
 }
 
@@ -75,13 +94,25 @@ export function MessageBody({
   const rest = message.parts.filter(
     (part) => part.type !== 'reasoning' && part.type !== 'tool',
   );
+  const { groups, order } = groupActivityParts(activity);
 
   return (
     <>
-      {activity.length > 0 ? (
-        <ActivityBlock parts={activity} onOpenUri={onOpenUri} />
-      ) : null}
-      {rest.map((part, index) =>
+      {order.map((key) => {
+        const group = groups.get(key);
+        if (!group) return null;
+        return (
+          <ActivityGroup
+            key={group.id}
+            id={group.id}
+            items={group.items}
+            running={group.items.some((item) => item.status === 'running')}
+            labels={labels}
+            onOpenUri={onOpenUri}
+          />
+        );
+      })}
+      {rest.map((part: VikingBotMessagePart, index: number) =>
         part.type === 'text' ? (
           <MessageText
             key={index}

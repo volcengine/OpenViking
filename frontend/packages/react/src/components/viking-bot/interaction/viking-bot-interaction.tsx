@@ -40,6 +40,7 @@ const TextInput = ({
 export function VikingBotInteractionView({
   request,
   className,
+  requestKey,
   index = 0,
   total = 1,
   disabled,
@@ -51,6 +52,8 @@ export function VikingBotInteractionView({
 }: VikingBotInteractionProps) {
   const labels = { ...DEFAULT_INTERACTION_LABELS, ...overrides };
   const blocked = Boolean(disabled || submitting);
+  // 问题身份变化时必须重挂表单，否则字段的实例状态会把上一题答案带到新题。
+  const formKey = requestKey ?? `${request.kind}:${index}`;
   const rootClass = ['ov-viking-bot__interaction', className]
     .filter(Boolean)
     .join(' ');
@@ -103,6 +106,7 @@ export function VikingBotInteractionView({
         </p>
       ) : null}
       <AskHuman
+        key={formKey}
         steps={steps}
         current={0}
         showSkip={Boolean(onCancel)}
@@ -133,6 +137,7 @@ export function VikingBotInteractionView({
                   { kind: 'schedule' }
                 >
               }
+              labels={labels}
               disabled={blocked}
               onChange={onChange}
             />

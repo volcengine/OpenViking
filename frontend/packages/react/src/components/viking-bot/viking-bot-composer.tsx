@@ -75,6 +75,8 @@ export const VikingBotComposerView = forwardRef<
     onSend({ text, attachments } satisfies VikingBotDraft);
   };
 
+  const acceptDrop = Boolean(onFilesAdded) && !disabled;
+
   return (
     <div
       className={[
@@ -84,6 +86,18 @@ export const VikingBotComposerView = forwardRef<
       ]
         .filter(Boolean)
         .join(' ')}
+      onDragOver={(event) => {
+        if (!acceptDrop) return;
+        // 阻止默认行为，否则浏览器会直接打开被拖入的文件。
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDrop={(event) => {
+        if (!acceptDrop) return;
+        event.preventDefault();
+        const files = [...(event.dataTransfer.files ?? [])];
+        if (files.length) onFilesAdded?.(files);
+      }}
     >
       {disabled && disabledReason ? (
         <p className="ov-viking-bot__composer-hint" role="status">
