@@ -120,19 +120,36 @@ export function useTooltipPosition(
     if (!trigger || !surface) return;
 
     // 浮层渲染到 `body`，拿不到宿主设在组件容器上的主题变量——CSS 变量沿 DOM
-    // 树继承，跨 portal 就断了。把触发元素上的 `--ov-ui-*` 计算值复制到浮层，
-    // 宿主对局部的主题覆盖才能跟着浮层走。
+    // 树继承，跨 portal 就断了。把触发元素上的公开变量复制到浮层，宿主的局部
+    // 覆盖才能跟着浮层走。
     //
-    // The surface renders into `body`, so it cannot see theme variables a host sets
-    // on a component container — CSS variables inherit down the DOM tree and the
-    // portal breaks that chain. Copy the trigger's computed `--ov-ui-*` values onto
-    // the surface so a local theme override follows it.
-    const triggerStyle = window.getComputedStyle(trigger);
-    for (const name of Array.from(triggerStyle)) {
-      if (!name.startsWith('--ov-ui-')) continue;
-      const value = triggerStyle.getPropertyValue(name).trim();
-      if (value) surface.style.setProperty(name, value);
-    }
+    // 只复制公开的 `--ov-ui-color-*`，不复制组件私有的 `--ov-ui-*-default`：
+    // 后者一旦内联，就不再随 `.dark` 切换变化，等于把浮层的主题锁死在打开那一刻。
+    // 主题变化（`html` 的 class 改动）时重新同步，保证打开期间也跟着变。
+    //
+    // The surface renders into `body` and cannot see theme variables a host sets on
+    // a component container — CSS variables inherit down the tree and the portal
+    // breaks that chain. Copy the trigger's public variables so a local override
+    // follows the surface.
+    //
+    // Only the public `--ov-ui-color-*` are copied, never the component-private
+    // `--ov-ui-*-default`: inlining those would freeze the surface's theme at the
+    // moment it opened instead of following `.dark`. Re-sync when the theme changes
+    // (a class change on `html`) so an open surface follows along.
+    const syncTheme = () => {
+      const triggerStyle = window.getComputedStyle(trigger);
+      for (const name of Array.from(triggerStyle)) {
+        if (!name.startsWith('--ov-ui-color-')) continue;
+        const value = triggerStyle.getPropertyValue(name).trim();
+        if (value) surface.style.setProperty(name, value);
+      }
+    };
+    syncTheme();
+    const themeObserver = new MutationObserver(syncTheme);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-theme'],
+    });
 
     const update = () => {
       const triggerRect = trigger.getBoundingClientRect();
@@ -164,6 +181,7 @@ export function useTooltipPosition(
     window.addEventListener('resize', update);
     return () => {
       observer.disconnect();
+      themeObserver.disconnect();
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };

@@ -148,16 +148,6 @@ export function FilePreviewViewer({
   latest.current = { text, onDownload, tabSlots: tab.slots, canDownload };
 
   const slots = useMemo<FileViewerCoreProps['slots']>(() => {
-    const downloadFallback: NonNullable<
-      FileViewerCoreProps['slots']
-    >['downloadFallback'] = () => (
-      <UnsupportedState
-        text={latest.current.text}
-        onDownload={
-          latest.current.canDownload ? latest.current.onDownload : undefined
-        }
-      />
-    );
     // 分支在调用时才决定，不在创建时决定：`slots` 只建一次（空依赖），而
     // 宿主可能在挂载后换页签或增删插槽。创建时就把「用宿主的还是内置的」定死，
     // 切到没有该插槽的页签后会继续渲染上一页的节点，表现为空白。
@@ -180,26 +170,48 @@ export function FilePreviewViewer({
         <LoadFailedState text={latest.current.text} onRetry={retry} />
       );
     };
-    const confirmFallback = latest.current.tabSlots?.confirmFallback;
-    // 底座按 `slots.downloadFallback` → `unsupportedFallback` → 内置兜底的顺序
-    // 取格式不支持时的内容。宿主给了 `unsupportedFallback` 就整体接管这个状态，
-    // 组件必须让出自己的 `downloadFallback`，否则永远命中它、宿主的节点轮不到。
+    // `confirm` 与 `downloadFallback` 同样在调用时才取宿主的插槽。它们在创建
+    // 时定死会有两种残留：切到不提供插槽的页签后仍渲染上一页的节点；宿主提供了
+    // `confirmFallback` 之后组件再也没机会让位。
     //
-    // The base resolves the unsupported state as `slots.downloadFallback` →
-    // `unsupportedFallback` → its own message. A host `unsupportedFallback` takes
-    // over that state wholesale, so this component has to step aside with its own
-    // `downloadFallback`; otherwise ours always wins and the host's never shows.
-    const hostUnsupported = latest.current.tabSlots?.unsupportedFallback;
+    // `confirm` and `downloadFallback` also read the host's slots at call time.
+    // Fixing them at creation leaves two kinds of residue: the previous tab's node
+    // keeps rendering after switching to a tab without that slot, and once the host
+    // supplies `confirmFallback` this component never steps aside for it.
+    const confirmSlot: NonNullable<FileViewerCoreProps['slots']>['confirm'] = (
+      props,
+    ) => {
+      const Host = latest.current.tabSlots?.confirmFallback;
+      return Host ? <Host {...props} /> : null;
+    };
+    // 宿主给了 `downloadFallback` 就用它；给了 `unsupportedFallback` 则整体让位
+    // （底座的解析顺序是 downloadFallback → unsupportedFallback → 内置），所以
+    // 这时返回 `null` 让底座继续往下找。都没给才用组件自己的不支持态。
+    //
+    // Use the host's `downloadFallback` when present; when it supplies
+    // `unsupportedFallback` instead, return `null` so the base keeps resolving
+    // (downloadFallback → unsupportedFallback → its own) and reaches the host's.
+    // Only with neither does this component render its own unsupported state.
+    const downloadSlot: NonNullable<
+      FileViewerCoreProps['slots']
+    >['downloadFallback'] = () => {
+      const own = latest.current.tabSlots;
+      if (own?.downloadFallback) return <>{own.downloadFallback}</>;
+      if (own?.unsupportedFallback) return null;
+      return (
+        <UnsupportedState
+          text={latest.current.text}
+          onDownload={
+            latest.current.canDownload ? latest.current.onDownload : undefined
+          }
+        />
+      );
+    };
     return {
       loading: loadingSlot,
       error: errorSlot,
-      ...(hostUnsupported
-        ? {}
-        : {
-            downloadFallback:
-              latest.current.tabSlots?.downloadFallback ?? downloadFallback,
-          }),
-      ...(confirmFallback ? { confirm: confirmFallback } : {}),
+      downloadFallback: downloadSlot,
+      confirm: confirmSlot,
     };
   }, []);
 
