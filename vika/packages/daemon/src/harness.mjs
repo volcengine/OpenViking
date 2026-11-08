@@ -58,6 +58,7 @@ export class Harness {
     mentionTarget = () => null,
     isStopping = () => false,
     inbox = null,
+    taskHint = null,
   }) {
     this.config = config;
     this.store = store;
@@ -78,6 +79,8 @@ export class Harness {
     this.isStopping = isStopping;
     // The inbox scheduler's waiting inputs (inbox.mjs); null under legacy.
     this.inbox = inbox;
+    // Workers scheduler: a line naming the tasks an input may belong to.
+    this.taskHint = taskHint;
     this.ingressBarrier = Promise.resolve();
     this.pendingIngress = 0;
     this.groupBurst = new GroupBurstRouter({
@@ -224,7 +227,8 @@ export class Harness {
         ...(BOT_SENDERS.has(event.senderType)
           ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
       });
-      this.route(eventDeliveryItem(event, result.inbound.seq, { text: recall ? `${line}\n${recall}` : line }),
+      const hint = event.chatId ? this.taskHint?.(event, { owner }) ?? '' : '';
+      this.route(eventDeliveryItem(event, result.inbound.seq, { text: [line, hint, recall].filter(Boolean).join('\n') }),
         inputMeta(event, { owner, mention }));
     });
   }

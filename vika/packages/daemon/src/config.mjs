@@ -305,8 +305,9 @@ export function getConfig() {
     stagedReplies: boolEnv('VIKA_STAGED_REPLIES', false),
     // agents[].scheduler: legacy puts every input into the running turn at
     // once; inbox holds inputs while the model works, notifies it, and lets it
-    // read them at a checkpoint (inbox.mjs). Read at start only.
-    scheduler: enumEnv('VIKA_SCHEDULER', 'legacy', ['legacy', 'inbox']),
+    // read them at a checkpoint (inbox.mjs); workers adds worker sessions
+    // the main session hands longer work to (tasks.mjs). Read at start only.
+    scheduler: enumEnv('VIKA_SCHEDULER', 'legacy', ['legacy', 'inbox', 'workers']),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('VIKA_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
