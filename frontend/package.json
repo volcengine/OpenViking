@@ -11,7 +11,7 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "dev": "npm run dev --workspace @openviking/ui-docs --",
+    "dev": "npm run build:lib && concurrently -n lib,docs -c cyan,magenta \"npm run dev --workspace @openviking/react\" \"npm run dev --workspace @openviking/ui-docs --\"",
     "check": "npm run lint",
     "lint": "npm run build:lib && node scripts/lint.mjs",
     "lint:fix": "npm run build:lib && node scripts/lint.mjs --fix",
@@ -25,10 +25,12 @@
     "format:check": "prettier --check ."
   },
   "devDependencies": {
+    "@rsbuild/plugin-svgr": "^2.0.5",
     "@rslint/core": "0.10.0",
     "@types/node": "^22.19.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.2.0",
+    "concurrently": "^10.0.6",
     "prettier": "^3.6.2",
     "typescript": "7.0.2"
   }

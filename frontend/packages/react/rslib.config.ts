@@ -1,4 +1,5 @@
 import { pluginReact } from '@rsbuild/plugin-react';
+import { pluginSvgr } from '@rsbuild/plugin-svgr';
 import { defineConfig } from '@rslib/core';
 
 export default defineConfig({
@@ -56,5 +57,5 @@ export default defineConfig({
     })),
   ],
   output: { target: 'web' },
-  plugins: [pluginReact()],
+  plugins: [pluginReact(), pluginSvgr()],
 });
