@@ -14,6 +14,7 @@ import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { assertPiVersion, piPlatformTools, piCommand, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
+import { piIsolationArgs } from './ov-isolation.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
@@ -37,7 +38,7 @@ const SKIPPABLE_OVERSIZED_EVENTS = new Set([
 
 const PREFLIGHT_FLAGS = [
   '--mode', '--append-system-prompt', '--thinking',
-  '--session-id', '--session-dir', '--model', '--extension', '--approve',
+  '--session-id', '--session-dir', '--model', '--extension', '--approve', '--no-extensions',
 ];
 
 function delay(ms) {
@@ -89,6 +90,7 @@ export class PiAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this._isolationArgs = options.isolationArgs ?? piIsolationArgs;
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.onTurnAbandoned = options.onTurnAbandoned ?? null;
@@ -225,7 +227,9 @@ export class PiAgent {
   async _preflight() {
     const version = await this._probe(['--version']);
     assertPiVersion(version.stdout);
-    const help = await this._probe(['--help']);
+    // Pi loads every extension it discovers to list their flags, OpenViking's
+    // own included (ov-isolation.mjs): the core flags are all that is checked.
+    const help = await this._probe(['-ne', '--help']);
     for (const flag of PREFLIGHT_FLAGS) {
       if (!help.stdout.includes(flag)) {
         throw new Error(`pi preflight is missing required flag ${flag}`);
@@ -312,6 +316,8 @@ export class PiAgent {
     if (this.needsHistoryPrefix) await this.store.prepareOVContext?.(this.cognitionEpoch);
     const model = this.model;
     const effort = this.effort;
+    const env = sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken), this.config);
+    const isolationArgs = await this._isolationArgs(env, this.config.workspace);
     return new Promise((resolve, reject) => {
       const promptPath = this._promptPath();
       fs.writeFileSync(promptPath, this.developerInstructionsText, { encoding: 'utf8', mode: 0o600 });
@@ -323,11 +329,11 @@ export class PiAgent {
         '--session-id', this.sessionId,
         '--session-dir', this._sessionDir(),
         '--approve',
+        ...isolationArgs,
         '--extension', PI_MCP_EXTENSION,
       ];
       if (model) args.push('--model', model);
 
-      const env = sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken), this.config);
       env.PERSONAL_AGENT_MCP_CONFIG = JSON.stringify({
         ...agentToolServer(this.config, this.authorityToken),
         timeout: Math.max(10, Math.ceil(this.config.sendTimeoutMs / 1_000) + 5),

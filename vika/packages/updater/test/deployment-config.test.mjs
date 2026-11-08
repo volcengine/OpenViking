@@ -432,10 +432,12 @@ test('connects mailboxes only together with the email connector, each account fi
 });
 
 
-test('OV recall is the daemon\'s, opt-in per instance with a scope; the plugins only read; no Lark profile for Weixin', () => {
+test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that loads stays inert; no Lark profile for Weixin', () => {
   const manifest = validManifest();
   manifest.agents[1].ovAutoRecall = true;
+  // Retired options: ignored, never an error.
   manifest.agents[1].ovRecallScope = 'actor';
+  manifest.agents[1].ovRemember = true;
   manifest.agents[2].channel = 'weixin';
   manifest.agents[2].connectors = ['weixin'];
   delete manifest.agents[2].profile;
@@ -450,11 +452,12 @@ test('OV recall is the daemon\'s, opt-in per instance with a scope; the plugins 
     assert.equal(selectDeploymentAgent(deployment, 'alpha').ovAutoRecall, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
     assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/vika/ov/alpha.json');
-    assert.equal(env.OPENVIKING_MEMORY_ENABLED, '1');
+    assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.VIKA_OV_AUTO_RECALL, 'false');
-    assert.equal(env.VIKA_OV_RECALL_SCOPE, 'all');
-    // The daemon is the only writer; the plugins only read, under no peer.
+    assert.equal(env.VIKA_OV_RECALL_SCOPE, undefined);
+    assert.equal(env.VIKA_OV_REMEMBER, undefined);
+    // Vika owns OV: a plugin that loads anyway writes and recalls nothing.
     assert.equal(env.OPENVIKING_AUTO_CAPTURE, '0');
     assert.equal(env.OPENVIKING_AUTO_COMMIT_ON_COMPACT, '0');
     assert.equal(env.OPENVIKING_TAKEOVER, '0');
@@ -469,11 +472,11 @@ test('OV recall is the daemon\'s, opt-in per instance with a scope; the plugins 
     assert.equal(env.OPENVIKING_RECALL_LEDGER_DIR, '/srv/vika/data/alpha/openviking/recall-ledger');
     applyDeploymentAgentEnv(env, deployment, 'beta');
     assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/vika/ov/beta.json');
-    assert.equal(env.OPENVIKING_MEMORY_ENABLED, '1');
-    // Recall on: the daemon recalls (ov-recall.mjs); the plugins' own stays off.
+    assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
+    // Search on: the daemon searches (ov-recall.mjs); the plugins' own stays off.
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.VIKA_OV_AUTO_RECALL, 'true');
-    assert.equal(env.VIKA_OV_RECALL_SCOPE, 'actor');
+    assert.equal(selectDeploymentAgent(deployment, 'beta').ovRecallScope, undefined);
     assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/vika/data/beta/openviking/pending');
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'cli_beta');
     applyDeploymentAgentEnv(env, deployment, 'gamma');

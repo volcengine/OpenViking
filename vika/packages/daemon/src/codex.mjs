@@ -13,6 +13,7 @@ import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { codexConfigFile, codexIsolationArgs } from './ov-isolation.mjs';
 
 const CODEX_RUNTIME = getRuntimeDefinition('codex');
 const CODEX_APP_SERVER_CONFIG_ARGS = Object.freeze([
@@ -213,6 +214,8 @@ export class CodexAgent {
     this.modelSettingKey = options.modelSettingKey ?? `${runtime.id}_model`;
     this.effortSettingKey = options.effortSettingKey ?? (this.supportsEffort ? `${runtime.id}_effort` : '');
     this.appServerConfigArgs = options.appServerConfigArgs ?? CODEX_APP_SERVER_CONFIG_ARGS;
+    // The runtime's own OpenViking plugin stays off (ov-isolation.mjs).
+    this.ovIsolationArgs = options.ovIsolationArgs ?? (() => codexIsolationArgs(codexConfigFile(process.env)));
     this._sanitizeEnv = options.sanitizeEnv ?? sanitizeCodexEnv;
     this.policyVersion = options.policyVersion ?? 'steer-v2';
     this.reconnectBaseMs = options.reconnectBaseMs ?? 1000;
@@ -910,6 +913,7 @@ export class CodexAgent {
         'app-server', '--listen', 'stdio://',
         '-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`,
         ...this.appServerConfigArgs,
+        ...this.ovIsolationArgs(),
       ];
       // The daemon's agent tools ride along as an MCP stdio adapter to the Core.
       const tools = agentToolServer(this.config, this.authorityToken);

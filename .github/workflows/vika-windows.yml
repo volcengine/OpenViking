@@ -40,6 +40,8 @@ jobs:
         run: node --test --test-name-pattern expandHome packages/cli/test/setup.test.mjs
       - name: Feishu events and OpenViking integration contracts
         run: node --test packages/daemon/test/event.test.mjs packages/daemon/test/lark-preflight.test.mjs packages/daemon/test/ov-session-context.test.mjs packages/daemon/test/ov-session-lifecycle.test.mjs packages/daemon/test/ov-recall.test.mjs packages/cli/test/check-ov.test.mjs
+      - name: Unified OpenViking tools and preferences
+        run: node --test packages/daemon/test/ov-tools.test.mjs packages/daemon/test/ov-person.test.mjs packages/daemon/test/ov-preferences.integration.test.mjs
       - run: node packages/cli/bin/vika.mjs --help
       - name: Parse PowerShell installer
         shell: pwsh

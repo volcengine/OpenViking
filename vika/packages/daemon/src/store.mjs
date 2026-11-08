@@ -765,9 +765,7 @@ export class Store {
 
   // One event ledger for all sources. Chat columns are nullable indexes into the
   // canonical envelope, not a separate message ledger. No provider raw is stored.
-  // `peer` is whom OpenViking attributes the line to (ov-peer.mjs): null for
-  // the owner, decided by the caller, which knows who the owner is.
-  ingest(event, filterReason = null, now = Date.now(), { journal = true, peer } = {}) {
+  ingest(event, filterReason = null, now = Date.now(), { journal = true } = {}) {
     return this.transaction(() => {
       const existing = this.getInboundByEvent.get(event.connectorInstance, event.eventId);
       if (existing) return { inserted: false, inbound: rowToInbound(existing), filterReason: existing.filter_reason };
@@ -819,8 +817,7 @@ export class Store {
             actor: event.senderId || 'unknown',
             text: event.content,
             dedupeKey: `event:${eventIdentity(event)}`,
-            metadata: { source: event.source, connectorInstance: event.connectorInstance, event: envelope,
-              ...(peer === undefined ? {} : { peer }) },
+            metadata: { source: event.source, connectorInstance: event.connectorInstance, event: envelope },
           });
         }
         this.recordActivity({

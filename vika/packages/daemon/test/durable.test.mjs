@@ -536,6 +536,78 @@ describe('DurableAgent against the real host', () => {
     }
   });
 
+  it('registers the Core OpenViking tools from actions.sock like every other runtime tool', async () => {
+    const dataDir = tempDir();
+    const socketPath = path.join(dataDir, 'actions.sock');
+    const calls = [];
+    const server = http.createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        if (request.method === 'GET' && request.url === '/v1/tools') {
+          response.setHeader('content-type', 'application/json');
+          // The Core's list with an OpenViking tool on it, as service.tools()
+          // serves it; the host has no OpenViking bridge of its own.
+          response.end(JSON.stringify({ tools: [
+            {
+              name: 'send_message', description: 'Send a text message',
+              inputSchema: {
+                type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false,
+              },
+            },
+            {
+              name: 'openviking_find', title: 'Find in OpenViking',
+              description: 'Fast semantic search of the OpenViking long-term memory.',
+              inputSchema: {
+                type: 'object',
+                properties: { query: { type: 'string', minLength: 1, maxLength: 1000 } },
+                required: ['query'], additionalProperties: false,
+              },
+              annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+            },
+          ] }));
+          return;
+        }
+        if (request.method === 'POST' && request.url === '/v1/call') {
+          calls.push(JSON.parse(body));
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({ ok: true, result: { text: 'No matching context found.', data: { hits: [], total: 0 } } }));
+          return;
+        }
+        response.statusCode = 404;
+        response.end();
+      });
+    });
+    await new Promise((resolve) => server.listen(socketPath, resolve));
+    const config = baseConfig({ dataDir });
+    config.actionSocketPath = socketPath;
+    const store = makeStore();
+    const successes = [];
+    const agent = new DurableAgent(config, store, quietLogger, {
+      onTurnSucceeded: (success) => successes.push(success),
+    });
+    process.env.DURABLE_FAUX = '1';
+    process.env.DURABLE_FAUX_RESPONSES = JSON.stringify([
+      { toolCall: { name: 'openviking_find', arguments: { query: 'what do I already know' } } },
+      { text: 'nothing stored yet' },
+    ]);
+    try {
+      await agent.start();
+      agent.deliver('look in memory', 7);
+      await waitFor(() => successes.length === 1, 15_000);
+      assert.deepEqual(calls, [{ tool: 'openviking_find', input: { query: 'what do I already know' } }]);
+      const completed = store.activities.find((activity) => activity.kind === 'agent.tool_completed');
+      assert.equal(completed.status, 'COMPLETED');
+      assert.ok(store.activities.some((activity) => activity.kind === 'agent.note' && activity.summary === 'nothing stored yet'));
+    } finally {
+      await agent.stop();
+      await new Promise((resolve) => server.close(resolve));
+      delete process.env.DURABLE_FAUX;
+      delete process.env.DURABLE_FAUX_RESPONSES;
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs commands and edits workspace files through the coding tools', async () => {
     const dataDir = tempDir();
     const config = baseConfig({ dataDir });

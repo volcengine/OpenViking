@@ -27,6 +27,7 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'VIKA_DRY_RUN',
   'VIKA_IGNORED_SENDER_IDS',
   'VIKA_SEND_TIMEOUT_MS',
+  'VIKA_OV_TOOL_TIMEOUT_MS',
   'VIKA_SHUTDOWN_TIMEOUT_MS',
   'VIKA_MAX_REPLY_CHARS',
   'VIKA_MAX_EVENT_BYTES',
@@ -86,7 +87,6 @@ const AGENT_FIELDS = Object.freeze([
   'workspace',
   'ovConfig',
   'ovAutoRecall',
-  'ovRecallScope',
   'explicitSilence',
   'stagedReplies',
   'role',
@@ -296,12 +296,6 @@ function parseAgent(value, index, ignored) {
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
-  // Which peers recall searches: all of them, the sender's first (default), or
-  // only the sender's, for an instance facing people who must not see each
-  // other's memories.
-  if (value.ovRecallScope !== undefined && !['all', 'actor'].includes(value.ovRecallScope)) {
-    throw new Error(`${label}.ovRecallScope must be "all" or "actor"`);
-  }
   if (value.explicitSilence !== undefined && typeof value.explicitSilence !== 'boolean') {
     throw new Error(`${label}.explicitSilence must be a boolean`);
   }
@@ -330,7 +324,6 @@ function parseAgent(value, index, ignored) {
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
-    ovRecallScope: value.ovRecallScope ?? 'all',
     // On by default, except on Ark (no Core tools, so no stay_silent); an
     // explicit false opts out.
     explicitSilence: value.explicitSilence ?? model !== 'ark',
@@ -498,32 +491,25 @@ function selectDeploymentAgent(deployment, id = deployment.defaultInstance) {
   return agent;
 }
 
-// Pin the runtime plugins to this instance's OV identity and recall policy.
-// These are process variables of this instance only, and the plugins rank them
-// above every file, so the owner's own Codex / Claude Code / Pi keep their
-// settings.
-//
-// The daemon is the only writer of the conversation (ov-session-context.mjs
-// syncs every event and commits it), so the plugins write nothing on their
-// own: their capture would store the conversation a second time and attribute
-// all of it to one peer. Pi's compaction takeover is such a write too (it syncs
-// and commits the whole branch), so it is off and Pi compacts natively. No
-// peer is derived from the workspace either: a peer names who the agent talks
-// to, which the daemon knows per event, not per process. For the same reason
-// automatic recall is the daemon's (ov-recall.mjs, agents[].ovAutoRecall), so
-// the plugins' own is off.
+// Vika owns OpenViking for the agents it runs: the daemon syncs the
+// conversation and shows memory (ov-session-context.mjs, ov-recall.mjs), and
+// the Core's openviking_* tools read and write it. The runtimes' own OpenViking
+// plugins stay out: each runtime switches them off where it is launched
+// (runtime-catalog.mjs, ovIsolation). These process variables are the second
+// line for a plugin that loads anyway: they pin it to this instance's identity
+// and keep it inert (no memory hooks, capture, recall, commit or takeover).
+// They are this instance's process variables only, ranked above every file, so
+// the owner's own Codex / Claude Code / Pi keep their settings.
 //
 // The plugins keep session state and a queue of unsent writes under the home
-// directory, shared by every process of the OS user. A session-start sweep
-// commits idle sessions it finds there and replays queued writes through the
-// caller's connection, which here is this instance's identity, not the owner's.
-// Each instance therefore gets its own directories under its data directory.
+// directory, shared by every process of the OS user, so even an inert plugin
+// gets its own directories under the instance's data directory.
 function openVikingAgentEnv(agent) {
   const state = path.join(agent.dataDir, 'openviking');
   return {
     OPENVIKING_CLI_CONFIG_FILE: agent.ovConfig,
     OPENVIKING_CREDENTIAL_SOURCE: 'cli',
-    OPENVIKING_MEMORY_ENABLED: '1',
+    OPENVIKING_MEMORY_ENABLED: '0',
     OPENVIKING_AUTO_RECALL: '0',
     OPENVIKING_AUTO_CAPTURE: '0',
     OPENVIKING_AUTO_COMMIT_ON_COMPACT: '0',
@@ -566,7 +552,6 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.VIKA_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
-  env.VIKA_OV_RECALL_SCOPE = agent.ovRecallScope;
   env.VIKA_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.VIKA_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.VIKA_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';

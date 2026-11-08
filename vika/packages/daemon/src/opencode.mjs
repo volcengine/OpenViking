@@ -15,6 +15,7 @@ import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { prepareOpencodeConfigHome } from './ov-isolation.mjs';
 
 const OPENCODE_RUNTIME = getRuntimeDefinition('opencode');
 const MAX_LINE_BYTES = 5_000_000;
@@ -207,6 +208,9 @@ export class OpencodeAgent {
         // Pins the conversation policy instruction and the personal_agent MCP
         // server without editing the user's own opencode.json.
         OPENCODE_CONFIG: configPath,
+        // OpenCode's own OpenViking plugin stays off: its global config folder
+        // is a Vika-owned copy without it (ov-isolation.mjs).
+        XDG_CONFIG_HOME: prepareOpencodeConfigHome(path.join(this.runtimeDir, 'config-home'), process.env),
       };
       let child;
       try {

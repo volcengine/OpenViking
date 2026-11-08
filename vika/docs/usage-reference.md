@@ -1,44 +1,47 @@
-# OpenViking SuperAgent 功能与架构参考
+# OpenViking SuperAgent Features and Architecture
 
-[产品介绍](../README.md) · [快速安装](../install.md)
+[Overview](../README.md) · [Quick start](../install.md)
 
+Connect your local coding agent to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email events. Core maintains a shared Agent session and OpenViking space; independent Connector subprocesses handle message sources.
 
-把你本机上的 coding agent 接进飞书、微信、Telegram、Slack 和 QQ，也可以接收邮箱事件。Core 维护一个共享的 Agent session 和 OpenViking 空间；每个消息源由独立 Connector 子进程接入。
+Vika makes Codex, TraeX, Claude, Pi, or OpenCode a long-term collaborator. OpenViking retains context so you need not re-explain projects, while code, credentials, and local tools remain on your machine.
 
-适合想把 Codex、TraeX、Claude、Pi 或 OpenCode 变成长期协作者的人。上下文沉淀在 OpenViking，不用每次重新解释项目背景；代码、凭据和本地工具依然留在自己的机器上。
+## Usage
 
-## 怎么用
+1. Run the daemon on a Mac or Linux server and connect trusted direct chats and groups.
+2. Send tasks directly, without mentioning the bot every time: investigate an error, shorten a README and open a PR, or summarize a discussion.
+3. Use threads for focused discussions. The agent can execute coding tasks, invoke subagents, and work in other authorized chats when needed.
 
-1. 在 Mac 或 Linux 服务器上常驻运行 daemon，把 bot 加进你信任的私聊和群。
-2. 直接发任务，不需要每条消息都 `@`。比如“查一下这个报错”“把 README 改短一点并提 PR”“整理今天的讨论”。
-3. 需要展开讨论就开 thread。它能执行 coding task、调用 subagent，也能在必要时去其他已授权聊天继续工作。
+By default it responds to questions, tasks, and corrections, and usually stays silent for acknowledgments, thanks, chatter, and conversations between people. Chats share a working context, allowing follow-ups across chats and days.
 
-它默认不抢话：明确问题、任务、纠正才回复；“收到”“谢谢”、闲聊和人与人之间的对话通常保持静默。所有聊天共享一份工作上下文，所以它能接住跨群、跨天的续聊。
+## Why use it
 
-## 为什么用它
+- **Chat is the entry point; the agent remains your coding agent.** Request code, research, documents, and collaboration without copying tasks to a terminal.
+- **Context lives in OpenViking.** Project knowledge, memory, and task resources are retained alongside each agent's own workspace and memory configuration.
+- **Your machine stays under your control.** The daemon connects trusted messages to a local agent without moving the workspace to the cloud.
+- **Run multiple agents.** Each has a separate Feishu profile, workspace, data directory, and OV configuration, sharing Web and updater services.
 
-- **消息源是入口，agent 还是 coding agent。**不用再把需求复制到另一个终端窗口；需要代码、调研、文档或协作动作时，直接在对话里交代。
-- **上下文不靠聊天记录硬塞。**项目知识、长期记忆和任务资料放在 OpenViking；每个 agent 有自己的 workspace 和记忆配置。
-- **本机可控。**daemon 只是把可信聊天消息和本地 agent 接起来，不把本机工作区搬到云端。
-- **可以有多个 agent。**每个 agent 使用独立的飞书 profile、workspace、数据目录和 OpenViking 配置；共享同一个 Web 和 updater。
+## Architecture
 
-## 架构，够用就行
+Core starts Connector subprocesses from the manifest. Feishu receives through lark-cli long connections; WeChat long-polls Tencent's `openclaw-weixin` iLink HTTP protocol; Telegram long-polls Bot API `getUpdates`; Slack uses Socket Mode WebSocket; QQ uses official Bot API WebSocket for direct chats. Each emits a unified `EVENT` envelope into one `AgentRuntime`. Failures and reconnects are isolated: an expired WeChat login does not stop Feishu or the runtime.
 
-Core 根据 manifest 启动 Connector 子进程。飞书 Connector 通过 `lark-cli` 长连接收消息；微信 Connector 通过腾讯 `openclaw-weixin` 的 iLink HTTP 协议长轮询。Telegram Connector 通过官方 Bot API 的 `getUpdates` 长轮询。Slack Connector 通过 Socket Mode 的 WebSocket 长连接；QQ Connector 通过官方 Bot API 的 WebSocket 接收私聊。它们输出统一的 `EVENT` 信封，并进入同一个 `AgentRuntime`。每个 Connector 单独失败、单独重连：微信登录过期这类问题只让微信停下，飞书和 runtime 照常运行。出站方向，所有 runtime 都调用同一套 Agent 工具（`send_message`、`reply_message` 等）：Codex/TraeX/Claude/Pi/OpenCode 均经同一个 MCP 适配器，Durable 由自己的 host 进程直接调用，两条路都只负责把调用转发给 Core 的本机 socket。Core 统一校验运行权、新鲜度、路由与内容，写入唯一的 `outbox` 表后再由对应 Connector 执行；daemon 自己的失败通知和 slash 命令回复走同一条路径。协议和生命周期见 [Connector protocol 0.2](../docs/connector-protocol.md)。
+Outbound runtimes use the same Agent tools, such as `send_message` and `reply_message`. Codex/TraeX/Claude/Pi/OpenCode share an MCP adapter; Durable calls through its host process. Both forward to Core's local socket. Core validates authority, freshness, routing, and content, writes a single `outbox` table, then invokes the Connector. Daemon failure notices and slash-command responses use the same path. See [Connector protocol 0.2](connector-protocol.md).
 
-Core 的入站模型同时支持聊天与非聊天事件：所有来源写入 `connector_events`，按来源实例和事件 ID 去重；聊天、消息和回复路由字段可选。GitHub issue、Calendar 提醒等可以使用 `kind`、`subject`、标题与正文进入 runtime，无须包装成飞书消息。内置 Connector 为飞书、微信、Telegram、Slack、QQ 和邮箱（IMAP/SMTP）；新增来源需实现 Connector。非聊天事件只能经 `notify_owner` 通知 owner（你本人）：Agent 不选目的地，Core 发到主渠道（`channel`）上你的私聊。主渠道就是机器人主动找你时用的 IM：你没先找它、它直接找你的消息（新邮件提醒、待你确认的邮件回复等）都发到这里；你在哪个 IM 里找它，它就在哪里回你。owner 身份由 Connector 自检时给出：飞书是该 profile 用 lark-cli 做 user 登录的账号，微信是扫码登录的账号，Telegram 是通过一次性 Start 链接验证的账号，Slack 是在私聊里给机器人发一次性口令的账号，QQ 是通过一次性私聊验证码验证的账号。协议已更新为 0.2，本次为未上线产品的直接 schema 变更，使用新的数据目录，不迁移旧 `inbound` 表。
+All sources write `connector_events`, deduplicated by source instance and event ID. Chat/message/reply routing is optional: GitHub issues and calendar reminders can enter with `kind`, `subject`, title, and body without pretending to be chat messages. Built-in connectors are Feishu, WeChat, Telegram, Slack, QQ, and IMAP/SMTP email; new sources require a Connector. Non-chat events notify the owner through `notify_owner`, with Core selecting the owner's direct chat on the primary `channel`, rather than the agent choosing a destination. Incoming chat replies stay on the originating IM. The primary channel handles unsolicited notifications and email approvals.
 
-## 安装
+Connectors establish the owner during self-check: Feishu's lark-cli user account, WeChat's scanning account, Telegram's one-time Start binding, Slack's direct-chat passphrase sender, or QQ's verified direct-chat account. Protocol 0.2 was a direct pre-release schema change: use a new data directory; the old `inbound` table is not migrated.
 
-一条命令：`curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh`，装好后 `vika setup` 接飞书、微信、Telegram、Slack、QQ 或邮箱；界面有中文和英文（`--lang zh|en`）。机器上不需要 Node。细节看 [install.md](../install.md)：依赖、setup、升级回滚、开机自启、多 agent 和发布新版本。
+## Installation
 
-## 聊天渠道与邮箱
+Use the pinned command in [install.md](../install.md), then `vika setup` to connect channels. Node is bundled, and the UI supports `--lang zh|en`. The unversioned installer and `latest` endpoint are currently unavailable. See the [configuration reference](installation-reference.md) for dependencies, setup, upgrades, rollback, autostart, multiple agents, and releases.
 
-各渠道的配置与支持范围见下文；[附件与卡片](#文档附件与交互卡片)单独说明。
+## Chat channels and email
 
-### 微信单聊 MVP
+Channel setup and supported behavior follow. [Attachments and cards](#attachments-and-cards) are described separately.
 
-可以在 `config.json` 中增加一个微信实例。`channel` 是兼容字段；`connectors` 声明该 Core 启动的 Connector。`profile` 是飞书 Connector 的 lark-cli profile，纯微信实例不填（填了会被拒绝）；`ovConfig` 必填，`ovAutoRecall` 默认为 `false`：
+### WeChat direct messages
+
+Add a WeChat instance to `config.json`. `channel` is the compatibility field; `connectors` selects processes started by Core. `profile` belongs to Feishu's lark-cli and must be omitted for WeChat-only instances. `ovConfig` is required; `ovAutoRecall` defaults to `false`.
 
 ```json
 {
@@ -54,7 +57,7 @@ Core 的入站模型同时支持聊天与非聊天事件：所有来源写入 `c
 }
 ```
 
-微信实例可以使用 Codex、TraeX、Claude、Pi 或 OpenCode runtime（示例用 Pi）。要让同一个 session 和 OV 空间同时接收飞书与微信，在现有实例上配置：
+Codex, TraeX, Claude, Pi, and OpenCode can be used. To share the session and OV space between Feishu and WeChat:
 
 ```json
 {
@@ -64,9 +67,9 @@ Core 的入站模型同时支持聊天与非聊天事件：所有来源写入 `c
 }
 ```
 
-随后执行一次 `vika login weixin` 扫码登录（有多个实例时会让你选，或写上实例名）。给已有实例补接微信用 `vika setup`，选"修改"这个实例。不配置 `connectors` 时仍按旧的 `channel` 启动单个 Connector。
+Run `vika login weixin`, choosing an instance if needed, or name it explicitly. Add WeChat to an existing instance through setup. Without `connectors`, the legacy single `channel` behavior remains.
 
-安装依赖后扫码，再以前台方式启动这个实例：
+For source development:
 
 ```bash
 npm install
@@ -74,78 +77,77 @@ vika login weixin weixin
 VIKA_INSTANCE_ID=weixin npm run start:daemon
 ```
 
-终端会显示二维码和备用链接。用微信扫码并在手机确认后，凭证写入该实例的 `dataDir/weixin/state.sqlite3`；随后可以给新出现的机器人联系人发送文本、图片或文件。扫码后先在微信里给机器人发一句话（比如「你好」）：微信只送达你发过消息之后机器人发的消息，在这之前它没法主动找你（新邮件提醒、待你确认的邮件回复都发不到微信），每次重新扫码登录后都一样。一个微信号同时只能连一个机器人，给另一个实例扫码会让这个实例的微信掉线。带有微信语音转写的消息会以转写文本进入 Agent。机器人只和扫码的那个微信号单聊，不能和别人聊，也不能进群。
+Scan the terminal QR code or open its backup link, then confirm on your phone. Credentials are stored in `dataDir/weixin/state.sqlite3`. Send the new bot contact text, images, or files. **Send it a message after every scan before expecting proactive messages**, including email notifications or approvals. One WeChat account can connect to only one bot; scanning another instance disconnects the previous one. Existing WeChat voice transcription enters as text. Only the scanning account can chat with the bot; other people and groups are unsupported.
 
-这个 MVP 使用一个微信账号，支持单聊文本、入站图片和文件、微信提供的语音转写，以及出站图片和文件。入站媒体经腾讯 CDN 下载和 AES 解密后保存在该实例的 `dataDir/weixin/media`，单个文件和出站 workspace 文件上限均为 20 MiB，并随 daemon 的保留周期清理。原始语音解码/ASR、视频、群聊、引用和 reaction 尚未接入。协议实现固定对齐 `Tencent/openclaw-weixin` 2.4.9，来源与许可证见 [微信协议说明](../packages/daemon/src/weixin/NOTICE.md) 和 [MIT 许可证](../packages/daemon/src/weixin/LICENSE.openclaw-weixin)。
+Inbound media is downloaded from Tencent CDN, AES-decrypted, and stored in `dataDir/weixin/media`, with a 20 MiB per-file limit for downloads and outgoing workspace files and cleanup under the daemon retention policy. Raw audio/ASR, video, groups, quoted replies, and reactions are not implemented. The protocol is pinned to `Tencent/openclaw-weixin` 2.4.9; see its [notice](../packages/daemon/src/weixin/NOTICE.md) and [MIT license](../packages/daemon/src/weixin/LICENSE.openclaw-weixin).
 
-### QQ 私聊
+### QQ direct messages
 
-使用腾讯官方 QQ Bot API v2 和 WebSocket，不需要公网 Webhook，也不是个人 QQ 账号协议。在包含 QQ 功能的 release 中：
+QQ uses official Bot API v2 and WebSocket, not a personal-account protocol, and needs no public webhook. In a release with QQ support:
 
-1. 先在 [QQ 开放平台](https://q.qq.com/#/) 按页面引导注册开发者账号（已有可跳过），没有开发者账号无法创建机器人。再到腾讯 [QQ 机器人入口](https://q.qq.com/qqbot/openclaw/) 创建独立机器人，取得 AppID / AppSecret，并用本人 QQ 添加机器人。这个入口提供的机器人凭证可以用于 Vika；无需运行 OpenClaw。
-2. 运行 `vika setup`，新建或修改实例，勾选 QQ。输入 AppID 和 AppSecret（密钥隐藏输入），确认机器人已上线并具备单聊消息权限。
-3. 向机器人私聊发送终端显示的完整 `vika-bind …` 验证码，三分钟内有效。收到匹配的私聊后才保存新账号；其他人先发消息不会成为 owner。
-4. 实例启动后在私聊中发送任务。重新绑定或换密钥使用 `vika login qq [实例]`；验证期间暂时停止实例，成功或取消后恢复启动，失败不覆盖旧凭证。
+1. Register at the [QQ developer platform](https://q.qq.com/#/) if needed, then create a separate bot at the [QQ bot entry](https://q.qq.com/qqbot/openclaw/), obtain AppID / AppSecret, and add it with your QQ account. These credentials work with Vika; OpenClaw need not be running.
+2. Select QQ in setup, enter credentials (secret input is hidden), and ensure the bot is online with direct-message permission.
+3. Send the complete `vika-bind …` code shown in the terminal to the bot within three minutes. Only the matching direct message saves the account; another early sender does not become owner.
+4. Send tasks after startup. Use `vika login qq [instance]` to rebind or change keys; the instance pauses during verification, resumes afterward, and retains old credentials on failure.
 
-首版只处理绑定 owner 的私聊，支持文本、图片、文件、引用回复与现有 slash 命令。文本按纯文本发送，最多 4000 字符；文件和下载最多 20 MiB，5 MB 起走分片上传。普通文件发送取决于机器人是否具有对应权限。不支持群聊、个人号代收、语音、视频、交互按钮或历史搜索。只使用 MIT 开源的腾讯 Node SDK 处理 WebSocket，未引入独立的扫码领取凭证 SDK。
+Only the bound owner's direct chats are processed. Text, images, files, quoted replies, and slash commands are supported. Text is plain, up to 4,000 characters. Files/downloads are limited to 20 MiB, with multipart upload from 5 MB; sending generic files depends on bot permissions. Groups, personal-account interception, audio, video, interactive buttons, and history search are unsupported. Only Tencent's MIT Node SDK is used for WebSocket, not a separate QR credential SDK.
 
-QQ 可以作为主渠道接收主动通知和带编号的邮件回信审批；需允许主动消息且有剩余配额。被动回复序号与次数在本地持久化，最多四次，时限按消息产生时间计算、上限 60 分钟；官方文档同页仍有“5 分钟”的字段说明，因此服务端提前判过期也会直接返回错误。超限、权限拒绝、配额耗尽或结果不明时不会自动改成主动发送，也不会自动重试消息。详见腾讯的[单聊发送规则](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)。
+QQ can be the primary channel for notifications and numbered email approvals, subject to proactive-message permissions and quota. Passive reply counters persist locally, with at most four replies and a maximum 60-minute window measured from message creation. The official page also mentions five minutes in a field description; earlier server rejection is returned as an error. Quota exhaustion, permission errors, expiry, and uncertain results do not trigger automatic proactive fallback or retries. See [QQ sending rules](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html).
 
-纯 QQ 实例使用 `"channel": "qq"`、`"connectors": ["qq"]`，不填 `profile`；也可与其他 IM 共用实例。支持 Codex、TraeX、Claude、Pi、OpenCode。AppSecret、owner OpenID 和回复路由保存在 `<dataDir>/qq/state.sqlite3`（0600，父目录 0700），不写入 manifest 或日志；附件保存在 `<dataDir>/qq/media` 并随保留周期清理。一个实例只能有一个本地接收者，一个机器人应只绑定一个实例。WebSocket 断线期间在同一进程内尝试 Resume；不承诺进程停机期间补回所有消息，未改变公共 ACK/outbox 机制。
+A QQ-only instance uses `"channel": "qq"`, `"connectors": ["qq"]`, and no `profile`; mixed instances are supported. Codex, TraeX, Claude, Pi, and OpenCode are available. AppSecret, owner OpenID, and reply routes live in `<dataDir>/qq/state.sqlite3` (0600, parent 0700), not manifest/logs. Media lives in `<dataDir>/qq/media` with retention cleanup. Bind one local receiver and one instance per bot. WebSocket Resume is attempted within the same process; complete recovery of messages during process downtime is not guaranteed. Common ACK/outbox behavior is unchanged.
 
-### Telegram 私聊
+### Telegram direct messages
 
-使用官方 [Telegram Bot API](https://core.telegram.org/bots/api) 长轮询，不需要公网 Webhook。运行 Vika 的机器需要能通过 HTTPS 访问 `api.telegram.org`，手机或桌面端需要能打开 Telegram。
+The official [Telegram Bot API](https://core.telegram.org/bots/api) uses long polling without public webhooks. Vika must reach `api.telegram.org` over HTTPS, and you need Telegram on your phone or desktop.
 
-1. 在官方 [@BotFather](https://t.me/BotFather) 中发送 `/newbot`，为这个实例创建独立 Bot，复制 token。
-2. 运行 `vika setup`，新建或修改实例，勾选 Telegram；可把它选为主渠道，也可与飞书、微信、邮箱共用一个实例。
-3. 在终端的隐藏输入框粘贴 token。打开随后生成的链接或扫描二维码，在 Bot 私聊中点击 **Start**，三分钟内完成绑定。
-4. 实例启动后，在这个 Bot 的私聊中发送任务。更换 token 或重新绑定用 `vika login telegram [实例]`；验证期间实例会暂时停止，完成或取消后恢复启动。新绑定成功前保留旧凭证。
+1. Send `/newbot` to official [@BotFather](https://t.me/BotFather), create a separate bot, and copy its token.
+2. Select Telegram in setup. It can be primary or share an instance with Feishu, WeChat, and email.
+3. Paste the token into hidden input, open the generated link or QR code, and click **Start** in the bot's direct chat within three minutes.
+4. After startup, send tasks. `vika login telegram [instance]` changes tokens or binding, pausing the instance during verification and retaining old credentials until success.
 
-只有用本次随机链接完成绑定的账号能触发 Agent；其他账号、群聊、旧的绑定命令都忽略。普通 Bot 私聊不是端到端加密对话。每个实例使用独立 Bot，勿让其他程序同时轮询同一个 Bot；已有 Webhook 时接入会拒绝，不会替你删除原服务的配置。
+Only the account completing the current random binding link can trigger the agent; other accounts, groups, and old binding commands are ignored. Ordinary bot direct chats are not end-to-end encrypted. Use one bot per instance with no competing poller. Existing webhooks cause refusal rather than automatic deletion of another service's configuration.
 
-支持文本、图片、文件和引用回复，主渠道通知与邮件编号审批沿用现有流程。文本以纯文本发送，单条最多 4096 字符；工作区文件沿用 Core 的 **20 MiB** 上限，JPEG/PNG 不超过 **10 MB** 时作为图片发送，更大时作为文件发送；入站媒体按需下载，托管 Bot API 上限 **20 MB**。暂不支持群聊、语音转写、视频、按钮卡片、reaction 或聊天历史检索。
+Text, images, files, quoted replies, primary notifications, and numbered email approvals are supported. Plain text is limited to 4,096 characters. Workspace files retain Core's **20 MiB** limit; JPEG/PNG files up to **10 MB** are sent as photos, larger ones as files. Incoming media downloads on demand, limited to **20 MB** by the hosted Bot API. Groups, voice transcription, video, button cards, reactions, and chat-history search are unsupported.
 
-纯 Telegram 实例使用 `"channel": "telegram"`、`"connectors": ["telegram"]`，不填 `profile`；混合实例可用 `"connectors": ["lark", "telegram", "email"]`，有飞书时仍须配置 `profile`。Codex、TraeX、Claude、Pi、OpenCode 均可用。
+A Telegram-only instance uses `"channel": "telegram"`, `"connectors": ["telegram"]`, and no `profile`. A mixed example is `"connectors": ["lark", "telegram", "email"]`, with `profile` required for Feishu. Codex, TraeX, Claude, Pi, and OpenCode are supported.
 
-Bot token、owner/chat ID、接收游标及回复路由保存在 `<dataDir>/telegram/state.sqlite3`（0600，父目录 0700），token 不写入 manifest 或日志；媒体保存在 `<dataDir>/telegram/media` 并随保留周期清理。Telegram 最多保存 24 小时的待接收更新；当前接收仍使用 protocol 0.2 的 stdout 投递与游标机制，没有新增 Core 持久化 ACK 保证。发送只对明确的 `429 retry_after` 做有限重试，网络中断等结果不明的发送不会自动重发。
+Tokens, owner/chat IDs, receive cursors, and reply routes live in `<dataDir>/telegram/state.sqlite3` (0600, parent 0700), not manifest/logs. Media lives in `<dataDir>/telegram/media` and expires under retention. Telegram retains pending updates for at most 24 hours. Reception uses protocol 0.2 stdout delivery/cursors without an additional Core durable ACK guarantee. Sending retries only explicit `429 retry_after` responses within limits; uncertain network outcomes are not automatically resent.
 
 ### Slack
 
-使用你自己工作区里的内部 Slack App，通过 [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode) 收消息，不需要公网回调地址。运行 Vika 的机器需要能通过 HTTPS/WSS 访问 `slack.com`。每个 Vika 实例用一个独立的 App：Slack 会把事件随机分给同一个 App 的所有连接，两个程序共用一个 App 会各丢一部分消息，Vika 发现时会停下并提示。
+Use an internal app in your workspace with [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode), requiring HTTPS/WSS access to `slack.com` but no public callback. Use one app per instance: Slack distributes events randomly among an app's connections, so competing receivers lose messages. Vika stops with an explanation when it detects this.
 
-1. 运行 `vika setup`，新建或修改实例，勾选 Slack。
-2. 打开终端里给出的链接，选择工作区，用预填的配置创建 App（链接打不开时，在 [api.slack.com/apps](https://api.slack.com/apps) 选 Create New App → From a manifest，粘贴 `<dataDir>/slack/app-manifest.json`）。工作区开启了应用审批时，安装要等管理员批准。
-   也可以用已有的 App：对照这份 manifest 打开 Socket Mode、在 App Home 允许用户发消息，补齐事件订阅和 Bot Token Scopes 后重新安装。开了 Token Rotation 的 App 不能用；原来接收它消息的程序要先停掉。
-3. 点 **Install to Workspace**，在 OAuth & Permissions 复制 Bot User OAuth Token（`xoxb-`）；在 Basic Information → App-Level Tokens 生成一个带 `connections:write` 的 token（`xapp-`）。两个 token 都在终端的隐藏输入框粘贴。
-4. 终端显示一个一次性口令（`vika-xxxxxxxx`），在 Slack 里私聊这个机器人发送它，5 分钟内完成绑定；发送口令的人就是 owner。之后要换 token 或换 owner，用 `vika login slack [实例]`，验证期间实例暂停，期间别人发给机器人的消息会在恢复后补上。
+1. Select Slack in setup.
+2. Open the terminal link and create an app with its prefilled configuration. Alternatively use **Create New App → From a manifest** at [api.slack.com/apps](https://api.slack.com/apps) with `<dataDir>/slack/app-manifest.json`. Workspace approval may be required. For an existing app, enable Socket Mode and App Home messaging, add manifest subscriptions/scopes, and reinstall. Token Rotation is unsupported; stop any previous receiver.
+3. **Install to Workspace** and copy the Bot User OAuth Token (`xoxb-`) from OAuth & Permissions. Create an App-Level Token (`xapp-`) with `connections:write` under Basic Information. Paste both into hidden terminal input.
+4. Send the one-time `vika-xxxxxxxx` passphrase to the bot in a direct chat within five minutes; its sender becomes owner. `vika login slack [instance]` rebinds tokens or owner, pausing the instance during validation; messages received during this pause are replayed afterward.
 
-和飞书一样，工作区里任何人都可以私聊机器人；频道要先用 `/invite @机器人` 把它拉进去才会收到消息，群里不用 @ 它，是否回复由 Agent 判断。和其他公司共享的 Slack Connect 频道照常接收，消息行会标上 `external=true`，按外部群的信息边界处理。其他 App 发的消息（GitHub、告警、其他 AI 机器人）也会交给 Agent，行内标 `sender=bot` 和 `bots_since_human=N`（自上一条真人消息以来这里有几条 bot 消息）。要不要回、和别的机器人协作几轮，都由 Agent 按「有必要才说话」判断，不需要 @。只有失控时才有一根保险丝：同一个频道或线程里一直没有真人说话、Agent 已经回应了 20 条 bot 消息，再回就会被拦下，并私聊通知你一次；有人在那里说一句话就恢复。阈值用 `VIKA_BOT_REPLY_FUSE` 调，设为 `0` 关闭。飞书也是同一套规则。
+Anyone in the workspace can directly message the bot. Invite it to channels with `/invite @bot`; mentioning it is not required, and the agent decides whether to answer. Slack Connect inputs carry `external=true` and follow external-group privacy boundaries. Other apps' messages carry `sender=bot` and `bots_since_human=N`. The agent decides whether another response helps. A fuse blocks further replies after 20 bot-message responses in a channel/thread with no intervening human message, notifying the owner once. Human input resets it. Set `VIKA_BOT_REPLY_FUSE` to change the threshold, or `0` to disable it. Feishu uses the same mechanism.
 
-Slack 没有引用回复：Agent 在频道里回某条消息时会回到它的线程里，线程里的消息自然也回到线程。Agent 写的 Markdown 发送前转成 Slack 的格式，单条最多 12000 字符，更长的发文件；`@channel`/`@here` 不会被发出。支持文本、文件（工作区文件最多 20 MiB，入站文件按需下载）、@提及、reaction 和撤回；暂不支持按钮卡片和搜索，邮件审批用编号消息（「发送 N」）。Slack 会把 `/` 开头的消息当成 Slack 命令拦下，要用 `/new`、`/model` 这些命令时前面加一个空格，发 ` /new`。
+Slack has no quoted replies: replying to a channel message starts/continues its thread; thread input stays there. Markdown converts to Slack syntax, with a 12,000-character limit and longer content sent as files. `@channel` and `@here` are suppressed. Text, files (workspace limit 20 MiB; incoming files downloaded on demand), mentions, reactions, and retraction are supported; button cards and search are not. Email approval uses numbered messages such as `发送 N` (send N). Slack intercepts slash commands, so prefix Vika commands with a space, e.g. ` /new`.
 
-Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，获取用户 ID、显示名，以及已知的机器人、本人和停用标记；查到的名字可以直接用于 `mention_names`，重名时使用返回的用户 ID。默认每页 100 人、最多 200 人，通过 `next_cursor` 翻页；个别用户资料不可用时仍返回其 ID，并明确标记未知，不会把资料缺失的成员当作真人。新建 App 的模板包含成员查询权限；旧 App 需要补授权，步骤见 [Slack 接入](installation-reference.md#slack-接入)。缺权限只影响这个查询，不会停掉消息收发。
+`list_chat_members` pages through channel/direct-chat members and returns IDs, display names, and known bot/self/deactivated flags. Names can be used in `mention_names`; use IDs for duplicates. Page size defaults to 100, maximum 200, with `next_cursor`. Unavailable profiles retain their IDs and an explicit unknown marker rather than being classified as human. New-app templates include these permissions; existing apps need [additional authorization](installation-reference.md#slack-setup). Missing scopes affect this query only.
 
-基础查询统一走 `Agent → Core → Slack Connector → 官方 Slack CLI`：`list_chats` 列出 bot 已加入的群会话，`list_chat_messages` 从新到旧读会话历史，`list_thread_messages` 从旧到新读线程（含根消息），成员与用户资料也由 CLI 查询。每次返回一页，`has_more` 为真时用 `next_cursor` 继续；按名称过滤后即使本页为空也可能还有下一页。历史与线程每页最多 50 条，只支持 bot 身份，权限范围内可以读取绑定前的消息和 bot 自己的消息。查询结果里的完整 `message_id` / `thread_id` 可用于后续回复、线程查询和附件下载；历史只作上下文，不会再次进入入站队列，也不能充当 `decision_id`。混合 IM 实例可以显式指定 `source: "slack"`。
+Read-only queries use `Agent → Core → Slack Connector → official Slack CLI`. `list_chats` lists joined group conversations, `list_chat_messages` reads newest first, and `list_thread_messages` reads oldest first including the root. Members and profiles use the CLI too. Each call returns one page; continue with `next_cursor` when `has_more`, even if name filtering emptied the current page. History/threads allow at most 50 messages per page and bot identity only, including authorized pre-binding and bot messages. Full returned `message_id` / `thread_id` values work for replies, thread reads, and downloads. History is context only, never requeued or valid as `decision_id`. Mixed instances can specify `source: "slack"`.
 
-官方 [Slack CLI](https://github.com/slackapi/slack-cli) 固定为 4.10.0，随发布包安装到 `bin/slack`，源码开发运行 `npm run setup` 安装。Connector 通过 `slack api` 调用白名单内的只读接口，独立临时配置、bot token 环境变量与进程超时由 Connector 管理；Core 不执行 CLI，Agent 不获取 bot token。Socket Mode 收消息及发送、reaction、撤回、文件传输继续由 Connector 的 Web API 实现。
+Official [Slack CLI](https://github.com/slackapi/slack-cli) 4.10.0 is bundled at `bin/slack` or installed by `npm run setup`. The Connector uses `slack api` for allowlisted read-only calls and manages temporary configuration, token environment, and timeouts. Core does not execute the CLI; the agent does not receive the bot token. Socket Mode reception and Web API sending, reactions, retraction, and file transfer remain in the Connector.
 
-纯 Slack 实例使用 `"channel": "slack"`、`"connectors": ["slack"]`，不填 `profile`；Codex、TraeX、Claude、Pi、OpenCode 均可用。两个 token、owner、回复路由、显示名缓存和待处理消息保存在 `<dataDir>/slack/state.sqlite3`（0600，父目录 0700），token 不写入 manifest 或日志。收到的消息先存进这个库再向 Slack 确认，所以 Connector 重启不会丢掉已确认的消息；daemon 整体停机期间 Slack 只短暂重试，停得久了会漏消息。Slack 没有幂等键，结果不明的发送不会自动重发。
+Slack-only instances use `"channel": "slack"`, `"connectors": ["slack"]`, and no `profile`; Codex, TraeX, Claude, Pi, and OpenCode are supported. Tokens, owner, routes, display-name cache, and pending messages live in `<dataDir>/slack/state.sqlite3` (0600, parent 0700), not manifest/logs. Messages persist before ACK, surviving Connector restarts. Slack retries only briefly during total daemon downtime, so longer outages can lose messages. Slack provides no idempotency key; uncertain sends are not automatically retried.
 
-### 邮箱
+### Email
 
-邮箱 Connector 用 IMAP 只读监听收件箱（不会把邮件标成已读，也不移动、不删除），用 SMTP 回信。一个实例可以同时接多个邮箱，每个邮箱是一个独立的 Connector 实例（`email-gmail`、`email-qq` 这样的名字），各跑一个子进程：一个邮箱密码失效或被限流，只有它自己退避重连，其他邮箱照常收信。新邮件到达后，Agent 判断要不要告诉你，要的话发到你在主渠道上的私聊。Agent 从不直接发邮件：无论是你让它回，还是它觉得该回，它都只能起草，Core 把草稿（发件邮箱、收件人、主题和正文）发到主渠道等你确认，只有你确认了才发出：
+The email Connector watches IMAP read-only: it does not mark messages read, move, or delete them. SMTP sends replies. Each configured mailbox runs as a separate Connector subprocess, such as `email-gmail` or `email-qq`; bad passwords or rate limits back off independently. The agent decides whether incoming mail merits an owner notification on the primary IM. It **cannot send email directly**: whether asked or acting on its own judgment, it drafts a reply and Core presents sender account, recipient, subject, and body for owner approval.
 
-- 主渠道是飞书：草稿是一张卡片，正文可以直接在卡片上改，点"发送"按卡片上的内容发出，点"不发了"就作废。
-- 主渠道是微信、Telegram、Slack 或 QQ：草稿是一条带编号的消息，回复「发送 3」发出，「不发 3」作废，「修改 3 新的正文」把正文换成你写的内容（改完会把新草稿再发你一遍，还要回「发送 3」才发出）。也可以直接告诉 Agent 怎么改，它会重新起草一份，旧编号随之作废。这几句回复由 Core 处理，不经过 Agent，只认你本人在私聊里发的、整条消息正好是这个格式的回复。
+- With Feishu as primary, edit the draft body in a card and click Send or cancel.
+- With WeChat, Telegram, Slack, or QQ, use numbered messages: `发送 3` sends, `不发 3` discards, and `修改 3 新的正文` replaces draft 3 with the supplied body. These are literal Chinese command forms; an edited draft is shown again and still needs explicit send approval. Asking the agent to redraft invalidates the old number. Core handles exact-format owner direct messages without invoking the agent.
 
-每封邮件在交给 Agent 之前先存进当前实例的 OpenViking 私有区（`viking://~/resources/emails/<邮件>/`）：`body.md` 是主题、收发件人、时间、附件清单和完整正文；附件全文在 `attachments/<编号>-<文件名>/full/` 下，PDF、Word、Excel、PPT、HTML、文本等由 OV 解析成 Markdown，转发的邮件和日历邀请这类文本附件原样存，图片、压缩包等不存，内嵌在正文里的图片也不存。OV 一个文件只建一条向量、只看开头约 4096 token，所以长正文和长附件另外由 OV 切成小块存一份（同级的 `chunks/`），只用于召回；Agent 读的永远是全文，召回命中某一块时从这一块在全文中的位置读起。OV 只为这些内容建向量（`vectors_only`），不调 LLM 生成摘要。Agent 收到的只有收发件人、存储位置、附件清单和正文开头 500 字，需要细看时用 `read_email` 读全文或某个附件。OV 暂时不可用时，这封邮件照旧把正文（前 6000 字）直接交给 Agent，附件打不开。
+Before delivery to the agent, each email is stored in the instance's private OV area, `viking://~/resources/emails/<email>/`. `body.md` contains subject, addresses, time, attachment list, and full body. Attachment text is under `attachments/<number>-<filename>/full/`: OV parses PDF, Word, Excel, PPT, HTML, and text into Markdown; textual forwarded mail and calendar invitations remain as text. Images, archives, and inline body images are not stored. Because one OV file has one vector based on roughly its first 4,096 tokens, long bodies/attachments also get sibling `chunks/` for recall. The agent always reads the full text, starting at the matching position when a chunk is recalled. `vectors_only` avoids LLM summaries. The agent initially receives addresses, storage location, attachment list, and the first 500 characters; `read_email` reads full body or attachments. During OV outages, the first 6,000 body characters are delivered directly and attachments are unavailable.
 
-草稿只有你能确认，只认第一次，三天后过期。首次启动只从之后到达的邮件开始；订阅和群发邮件标为 `kind=email.list`，自动回复（含多数退信）和它自己的回信直接跳过；程序自动发出的通知（安全告警、任务失败等）照常交给 Agent 判断。
+Only the owner can approve, once, within three days. Initial startup watches only subsequently arriving mail. List/subscription mail is marked `kind=email.list`; automatic replies, most bounces, and the bot's own replies are skipped. Automated alerts such as security or task-failure notifications still reach the agent.
 
-在 `vika setup` 里勾选邮箱接入（新建或修改实例都行，可以连续接几个）：输入邮箱地址和专用密码，Gmail、QQ、163/126/yeah.net 自动带出服务器，其他邮箱手填。先实际登录一次 IMAP 和 SMTP，成功才保存。已经接了邮箱的实例，在 `vika setup` 修改它时会给一个邮箱菜单：再接一个、给某个邮箱换密码，或者移除某个；只是换密码的话，`vika login email` 更快。回信从邮件所在的那个邮箱发出，待确认的草稿上会写明发件邮箱。
+Select email in setup for new or existing instances and add one or more accounts. Gmail, QQ, and 163/126/yeah.net have presets; other servers are manual. IMAP and SMTP are tested before saving. The edit menu adds accounts, changes passwords, or removes accounts; `vika login email` is quicker for password changes. Replies use the receiving mailbox, shown on the draft.
 
-每个邮箱的账号存在 `~/.vika/email/<实例>/<邮箱名>.json`（0600），实例配置里是它们的列表：
+Account files are `~/.vika/email/<instance>/<account>.json` (0600), referenced by the instance:
 
 ```json
 {
@@ -159,24 +161,24 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 }
 ```
 
-邮箱名是 `email-` 加小写字母、数字和 `-`。账号文件格式如下，手写时文件权限必须是 0600，不要写进 `env`：
+Account IDs start with `email-` and use lowercase letters, digits, and hyphens. Handwritten account files must have mode 0600 and must not be placed in `env`:
 
 ```json
 {
   "address": "you@gmail.com",
-  "password": "<客户端专用密码>",
+  "password": "<app-password>",
   "imap": { "host": "imap.gmail.com", "port": 993 },
   "smtp": { "host": "smtp.gmail.com", "port": 465 }
 }
 ```
 
-可选 `imap.mailbox` 指定要监听的一个 IMAP 文件夹，默认 `INBOX`，例如 `"imap": { "host": "imap.example.com", "port": 993, "mailbox": "Projects" }`。文件夹名保留大小写和空格（只有 INBOX 不区分大小写），支持非 ASCII 名称。首次监听某文件夹从之后的新邮件开始，不导入已有邮件；切换回曾监听的文件夹会从各自保存的位置继续。不同文件夹的邮件身份相互独立，原有 INBOX 邮件和归档仍可读取、回复。
+Optional `imap.mailbox` selects one folder, default `INBOX`, e.g. `"imap": { "host": "imap.example.com", "port": 993, "mailbox": "Projects" }`. Case and spaces are preserved (only INBOX is case-insensitive), including non-ASCII names. A newly watched folder starts with future mail rather than importing existing messages. Returning to a previously watched folder resumes its cursor. Folder identities are independent; old INBOX mail and archives remain readable/replyable.
 
-同时监听多个文件夹时，将 `imap.mailbox` 换成 `imap.mailboxes`，例如 `["INBOX", "Projects", "Projects/Alerts"]`，最多 100 个，二者不能同时设置。单文件夹仍使用服务器支持的 IDLE；多个文件夹在同一连接上逐个 EXAMINE，只读轮询，默认每轮结束后等待 60 秒，可用 `imap.pollIntervalSeconds` 设置 15–3600 秒。IDLE 只监视当前选中的文件夹，不能用一次 INBOX IDLE 代表所有目录。
+For several folders, replace `imap.mailbox` with `imap.mailboxes`, e.g. `["INBOX", "Projects", "Projects/Alerts"]`, up to 100; the two settings are mutually exclusive. Single folders use server-supported IDLE. Multiple folders are read-only polled with sequential EXAMINE on one connection, waiting 60 seconds after each round by default; `imap.pollIntervalSeconds` accepts 15–3600. IDLE watches only the selected folder, not every folder through one INBOX subscription.
 
-每个文件夹独立记录 UIDVALIDITY 和 UID。某个目录临时无权限或被删除不会阻塞其他目录，断线后退避重连并续接游标；目录重编号时只重置该目录，按首次监听规则从新邮件开始。每轮每目录最多处理最新 50 封待处理邮件，超出部分跳过（SEARCH 响应本身未限量）；附件处理也会延长轮询周期。跨文件夹移动/复制邮件可能再次提醒，因为它在目标目录获得新的 IMAP 身份，不按 Message-ID 全局去重。
+Each folder tracks UIDVALIDITY and UID separately. Permission failures or deletion do not block other folders; reconnect resumes cursors with backoff. Renumbering resets only that folder and follows the new-mail-only rule. Each round processes at most the latest 50 pending messages per folder and skips excess (the SEARCH response itself is not bounded). Attachments can lengthen rounds. Copies/moves can notify again because the destination has a new IMAP identity; Message-ID is not globally deduplicated.
 
-需要发现后来新建的文件夹时，改用 `imap.discovery`（不能与 `mailbox` / `mailboxes` 并用）：
+To discover new folders, use `imap.discovery`, mutually exclusive with `mailbox` / `mailboxes`. This is the account file's `imap` object:
 
 ```json
 {
@@ -191,80 +193,77 @@ Agent 可用 `list_chat_members` 分页查询当前频道或私聊的成员，�
 }
 ```
 
-以上是账号文件中的 `imap` 对象。通过 `LIST "" "*"` 获取可选择目录，按服务器返回的层级分隔符选择根目录及子目录；`Projects` 不会误匹配 `ProjectsOld`。`roots` 留空表示所有可选择目录，排除项也作用于其子目录。垃圾箱、已发送目录的名字由供应商决定，请明确填写排除项；不会猜测文件夹的用途。发现模式始终轮询，默认每 300 秒刷新列表（可设 15–86400 秒，实际还受轮询和处理时间影响）。最多匹配 100 个目录，超过时拒绝该次刷新，请缩小范围。刷新失败保留最近一次成功列表，删除目录保留游标以便重现后续接；新发现目录仍只提醒之后的新邮件。日志中的 `email_mailboxes_discovered` 记录匹配数量，失败会记录 `email_mailbox_discovery_failed`，不会静默切回 INBOX。
+`LIST "" "*"` finds selectable folders; server hierarchy delimiters determine roots and descendants, so `Projects` does not match `ProjectsOld`. Empty `roots` means all selectable folders; exclusions include descendants. Explicitly exclude provider-specific Trash/Sent names; purposes are not guessed. Discovery always polls and refreshes every 300 seconds by default (15–86400 allowed, also affected by processing/poll time). More than 100 matches rejects that refresh; narrow the scope. Failure retains the last successful list. Deleted folders retain cursors for reappearance; newly discovered folders notify only future mail. Logs record counts in `email_mailboxes_discovered` and failures in `email_mailbox_discovery_failed`, never silently falling back to INBOX.
 
-协议依据：[RFC 9051](https://www.rfc-editor.org/rfc/rfc9051.html) 的 mailbox、UIDVALIDITY、UID 身份与 LIST；[RFC 2177](https://www.rfc-editor.org/rfc/rfc2177.html) 的 IDLE；IMAP4rev1 非 ASCII 名称按 [RFC 3501 §5.1.3](https://www.rfc-editor.org/rfc/rfc3501.html#section-5.1.3) 编码。NOTIFY / OBJECTID 不属于这一版实现。
+Protocol references: [RFC 9051](https://www.rfc-editor.org/rfc/rfc9051.html) for mailbox, UIDVALIDITY, UID, and LIST; [RFC 2177](https://www.rfc-editor.org/rfc/rfc2177.html) for IDLE; [RFC 3501 §5.1.3](https://www.rfc-editor.org/rfc/rfc3501.html#section-5.1.3) for IMAP4rev1 non-ASCII names. NOTIFY / OBJECTID are not implemented.
 
+`password` is a per-account third-party app password shared by IMAP and SMTP. Gmail requires two-step verification and an app password without spaces; QQ/163 call it an authorization code and require enabling IMAP/SMTP. SMTP uses implicit TLS on 465 and STARTTLS elsewhere, overridable with `smtp.secure`. Optional `username` defaults to `address`; `name` sets the reply sender name. OAuth-only providers such as Outlook are not supported here. Self-hosted Ark lacks Agent tools and cannot use email.
 
+## Attachments and cards
 
-`password` 是邮箱给第三方客户端用的专用密码，按邮箱账号生成一次，IMAP 和 SMTP 共用：Gmail 叫应用密码（需先开两步验证，填写时去掉空格），QQ/163 叫授权码（需先在设置里开启 IMAP/SMTP）。SMTP 在 465 端口用直连 TLS，其他端口用 STARTTLS，可用 `smtp.secure` 覆盖；可选 `username`（默认同 `address`）和 `name`（回信的发件人名）。只用 OAuth 的邮箱（如 Outlook）暂不支持。方舟 Self-hosted Ark 用不了 Agent 工具，因此不支持邮箱。
+`send_message` / `reply_message` accept exactly one of `markdown`, `file_path`, `file_key`, `card`, or `choices`. WeChat, Telegram, Slack, and QQ support only `markdown` and `file_path`. Files are workspace-relative and at most 20 MiB; images are sent as images. Inline Card 1.0/2.0 is limited to 30 KiB. Thread files/cards use replies with `reply_in_thread: true`.
 
-## 文档附件与交互卡片
+`choices` sends a single-choice button question and returns immediately. After a click, the daemon validates answerer, expiry, and duplicate submissions, delivers a new input, and best-effort updates the card. Question state and thread routes persist in SQLite. Ordinary cards also enter the agent, showing `[card]` when text is unavailable. See [message formats](../packages/daemon/agent/lark-message-formats.md). Outbound schemas are runtime-independent; only Agent-tool cards register callbacks.
 
-`send_message` / `reply_message` 的正文可选择 `markdown`、`file_path`、`file_key`、`card` 或 `choices`，每次只选一种（微信、Telegram、Slack、QQ 只支持 `markdown` 与 `file_path`）。文件相对于 Agent workspace，最多 20 MiB，图片按图片发送；自定义卡片支持 inline Card 1.0/2.0，最多 30 KiB。话题内的文件和卡片使用 reply + `reply_in_thread: true`。
+Enable long-connection `card.action.trigger` in Feishu callback configuration before deployment; see [manual setup](installation-reference.md#manual-feishu-setup).
 
-`choices` 生成带按钮的单选问题，发送立即返回；用户点击后，daemon 校验答题人、有效期与重复提交，将答案作为新输入交给 Agent，并尽力更新原卡片。问题状态与话题路由持久化到 SQLite。普通卡片消息也会进入 Agent，正文缺失时显示 `[card]`。完整参数、限制和调用示例见 [消息格式指南](../packages/daemon/agent/lark-message-formats.md)。这些出站参数对所有 runtime 一致；只有经 Agent 工具发出的卡片才有回调登记。
+## Interaction rules
 
-部署前必须在飞书应用的「回调配置」启用 `card.action.trigger` 长连接，详见 [安装说明](installation-reference.md#手动配飞书不用-setup-时)。
+- In a connected IM direct chat, `/primary` selects that IM as primary; `/primary status` shows the primary and current IM. Only its bound owner can use these, never groups. In Slack, prefix a space. Changes persist immediately without restart or task interruption. New notifications/approvals move to the new IM; pending approvals remain on the original one. Selecting the current IM is a no-op. Unavailable connections, unbound owners, or save failures preserve the old setting. WeChat warns that proactive delivery needs recent context and may require another incoming message. An already open setup wizard refuses to overwrite a concurrent command change; restart setup.
+- All connected chats can request workspace writes, so connect only trusted chats.
+- Chats share one global runtime/session. Inputs interleave with `chat=` identifying their origins.
+- Group batching lasts 400 ms from the first pending message; later arrivals do not reset it. Chat/thread queues expire independently. Active Codex/TraeX/Claude/Pi/Durable turns receive immediate steering; OpenCode and Ark follow-ups wait for the next turn.
+- Questions, tasks, corrections, and meaningful follow-ups usually receive replies. Acknowledgments, thanks, chatter, status broadcasts, conversations between people, and already answered questions usually do not.
+- Images, files, audio, and video enter as restricted resource references. Codex/TraeX/Claude/Pi/Durable/OpenCode use `get_message_media` with image/file keys (WeChat/Telegram/QQ use message ID; Slack uses message and file IDs). Images are supplied through tool results, not embedded in the inbound prompt. Self-hosted Ark needs equivalent Worker-local tools because it does not inherit daemon Agent tools. Unknown message types do not trigger replies.
+- Direct-chat slash commands are handled by the daemon without waiting for the model: `/new`, `/help`, `/status`, `/runtime` (alias `/run`), `/model`, `/effort`, and `/primary`. `/new` starts a clean session; Ark must first create the remote session successfully before committing the local epoch. Runtime switching supports Codex, TraeX, Claude, Pi, Durable, OpenCode, and Ark; selecting the same runtime preserves the session. Successful switches save both manifest and SQLite state and survive restart; setup reconciles desired configuration with actual runtime state. Cross-runtime switching retires the native session, restores the target's last model, and attaches recent raw OV history to the first real input; older raw messages are available through archive queries. `/model` affects only the current runtime (e.g. Claude `sonnet`, or Pi/Durable/OpenCode `provider/id`), without implicit runtime or session switching. Claude's CLI supplies names, version IDs, and efforts. Model/effort changes apply next turn, preserving the current turn and context. Effort candidates are validated against the model; unavailable capabilities are not guessed. When changing model, retain a supported effort, otherwise use its declared default, then supported medium or first option, and report the adjustment. Remove effort overrides for models explicitly lacking support. Unknown capabilities preserve settings and request retry. Unavailable saved models fall back to the runtime default, but discovery failure is not proof a model is absent; fallback is saved only after successful switching. Ark model/effort are configured remotely. `/status` reports main-model sampling and duration, showing idle while it waits for tools/subagents. Prompt/code updates require a published release via `vika upgrade <instance-id>`.
+- After ten minutes without successful outbound delivery, subsequent trusted input metadata gets `idle=<seconds>s`; no reaction is sent automatically. For genuinely long work, Codex/TraeX/Claude/Pi/Durable/OpenCode may add temporary `OnIt` via `react_to_message`. Ark's Worker/CLI path supports final reactions only. Short tasks and ignored group messages create no extra noise; silence does not consume the idle window. Core tracks exact `reaction_id` values in memory per chat/thread and removes them on the next successful final text/reaction or when the turn ends, fails, or is abandoned. No polling/database scan is used. Deletion failure or SIGKILL may leave a reaction behind; this is best-effort UX. `VIKA_IDLE_REACTION_AFTER_MS=0` disables the hint.
+- `agents[].role` chooses `colleague` (AI coworker collaborating in work groups), `assistant` (owner-focused tasks, reminders, and notifications), `qa` (verified product answers with privacy and topic boundaries), or an absolute Markdown path. Setup can copy a built-in role as a custom starting point. Built-ins update with releases; custom files do not. Omission uses default rules only. Owner/product knowledge belongs in OV, not the role. Restarting after role edits starts a new session.
+- Natural-writing guidance defaults on; `agents[].naturalWriting: false` disables it.
+- Setup's instance **Other settings** toggles staged replies, natural writing, explicit silence, OV recall, and meeting notes. Save/restart applies changes. New instances default to natural writing and explicit silence; the first Feishu colleague/assistant also enables meeting notes. The confirmation screen lists defaults. These fields may also be edited in `config.json`.
+- `agents[].meetingNotes` stores enabled smart notes and transcripts from your Feishu meetings in private OV `viking://~/resources/meetings/<meeting_id>/`: `note.md`, `transcript.md`, and long-text recall `chunks/`. The agent reads full text with `read_meeting_note`. At startup and every 15 minutes it queries recent meetings as the owner, initially looking back 30 days, and checks new/waiting meetings. Notes generally appear 1–4 minutes after meetings and are archived about 15–20 minutes later; after two hours without notes, polling stops for that meeting. No Feishu events or extra app configuration are needed; ingestion does not wake the agent or send messages. Minutes without read permission are not stored; linked documents are read on demand, not copied. Enable this on only one instance per machine to avoid duplicate ingestion. The first Feishu colleague/assistant defaults on, QA off; disable the old instance before moving it. State is `<dataDir>/meeting-notes/meetings.sqlite3`, with waiting/pending/stored/none/skipped/failed per meeting.
+- Explicit silence defaults **on**, except Ark defaults off. Set `agents[].explicitSilence: false` and restart to disable. When enabled, each input requires a delivery or `stay_silent`, recorded in SQLite `decisions`; undecided inputs are offered once more with `undecided=1`. When disabled, prompt/tools/policyHash match the feature-free behavior. Changing the setting changes policyHash and prevents native thread resume. Upgrading an older default-off version without an explicit field enables it and starts a new session on the first turn; specify false to retain the old behavior. Ark lacks Core tools; enabling this while running/switching to Ark logs `explicit_silence_not_applied`.
+- Staged replies default **off**; enable `agents[].stagedReplies`. Immediate answers still use one message. Real investigation starts with `OnIt` (a short message on WeChat/Telegram), followed only by verified intermediate findings and a self-contained final answer. A necessary question is that turn's final response; elapsed time is never consent. Intermediate `send_message`/`reply_message` calls use `interim: true`, text only, in the originating chat/thread. They neither complete the decision nor remove `OnIt`. Disabled tools omit `interim` and use one final delivery per decision. Changing this setting changes policyHash. Ark lacks support and logs `staged_replies_not_applied`.
+- Anyone can request research, documents, and similar work. lark-cli acts only as bot or owner, so actions in another person's own account (their calendar/tasks/meetings) are unavailable; the agent should explain and supply details they can add themselves.
+- Replies quoting an agent message carry `reply_to=me` and a `quote=` excerpt to relate delayed answers to the original question.
+- Feishu document-comment mentions and replies to comments the bot joined wake it. A document is `chat=doc:<type>:<token>` and each comment is a thread. The bot reads the comment, referenced passage, prior replies, and title as bot; read failures still wake the model with an explanation. `reply_message` answers in plain text only. Resolved/whole-document comments cannot accept replies, so a new whole-document comment mentions the asker. Everyone with document access can see it; group privacy rules apply. The API has no idempotency key, so uncertain replies are not retried. Only comments on documents shared with the bot are received.
+- Failed model calls produce a programmatic quoted failure notice with the actual error instead of silently losing the message.
+- Core cancels a turn after three ineffective repeated actions on the same input since the last effective action (delivery, decision, timer creation/deletion). Duplicate silence, sends, or identical timers count despite wording changes; queries neither count nor reset the counter. Codex/TraeX/Claude/Pi/Durable/OpenCode cancel in place without replacing process/session. No failure notice is sent for the first cancellation; pending input continues, and undecided chat/non-chat inputs are offered once more, with `undecided=1` only when explicit silence is enabled. A second cancellation for that input stops replay and sends a failure notice. `decisions` records final deliveries even with explicit silence disabled for this check, without changing prompt/tools. The next turn receives an explanation. A second cancellation within ten minutes, or a turn still active 30 seconds after cancellation, creates a new native session with recent history while preserving cognition epoch. Activity records the cancellation. Repeated file reads/commands are not detected; Ark is excluded because it bypasses Core tools.
 
-## 交互规则
+Codex/TraeX/Claude/Pi/OpenCode MCP and Durable sends, replies, reactions, and retractions all pass through Core authority, freshness, idempotent outbox, and delivery accounting. Policy forbids bypassing them with lark-cli. The fixed bot-profile CLI remains available for non-message documents/calendar work; auth/config/admin operations stay forbidden. Self-hosted Ark is an exception: its Environment Worker cannot reach the local socket, so Worker bash invokes fixed lark-cli without Core freshness/outbox. Tools can deliver the entire reply; `end_turn` need not also return `agent.message`.
 
-- 在已接入 IM 的机器人私聊里发送 `/primary`，把当前 IM 设为主渠道；`/primary status` 查看当前主 IM 和聊天所在 IM。两个命令都只接受该 IM 已绑定的 owner，群聊不执行；Slack 前面加一个空格，发 ` /primary` 或 ` /primary status`。切换会保存到当前实例配置并立即生效，无需重启，也不打断正在进行的任务。后续主动通知和新的邮件审批发到新主 IM，已有待审批消息仍在原 IM 处理。重复选择当前主 IM 不重复修改配置；连接不可用、owner 未绑定或保存失败时保留原设置。微信会提示主动通知依赖会话上下文，长时间未互动后可能需要再发一条消息恢复。若同时打开了 `vika setup`，命令修改配置后旧的 setup 会拒绝覆盖，请重新运行 setup。
-- 所有聊天统一具有工作区写权限，可让 Codex 在配置的工作区里完成任务；因此只应把 Agent 加入你信任的聊天。
-- 所有聊天共享一个全局 runtime/session，不同 chat 的消息会交错进入同一上下文，用每行的 `chat=` 标签区分归属。
-- 群聊的 400ms 从首条待处理消息开始计算，后续补充不会重置时间。不同 chat/thread 各自排队，先到期的先开 turn。Codex/TraeX/Claude/Pi/Durable 已有 turn 时使用即时 steer；OpenCode 与 Ark 的后续消息进入下一 turn。
-- 明确问题、任务、纠正和有效续聊通常会回复；“收到”“谢谢”、闲聊、状态播报、人与人之间的对话、已经有人答好的问题通常保持静默。
-- 图片、文件和音视频会以受限资源引用进入 Agent；Codex/TraeX/Claude/Pi/Durable/OpenCode 可用 `get_message_media` 按消息中的 image_key/file_key（微信、Telegram、QQ 按消息 ID，Slack 按消息 ID 和文件 ID）取回本地文件，图片通过工具结果直接交给模型，内容本身不会直接塞进入站 prompt。Self-hosted Ark 不继承 daemon 的 Agent 工具，只有 Worker 环境另行提供等价本地能力时才能读取。未知消息类型不会触发回复。
-- 本机 slash 命令在私聊里直接发 `/` 开头的消息，由 daemon 优先处理并回复，不等待当前模型 turn：`/new`、`/help`、`/status`、`/runtime [名称]`、`/model [名称]`、`/effort [档位]`、`/primary [status]`。`/new` 开启干净会话；对 Ark 会先成功创建远端 session，再提交本地 epoch。`/runtime`（可简写 `/run`）查看或切换 Codex、TraeX、Claude、Pi、Durable、OpenCode、Ark，例如 `/run claude`、`/run durable`、`/run ark`；重复选择当前 runtime 保留会话。切换成功后同时保存到 `config.json` 和 SQLite，因此与 `vika setup` 选择 runtime 的结果一致，实例重启后不会回到旧 runtime；setup 重启实例时会把配置中的期望 runtime 协调成 SQLite 中的实际 runtime。跨 runtime 切换退役旧 native session，恢复目标 runtime 上次选择的模型，并在第一条真实消息里接上 OV session 的近期原始消息，更早的由模型按需查 OV archive。`/model` 只查看或切换当前 runtime 的模型，例如切到 Claude 后 `/model sonnet`，切到 Pi、Durable 或 OpenCode 后 `/model provider/id`；不会隐式切 runtime，也不会新建底层会话。Claude 模型列表来自 CLI，展示名称、实际版本 ID 和支持的 effort。`/model` 和 `/effort` 在下一轮生效，保留当前 turn 和上下文。`/effort` 只展示、校验当前模型的档位；能力信息不可用时不猜测候选项。切换模型时一起校验原 effort：仍受支持就保留，否则优先采用目标模型声明的默认档位，再选其支持的 medium 或首个档位，并在回执中说明；明确不支持 effort 时取消额外配置。目标能力未知时保留原设置并提示重试。切 runtime 时，保存的模型已不可用会回退该 runtime 的默认模型；目录发现失败不等于模型不存在，成功切换后才保存回退结果。Ark 的 model/effort 由远端 Agent 配置管理。`/status` 只看主模型是否正在采样及持续时间；主模型等工具或 subagent 时显示空闲。prompt 和代码更新通过当前实例自己的 `vika upgrade <instance-id>` 发布。
-- 连续 10 分钟没有成功 outbound delivery 后，daemon 只在后续入站消息的可信 metadata 里加 `idle=<seconds>s`，不会预先 reaction。Agent 仍先按正常规则判断是否要处理；Codex/TraeX/Claude/Pi/Durable/OpenCode 只有决定处理且预计是长工作时，才调用 `react_to_message` 的 `temporary: true` 发一个 `OnIt`。Ark 的 Worker/CLI 路径不使用 daemon 的临时 reaction helper，只支持最终 reaction。无需回复的群消息和短任务不会产生额外噪音；仅查看后保持静默也不会消费 idle 窗口。Core 按 chat/thread 在内存保存 exact `reaction_id`，同 scope 下一次成功的最终文字或 reaction 发出后立即删除，这一轮模型 turn 结束时（成功、失败或被放弃）也会全部删除，不轮询、不扫 DB。删除失败或进程被 `SIGKILL` 时可能残留，这是 best-effort UX 的明确边界。可用 `VIKA_IDLE_REACTION_AFTER_MS=0` 关闭 hint。
-- 每个实例有一个角色，决定它是谁、什么时候说话、怎么说：`config.json` 里该实例的 `agents[].role` 填 `colleague`（AI 同事：你的 AI 分身，在工作群里像你一样答疑、跟进，和同事及其他 bot 协作）、`assistant`（个人助理：只为你工作，记事、提醒，主动把值得知道的事告诉你）或 `qa`（答疑助手：在答疑群里查证后把问题讲明白，注意隐私，不接无关话题），也可以填一个 Markdown 文件的绝对路径，用你自己写的角色。`vika setup` 里可以选，选「自己写 prompt」时可以从任一个内置角色复制一份再改。内置角色随版本更新，自己的文件不会被改动；不填就只用内置的默认规则。关于主人和所答产品的信息不写在角色里，agent 会去 OpenViking 查，学到的存回去。改完 `vika restart <实例>` 生效，模型会开一次新会话。
-- 去 AI 味的写作规则默认开启，`agents[].naturalWriting` 设为 `false` 关闭。
-- 实例的开关都在 `vika setup` →修改实例→「其他设置」里：分段回复、自然写作、显式不回复、OpenViking 自动召回、会议纪要入库，逐个切换，保存后重启实例生效；新建实例时用默认值（开自然写作和显式不回复；第一个接飞书的 AI 同事或个人助理还开会议纪要入库），确认页会列出来。也可以直接改 `config.json` 里该实例的同名字段。
-- 会议纪要入库（`agents[].meetingNotes`）：你参加的飞书会议只要开了智能纪要，智能纪要和文字记录会存进该实例 OpenViking 的私有区 `viking://~/resources/meetings/<meeting_id>/`（`note.md` 是会议信息加纪要正文，`transcript.md` 是文字记录，长文另有 `chunks/` 供召回），agent 用 `read_meeting_note` 读全文。做法是定时补扫：实例启动时和之后每 15 分钟，以你的身份查一次最近的会议（第一次往前补 30 天），新会议和还没等到纪要的会议逐个问一下有没有纪要，有就入库；纪要一般在会后 1–4 分钟生成，所以会后大约 15–20 分钟内入库；会议结束 2 小时后还没有纪要就不再问。不订阅任何飞书事件，飞书应用不需要额外配置，入库不叫醒 agent，也不发消息。妙记没有读权限，不存；纪要里链接的文档也不复制，用到时 agent 现读。一台机器上只能有一个实例开这个开关（每个开着的实例都会把每份纪要再存一遍）：新建的第一个接飞书的 AI 同事或个人助理默认开，答疑助手默认关；想换到另一个实例，先在原来那个实例上关掉。状态在 `<dataDir>/meeting-notes/meetings.sqlite3`（每场会一行：waiting/pending/stored/none/skipped/failed）。
-- 显式不回复按实例可选，**默认开启**（`model` 为 `ark` 的实例除外，默认关闭）：`config.json` 里该实例的 `agents[].explicitSilence` 设为 `false` 关闭（或在「其他设置」里关掉），重启实例生效。开启后 Codex/TraeX/Claude/Pi/Durable/OpenCode 不回复时调用 `stay_silent`，每条聊天消息（各 IM 的私聊和群都算）都要有一个决定：投递或 `stay_silent`，记在 SQLite `decisions` 表；一轮结束还没表态的消息会带 `undecided=1` 再给模型一次，只提醒一次。关闭时 prompt、工具和 policyHash 与没有这个功能时完全一样；开关一改，该实例的 policyHash 就变，已存的 native thread 不再 resume；从默认关闭的旧版本升级时，没写这个字段的实例会变成开启，policyHash 随之改变，升级后第一轮开新会话（不想要就写 `"explicitSilence": false`）。Ark（Volc）没有 Core 工具，不支持这个功能：开着开关跑在 Ark 上时，daemon 启动时（以及 `/runtime` 切到 Ark 时）打一条 warn 日志 `explicit_silence_not_applied`。
-- 分段回复按实例可选，**默认关闭**：`agents[].stagedReplies` 设为 `true`（或在「其他设置」里打开）。打开后，能即答的问题仍只回一条；需要真正动手（查日志、读代码、跑命令）的任务，模型先贴 `OnIt` 表情表示在做（微信、Telegram 没有表情，改发一句短话），过程中只在拿到查实的阶段性结论时发消息，最后发一条能单独读懂的最终答复。需要对方确认才能继续时，提问就是这一轮的最终答复，对方的回答作为新消息进来再接着做，多久没回都不算同意。阶段性消息走 `send_message`/`reply_message` 的 `interim: true`：只能是文字、只能发到请求所在的会话（请求在话题里就发在同一话题），不算这个 decision 的最终投递（显式不回复开着时仍要求最后表态），也不会摘掉 `OnIt`。关闭时 prompt 用原来「一个 decision 一次最终投递」的规则，工具也没有 `interim`；开关一改 policyHash 就变。Ark（Volc）没有 Core 工具，不支持，开着跑 Ark 时打 warn `staged_replies_not_applied`。
-- 谁都可以让机器人干活，比如查资料、做行研、写文档。它的 `lark-cli` 只能以机器人或 owner 的身份操作，所以要在别人自己账号里做的事（给对方加日程、加任务、替对方拉会议）它做不了，会礼貌说明，并给出能做的替代，比如把要点整理好让对方自己加。
-- 有人引用回复 agent 自己的消息时，入站行除了 `reply_to=me` 还带 `quote=`：被引用那条消息的开头，隔很久才回的答复也能对上当初的问题。
-- 飞书文档的评论里 @ 机器人（任何能评论的人都可以），或在它回复过的评论里接着回复，都会唤醒它：一篇文档算一个会话（`chat=doc:<类型>:<token>`），一条评论算其中一个话题。机器人先以 bot 身份读出评论正文、所评的原文、这条评论里之前的回复和文档标题，再交给模型；读不到（多半是文档没分享给机器人）也照样唤醒，并写明原因。回答用 `reply_message` 回在这条评论里，只能是纯文本；全文评论和已解决的评论不能回复，就新开一条全文评论并 @ 提问的人。评论区所有能打开文档的人都看得到，按群聊的保密规则处理。评论回复接口没有幂等键，结果不确定时不会自动重发。机器人只收得到分享给它的文档里的评论。
+## Feishu prerequisites
 
-- 某一轮模型调用失败时，daemon 会程序化地引用回复一条失败提示（含真实报错），消息不会无声消失。
-- 模型原地打转时 daemon 会中止这一轮：同一轮里，自上一次真正生效的调用（发出消息、表态、建或删定时器）以来，对同一条输入累计做了 3 次没有任何效果的调用（重复 `stay_silent`、重复发同一条消息、重复建同一个定时器，措辞不同也算；查询类调用不计也不清零），就取消当前 turn，不再等它自己结束。Codex/TraeX/Claude/Pi/Durable/OpenCode 都是原地取消，进程和会话不变；这一轮不发失败提示，卡住期间进来的消息接着在同一会话里处理，这一轮里还没有决定的输入（含邮件等非聊天事件）会再给模型一次：开了显式不回复的带 `undecided=1`，没开的不带标记；同一条第二次又被中止就不再补投，改发失败提示。为此 `decisions` 表在不开显式不回复时也记录最终投递，只用于这个判断，prompt 和工具不变。下一轮开头附一行 daemon 说明为什么中止。同一会话 10 分钟内第二次中止，或者取消后 30 秒这一轮还没结束，就改开新会话并带上近期历史（cognition epoch 不变）。活动面板里记为「已中止原地打转的一轮」。只认没有效果的重复调用；在读文件、跑命令上打转的情况目前不检测。Ark 不经过 Core 工具，不适用。
+Create the app under a phone-registered Feishu account (a free enterprise is created with you as administrator) or an enterprise account. Doubao-signed-in Feishu can create/publish apps but cannot obtain `tenant_access_token` (`code=21001`, access-control rejection). Setup explains and does not save configuration.
 
-Codex/TraeX/Claude/Pi/OpenCode（MCP）与 Durable 的发消息、回复、reaction、撤回都经 Core 的 Agent 工具，统一受 runtime authority、freshness fence、幂等 outbox 与投递账本约束；prompt 禁止它们改用 `lark-cli` 发消息。`lark-cli` 仍以固定 bot profile 留给文档、日历等非消息类操作（auth/config/admin 操作始终禁止）。Self-hosted Ark 例外：官方 Environment Worker 无法访问本机 socket，仍由 Worker 的 bash 调用固定的本地 `lark-cli` 回复，不经过 freshness fence 与 outbox；回复可以完全由工具完成，`end_turn` 不要求再返回 `agent.message`。
+[permission.json](../permission.json) contains the complete feature permission list. Import it through the developer console's permission-management bulk-enable screen; see [official scope guidance](https://open.feishu.cn/document/server-docs/application-scope/introduction?lang=zh-CN). It covers documents, messages, tasks, meetings, and more, not minimum privileges. Restrict scopes and app visibility for production. Review-required permissions take effect only after creating/publishing an app version and administrator approval.
 
-## 飞书前置条件
+The basic messaging path requires:
 
-机器人应用要建在手机号注册的飞书账号（注册时会建一个免费企业，你是管理员）或公司的飞书账号下。用豆包账号登录的飞书能建应用、能发布，但开放平台不给应用发 `tenant_access_token`（`code=21001`，访问控制策略拒绝），机器人收发不了消息；`vika setup` 遇到时会说明原因，不写配置。
+1. A long-connection subscription to `im.message.receive_v1`.
+2. `im:message.p2p_msg` or its corresponding read-only permission.
+3. `im:message.group_msg` for unmentioned group messages; group-at alone does not receive them. Bot-authored messages additionally need `im:message.group_msg.include_bot:read` (or `im:message.group_at_msg.include_bot:readonly` for at-only). Setup requests these when creating the app.
+4. `im:message:send_as_bot`.
+5. `im:chat:read` for the bot's group list.
+6. Group membership and appropriately restricted app visibility.
 
-仓库根目录的 [`permission.json`](../permission.json) 是完整功能权限清单。首次配置应用时，在飞书开放平台进入「开发配置 → 权限管理 → 批量开通」，导入该文件；具体格式和审核规则见 [官方权限申请说明](https://open.feishu.cn/document/server-docs/application-scope/introduction?lang=zh-CN)。清单覆盖 daemon 可调用的文档、消息、任务、会议等完整能力，并非最小权限集；正式环境应按实际用途删减权限、限制应用可见范围。新增的需审核权限只有在创建应用版本、发布并经管理员审核后才会生效。
+### Message access
 
-只运行基础消息链路至少需要：
+Setup asks whether to search/read Feishu messages as your user (`agents[].larkMessageAccess`).
 
-1. 使用长连接订阅 `im.message.receive_v1`。
-2. 私聊消息权限 `im:message.p2p_msg`（或对应只读权限）。
-3. 群聊不 `@` 也要收到消息，需要敏感权限 `im:message.group_msg`；只有 group-at 权限时，平台不会投递普通群消息。要收到群里其他机器人的消息，还需要 `im:message.group_msg.include_bot:read`（只有 @ 权限时对应 `im:message.group_at_msg.include_bot:readonly`）；`vika setup` 建应用时已经申请。
-4. 机器人发消息权限 `im:message:send_as_bot`。
-5. 获取机器人所在群列表权限 `im:chat:read`。
-6. 把机器人加入需要参与的群，并把应用可见范围限制为自己的日常使用范围。
+- **Allow** (default `owner`): the second scan authorizes `search:message`, `im:message:readonly`, `im:message.group_msg:get_as_user`, and `im:message.p2p_msg:get_as_user`. `search_messages` uses your identity; history can use `as: "user"`, including your direct chats and groups the bot has not joined.
+- **Deny** (`bot`): neither scan requests those four user scopes; the app requests bot `search:message` instead. Search/history return only the bot's joined groups and its own direct chats.
 
-### 机器人能读到哪些消息
+Feishu retains previous app grants. Disabling user scopes later blocks history but may leave user-identity search available. The choice therefore follows the app and is asked only for creation/replacement. To restrict a previously allowed app to bot-only conversations, create a new bot. Setup warns if you choose denial for an app previously authorized to read messages.
 
-接飞书时 `vika setup` 会问一次：允许机器人以你的身份搜索和读取飞书消息吗？（`agents[].larkMessageAccess`）
+Document comments additionally require long-connection `drive.notice.comment_add_v1` (included by setup) and sharing the document with the bot. `docs:document.comment:*` scopes are in `permission.json`.
 
-- 允许（默认，`owner`）：第二次扫码授权你的用户身份读消息（`search:message`、`im:message:readonly`、`im:message.group_msg:get_as_user`、`im:message.p2p_msg:get_as_user`），`search_messages` 以你的身份搜，读历史可以带 `as: "user"`，能看到你看得到的全部会话，包括机器人不在的群和你的单聊。
-- 不允许（`bot`）：两次扫码都不申请这四个用户权限，应用改为申请机器人身份的 `search:message`；搜索和读历史都用机器人身份，飞书只返回机器人加入的群和它自己的单聊。
+After upgrades, setup checks every Feishu instance for scopes, message/comment events, card callbacks, and owner authorization. Missing items are shown in the action menu and Feishu app settings. Choose QR repair and save; an owner/admin scan adds missing app configuration, another scan refreshes user authorization if needed, then the instance restarts.
 
-飞书会一直保留你给一个应用授过的权限：之后在开放平台关掉用户身份的权限，读历史会被挡住，但以你的身份搜索仍然有效。所以这个选择跟着应用走，只在新建或换应用时问；选了允许的应用改不回来，要只看机器人所在会话就换一个新建的机器人。选了不允许、但应用以前被你授权过读消息时，扫码后会提示。
+As of lark-cli 1.0.86, no CLI command imports/publishes developer-console scope manifests: `lark-cli application` manages slash commands; `lark-cli apps` manages Miaoda apps. Do not use `auth login` to repair bot scopes; import, publish, and approve in the developer console. User scopes additionally require user OAuth.
 
-要在飞书文档的评论里 @ 机器人，还要用长连接订阅 `drive.notice.comment_add_v1`（`vika setup` 建应用时已经订阅），并把文档分享给机器人；读写评论用到的 `docs:document.comment:*` 权限在 `permission.json` 里。
+The selected local lark-cli profile must exist with bot identity `ready`; user OAuth is needed only for user scopes. The chosen coding CLI (such as `codex` or `traecli`) must be authenticated. The daemon pins its startup profile and does not follow later default-profile changes.
 
-升级后新版本可能要更多权限或事件：`vika setup` 一开始会核对每个接了飞书的实例（应用的权限、接收消息和文档评论两个事件、卡片回调，以及你给它的用户授权）。缺东西的实例在「要做什么」里标出「飞书应用缺 N 项」；进去修改它，「飞书应用」一项会写明缺什么，选「扫码补齐缺的 N 项」再保存，保存时扫一次码补齐应用（你要是应用的所有者或管理员），授权也缺的话再扫一次码重新授权，然后照常重启。不用记任何命令。
-
-截至 `lark-cli 1.0.86`，CLI 没有导入或发布开放平台应用权限清单的命令：`lark-cli application` 只管理 slash command，`lark-cli apps` 管理的是妙搭应用。不要用 `lark-cli auth login` 处理 bot 缺权；bot scope 必须在开发者后台导入、发布并完成审核。清单中的 user scope 还需要对应用户执行 OAuth 登录授权。
-
-本机 `lark-cli` 的目标 profile 必须已配置且 bot identity 为 `ready`；只有使用 user scope 时才需要额外 OAuth 登录。当前选择的本机 agent CLI（例如 `codex` 或 `traecli`）需要已经登录。daemon 会固定启动时选中的 lark profile，不会跟随后续默认 profile 的变化。
-
-## 本地开发验证
+## Local development validation
 
 ```bash
 cd vika
@@ -276,9 +275,9 @@ npm run start:daemon   # 127.0.0.1:3738
 npm run start:web      # 127.0.0.1:3737
 ```
 
-源码目录应使用独立的小工作区，避免测试中的 Codex 改到 daemon 自身。正式安装在 `~/.vika/releases/`，由 Vika 自己的 pm2 托管；每个实例的工作区由 release 之外的持久 manifest 独立配置。
+Use a small, separate agent workspace so test coding agents cannot modify the daemon itself. Installed releases live under `~/.vika/releases/`, managed by Vika's PM2. Persistent manifests outside releases independently configure each workspace.
 
-## 日常运维
+## Operations
 
 ```bash
 vika status
@@ -288,92 +287,94 @@ vika upgrade <instance-id>
 vika upgrade all
 ```
 
-`vika-updater` 监听权限为 `0600` 的本机 Unix socket，不开放 TCP 端口，也不读取 Agent 的源码 checkout。它只接受 manifest 中的 agent id 和 `all`，每次请求都重读 manifest；请求不能传版本、路径、下载地址或 shell。它只装下载地址上 `latest` 指向的已发布版本：核对 SHA-256、用安装包自带的 Node 冒烟检查后才原子切换 `current`，随后从同一份 ecosystem config 滚动目标 daemon，`all` 还会滚动共享 Web，最后从新版本重启自己。相同版本的第二次请求直接复用。整个过程和安装脚本共用同一把 deploy lock。
+`vika-updater` listens on a local Unix socket with mode 0600, not TCP, and never reads the agent's source checkout. It accepts only manifest IDs or `all`, rereading the manifest each time; requests cannot specify versions, paths, download URLs, or shell commands. It installs only the published `latest`, verifies SHA-256 and bundled-Node smoke checks, atomically switches `current`, rolls target daemons from the same ecosystem configuration (`all` also rolls shared Web), then restarts itself. Same-version requests reuse the release. It shares the installer's deployment lock. A published `latest` endpoint is required; see the current pinned-install limitation in [install.md](../install.md).
 
-### 可横向扩展的多 Agent 部署
+### Multiple-agent deployment
 
-OpenViking 是 Vika 的必需组件：setup 新建实例时，会在接入 IM 前列出已检测连接，并始终提供火山引擎 OpenViking 托管服务（只需填 API Key，在 OpenViking 控制台「用户管理 → API Key」获取）、手动填写地址与凭据、导入配置文件的入口，支持远端和自定义端口；验证通过才继续。用 API Key 的服务只按 key 认身份，实例配置里记下的 user 就是这把 key 登录的 user；手动换了地址时不会沿用之前的 Account、User。setup 修改已有实例时，直接进入实例设置菜单，选择与其他配置项并列的 `OpenViking` 才打开连接配置；选择「保存」后生效，返回菜单或放弃修改不覆盖原配置。安装脚本不提问：终端里的首次安装直接进入 setup 配置 OV；其余安装（已有实例、`--no-setup` 或无终端）要求 OV 已经可用，否则不切换版本。daemon 启动时 OV 拒绝配置或凭据会退出；只是暂时连不上则先不带历史启动，恢复后自动同步。每个实例必须提供独立的 `ovConfig`。配置中的 `agents[].ovAutoRecall` 是布尔值，默认 `false`；改为 `true` 后由 daemon 自动召回，所有 runtime 一样：私聊、@ 到它的群消息、文档评论和邮件等聊天以外的事件，在交给 runtime 前按发送者检索 OV（最多约 3 秒，失败或超时就不带召回），结果附在那一行后面，每条用 `who=` 标明是主人自己的、当前发送者的，还是别人的；发送者在 OV 里有 profile 时放在最前。`agents[].ovRecallScope` 默认 `"all"`（检索所有人的记忆，当前发送者的排在前面），面向外部人员、彼此的记忆不能互相看到的实例填 `"actor"`（只检索当前发送者和主人自己的）。对话只由 daemon 的 session 历史同步写进 OV，Vika 启动的 runtime 里插件的自动召回、自动 capture、compact 时 commit 和 Pi 压缩接管都关闭，不受该开关影响。修改后重启实例生效。
+OV is required. Before IM onboarding, setup lists detected connections and always offers Volcengine managed OV (API key from the OV console's User Management → API Key), manual URL/credentials, and file import, including remote/custom ports. API-key services derive identity from the key; manually changing the address does not reuse old Account/User fields. Editing an instance opens its settings directly; select OpenViking to edit and save to apply. Backing out/discarding preserves old configuration. The installer does not prompt: first interactive installation enters setup; other installs require OV before switching. Rejected startup credentials cause exit; temporary outages allow history-free startup and later sync.
 
-新建实例的连接列表来自环境变量指定的配置、Vika 保存的连接和 OpenViking CLI 配置，不列出其他实例的配置；修改实例时额外提供该实例当前的配置。选定连接后，新实例会生成自己的配置文件，并且是 OV 里一个独立的 user：请求自带身份的服务（dev、Trusted）用「连接的 User.实例 ID」（如 `weihan.liu.asd`，连接没有 User 时就是实例 ID）；API Key 服务按 key 认身份，这把 key 已被其他实例或 OpenViking 命令行使用时，要明确选择共用（记忆不隔离）或换一把，用管理员 Key 时还可以为实例新建 user（管理员 Key 不保存）；同一次 setup 里退回重选会复用已创建的 user，setup 结束时（保存、取消或出错）会删掉创建了但没用上的 user，删不掉的会提示管理员处理。实例配置不带 peer：peer 是 agent 交互的对象，由 daemon 按消息标注。已有配置指向本机默认地址时，不再重复进行无身份探测。Trusted 模式需要填写 Account 和 User；缺少这些字段会提示服务已启动但需要配置身份，补齐后通过身份检查才能继续。
+Each instance requires separate `ovConfig`. Vika owns OV memory for every runtime: only the daemon's session sync writes the conversation, each line naming its speaker in `from=`, with no peers; extraction keeps profile, entities, and events, each event once. Preferences are written only by `openviking_remember`, into the sender's own directory (`memories/preferences/owner/` for the owner, `<name>~<id>/` for anyone else); the owner's preferences are the agent's standing rules. Before forwarding direct chats, mentioned group messages, document comments, and non-chat events such as mail, the daemon attaches the owner's preferences and the sender's (about three seconds; failures/timeouts skip them). Boolean `agents[].ovAutoRecall` (default `false`) adds one semantic search on the line; results follow it with `who=` naming the owner, the sender, or another person. Extraction never changes the agent's own name or role: those come from configuration, and when someone else asks it to change how it behaves for everyone, or how it treats another person, it asks the owner first. Runtimes Vika starts do not load their own OpenViking plugins. Restart to apply changes.
 
-运行中 OV 请求失败不会退出 daemon，也不主动向聊天发送故障通知。新原生会话可跳过 OV 历史继续处理消息；本地同步账本保留，后台恢复后重试。已有会话不会在恢复后突然补入历史；下次新会话可再次读取 OV。归档完整性错误仍会阻止不完整的历史交接，不回退到 SQLite 回放。
+Core provides `openviking_*` tools with identical names, schemas, and behavior for every local runtime (Codex/TraeX/Claude/Pi/Durable/OpenCode) through the same ActionService: `openviking_find` / `openviking_search` (retrieval; a person's preference says whose it is), `openviking_read` / `openviking_list` (read and browse `viking://`), `openviking_add_resource` (asynchronously import a URL or workspace file someone asked to keep, by default into the private `viking://~/resources/inbox`, never into the daemon's mail, meeting-note, timer, memory, or session trees), and `openviking_remember` (when someone states how they want to be treated, asks that something about them stay private, or changes or withdraws such a wish, store, replace, or remove that preference by topic; the Core decides whose it is from the message's real sender, the model gives only topic and words). Ark (Volc) has no Core tools and is the only exception.
 
-每个 Agent 是独立 daemon 进程，不是另一个 Agent 的子 agent；manifest 可以增加多个 daemon，它们共享一份 release、Web 和 updater。唯一配置源是 JSON manifest，完整格式见 [`config.example.json`](../config.example.json)。顶层字段是 `version`、`defaultInstance`、`env`、`agents`；每个 agent 必须完整提供 `id`、`displayName`、`profile`、`port`、`dataDir`、`workspace`、`ovConfig`、`model`，可用 `channel` 选择 `lark` 或 `weixin`，省略时默认 `lark`。
+New-instance connection lists include environment-selected, saved Vika, and OV CLI configurations, not other instances' configurations; editing additionally shows that instance's current connection. New instances create their own OV file and user identity. Request-identified dev/Trusted services use `<connection-user>.<instance-id>` or just the ID without a connection user. API-key services identify by key: if already used by another instance or CLI, explicitly choose shared memory or another key. An admin key can create a new user without being saved. Backtracking reuses newly created users; setup completion/cancellation/error deletes unused created users, reporting cleanup failures for administrators. Instance configuration has no peer, and the daemon attaches none. An existing default-local connection avoids repeated anonymous probing. Trusted mode requires Account and User and cannot proceed until identity checks pass.
 
-`env` 是所有 daemon 共用的运行参数，只认示例中列出的 key，所有 JSON value 都必须是字符串（包括布尔值和数字；空字符串允许）。同名系统进程环境变量优先于 manifest `env`，可用于临时覆盖。Agent identity、channel、Lark profile、端口、dataDir、workspace、OV config、model，以及 Web/updater 控制面字段不能放进 `env`；未知或保留的 key 会被丢弃，不会传给任何进程。每个 agent 的 `profile` 会同时固定注入 `VIKA_LARK_PROFILE` 和 `LARKSUITE_CLI_PROFILE`；没有接入飞书的实例，其 Agent 子进程不会继承这两个飞书变量。
+Runtime OV failures do not exit the daemon or proactively notify chats. New native sessions can skip history; the local sync ledger remains for retry. Existing sessions do not suddenly receive recovered history; a later new session can load it. Archive-integrity errors still block incomplete handoff rather than replaying SQLite history.
 
-manifest 里当前版本不认识的字段（顶层、agent、`env` 等任何一层）会被忽略：daemon 启动日志记 `config_fields_ignored`，`vika status` 和 `vika setup` 会列出这些字段，所以旧版本写的配置升级后照样能起来。已知字段仍严格校验：启动 preflight 拒绝相对路径、非法 id/端口，以及重复的 id、profile、port、dataDir、workspace、OV config；任意 agent 的 dataDir/workspace 互相嵌套也会拒绝。ecosystem 据此生成全部 `vika-<id>`、Web routes 和 updater allowlist，每个 daemon 都被固定注入自己的 Lark profile、CLI profile、数据、工作区、OV 和 model。
+Each agent is an independent daemon, not another agent's subagent. The manifest is the sole configuration source; see [config.example.json](../config.example.json). Top-level fields are `version`, `defaultInstance`, `env`, and `agents`. Instances provide `id`, `displayName`, `port`, `dataDir`, `workspace`, `ovConfig`, `model`, and `profile` when using Feishu. `channel` defaults to `lark`; connector-specific examples above describe other channels.
 
-`npm run start:daemon` 默认运行 `defaultInstance`；临时前台跑另一只可设置 `VIKA_INSTANCE_ID=<id>`。添加、删除 agent，或修改 id/port 等 topology/allowlist 时，先保存 manifest，再执行 `vika upgrade all`（或 `vika start <新实例>` 加 `vika restart web`）。`upgrade all` 在新拓扑全部验活后，会删除同一受管 release 中已不在 manifest 的旧 daemon PM2 app，不删除数据目录，也不触碰外部同名前缀进程。若重命名 id 时还要立即复用旧端口，先核对旧 app 的 executable 确属本部署，再精确 stop/delete 旧 app；代码不提供 alias 或 migration。普通 daemon 代码升级仍用 `vika upgrade <id>`。
+Shared `env` accepts only listed keys and string JSON values, including numeric/boolean settings (empty strings are allowed). Process environment values take precedence. Identity, channel, profile, port, directories, OV/model, and Web/updater control fields do not belong in `env`; unknown/reserved keys are discarded. Feishu `profile` fixes both `VIKA_LARK_PROFILE` and `LARKSUITE_CLI_PROFILE`; non-Feishu agent children do not inherit either.
 
-删除实例也可以运行 `vika setup`，选择「删除一个实例」，选定后确认（默认取消）。setup 会移除实例配置和对应的受管 PM2 进程、保存进程列表，并刷新控制台；工作目录、历史数据、登录凭据、OpenViking 记忆和各平台的机器人均保留。删除默认实例时，可选择新的默认实例（只剩一个时自动选用）。删除最后一个实例时，也会移除 Web 和 updater 进程，将配置备份到原路径加 `.bak` 后移走原文件，下次 `vika setup` 可重新新建实例。部署或升级进行中不能删除；进程删除失败时保留配置，可修好后重试。
+Unknown manifest fields at any level are ignored and reported in `config_fields_ignored`, status, and setup, allowing older configuration to start. Known fields remain strict: relative paths, invalid IDs/ports, duplicate IDs/profiles/ports/directories/OV files, and nested dataDir/workspace pairs are rejected. The ecosystem creates `vika-<id>` apps, Web routes, and updater allowlists with fixed per-instance settings.
 
-代码升级先由维护者发布新版本（见 install.md），再调用 `vika upgrade <instance-id>`。升级承载当前 turn 的自身进程也由 updater 继续完成，但当前 CLI/模型连接可能随进程退出，结果应用 `/status` 或本机 health check 验收。
+`npm run start:daemon` uses `defaultInstance`; `VIKA_INSTANCE_ID=<id>` selects another for foreground development. After topology changes, save the manifest and run `vika upgrade all`, or `vika start <new-instance>` plus `vika restart web`. After all new apps are healthy, `upgrade all` removes obsolete apps from the same managed release without deleting data or touching unrelated prefix-matching processes. To reuse an old port immediately after an ID rename, verify executable ownership and stop/delete that exact old app; there is no alias/migration mechanism. Ordinary code upgrades use `vika upgrade <id>`.
 
-## Activity 页面
+Setup deletion defaults to cancellation. It removes the instance configuration and managed PM2 app, saves the process list, and refreshes Web, retaining workspaces, history, credentials, OV memory, and platform bots. Choose a new default if needed; the sole remaining one is automatic. Deleting the last instance removes Web/updater, backs up config to `.bak`, and removes the active file. Deletion is blocked during deployment/upgrades; process-removal failure retains configuration for retry.
 
-定时任务通过 `finish_timer_occurrence` 交付最终结果并结束本次执行：传入 `occurrence_id` 和 `delivery: { tool, input }`，复用 `send_message`、`reply_message` 或 `notify_owner`，确认发送成功后由 Core 标记完成。按任务条件无需发送时，不传 `delivery`，填写 `reason`，本次直接完成。需要询问主人或发送中间进度时仍用普通发送工具，不结束本次任务。发送失败、结果不确定或 dry-run 模拟发送不会标记完成；完成后停止本次检查提醒，不取消后续定时触发。完成结果及无需发送的原因保留在活动账本中。
+Maintainers must publish code before `vika upgrade <instance-id>`. The updater can finish a self-upgrade after its caller exits, but the current CLI/model connection may be lost. Verify through `/status` or local health afterward.
 
-定时任务及执行检查默认存到当前实例的 OV：`viking://~/resources/vika/<agents[].id>/timers-state.json`。`~` 由 OV 按实际认证用户展开；每个实例使用自己的 OV 用户时自然隔离，主动共用 OV 用户的实例仍由 id 分目录。复用实例的 `ovConfig` 和 id，启动时加载，仅在状态变化时写回。写入等待 OV 后台处理完成，再执行串行队列中的下一次修改。设置 `VIKA_TIMER_STORAGE=sqlite`（也可放在配置的 `env` 中）可使用原有本地 SQLite；其它数据仍保存在本地，不自动迁移两种存储之间的数据。OV 暂时不可用时机器人继续收发消息，定时器后台重试加载；恢复前定时器操作明确报暂时不可用，不会用空状态覆盖远端或静默切换到 SQLite。
+## Activity page
 
-耗尽的执行检查从最后保存的检查时间起保留 7 天，超过期限自动清理（OV 和 SQLite 均适用）；即使没有活跃定时器也会执行清理。清理后该 occurrence 不再接受完成调用。OV 当前仍会为状态文件建立索引，`vectors_only` 不表示关闭索引。
+Timers complete through `finish_timer_occurrence` with `occurrence_id` and optional `delivery: { tool, input }`, reusing `send_message`, `reply_message`, or `notify_owner`. Core marks completion only after confirmed sending. If no message is needed, omit delivery and provide `reason`. Ordinary messages can ask the owner or report progress without completing the occurrence. Failed/uncertain/dry-run sends do not complete it. Completion ends this occurrence's checks, not future timer triggers, and the activity ledger retains results/reasons.
 
-同一用户下的同一个实例只在一台机器运行。跨机器迁移时先停止旧机器上的实例，再用相同的 `ovConfig` 和实例 id 启动新机器；不支持两台机器同时读写同一份定时器状态。
+Timers and occurrence checks default to the instance's OV at `viking://~/resources/vika/<agents[].id>/timers-state.json`. OV expands `~` using authenticated identity; separate OV users isolate instances, while intentional user sharing still separates IDs. State loads on startup and writes only on changes, awaiting background processing before the next queued mutation. `VIKA_TIMER_STORAGE=sqlite`, also available in manifest `env`, selects legacy local storage. Other data stays local; no automatic migration occurs. During OV outages, messaging continues while timer loading retries; timer operations report unavailability and never overwrite remote state with an empty snapshot or silently fall back.
 
-定时任务不保证最终消息只发送一次（exactly-once）。消息发送和 OV 完成状态写入不是一个事务；发送成功但完成状态未保存时，后续检查或跨机器恢复可能再次投递。
+Exhausted occurrence checks expire seven days after their last saved check time in either backend, even without active timers. Removed occurrences reject completion calls. OV still indexes the state file; `vectors_only` does not disable indexing.
 
-OV 写入只以写请求成功响应为准。失败或超时时，在同一串行队列内重试同一份状态，最多 3 次；全部失败则向 AI 报错，不回读内容来判定成功。失败后，后续修改和定时执行必须先成功加载 OV 当前状态，不能用旧内存状态覆盖远端。调度器会继续检查，恢复后重新安排执行。
+Run a given instance under a given OV user on only one machine. Stop the old machine before moving the same identity/ID to another; concurrent writers are unsupported.
 
-主动调用 `cancel_timer` 会删除任务及其全部执行检查记录，停止后续触发和 heartbeat 补提醒；任务已经自然结束时，也可按原 timer id 清理剩余检查。一次性任务触发后或达到次数上限时，只移除任务，保留最后执行的完成检查。取消不会自动中断已经交给 AI 的执行。
+Timers do not guarantee exactly-once final delivery: sending and saving OV completion are not one transaction, so a successful send with unsaved completion can be delivered again after checks or migration.
 
-打开 [http://127.0.0.1:3737/](http://127.0.0.1:3737/) 可以查看本机活动账本：消息是否收到、Agent 每一轮做了什么（思考、工具调用）、选择了哪种投递方式，以及发送是否成功。
+OV writes rely on successful write responses. Failed/timed-out writes retry the identical state within the serial queue, at most three times; failure is reported without read-back to infer success. Subsequent mutation/execution must first reload OV successfully rather than overwrite it from stale memory. Scheduling keeps checking and resumes after recovery.
 
-页面没有登录，只监听本机。Vika 跑在服务器上时，用 SSH 端口转发在自己电脑上打开：`ssh -L 3737:127.0.0.1:3737 <服务器>`。
+`cancel_timer` removes the timer and all occurrence checks, stopping future triggers and heartbeat reminders. It can also clear checks for a naturally ended timer. One-shot or count-exhausted timers remove the schedule but retain the final occurrence check. Cancellation does not interrupt work already handed to the model.
 
-- 默认进入当前认知会话。`/new` 开启新的认知会话；`/runtime` 更换原生 session，但保留认知会话；同一 runtime 的 `/model` 和 `/effort` 保留原生 session 和认知会话，下一轮生效。顶栏可切换历史会话，或查看全部会话的完整账本。
-- 下方是按轨道排列的时间轴（回合 / 消息 / 助手 / 投递 / 命令 / 系统）；上方详情列表与播放头双向同步。
-- 失败保留在原时间位置并标红；没有“需要处理”队列。
-- 历史会话不跟随实时更新，可一键回到当前会话；当前会话在拖离尾部后可回到最新。
-- 页面每 4 秒在本机刷新一次；没有外部资源或云端服务。
+Open [http://127.0.0.1:3737/](http://127.0.0.1:3737/) for received messages, model turns (reasoning/tools), delivery decisions, and outcomes. It has no login and listens locally only. For remote servers, use `ssh -L 3737:127.0.0.1:3737 <server>`.
 
-这些活动作为保留历史的事件账本写入同一个 SQLite；普通状态清理不会删除 activity。监听启动记录在新进程接管或正常停止时会收口，因此历史启动仍可见，但只有当前监听显示“进行中”。网页 API 只返回脱敏后的来源/会话引用、认知 epoch 和裁剪后的正文，不暴露飞书 message/chat ID、Codex/TraeX/Claude/Ark session、幂等键或 raw event。
+- The current cognitive session opens by default. `/new` creates a new cognitive session; `/runtime` changes native session but preserves cognition. Same-runtime `/model` and `/effort` preserve both and apply next turn. The top bar selects history or the complete ledger.
+- A lower timeline separates turns, messages, assistant, delivery, commands, and system tracks; details and playhead synchronize.
+- Failures remain red at their original time; there is no separate action queue.
+- Historical views do not live-follow; return to the current session or latest position explicitly.
+- The local page refreshes every four seconds, using no external resources or cloud service.
 
-## Runtime 模块边界
+Activity events persist in the same SQLite ledger and are not deleted by ordinary state cleanup. Listener records close on process takeover or normal shutdown, retaining historical starts while only the current listener appears active. Web APIs return redacted source/session references, cognitive epochs, and clipped bodies, not Feishu chat/message IDs, native session IDs, idempotency keys, or raw events.
 
-daemon 和 slash commands 只通过 `AgentRuntime` 的 `start`、`submit`、`snapshot`、`transition`、`stop` 接口控制模型。`runtime-catalog` 统一 model alias、effort 与 capability；`runtime-adapter` 把 Codex、TraeX、Claude、Pi、Durable、OpenCode、Ark 的 transport lifecycle 归一；`runtime-input` 生成认证过的输入 envelope。具体 Adapter 只保留协议差异：Codex JSON-RPC、Claude stream-json、Pi RPC JSONL、Durable host JSONL、OpenCode ACP nd-JSON、Ark Sessions/SSE。Self-hosted Ark 的输出和工具执行归 Worker/runtime 所有。`submit` 返回 `accepted: false` 时 caller 仍持有整批消息；返回 `accepted: true` 后 ownership 才交给 runtime。
+## Runtime boundaries
 
-### Runtime 工具接入
+The daemon and slash commands control models only through `AgentRuntime.start`, `submit`, `snapshot`, `transition`, and `stop`. `runtime-catalog` centralizes aliases, efforts, and capabilities; `runtime-adapter` normalizes transports; `runtime-input` creates authenticated envelopes. Adapters retain protocol differences: Codex JSON-RPC, Claude stream-json, Pi RPC JSONL, Durable host JSONL, OpenCode ACP nd-JSON, and Ark Sessions/SSE. Self-hosted Ark output/tool execution belongs to Worker/runtime. `submit` with `accepted: false` leaves the batch with the caller; ownership transfers only on true.
 
-随包 CLI 的发现由 `packages/daemon/src/agent-clis.mjs` 统一登记，目前包括 `lark-cli` 和官方 Slack CLI（命令名 `slack`）。Codex/TraeX/Claude/Pi/Durable/OpenCode 的子进程 PATH 优先加入这些 CLI 的目录，系统提示词同时列出实际命令路径；安装 release 或源码执行 `npm run setup` 后，无须全局安装或手工修改 PATH。`LARK_CLI_BIN` / `SLACK_CLI_BIN` 覆盖会同时用于 PATH 和提示词，改名及含空格的路径使用经过 shell 转义的实际命令；相对路径以 Vika 包根目录解析。消息投递、profile 和连接器凭证的边界不变，Slack bot token 仍由 Connector 管理。
+### Runtime tools
 
-以后接入新的随包 CLI，在完成固定版本安装后向该清单添加命令名、二进制路径及版本检查参数，即可复用所有本地 runtime 的 PATH、发现提示词和 release 冒烟检查，无须用户额外设置。`node packages/daemon/scripts/check-agent-clis.mjs` 在临时 HOME、独立工作目录和干净 PATH 中检查 sh/bash 能否找到并执行所有登记的 CLI；release 构建会自动运行。
+`packages/daemon/src/agent-clis.mjs` registers bundled lark-cli and official Slack CLI (`slack`). Codex/TraeX/Claude/Pi/Durable/OpenCode children prepend their directories to PATH, and prompts list actual command paths. Releases and source `npm run setup` need no global installation or manual PATH changes. `LARK_CLI_BIN` / `SLACK_CLI_BIN` affect both discovery and prompt paths; renamed/spaced paths are shell-escaped and relative paths resolve from the Vika package root. Messaging, profile, and credential boundaries remain unchanged; the Slack Connector retains its token.
 
-Pi 作为精确版本的 npm 依赖随 release 安装和升级，默认不使用全局 `pi`。daemon 通过会话扩展注册 `personal_agent` MCP（`direct` exposure），不修改用户的 MCP 配置；工具未加载成功则启动失败。Codex/TraeX/Claude/Pi/Durable/OpenCode 共用 conversation policy，不再保留 Pi 的 Bash/CLI 工具教程。安装和模型登录见 [install.md](../install.md)。
+Registering another pinned bundled CLI requires its name, binary path, and version-check arguments to reuse local-runtime discovery and release smoke checks. `node packages/daemon/scripts/check-agent-clis.mjs` checks sh/bash discovery/execution with temporary HOME, separate workspace, and clean PATH; release builds run it automatically.
 
-Durable 基于 pi-durable，同样作为精确版本的 npm 依赖随 release 发布。daemon 管着一个 host 子进程，它把对话、模型轮次和工具调用先写进 `<dataDir>/durable/session.sqlite`，一轮中途进程退出时，重启后从最后的检查点接着跑完。模型复用 Pi 的 `~/.pi/agent` 配置（也认 provider 的 API key 环境变量），Agent 工具由 host 直接从 `actions.sock` 注册，另带 pi-durable 的 `bash`、`read`、`write`、`edit`。协议、模型选择顺序和恢复机制见 [Durable runtime](../docs/pi-durable-runtime.md)。
+Pi is an exact-version npm dependency, not global `pi` by default. Its session extension registers `personal_agent` MCP with `direct` exposure without editing user MCP configuration; failed loading prevents startup. Local runtimes share conversation policy rather than a Pi-specific Bash/CLI tutorial. See [installation](../install.md) for authentication.
 
-Agent 工具只有一份定义与实现，在 Core 的 `ActionService`。Codex/TraeX/Claude/Pi/OpenCode 均挂本机 stdio MCP 适配器（`actions/mcp.mjs`），Durable 的 host 用同一个 socket 客户端（`actions/client.mjs`），统一转发到 `<dataDir>/actions.sock`，runtime 子进程经 `PERSONAL_AGENT_SOCKET` / `PERSONAL_AGENT_AUTHORITY` 拿到地址和运行权。Self-hosted Ark 使用 Worker 的 bash 调用固定 `lark-cli`，因为 Worker 不在 daemon 的进程树里。Ark 的调用发生在官方 Environment Worker 进程里；Worker 是唯一工具执行面，也只有这条路径能在同一个原生 turn 中多次调用 Environment 内的 CLI。daemon 只观察远端 `agent.tool_use`、`user.tool_result` 与最终状态。云沙箱的严格 JSON Tool Call bridge 已移除；理论上可把 CLI credential 同步到云沙箱重建类似链路，但这不是当前支持或建议的接入方式。Ark 的直接 CLI 路径使用稳定幂等键，但不经过 daemon 的 authority/freshness 与 outbox，因此其可靠性边界与其他 runtime 不同。
+Durable is also pinned and bundled. Its host journals conversations, model turns, and tool calls in `<dataDir>/durable/session.sqlite`, resuming checkpoints after interruption. It reuses `~/.pi/agent` configuration and provider API-key environment variables. The host registers Agent tools directly through `actions.sock`, alongside pi-durable `bash`, `read`, `write`, and `edit`. See [Durable runtime](pi-durable-runtime.md) for model precedence and recovery.
 
-## 可靠性边界
+Agent tools have one definition/implementation in Core `ActionService`. Codex/TraeX/Claude/Pi/OpenCode use stdio `actions/mcp.mjs`; Durable uses `actions/client.mjs`; both forward to `<dataDir>/actions.sock` with `PERSONAL_AGENT_SOCKET` / `PERSONAL_AGENT_AUTHORITY`. Self-hosted Ark's official Environment Worker instead invokes fixed lark-cli through bash because it is outside the daemon process tree; only this Worker path can invoke Environment CLIs repeatedly within one native turn. The daemon observes `agent.tool_use`, `user.tool_result`, and final status. The cloud sandbox strict JSON Tool Call bridge was removed. Synchronizing CLI credentials to a cloud sandbox is not a supported or recommended replacement. Ark's CLI path uses stable idempotency keys but bypasses daemon authority/freshness/outbox and has different reliability limits.
 
-- 消息先写 SQLite（状态直接 DONE），再喂给当前常驻 runtime。Codex/TraeX 用 `turn/start` / `turn/steer`，Claude 用 persistent stream-json input，Durable 的 host 先把输入写进 pi-durable 的 SQLite 再请求模型，火山方舟用 session events + SSE，并在断线后以 event history + event id 去重补洞。Ark 会持久化本轮 `user.message` fence；daemon 重启后从远端历史恢复已接受的 turn，不会重复 POST。若 POST 是否被接受无法证明，旧 session 会被持久化隔离，克隆新 session 并原子轮换 epoch/authority 后才恢复队列，避免迟到输出串到下一条消息。
-- 400ms 群聊窗口只做 transport batching，不创建 chat 专属的 Codex session、history 或 memory。进程在窗口内停止或崩溃，仍可能让已落库消息没来得及喂给 Codex；这版没有加入 durable replay 或 delivery ledger。
-- slash command 和后续消息经过同一条全局 ingress barrier，但命令本身不等待模型；只读命令并行回答，会话变更命令先中断旧 turn。会话变更先 prepare 新 session，再用一次 SQLite CAS 原子提交 epoch、session、authority 与 model 设置，最后做不可失败的本地 activation；prepare 或 CAS 失败时旧认知状态不变。跨 runtime switch 同样先 preflight 目标进程再交接，目标启动失败时仍留在旧 runtime。`/model` 和 `/effort` 只保存当前 runtime 的模型和推理档位，不中断当前 turn、不更换会话；下一轮开始时 Codex/TraeX 按轮传参、Pi 调用 `set_model` / `set_thinking_level` RPC、Claude 换进程后恢复同一个 session，应用成功后才投递输入。重复设置当前模型或档位不做变更。
-- SQLite 保留 active runtime/session、投递幂等账本和 OV 同步 outbox。跨 runtime 的历史上下文只来自 OV session 的近期原始消息，更早的由模型按需查 OV archive 里的原始消息；较旧的 OV（包括火山托管服务）默认会为每个归档生成 Working Memory 摘要，Vika 不改 OV 的这项设置，只是从不使用它；同一 native session 继续使用原生 compaction。OV 不可用或返回异常时新 session 不带历史继续，不回放本地 journal。详见 [OV session context](../docs/ov-session-context.md)。
-- 收到的每条消息压缩成一行 `[chat=… msg=… event=… time=… from=…] 正文`；`chat=`/`msg=`/`event=` 为完整 id（作为工具参数使用），thread 后缀与 `from=` 为短 stub。`msg=` 是回复目标，`event=` 是 `decision_id`；日历、issue 等非聊天事件没有 `msg=`，同样用 `event=` 发通知。新线程首轮注入跨聊天历史，以 `--- history above, new messages below ---` 分隔。
-- Codex/TraeX/Claude/Pi/Durable/OpenCode 通过 Core 的 Agent 工具执行消息动作。
-- raw 飞书事件不会整包落库，避免保存事件 header 中的 token；正文只为会话上下文保留。
-- Activity 账本保留脱敏后的短摘要（含收消息、turn 开始/结束、steer、agent 输出）；老记录由网页折叠，不因业务表的清理而消失。
-- 单个 turn 没有总时长 watchdog；Codex/TraeX/Claude 若长时间不结束一轮，该轮会一直 active。
+## Reliability limits
 
-当前固定为 raw 事件、text 回复；不支持 compact 订阅。富文本 post 中的图片会作为 image_key 资源引用解析，不解析 markdown 图片语法。
+- Messages first enter SQLite as DONE, then the resident runtime. Codex/TraeX use `turn/start` / `turn/steer`; Claude uses persistent stream-json input; Durable journals before model invocation; Ark uses session events/SSE and event-history/event-ID gap recovery. Ark persists its `user.message` fence and restores accepted remote turns without duplicate POST after daemon restart. If acceptance is uncertain, the old session is quarantined, a new one cloned, and epoch/authority atomically rotated before the queue resumes, preventing late output from crossing turns.
+- The 400 ms group window batches transport only; it creates no chat-specific native session/history/memory. A crash in the window can leave persisted messages undelivered to the runtime. This version adds no durable replay/delivery ledger for that gap.
+- Slash commands and subsequent input share an ingress barrier, but commands do not wait for the model. Read-only commands reply concurrently; session changes interrupt the old turn, prepare a new session, atomically CAS epoch/session/authority/model in SQLite, then perform non-failing local activation. Failed preparation/CAS preserves cognition. Cross-runtime switches preflight the destination before handoff. Model/effort changes save settings without interrupting or replacing sessions, applying next turn: Codex/TraeX per-turn parameters, Pi `set_model` / `set_thinking_level` RPC, Claude process replacement resuming the same session. Input is delivered only after successful application. Repeating current settings is a no-op.
+- SQLite retains active runtime/session, idempotency ledger, and OV sync outbox. Cross-runtime context comes only from recent raw OV session messages, with older raw archives queried on demand. Older OV services, including managed services, may generate Working Memory summaries; Vika neither changes that setting nor uses those summaries. Native sessions retain native compaction. OV failures allow new sessions without history, never replaying the local journal. See [OV session context](ov-session-context.md).
+- Input is one line, `[chat=… msg=… event=… time=… from=…] body`. Full chat/message/event IDs serve as tool arguments; display-name/thread representations may be shortened. `msg=` identifies the reply target and `event=` the decision. Non-chat inputs may lack `msg=` and still use `event=` for notifications. New sessions receive prior cross-chat history separated by `--- history above, new messages below ---`.
+- Local runtimes use Core Agent tools for messaging.
+- Raw Feishu events are not stored wholesale, avoiding header tokens; bodies are retained for context.
+- Activity retains redacted short summaries of input, turns, steering, outputs, and delivery. Old entries fold in the UI rather than disappearing with business-table cleanup.
+- There is no total-turn watchdog; a long-running Codex/TraeX/Claude turn can remain active indefinitely.
 
-## 飞书端验收
+Subscriptions use raw events, not compact mode. Rich-text post images become image-key resource references; Markdown image syntax is not parsed.
 
-1. 私聊发一个明确任务，应执行并回复。
-2. 私聊只发“收到，谢谢”，应保持静默。
-3. 群里不 `@` 发一个尚未解决的问题；Agent 有增量价值时回复。
-4. 群里发闲聊或人与人的对话，应保持静默。
-5. Codex/TraeX 空闲时，在同一群聊或话题里快速连发一条任务和一条纠正（间隔小于 400ms）；两条应进入同一个 `turn/start`，最终回复采用纠正后的要求。
-6. Codex/TraeX/Claude 思考时立即补一句纠正；该补充会 steer 进同一轮。
-7. 私聊要求 Agent 向另一个已加入群发送测试消息；Agent 应先解析群名，再通过专用工具发送，并在当前私聊确认结果。
+## Feishu acceptance checks
+
+1. A clear direct-chat task should execute and receive a reply.
+2. A direct-chat acknowledgment such as “Received, thanks” should remain unanswered.
+3. An unresolved group question without a mention may receive a reply when the agent adds value.
+4. Chatter or conversations between people should remain unanswered.
+5. While Codex/TraeX is idle, send a task followed by a correction in the same chat/thread within 400 ms. Both should share `turn/start`, and the reply should follow the correction.
+6. While Codex/TraeX/Claude is thinking, send a correction; it should steer into the same turn.
+7. In a direct chat, request a test message to another joined group. The agent should resolve its name, send through the dedicated tool, and confirm in the original chat.
