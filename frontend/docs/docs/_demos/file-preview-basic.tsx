@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
-import type { FilePreviewTab } from '@openviking/react/components/file-preview';
+import type {
+  FilePreviewActions,
+  FilePreviewTab,
+} from '@openviking/react/components/file-preview';
+import { getFileTypeIcon } from '@openviking/react/icons';
 import '@openviking/react/components/file-preview/style.css';
 
 /**
@@ -19,6 +23,8 @@ Compile heterogeneous knowledge sources into durable, connected knowledge.
 ## Objective
 
 Turn the supplied sources into reusable pages instead of a pile of summaries.
+
+See [the compile notes](viking://system/compile/notes.md) and [a relative page](./sibling.md).
 `,
     dashboard:
       'A content tab renders whatever the host passes — a dashboard, a graph, a summary. The component does not know what it is.',
@@ -26,18 +32,23 @@ Turn the supplied sources into reusable pages instead of a pile of summaries.
     hint: 'Switch tabs, copy the path or the content, or toggle preview and source.',
     contentCopied: 'Content copied',
     pathCopied: 'Path copied',
+    permissionTag: 'Can manage',
     parentOpened: (path: string) => `Simulated parent navigation: ${path}`,
+    linkOpened: (uri: string) => `Simulated link navigation: ${uri}`,
     saved: 'Content saved',
     cancelled: 'Editing cancelled',
     previewLabel: 'File preview',
     labels: {
-      copyContent: 'Copy content',
       copyPath: 'Copy path',
+    },
+    // 动作按钮由示例自己渲染，文案也归示例，不经过组件的 labels。
+    actions: {
+      copyContent: 'Copy content',
+      preview: 'Preview',
+      source: 'Source',
       edit: 'Edit',
       save: 'Save',
       cancel: 'Cancel',
-      preview: 'Preview',
-      source: 'Source',
     },
   },
   zh: {
@@ -48,6 +59,8 @@ Turn the supplied sources into reusable pages instead of a pile of summaries.
 ## 目标
 
 把素材变成可复用的页面，而不是一堆摘要。
+
+参见 [编译说明](viking://system/compile/notes.md) 与 [同目录页面](./sibling.md)。
 `,
     dashboard:
       '内容页签原样渲染宿主传入的节点——可以是看板、图谱或摘要，组件不关心它是什么。',
@@ -55,18 +68,22 @@ Turn the supplied sources into reusable pages instead of a pile of summaries.
     hint: '切换页签、复制路径或正文，或在预览与源码之间切换。',
     contentCopied: '正文已复制',
     pathCopied: '路径已复制',
+    permissionTag: '可管理',
     parentOpened: (path: string) => `已模拟跳转到上级：${path}`,
+    linkOpened: (uri: string) => `已模拟打开链接：${uri}`,
     saved: '正文已保存',
     cancelled: '已取消编辑',
     previewLabel: '文件预览',
     labels: {
-      copyContent: '复制正文',
       copyPath: '复制路径',
+    },
+    actions: {
+      copyContent: '复制正文',
+      preview: '预览',
+      source: '源码',
       edit: '编辑',
       save: '保存',
       cancel: '取消',
-      preview: '预览',
-      source: '源码',
     },
   },
 };
@@ -98,11 +115,86 @@ export default function FilePreviewBasic() {
     </div>
   );
 
+  // 图标由宿主决定：组件不按文件名推断类型，这里用包的图标集按格式取一个。
+  // The host decides the icon: the component never infers a type from the file
+  // name, so the demo picks one per format from the package icon set.
+  const tabIcon = (fileName: string) => {
+    const Icon = getFileTypeIcon(fileName);
+    return <Icon width={14} height={14} />;
+  };
+
+  // 组件不内置复制、下载、视图切换与编辑按钮，这些由宿主用 `actions` 上下文
+  // 自己渲染。示例演示一个最小实现。
+  // The component ships no copy, download, view-switch or edit buttons; the host
+  // renders them from the `actions` context. This is a minimal implementation.
+  const renderActions = (actions: FilePreviewActions) => (
+    <>
+      {actions.canCopyContent ? (
+        <button
+          type="button"
+          className="ov-file-preview__button"
+          disabled={actions.busy}
+          onClick={() => void actions.copyContent()}
+        >
+          {t.actions.copyContent}
+        </button>
+      ) : null}
+      {actions.canSwitchView ? (
+        <div className="ov-file-preview__switch" role="group">
+          {(['preview', 'source'] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className="ov-file-preview__switch-item"
+              data-active={actions.viewMode === mode || undefined}
+              aria-pressed={actions.viewMode === mode}
+              disabled={actions.busy}
+              onClick={() => actions.setViewMode(mode)}
+            >
+              {mode === 'preview' ? t.actions.preview : t.actions.source}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {actions.canEdit && !actions.editing ? (
+        <button
+          type="button"
+          className="ov-file-preview__button"
+          disabled={actions.busy}
+          onClick={actions.startEditing}
+        >
+          {t.actions.edit}
+        </button>
+      ) : null}
+      {actions.editing ? (
+        <>
+          <button
+            type="button"
+            className="ov-file-preview__button"
+            disabled={actions.busy}
+            onClick={actions.cancelEditing}
+          >
+            {t.actions.cancel}
+          </button>
+          <button
+            type="button"
+            className="ov-file-preview__button ov-file-preview__button--primary"
+            disabled={actions.busy}
+            onClick={() => void actions.saveEditing()}
+          >
+            {t.actions.save}
+          </button>
+        </>
+      ) : null}
+    </>
+  );
+
   const tabs: [FilePreviewTab, ...FilePreviewTab[]] = [
     {
       kind: 'file',
       key: 'file',
       title: 'SKILL.md',
+      icon: tabIcon('SKILL.md'),
       source: {
         content,
         fileName: 'SKILL.md',
@@ -110,8 +202,13 @@ export default function FilePreviewBasic() {
       },
       onCopyContent: () => setActiveHint(t.contentCopied),
       onCopyPath: () => setActiveHint(t.pathCopied),
-      operations: { openParent: async () => {} },
+      operations: {
+        openParent: async () => {},
+        // 正文里的链接交给宿主解析；组件把 Markdown 里的原始目标原样传出来。
+        openUri: async () => {},
+      },
       onOpenParent: (path) => setActiveHint(t.parentOpened(path)),
+      onOpenUri: (uri) => setActiveHint(t.linkOpened(uri)),
       editing: {
         save: (value) => {
           setContent(value);
@@ -120,11 +217,17 @@ export default function FilePreviewBasic() {
         onSave: () => setActiveHint(t.saved),
         onCancel: () => setActiveHint(t.cancelled),
       },
+      slots: {
+        actions: renderActions,
+        // 路径旁的附加标记由宿主决定含义与样式，组件只负责位置。
+        titleExtra: <span className="ov-demo-tag">{t.permissionTag}</span>,
+      },
     },
     {
       kind: 'file',
       key: 'diagram',
       title: 'diagram.svg',
+      icon: tabIcon('diagram.svg'),
       source: {
         url: diagramSvg,
         fileName: 'diagram.svg',
@@ -135,13 +238,26 @@ export default function FilePreviewBasic() {
       kind: 'content',
       key: 'dashboard',
       title: t.dashboardTitle,
+      icon: tabIcon(''),
       content: dashboard,
     },
   ];
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      <div style={{ height: 560 }}>
+      {/*
+       * 自己再包一层卡片：Rspress 的预览卡片带 16px 内边距，组件贴不到边，
+       * 看上去像是组件内部留了白。这里用负外边距抵消掉那 16px，再按宿主的
+       * 做法给卡片加边框与圆角，组件就与卡片边缘齐平——哪些留白属于组件、
+       * 哪些属于示例一眼可分。
+       *
+       * A card of our own. Rspress's preview card carries 16px of padding, so the
+       * component cannot reach the edge and the gap reads as its own. Negative
+       * margins cancel that padding and the card gets its own border and radius,
+       * matching the host, so the component sits flush and it is obvious which
+       * spacing belongs to which.
+       */}
+      <div className="ov-demo-surface" style={{ height: 560 }}>
         <FilePreview
           tabs={tabs}
           locale={lang === 'zh' ? 'zh-CN' : 'en-US'}
@@ -149,9 +265,9 @@ export default function FilePreviewBasic() {
           aria-label={t.previewLabel}
         />
       </div>
-      <p style={{ margin: 0, color: '#8f959e', fontSize: 12 }}>
-        {activeHint || t.hint}
-      </p>
+      {/* 示例自己的说明与操作回执，不属于组件。用主题变量而不是写死灰值，
+          暗色下才可读。 */}
+      <p className="ov-demo-hint">{activeHint || t.hint}</p>
     </div>
   );
 }

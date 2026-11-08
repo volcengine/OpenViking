@@ -7,12 +7,32 @@
 }
 
 /*
- * 组件示例需要接近真实使用的宽度，默认 1000px 会把全屏预览类组件压得太窄。
- * 用 `html:root` 提高优先级：Rspress 主题在更靠后的样式表里用 `:root`
- * 重新声明了该变量，同优先级下会被它覆盖。
+ * 内容区宽度上限。Rspress 默认 1000px，会把全屏预览类组件压得很窄；即便提到
+ * 1400px，2K 屏两侧仍各留 300 多像素的空白，而这里的示例正是越宽越能看出
+ * 效果。
+ *
+ * 不能用 `none`：顶导的内边距按
+ * `max(calc((100vw - 内容上限 - 侧栏 - 目录) / 2), 20px)` 计算，`none` 会让
+ * 整个 `calc()` 失效，顶导 padding 退化成 0，标题紧贴屏幕左边缘、右侧留一大
+ * 片空白。给一个足够大的具体值，内容在常见屏幕上都能撑满，同时让那条公式
+ * 继续算得出对称的内边距。
+ *
+ * `html:root` raises specificity: the theme redeclares this variable on `:root`
+ * in a later stylesheet, which would otherwise win.
+ *
+ * Content width cap. Rspress defaults to 1000px, which squeezes a full-screen
+ * preview component; even 1400px leaves 300-odd pixels empty on each side of a
+ * 2K screen, and these demos show more the wider they get.
+ *
+ * `none` is not an option: the top nav computes its horizontal padding as
+ * `max(calc((100vw - content-max-width - sidebar - outline) / 2), 20px)`, and
+ * `none` invalidates that `calc()`, collapsing the nav's padding to zero so the
+ * title sits flush against the left edge. A large concrete value keeps the
+ * content filling ordinary screens while that formula still resolves to
+ * symmetric padding.
  */
 html:root {
-  --rp-content-max-width: 1400px;
+  --rp-content-max-width: 2400px;
 }
 
 /*
@@ -97,6 +117,79 @@ html:root {
   gap: 12px;
 }
 
+/*
+ * 演示卡片。Rspress 的预览卡片自带 16px 内边距，组件贴不到边，留白看起来
+ * 像是组件内部的。这里直接把那张卡片的 padding 清零，并让它自己的边框与
+ * 圆角承担卡片外观，组件便与卡片边缘齐平——组件的留白与示例的留白因此可以
+ * 分开看。
+ *
+ * 不用负外边距：内容区带 `overflow: auto`，负边距会把内容推到它外面被裁掉。
+ *
+ * A demo card. Rspress's preview card carries 16px of padding, so the component
+ * cannot reach the edge and the gap reads as its own. Zero that padding and let
+ * the card's own border and radius carry the frame, and the component sits flush
+ * — which keeps the two kinds of spacing distinguishable.
+ *
+ * Negative margins are not an option: the content area scrolls (`overflow: auto`),
+ * so pulling content outside it would simply clip.
+ */
+/* 用两级类名抬高特异性：预览插件把同一张卡片的 `padding: 16px` 写在更靠后的
+   样式表里，同特异性时会被它盖掉。 */
+.rp-preview .rp-preview--internal__card {
+  padding: 0;
+  overflow: hidden;
+}
+
+/*
+ * 卡片内容区不留内边距。`overflow` 保持 Rspress 的默认值：它同时承载「代码块
+ * 展示」这一形态，把 `auto` 改成 `visible` 会让代码块塌陷成 0 高、内容溢出到
+ * 页面外。组件自己的滚动由组件内部容器负责，不需要动这里。
+ *
+ * Zero the padding only. Leave `overflow` at Rspress's default: the same card
+ * also renders the "show code" view, and switching `auto` to `visible` collapses
+ * that block to zero height and spills its content onto the page. The component's
+ * own scrolling lives in its inner containers, so this needs no change.
+ */
+.rp-preview .rp-preview--internal__card__content {
+  padding: 0;
+}
+
+/*
+ * 组件与卡片之间留一点纵向呼吸：页签行紧贴卡片上边框会显得拥挤。只加纵向，
+ * 横向仍与卡片齐平——组件宽度本就要撑满，左右再缩会看不出实际占位。
+ *
+ * A little vertical breathing room between the component and the card edge: a tab
+ * row flush against the top border reads as cramped. Vertical only — the component
+ * is meant to fill the width, so insetting the sides would hide its real extent.
+ */
+.ov-demo-surface {
+  box-sizing: border-box;
+  padding: 8px 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+/* 示例自己画的权限标记，模拟宿主传入 `slots.titleExtra`。组件不提供样式，
+   这里用主题变量画一个中性标签。 */
+.ov-demo-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--rp-c-bg-soft);
+  color: var(--rp-c-text-2);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+/* 说明文字紧跟在卡片下方，与卡片同宽。 */
+.ov-demo-hint {
+  margin: 0;
+  color: var(--rp-c-text-2);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .ov-demo-modules {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
@@ -129,4 +222,59 @@ html:root {
 .ov-demo-controls button:focus-visible {
   outline: 2px solid var(--rp-c-brand);
   outline-offset: 3px;
+}
+
+/*
+ * 代码块补上左右内边距。Rspress 只给 `code` 设了 `padding: 1rem 0`，左右为
+ * 0，代码因此紧贴卡片边缘。用与上下一致的 1rem。
+ *
+ * Code blocks need horizontal padding. Rspress sets only `padding: 1rem 0` on
+ * `code`, so lines sit flush against the card edge; match the vertical 1rem.
+ */
+/* 两级类名抬高特异性：主题把同一规则写在更靠后的样式表里。 */
+.rp-codeblock .rp-codeblock__content :where(code) {
+  padding: 1rem;
+}
+
+/*
+ * 「展开代码」按钮贴在卡片右边缘。它的 `right: 20px` 是相对代码块内容区的，
+ * 而内容区撑满卡片宽度，20px 在宽卡片上显得贴边。加到 24px 并让按钮组在
+ * 窄容器里也不溢出。
+ *
+ * The "show code" button sits against the card's right edge. Its `right: 20px`
+ * is relative to the code content area, which fills the card, so 20px reads as
+ * flush on a wide card. Bump it and keep the group inside on narrow ones.
+ */
+.rp-codeblock .rp-code-button-group {
+  right: 24px;
+}
+
+/*
+ * 预览里的 Markdown 正文不再限制阅读宽度。底座给
+ * `.ark-agentic-file-viewer-markdown__content` 设了 `max-width: 920px` 并居中，
+ * 那是为长文阅读准备的；在文档站这种宽容器里，它表现为两侧各留一大片空白，
+ * 看不出组件实际占了多少宽度。示例需要展示真实铺满效果。
+ *
+ * Markdown bodies inside the preview are no longer capped at a reading width. The
+ * base sets `max-width: 920px` and centres it, which is right for long-form
+ * reading but leaves wide gaps on both sides in a docs layout, hiding how much
+ * width the component really takes.
+ */
+.ov-file-preview .ark-agentic-file-viewer-markdown__content {
+  max-width: none;
+  margin-inline: 0;
+}
+
+/*
+ * 预览卡片的操作区（展开代码等）紧贴右边。Rspress 靠卡片自身的 `padding: 16px`
+ * 给它留位，而这里把卡片 padding 清零让组件贴边，操作区因此顶到了边缘。单独
+ * 补右边距，不影响组件。
+ *
+ * The preview card's operation buttons sit flush against the right edge. Rspress
+ * relies on the card's own `padding: 16px` to inset them; zeroing that padding so
+ * the component reaches the edge left them touching it. Add the inset back on the
+ * buttons alone.
+ */
+.rp-preview--internal__card > .rp-preview-operations {
+  padding-right: 12px;
 }

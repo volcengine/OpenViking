@@ -19,7 +19,9 @@ Pass at least one tab. A file tab carries `source`; a content tab carries a node
 | `kind: 'file'`    | The component   | A file, its source, a document |
 | `kind: 'content'` | The host, as-is | Dashboards, graphs, summaries  |
 
-Both share the shell — tab row, path breadcrumb, copy path and the header slots. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
+Both share the shell — tab row, path breadcrumb, copy path and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
+
+**The component ships no action buttons of its own.** Copy body, copy path, download, the preview/source switch and editing all carry host product semantics and copy; built in they could be neither trimmed nor restyled. Copy path is the exception — any file with a `source.path` needs it under every host, so it stays in the shell at the end of the breadcrumb. Everything else is rendered by the host in `slots.actions`, which receives a `FilePreviewActions` context: the current view mode, editing state, which capabilities are available, and the methods that change them. The state stays with the component.
 
 The active tab is owned by the component. To switch from outside, use the ref handle:
 
@@ -40,11 +42,11 @@ previewRef.current?.setActiveTab('dashboard');
 
 ## States
 
-Loading, failure and unsupported formats are not props — the component decides them from the content and the file name. All three can be replaced through `slots`:
+Loading, failure and unsupported formats are not props: this component decides loading and failure, while whether a format can be previewed is the base component's call. All three can be replaced through `slots`:
 
 - `slots.loadingFallback`
 - `slots.errorFallback`
-- `slots.unsupportedFallback`
+- `slots.unsupportedFallback` — handed to the base, which then owns the whole unsupported state, so the download entry it would otherwise offer no longer appears
 
 The host supplies asynchronous `editing.save` and optional `editing.loadContent` capabilities. `loadContent` returns the full text; `undefined` abandons the edit, and rejection shows a read error. A failed save retains the draft and shows an error. `editing.onSave` only reports a successful save; `editing.onCancel` reports a discarded draft. Saving prevents duplicate submissions and tab changes until completion.
 
@@ -62,37 +64,54 @@ Execution capabilities and notifications are separate. Operation resolution trig
 
 Shared by both kinds:
 
-| Property             | Type                         | Default   | Description                                                                  |
-| -------------------- | ---------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `key`                | `string`                     | Required  | Unique tab key.                                                              |
-| `title`              | `ReactNode`                  | File name | What the tab row shows. Required for content tabs.                           |
-| `icon`               | `ReactNode`                  | By format | Tab icon.                                                                    |
-| `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.                                       |
-| `disabled`           | `boolean`                    | `false`   | Disables the tab.                                                            |
-| `onOpenParent`       | `(path: string) => void`     | —         | Called after the parent directory opens successfully; not called on failure. |
-| `onCopyPath`         | `(path: string) => void`     | —         | Called after path copying succeeds.                                          |
-| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.                                       |
-| `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                                                     |
+| Property       | Type                         | Default   | Description                                                                  |
+| -------------- | ---------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `key`          | `string`                     | Required  | Unique tab key.                                                              |
+| `title`        | `ReactNode`                  | File name | What the tab row shows. Required for content tabs.                           |
+| `icon`         | `ReactNode`                  | —         | Tab icon, supplied by the host; omit to hide.                                |
+| `labels`       | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.                                       |
+| `disabled`     | `boolean`                    | `false`   | Disables the tab.                                                            |
+| `onOpenParent` | `(path: string) => void`     | —         | Called after the parent directory opens successfully; not called on failure. |
+| `onCopyPath`   | `(path: string) => void`     | —         | Called after path copying succeeds.                                          |
+
+`slots.titleExtra` renders after the path and copy button, before the action group. Use it for a marker beside the title — a permission tag, a status badge, a version label. The component does not interpret or style it: whatever you pass is what renders, and omitting it takes no space.
+
+```tsx
+{
+  kind: 'file',
+  key: 'file',
+  source: { content, fileName: 'JC-17-A.md', path },
+  slots: { titleExtra: <Tag>Can manage</Tag> },
+}
+```
 
 File tabs add:
 
-| Property        | Type                            | Default  | Description                                                                                             |
-| --------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `source`        | `FilePreviewSource`             | Required | The content and file name.                                                                              |
-| `operations`    | `FilePreviewOperations`         | —        | Async `openParent(path)`, `download()` and `openUri(uri)` capabilities, each returning `Promise<void>`. |
-| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.                                                                     |
-| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only.                                                                 |
-| `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.                                                                         |
-| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.                                                                  |
-| `onDownload`    | `() => void`                    | —        | Called after the download operation succeeds; not called on failure.                                    |
-| `onOpenUri`     | `(uri: string) => void`         | —        | Called after a content resource opens successfully; not called on failure.                              |
+| Property        | Type                            | Default  | Description                                                                                                        |
+| --------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `source`        | `FilePreviewSource`             | Required | The content and file name.                                                                                         |
+| `operations`    | `FilePreviewOperations`         | —        | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                            |
+| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.                                                                                |
+| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only.                                                                            |
+| `slots`         | `FilePreviewFileTabSlots`       | —        | `actions` (node or renderer), `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
+| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.                                                                             |
+| `onDownload`    | `() => void`                    | —        | Called after the download operation succeeds; not called on failure.                                               |
+| `onOpenUri`     | `(uri: string) => void`         | —        | Called after a content resource opens successfully; not called on failure.                                         |
+
+Content tabs add:
+
+| Property  | Type        | Default  | Description                                                                           |
+| --------- | ----------- | -------- | ------------------------------------------------------------------------------------- |
+| `content` | `ReactNode` | Required | The tab body, filling everything below the tab row; the host lays it out and scrolls. |
+
+A content tab has no content header row and does not use `slots` — that whole area belongs to the host, so there is no component-provided header or state to fill. The component places no wrapper around `content` either: a wrapper would only constrain the host's layout. Put any toolbar, title or status line inside `content` itself.
 
 ```tsx
 import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
 
-Copying is handled by the component. File tabs with `source.path` show the copy-path button. The content-copy button is disabled when no copyable text is available. Both callbacks receive the value already copied, run only on success, and are optional; omitting them does not affect copying. Hosts do not perform another copy.
+Copying is handled by the component: the host renders the button and calls `actions.copyContent()` or `actions.copyPath()`, both resolving to whether it succeeded. `onCopyContent` / `onCopyPath` fire after a successful copy with the value already copied, and never on failure.
 
 ## Accessibility
 
