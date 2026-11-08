@@ -8,7 +8,7 @@ param(
     [Parameter(Mandatory)][string]$Destination
 )
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 if (![IO.Path]::IsPathRooted($Destination)) { throw 'Destination must be an absolute path' }
 $archive = (Resolve-Path -LiteralPath $File).Path
 $target = [IO.Path]::GetFullPath($Destination)
