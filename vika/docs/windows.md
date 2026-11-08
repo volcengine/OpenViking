@@ -85,9 +85,11 @@ checkout/commit and configuration for rollback; do not copy this tree over a
 running installation. The previous logs options and unrelated lock, logging,
 delivery, interruption and PM2 behavior fixes were split out for separate review.
 
-From `vika`, run `npm test`. The development-only `npm run check` still needs
-Git Bash because the syntax
-check uses POSIX shell loops. Platform isolation and POSIX configuration snapshots
+From `vika`, run `npm test`. The development-only `npm run check` needs a POSIX
+shell because its syntax check uses shell loops. On Windows, npm runs scripts
+through `cmd.exe` even when started from Git Bash, so `npm run check` itself
+fails there; run the same loops in Git Bash directly, or point
+`npm_config_script_shell` at Git Bash. Platform isolation and POSIX configuration snapshots
 run in the normal suite; macOS configuration selection on Linux is not a macOS
 runtime test. On Windows, test normal-user startup/stop, descendant cleanup,
 occupied pipes, long instructions and each connector/runtime you actually use.
