@@ -135,13 +135,24 @@ export class MessageInbox {
 
   add(item, meta = {}) {
     if (this.stopped) return false;
+    this.publish(this.persist(item, meta));
+    return true;
+  }
+
+  // A producer may persist an entry inside its own SQLite transaction. It
+  // must publish only after COMMIT, so no rolled-back input reaches a runtime.
+  persist(item, meta = {}) {
+    if (this.stopped) throw new Error('inbox is stopped');
     const createdAtMs = this.now();
     const scopeKey = item.scopeKey ?? item.conversationKey ?? item.scope?.key ?? 'unscoped';
     const { lastInsertRowid } = this.insertRow.run(scopeKey, item.seq ?? null, JSON.stringify(item),
       JSON.stringify(meta), createdAtMs);
-    this.entries.push({ id: Number(lastInsertRowid), scopeKey, item, meta, createdAtMs, notified: false });
+    return { id: Number(lastInsertRowid), scopeKey, item, meta, createdAtMs, notified: false };
+  }
+
+  publish(entry) {
+    if (!this.entries.some((existing) => existing.id === entry.id)) this.entries.push(entry);
     this.schedule();
-    return true;
   }
 
   // Inputs a previous daemon generation accepted and never delivered. Older
@@ -150,12 +161,16 @@ export class MessageInbox {
     const cutoff = this.now() - this.maxAgeMs;
     const rows = this.db.prepare('SELECT * FROM inbox_pending ORDER BY id').all();
     for (const row of rows) {
-      if (row.created_at_ms < cutoff) {
+      const meta = JSON.parse(row.meta_json);
+      // A finished task's result must survive a long outage too.
+      if (row.created_at_ms < cutoff && meta.kind !== 'task.report') {
         this.deleteRow.run(row.id);
         continue;
       }
-      this.entries.push({ id: Number(row.id), scopeKey: row.scope_key, item: JSON.parse(row.item_json),
-        meta: JSON.parse(row.meta_json), createdAtMs: row.created_at_ms, notified: false });
+      if (!this.entries.some((entry) => entry.id === Number(row.id))) {
+        this.entries.push({ id: Number(row.id), scopeKey: row.scope_key, item: JSON.parse(row.item_json),
+          meta, createdAtMs: row.created_at_ms, notified: false });
+      }
     }
     if (this.entries.length > 0) {
       this.logger?.info('inbox_restored', { waiting: this.entries.length });

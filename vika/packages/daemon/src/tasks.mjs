@@ -18,7 +18,7 @@ import { safeError } from './logger.mjs';
 // approvals, outbox) applies to what a worker produced.
 //
 // Task state lives here, in SQLite (created on first use): the task with its
-// origin, the inputs routed to it (in order, each delivered once), and an
+// origin, the inputs routed to it (acknowledged after a successful turn), and an
 // append-only list of reports. Nothing depends on the worker's native session
 // surviving: a lost session is started again from the task record.
 
@@ -33,7 +33,7 @@ export const RECENT_ENDED = 32;
 const CATCH_UP_TURNS = 3;
 const TRANSIENT_RETRIES = 2;
 const SUMMARY_CHARS = 600;
-const DRAFT_CHARS = 4_000;
+const REPORT_RETRY_MS = 1_000;
 const CANDIDATES = 3;
 
 export const REPORT_STATES = Object.freeze(['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed']);
@@ -81,6 +81,11 @@ const SCHEMA = `
     delivered_at_ms INTEGER
   );
   CREATE INDEX IF NOT EXISTS task_inputs_pending ON task_inputs(task_id, delivered_at_ms);
+  CREATE TABLE IF NOT EXISTS task_input_claims (
+    input_id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    turn INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS task_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
@@ -91,6 +96,13 @@ const SCHEMA = `
     structured INTEGER NOT NULL,
     created_at_ms INTEGER NOT NULL,
     relayed_at_ms INTEGER
+  );
+  -- Durable intent to deliver a selected final report, never a progress or
+  -- superseded report. Retained after delivery as the report -> inbox receipt.
+  CREATE TABLE IF NOT EXISTS task_report_deliveries (
+    report_id INTEGER PRIMARY KEY,
+    inbox_id INTEGER,
+    created_at_ms INTEGER NOT NULL
   );
 `;
 
@@ -130,7 +142,7 @@ export class TaskManager {
     db,
     config,
     executor,
-    relay,
+    inbox,
     lineFor,
     logger = null,
     recordActivity = () => {},
@@ -140,7 +152,8 @@ export class TaskManager {
   }) {
     if (!db) throw new TypeError('db is required');
     if (!executor) throw new TypeError('executor is required');
-    Object.assign(this, { db, config, executor, relay, lineFor, logger, recordActivity, slots, reservedSlots, now });
+    if (!inbox || inbox.db !== db) throw new TypeError('inbox must share the task database');
+    Object.assign(this, { db, config, executor, inbox, lineFor, logger, recordActivity, slots, reservedSlots, now });
     this.db.exec(SCHEMA);
     // Worker authority tokens: token -> task id, for the turn that holds it.
     this.tokens = new Map();
@@ -149,7 +162,20 @@ export class TaskManager {
     this.running = new Map();
     this.catchUp = new Map();
     this.retries = new Map();
+    this.reportRetry = null;
     this.stopped = false;
+  }
+
+  transaction(fn) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = fn();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   // ---- reads ----------------------------------------------------------------
@@ -270,14 +296,16 @@ export class TaskManager {
     const time = this.now();
     const workdir = path.join(this.config.workspace, 'tasks', id);
     fs.mkdirSync(workdir, { recursive: true });
-    this.db.prepare(`INSERT INTO tasks(id, title, status, origin_seq, origin_event, origin_instance, origin_scope, origin_chat,
-      origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, runtime, session_id, workdir,
-      created_at_ms, updated_at_ms) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, clip(title, 120), origin.seq, origin.event_id, origin.connector_instance, origin.scope_key, origin.chat_id ?? null,
-      origin.thread_id ?? null, origin.message_id ?? null, origin.chat_type ?? null, origin.source, origin.sender_id ?? null,
-      requester, clip(note, 400), runtime, randomUUID(), workdir, time, time,
-    );
-    for (const row of rows) this.addInput(id, row, 'owner');
+    this.transaction(() => {
+      this.db.prepare(`INSERT INTO tasks(id, title, status, origin_seq, origin_event, origin_instance, origin_scope, origin_chat,
+        origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, runtime, session_id, workdir,
+        created_at_ms, updated_at_ms) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, clip(title, 120), origin.seq, origin.event_id, origin.connector_instance, origin.scope_key, origin.chat_id ?? null,
+        origin.thread_id ?? null, origin.message_id ?? null, origin.chat_type ?? null, origin.source, origin.sender_id ?? null,
+        requester, clip(note, 400), runtime, randomUUID(), workdir, time, time,
+      );
+      for (const row of rows) this.addInput(id, row, 'owner');
+    });
     this.recordActivity('task.created', { summary: `${id} ${title}`, inboundSeq: origin.seq, metadata: { task: id } });
     this.request(id);
     return this.get(id);
@@ -295,12 +323,12 @@ export class TaskManager {
     const task = this.get(taskId);
     if (!task) throw new Error(`no task ${taskId}`);
     if (task.status === 'stopped') throw new Error(`${taskId} was stopped; create a new task instead`);
-    for (const row of rows) this.addInput(taskId, row, role);
-    this.touch(taskId);
-    if (role === 'owner') {
-      if (ENDED.has(task.status) || task.status === 'waiting' || task.status === 'blocked') this.setStatus(taskId, 'queued');
-      this.request(taskId);
-    }
+    this.transaction(() => {
+      for (const row of rows) this.addInput(taskId, row, role);
+      this.touch(taskId);
+      if (role === 'owner' && (ENDED.has(task.status) || task.status === 'waiting' || task.status === 'blocked')) this.setStatus(taskId, 'queued');
+    });
+    if (role === 'owner') this.request(taskId);
     return this.get(taskId);
   }
 
@@ -336,17 +364,32 @@ export class TaskManager {
   // task_check: the inputs routed since the worker last saw any.
   check(taskId) {
     const rows = this.undelivered(taskId);
-    this.markDelivered(rows);
+    this.transaction(() => this.claimInputs(this.get(taskId), rows));
     return rows;
   }
 
   undelivered(taskId) {
-    return this.db.prepare('SELECT * FROM task_inputs WHERE task_id = ? AND delivered_at_ms IS NULL ORDER BY id').all(taskId);
+    return this.db.prepare(`SELECT * FROM task_inputs WHERE task_id = ? AND delivered_at_ms IS NULL
+      AND id NOT IN (SELECT input_id FROM task_input_claims) ORDER BY id`).all(taskId);
   }
 
-  markDelivered(rows) {
-    const stamp = this.db.prepare('UPDATE task_inputs SET delivered_at_ms = ? WHERE id = ?');
-    for (const row of rows) stamp.run(this.now(), row.id);
+  claimInputs(task, rows) {
+    const claim = this.db.prepare('INSERT INTO task_input_claims(input_id, task_id, turn) VALUES (?, ?, ?)');
+    for (const row of rows) claim.run(row.id, task.id, task.turns);
+  }
+
+  settleInputs(task, result) {
+    this.transaction(() => {
+      if (!result.error) {
+        this.db.prepare(`UPDATE task_inputs SET delivered_at_ms = ? WHERE id IN
+          (SELECT input_id FROM task_input_claims WHERE task_id = ? AND turn = ?)`).run(this.now(), task.id, task.turns);
+      }
+      this.db.prepare('DELETE FROM task_input_claims WHERE task_id = ?').run(task.id);
+      // Only a successful turn is a checkpoint we can resume. After an
+      // interrupted/failed turn, reconstruct from our ledger in a new session.
+      const session = result.error ? null : result.nativeSession ?? (task.runtime === 'codex' ? null : task.session_id);
+      this.db.prepare('UPDATE tasks SET native_session = ? WHERE id = ?').run(session, task.id);
+    });
   }
 
   report(taskId, { state, summary = '', draft = '', question = '', artifacts = [] }) {
@@ -389,21 +432,30 @@ export class TaskManager {
   }
 
   brief(task, inputs) {
+    const recovery = task.turns > 0 && !task.native_session;
+    const prefix = task.recovering
+      ? ['The daemon restarted while you were working on this task. Check your directory and what you already did (files, commits, issues, comments) before repeating any outside action.']
+      : recovery ? ['The previous worker session could not be safely resumed. Check existing work before repeating any outside action.'] : [];
+    if (recovery) inputs = this.db.prepare('SELECT * FROM task_inputs WHERE task_id = ? ORDER BY id').all(task.id);
     const owner = inputs.filter((row) => row.role === 'owner');
     const context = inputs.filter((row) => row.role !== 'owner');
-    if (task.turns === 0) {
+    if (task.turns === 0 || recovery) {
       return [
+        ...prefix,
         `[task ${task.id}] ${task.title}`,
         `Requested by ${task.requester_name ?? 'unknown'}${task.origin_chat ? ` in chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)}` : ''} (source=${task.origin_source}). The request, as the agent received it:`,
         ...owner.map((row) => row.text),
         ...(context.length ? ['Context:', ...context.map((row) => row.text)] : []),
         ...(task.note ? [`Routing note from the agent: ${task.note}`] : []),
         `Your directory: ${task.workdir}`,
+        ...(recovery && task.summary ? ['Previous work summary (may be incomplete):', quoted(task.summary)] : []),
+        ...(recovery && task.draft ? ['Previous draft (may be incomplete):', quoted(task.draft)] : []),
+        ...(recovery && task.artifacts_json !== '[]' ? [`Previous artifacts: ${task.artifacts_json}`] : []),
         'Work on this request, then finish with task_report. You cannot message anyone: the agent replies to the requester from your report.',
       ].join('\n');
     }
     return [
-      ...(task.recovering ? ['The daemon restarted while you were working on this task. Check your directory and what you already did (files, commits, issues, comments) before repeating any outside action.'] : []),
+      ...prefix,
       ...(owner.length ? [`[task ${task.id}] New input from the requester's side:`, ...owner.map((row) => row.text)] : []),
       ...(context.length ? ['Context only (act on it only if it changes your task):', ...context.map((row) => row.text)] : []),
       ...(owner.length || context.length ? [] : [`[task ${task.id}] Continue your task.`]),
@@ -414,19 +466,21 @@ export class TaskManager {
   async runTurn(task, { reserved = false } = {}) {
     const token = randomUUID();
     const inputs = this.undelivered(task.id);
-    this.markDelivered(inputs);
     const prompt = this.brief(task, inputs);
     const reportsBefore = this.db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM task_reports WHERE task_id = ?').get(task.id).id;
+    this.transaction(() => {
+      this.db.prepare(`UPDATE tasks SET status = 'running', turns = turns + 1, recovering = 0, updated_at_ms = ?, ended_at_ms = NULL,
+        session_id = ? WHERE id = ?`).run(this.now(), task.turns > 0 && !task.native_session ? randomUUID() : task.session_id, task.id);
+      this.claimInputs(this.get(task.id), inputs);
+    });
     this.tokens.set(token, task.id);
-    this.db.prepare(`UPDATE tasks SET status = 'running', turns = turns + 1, recovering = 0, updated_at_ms = ?, ended_at_ms = NULL
-      WHERE id = ?`).run(this.now(), task.id);
     const slot = { handle: null, reserved, startedAt: this.now() };
     this.running.set(task.id, slot);
     this.recordActivity('task.turn_started', { summary: `${task.id} ${task.title}`, metadata: { task: task.id, turn: task.turns + 1, inputs: inputs.length } });
     let result;
     try {
       slot.handle = this.executor.start({
-        task: this.get(task.id), prompt, authority: token, resume: task.turns > 0,
+        task: this.get(task.id), prompt, authority: token,
       });
       result = await slot.handle.done;
     } catch (error) {
@@ -446,10 +500,9 @@ export class TaskManager {
   }
 
   afterTurn(taskId, result, reportsBefore, slot) {
-    // A runtime that names its own sessions (Codex) reports the id to resume.
-    if (result.nativeSession) this.db.prepare('UPDATE tasks SET native_session = ? WHERE id = ?').run(result.nativeSession, taskId);
     const task = this.get(taskId);
     if (!task || task.status === 'stopped') return;
+    this.settleInputs(task, result);
     this.recordActivity('task.turn_completed', {
       summary: `${taskId} ${result.error ? `failed: ${result.error}` : 'turn ended'}`,
       status: result.error ? 'failed' : 'completed',
@@ -479,16 +532,21 @@ export class TaskManager {
     // in the result before it is relayed.
     const fresh = this.undelivered(taskId).filter((row) => row.role === 'owner');
     const caught = this.catchUp.get(taskId) ?? 0;
-    if (fresh.length > 0 && caught < CATCH_UP_TURNS) {
+    if (!result.error && fresh.length > 0 && caught < CATCH_UP_TURNS) {
       this.catchUp.set(taskId, caught + 1);
       this.setStatus(taskId, 'queued');
       this.request(taskId);
       return;
     }
     this.catchUp.delete(taskId);
-    this.setStatus(taskId, STATUS_FOR[report.state] ?? 'done');
-    this.relayReport(this.get(taskId), report);
-    if (this.undelivered(taskId).some((row) => row.role === 'owner')) {
+    // Ending the task and recording the obligation to deliver its report are
+    // atomic. A failed inbox write leaves this durable outbox available to retry.
+    this.transaction(() => {
+      this.setStatus(taskId, STATUS_FOR[report.state] ?? 'done');
+      this.db.prepare('INSERT OR IGNORE INTO task_report_deliveries(report_id, created_at_ms) VALUES (?, ?)').run(report.id, this.now());
+    });
+    this.flushReports();
+    if (!result.error && this.undelivered(taskId).some((row) => row.role === 'owner')) {
       this.setStatus(taskId, 'queued');
       this.request(taskId);
     }
@@ -499,27 +557,67 @@ export class TaskManager {
       `[task report] task=${task.id} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}`,
       `origin: ${task.origin_chat ? `chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)} ` : ''}source=${task.origin_source} msg=${metadataTag(task.origin_message ?? '')} event=${metadataTag(task.origin_event ?? '')}`,
       ...(report.summary ? ['summary:', quoted(clip(report.summary, SUMMARY_CHARS))] : []),
-      ...(report.draft ? ['draft:', quoted(clip(report.draft, DRAFT_CHARS))] : []),
+      ...(report.draft ? ['draft:', quoted(report.draft)] : []),
       ...(report.question ? ['question:', quoted(clip(report.question, SUMMARY_CHARS))] : []),
     ].join('\n');
-    this.db.prepare('UPDATE task_reports SET relayed_at_ms = ? WHERE id = ?').run(this.now(), report.id);
-    this.recordActivity('task.reported', { summary: `${task.id} ${report.state}`, inboundSeq: task.origin_seq,
-      metadata: { task: task.id, state: report.state, structured: Boolean(report.structured) } });
-    this.relay({
+    const item = {
       text,
       seq: null,
       scopeKey: task.origin_scope,
       chatType: 'p2p',
       scope: { kind: 'task', key: task.origin_scope },
-    }, {
+    };
+    const meta = {
       chatId: task.origin_chat, threadId: task.origin_thread, source: task.origin_source, instance: task.origin_instance,
       kind: 'task.report', chatType: task.origin_chat_type, from: `task ${task.id}`,
+    };
+    const entry = this.transaction(() => {
+      const delivery = this.db.prepare('SELECT * FROM task_report_deliveries WHERE report_id = ?').get(report.id);
+      if (!delivery || delivery.inbox_id != null) return null;
+      const entry = this.inbox.persist(item, meta);
+      this.db.prepare('UPDATE task_reports SET relayed_at_ms = ? WHERE id = ?').run(this.now(), report.id);
+      this.db.prepare('UPDATE task_report_deliveries SET inbox_id = ? WHERE report_id = ?').run(entry.id, report.id);
+      return entry;
     });
+    if (entry) {
+      this.inbox.publish(entry);
+      this.recordActivity('task.reported', { summary: `${task.id} ${report.state}`, inboundSeq: task.origin_seq,
+        metadata: { task: task.id, state: report.state, structured: Boolean(report.structured) } });
+    }
+  }
+
+  flushReports() {
+    if (this.stopped) return;
+    let failed = false;
+    for (const report of this.db.prepare(`SELECT r.* FROM task_report_deliveries d JOIN task_reports r ON r.id = d.report_id
+      WHERE d.inbox_id IS NULL ORDER BY r.id`).all()) {
+      try {
+        this.relayReport(this.get(report.task_id), report);
+      } catch (error) {
+        failed = true;
+        this.logger?.error('task_report_relay_failed', { task: report.task_id, error: safeError(error) });
+      }
+    }
+    if (failed && !this.reportRetry) {
+      this.reportRetry = setTimeout(() => { this.reportRetry = null; this.flushReports(); }, REPORT_RETRY_MS);
+      this.reportRetry.unref?.();
+    }
   }
 
   // Tasks a previous daemon generation was running start again with a
   // recovery note; queued ones go back in line.
   restore() {
+    this.transaction(() => {
+      this.db.exec('DELETE FROM task_input_claims');
+      // Also recover final reports left unmarked by versions before the
+      // durable outbox. Only the latest final report of a settled task is eligible.
+      this.db.prepare(`INSERT OR IGNORE INTO task_report_deliveries(report_id, created_at_ms)
+        SELECT r.id, ? FROM tasks t JOIN task_reports r ON r.task_id = t.id
+        WHERE t.status IN ('done', 'waiting', 'blocked', 'dropped', 'failed') AND r.state != 'progress'
+          AND r.relayed_at_ms IS NULL AND r.id = (SELECT MAX(id) FROM task_reports WHERE task_id = t.id)`).run(this.now());
+      this.db.exec("UPDATE tasks SET native_session = NULL WHERE status IN ('queued', 'running')");
+    });
+    this.flushReports();
     for (const task of this.db.prepare("SELECT * FROM tasks WHERE status IN ('queued', 'running') ORDER BY updated_at_ms").all()) {
       if (task.status === 'running') this.db.prepare("UPDATE tasks SET status = 'queued', recovering = 1 WHERE id = ?").run(task.id);
       this.request(task.id);
@@ -530,6 +628,8 @@ export class TaskManager {
   // and restore() starts them again.
   shutdown() {
     this.stopped = true;
+    clearTimeout(this.reportRetry);
+    this.reportRetry = null;
     for (const slot of this.running.values()) slot.handle?.stop?.();
   }
 }

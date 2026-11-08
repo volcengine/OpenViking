@@ -106,13 +106,23 @@ describe('WorkerExecutor', () => {
     const executor = new WorkerExecutor({ config, settings: () => ({ runtime: 'claude', model: 'sonnet', effort: 'medium' }) });
     const first = await executor.start({ task: task({ runtime: 'claude' }), prompt: 'one', authority: 'tok' }).done;
     assert.equal(first.text, '结果在这里');
-    await executor.start({ task: task({ runtime: 'claude', turns: 2 }), prompt: 'two', authority: 'tok' }).done;
+    await executor.start({ task: task({ runtime: 'claude', native_session: task().session_id, turns: 2 }), prompt: 'two', authority: 'tok' }).done;
     const [one, two] = calls(dir, 'claude');
     const arg = (call, flag) => call.argv[call.argv.indexOf(flag) + 1];
     assert.equal(arg(one, '--session-id'), task().session_id);
     assert.equal(arg(two, '--resume'), task().session_id);
     const mcp = JSON.parse(fs.readFileSync(arg(one, '--mcp-config'), 'utf8'));
     assert.deepEqual(mcp.mcpServers.personal_agent.args.slice(-2), ['--authority', 'tok']);
+  });
+
+  it('starts a fresh Claude session after an attempt without a successful session checkpoint', async (t) => {
+    const { dir, config, task } = setup(t);
+    config.claudeBin = fakeCli(dir, 'claude', [{ type: 'result', result: 'ok', is_error: false }]);
+    await new WorkerExecutor({ config }).start({ task: task({ runtime: 'claude', turns: 2 }), prompt: 'replayed original', authority: 'tok' }).done;
+    const [call] = calls(dir, 'claude');
+    assert.ok(!call.argv.includes('--resume'));
+    assert.equal(call.argv[call.argv.indexOf('--session-id') + 1], task().session_id);
+    assert.equal(call.argv.at(-1), 'replayed original');
   });
 
   it('runs only on the runtimes it knows, and a stopped turn ends as stopped', async (t) => {

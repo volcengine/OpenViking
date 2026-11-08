@@ -142,7 +142,7 @@ const RUNTIMES = {
         '--no-chrome',
         ...(effort ? ['--effort', effort] : []),
         ...(model ? ['--model', model] : []),
-        ...(task.turns > 1 ? ['--resume', task.session_id] : ['--session-id', task.session_id]),
+        ...(task.native_session ? ['--resume', task.native_session] : ['--session-id', task.session_id]),
         prompt,
       ];
       return { command: config.claudeBin, args, env: sanitizeClaudeEnv(process.env, config.profile, agentToolEnv(config, authority), config) };
