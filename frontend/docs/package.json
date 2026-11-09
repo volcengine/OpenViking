@@ -21,6 +21,9 @@
   "imports": {
     "#scope-switcher-icons": "./docs/_demos/scope-switcher-icons.tsx",
     "#scope-switcher-source": "./docs/_demos/scope-switcher-source.ts",
-    "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts"
+    "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts",
+    "#tui-records": "./docs/_demos/tui-records.tsx",
+    "#tui-commands": "./docs/_demos/tui-commands/index.ts",
+    "#tui-demo-result": "./docs/_demos/tui-demo-result.ts"
   }
 }
