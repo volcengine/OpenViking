@@ -12,7 +12,7 @@ export const ZH_TUI_LABELS: ResolvedTuiLabels = {
   success: '执行成功',
   error: '执行失败',
   copy: '复制',
-  copied: '已复制',
+  copied: '复制成功',
   empty: '运行命令后将在此显示结果。',
   noResult: '暂无返回结果',
   justNow: '刚刚',

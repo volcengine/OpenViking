@@ -2,8 +2,17 @@
 
 React imports these SVG files directly during its build.
 
+- `svg/tui/copy.svg` — an original 16 × 16 outlined copy glyph drawn for this
+  workspace. It inherits `currentColor`, follows the repository license and is
+  bundled inline by Tui. The success state reuses `svg/scope-switcher/check.svg`.
+
 - `svg/` — icons drawn for this workspace, following the repository license. The
   five full-colour file-type icons come from the design files.
+- `svg/console/` — conversation, terminal, history and new-session controls
+  drawn for this workspace in a consistent 1.2-unit outline. They inherit
+  `currentColor`, follow this repository's license and are bundled inline.
+  `history-empty.svg` is an original geometric tray illustration based on the
+  supplied console screenshot. Its outline and background follow theme colors.
 - `svg/arrow-right.svg` — the static artwork of `IconRightArrow` used by the
   Volcengine OpenViking console's `TerminalBody` quick commands. Extracted from
   `@arco-design/iconbox-react-viking` 0.0.121, whose package metadata declares

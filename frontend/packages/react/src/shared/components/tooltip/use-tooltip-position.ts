@@ -1,6 +1,10 @@
-import { useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 
 import type { TooltipPlacement } from './types.js';
+
+// Server renderers cannot measure a viewport; retain pre-paint positioning in browsers.
+const usePositionEffect =
+  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** 浮层与触发元素之间的间隙。 Gap between the surface and its trigger. */
 export const OFFSET = 6;
@@ -34,6 +38,7 @@ export function resolvePosition(
   trigger: DOMRect,
   surface: { width: number; height: number },
   placement: TooltipPlacement,
+  alignment: 'center' | 'end' = 'center',
 ): TooltipPosition {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
@@ -66,7 +71,10 @@ export function resolvePosition(
       side === 'top'
         ? trigger.top - surface.height - OFFSET
         : trigger.bottom + OFFSET;
-    const left = trigger.left + trigger.width / 2 - surface.width / 2;
+    const left =
+      alignment === 'end'
+        ? trigger.right - surface.width
+        : trigger.left + trigger.width / 2 - surface.width / 2;
     return {
       top: clamp(top, surface.height, viewportHeight),
       left: clamp(left, surface.width, viewportWidth),
@@ -107,6 +115,7 @@ export function useTooltipPosition(
   triggerRef: React.RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
   placement: TooltipPlacement,
+  alignment: 'center' | 'end' = 'center',
 ) {
   const [position, setPosition] = useState<TooltipPosition>({
     top: 0,
@@ -114,7 +123,10 @@ export function useTooltipPosition(
     placement,
   });
 
-  useLayoutEffect(() => {
+  // Sync with viewport/element geometry after DOM commit; render and event-only
+  // logic cannot observe scroll, resize or theme changes. Cleanup disconnects
+  // observers and listeners. The server uses an inert effect without layout warnings.
+  usePositionEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
     if (!trigger || !surface) return;
@@ -183,6 +195,7 @@ export function useTooltipPosition(
         triggerRect,
         { width: surfaceRect.width, height: surfaceRect.height },
         placement,
+        alignment,
       );
       // 坐标没变就不写 state：每次写入新对象都会触发一次重渲染，而重渲染
       // 又会让本 effect 重跑，形成无限循环。
@@ -210,7 +223,7 @@ export function useTooltipPosition(
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [open, placement, surface, triggerRef]);
+  }, [open, placement, surface, triggerRef, alignment]);
 
   return position;
 }

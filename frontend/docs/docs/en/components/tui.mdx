@@ -95,6 +95,8 @@ Omitting `commands` leaves text input and submission available, without command 
 
 Every result has a command heading and an accessible success, error or loading icon. The heading uses the matched host descriptor’s `inputText` without arguments; duplicate command titles in the body are hidden. Write results use a separate shaded row for each line; status results use shaded key/value rows; resource previews have their own content surface. JSON and Markdown code fences share copyable code blocks. Markdown ordered lists retain visible native numbering, including a non-default start value. Execution success is independent of a returned task’s `pending` status.
 
+Code blocks use an icon-only copy button. Hover or keyboard focus shows “Copy”; after success the icon briefly changes to a check and the tooltip shows “Copied”. Customize these strings through `labels.copy` and `labels.copied`. A failed copy neither shows success feedback nor calls `onCopy`.
+
 Empty result messages use `labels.noResult`; command-help headings and hints use `labels.availableCommands` and `labels.helpHint`.
 
 `TuiRecordContent` contains one general text result and six structured results:

@@ -1,0 +1,47 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="259"
+  height="140"
+  viewBox="0 0 259 140"
+  fill="none"
+>
+  <g
+    opacity=".36"
+    stroke="var(--ov-ui-color-border-2, var(--ov-ui-border-2-default))"
+    stroke-dasharray="2 2"
+    style="
+      mask-image: radial-gradient(
+        ellipse at center,
+        currentColor,
+        transparent 72%
+      );
+    "
+  >
+    <path
+      d="M0 28H259M0 56H259M0 84H259M0 112H259M37 0V140M75 0V140M117 0V140M159 0V140M199 0V140M235 0V140"
+    />
+  </g>
+  <path
+    d="M95 81L103 59Q104 56 107 56H152Q155 56 156 59L164 81V98Q164 104 158 104H101Q95 104 95 98Z"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+  />
+  <path
+    d="M102 81L109 65Q110 63 113 63H146Q149 63 150 65L157 81H139Q139 92 129.5 92Q120 92 120 81Z"
+    fill="currentColor"
+    opacity=".15"
+  />
+  <g
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path
+      d="M95 81L103 59Q104 56 107 56H152Q155 56 156 59L164 81V98Q164 104 158 104H101Q95 104 95 98Z"
+    />
+    <path
+      d="M96 81H101M106 81H118Q120 81 120 83Q120 93 129.5 93Q139 93 139 83Q139 81 141 81H163"
+    />
+    <path d="M108 38L117 46M130 34V46M152 38L143 46" opacity=".8" />
+  </g>
+</svg>

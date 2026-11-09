@@ -4,9 +4,11 @@
 
 `modules/` 按共同完成的交互流程组织 Hook 与组合视图，共享状态与联动在模块内维护。Hook 负责加载请求、适配数据与维护状态，组合视图把 Hook 返回的数据和操作接入 `components/`。完整页面由宿主组装。
 
-## 当前可接入的占位组件
+Console 已导出命令组合视图，编排 Hook 保持内部实现，接通原生请求、取消、重试与身份隔离；对话服务后续接入。FileBrowser 与 TaskCenter 仍为占位。
 
-三个模块已提供可导入的占位组件、公开的 Props / Labels / Slots 类型和独立样式入口，接入方可以先完成页面布局。props 已定型：每个模块都声明了请求配置、受控状态、回调、插槽与文案。组件本体目前仍只渲染模块名称与占位文案，尚未消费这些 props；业务 Hook 与下文的业务交互仍待实现。
+## 当前可接入的模块
+
+Console 已提供原生命令面板；FileBrowser、TaskCenter 仍为布局占位。各模块均有公开类型与独立样式入口，下文区分本期实现与后续目标。
 
 模块自己取数，因此 props 里没有数据字段：宿主给配置、受控值与文案，模块通过回调上报变化。
 
@@ -64,7 +66,7 @@ React 接入由 `@openviking/react/client` 的 `OpenVikingProvider` 通过 Conte
 
 模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值，显式传空字符串则清除它。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。三个模块的 `FileBrowserProps`、`ConsoleProps` 与 `TaskCenterProps` 均已声明该字段。
 
-Provider 已实现；业务 Hook 尚未实现，因此模块目前还不会发起请求。宿主在应用根部配置一次：
+Provider 与 Console 命令执行已实现，Console 仅在显式提交命令时请求。宿主在应用根部配置一次：
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
@@ -103,7 +105,7 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ## 业务模块划分
 
-三个模块目录及其占位组件已经建立，以下是各模块后续迁入的目标能力，尚未实现。组合视图所依赖的组件当前也均为占位实现，模块的真实实现需先等这些视图落地。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
+下表描述目标能力。Console 命令侧已实现，对话服务与其他模块后续迁入。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
 
 | 模块           | Hook 与业务职责                                                                                   | 组合视图                                                                    |
 | -------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -127,15 +129,15 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ### 交互面板模块
 
-`console` 计划覆盖对话与 TUI 共用的整个面板，提供统一的 `useConsole` Hook 与 `Console` 组合视图：
+`console` 覆盖对话与 TUI 共用的整个面板，对外提供 `Console` 组合视图，编排 Hook 保持内部实现：
 
-- Hook 统一返回当前模式、公共上下文、对话与命令的数据、状态和操作；模式切换与工具栏操作在模块内协调，宿主也可只使用 Hook 组装视图。
+- 内部 Hook 统一管理当前模式、公共上下文、对话与命令的数据、状态和操作；组合视图协调模式切换与工具栏操作。
 - 对话与 TUI 使用同一服务、身份与宿主传入的资源上下文；各自维护消息历史、命令记录与运行状态，切换模式时保留各自状态。
 - 对话能力包括会话、消息流、附件、记忆提交与编译动作；TUI 能力包括命令定义、执行、取消与执行记录，可用命令遵循宿主提供的能力。
-- 组合视图负责模式切换、公共工具栏与内容区域，操作按当前模式分发。`Tui` 作为可独立消费的纯视图组件接入；对话视图暂无公共组件，由模块内部实现。
+- 组合视图负责模式切换、公共工具栏与内容区域，操作按当前模式分发。`Tui` 作为可独立消费的纯视图组件接入；对话视图复用 VikingBot，服务接入后续实现。
 - 打开资源、定位产物或刷新目录通过事件交给宿主，与 `file-browser` 的联动不依赖对方私有状态；登录、身份切换与产品引导仍由宿主负责。
 
-以上交互与 `useConsole` 仍为规划；当前仅导出 `Console` 占位组件和基础类型。
+`Console` 已实现命令执行、取消、重试、记录与独立草稿，编排 Hook 不属于公开 API；对话会话、流式回复、附件和记忆提交后续接入。支持的命令子集见 [Console 文档](../../../../docs/docs/zh/modules/console.mdx)。
 
 ## 组合与扩展边界
 
@@ -149,8 +151,8 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ## 当前状态与开发入口
 
-每个模块使用独立的 kebab-case 目录，入口文件与目录同名，已同步提供占位组件、基础类型和独立构建入口。真实业务迁入后，从同一模块入口分别导出 Hook 与组合视图；当前不提供占位 Hook 或请求配置 API。
+每个模块使用独立的 kebab-case 目录，入口文件与目录同名，已同步提供占位组件、基础类型和独立构建入口。真实业务迁入后，从同一模块入口分别导出 Hook 与组合视图；Console 当前提供组合视图与请求配置，Hook 保持内部实现；占位模块不提供虚假的 Hook。
 
 开发命令和构建入口见 [前端工作区 README](../../../../README.md)，包结构见[包说明](../../README.md)，实施约束见本目录 [AGENTS.md](./AGENTS.md)。
 
-已开放 `@openviking/react/modules/<模块>`，不提供分类聚合 JS 入口。模块 CSS 同时提供 `@openviking/react/modules/style.css` 与 `@openviking/react/modules/<模块>/style.css`，整包 `@openviking/react/style.css` 也包含模块样式。单模块 CSS 当前包含占位视图样式，迁入组合视图后须同步包含所需组件样式；后续单独使用 Hook 无需导入 CSS。
+已开放 `@openviking/react/modules/<模块>`，不提供分类聚合 JS 入口。模块 CSS 同时提供 `@openviking/react/modules/style.css` 与 `@openviking/react/modules/<模块>/style.css`，整包 `@openviking/react/style.css` 也包含模块样式。Console 样式包含 Tui 与 VikingBot，其余模块样式包含当前视图；后续单独使用 Hook 无需导入 CSS。

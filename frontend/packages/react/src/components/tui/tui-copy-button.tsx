@@ -1,5 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
+import CopySvg from '../../../../icons/svg/tui/copy.svg?react';
+import CheckSvg from '../../../../icons/svg/scope-switcher/check.svg?react';
+import { Tooltip } from '../../shared/components/tooltip/index.js';
 import { copyTuiText } from './tui-text.js';
 
 export interface TuiCopyButtonProps {
@@ -10,7 +13,7 @@ export interface TuiCopyButtonProps {
   className?: string;
 }
 
-/** 复制按钮：成功后短暂显示已复制，并通知宿主。 */
+/** 纯图标复制按钮：Tooltip 展示动作与复制成功反馈。 */
 export function TuiCopyButton({
   text,
   label,
@@ -19,23 +22,36 @@ export function TuiCopyButton({
   className,
 }: TuiCopyButtonProps) {
   const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<number | undefined>(undefined);
+
+  // Clear this button's browser feedback timer on unmount; it cannot be cleaned
+  // up by a later click when the result has been removed from the document.
+  useEffect(() => () => window.clearTimeout(resetTimer.current), []);
 
   const handleCopy = () => {
     void copyTuiText(text).then((succeeded) => {
       if (!succeeded) return;
+      window.clearTimeout(resetTimer.current);
       setCopied(true);
       onCopy?.(text);
-      window.setTimeout(() => setCopied(false), 1600);
+      resetTimer.current = window.setTimeout(() => setCopied(false), 1500);
     });
   };
 
   return (
-    <button
-      type="button"
-      className={['ov-tui__copy', className].filter(Boolean).join(' ')}
-      onClick={handleCopy}
-    >
-      {copied ? copiedLabel : label}
-    </button>
+    <Tooltip content={copied ? copiedLabel : label}>
+      <button
+        type="button"
+        className={['ov-tui__copy', className].filter(Boolean).join(' ')}
+        aria-label={copied ? copiedLabel : label}
+        onClick={handleCopy}
+      >
+        {copied ? (
+          <CheckSvg aria-hidden="true" focusable="false" />
+        ) : (
+          <CopySvg aria-hidden="true" focusable="false" />
+        )}
+      </button>
+    </Tooltip>
   );
 }

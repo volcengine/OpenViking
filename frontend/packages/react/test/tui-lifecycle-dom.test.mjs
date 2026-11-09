@@ -62,7 +62,9 @@ test('Markdown code copy feedback, DOM identity and focused links survive contro
     const button = view.container.querySelector('.ov-tui__copy');
     await click(button);
     assert.deepEqual(copied, ['{"id":9007199254740993}']);
-    assert.match(button.textContent, /Copied/);
+    assert.equal(button.textContent, '');
+    assert.ok(button.querySelector('svg[aria-hidden="true"]'));
+    assert.equal(button.getAttribute('aria-label'), 'Copied');
     const link = view.container.querySelector('a');
     link.focus();
     await view.render({
@@ -72,7 +74,7 @@ test('Markdown code copy feedback, DOM identity and focused links survive contro
     await type(view.input, 'hello');
     assert.ok(view.container.querySelector('.ov-tui__copy') === button);
     assert.ok(document.activeElement === link);
-    assert.equal(button.textContent, 'Done');
+    assert.equal(button.getAttribute('aria-label'), 'Done');
     await click(link);
     assert.deepEqual(opened, ['viking://resources/a.md']);
   } finally {
@@ -97,6 +99,32 @@ test('formatted Markdown link labels contain one anchor and invoke the host once
     assert.ok(!view.container.querySelector('a a'));
     await click(view.container.querySelector('a'));
     assert.deepEqual(opened, [uri]);
+  } finally {
+    await view.dispose();
+  }
+});
+
+test('failed clipboard writes keep the copy action and do not report success', async () => {
+  const copied = [];
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: async () => {
+        throw new Error('Clipboard unavailable');
+      },
+    },
+  });
+  const view = await mount({
+    locale: 'zh',
+    records: [markdown('```json\n{"demo":true}\n```')],
+    onCopy: (text) => copied.push(text),
+  });
+  try {
+    const button = view.container.querySelector('.ov-tui__copy');
+    await click(button);
+    assert.equal(button.getAttribute('aria-label'), '复制');
+    assert.equal(button.textContent, '');
+    assert.deepEqual(copied, []);
   } finally {
     await view.dispose();
   }

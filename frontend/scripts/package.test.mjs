@@ -32,6 +32,15 @@ test('JavaScript entries resolve and import without browser globals', async () =
   }
 });
 
+test('Console exposes its view while keeping its orchestration Hook internal', async () => {
+  const root = await import('@openviking/react');
+  const module = await import('@openviking/react/modules/console');
+  assert.equal(typeof module.Console, 'function');
+  assert.equal(root.Console, module.Console);
+  assert.equal('useConsole' in root, false);
+  assert.equal('useConsole' in module, false);
+});
+
 test('public stylesheets resolve through package exports', async () => {
   for (const entry of Object.keys(manifest.exports)) {
     if (!entry.endsWith('.css')) continue;

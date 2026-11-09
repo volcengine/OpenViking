@@ -120,3 +120,8 @@ export function OpenVikingProvider({
 export function useOvClient(): OvClient | null {
   return useContext(OvClientContext)?.client ?? null;
 }
+
+/** Internal: modules compose their request lifetime with the inherited signal. */
+export function useOvSignal(): AbortSignal | undefined {
+  return useContext(OvClientContext)?.base.signal;
+}

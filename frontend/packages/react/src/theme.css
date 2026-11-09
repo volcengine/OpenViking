@@ -36,6 +36,7 @@
  * the fallback applies otherwise.
  */
 .ov-agent-connect,
+.ov-console,
 .ov-file-browser,
 .ov-file-preview,
 .ov-file-tree,
@@ -85,6 +86,7 @@
 }
 
 .dark .ov-agent-connect,
+.dark .ov-console,
 .dark .ov-file-browser,
 .dark .ov-file-preview,
 .dark .ov-file-tree,
