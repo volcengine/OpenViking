@@ -116,6 +116,7 @@ async def readiness_check(request: Request):
         )
 
     checks = {}
+    state_backend = getattr(service._agfs_client, "shared_state_backend", None)
 
     # 1. AGFS: probe filesystem access
     try:
@@ -171,11 +172,19 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["ollama"] = f"error: {e}"
 
+    state_check = getattr(service._agfs_client, "check_state", None)
+    if state_check is not None:
+        try:
+            await state_check()
+            checks["business_state"] = "ok"
+        except Exception:
+            checks["business_state"] = "unavailable"
+
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
     return JSONResponse(
         status_code=status_code,
-        content={"status": "ready" if all_ok else "not_ready", "checks": checks},
+        content={"status": "ready" if all_ok else "not_ready", "checks": checks, "shared_state": state_backend},
     )
 
 

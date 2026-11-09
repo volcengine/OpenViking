@@ -207,6 +207,15 @@ class OpenVikingService:
         # Create RAGFS client using utility
         runtime_binding_config = binding_config or RagfsBindingConfig(agfs=config.agfs)
         self._agfs_client = create_agfs_client(runtime_binding_config, git_config=git_config)
+        # 公共接缝仅注入业务状态存取，私有化SQL映射/配置留在部署插件。
+        if config.business_state.module:
+            import importlib
+
+            state_module = importlib.import_module(config.business_state.module)
+            self._agfs_client = state_module.create(
+                self._agfs_client, config.business_state.params, service_name
+            )
+
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
@@ -215,6 +224,7 @@ class OpenVikingService:
                 agfs=self._agfs_client,
                 timeout=config.agfs.timeout,
                 mount_point=queue_mount_point,
+                work_capacity=getattr(self._agfs_client,"work_capacity",None),
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
                 max_concurrent_external_parse=max_concurrent_external_parse,

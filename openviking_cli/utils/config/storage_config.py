@@ -47,6 +47,13 @@ class WatchStoreConfig(BaseModel):
         return self
 
 
+class BusinessStateConfig(BaseModel):
+    """可选业务状态codec；文件字节与原生Task保持独立owner。"""
+
+    module: str | None = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
 class StorageConfig(BaseModel):
     """Configuration for storage backend.
 
@@ -86,6 +93,8 @@ class StorageConfig(BaseModel):
         default_factory=TaskStoreConfig,
         description="Persistent Task/Work storage backend",
     )
+
+    business_state: BusinessStateConfig = Field(default_factory=BusinessStateConfig)
 
     watch_store: WatchStoreConfig = Field(
         default_factory=WatchStoreConfig,

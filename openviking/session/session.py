@@ -5,6 +5,8 @@
 Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
+from openviking.pyagfs.async_client import state_transaction
+
 import asyncio
 import copy
 import hashlib
@@ -825,7 +827,8 @@ class Session:
         try:
             if not filenames:
                 # Phase 1 writes different child files, each with its own lock.
-                yield session_lease
+                async with state_transaction(agfs):
+                    yield session_lease
                 return
             file_lease = await agfs.pathlock_acquire_exact_batch(
                 [f"{session_path}/{name}" for name in filenames],
@@ -833,7 +836,8 @@ class Session:
                 owner_lease_ref=session_lease,
             )
             try:
-                yield file_lease
+                async with state_transaction(agfs):
+                    yield file_lease
             finally:
                 await agfs.pathlock_release(file_lease)
         finally:

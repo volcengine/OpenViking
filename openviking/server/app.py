@@ -467,6 +467,8 @@ def create_app(
     )
 
     app.add_middleware(HTTPObservabilityMiddleware)
+    from openviking.server.state_middleware import StateCapacityMiddleware
+    app.add_middleware(StateCapacityMiddleware)
     app.add_middleware(ProfileMiddleware)
     app.add_middleware(RequestTimingMiddleware)
 

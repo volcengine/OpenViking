@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """User privacy config storage service."""
 
+from openviking.pyagfs.async_client import state_transaction
+
 import json
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
@@ -158,7 +160,9 @@ class UserPrivacyConfigService:
             **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
         )
         try:
-            yield lease
+            # 多份current/meta/history由状态后端在锁内一次发布。
+            async with state_transaction(agfs):
+                yield lease
         finally:
             await release(lease)
 

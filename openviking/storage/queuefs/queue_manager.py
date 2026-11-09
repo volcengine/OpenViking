@@ -43,6 +43,7 @@ def init_queue_manager(
     max_concurrent_external_task: int = 10,
     *,
     middlewares: Sequence[QueueMiddleware] = (),
+    work_capacity: Any = None,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -71,6 +72,7 @@ def init_queue_manager(
         max_concurrent_session_commit=max_concurrent_session_commit,
         max_concurrent_external_task=max_concurrent_external_task,
         middlewares=middlewares,
+        work_capacity=work_capacity,
     )
     return _instance
 
@@ -118,6 +120,7 @@ class QueueManager:
         max_concurrent_external_task: int = 10,
         *,
         middlewares: Sequence[QueueMiddleware] = (),
+        work_capacity: Any = None,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -141,6 +144,7 @@ class QueueManager:
         # Import at composition time to avoid a service <-> queue package cycle.
         from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 
+        self._work_capacity = work_capacity
         self._middlewares: tuple[QueueMiddleware, ...] = (
             TaskWorkQueueMiddleware(),
             *middlewares,
@@ -351,7 +355,15 @@ class QueueManager:
                     try:
                         queue_size = loop.run_until_complete(queue.size())
                         if queue.has_dequeue_handler() and queue_size > 0:
-                            data = loop.run_until_complete(queue.dequeue())
+                            permit = self._work_capacity.try_acquire(queue.name) if self._work_capacity else None
+                            if self._work_capacity and permit is None:
+                                stop_event.wait(poll_interval)
+                                continue
+                            try:
+                                data = loop.run_until_complete(queue.dequeue())
+                            finally:
+                                if permit is not None:
+                                    permit.release()
                             if data is not None:
                                 logger.debug("[QueueManager] Dequeued message from %s", queue.name)
                             if queue.name in {self.SESSION_COMMIT, self.EXTERNAL_TASK}:
@@ -405,7 +417,7 @@ class QueueManager:
         sem = asyncio.Semaphore(max_concurrent)
         active_tasks: Set[asyncio.Task] = set()
 
-        async def process_one(data: Dict[str, Any]) -> None:
+        async def process_one(data: Dict[str, Any], permit: Any = None) -> None:
             async with sem:
                 msg_id = data.get("id", "") if isinstance(data, dict) else ""
                 try:
@@ -415,6 +427,9 @@ class QueueManager:
                 except Exception as e:
                     # The message remains in processing and will be recovered.
                     logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
+                finally:
+                    if permit is not None:
+                        permit.release()
 
         while not stop_event.is_set():
             # Prune completed tasks
@@ -424,10 +439,24 @@ class QueueManager:
             while len(active_tasks) < max_concurrent:
                 if not queue.has_dequeue_handler():
                     break
-                data = await queue.dequeue_raw()
-                if data is None:
+                # 只增加可选容量接缝，领取/processor/ACK语义继续由原队列负责。
+                permit = self._work_capacity.try_acquire(queue.name) if self._work_capacity else None
+                if self._work_capacity and permit is None:
                     break
-                task = asyncio.create_task(process_one(data))
+                try:
+                    data = await queue.dequeue_raw()
+                except BaseException:
+                    if permit is not None:
+                        permit.release()
+                    raise
+                if data is None:
+                    if permit is not None:
+                        permit.release()
+                    break
+                task = asyncio.create_task(process_one(data, permit))
+                if permit is not None:
+                    # 尚未开始processor就被关闭取消，也必须归还未使用的容量。
+                    task.add_done_callback(lambda completed, slot=permit: slot.release())
                 active_tasks.add(task)
                 logger.debug(
                     f"[QueueManager] Dispatched concurrent task for {queue.name} "
