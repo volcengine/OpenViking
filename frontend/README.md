@@ -1,6 +1,6 @@
 # OpenViking Frontend
 
-React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Console provides native command execution and ScopeCascade coordinates identity selection. FileBrowser and TaskCenter remain layout placeholders.
+React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Console provides native command execution and ScopeCascade coordinates identity selection. FileBrowser remains a layout placeholder.
 
 Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).
 
@@ -30,8 +30,8 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, `ov-` prefixed BEM class names, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. FileTree, FilePreview and Tui are implemented against their reviewed contracts; scope-switcher is a stateless layout, agent-connect renders a fixed-size shell, and viking-bot provides a working view pending design review. See the [module map](./packages/react/README.md#module-map).
-- `packages/react/src/modules/{file-browser,console,task-center}`: Console ships a native command panel; FileBrowser and TaskCenter remain placeholders with public types and styles.
+- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. FileTree, FilePreview and Tui are implemented against their reviewed contracts; scope-switcher is a stateless layout, agent-connect has built-in bilingual agent and developer integration content with host-provided credentials and locale, and viking-bot provides a working view pending design review. See the [module map](./packages/react/README.md#module-map).
+- `packages/react/src/modules/{file-browser,console}`: Console ships a native command panel; FileBrowser remains a placeholder with public types and styles.
 - `packages/react/src/client`: the framework-neutral request client, exported from `@openviking/react/client` — a `fetch`-based `createOvClient` plus the contract modules depend on (`OvClient`, `OvRequestOptions`, `OvClientError`).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `packages/react/src/shared`: internal shared code used by more than one component, with no public entry — not exported from the root, any subpath, or `package.json`. Currently holds the `tooltip` surface that `file-preview` renders into `document.body`.
@@ -55,7 +55,7 @@ Library output is `packages/react/dist/`; documentation output is `docs/doc_buil
 
 ## Target layout
 
-The workspace currently contains React components, shared SVGs, the Console command module and two business module placeholders, the request client, and documentation. The target also includes framework-neutral libraries, the Client transport, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
+The workspace currently contains React components, shared SVGs, the Console command module and one business module placeholder, the request client, and documentation. The target also includes framework-neutral libraries, the Client transport, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
 
 ```text
 frontend/

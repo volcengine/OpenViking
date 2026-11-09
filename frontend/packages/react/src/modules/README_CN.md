@@ -4,11 +4,11 @@
 
 `modules/` 按共同完成的交互流程组织 Hook 与组合视图，共享状态与联动在模块内维护。Hook 负责加载请求、适配数据与维护状态，组合视图把 Hook 返回的数据和操作接入 `components/`。完整页面由宿主组装。
 
-Console 已导出命令组合视图，编排 Hook 保持内部实现，接通原生请求、取消、重试与身份隔离；对话服务后续接入。FileBrowser 与 TaskCenter 仍为占位。
+Console 已导出命令组合视图，编排 Hook 保持内部实现，接通原生请求、取消、重试与身份隔离；对话服务后续接入。FileBrowser 仍为占位。
 
 ## 当前可接入的模块
 
-Console 已提供原生命令面板；FileBrowser、TaskCenter 仍为布局占位。各模块均有公开类型与独立样式入口，下文区分本期实现与后续目标。
+Console 已提供原生命令面板；FileBrowser 仍为布局占位。各模块均有公开类型与独立样式入口，下文区分本期实现与后续目标。
 
 模块自己取数，因此 props 里没有数据字段：宿主给配置、受控值与文案，模块通过回调上报变化。
 
@@ -16,7 +16,6 @@ Console 已提供原生命令面板；FileBrowser、TaskCenter 仍为布局占�
 | -------------- | ------------- | ---------------------------------------- |
 | `file-browser` | `FileBrowser` | `@openviking/react/modules/file-browser` |
 | `console`      | `Console`     | `@openviking/react/modules/console`      |
-| `task-center`  | `TaskCenter`  | `@openviking/react/modules/task-center`  |
 
 ```tsx
 import { FileBrowser } from '@openviking/react/modules/file-browser';
@@ -25,7 +24,7 @@ import '@openviking/react/modules/file-browser/style.css';
 <FileBrowser labels={{ title: '文件浏览' }} />;
 ```
 
-三个组件与主 Props 类型也从 `@openviking/react` 根入口导出；Labels、Slots 与枚举类型从模块子路径导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
+两个组件与主 Props 类型也从 `@openviking/react` 根入口导出；Labels、Slots 与枚举类型从模块子路径导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
 
 ## 职责
 
@@ -64,7 +63,7 @@ React 接入由 `@openviking/react/client` 的 `OpenVikingProvider` 通过 Conte
 | `resourceId`  | 当前库；数据面接口需要它                                                                                               |
 | `credentials` | 传给 `fetch` 的 `RequestCredentials`。默认 `include`，可按需覆盖为 `same-origin` 或 `omit`                             |
 
-模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值，显式传空字符串则清除它。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。三个模块的 `FileBrowserProps`、`ConsoleProps` 与 `TaskCenterProps` 均已声明该字段。
+模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值，显式传空字符串则清除它。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。两个模块的 `FileBrowserProps` 与 `ConsoleProps` 均已声明该字段。
 
 Provider 与 Console 命令执行已实现，Console 仅在显式提交命令时请求。宿主在应用根部配置一次：
 
@@ -111,7 +110,6 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 | -------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `file-browser` | 统一管理目录、检索、当前 URI、预览加载与编辑保存；协调定位、刷新、历史与版本对比                  | 组合 `FileTree`、搜索交互与 `FilePreview`，提供目录和内容联动的文件浏览区域 |
 | `console`      | 统一管理对话 / TUI 模式、公共上下文与工具栏；处理对话会话、消息流、附件、记忆提交及命令执行与记录 | 组合模块内的对话视图、`Tui` 与模式切换，提供完整的交互面板                  |
-| `task-center`  | 当前身份可见任务的列表、筛选、详情、执行记录与允许的操作                                          | 任务列表和详情；个人终端本期聚焦资源导入与知识整理任务                      |
 
 历史列表与版本对比先作为 `file-browser` 的预览能力，编译确认作为 `console` 中的 Bot 动作流程；有独立消费需求后再拆公开模块，不为每个按钮或弹窗建模块。公共视图组件按真实复用需求补充，表中组合视图不要求提前新增组件占位。
 

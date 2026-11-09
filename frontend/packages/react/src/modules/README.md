@@ -4,11 +4,11 @@ English / [中文](README_CN.md)
 
 `modules/` organises Hooks and composite views around interactions that are completed together, keeping shared state and coordination inside the module. Hooks load requests, adapt data and hold state; composite views wire the data and operations a Hook returns into `components/`. The host assembles full pages.
 
-Console exports a composite command view; its orchestration Hook remains internal. Native requests, cancellation, retry and identity isolation are implemented; conversation services remain pending. FileBrowser and TaskCenter remain placeholders.
+Console exports a composite command view; its orchestration Hook remains internal. Native requests, cancellation, retry and identity isolation are implemented; conversation services remain pending. FileBrowser remains a placeholder.
 
 ## Available modules
 
-Console ships a native command panel; FileBrowser and TaskCenter remain layout placeholders. Each module has public types and independent styles. The sections below distinguish current delivery from target capability.
+Console ships a native command panel; FileBrowser remains a layout placeholder. Each module has public types and independent styles. The sections below distinguish current delivery from target capability.
 
 Because a module loads its own data, no prop carries data. A host supplies configuration, the controlled value and the copy; the module reports changes through callbacks.
 
@@ -16,7 +16,6 @@ Because a module loads its own data, no prop carries data. A host supplies confi
 | -------------- | ------------- | ---------------------------------------- |
 | `file-browser` | `FileBrowser` | `@openviking/react/modules/file-browser` |
 | `console`      | `Console`     | `@openviking/react/modules/console`      |
-| `task-center`  | `TaskCenter`  | `@openviking/react/modules/task-center`  |
 
 ```tsx
 import { FileBrowser } from '@openviking/react/modules/file-browser';
@@ -25,7 +24,7 @@ import '@openviking/react/modules/file-browser/style.css';
 <FileBrowser labels={{ title: 'File browser' }} />;
 ```
 
-The three components and their main Props types are also exported from the `@openviking/react` root entry; Labels, Slots and the enum types come from the module subpath. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
+The two components and their main Props types are also exported from the `@openviking/react` root entry; Labels, Slots and the enum types come from the module subpath. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
 
 ## Responsibilities
 
@@ -64,7 +63,7 @@ React integration is provided by `OpenVikingProvider` from `@openviking/react/cl
 | `resourceId`  | Current library; data-plane requests need it                                                                                                                                                                   |
 | `credentials` | `RequestCredentials` for `fetch`. Defaults to `include`; override with `same-origin` or `omit` as needed                                                                                                       |
 
-Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. Every module's `FileBrowserProps`, `ConsoleProps` and `TaskCenterProps` already declares this field.
+Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. The `FileBrowserProps` and `ConsoleProps` types already declare this field.
 
 The Provider and Console command execution are implemented; Console only requests on explicit command submission. The host configures it once at the application root:
 
@@ -111,7 +110,6 @@ The table below describes target capabilities. Console command execution is impl
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `file-browser` | Manages directory, retrieval, current URI, preview loading and edit saving; coordinates positioning, refresh, history and version comparison                                  | Composes `FileTree`, the search interaction and `FilePreview` into a file browsing area that links directory and content |
 | `console`      | Manages conversation / TUI mode, common context and toolbar; handles conversation sessions, message streams, attachments, memory submission and command execution and records | Composes the module's own conversation view, `Tui` and mode switching into a complete interaction panel                  |
-| `task-center`  | Lists, filters, details, execution records and permitted operations for tasks visible to the current identity                                                                 | Task list and detail; this phase of the personal terminal focuses on resource import and knowledge organisation tasks    |
 
 History lists and version comparison start as preview capabilities of `file-browser`, and compile confirmation as a Bot action flow in `console`; they become public modules only once an independent consumer appears, and no module is created per button or dialog. Public view components are added when real reuse appears, and the composite views in the table do not require new component placeholders ahead of time.
 
