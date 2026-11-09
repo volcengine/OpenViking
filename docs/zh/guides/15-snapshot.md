@@ -16,7 +16,7 @@ Snapshot 保存文件树的版本，不会回滚当前 ACL，也不保存向量�
 
 ## 提交范围与并发
 
-USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 `project_dir`，给 `show` 传入文件 `path`。只有本地 ROOT 可以省略这些范围参数。对自己有写权限的项目目录提交，可以避免把无关资源纳入同一次快照。
+USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 `project_dir`，给 `show` 传入文件 `path`。只有本地 ROOT 可以省略这些范围参数。对自己有读权限的项目目录提交，可以避免把无关资源纳入同一次快照。
 
 | `commit(paths=...)` 输入 | 含义 |
 | --- | --- |

@@ -301,7 +301,7 @@ class _SnapshotMixin:
                 ) from exc
         try:
             scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
-            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.WRITE)
+            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.READ)
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
             if lease is not None:

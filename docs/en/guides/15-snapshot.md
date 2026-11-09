@@ -16,7 +16,7 @@ Snapshots version the file tree. They do not roll back current ACLs or preserve 
 
 ## Commit scope and concurrency
 
-USER / ADMIN callers must supply `paths` for `commit` and `log`, `project_dir` for `restore`, and a file `path` for `show`. Only local ROOT mode may omit those scope parameters. Committing a project directory with write access keeps unrelated resources out of the change.
+USER / ADMIN callers must supply `paths` for `commit` and `log`, `project_dir` for `restore`, and a file `path` for `show`. Only local ROOT mode may omit those scope parameters. Committing a project directory with read access keeps unrelated resources out of the change.
 
 | `commit(paths=...)` input | Meaning |
 | --- | --- |

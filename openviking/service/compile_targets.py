@@ -518,13 +518,6 @@ class CompileStateStore:
         return removed
 
 
-def task_ctx(account_id: str, user_id: str) -> RequestContext:
-    """Use the accepted task identity for internal Git access; writes recheck actor ACL."""
-    return RequestContext(
-        user=UserIdentifier(account_id=account_id, user_id=user_id), role=Role.USER, bypass_acl=True
-    )
-
-
 def overlaps(a: str, b: str) -> bool:
     return a == b or a.startswith(f"{b}/") or b.startswith(f"{a}/")
 
@@ -569,6 +562,26 @@ class CompileLifecycle:
         self.store = self._store = store
         self._fs = viking_fs
         self.resolve_groups = None
+
+    async def task_ctx(self, task: Any) -> RequestContext:
+        """Restore the accepted executor with current groups and normal ACL checks.
+
+        Private connection data supplies the authenticated role and fallback groups.
+        Tasks without a saved role have USER privileges. Resolver failures propagate
+        so authorization cannot silently reuse stale group membership.
+        """
+        connection = (task.auth or {}).get("openviking_connection") or {}
+        groups = (
+            await self.resolve_groups(task.account_id, task.user_id)
+            if self.resolve_groups is not None
+            else connection.get("group_ids", ())
+        )
+        return RequestContext(
+            user=UserIdentifier(account_id=task.account_id, user_id=task.user_id),
+            role=Role.parse(connection.get("role", Role.USER)),
+            group_ids=tuple(groups),
+            bypass_acl=False,
+        )
 
     @staticmethod
     def validate_layout(to: str, sources: list[str]) -> None:
@@ -763,7 +776,7 @@ class CompileLifecycle:
         """Freeze source and Skill snapshots plus a replayable Runtime plan before submission."""
         request = task.meta["request"]
         compile_name = self._compile_name(task)
-        ctx = task_ctx(task.account_id, task.user_id)
+        ctx = await self.task_ctx(task)
         meta = run["meta"]
         checkpoint = self._checkpoint(task)
         if "baseline" not in checkpoint:
@@ -913,7 +926,7 @@ class CompileLifecycle:
             return ExternalTaskSnapshot(
                 status=run["status"], result=run.get("result"), error_message=run.get("error")
             )
-        ctx = task_ctx(task.account_id, task.user_id)
+        ctx = await self.task_ctx(task)
         target = task.meta["request"]["to"]
         meta = run["meta"]
         if await get_task_tracker().is_cancellation_requested(
@@ -1032,15 +1045,7 @@ class CompileLifecycle:
                     )
                     if terminal.status != TaskStatus.COMPLETED:
                         raise FailedPreconditionError("Compile rollback index rebuild failed")
-                search_ctx = RequestContext(
-                    user=UserIdentifier(account_id=task.account_id, user_id=task.user_id),
-                    role=Role.USER,
-                    group_ids=(
-                        tuple(await self.resolve_groups(task.account_id, task.user_id))
-                        if self.resolve_groups is not None
-                        else ()
-                    ),
-                )
+                search_ctx = await self.task_ctx(task)
                 result = await get_service().search.find(
                     query="",
                     ctx=search_ctx,
@@ -1093,7 +1098,7 @@ class CompileLifecycle:
     async def _rollback(self, to: str, task: Any, run: Dict[str, Any], ctx: RequestContext) -> None:
         """Restore ``to`` to ``run``'s baseline; ``ctx`` provides snapshot access.
 
-        Writes enforce the owner's USER ACL. Denied paths are recorded; storage
+        Writes enforce the executor's current permissions. Denied paths are recorded; storage
         errors propagate. A persisted head makes completion idempotent.
         """
         run_meta = run["meta"]
@@ -1102,16 +1107,7 @@ class CompileLifecycle:
             async with self._locked_output(to, ctx) as lease:
                 if run_meta.get("finish_snapshot"):
                     return
-                actor_ctx = RequestContext(
-                    user=ctx.user,
-                    role=Role.USER,
-                    bypass_acl=False,
-                    group_ids=(
-                        tuple(await self.resolve_groups(ctx.account_id, ctx.user.user_id))
-                        if self.resolve_groups is not None
-                        else ()
-                    ),
-                )
+                actor_ctx = await self.task_ctx(task)
                 head = await self._commit(
                     [to],
                     f"compile {task.task_id} rollback point",

@@ -32,7 +32,7 @@
 |------|----------|
 | `show(path=...)` / `diff` / `log` | `read` |
 | `diff_paths` | 来源目录和每个变化文件的 `read`；任一子节点无权则整次失败，且不暴露该 URI |
-| `commit` | `write`；目录会递归检查当前全部子节点，任一子节点无权则整次失败 |
+| `commit` | `read`；目录会递归检查当前全部子节点，任一子节点无权则整次失败 |
 | `restore` 覆盖已有文件 | 文件的 `write` |
 | `restore` 新建文件 | 父目录的 `write` |
 | `restore` 删除文件 | 文件的 `write` |

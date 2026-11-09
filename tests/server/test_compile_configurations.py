@@ -341,11 +341,15 @@ async def test_compile_admission_rejects_invalid_targets_before_publication(
     )
 
 
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.GLOBAL])
 async def test_configuration_runs_full_isolation_and_failure_recovery(
-    service, app, client, monkeypatch
+    service, app, client, monkeypatch, role
 ):
     ensure_target = service.fs.ensure_compile_target
     ctx, runtime = await prepare(service, app, monkeypatch)
+    ctx.role, ctx.group_ids = Role(role), ("reviewers",)
+    commit = AsyncMock(wraps=service.viking_fs.commit)
+    monkeypatch.setattr(service.viking_fs, "commit", commit)
     monkeypatch.setattr(service.fs, "ensure_compile_target", AsyncMock(wraps=ensure_target))
     service.fs.finalize_compile_directories.return_value = False
     owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
@@ -375,6 +379,13 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         assert response.status_code == 202, response.text
         task_id = response.json()["result"]["task_id"]
         await service.compile._tasks.execute(task_id, **owner)
+        for call in commit.await_args_list:
+            executor = call.kwargs["ctx"]
+            assert (executor.role, executor.group_ids, executor.bypass_acl) == (
+                role,
+                ctx.group_ids,
+                False,
+            )
         return await tracker.get(task_id, **owner)
 
     first = await execute({"compile_name": compile_name}, "compile-first-execution")

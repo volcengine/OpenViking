@@ -32,7 +32,7 @@ Snapshots use the current ACL at operation time. ACLs are not stored in snapshot
 |-----------|---------------------|
 | `show(path=...)` / `diff` / `log` | `read` |
 | `diff_paths` | `read` on requested directories and every changed file; any denied descendant rejects the whole query without exposing its URI |
-| `commit` | `write`; directories recursively check every current descendant and fail as a whole if any node is denied |
+| `commit` | `read`; directories recursively check every current descendant and fail as a whole if any node is denied |
 | `restore` overwriting a file | `write` on the file |
 | `restore` creating a file | `write` on the parent directory |
 | `restore` deleting a file | `write` on the file |

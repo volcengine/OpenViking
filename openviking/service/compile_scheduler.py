@@ -115,7 +115,12 @@ class CompileScheduler:
 
     async def save_credential(self, ctx: RequestContext) -> tuple[Dict[str, Any], Dict[str, str]]:
         """Return the request's execution identity and encrypted API key for scheduled runs."""
-        executor = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+        executor = {
+            "account_id": ctx.account_id,
+            "user_id": ctx.user.user_id,
+            "role": str(ctx.role),
+            "group_ids": list(ctx.group_ids),
+        }
         return executor, await encrypt_credential(self.credential_encryptor, ctx)
 
     def install_expiry(self, scheduler: Any) -> None:
@@ -275,10 +280,10 @@ class CompileScheduler:
             ):
                 continue
             await self._compile.lifecycle.record_queued(task, locked_record=record)
-            actor = RequestContext(
-                user=UserIdentifier(account_id=task.account_id, user_id=task.user_id),
-                role=Role.USER,
+            task.auth = await self._compile._tasks._task_auth(
+                task.task_id, task.account_id, task.user_id
             )
+            actor = await self._compile.lifecycle.task_ctx(task)
             await self._compile._tasks._resume_submission(task, actor)
             return True
         return False
@@ -286,7 +291,8 @@ class CompileScheduler:
     async def _executor(self, record: Dict[str, Any]) -> tuple[RequestContext, Dict[str, Any]]:
         """Verify the saved key and load the executor's current account groups.
 
-        A user key must match the saved identity. A root key acts as the saved user.
+        A user key must match the saved identity and supplies its current role.
+        A root key acts with the saved executor role, defaulting to USER when absent.
         """
         context = record["execution_context"]
         executor, credential = context.get("executor"), context.get("credential")
@@ -302,7 +308,8 @@ class CompileScheduler:
             api_key = json.loads(plaintext.decode("utf-8"))["api_key"]
         except Exception as exc:
             raise invalid from exc
-        group_ids = ()
+        role = Role.parse(executor.get("role", Role.USER))
+        group_ids = tuple(executor.get("group_ids", ()))
         if self._identity_resolver is not None:
             try:
                 identity = await self._identity_resolver(api_key)
@@ -314,12 +321,14 @@ class CompileScheduler:
                 executor["user_id"],
             ):
                 raise invalid
+            if not root_key:
+                role = identity.role
             group_ids = tuple(
                 await self._group_resolver(executor["account_id"], executor["user_id"])
             )
         ctx = RequestContext(
             user=UserIdentifier(account_id=executor["account_id"], user_id=executor["user_id"]),
-            role=Role.USER,
+            role=role,
             group_ids=group_ids,
             api_key=api_key,
         )

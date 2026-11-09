@@ -684,12 +684,13 @@ class CompileService:
             await self._require_lifecycle().record_queued(task, locked_record=locked_record)
 
         await self._fs.ensure_compile_target(normalized.to, ctx)
+        # Private task state retains the authenticated executor for asynchronous filesystem access.
         return await self._tasks.create(
             self.task_type,
             resource_id=", ".join(normalized.from_),
             payload=payload,
             private_payload=private_payload,
-            connection=connection,
+            connection={**connection, "role": str(ctx.role), "group_ids": list(ctx.group_ids)},
             ctx=ctx,
             idempotency_key=idempotency_key,
             submission_payload=submitted if idempotency_key else None,

@@ -273,8 +273,8 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
 
     assert await service.fs.show(v1["commit_oid"], path=file_uri, ctx=reader)
     assert await service.fs.log(paths=[root], ctx=reader)
-    with pytest.raises(PermissionDeniedError):
-        await service.fs.commit(message="reader cannot commit", paths=[root], ctx=reader)
+    snapshot = await service.fs.commit(message="reader snapshot", paths=[root], ctx=reader)
+    assert snapshot["commit_oid"] == v1["commit_oid"]
 
     await service.fs.write(file_uri, content="v2", mode="replace", wait=True, ctx=writer)
     await service.fs.commit(message="acl restore v2", paths=[root], ctx=writer)
@@ -345,6 +345,10 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
     assert all(ctx.group_ids == ("engineering",) for ctx in reindex_contexts)
     assert all(ctx.actor_peer_id == "snapshot-peer" for ctx in reindex_contexts)
     assert all(ctx.bypass_acl for ctx in reindex_contexts)
+
+    await service.fs.set_acl(file_uri, [], ctx=admin, acl_mode=AclMode.RESTRICTED)
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.commit(message="unreadable descendant", paths=[root], ctx=reader)
 
 
 async def test_show_commit_metadata(client_with_resource):

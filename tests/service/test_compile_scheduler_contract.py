@@ -86,15 +86,24 @@ async def test_scheduled_credential_uses_current_key_identity():
     scheduler.credential_encryptor = FileEncryptor(LocalFileProvider(root_key="ab" * 32))
     caller = RequestContext(user=UserIdentifier(ACCOUNT, OWNER), role=Role.USER, api_key="test-key")
     executor, credential = await scheduler.save_credential(caller)
-    assert executor == {"account_id": ACCOUNT, "user_id": OWNER}
+    assert executor == {
+        "account_id": ACCOUNT,
+        "user_id": OWNER,
+        "role": Role.USER,
+        "group_ids": [],
+    }
     record = {"execution_context": {"executor": executor, "credential": credential}}
 
     resolve = AsyncMock()
-    scheduler.set_identity_resolver(resolve, AsyncMock(return_value=[]))
-    for identity in (ResolvedIdentity(Role.ROOT), ResolvedIdentity(Role.USER, ACCOUNT, OWNER)):
+    scheduler.set_identity_resolver(resolve, AsyncMock(return_value=["reviewers"]))
+    for role in (Role.ROOT, Role.USER, Role.ADMIN, Role.GLOBAL):
+        identity = (
+            ResolvedIdentity(role) if role == Role.ROOT else ResolvedIdentity(role, ACCOUNT, OWNER)
+        )
         resolve.return_value = identity
         ctx, _ = await scheduler._executor(record)
-        assert (ctx.user, ctx.role) == (caller.user, Role.USER)
+        assert ctx.user == caller.user and ctx.role == (Role.USER if role == Role.ROOT else role)
+        assert ctx.group_ids == ("reviewers",) and not ctx.bypass_acl
     resolve.return_value = ResolvedIdentity(Role.USER, ACCOUNT, "other")
     with pytest.raises(FailedPreconditionError):
         await scheduler._executor(record)
@@ -187,6 +196,7 @@ async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypa
         _tasks=ExternalTaskService(),
         create=AsyncMock(),
     )
+    service._tasks._task_auth = AsyncMock(return_value={})
     scheduler = CompileScheduler(service, store)
     scheduler._executor = AsyncMock(side_effect=AssertionError("must retain accepted owner"))
     scheduler._expiry = SimpleNamespace(report=AsyncMock(), unregister=AsyncMock())
