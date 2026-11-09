@@ -108,7 +108,10 @@ export const VikingBotComposerView = forwardRef<
     onSend({ text, attachments } satisfies VikingBotDraft);
   };
 
-  const acceptDrop = Boolean(onFilesAdded) && !disabled && !limitReached;
+  // 拦截拖放的默认行为与是否接受文件是两件事：满额或禁用时仍要阻止浏览器
+  // 直接打开被拖入的文件（那会离开当前会话并丢掉未发送草稿），只是不添加文件。
+  const interceptDrop = Boolean(onFilesAdded);
+  const acceptDrop = interceptDrop && !disabled && !limitReached;
 
   return (
     <div
@@ -120,14 +123,15 @@ export const VikingBotComposerView = forwardRef<
         .filter(Boolean)
         .join(' ')}
       onDragOver={(event) => {
-        if (!acceptDrop) return;
-        // 阻止默认行为，否则浏览器会直接打开被拖入的文件。
+        if (!interceptDrop) return;
         event.preventDefault();
-        event.dataTransfer.dropEffect = 'copy';
+        event.dataTransfer.dropEffect = acceptDrop ? 'copy' : 'none';
       }}
       onDrop={(event) => {
-        if (!acceptDrop) return;
+        if (!interceptDrop) return;
+        // 无论能否接受，都先取消默认行为，避免浏览器打开该文件。
         event.preventDefault();
+        if (!acceptDrop) return;
         reportFiles([...(event.dataTransfer.files ?? [])]);
       }}
     >

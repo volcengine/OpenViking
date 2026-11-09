@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { VikingBot } from '@openviking/react/components/viking-bot';
+import type { VikingBotAttachment } from '@openviking/react/components/viking-bot';
 import '@openviking/react/components/viking-bot/style.css';
 
 const messages = [
@@ -42,10 +44,23 @@ const messages = [
   },
 ];
 
+const ATTACHED: VikingBotAttachment[] = [
+  { key: 'a1', name: 'report.pdf', status: 'ready' },
+];
+
 export default function VikingBotBasic() {
+  const [draft, setDraft] = useState('');
   return (
     <div style={{ height: 520 }}>
-      <VikingBot messages={messages} draft="" />
+      <VikingBot
+        messages={messages}
+        draft={draft}
+        attachments={ATTACHED}
+        onDraftChange={setDraft}
+        onSend={() => setDraft('')}
+        onCancel={() => undefined}
+        onFilesAdded={() => undefined}
+      />
     </div>
   );
 }
