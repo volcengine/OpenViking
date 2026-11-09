@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 const shell = process.env.POWERSHELL_EXE || 'pwsh';
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-online-test-'));
 const quote = value => `'${value.replaceAll("'", "''")}'`;
-const installer = fs.readFileSync(fileURLToPath(new URL('install-preview.ps1', import.meta.url)), 'utf8');
+// Match the published HTTP entry: UTF-8 without BOM (offline .ps1 keeps BOM).
+const installer = fs.readFileSync(fileURLToPath(new URL('install-preview.ps1', import.meta.url)), 'utf8').replace(/^\uFEFF/, '');
 const version = '0.4.0-windows-preview-online';
 const name = `vika-${version}-win32-x64.zip`;
 const root = path.join(work, 'fixture');
