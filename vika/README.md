@@ -17,13 +17,20 @@ Vika supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and
 
 ## Quick start
 
-You need macOS or Linux, a configured model runtime, and **an OpenViking service (required; local or remote)**. On Windows, use WSL2 with this published release, or try the experimental [Windows x64 preview package](docs/windows-preview.md#download-and-install).
+You need macOS or Linux, a configured model runtime, and **an OpenViking service (required; local or remote)**. On Windows, use WSL2 or the experimental [native Windows x64 preview](docs/windows-preview.md).
 
 ```bash
-curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/0.4.0-24e73d5a3f7a/install.sh | sh -s -- --version 0.4.0-24e73d5a3f7a
+curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 ```
 
-This command installs a pinned release. The unversioned installer and `latest` endpoint are not currently available.
+This installs the latest release (currently `0.5.0-preview`). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/install.sh | sh -s -- --version <version>`.
+
+On native Windows (x64, preview), in PowerShell:
+
+```powershell
+irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
+```
+
 
 The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `vika setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `vika dsh model`.
 

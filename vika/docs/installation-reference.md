@@ -7,10 +7,10 @@ This reference covers running the daemon. For the product overview, read the [RE
 ## One-command installation
 
 ```bash
-curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/0.4.0-24e73d5a3f7a/install.sh | sh -s -- --version 0.4.0-24e73d5a3f7a
+curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 ```
 
-This command pins a published preview. The unversioned installer and `vika/latest` currently return 404; do not omit `--version` until the release endpoints are published.
+This installs the version in `vika/latest` (currently `0.5.0-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/install.sh | sh -s -- --version <version>`. Native Windows uses `irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex`; see [Windows preview](windows-preview.md).
 
 The installer detects Linux or macOS and x64 or arm64 (use WSL2 on Windows), downloads the matching archive, verifies SHA-256, extracts it to `~/.vika/releases/<version>`, adds `~/.vika/bin` to your shell PATH, and enters `vika setup`. Only sh, curl, tar, and sha256sum (or shasum) are required. The package supplies pinned Node, PM2, lark-cli, and Pi without modifying existing Node, npm, PM2, or git installations. Before switching, it runs the new bundled Node; incompatible system libraries or CPU architecture leave the previous installation intact. musl systems such as Alpine are unsupported.
 

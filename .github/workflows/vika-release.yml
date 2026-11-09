@@ -5,8 +5,8 @@ name: Vika Release
 #   <prefix>/releases/<version>/  vika-<version>-<platform>.tar.gz (+ .sha256),
 #                                 install.sh, and release.json, uploaded last
 #   <prefix>/install.sh, <prefix>/latest  written last, only for an
-#                                         openviking-vika@X.Y.Z tag newer than
-#                                         latest and without a "-"
+#                                         openviking-vika@ tag newer than
+#                                         latest (pre-releases until a stable one)
 # A pull request that touches vika/ tests and builds linux-x64 and publishes
 # nothing. A manual run publishes the chosen branch as <version>-<commit>, a
 # preview that `latest` never points to.
@@ -212,9 +212,10 @@ jobs:
             echo "Vika ${VERSION} is uploaded already; finishing its release"
           fi
 
-          # `latest` only moves forward and never to a pre-release (a version
-          # with a "-"): a hotfix on an older line or a release candidate gets
-          # its own directory and leaves every installed Vika where it is.
+          # `latest` only moves forward. Until Vika has a stable release a
+          # pre-release (a version with a "-") moves it too; once `latest`
+          # holds a stable version, pre-releases of the same line leave it.
+          # Versions compare by their base, and a stable version wins a tie.
           # Writing the version `latest` holds already is a re-run's no-op.
           MOVE_LATEST=false
           CURRENT=""
@@ -222,15 +223,19 @@ jobs:
             if fetch "${VIKA_TOS_PREFIX}/latest" current-latest; then
               CURRENT="$(tr -d ' \r\n' < current-latest)"
             fi
-            case "${VERSION}" in
-              *-*) ;;
-              *)
-                NEWEST="$(printf '%s\n%s\n' "${CURRENT}" "${VERSION}" | sort -V | tail -n 1)"
-                if [ "${NEWEST}" = "${VERSION}" ]; then
-                  MOVE_LATEST=true
-                fi
-                ;;
-            esac
+            BASE="${VERSION%%-*}"
+            CURRENT_BASE="${CURRENT%%-*}"
+            NEWEST="$(printf '%s\n%s\n' "${CURRENT_BASE}" "${BASE}" | sort -V | tail -n 1)"
+            if [ -z "${CURRENT}" ] || [ "${CURRENT}" = "${VERSION}" ]; then
+              MOVE_LATEST=true
+            elif [ "${BASE}" != "${CURRENT_BASE}" ]; then
+              [ "${NEWEST}" = "${BASE}" ] && MOVE_LATEST=true
+            else
+              case "${VERSION}" in
+                *-*) case "${CURRENT}" in *-*) [ "$(printf '%s\n%s\n' "${CURRENT}" "${VERSION}" | sort -V | tail -n 1)" = "${VERSION}" ] && MOVE_LATEST=true ;; esac ;;
+                *) MOVE_LATEST=true ;;
+              esac
+            fi
           fi
 
           if [ "${UPLOADED}" = false ]; then
