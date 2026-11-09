@@ -217,7 +217,7 @@ class _SnapshotMixin:
                 entries may be files or directories. Directories are expanded
                 recursively with the snapshot pruning rules applied. ``None``
                 (default) enumerates the whole account tree. An empty list is
-                forwarded as an explicit empty path list (no-op commit). A
+                forwarded as an explicit empty path list (no file changes). A
                 path that exists in neither the VFS nor the previous snapshot
                 logs a warning and is treated as a no-op deletion.
             branch: Branch to advance. Defaults to ``"main"``.
@@ -231,6 +231,7 @@ class _SnapshotMixin:
             added/updated/removed). Both variants include ``ignored``: the
             number of candidate paths skipped by the account ``.ovgitignore``
             rules (system pruning is not counted). Noop omits ``changed``.
+            The first commit creates a valid snapshot even with no file changes.
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id

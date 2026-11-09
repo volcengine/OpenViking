@@ -121,7 +121,7 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 }
 ```
 
-`changed` 为本次提交中新增/修改/删除的路径数；`ignored` 为本次被账号 `.ovgitignore` 规则排除的候选路径数（系统内置剪枝不计入）。当工作区相对上一次提交没有任何变化时返回 `noop`，`commit_oid` 为当前 HEAD（`noop` 同样返回 `ignored`，但不含 `changed`）：
+`changed` 为本次提交中新增/修改/删除的路径数；`ignored` 为本次被账号 `.ovgitignore` 规则排除的候选路径数（系统内置剪枝不计入）。分支首次提交即使未选中文件或文件全部被排除，也创建有效快照，返回 `created`、`changed=0`；空目录本身不被记录。当工作区相对上一次提交没有任何变化时返回 `noop`，`commit_oid` 为当前 HEAD（`noop` 同样返回 `ignored`，但不含 `changed`）：
 
 ```json
 {

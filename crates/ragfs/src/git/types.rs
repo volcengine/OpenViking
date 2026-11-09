@@ -16,6 +16,7 @@ pub struct CommitRequest {
 
 #[derive(Debug, Clone)]
 pub enum CommitResponse {
+    /// A persisted commit; `changed` is zero for an empty initial snapshot.
     Created {
         commit_oid: ObjectId,
         changed: usize,
@@ -23,8 +24,7 @@ pub enum CommitResponse {
         /// Existing hardcoded system pruning is not included.
         ignored: usize,
     },
-    /// No path produced an editor change; ref untouched. `commit_oid` is the
-    /// existing HEAD (or `ObjectId::null` if the branch did not exist).
+    /// No path changed on an existing branch; ref untouched. `commit_oid` is HEAD.
     Noop {
         commit_oid: ObjectId,
         /// Number of candidate paths skipped by user `.ovgitignore` rules.

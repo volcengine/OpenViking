@@ -62,7 +62,7 @@ Partial commits preserve the previous snapshot outside the requested scope. Afte
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | message | str | Yes | - | Commit message |
-| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. USER/ADMIN callers must provide this field; `null` account-wide snapshots are reserved for local ROOT mode. An empty list `[]` is forwarded as an explicit empty path set (no-op). A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
+| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. USER/ADMIN callers must provide this field; `null` account-wide snapshots are reserved for local ROOT mode. An empty list `[]` selects no files. A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
 | branch | str | No | `main` | Branch to advance |
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
@@ -121,7 +121,7 @@ When a new snapshot is created:
 }
 ```
 
-`changed` is the number of paths added/updated/removed in this commit; `ignored` is the number of candidate paths skipped by the account `.ovgitignore` rules (built-in system pruning is not counted). When the workspace is unchanged relative to the last commit, the result is `noop` and `commit_oid` is the current HEAD (`noop` also returns `ignored` but has no `changed`):
+`changed` is the number of paths added/updated/removed in this commit; `ignored` is the number of candidate paths skipped by the account `.ovgitignore` rules (built-in system pruning is not counted). The first commit on a branch creates a valid snapshot even when no files are selected or all selected files are excluded; it returns `created` with `changed=0`. Empty directories themselves are not recorded. When the workspace is unchanged relative to the last commit, the result is `noop` and `commit_oid` is the current HEAD (`noop` also returns `ignored` but has no `changed`):
 
 ```json
 {

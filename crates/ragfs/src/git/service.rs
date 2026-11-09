@@ -110,8 +110,9 @@ impl GitService {
     /// - If `paths` is `None`, the full `/local/{account}` subtree is
     ///   enumerated via `enumerate::collect_all`.
     ///
-    /// On no-op (no editor change) the branch ref is untouched and
-    /// `CommitResponse::Noop` is returned.
+    /// The first commit persists an empty tree if no paths change. On later
+    /// no-op commits the branch ref is untouched and `CommitResponse::Noop`
+    /// is returned.
     ///
     /// Entries in `paths` may identify files, directories, or paths deleted
     /// since the previous snapshot. Directories are expanded recursively;
@@ -679,16 +680,15 @@ impl GitService {
             }
         }
 
-        // 5. No-op short-circuit. Even though the tree didn't change, the
-        //    on-disk (size, mtime_ns) for enumerated paths may have shifted
+        // 5. An existing branch reuses HEAD when unchanged. The on-disk
+        //    (size, mtime_ns) for enumerated paths may have shifted
         //    (e.g. `touch` of an unchanged file). Persist the refreshed index
         //    keyed on the *current* HEAD so the next commit can still hit the
         //    fast path. Soft-fail on save errors.
-        if changed == 0 {
-            let noop_oid = prev_head.unwrap_or_else(|| ObjectId::null(gix_hash::Kind::Sha1));
-            if let (Some(store), Some(parent)) = (&self.index_store, prev_head) {
+        if let (0, Some(head)) = (changed, prev_head) {
+            if let Some(store) = &self.index_store {
                 let new_index = CommitIndex {
-                    parent_oid: parent,
+                    parent_oid: head,
                     entries: new_index_entries,
                     // Stamped from the backing file's mtime on the next load.
                     saved_at_ns: None,
@@ -699,7 +699,7 @@ impl GitService {
             }
             let _ = fast_path_active;
             return Ok(CommitResponse::Noop {
-                commit_oid: noop_oid,
+                commit_oid: head,
                 ignored,
             });
         }
@@ -2159,8 +2159,7 @@ mod tests {
     // ── 1 ──────────────────────────────────────────────────────────────
     #[tokio::test]
     async fn test_commit_first_creates_root_commit() {
-        let (_dir, vfs, object_store, ref_store, svc) = make_service("acct");
-        vfs.put("resources/a.md", b"hello");
+        let (_dir, _vfs, object_store, ref_store, svc) = make_service("acct");
 
         let resp = svc
             .commit(req("acct", "main", "first", None))
@@ -2173,7 +2172,7 @@ mod tests {
                 changed,
                 ..
             } => {
-                assert!(changed >= 1, "should record at least one change");
+                assert_eq!(changed, 0);
                 let parents = commit_parents(
                     object_store.as_ref() as &dyn ObjectStore,
                     "acct",
@@ -2187,7 +2186,7 @@ mod tests {
                     commit_oid,
                 )
                 .await;
-                assert_ne!(tree, ObjectId::empty_tree(gix_hash::Kind::Sha1));
+                assert_eq!(tree, ObjectId::empty_tree(gix_hash::Kind::Sha1));
                 let head = ref_store.read("acct", "refs/heads/main").await.unwrap();
                 assert_eq!(head, commit_oid);
             }
