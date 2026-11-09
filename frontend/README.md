@@ -16,7 +16,7 @@ npm run dev
 
 Open the `/ui/` URL printed by Rspress. The official workspace development plugin starts the library's Rslib watcher before the documentation server, so no manual library build is required. Demos consume the built package exports and update when the watcher rebuilds them.
 
-The navigation language menu switches between English at `/ui/` and Simplified Chinese at `/ui/zh/`. Existing English URLs remain unchanged.
+The navigation language menu switches between Simplified Chinese at `/ui/` and English at `/ui/en/`.
 
 ```bash
 npm run lint           # Check formatting, lint rules, and types for all workspaces
@@ -34,6 +34,7 @@ npm run preview        # Serve the built documentation at /ui/
 - `packages/react/src/modules/{file-browser,console,task-center}`: importable placeholder components with settled public Props / Labels / Slots types, and styles. Business Hooks and interactions are planned.
 - `packages/react/src/client`: the framework-neutral request client, exported from `@openviking/react/client` — a `fetch`-based `createOvClient` plus the contract modules depend on (`OvClient`, `OvRequestOptions`, `OvClientError`).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
+- `packages/react/src/shared`: internal shared code used by more than one component, with no public entry — not exported from the root, any subpath, or `package.json`. Currently holds the `tooltip` surface that `file-preview` renders into `document.body`.
 - `docs`: Rspress with `@rspress/plugin-preview`, external TSX demos, source viewing/copying, and hand-written props tables.
 - `docs/docs/en` and `docs/docs/zh`: matching English and Simplified Chinese pages, with localized navigation.
 - `docs/docs/_demos`: runnable examples using the public package exports.

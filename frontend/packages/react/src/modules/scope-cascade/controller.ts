@@ -65,16 +65,33 @@ export function createScopeController() {
       if (!active || request.signal.aborted || requests[index] !== request)
         return;
       const previous = snapshots[index]!.selected;
-      const selected = options.find(
-        (option) => option.id === previous?.id && !option.disabled,
-      );
+      /**
+       * 作用域始终有一个确定的值。此前的选中值不在新列表里、被禁用，或本来就没
+       * 有时，改由第一个可选项承担——这一步必须在这里做：它决定后续请求的参数，
+       * 组件只负责按给定值渲染，不做业务归一化。
+       *
+       * A scope always has a definite value. When the previous selection is gone
+       * from the new list, is disabled, or was never set, the first selectable
+       * option takes over. This has to happen here: it decides the parameters of
+       * subsequent requests, and the component only renders the value it is given
+       * rather than normalising business state.
+       */
+      const selected =
+        options.find(
+          (option) => option.id === previous?.id && !option.disabled,
+        ) ?? options.find((option) => !option.disabled);
+      const changed = selected !== undefined && selected.id !== previous?.id;
       update(index, { options, selected, loading: false, error: null });
       // A refreshed list may revoke the current selection. Clear all descendants
       // before notification so nobody sees a mixed library/space/user identity.
+      // Picking a different option counts too: the descendants belong to the old
+      // identity and must not survive the switch.
       const revoked = previous !== undefined && selected === undefined;
-      if (revoked) resetDescendants(index);
+      if (revoked || changed) resetDescendants(index);
       notify(index);
-      if (revoked) for (let next = index + 1; next < 3; next++) notify(next);
+      if (revoked || changed)
+        for (let next = index + 1; next < 3; next++) notify(next);
+      if (changed && index < 2) void load((index + 1) as ScopeCascadeIndex);
     } catch (error) {
       if (!active || request.signal.aborted || requests[index] !== request)
         return;

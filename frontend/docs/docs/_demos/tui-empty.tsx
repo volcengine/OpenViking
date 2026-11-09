@@ -13,12 +13,12 @@ import { createTuiCommands, createTuiCommandGroups } from '#tui-commands';
 // The empty state belongs to the host. These styles travel with the copyable demo.
 const emptyStyles = `
 .ov-demo-tui-empty {
-  --ov-ui-demo-tui-muted: var(--ov-ui-text-muted, color-mix(in srgb, CanvasText 60%, Canvas));
+  --ov-ui-demo-tui-muted: var(--ov-ui-tui-muted);
   inline-size: 100%;
   min-inline-size: 0;
   align-self: stretch;
   padding: 32px 4px;
-  color: var(--ov-ui-text, CanvasText);
+  color: inherit;
   text-align: start;
 }
 .ov-demo-tui-empty .ov-demo-tui-empty__title {

@@ -1,30 +1,59 @@
-/**
- * 命令控制台的主题变量。叠加色取中灰加透明度，浅色与暗色主题下都可用；
- * 宿主需要精确配色时整组覆盖。
- *
- * Theme variables of the command console. Overlays are mid-grey with alpha so
- * they work in both themes; override the whole set for exact colours.
- */
+/** TUI colours derive from the package theme; legacy host aliases remain supported. */
 .ov-tui {
   --ov-ui-tui-gap: 16px;
-  --ov-ui-tui-bubble-bg: rgb(128 128 128 / 12%);
-  --ov-ui-tui-card-bg: rgb(128 128 128 / 6%);
-  --ov-ui-tui-result-bg: var(--ov-ui-surface, Canvas);
-  --ov-ui-tui-card-border: rgb(128 128 128 / 22%);
-  --ov-ui-tui-skeleton: rgb(128 128 128 / 16%);
-  --ov-ui-tui-skeleton-bright: rgb(128 128 128 / 28%);
-  --ov-ui-tui-link: var(--ov-ui-primary, #5252ff);
-  --ov-ui-tui-success: var(--ov-ui-success, #1f9d55);
-  --ov-ui-tui-error: var(--ov-ui-status-error, #d64545);
-  --ov-ui-tui-warning: #b26a00;
-
+  --ov-ui-tui-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text, var(--ov-ui-text-1-default))
+  );
+  --ov-ui-tui-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-muted, var(--ov-ui-text-3-default))
+  );
+  --ov-ui-tui-surface: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-surface, var(--ov-ui-bg-1-default))
+  );
+  --ov-ui-tui-hover: var(
+    --ov-ui-color-fill-hover,
+    var(--ov-ui-hover, var(--ov-ui-fill-hover-default))
+  );
+  --ov-ui-tui-focus: var(
+    --ov-ui-color-focus,
+    var(--ov-ui-focus-ring, var(--ov-ui-focus-default))
+  );
+  --ov-ui-tui-bubble-bg: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  --ov-ui-tui-card-bg: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+  --ov-ui-tui-result-bg: var(--ov-ui-tui-surface);
+  --ov-ui-tui-card-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default)
+  );
+  --ov-ui-tui-skeleton: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  --ov-ui-tui-skeleton-bright: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default)
+  );
+  --ov-ui-tui-link: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary, var(--ov-ui-primary-default))
+  );
+  --ov-ui-tui-success: var(
+    --ov-ui-color-status-success,
+    var(--ov-ui-success, var(--ov-ui-status-success-default))
+  );
+  --ov-ui-tui-error: var(
+    --ov-ui-color-status-error,
+    var(--ov-ui-status-error, var(--ov-ui-status-error-default))
+  );
+  --ov-ui-tui-warning: var(--ov-ui-color-warning, var(--ov-ui-warning-default));
+  --ov-ui-tui-shadow: var(--ov-ui-color-shadow, var(--ov-ui-shadow-default));
   display: flex;
   box-sizing: border-box;
   min-width: 0;
   min-height: 0;
   height: 100%;
   flex-direction: column;
-  color: var(--ov-ui-text, inherit);
+  color: var(--ov-ui-tui-text);
   font-family: var(
     --ov-ui-font-family,
     'PingFang SC',
@@ -62,12 +91,12 @@
   align-items: center;
   justify-content: center;
   padding: 24px 12px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   text-align: center;
 }
 
 .ov-tui__muted {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
 }
 
 /* 记录：命令气泡靠右，结果卡片占满宽度。 */
@@ -105,7 +134,7 @@
 .ov-tui__bubble-time {
   flex: none;
   align-self: flex-end;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
 }
 
@@ -165,7 +194,7 @@
   inline-size: 14px;
   block-size: 14px;
   flex: none;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
 }
 
 .ov-tui__result-state[data-status='success'] {
@@ -223,7 +252,7 @@
   border-radius: 6px;
   background: transparent;
   padding: 2px 8px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -231,12 +260,12 @@
 
 .ov-tui__copy:hover {
   color: inherit;
-  background: var(--ov-ui-hover, rgb(128 128 128 / 12%));
+  background: var(--ov-ui-tui-hover);
 }
 
 .ov-tui__copy:focus-visible,
 .ov-tui__link:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline: 2px solid var(--ov-ui-tui-focus);
   outline-offset: 1px;
 }
 
@@ -405,7 +434,7 @@
 
 .ov-tui__markdown th,
 .ov-tui__table th {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-weight: 600;
 }
 
@@ -421,7 +450,7 @@
   border-radius: 12px;
   background: var(--ov-ui-tui-card-bg);
   padding: 14px 16px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 14px;
   line-height: 24px;
   white-space: pre-line;
@@ -476,7 +505,7 @@
   background: var(--ov-ui-tui-card-bg);
 }
 .ov-tui__search-item:has(.ov-tui__search-open:focus-visible) {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline: 2px solid var(--ov-ui-tui-focus);
   outline-offset: 1px;
 }
 .ov-tui__search-uri {
@@ -543,9 +572,10 @@
   margin-top: 4px;
   border: 1px solid var(--ov-ui-tui-card-border);
   border-radius: 8px;
-  background: var(--ov-ui-surface, canvas);
+  background: var(--ov-ui-tui-surface);
   padding: 8px 10px;
-  box-shadow: 0 6px 16px rgb(0 0 0 / 12%);
+  box-shadow: 0 6px 16px
+    color-mix(in srgb, var(--ov-ui-tui-shadow) 12%, transparent);
   color: inherit;
   font-size: 12px;
   font-weight: 400;
@@ -557,7 +587,7 @@
   border-radius: 999px;
   background: var(--ov-ui-tui-bubble-bg);
   padding: 0 7px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 11px;
   line-height: 18px;
   white-space: nowrap;
@@ -595,7 +625,7 @@
   border: 1px solid var(--ov-ui-tui-card-border);
   border-radius: 6px;
   padding: 0 6px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 11px;
   line-height: 18px;
 }
@@ -603,7 +633,7 @@
 .ov-tui__search-preview,
 .ov-tui__search-meta {
   overflow: hidden;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -630,7 +660,7 @@
 
 .ov-tui__tree-meta {
   flex: none;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
 }
 
@@ -648,7 +678,7 @@
 }
 
 .ov-tui__load-more:hover {
-  background: var(--ov-ui-hover, rgb(128 128 128 / 12%));
+  background: var(--ov-ui-tui-hover);
 }
 
 .ov-tui__write-lines {
@@ -702,7 +732,7 @@
 }
 
 .ov-tui__status-label {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   margin: 0;
   font-size: 12px;
   font-weight: 400;
@@ -736,7 +766,7 @@
 
 /* 资源预览。 */
 .ov-tui__result-meta {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
   line-height: 20px;
 }
@@ -770,7 +800,7 @@
   border-radius: 12px;
   background: var(--ov-ui-tui-card-bg);
   padding: 16px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 13px;
   line-height: 22px;
 }
@@ -820,7 +850,7 @@
 }
 
 .ov-tui__help-footer {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
   line-height: 20px;
 }
@@ -833,7 +863,7 @@
 
 .ov-tui__help-section-label {
   padding: 0 4px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
 }
 
@@ -862,7 +892,7 @@
 }
 
 .ov-tui__help-item:hover {
-  background: var(--ov-ui-hover, rgb(128 128 128 / 12%));
+  background: var(--ov-ui-tui-hover);
 }
 
 .ov-tui__help-name {
@@ -871,7 +901,7 @@
 }
 
 .ov-tui__help-desc {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -1029,7 +1059,7 @@
 
 .ov-tui__input::placeholder {
   -webkit-text-fill-color: currentColor;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
 }
 
 .ov-tui__input-mirror {
@@ -1049,11 +1079,11 @@
 
 .ov-tui__bubble-command,
 .ov-tui__input-command {
-  color: var(--ov-ui-text, inherit);
+  color: var(--ov-ui-tui-text);
 }
 
 .ov-tui__command-prefix {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
 }
 
 .ov-tui__command-name {
@@ -1065,14 +1095,14 @@
 
 .ov-tui__input-completion,
 .ov-tui__input-arguments {
-  color: var(--ov-ui-text-muted, #787c91);
+  color: var(--ov-ui-tui-muted);
 }
 
 .ov-tui__input {
   position: relative;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  caret-color: var(--ov-ui-text, CanvasText);
+  caret-color: var(--ov-ui-tui-text);
   scrollbar-width: none;
 }
 
@@ -1082,7 +1112,7 @@
 }
 
 .ov-tui__input::selection {
-  background: rgb(82 82 255 / 22%);
+  background: color-mix(in srgb, var(--ov-ui-tui-link) 22%, transparent);
 }
 
 @media (forced-colors: active) {
@@ -1109,7 +1139,7 @@
   align-items: center;
   gap: 12px;
   margin-inline: 4px;
-  color: var(--ov-ui-text-muted, #787c91);
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
 }
 
@@ -1130,7 +1160,7 @@
   justify-content: center;
   border: 0;
   border-radius: 7px;
-  background: var(--ov-ui-hover, rgb(128 128 128 / 6%));
+  background: var(--ov-ui-tui-hover);
   color: inherit;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 14px;
@@ -1156,14 +1186,14 @@
 .ov-tui__no-suggestions {
   border: 1px solid var(--ov-ui-tui-card-border);
   border-radius: 10px;
-  background: var(--ov-ui-surface, canvas);
+  background: var(--ov-ui-tui-surface);
   padding: 8px 12px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
 }
 
 .ov-tui__hint-empty {
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
 }
 
@@ -1172,10 +1202,10 @@
 .ov-tui__no-suggestions {
   border: 1px solid var(--ov-ui-border, var(--ov-ui-tui-card-border));
   border-radius: 12px;
-  background: var(--ov-ui-surface, canvas);
+  background: var(--ov-ui-tui-surface);
   box-shadow:
-    0 16px 36px rgb(15 23 42 / 10%),
-    0 6px 18px rgb(15 23 42 / 6%);
+    0 16px 36px color-mix(in srgb, var(--ov-ui-tui-shadow) 10%, transparent),
+    0 6px 18px color-mix(in srgb, var(--ov-ui-tui-shadow) 6%, transparent);
 }
 
 .ov-tui__suggestions {
@@ -1197,7 +1227,7 @@
 
 .ov-tui__suggestion-label {
   padding: 0 8px 4px;
-  color: var(--ov-ui-text-muted, #6e718c);
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
   font-weight: 500;
   line-height: 20px;
@@ -1224,7 +1254,7 @@
 
 .ov-tui__suggestion[aria-selected='true'],
 .ov-tui__suggestion:hover {
-  background: var(--ov-ui-hover, rgb(128 128 128 / 6%));
+  background: var(--ov-ui-tui-hover);
 }
 
 .ov-tui__suggestion[aria-selected='true'] .ov-tui__suggestion-name {
@@ -1233,7 +1263,7 @@
 
 .ov-tui__suggestion:focus-visible,
 .ov-tui__hint-example:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #5252ff);
+  outline: 2px solid var(--ov-ui-tui-focus);
   outline-offset: -2px;
 }
 
@@ -1249,7 +1279,7 @@
   min-width: 0;
   flex: 1 1 160px;
   overflow: hidden;
-  color: var(--ov-ui-text-muted, #6e718c);
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
   line-height: 22px;
   text-overflow: ellipsis;
@@ -1288,7 +1318,7 @@
 
 .ov-tui__hint-desc,
 .ov-tui__hint-label {
-  color: var(--ov-ui-text-muted, #6e718c);
+  color: var(--ov-ui-tui-muted);
   font-size: 12px;
   line-height: 20px;
 }
@@ -1302,7 +1332,7 @@
 .ov-tui__hint-usage {
   border: 1px solid var(--ov-ui-border, var(--ov-ui-tui-card-border));
   border-radius: 8px;
-  background: var(--ov-ui-hover, rgb(128 128 128 / 6%));
+  background: var(--ov-ui-tui-hover);
   padding: 9px 12px;
   overflow-wrap: anywhere;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
@@ -1322,7 +1352,7 @@
   gap: 12px;
   border: 0;
   border-radius: 8px;
-  background: var(--ov-ui-hover, rgb(128 128 128 / 6%));
+  background: var(--ov-ui-tui-hover);
   padding: 10px 12px;
   color: inherit;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
@@ -1335,7 +1365,7 @@
 
 .ov-tui__hint-example-index {
   flex: none;
-  color: var(--ov-ui-text-muted, #6e718c);
+  color: var(--ov-ui-tui-muted);
 }
 
 .ov-tui__hint-example:hover {
@@ -1367,7 +1397,7 @@
 }
 
 .ov-tui__hint-table th {
-  color: var(--ov-ui-text-muted, #6e718c);
+  color: var(--ov-ui-tui-muted);
 }
 
 .ov-tui__hint-table :is(th, td):nth-child(2) {
