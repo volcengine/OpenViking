@@ -696,6 +696,32 @@ describe('AgyAgent ACP backend', () => {
     await agent.stop();
   });
 
+  it('fails a turn that agy reports as terminated under a normal end_turn', async () => {
+    const failed = [];
+    const succeeded = [];
+    const { agent, children } = newAgent(makeStore(), {
+      onTurnFailed: (info) => failed.push(info),
+      onTurnSucceeded: (info) => succeeded.push(info),
+    });
+    const child = await startSession(agent, children);
+    const finish = async (text, index) => {
+      agent.deliver(`line ${index}`, index);
+      await waitFor(() => prompts(child).length === index);
+      child.feed({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'agy-ses-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
+      child.feed({ jsonrpc: '2.0', id: prompts(child)[index - 1].id, result: { stopReason: 'end_turn' } });
+      await waitFor(() => !agent.turnActive);
+    };
+    await finish('\n⚠ Agent execution terminated due to error.\n', 1);
+    assert.equal(failed.length, 1);
+    assert.match(failed[0].error, /terminated due to error/);
+    assert.equal(succeeded.length, 0);
+
+    await finish('A normal answer quoting ⚠ Agent execution terminated due to error. in the middle.', 2);
+    assert.equal(failed.length, 1);
+    assert.equal(succeeded.length, 1);
+    await agent.stop();
+  });
+
   it('declines a permission request that arrives anyway', async () => {
     const { agent, children, store } = newAgent();
     const child = await startSession(agent, children);

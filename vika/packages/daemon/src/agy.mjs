@@ -10,6 +10,7 @@ import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
 const AGY_RUNTIME = getRuntimeDefinition('agy');
 const NOT_LOGGED_IN = 'AGY_NOT_LOGGED_IN';
+const AGENT_TERMINATED = '⚠ Agent execution terminated due to error.';
 
 function notLoggedIn() {
   const error = new Error('agy is not logged in: run agy and sign in, or agy acp --login');
@@ -116,6 +117,14 @@ export class AgyAgent extends OpencodeAgent {
 
   _promptBusy() {
     return this.turnActive || this.openPrompts > 0;
+  }
+
+  // A failed agent loop reaches ACP only as this closing line of text and a
+  // normal end_turn; the cause is in agy's own acp-server log.
+  _turnEndError() {
+    return this.noteText.trimEnd().endsWith(AGENT_TERMINATED)
+      ? new Error('agy agent execution terminated due to error; see its acp-server log')
+      : null;
   }
 
   // The same ids `agy models` and --model use, with the effort in the suffix.

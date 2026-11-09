@@ -670,7 +670,7 @@ export class OpencodeAgent {
         const stopReason = this.cancelledOwner === owner ? 'cancelled' : result?.stopReason;
         const failed = stopReason && stopReason !== 'end_turn'
           ? new Error(`${this.runtimeLabel} turn ended: ${stopReason}`)
-          : null;
+          : this._turnEndError();
         this._completeTurn(failed);
       },
       (error) => {
@@ -685,6 +685,11 @@ export class OpencodeAgent {
         this._completeTurn(error);
       },
     );
+  }
+
+  // A failure the runtime reports under a normal end_turn. OpenCode has none.
+  _turnEndError() {
+    return null;
   }
 
   // An error without a numeric code never came back from the agent: the prompt
