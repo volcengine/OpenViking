@@ -1,8 +1,9 @@
-# Windows preview
+# Windows source development and validation
 
-For an experimental downloadable Windows x64 package, see
-[the preview Action and local installer](windows-preview.md). The instructions
-below describe a source checkout; stable Windows releases remain unsupported.
+For a normal installation, use the Windows one-line command in the shared
+[installation guide](../install.md). For offline packages and release validation,
+see [Windows package maintenance](windows-preview.md). The instructions below
+are for developers running a source checkout.
 
 This is a source-only preview for a trusted, single-user Windows 10/11 x64
 workstation. It does not install the separate OpenViking server; configure an

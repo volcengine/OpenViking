@@ -1,4 +1,6 @@
-# Windows x64 downloadable preview
+# Windows package maintenance
+
+For installation and first-run setup, use the shared [installation guide](../install.md). This page covers Windows build artifacts, offline installation and validation.
 
 The **Windows x64 preview** job in **Vika Release** builds a separate, experimental ZIP.
 It shares the POSIX workflow's pull-request, manual and `openviking-vika@*` tag
@@ -52,61 +54,6 @@ To pin a preview version or pass options without `iex`:
 by the one-line command. The download base is the Vika root (before
 `/windows-preview`), must use HTTPS, and defaults to the release bucket above.
 The existing `install-preview.ps1 -File <zip>` offline entry remains available.
-
-## Community setup wizard
-
-For a fresh installation without an existing manifest, a community-maintained
-wrapper adds an interactive setup wizard to the preview package. Download the
-`-winsetup.zip` from the [community download page](https://bhpan.buaa.edu.cn/link/AAFA06DBD7CC54498AB80EE9BF4B2ED044).
-This wrapper is separate from the repository's Actions artifact and is not an
-official TOS release. The reported tested combination is **Durable + DeepSeek API
-+ self-hosted OpenViking**; other configurations need testing.
-
-Use a normal Windows x64 user account with **PowerShell 7** (`pwsh`) installed.
-Open PowerShell and paste this block. Enter the actual downloaded ZIP path when
-prompted; no source checkout or old Vika configuration is required.
-
-```powershell
-$ErrorActionPreference = 'Stop'
-Get-Command pwsh -ErrorAction Stop | Out-Null
-$zip = (Read-Host 'Downloaded winsetup ZIP path').Trim().Trim('"')
-if (!(Test-Path -LiteralPath $zip -PathType Leaf)) { throw 'ZIP not found' }
-$temp = Join-Path $env:TEMP ('vika-winsetup-' + [guid]::NewGuid().ToString('N'))
-Expand-Archive -LiteralPath $zip -DestinationPath $temp
-$installer = Join-Path $temp 'install.ps1'
-if (!(Test-Path -LiteralPath $installer -PathType Leaf)) {
-    throw 'This is not the community winsetup ZIP: install.ps1 is missing'
-}
-& pwsh -NoProfile -ExecutionPolicy Bypass -File $installer
-if ($LASTEXITCODE -ne 0) { throw "Setup failed with exit code $LASTEXITCODE; files kept at $temp" }
-```
-
-The execution-policy option applies only to this child process. The command uses
-a unique temporary directory and does not delete an existing installation.
-Keep any existing configuration backed up before trying this preview.
-
-Prepare these values for the wizard:
-
-- An existing, reachable OpenViking service address and the intended **User API
-  Key**. The wizard does not deploy an OpenViking server. Choose the hosted-service
-  option only if you have credentials for that service.
-- An absolute workspace path and an agent display name.
-- Your model provider, model ID, and API key.
-- Your own Feishu App ID and App Secret. Configure long-connection events,
-  permissions and app publication, then complete the authorization requested by
-  the wizard with your own account.
-
-Do not copy another user's credentials or assume a sample local server address
-exists on your computer. Follow the wrapper's completion screen for its command
-entry point and configuration locations; the bare artifact instructions below
-use a different launcher. After startup, send a task through Feishu and check the
-reply and actual workspace output. A successful offline check alone does not
-verify model requests or message delivery.
-
-There is currently no hosted one-command download entry point for this community
-wrapper. Do not substitute an invented TOS URL. Automatic upgrades are not
-established by this preview installation path; starting at login is, through
-`vika autostart enable`.
 
 ## Install a local artifact
 

@@ -328,7 +328,7 @@ Download:
 
 <img src="docs/images/superagent-overview.png" alt="Chat and email connect to Vika and your agent on your machine or cloud VM; the agent uses workspace tools, while OpenViking provides local or remote knowledge and memory." width="100%" />
 
-[Get started →](vika/install.md) · [Learn more →](vika/README.md) · Requires a local or remote OpenViking service.
+[Install on macOS, Linux or Windows →](vika/install.md) · [Learn more →](vika/README.md) · Requires a local or remote OpenViking service.
 
 ## VikingBot
 
