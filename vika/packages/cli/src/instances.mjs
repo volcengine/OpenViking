@@ -19,6 +19,8 @@ export const IM_LABELS = Object.freeze({
   telegram: 'Telegram',
   qq: 'QQ',
   slack: 'Slack',
+  // A QQ account through OneBot, told apart from the official QQ bot.
+  get onebot() { return t('QQ（OneBot）', 'QQ (OneBot)'); },
 });
 
 // The primary IM (`channel`) is where the bot reaches the owner unasked.

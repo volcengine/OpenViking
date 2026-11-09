@@ -454,6 +454,19 @@ test('adding Slack to an existing instance pastes tokens for the new IM only and
   assert.match(h.written(), /\/invite/);
 });
 
+test('adding OneBot to an existing instance connects only it, next to nothing else, and can make it primary', async (t) => {
+  const h = harness(t, ['2', '5', '1,7', '7', '2', '11']);
+  const before = existing(h, {});
+  h.options.connect.onebot = async ({ plan, canGoBack }) => { h.calls.push(['onebot', plan.dataDir, canGoBack]); };
+  assert.equal(await setupCommand(h.options), 0);
+  assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'onebot'], channel: 'onebot' }]);
+  assert.deepEqual(h.calls, [['onebot', before.dataDir, false], ['restart', 'asd']]);
+  assert.match(h.written(), /接入QQ（OneBot）（需要 WebSocket 地址、access token 和私聊口令）/);
+  assert.match(h.written(), /接下来接入：QQ（OneBot） WebSocket 地址 \+ access token \+ 私聊口令绑定/);
+  assert.match(h.written(), /主渠道：飞书 → QQ（OneBot）/);
+  assert.ok(h.written().includes('把群号写进 ~/.vika/data/asd/onebot/config.json'));
+});
+
 test('setup detects a primary command that changed the manifest while it was connecting an IM', async (t) => {
   const h = harness(t, ['2', '5', '1,4', '7', '2', '11']);
   const before = existing(h, { connectors: ['lark', 'slack'] });
@@ -1566,6 +1579,24 @@ test('English setup offers QQ and describes credentials and private-chat binding
   assert.doesNotMatch(h.written(), /[一-鿿]|undefined/);
   assert.match(h.written(), /Next, connecting: QQ AppID \/ AppSecret \+ private-chat verification code/);
   assert.match(h.written(), /QQ: Message the bot you just bound/);
+});
+
+test('English setup offers OneBot as a QQ of its own, last in the list, and says where groups are connected', async (t) => {
+  const h = harness(t, ['OB Agent', '', '', '1', '7', 'y'], { runtimes: ENGLISH_RUNTIMES });
+  h.options.env.VIKA_LANG = 'en';
+  h.options.connect.onebot = async ({ plan }) => {
+    assert.equal(fs.existsSync(path.join(h.home, '.vika', 'config.json')), false);
+    h.calls.push(['onebot', plan.dataDir]);
+  };
+  assert.equal(await setupCommand(h.options), 0);
+  const [agent] = h.manifest().agents;
+  assert.equal(agent.channel, 'onebot'); assert.deepEqual(agent.connectors, ['onebot']);
+  assert.equal(agent.profile, undefined);
+  assert.equal(h.calls[0][0], 'onebot');
+  assert.doesNotMatch(h.written(), /[一-鿿]|undefined/);
+  assert.match(h.written(), /QQ \(OneBot\).*an ordinary QQ account logged in to NapCat, LLOneBot or Lagrange/);
+  assert.match(h.written(), /Next, connecting: QQ \(OneBot\) WebSocket address \+ access token \+ a code in a private message/);
+  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; to bring it into a group, list the group in \S+\/onebot\/config\.json/);
 });
 
 test('in English, a first setup says it all in English, and the bot says hello in English', async (t) => {

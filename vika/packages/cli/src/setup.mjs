@@ -44,6 +44,7 @@ import { IM_LABELS, connectorsOf, ignoredFieldsNotice, imList, primaryMeaning } 
 import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
+import { connectOneBot, policyPath } from './onebot.mjs';
 
 // `vika setup`: add, change or remove an instance. A new instance is asked
 // question by question; a change is a list of every setting with its current
@@ -97,10 +98,12 @@ const imChoices = () => [
     hint: t('工作区里的 Slack App（新建或用已有的，Socket Mode）；需要粘贴两个 token', 'a new or existing app in your Slack workspace (Socket Mode); paste two tokens') },
   { label: 'QQ', value: 'qq',
     hint: t('腾讯官方机器人；需要 AppID / AppSecret 和本人私聊验证码', 'official Tencent bot; needs AppID / AppSecret and a private-chat verification code') },
+  { label: IM_LABELS.onebot, value: 'onebot',
+    hint: t('用 NapCat、LLOneBot 或 Lagrange 登录的普通 QQ 号；需要 WebSocket 地址、access token 和私聊口令', 'an ordinary QQ account logged in to NapCat, LLOneBot or Lagrange; needs the WebSocket address, an access token and a code in a private message') },
 ].filter(choice => capabilities.connectors[choice.value] !== false);
 
 // IMs connected by pasting tokens rather than scanning a code.
-const TOKEN_IMS = ['telegram', 'slack', 'qq'];
+const TOKEN_IMS = ['telegram', 'slack', 'qq', 'onebot'];
 
 // Where the Feishu/Lark bot app comes from. A scan can only pick an app the
 // scanner owns or administers, and a test tenant cannot scan at all; then the
@@ -1568,6 +1571,7 @@ function connectionSteps(prompter, connectors, { saving = false, larkSource = 'c
     if (im === 'telegram') return t('Telegram Bot token + Start 绑定', 'Telegram bot token + Start');
     if (im === 'qq') return t('QQ AppID / AppSecret + 私聊验证码绑定', 'QQ AppID / AppSecret + private-chat verification code');
     if (im === 'slack') return t('Slack 新建或选已有 App + 两个 token + 私聊口令绑定', 'Slack app (new or existing) + two tokens + a code in a direct message');
+    if (im === 'onebot') return t(`${IM_LABELS.onebot} WebSocket 地址 + access token + 私聊口令绑定`, `${IM_LABELS.onebot} WebSocket address + access token + a code in a private message`);
     const scans = scansOf(im, larkSource);
     return t(`${IM_LABELS[im]} ${scans} 次`, `${IM_LABELS[im]} ${scans} ${scans === 1 ? 'scan' : 'scans'}`);
   });
@@ -1641,7 +1645,7 @@ async function setupFlow({
   detect = { runtimes: detectRuntimes, openViking: detectOpenViking, larkApps: checkLarkApps, dsh: detectDsh },
   dshModels = null,
   configureOV = configureOpenViking,
-  connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, email: askEmail, greet, pi: loginPi },
+  connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, email: askEmail, greet, pi: loginPi },
   control = { start: startCommand, restart: restartCommand, autostart: autostartCommand },
   listen = larkMessageListener,
   allocate = allocatePort,
@@ -1931,7 +1935,11 @@ async function setupFlow({
         await connect.slack({ plan, prompter, fetchImpl, canGoBack: prompter.tty && !bound });
         bound = true;
       }
-      if (newIms.includes('qq')) await connect.qq({ plan, prompter, fetchImpl, canGoBack: prompter.tty && !bound });
+      if (newIms.includes('qq')) {
+        await connect.qq({ plan, prompter, fetchImpl, canGoBack: prompter.tty && !bound });
+        bound = true;
+      }
+      if (newIms.includes('onebot')) await connect.onebot({ plan, prompter, canGoBack: prompter.tty && !bound });
       break;
     } catch (error) {
       if (!(error instanceof GoBack)) throw error;
@@ -2055,6 +2063,11 @@ async function setupFlow({
     next.push(['Slack', t('私聊机器人发任务；要它参与频道，在频道里 /invite 它；命令前加个空格（ /new）',
       'Message the bot directly; /invite it to channels it should join; put a space before commands ( /new)')]);
   }
+  if (newIms.includes('onebot')) {
+    const policy = shortenHome(policyPath(plan.dataDir), homeDir);
+    next.push([IM_LABELS.onebot, t(`在 QQ 里私聊这个号发任务；要它进群，把群号写进 ${policy}`,
+      `Message the account in a private QQ chat; to bring it into a group, list the group in ${policy}`)]);
+  }
   if (!current) {
     next.push([t('控制台', 'Console'), t(`http://127.0.0.1:${WEB_PORT}  每一轮在做什么都在这里`, `http://127.0.0.1:${WEB_PORT}  what every turn did`)]);
     if (env.SSH_CONNECTION) {
@@ -2122,9 +2135,10 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     const policy = POLICY_SWITCHES.has(key);
     changes.push(t(`${label}：${arrow}${policy ? '（模型会开一次新的会话）' : ''}`, `${label}: ${arrow}${policy ? ' (the model starts a new session)' : ''}`));
   }
-  for (const im of ['lark', 'weixin', 'telegram', 'slack', 'qq']) {
+  for (const im of ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']) {
     if (!was.includes(im) && after.connectors.includes(im)) {
       changes.push(im === 'qq' ? t('接入QQ（需要 AppID / AppSecret 和私聊验证码）', 'Connect QQ (needs AppID / AppSecret and a private-chat verification code)')
+        : im === 'onebot' ? t(`接入${IM_LABELS[im]}（需要 WebSocket 地址、access token 和私聊口令）`, `Connect ${IM_LABELS[im]} (needs the WebSocket address, an access token and a code)`)
         : im === 'telegram' ? t(`接入${IM_LABELS[im]}（需要 Bot token 和 Start 绑定）`, `Connect ${IM_LABELS[im]} (needs a bot token and Start)`)
         : im === 'slack' ? t(`接入${IM_LABELS[im]}（需要新建或选已有 App、两个 token 和私聊口令绑定）`, `Connect ${IM_LABELS[im]} (needs a new or existing app, two tokens and a code)`)
           : t(`接入${IM_LABELS[im]}（需要扫码）`, `Connect ${IM_LABELS[im]} (needs a scan)`));

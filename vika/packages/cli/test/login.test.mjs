@@ -96,7 +96,7 @@ test('usage, and nothing to renew before setup', async (t) => {
   const empty = machine(t, () => []);
   await assert.rejects(loginCommand(['weixin'], empty.options), /先运行 vika setup/);
   assert.equal(await loginCommand(['setup'], empty.options), 2);
-  assert.match(empty.written(), /用法：vika login <lark\|weixin\|email\|telegram\|slack\|qq> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 vika setup 修改实例/);
+  assert.match(empty.written(), /用法：vika login <lark\|weixin\|email\|telegram\|slack\|qq\|onebot> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 vika setup 修改实例/);
 });
 
 test('Telegram login stops the poller before verification and restarts with the new key', async (t) => {
@@ -113,6 +113,16 @@ test('Slack login stops the receiver before verification and restarts with the n
   m.options.connect.slack = async ({ plan }) => { m.calls.push(['slack', plan.id]); };
   assert.equal(await loginCommand(['slack'], m.options), 0);
   assert.deepEqual(m.calls, [['stop', 'sl'], ['slack', 'sl'], ['restart', 'sl']]);
+});
+
+test('OneBot login stops the instance, so it does not take the code as a message, and restarts with the new account', async (t) => {
+  const m = machine(t, (home) => [agent(home, 'ob', { channel: 'onebot', connectors: ['onebot'], profile: undefined, model: 'pi' })]);
+  m.options.control.stop = async (id) => { m.calls.push(['stop', id]); };
+  m.options.connect.onebot = async ({ plan }) => { m.calls.push(['onebot', plan.id]); };
+  assert.equal(await loginCommand(['onebot'], m.options), 0);
+  assert.deepEqual(m.calls, [['stop', 'ob'], ['onebot', 'ob'], ['restart', 'ob']]);
+  assert.match(m.written(), /OB（ob）的 QQ（OneBot） 已更新/);
+  await assert.rejects(loginCommand(['qq'], m.options), /还没有实例接QQ；/);
 });
 
 test('failed Telegram verification resumes the existing instance and reports the failure', async (t) => {
