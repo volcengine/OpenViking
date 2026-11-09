@@ -119,15 +119,16 @@ export function admitted(policy, account, chat) {
 // quote and @self. `spoken` is its `spokenText`, the text without any
 // @mention, where `names` are looked for.
 export function classify({ kind, chat, self, own, fromOwner, text, spoken, atSelf, replyToOwn }, policy) {
+  // The agent's own words as an event would wake it with them. In a private
+  // chat a line another client sent from the account is not shown either:
+  // the Core submits every private line on its own, so it would cost a turn
+  // of its own, and a leading `/` there would run as a daemon command.
+  if (self) return own || kind === 'private' ? 'drop' : 'context';
   const typed = String(text ?? '').trimStart();
-  // The agent's own words as an event would wake it with them. A private `/`
-  // line sent from the account by another client would run as a daemon
-  // command (see below), and it is not the owner's.
-  if (self) return own || (kind === 'private' && typed.startsWith('/')) ? 'drop' : 'context';
   const command = policy.commandPrefixes.some((prefix) => typed.startsWith(prefix));
   if (kind === 'private') {
-    // An exchange with the other program on the account; secrets typed
-    // there must not reach the model.
+    // A line to the other program on the account. Like its answers (above),
+    // it is not shown: secrets typed there must not reach the model.
     if (command) return 'drop';
     // The Core runs a leading `/` in any direct chat as a daemon command for
     // whoever sent it (commands.mjs commandCandidate, daemon.mjs

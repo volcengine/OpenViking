@@ -582,13 +582,16 @@ there since, and never more than 45 s after the first waiting ambient line;
 context lines (at most 30 per chat, none older than 6 h) only ride along. A
 release emits all of the chat's lines in order, so the Core's group burst gives
 the model one input per batch, and the freshness fence is crossed once per
-batch rather than once per line. The Connector's own echoes are dropped:
-the echo of a send is recognised by the message id the send returned, once
-the send on the socket is answered, since the echo may arrive first. A message
-sent from the same account by another client is kept as a context line with
-actor type `bot` and the account's name. A private `/` line from anyone but
-the owner, the account itself included, is dropped, because the Core runs a
-leading `/` in any direct chat as a daemon command without an owner check.
+batch rather than once per line. The Core submits private lines one by one,
+and a private chat holds only direct lines, so nothing there rides along. The
+Connector's own echoes are dropped: the echo of a send is recognised by the
+message id the send returned, once the send on the socket is answered, since
+the echo may arrive first. A group message sent from the same account by
+another client is kept as a context line with actor type `bot` and the
+account's name; in a private chat such a message is dropped, since it would
+cost a model turn of its own. A private `/` line from anyone but the owner is
+dropped, because the Core runs a leading `/` in any direct chat as a daemon
+command without an owner check.
 
 Ids are strings: a chat is `group:<number>` or `private:<number>`, a message
 `ob:<chat>:<message_id>` (NapCat's ids are signed 32-bit hashes; the sign is

@@ -78,7 +78,7 @@ describe('conversation policy assemble', () => {
       assert.match(text, /^## OneBot$/m);
       assert.match(text, /source=onebot/);
       assert.match(text, /decide once, on the newest/);
-      assert.match(text, /On `source=onebot`, every `sender=bot` line was sent from this same account/);
+      assert.match(text, /On `source=onebot`, `sender=bot` lines appear in groups only, and every one was sent from this same account/);
       assert.match(text, /`owner=1` still marks the owner's/);
       assert.match(text, /plain text: no Markdown/);
       assert.match(text, /`mention_user_ids` is not available/);

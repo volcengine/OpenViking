@@ -142,8 +142,8 @@ private chat (`sub_type: friend`). It then gives the message one of four classes
 | Message | Class |
 | --- | --- |
 | The echo of a message this Connector sent | dropped |
-| Sent from this account by another program or by hand, private, starts with `/` | dropped |
-| Other messages sent from this account by another program or by hand | context, shown as `sender=bot` |
+| Private, sent from this account by another program or by hand | dropped |
+| Group, sent from this account by another program or by hand | context, shown as `sender=bot` |
 | Private, starts with a command prefix | dropped |
 | Private, from someone other than the owner, starts with `/` | dropped |
 | Private, from the owner (or from a friend under `"private": "friends"`) | direct |
@@ -157,14 +157,15 @@ make its next message stale. A message counts as the agent's own only if its id 
 send. The echo can arrive before the send's answer, so the Connector waits for the send on the socket to be answered
 before it decides. Sends still waiting their turn are not waited for.
 
-A private command line is an exchange with the other program; anything typed there, a password included, must not
-reach the model. A private `/` line from anyone but the owner is dropped as well, and so is one sent from the account
-itself by another program or by hand. The Core runs a leading `/` in every direct chat as a daemon command for
+In a private chat, an exchange with the other program on the account is not shown to the agent, in either
+direction: a command line, since anything typed there, a password included, must not reach the model, and whatever
+the account itself sends there from another client. The Core submits every private line on its own (only group lines
+share a window, see below), so each such line would cost the model a turn that ends in silence and delays the real
+answer. A private `/` line from anyone but the owner is dropped as well. The Core runs a leading `/` in every direct chat as a daemon command for
 whoever sent it, with no owner check (`commandCandidate` in `commands.mjs`, `handleSlashCommand` in `daemon.mjs`). A
-friend's `/new` or `/model`, or a plugin host's `/` command in a private chat, would then reset or reconfigure the
-session every chat shares. Only `/primary` checks the owner. The owner's `/` lines, typed from the owner's own QQ,
-still reach the Core, unless a command prefix matches first. In a group the Core runs no commands, so a `/` line sent
-from the account stays context.
+friend's `/new` or `/model` would then reset or reconfigure the session every chat shares. Only `/primary` checks the
+owner. The owner's `/` lines, typed from the owner's own QQ, still reach the Core, unless a command prefix matches
+first. In a group the Core runs no commands, so a `/` line sent from the account is context like any other.
 
 @全体成员 does not address the agent.
 
@@ -181,12 +182,15 @@ again, and each answer would be stale before it went out. So the Connector holds
   the agent's latest send there. Whatever the chat does, it is due 45 s after its oldest waiting ambient line.
 - **Grace.** After a release, more ambient lines wait until 20 s after that release, so that chatter does not make
   the answer stale while the model is still writing it. The grace ends early at the agent's first send to that
-  chat written after that release; an answer to an earlier batch that is still on its way does not end it. This matters most for runtimes that hold new input until the next turn (OpenCode).
+  chat written after that release; an answer to an earlier batch that is still on its way does not end it. This
+  matters most for runtimes that hold new input until the next turn (OpenCode).
 - **context** never makes a chat due. It goes out with the chat's next release. Each chat keeps at most its newest
   30 context lines, none older than 6 hours; older ones are deleted unseen.
 
-A release emits every line held in that chat, in arrival order. The Core's group window (400 ms) then hands them to
-the model as one input: one wake per batch, and the model decides once, on the newest line. In an `ambient` group the
+A release emits every line held in that chat, in arrival order. In a group, the Core's group window (400 ms) then
+hands them to the model as one input: one wake per batch, and the model decides once, on the newest line. The Core
+submits private lines one by one, but a private chat only ever holds direct lines, each released as it arrives, so
+there is never a batch there to split. In an `ambient` group the
 agent follows the conversation and decides whether to speak. In a `mention` group it is woken only when addressed,
 and then sees the chatter before that line (up to the 30-line, 6-hour bound) as context.
 
@@ -209,12 +213,12 @@ To keep them from talking over each other:
    an @mention of the account, a keyword or a private chat: AI chat, auto-replies, keyword replies, poke
    responses. Otherwise one @account wakes both programs. Also make it ignore the account's own messages, which most
    frameworks do by default. Otherwise it may react to what the agent sends.
-3. **Optionally**, turn on `reportSelfMessage` for Vika's connection. What the other program sends then reaches the
-   agent as `sender=bot` lines from the account's own name, as context; a private one that starts with `/` is
-   dropped (see [Classes](#classes)). People see those messages as coming from
-   the agent. The model is told not to answer, repeat or contradict them as if someone else had said them, and to
-   leave commands to the program that owns them. Messages you send by hand from the account's own QQ show up the
-   same way.
+3. **Optionally**, turn on `reportSelfMessage` for Vika's connection. What the other program sends in a group then
+   reaches the agent as `sender=bot` lines from the account's own name, as context. People see those messages as
+   coming from the agent. The model is told not to answer, repeat or contradict them as if someone else had said
+   them, and to leave commands to the program that owns them. Messages you send by hand from the account's own QQ in
+   a group show up the same way. In a private chat, what the account sends from another client is dropped either
+   way (see [Classes](#classes)).
 
 Choose prefixes the other program really requires: an entry like `gs` also catches ordinary text that begins with
 those letters, which the agent then sees only as context. Do not connect two Vika instances to one account: both
@@ -285,13 +289,15 @@ link-local, private, shared (`100.64.0.0/10`) or unspecified range; host names a
   no replay. The agent can read what it missed with `list_chat_messages`.
 - **Private chats.** Under `"private": "owner"`, every private chat but the owner's is ignored. Temporary sessions,
   strangers and anonymous group messages are always ignored. Notices (joins, recalls, pokes) are not delivered: a
-  recalled message stays in the agent's context.
+  recalled message stays in the agent's context. What you or another program send from the account itself in a
+  private chat is never shown to the agent, so it does not know what was said there on the account's behalf.
 - **One account per instance**, and one OneBot Connector per instance.
 - **Failed sends are not resent.** A send whose request went out but got no answer within `VIKA_SEND_TIMEOUT_MS`
   (30 s by default) is reported as uncertain; one that never reached the socket, for example while it reconnects,
   says it was not sent. The Core cannot tell the two apart: it records every failed send as uncertain, and because
   OneBot has no idempotency key, its outbox blocks the identical retry either way. If an uncertain message did go out,
-  its echo is not recognised as the agent's own and arrives as a `sender=bot` context line.
+  its echo is not recognised as the agent's own: in a group it arrives as a `sender=bot` context line, in a private
+  chat it is dropped.
 - **Pacing.** Sends go out one at a time, at most one every 1.2 s per chat. A burst to one chat queues behind that
   chat's pace; sends to other chats do not wait for it.
 - **Reactions.** The face ids exist in the QQ face table NapCat and LLOneBot ship. Whether QQ accepts every one of them

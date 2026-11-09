@@ -922,13 +922,14 @@ test('onebot classification follows every row of the table', () => {
   // self and own: the echo of what the agent sent.
   assert.equal(line({ self: true, own: true }), 'drop');
   assert.equal(owner({ self: true, own: true, fromOwner: false }), 'drop');
-  // self, not own: another client on the account.
+  // self, not own: another client on the account. Context in a group, never shown in a private chat,
+  // where it would cost a turn of its own and a leading / would run as a daemon command.
   assert.equal(line({ self: true, text: 'gs ok', atSelf: true }), 'context');
-  assert.equal(owner({ self: true, fromOwner: false }), 'context');
-  // ...whose private `/` line the Core would run as a daemon command; in a group it is only context.
+  assert.equal(line({ self: true, text: '/new' }), 'context');
+  assert.equal(line({ chat: 'group:2', self: true }), 'context');
+  assert.equal(owner({ self: true, fromOwner: false }), 'drop');
   assert.equal(owner({ self: true, fromOwner: false, text: '/new' }), 'drop');
   assert.equal(owner({ self: true, fromOwner: false, text: '  /model x' }), 'drop');
-  assert.equal(line({ self: true, text: '/new' }), 'context');
   // private from the owner, with and without a command prefix.
   assert.equal(owner({ text: 'gs bind 123456' }), 'drop');
   assert.equal(owner({ text: '  /rss add x' }), 'drop');
@@ -943,7 +944,7 @@ test('onebot classification follows every row of the table', () => {
     text: 'hello', atSelf: false, replyToOwn: false, ...fields }, friends);
   assert.equal(friend({}), 'direct');
   assert.equal(friend({ self: true, text: '/new' }), 'drop');
-  assert.equal(friend({ self: true, text: 'see you' }), 'context');
+  assert.equal(friend({ self: true, text: 'see you' }), 'drop');
   assert.equal(friend({ text: 'gs bind' }), 'drop');
   assert.equal(friend({ text: '/new' }), 'drop');
   assert.equal(friend({ text: ' /model x' }), 'drop');
@@ -1536,16 +1537,17 @@ test('client neither stages nor answers chats that are not connected, and with p
   await friends.push(friend([text('hi there')], { message_id: 6 }));
   assert.deepEqual(friends.lines.map((line) => [line.conversation.id, line.content.text]),
     [[`private:${OWNER}`, '/new'], ['private:30003', 'hi there']]);
-  // The account's own lines from another client ride along, but never a / command.
+  // What another client sends from the account in a private chat, a / command or not, is never shown.
   const own = (message, extra) => direct(message, { post_type: 'message_sent', user_id: Number(SELF), target_id: 30003, time: fresh(),
     sender: { user_id: Number(SELF), nickname: 'Vika' }, ...extra });
   await friends.push(own([text('/new')], { message_id: 7 }));
   await friends.push(own([text('see you')], { message_id: 8 }));
   await friends.push(own([text('/model x')], { message_id: 9, target_id: Number(OWNER) }));
+  await friends.push(own([text('plugin reply')], { message_id: 12, target_id: Number(OWNER) }));
+  assert.deepEqual(friends.c.state.pendingChats(), [], 'not even staged');
   await friends.push(friend([text('bye')], { message_id: 10 }));
   await friends.push(direct([text('hello')], { message_id: 11, time: fresh() }));
-  assert.deepEqual(friends.lines.slice(2).map((line) => [line.actor.type, line.content.text]),
-    [['bot', 'see you'], ['user', 'bye'], ['user', 'hello']]);
+  assert.deepEqual(friends.lines.slice(2).map((line) => [line.actor.type, line.content.text]), [['user', 'bye'], ['user', 'hello']]);
   assert.deepEqual(friends.c.state.pendingChats(), []);
   await friends.c.sendMessage({ chat_id: 'private:30003', content: markdown });
   assert.equal(friends.sent('send_private_msg')[0].params.user_id, 30003);
