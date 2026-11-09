@@ -287,13 +287,26 @@ jobs:
           VERSION="$(jq -r .version dist/release.json)"
           PRERELEASE=()
           case "${VERSION}" in *-*) PRERELEASE=(--prerelease) ;; esac
+          {
+            echo '## Install'
+            echo
+            echo 'macOS / Linux / WSL2 (this version):'
+            echo
+            echo '```sh'
+            echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
+            echo '```'
+            echo
+            echo 'Windows users: use the PowerShell one-line installer in the shared guide below. Windows previews are published separately; this command and these release assets are for macOS / Linux.'
+            echo
+            echo "[Installation and setup guide](https://github.com/${GITHUB_REPOSITORY}/blob/feat/vika/vika/install.md)"
+          } > "${RUNNER_TEMP}/vika-release-notes.md"
           gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 dist/release.json \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
             --latest=false \
             ${PRERELEASE[@]+"${PRERELEASE[@]}"} \
             --title "Vika ${VERSION}" \
-            --notes "Install this version: \`curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}\`"
+            --notes-file "${RUNNER_TEMP}/vika-release-notes.md"
 
   windows-preview:
     name: Windows x64 preview
