@@ -30,7 +30,7 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, `ov-` prefixed BEM class names, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. FileTree, FilePreview and Tui are implemented against their reviewed contracts; scope-switcher is a stateless layout, agent-connect renders a fixed-size shell, and viking-bot provides a working view pending design review. See the [module map](./packages/react/README.md#module-map).
+- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. FileTree, FilePreview and Tui are implemented against their reviewed contracts; scope-switcher is a stateless layout, agent-connect has built-in bilingual agent and developer integration content with host-provided credentials and locale, and viking-bot provides a working view pending design review. See the [module map](./packages/react/README.md#module-map).
 - `packages/react/src/modules/{file-browser,console}`: importable placeholder components with settled public Props / Labels / Slots types, and styles. Business Hooks and interactions are planned.
 - `packages/react/src/client`: the framework-neutral request client, exported from `@openviking/react/client` — a `fetch`-based `createOvClient` plus the contract modules depend on (`OvClient`, `OvRequestOptions`, `OvClientError`).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
