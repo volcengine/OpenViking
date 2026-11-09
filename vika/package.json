@@ -27,6 +27,7 @@
     "start:daemon": "node packages/daemon/src/main.mjs",
     "start:web": "node packages/web/src/main.mjs",
     "check": "node scripts/check.mjs",
+    "check:dsh": "node packages/daemon/scripts/check-dsh.mjs",
     "test": "node --test packages/daemon/test/*.test.mjs packages/web/test/*.test.mjs packages/updater/test/*.test.mjs packages/cli/test/*.test.mjs",
     "simulator:claude-runtime": "node packages/daemon/simulator/claude-runtime-simulator.mjs",
     "health": "node packages/web/scripts/healthcheck.mjs"
