@@ -189,7 +189,8 @@ try {
     # the .vika directory it was written into.
     if ($launcherText -match 'USERPROFILE|%HOME%') { throw "the launcher guesses the home directory:`n$launcherText" }
     if ($launcherText -notmatch '%~dp0') { throw "the launcher does not resolve its own location:`n$launcherText" }
-    if ($run.Output -notmatch 'Vika 0\.5\.0-windows-preview-test →') { throw "the install line is missing:`n$($run.Output)" }
+    # Redirected output uses the console code page, which can turn the arrow into ?/^Z.
+    if ($run.Output -notmatch 'Vika 0\.5\.0-windows-preview-test \S+ ') { throw "the install line is missing:`n$($run.Output)" }
     if ($run.Output -notmatch 'next: run vika setup') { throw "no next step is named:`n$($run.Output)" }
     if (Test-Path -LiteralPath (Join-Path $testHome 'deploy.lock')) { throw 'the lock was not released' }
     if (-not (Test-Path -LiteralPath (Join-Path $testHome 'language'))) { throw '-Lang was not saved for later commands' }
