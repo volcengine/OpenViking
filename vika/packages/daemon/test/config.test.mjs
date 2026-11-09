@@ -246,6 +246,33 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /VIKA_TRAEX_EFFORT/);
   });
 
+  it('refuses a relative runtime binary path, which the workspace cwd would read differently', () => {
+    for (const [key, value] of [['CODEX_BIN', './codex'], ['CLAUDE_BIN', 'bin/claude'],
+      ['PI_BIN', 'pi/cli.js'], ['OPENCODE_BIN', '../opencode'], ['TRAEX_BIN', 'C:traex'], ['TRAECLI_BIN', 'tools/traecli']]) {
+      setEnv(key, value);
+      assert.throws(() => getConfig(), /must be an absolute path or a command name on PATH/, `${key}=${value}`);
+      setEnv(key, undefined);
+    }
+    // Bare command names and absolute paths keep working, and the padding the
+    // daemon would otherwise spawn verbatim is normalized away.
+    for (const value of ['codex', '/opt/codex/bin/codex', 'C:\\tools\\codex.exe']) {
+      setEnv('CODEX_BIN', value);
+      assert.equal(getConfig().codexBin, value);
+    }
+    setEnv('CODEX_BIN', '  /opt/codex  ');
+    assert.equal(getConfig().codexBin, '/opt/codex');
+    setEnv('CODEX_BIN', undefined);
+    assert.equal(getConfig().codexBin, 'codex');
+  });
+
+  it('checks every declared TraeX binary, including the shadowed legacy key', () => {
+    setEnv('TRAEX_BIN', '/opt/traex');
+    setEnv('TRAECLI_BIN', './traecli');
+    assert.throws(() => getConfig(), /TRAECLI_BIN must be an absolute path or a command name on PATH/);
+    setEnv('TRAECLI_BIN', '/opt/traecli');
+    assert.equal(getConfig().traexBin, '/opt/traex');
+  });
+
   it('accepts Pi CLI path and thinking-level effort', () => {
     setEnv('PI_BIN', undefined);
     assert.equal(getConfig().piBin, managedPiBin());

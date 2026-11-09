@@ -24,7 +24,7 @@ const RUNTIMES = [
   { id: 'pi', label: 'Pi（内置）', model: 'pi', bin: null, binEnv: null, available: true, note: 'ok' },
 ];
 
-function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false } = {}) {
+function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false, detectRuntimes = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const input = new PassThrough();
@@ -38,7 +38,7 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
     // A Chinese locale settles the language; the English run and the question have tests of their own.
     env: { HOME: home, PATH: '', LARK_CLI_BIN: '/opt/lark/bin/lark-cli', LANG: 'zh_CN.UTF-8' },
     homeDir: home,
-    detect: { runtimes: async () => runtimes, openViking: async () => ov },
+    detect: { runtimes: detectRuntimes ?? (async () => runtimes), openViking: async () => ov },
     // Most tests focus on IM/navigation. The actual OV form is exercised below
     // and in ov-setup.test.mjs, independently of these canned IM answers.
     configureOV: async ({ preferredConfigPath, detect, ...options }) => {
@@ -544,6 +544,24 @@ function existing(h, agent) {
     JSON.stringify({ version: 1, defaultInstance: full.id, env: {}, agents: [full] }));
   return full;
 }
+
+test('runtime detection sees the manifest env, with the shell taking precedence', async (t) => {
+  for (const [shellValue, expected] of [[undefined, '/opt/manifest/codex'], ['/usr/local/bin/codex', '/usr/local/bin/codex']]) {
+    const seen = [];
+    const h = harness(t, ['3', '1', ''], {
+      detectRuntimes: async ({ env }) => { seen.push(env); return RUNTIMES; },
+    });
+    existing(h, {});
+    const manifest = h.manifest();
+    manifest.env.CODEX_BIN = '/opt/manifest/codex';
+    fs.writeFileSync(path.join(h.home, '.vika', 'config.json'), JSON.stringify(manifest));
+    if (shellValue) h.options.env.CODEX_BIN = shellValue;
+    assert.equal(await setupCommand(h.options), 0);
+    assert.equal(seen[0]?.CODEX_BIN, expected);
+    // An ignored key in the file must not reach detection.
+    assert.equal(seen[0]?.PATH, h.options.env.PATH);
+  }
+});
 
 test('setup saves the safe temporary directory for /root data without moving the data or workspace', async (t) => {
   const h = harness(t, ['2', '1', 'New name', '11']);

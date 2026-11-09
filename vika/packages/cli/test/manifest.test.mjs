@@ -9,7 +9,7 @@ import test from 'node:test';
 import { updateManifest } from '../../daemon/src/deployment-manifest.mjs';
 import { InstanceLock } from '../../daemon/src/lock.mjs';
 import {
-  allocatePort, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, withDefaultTempDir, withInstance, writeManifest,
+  allocatePort, detectionEnv, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, withDefaultTempDir, withInstance, writeManifest,
 } from '../src/manifest.mjs';
 
 function agent(id, overrides = {}) {
@@ -94,6 +94,30 @@ test('only a manifest the daemon accepts is saved; the previous one is kept as .
   const second = withInstance(first, agent('agent2', { port: 3739 }));
   writeManifest(filePath, second);
   assert.deepEqual(JSON.parse(fs.readFileSync(`${filePath}.bak`, 'utf8')), first);
+});
+
+test('detection sees the validated manifest env, and the caller still wins', () => {
+  const manifestEnv = { CODEX_BIN: '/opt/codex/bin/codex', PI_BIN: '/opt/pi/cli.js' };
+  assert.deepEqual(detectionEnv({ PATH: '/usr/bin', HOME: '/home/u' }, manifestEnv), {
+    CODEX_BIN: '/opt/codex/bin/codex', PI_BIN: '/opt/pi/cli.js', PATH: '/usr/bin', HOME: '/home/u',
+  });
+  // The operator's environment wins, which is the precedence the daemon applies.
+  assert.equal(detectionEnv({ CODEX_BIN: '/usr/local/bin/codex' }, manifestEnv).CODEX_BIN, '/usr/local/bin/codex');
+  assert.deepEqual(detectionEnv({ PATH: '/usr/bin' }, null), { PATH: '/usr/bin' });
+});
+
+test('setup detects with the env the daemon applies, not every key in the file', (t) => {
+  const home = tempHome(t);
+  const filePath = path.join(home, '.vika', 'config.json');
+  const manifest = withInstance(null, agent('primary'), { CODEX_BIN: '/opt/codex' });
+  // The loader ignores both of these; they must not steer detection either.
+  manifest.env.PATH = '/somewhere/else/bin';
+  manifest.env.ANTHROPIC_API_KEY = 'must-not-be-read';
+  writeManifest(filePath, manifest);
+  const loaded = readManifest({ HOME: home });
+  assert.deepEqual(loaded.env, { CODEX_BIN: '/opt/codex' });
+  assert.deepEqual([...loaded.ignored].sort(), ['env.ANTHROPIC_API_KEY', 'env.PATH']);
+  assert.equal(detectionEnv({ PATH: '/usr/bin' }, loaded.env).PATH, '/usr/bin');
 });
 
 test('setup refuses to build on a manifest that does not load', (t) => {

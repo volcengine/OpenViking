@@ -264,6 +264,46 @@ test('a missing secrets file is not an error', () => {
   });
 });
 
+test('manifest env refuses a relative runtime binary path and keeps the two allowed forms', () => {
+  for (const [key, value] of [
+    ['CODEX_BIN', './codex'],
+    ['CLAUDE_BIN', 'bin/claude'],
+    ['PI_BIN', 'pi/cli.js'],
+    ['OPENCODE_BIN', '..\\opencode'],
+    ['TRAEX_BIN', 'C:traex'],
+    ['TRAECLI_BIN', 'tools/traecli'],
+  ]) {
+    const manifest = validManifest();
+    manifest.env[key] = value;
+    withManifest(manifest, (manifestPath) => {
+      assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }),
+        /env\.[A-Z_]+ must be an absolute path or a command name on PATH/, `${key}=${value}`);
+    });
+  }
+  for (const value of ['codex', '/opt/codex/bin/codex', 'C:\\tools\\codex.exe', '\\\\srv\\share\\codex']) {
+    const manifest = validManifest();
+    manifest.env.CODEX_BIN = value;
+    withManifest(manifest, (manifestPath) => {
+      const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+      assert.equal(deployment.env.CODEX_BIN, value);
+      assert.equal(resolvedDeploymentDaemonEnv(deployment, { VIKA_SECRETS_FILE: '/no/such/file' }).CODEX_BIN, value);
+    });
+  }
+  // Padding is normalized for the values the daemon spawns.
+  const padded = validManifest();
+  padded.env.CODEX_BIN = '  /opt/codex  ';
+  withManifest(padded, (manifestPath) => {
+    assert.equal(loadDeploymentManifest({ VIKA_CONFIG: manifestPath }).env.CODEX_BIN, '/opt/codex');
+  });
+  // Only the runtime binary keys are path-checked: the daemon's own paths keep
+  // their existing absolute-path validation and the rest are free-form.
+  const manifest = validManifest();
+  manifest.env.VIKA_IGNORED_SENDER_IDS = './not-a-path';
+  withManifest(manifest, (manifestPath) => {
+    assert.equal(loadDeploymentManifest({ VIKA_CONFIG: manifestPath }).env.VIKA_IGNORED_SENDER_IDS, './not-a-path');
+  });
+});
+
 test('manifest env passes on only the daemon-wide allowlist and drops every other key', () => {
   const dropped = [
     ['reserved identity', 'VIKA_LARK_PROFILE', 'cli_wrong'],

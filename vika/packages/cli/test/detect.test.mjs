@@ -9,6 +9,7 @@ import test from 'node:test';
 import {
   LOCAL_OV_URL, OVRegistrations, detectOpenViking, instanceOvConfig, instanceUserName, requestNamesUser, writeInstanceOvConfig,
 } from '../src/ov.mjs';
+import { PI_VERSION } from '../../daemon/src/pi-runtime.mjs';
 import { detectRuntimes, which } from '../src/runtimes.mjs';
 
 function tempDir(t, prefix) {
@@ -244,6 +245,124 @@ test('runtimes: a Pi with no model points the user at vika pi', async () => {
     ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false],
   ]);
   assert.match(runtimes[2].note, /vika pi/);
+});
+
+test('runtimes: a configured *_BIN is the binary setup offers, and PATH is not a stand-in', async (t) => {
+  const bin = tempDir(t, 'vika-explicit-');
+  // A codex and a claude on PATH that would be found if the explicit value
+  // were ignored; the configured ones live elsewhere and are not on PATH.
+  for (const name of ['codex', 'claude']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\n', { mode: 0o755 });
+  const configured = path.join(bin, 'configured-codex');
+  fs.writeFileSync(configured, '#!/bin/sh\n', { mode: 0o755 });
+  const probed = [];
+  const execFileImpl = async (command, args) => {
+    probed.push([command, args]);
+    if (args.includes('login') || args.includes('status')) return { stdout: 'Logged in using ChatGPT\n' };
+    if (args.includes('--list-models')) return { stdout: 'provider model\nvolcengine-ark ep-1\n' };
+    if (args.includes('--version')) return { stdout: `${PI_VERSION}\n` };
+    return { stdout: '[]' };
+  };
+  const runtimes = await detectRuntimes({
+    env: { PATH: bin, CODEX_BIN: configured, CLAUDE_BIN: configured, PI_BIN: '/opt/pi/cli.js' },
+    execFileImpl, piBin: '/managed/pi.js',
+  });
+  assert.equal(runtimes[0].bin, configured);
+  assert.equal(runtimes[0].binEnv, 'CODEX_BIN');
+  assert.equal(runtimes[1].bin, configured, 'the explicit Claude path wins over PATH');
+  assert.equal(runtimes[2].bin, '/opt/pi/cli.js', 'an explicit PI_BIN is pinned');
+  assert.equal(runtimes[2].binEnv, 'PI_BIN');
+  assert.deepEqual(probed.filter(([command]) => command === configured).map(([, args]) => args[0]),
+    ['login', 'auth'], 'the configured binaries are what get probed');
+});
+
+test('runtimes: a configured *_BIN that is missing is reported, never replaced from PATH', async (t) => {
+  const bin = tempDir(t, 'vika-explicit-missing-');
+  for (const name of ['codex', 'claude']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\n', { mode: 0o755 });
+  const missing = path.join(bin, 'nope');
+  const runtimes = await detectRuntimes({
+    env: { PATH: bin, CODEX_BIN: missing, CLAUDE_BIN: missing },
+    piBin: '/managed/pi.js',
+    execFileImpl: async (command) => {
+      const error = new Error(`spawn ${command} ENOENT`);
+      error.code = 'ENOENT';
+      throw error;
+    },
+  });
+  assert.equal(runtimes[0].bin, missing);
+  assert.equal(runtimes[0].available, false);
+  assert.match(runtimes[0].note, /找不到可执行文件/);
+  assert.equal(runtimes[1].bin, missing);
+  assert.match(runtimes[1].note, /找不到可执行文件/);
+});
+
+test('runtimes: a bare *_BIN name is looked up on PATH the way the daemon runs it', async (t) => {
+  const bin = tempDir(t, 'vika-bare-');
+  for (const name of ['pi', 'opencode']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\n', { mode: 0o755 });
+  const runtimes = await detectRuntimes({
+    env: { PATH: bin, PI_BIN: 'pi', OPENCODE_BIN: 'opencode' }, piBin: '/managed/pi.js',
+    acpProbe: async () => ({ compatible: true }),
+    execFileImpl: async (command, args) => {
+      if (args.includes('--list-models')) return { stdout: 'provider model\nopenai gpt-4o\n' };
+      if (args.includes('--version') && command === path.join(bin, 'pi')) return { stdout: `${PI_VERSION}\n` };
+      if (args.includes('--version')) return { stdout: 'opencode version 1.19.5\n' };
+      return { stdout: '' };
+    },
+  });
+  const pi = runtimes.find(({ id }) => id === 'pi');
+  const opencode = runtimes.find(({ id }) => id === 'opencode');
+  assert.equal(pi.bin, path.join(bin, 'pi'), 'the bare PI_BIN resolves on PATH, not against the cwd');
+  assert.equal(pi.available, true);
+  assert.equal(opencode.bin, path.join(bin, 'opencode'));
+  assert.equal(opencode.available, true);
+});
+
+test('runtimes: an explicit PI_BIN must match the version this release runs', async () => {
+  const runtimes = await detectRuntimes({
+    env: { PATH: '', PI_BIN: '/opt/pi/cli.js' }, piBin: '/managed/pi.js',
+    execFileImpl: async (command, args) => {
+      if (args.includes('--list-models')) return { stdout: 'provider model\nopenai gpt-4o\n' };
+      if (args.includes('--version')) return { stdout: '0.0.1-old\n' };
+      return { stdout: '' };
+    },
+  });
+  const pi = runtimes.find(({ id }) => id === 'pi');
+  assert.equal(pi.bin, '/opt/pi/cli.js');
+  assert.equal(pi.available, false, 'setup does not offer a Pi the daemon preflight would reject');
+  assert.match(pi.note, /Pi .* is required by this release/);
+});
+
+test('runtimes: an unexecutable configured binary is not reported as missing', async () => {
+  const runtimes = await detectRuntimes({
+    env: { PATH: '', CODEX_BIN: '/opt/codex' }, piBin: '/managed/pi.js',
+    execFileImpl: async () => {
+      const error = new Error('spawn EACCES');
+      error.code = 'EACCES';
+      throw error;
+    },
+  });
+  assert.equal(runtimes[0].available, false);
+  assert.match(runtimes[0].note, /无法执行/);
+});
+
+test('runtimes: a relative *_BIN path is refused where it is read', async () => {
+  const runtimes = await detectRuntimes({
+    env: { PATH: '', CODEX_BIN: './codex', CLAUDE_BIN: 'bin/claude', PI_BIN: 'pi/cli.js',
+      OPENCODE_BIN: './opencode', TRAEX_BIN: 'tools/traex' },
+    piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: '' }),
+  });
+  for (const id of ['codex', 'claude', 'pi', 'traex', 'opencode']) {
+    const runtime = runtimes.find((candidate) => candidate.id === id);
+    assert.ok(runtime, `${id} is still offered as a row`);
+    assert.equal(runtime.bin, null, `${id} is not offered with a relative path`);
+    assert.equal(runtime.available, false);
+    assert.match(runtime.note, /absolute path or a command name on PATH/);
+  }
+  assert.match(runtimes.find(({ id }) => id === 'codex').note, /CODEX_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'claude').note, /CLAUDE_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'pi').note, /PI_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'traex').note, /TRAEX_BIN/);
+  assert.match(runtimes.find(({ id }) => id === 'opencode').note, /OPENCODE_BIN/);
 });
 
 function traexFixture(t, names) {
