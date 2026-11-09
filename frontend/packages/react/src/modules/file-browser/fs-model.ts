@@ -175,6 +175,16 @@ export interface DirectorySummary {
   abstract: string;
   /** L1 总览正文。The L1 overview body. */
   overview: string;
+  /**
+   * 该级摘要的请求失败原因。为 `undefined` 表示请求成功（正文可能是空串，即
+   * 「还没生成」）；有值表示「取不到」，与「没生成」是两件事，必须让用户分得清。
+   *
+   * Why that level's request failed. `undefined` means the request succeeded (the body
+   * may be empty, meaning "not generated yet"); a value means "could not load", which
+   * is a different situation the user has to be able to tell apart.
+   */
+  abstractError?: string;
+  overviewError?: string;
 }
 
 export function toDirectoryTab(
@@ -185,6 +195,15 @@ export function toDirectoryTab(
   icon?: ReactNode,
 ): FilePreviewDirectoryTab {
   const name = nameFromUri(uri);
+  // 取不到的那一级显示失败原因而不是空正文：空正文会被读成「还没生成」，而两级
+  // 摘要各自可能独立失败（后端出错、权限不足），这两种情况处置完全不同。
+  //
+  // A level that could not be loaded shows the reason instead of an empty body: an
+  // empty body reads as "not generated yet", while the two levels can fail
+  // independently (backend error, missing permission) and the two call for different
+  // actions.
+  const levelBody = (body: string, failure?: string) =>
+    failure ? `> ${failure}` : body;
   return {
     kind: 'directory',
     key: uri,
@@ -198,7 +217,7 @@ export function toDirectoryTab(
         key: 'l0',
         label: labels.l0,
         source: {
-          content: summary.abstract,
+          content: levelBody(summary.abstract, summary.abstractError),
           fileName: `${name}.md`,
           path: uri,
           fileType: 'markdown',
@@ -208,7 +227,7 @@ export function toDirectoryTab(
         key: 'l1',
         label: labels.l1,
         source: {
-          content: summary.overview,
+          content: levelBody(summary.overview, summary.overviewError),
           fileName: `${name}.md`,
           path: uri,
           fileType: 'markdown',

@@ -73,13 +73,22 @@ export function useFsSearch({
         body: { query, target_uri: targetUri, limit: LIMIT },
         options: { ...requestOptions, signal: controller.signal },
       })
+      // 成功也要复查取消状态：自定义 fetch 可以在 signal 已中止之后照常返回，
+      // 这时把结果写进去就会让上一个账号/上一次查询的数据盖住当前视图。失败同理，
+      // 一个已作废的请求不该把错误留给新的查询。
+      //
+      // Successes are re-checked for cancellation too: a custom fetch can resolve
+      // normally after its signal was aborted, and publishing that result would let the
+      // previous account or the previous query overwrite the current view. Failures
+      // likewise: a request that was discarded must not leave its error behind.
       .then(
         (result) => {
+          if (controller.signal.aborted) return;
           setResults(mergeFindResult(result));
           setLoading(false);
         },
         (cause: unknown) => {
-          if (isAbort(cause)) return;
+          if (isAbort(cause) || controller.signal.aborted) return;
           setResults([]);
           setError(toError(cause));
           setLoading(false);

@@ -86,7 +86,17 @@ export async function openStream(
   const callerSignals = [resolved.signal, spec.options?.signal].filter(
     (candidate): candidate is AbortSignal => Boolean(candidate),
   );
-  const forward = () => stop();
+  // 调用方取消与 `abort()` 走**同一条**释放路径：只中止传输层不够，响应体的
+  // `cancel()` 也得调用，否则在两次 `next()` 之间（迭代空闲时）取消会留下一个仍
+  // 挂着的连接。`release` 在下面定义，因此这里通过一个可替换的引用转发。
+  //
+  // Caller cancellation goes through the **same** release path as `abort()`: aborting
+  // the transport alone is not enough, the response body's `cancel()` has to run too,
+  // or a cancellation between two `next()` calls (while iteration is idle) leaves a
+  // connection hanging. `release` is defined below, so it is forwarded through a
+  // replaceable reference.
+  let onCallerAbort: () => void = () => stop();
+  const forward = () => onCallerAbort();
   for (const callerSignal of callerSignals) {
     if (callerSignal.aborted) {
       forward();
@@ -194,6 +204,18 @@ export async function openStream(
     detach();
     void reader.cancel().catch(() => {});
   };
+  // 从这里开始，调用方取消同时中止传输并释放响应体。
+  // From here on, caller cancellation stops the transport and releases the body.
+  onCallerAbort = () => {
+    stop();
+    release();
+  };
+  // 取消可能发生在建立阶段就已完成（signal 早已中止）：那时 `release` 还不存在，
+  // 上面的循环只做了 `stop()`，这里补一次释放。
+  //
+  // The cancellation may have happened before setup finished (the signal was already
+  // aborted): the loop above only called `stop()` then, so the release is applied here.
+  if (controller.signal.aborted) release();
 
   // 无论正常结束、提前 `break` 还是出错，都要释放底层流并摘掉监听：只结束包装
   // 层的生成器不会取消响应体，长连接的 SSE 因此会在消费者退出后继续占着连接。

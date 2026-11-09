@@ -30,8 +30,8 @@ export interface FileBrowserTreePaneProps {
   refreshLabel: string;
   searchLoading: string;
   searchEmpty: string;
-  /** 搜索失败时的提示。Message shown when the search request fails. */
-  errorLabel: string;
+  /** 搜索失败时的结论文案。Conclusion shown when the search request fails. */
+  searchErrorLabel: string;
   /** 失败态里的重试按钮。Retry button of the failure state. */
   retryLabel: string;
 }
@@ -45,7 +45,7 @@ export function FileBrowserTreePane({
   refreshLabel,
   searchLoading,
   searchEmpty,
-  errorLabel,
+  searchErrorLabel,
   retryLabel,
 }: FileBrowserTreePaneProps) {
   return (
@@ -80,8 +80,21 @@ export function FileBrowserTreePane({
           emptyFallback={
             browser.searching ? (
               browser.searchError ? (
-                <p className="ov-file-browser__hint ov-file-browser__hint--error">
-                  {errorLabel}
+                // 结论用搜索专属文案，原因用服务端或传输层给的原话：只说「加载失败」
+                // 会让一次权限错误与后端故障看起来一样，而这句「加载目录失败」更是
+                // 答错了问题——失败的是搜索，不是目录。
+                //
+                // The conclusion uses search-specific copy and the reason is the server's
+                // or the transport's own wording: a bare "failed to load" makes a
+                // permission error look like a backend fault, and "failed to load the
+                // directory" answers the wrong question — it is the search that failed.
+                <div className="ov-file-browser__hint ov-file-browser__hint--error">
+                  <p className="ov-file-browser__failure-title">
+                    {searchErrorLabel}
+                  </p>
+                  <p className="ov-file-browser__failure-detail">
+                    {browser.searchError.message}
+                  </p>
                   <button
                     type="button"
                     className="ov-file-browser__retry"
@@ -89,7 +102,7 @@ export function FileBrowserTreePane({
                   >
                     {retryLabel}
                   </button>
-                </p>
+                </div>
               ) : (
                 <p className="ov-file-browser__hint">
                   {browser.searchLoading ? searchLoading : searchEmpty}

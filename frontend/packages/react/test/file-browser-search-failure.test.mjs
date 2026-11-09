@@ -54,7 +54,10 @@ test('a failed search shows the reason and a retry, not the empty copy', async (
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   const html = tree.container.innerHTML;
-  assert.match(html, /Failed to load the directory/);
+  // 结论必须是搜索专属文案，并带上服务端给的原因。
+  // The conclusion must be search-specific copy and carry the server's reason.
+  assert.match(html, /Failed to run the search/);
+  assert.match(html, /search forbidden/);
   assert.match(html, /ov-file-browser__retry/);
   assert.doesNotMatch(html, /No matching resources/);
   await tree.unmount();

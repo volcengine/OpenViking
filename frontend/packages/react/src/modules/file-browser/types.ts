@@ -31,6 +31,8 @@ export interface FileBrowserLabels {
   searchPlaceholder?: string;
   /** 搜索无结果提示。Message shown when a search returns nothing. */
   searchEmpty?: string;
+  /** 搜索请求失败的结论，原因由服务端返回。Conclusion when the search request fails; the reason comes from the server. */
+  searchFailed?: string;
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
   /** 预览读取正文时的提示。Message shown while the preview reads a resource. */

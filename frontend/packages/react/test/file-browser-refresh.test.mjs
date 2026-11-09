@@ -23,10 +23,17 @@ const listing = (entries) => ok(entries);
  * Mounts a probe that hands the Hook's result to a callback: the module's return
  * value is not markup, and what the tests inspect is `api` after each commit.
  */
+// 这些用例都在切换宿主给的 URI，因此用受控模式：非受控时 `currentUri` 只是初值，
+// 切换后应以模块自己的 `pendingUri` 为准，那属于另一组用例（见 selection 测试）。
+//
+// These cases switch the URI the host passes, so they run controlled: while
+// uncontrolled `currentUri` is only the initial value and later selections follow the
+// module's own `pendingUri`, which the selection tests cover separately.
 function probe(api) {
   return function Probe({ uri, notify }) {
     api.current = useFileBrowser({
       rootUri: ROOT,
+      controlled: true,
       currentUri: uri,
       onUriChange: notify,
     });
@@ -135,6 +142,11 @@ test('an aborted directory read does not keep its stale level', async () => {
     if (call.path === '/api/v1/content/abstract') return ok('A summary');
     if (call.path === '/api/v1/content/overview') return slowOverview.promise;
     if (call.path === '/api/v1/content/read') return ok('# B\n');
+    // FILE_B 在初始 listing 里出现过，类型已知；这里补 stat 只是兜底，避免类型
+    // 未知时多一次查询把断言拖进另一条路径。
+    // FILE_B appears in the initial listing so its type is known; this stat answer is
+    // only a fallback so an unknown-type lookup cannot pull the assertion elsewhere.
+    if (call.path === '/api/v1/fs/stat') return ok({ isDir: false });
     return ok({});
   });
 

@@ -32,12 +32,16 @@ export async function readDirectory(
   // different thing. Turning it into an empty string silently makes "not
   // generated" and "could not load" look identical, leaving the user unable to
   // tell which happened.
-  // 单级失败记为空，但两级都失败就当作整体失败抛出去：只失败一级通常意味着
-  // 那一级还没生成，两级都失败则是连接或权限出了问题，必须让用户看到。
+  // 单级失败不能记成空正文：空正文意味着「还没生成」，而请求失败意味着「取不到」
+  // ——后端出错、权限不足都会这样，用户与宿主都要能把两者分开。因此失败的一级
+  // 保留失败原因，交给页签显示；两级都失败则整体抛出，让预览显示失败态与重试。
   //
-  // One level failing counts as empty, but both failing is thrown: a single
-  // failure usually means that level is not generated yet, while both mean a
-  // connection or permission problem the user has to see.
+  // A single-level failure must not become an empty body: an empty body means "not
+  // generated yet" while a failed request means "could not load" — a backend error or
+  // missing permission both look like this, and the user and the host have to tell
+  // them apart. The failed level therefore keeps its reason for the tab to show; when
+  // both levels fail the whole read is thrown so the preview shows its failure state
+  // and a retry.
   const read = (path: string) =>
     client
       .request<string>({ method: 'GET', path, query: { uri }, options })
@@ -71,11 +75,20 @@ export async function readDirectory(
     throw abstractResult.cause;
   }
 
+  const reason = (result: { ok: boolean; cause?: unknown }) =>
+    result.ok
+      ? undefined
+      : result.cause instanceof Error
+        ? result.cause.message
+        : String(result.cause);
+
   return toDirectoryTab(
     uri,
     {
       abstract: abstractResult.ok ? abstractResult.text : '',
       overview: overviewResult.ok ? overviewResult.text : '',
+      abstractError: reason(abstractResult),
+      overviewError: reason(overviewResult),
     },
     labels,
     openParent,

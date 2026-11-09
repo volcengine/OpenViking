@@ -17,6 +17,7 @@ export const DEFAULT_LABELS: Required<ShellLabels> = {
   refresh: 'Refresh',
   searchPlaceholder: 'Search files ⌘+K...',
   searchEmpty: 'No matching resources',
+  searchFailed: 'Failed to run the search',
   loading: 'Loading…',
   searchLoading: 'Searching…',
   previewMode: 'Preview',

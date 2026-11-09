@@ -97,13 +97,22 @@ export function useFileBrowser({
   // directory under a collapsed ancestor would lose their L0/L1 summary and read
   // content instead. The decision therefore uses the set of directories the tree
   // knows about, which is independent of visibility.
-  // 受控时以宿主给的值为准；只有非受控才回落到模块自己记下的选中——否则模块自己
-  // 上报的选中永远不会生效，预览也就不会加载。
+  // 受控时以宿主给的值为准；非受控时以模块自己记下的选中为准。
   //
-  // While controlled the host's value wins; only an uncontrolled module falls back to
-  // its own remembered selection — otherwise a selection the module reports would never
-  // take effect and the preview would never load.
-  const activeUri = controlled ? currentUri : (currentUri ?? pendingUri);
+  // 非受控**不能**写成 `currentUri ?? pendingUri`：`currentUri` 在非受控模式下只是
+  // 初始值，一旦宿主给了非空的初值，这个表达式会永远压过 `pendingUri`，模块自己
+  // 上报的选中就再也生效不了，预览也就停在初值上。`pendingUri` 本来就以
+  // `currentUri` 为初值，因此只用它即可。
+  //
+  // While controlled the host's value wins; while uncontrolled the module's own
+  // remembered selection wins.
+  //
+  // Uncontrolled must **not** be written as `currentUri ?? pendingUri`: there
+  // `currentUri` is only the initial value, so any non-null initial value would win
+  // forever and a selection the module reports could never take effect, leaving the
+  // preview stuck on the initial resource. `pendingUri` is seeded from `currentUri`
+  // anyway, so using it alone is correct.
+  const activeUri = controlled ? currentUri : pendingUri;
   // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
   // 两者要走的接口不同，不能合并成「不是目录」。
   //

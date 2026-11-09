@@ -152,7 +152,7 @@ export function FileBrowser({
           refreshLabel={text.refresh}
           searchLoading={text.searchLoading}
           searchEmpty={text.searchEmpty}
-          errorLabel={text.error}
+          searchErrorLabel={text.searchFailed}
           retryLabel={text.retry}
         />
       </div>

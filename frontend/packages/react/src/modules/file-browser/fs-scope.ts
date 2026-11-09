@@ -27,17 +27,41 @@ function idOf(value: object | null | undefined): number {
 }
 
 /**
- * 一个身份字段的作用域标识。字符串直接用值；函数按函数对象本身取编号——同一个
- * 闭包每次请求求值出同样的凭证，而换了闭包就意味着换了一份凭证来源。
+ * 一个身份字段的作用域标识。
  *
- * The scope identity of one identity field. A string uses its value; a function uses
- * the function object's own id — the same closure yields the same credential on every
- * request, while a different closure means a different credential source.
+ * 三种状态必须区分开，不能压成同一个空串：
+ *
+ * - `undefined`（省略）表示**继承**上层配置；
+ * - 空字符串表示**显式清除**继承到的值，请求里不再带这个头；
+ * - 其余字符串就是值本身。
+ *
+ * 把「省略」与「显式清除」混为一谈，会在宿主把 `accountId` 从省略改成 `''` 时
+ * 认为作用域没变，于是上一个账号在途的响应照旧落到新视图里。
+ *
+ * 函数按函数对象本身取编号：同一个闭包每次请求求值出同样的凭证，而换了闭包就
+ * 意味着换了一份凭证来源。
+ *
+ * The scope identity of one identity field.
+ *
+ * Three states must stay distinct rather than collapse into one empty string:
+ *
+ * - `undefined` (omitted) means **inherit** from the layer above;
+ * - an empty string means **explicitly clear** the inherited value, so the header is
+ *   no longer sent;
+ * - any other string is the value itself.
+ *
+ * Merging "omitted" with "explicitly cleared" would treat a host switching `accountId`
+ * from omitted to `''` as the same scope, so the previous account's in-flight response
+ * would still land in the new view.
+ *
+ * A function uses the function object's own id: the same closure yields the same
+ * credential on every request, while a different closure means a different credential
+ * source.
  */
 function fieldKey(value: OvIdentityValue | undefined): string {
-  if (value === undefined) return '';
+  if (value === undefined) return 'inherit';
   if (typeof value === 'function') return `fn#${idOf(value)}`;
-  return value;
+  return `value:${value}`;
 }
 
 /**
@@ -58,10 +82,15 @@ function fieldKey(value: OvIdentityValue | undefined): string {
 export function scopeKeyOf(
   client: OvClient | null,
   options: OvRequestOptions | undefined,
+  rootUri?: string,
 ): string {
   return [
     idOf(client),
-    options?.baseURL ?? '',
+    // 根目录也属于作用域：换了根就换了一棵树，旧根在途的展开结果不能落进新树。
+    // The root is part of the scope too: a different root is a different tree, and an
+    // expansion in flight for the old root must not land in the new one.
+    rootUri === undefined ? 'inherit-root' : `root:${rootUri}`,
+    options?.baseURL === undefined ? 'inherit-base' : `base:${options.baseURL}`,
     fieldKey(options?.apiKey),
     fieldKey(options?.accountId),
     fieldKey(options?.userId),
