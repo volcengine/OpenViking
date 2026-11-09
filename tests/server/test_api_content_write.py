@@ -129,6 +129,7 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
     edited = f"{title}\n\n{replacement}\n\nAdditional context.\n\n"
     write_resp = await client.post(
         "/api/v1/content/write",
+        headers={"X-OpenViking-User": "alice"},
         json={
             "uri": file_uri,
             "content": edited,
@@ -150,6 +151,7 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
         "用户手动解决内容冲突，修正后的内容如正文所示"
     )
     assert resolution["resolution_basis"] == "人工修复"
+    assert resolution["resolved_by"] == "alice"
     attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
     assert {"has_conflict=false", "conflict_num=0", "team=search"} <= set(
         attrs.json()["result"]["attrs"]["tags"]

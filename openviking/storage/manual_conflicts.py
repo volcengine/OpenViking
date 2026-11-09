@@ -81,9 +81,12 @@ def _parse_conflict_records(payload: str) -> list[dict]:
     return records
 
 
-def resolve_manual_conflicts(previous: str, edited: str) -> tuple[str, list[str] | None]:
+def resolve_manual_conflicts(
+    previous: str, edited: str, user_id: str
+) -> tuple[str, list[str] | None]:
     """Return edited text with conflict history and tags; uncertain anchors stay unchanged.
 
+    user_id identifies the request caller recorded for newly resolved conflicts.
     Missing comments yield tags=None; empty comments count as zero conflicts.
     Invalid records raise InvalidArgumentError.
     """
@@ -118,6 +121,7 @@ def resolve_manual_conflicts(previous: str, edited: str) -> tuple[str, list[str]
                         fix_plan=_MANUAL_RESOLUTION,
                         fix_time=now,
                         resolution_basis="人工修复",
+                        resolved_by=user_id,
                     )
                     if rewritten is not None:
                         record["match_text"] = rewritten

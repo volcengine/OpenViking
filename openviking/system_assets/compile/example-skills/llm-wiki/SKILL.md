@@ -119,9 +119,16 @@ environment, units, and measurement definitions before judging incompatibility.
 Check values, dates, negation, states, responsibilities, procedures, relationships,
 identity/unit mistakes, unsupported citations, overgeneralized scope, opinions or
 inferences written as facts, and contradictions among body, tables, summaries, and index.
-Correctly scoped differences that can coexist are not conflicts: different versions,
-periods, environments, populations, or attributed perspectives. Attribution alone does
-not remove a contradiction between requirements for the same subject and conditions.
+Do not record a conflict when:
+- The claims apply to different versions, periods, environments, or populations.
+- One source explicitly replaces another, or the conflicting content is explicitly
+  withdrawn or marked as draft.
+- The claims are complementary or express opinions that can coexist.
+- A discussion has an applicable final decision.
+- The difference comes from an example, hypothesis, external practice,
+  or personal preference rather than a claim about the subject.
+- Different wording, units, or measurement definitions express the same underlying claim.
+Attribution alone does not remove a contradiction between requirements for the same subject and conditions.
 Style preferences are not conflicts. Comments and repair history are metadata, not
 evidence that an old problem still exists.
 
@@ -135,27 +142,50 @@ a record. Recency, repetition, and model familiarity alone do not establish auth
 use directly applicable specifications, versions, or explicit precedence. Do not use
 outside searches or assumptions to settle the dispute.
 
-### Severity and repair
+### Conflict types
 
-Severity describes impact; `state` describes resolution. They are independent, so a
-human-resolved `high` record can be `fixed`. Do not inflate severity to avoid repair.
+Assign one conflict_type to each conflict. Check these definitions in order
+and use the first matching type:
 
-| severity | Criteria | Action |
-| --- | --- | --- |
-| `high` | Affects safety, access control, privacy, irreversible operations, or a core decision; or incompatible same-scope sources leave a material conclusion undecidable. | Keep the issue `unfixed`. Explain the risk or uncertainty in the visible body where readers encounter the claim. When sources disagree, attribute each claim to its source and state what remains undecided. If the affected sentence already exists, preserve it and place the explanation immediately before it. Anchor the conflict record to a complete sentence that identifies the disputed claim. |
-| `medium` | A local factual, procedural, or scope error affects understanding/use, with evidence, attribution, or explicit scope supporting a safe correction. | Correct and verify the Wiki; record the issue as `fixed` with the actual repair and evidence. |
-| `low` | A local unit label, term, attribution, or minor qualifier is wrong, with a correction that preserves the main conclusion. | Correct and verify the Wiki; record the issue as `fixed` with the actual repair and evidence. |
+- human_conclusion: A source contradicts a conclusion recorded as manually resolved.
+- opinion: Sources propose different answers to a question that requires a decision,
+  and no applicable decision is available.
+- fact: Sources give incompatible facts or rules about the same subject under
+  the same conditions, including values, dates, states, requirements, and responsibilities.
 
-For medium/low overstatements, a supported repair may attribute alternatives, qualify
-scope, or state that the value is not established. This repairs the Wiki's overstatement,
-not a disagreement in raw sources. Merely describing an unresolved high source conflict
-accurately does not resolve it: its record remains `unfixed`.
+### Severity
 
-Propagate repairs to the same fact in this compile's summaries, tables, index, and other
-output pages, without changing unrelated or protected human content. Record unresolved
-high issues on each affected output page; do not indirectly repair them elsewhere.
-If a medium/low error cannot be fixed independently of a high sentence, preserve the
-sentence and include that dependent issue and evidence in the high record.
+Severity describes the consequence of acting on the wrong claim.
+It determines review priority, not whether the conflict is automatically repaired.
+Judge the worst plausible consequence and use the highest applicable level.
+
+| severity | Criteria |
+| --- | --- |
+| high | Affects external commitments, safety, permissions, privacy, compliance, money, irreversible operations, or blocks other people's work. |
+| medium | Affects internal decisions or execution and can cause recoverable costs, including rework, duplicated effort, inconsistent practices, or scheduling changes. |
+| low | Affects understanding but normally does not drive action, such as historical or background information. |
+
+A clearer description does not resolve a source disagreement.
+Mark a factual conflict fixed only when the supplied evidence supports the chosen answer.
+
+Apply a verified correction wherever the same claim appears in this compile's output.
+Record an unresolved conflict on every affected output page.
+Preserve unrelated content and protected human conclusions.
+
+### Handle conflicts by type
+
+- human_conclusion: Keep the human conclusion and its resolution record unchanged.
+  Add a separate unfixed record anchored to the human conclusion.
+  Describe the conflicting source in that record; do not add its claim to the page body.
+
+- opinion: Do not choose a proposal automatically.
+  Present the proposals with attribution, state that the decision is unresolved,
+  and record the conflict as unfixed.
+
+- fact: If the supplied evidence establishes which claim applies, update the Wiki
+  and record the conflict as fixed. Explain the supporting evidence in resolution_basis.
+  Otherwise, record it as unfixed. On a new page, present both claims and state that
+  the answer is unresolved. On an existing page, preserve the affected sentence.
 
 ### Current results and human resolutions
 
@@ -168,8 +198,8 @@ sentence and include that dependent issue and evidence in the high record.
   records from earlier runs. Leave pages outside this update untouched.
 - Recognize human resolutions by the exact `fix_plan` value in the field table below.
   Preserve their fields, original timestamps, severity, and `match_text` spans
-  verbatim. They remain `fixed`; do not reopen them merely from old comments or
-  overwrite their content because sources differ. Human protection takes precedence
+  verbatim. Keep retained human-resolution records fixed and preserve their protected text.
+  If a source contradicts that text, add a separate unfixed human_conclusion record. Human protection takes precedence
   over automatic repairs. Do not invent a human resolution or its timestamps.
 - The two fixed Chinese human-resolution values stay exact in every output language.
   If a human record cannot be parsed or its protected text cannot be located,
@@ -180,7 +210,9 @@ sentence and include that dependent issue and evidence in the high record.
 
 ## Conflict record format
 
-Each object has exactly these nine fields. Keep keys and enum values unchanged;
+Each new conflict record has exactly these eleven fields.
+Preserve retained human-resolution records verbatim, even if they lack the new fields.
+Keep keys and enum values unchanged;
 write descriptive values in the output language, except the fixed Chinese values.
 
 | Field | Type and meaning |
@@ -194,6 +226,8 @@ write descriptive values in the output language, except the fixed Chinese values
 | `fix_plan` | Automatic repair: non-empty actual correction and scope. Human resolution: exactly `用户手动解决内容冲突，修正后的内容如正文所示`. Unresolved: `""`. |
 | `fix_time` | For `fixed`, integer Unix seconds after repair and verification, no earlier than `begin_time`; for `unfixed`, `null`. Retained human times do not change. |
 | `resolution_basis` | Automatic repair: non-empty evidence location, supporting content, and applicability. Human resolution: exactly `人工修复`. Unresolved: `""`. |
+| `conflict_type` | Exactly human_conclusion, opinion, or fact, as defined above. |
+| `resolved_by` | Automatic repair: "compile_agent". Unfixed: "". For a retained human resolution, preserve its existing value. |
 
 Read real time from the execution environment at detection and after verification
 (for example, `date +%s`); never estimate, copy example timestamps, use milliseconds,
@@ -203,8 +237,8 @@ After finalizing the Wiki page body, copy the complete sentence that addresses
 the affected claim verbatim into `match_text`, including its punctuation.
 Exclude frontmatter and HTML comments. For a repaired claim, use the corrected
 sentence. If the claim appears only in a table, code block, or frontmatter,
-explain it in a body sentence and use that sentence as `match_text`. For medium-
-or low-severity repairs, also correct any affected frontmatter. Preserve the
+explain it in a body sentence and use that sentence as `match_text`. For automatic factual repairs,
+also correct any affected frontmatter. Preserve the
 original `match_text` of retained human resolutions verbatim.
 
 End every new/updated file, including `index.md`, after its body and Sources section with
@@ -242,7 +276,9 @@ real evidence and event times.
   "begin_time": 1792500000,
   "fix_plan": "",
   "fix_time": null,
-  "resolution_basis": ""
+  "resolution_basis": "",
+  "conflict_type": "fact",
+  "resolved_by": ""
 }
 -->
 ```
@@ -254,7 +290,7 @@ real evidence and event times.
   its title.
 - Index coverage: Verify that `index.md` lists every active knowledge page with
   its canonical link and a one-line description of what readers can find there.
-- Conflict records: Check all nine fields against the schema and verify the
+- Conflict records: Check all eleven fields in newly generated records against the schema and verify the
   cited evidence. For each new record, confirm that the decoded `match_text`
   exactly matches one complete sentence about the affected claim in the final
   Wiki page body, excluding frontmatter and HTML comments. When sources

@@ -1952,7 +1952,7 @@ class ContentWriteCoordinator:
             )
             if resolve_conflicts:
                 resolved, conflict_tags = resolve_manual_conflicts(
-                    previous_content, final_bytes.decode("utf-8")
+                    previous_content, final_bytes.decode("utf-8"), user_id=ctx.user.user_id
                 )
                 final_bytes = resolved.encode("utf-8")
                 if conflict_tags is not None:
