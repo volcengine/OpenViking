@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.message import Message, TextPart, ToolPart
+from openviking.message import ContextPart, Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.session.checkpoints import CheckpointRequest
 from openviking.session.extraction_batch import (
@@ -819,3 +819,146 @@ async def test_long_term_memory_batches_bound_an_oversized_message_before_extrac
     # Nothing over the ceiling may ever reach the extraction callback.
     assert delivered
     assert max(delivered) <= 1000
+
+
+def test_every_tool_output_of_a_multi_part_message_is_trimmed():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(tool_id=f"c{index}", tool_name="terminal", tool_output="x " * 10000)
+            for index in range(9)
+        ],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    assert [part.tool_id for part in bounded[0].parts if isinstance(part, ToolPart)] == [
+        f"c{index}" for index in range(9)
+    ]
+
+
+def test_a_tool_input_dominated_call_is_trimmed_not_only_its_output():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(
+                tool_id="call_1",
+                tool_name="write_file",
+                tool_input={"content": "x " * 40000},
+                tool_output="saved",
+                tool_status="completed",
+            )
+        ],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    tool_part = next(part for part in bounded[0].parts if isinstance(part, ToolPart))
+    assert tool_part.tool_id == "call_1"
+    assert tool_part.tool_output == "saved"
+    assert tool_part.tool_input["content"].endswith("characters kept]")
+
+
+def test_a_context_abstract_is_trimmed():
+    message = Message(
+        id="m",
+        role="user",
+        parts=[ContextPart(uri="viking://user/default/memories/profile.md", abstract="x " * 40000)],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    context_part = next(part for part in bounded[0].parts if isinstance(part, ContextPart))
+    assert context_part.uri == "viking://user/default/memories/profile.md"
+    assert context_part.abstract.endswith("characters kept]")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param(_message("m", text="word " * 4000), id="long-text"),
+        pytest.param(
+            Message(
+                id="m",
+                role="assistant",
+                parts=[
+                    ToolPart(tool_id=f"c{index}", tool_name="terminal", tool_output="x " * 10000)
+                    for index in range(9)
+                ],
+            ),
+            id="nine-tool-outputs",
+        ),
+        pytest.param(
+            Message(
+                id="m",
+                role="assistant",
+                parts=[
+                    ToolPart(
+                        tool_id="call_1",
+                        tool_name="write_file",
+                        tool_input={"content": "x " * 40000},
+                        tool_output="saved",
+                        tool_status="completed",
+                    )
+                ],
+            ),
+            id="tool-input-dominated",
+        ),
+        pytest.param(
+            Message(
+                id="m",
+                role="user",
+                parts=[
+                    ContextPart(
+                        uri="viking://user/default/memories/profile.md", abstract="x " * 40000
+                    )
+                ],
+            ),
+            id="context-abstract",
+        ),
+    ],
+)
+async def test_nothing_above_the_ceiling_reaches_the_extraction_callback(message):
+    session = Session(viking_fs=None)
+    delivered = []
+    original = [
+        (type(part).__name__, getattr(part, "text", ""), getattr(part, "tool_output", ""))
+        for part in message.parts
+    ]
+
+    async def extract(batch):
+        delivered.append(sum(item.estimated_tokens for item in batch))
+        return []
+
+    async def record(operation_name, step, batch, fn):
+        return await fn()
+
+    await session._extract_long_term_memories_with_batching(
+        messages=[message],
+        limits=ExtractionBatchLimits(max_message_tokens=4000),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract,
+        record_batch=record,
+    )
+
+    assert delivered
+    assert max(delivered) <= 4000
+    assert [
+        (type(part).__name__, getattr(part, "text", ""), getattr(part, "tool_output", ""))
+        for part in message.parts
+    ] == original

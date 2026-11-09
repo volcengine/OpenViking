@@ -2557,6 +2557,16 @@ class Session:
                 limits.max_message_tokens,
             )
         batches = plan_extraction_batches(messages, limits)
+        still_oversized = [batch for batch in batches if batch.oversized]
+        if still_oversized:
+            logger.warning(
+                "Phase 2 extraction still has %s pass(es) above the prompt budget "
+                "(%s estimated tokens, budget %s): the batch has no text that can be "
+                "shortened",
+                len(still_oversized),
+                max(batch.estimated_tokens for batch in still_oversized),
+                limits.max_message_tokens,
+            )
         if not batches:
             return []
 

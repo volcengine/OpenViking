@@ -78,50 +78,130 @@ def estimate_extraction_message_tokens(messages: Iterable[Message]) -> int:
 # extraction copy is trimmed instead: a bounded, explicitly marked prompt beats an
 # over-window request that the backend truncates and the extraction loses whole.
 TRUNCATION_MARKER = "\n\n[truncated for extraction: {kept} of {total} characters kept]"
-MIN_TRIMMED_PART_CHARS = 200
-MAX_TRIM_ROUNDS = 8
+MAX_TARGETED_ROUNDS = 12
+MAX_SCALE_STEPS = 24
 
 
-def _trimmable_text(part: Any) -> Optional[str]:
+def _longest_payload(part: Any) -> Optional[tuple[str, str]]:
+    """Longest prompt-bearing text of a part, and which field it lives in.
+
+    Mirrors ``Message.estimated_tokens``: text, context abstract, tool input JSON
+    and tool output are the fields that reach the prompt, so they are the only
+    ones whose shortening reduces the request.
+    """
+    best: Optional[tuple[str, str]] = None
     text = getattr(part, "text", None)
     if isinstance(text, str) and text:
-        return text
+        best = ("text", text)
+    abstract = getattr(part, "abstract", None)
+    if isinstance(abstract, str) and abstract and (best is None or len(abstract) > len(best[1])):
+        best = ("abstract", abstract)
     output = getattr(part, "tool_output", None)
-    if isinstance(output, str) and output:
-        return output
-    return None
+    if isinstance(output, str) and output and (best is None or len(output) > len(best[1])):
+        best = ("tool_output", output)
+    leaf = _longest_string_leaf(getattr(part, "tool_input", None))
+    if leaf is not None and (best is None or len(leaf[1]) > len(best[1])):
+        best = ("tool_input", leaf[1])
+    return best
 
 
-def _with_trimmed_text(part: Any, text: str) -> Any:
-    if isinstance(getattr(part, "text", None), str):
-        replacement = replace(part, text=text)
+def _longest_string_leaf(value: Any, path: tuple = ()) -> Optional[tuple[tuple, str]]:
+    if isinstance(value, str):
+        return (path, value) if value else None
+    if isinstance(value, dict):
+        candidates = [_longest_string_leaf(item, (*path, key)) for key, item in value.items()]
+    elif isinstance(value, (list, tuple)):
+        candidates = [
+            _longest_string_leaf(item, (*path, index)) for index, item in enumerate(value)
+        ]
     else:
-        replacement = replace(part, tool_output=text)
-    return replacement
+        return None
+    found = [candidate for candidate in candidates if candidate is not None]
+    return max(found, key=lambda candidate: len(candidate[1])) if found else None
+
+
+def _replace_leaf(value: Any, path: tuple, replacement: str) -> Any:
+    if not path:
+        return replacement
+    head, rest = path[0], path[1:]
+    if isinstance(value, dict):
+        updated_dict = dict(value)
+        updated_dict[head] = _replace_leaf(value[head], rest, replacement)
+        return updated_dict
+    if isinstance(value, (list, tuple)):
+        updated_list = list(value)
+        updated_list[head] = _replace_leaf(value[head], rest, replacement)
+        return updated_list
+    return value
+
+
+def _with_payload(part: Any, field: str, text: str) -> Any:
+    """Return ``part`` with its prompt-bearing field set to ``text``."""
+    if field == "tool_input":
+        path, _ = _longest_string_leaf(getattr(part, "tool_input", None)) or ((), "")
+        return replace(part, tool_input=_replace_leaf(part.tool_input, path, text))
+    if field == "abstract":
+        return replace(part, abstract=text)
+    if field == "tool_output":
+        return replace(part, tool_output=text)
+    return replace(part, text=text)
+
+
+def _shorten_payload(part: Any, keep_chars: int) -> Any:
+    field, text = _longest_payload(part) or (None, "")
+    if field is None:
+        return part
+    kept = text[: max(0, min(len(text), keep_chars))]
+    marked = kept + TRUNCATION_MARKER.format(kept=len(kept), total=len(text))
+    return _with_payload(part, field, marked)
 
 
 def _bound_message(message: Message, ceiling: int) -> Message:
-    """Trim one over-ceiling message until it fits, largest part first."""
+    """Trim one over-ceiling message until it fits the budget.
+
+    Largest payload first so short texts survive intact; a final uniform pass
+    guarantees the ceiling is met whenever any prompt-bearing text exists, which
+    is the only outcome the caller may rely on.
+    """
     parts = list(message.parts)
-    for _ in range(MAX_TRIM_ROUNDS):
+    for _ in range(MAX_TARGETED_ROUNDS):
         candidate = replace(message, parts=parts)
-        current_tokens = int(candidate.estimated_tokens or 0)
-        if current_tokens <= ceiling:
+        if int(candidate.estimated_tokens or 0) <= ceiling:
             return candidate
-        sizes = [
-            (len(text), index)
+        payloads = [
+            (len(payload[1]), index)
             for index, part in enumerate(parts)
-            if (text := _trimmable_text(part)) is not None
+            if (payload := _longest_payload(part)) is not None
         ]
-        if not sizes:
+        if not payloads:
             return candidate
-        _, largest = max(sizes)
-        text = _trimmable_text(parts[largest]) or ""
-        keep_ratio = max(0.1, ceiling / current_tokens * 0.95)
-        kept_chars = max(MIN_TRIMMED_PART_CHARS, min(len(text), int(len(text) * keep_ratio)))
-        trimmed = text[:kept_chars] + TRUNCATION_MARKER.format(kept=kept_chars, total=len(text))
-        parts[largest] = _with_trimmed_text(parts[largest], trimmed)
-    return replace(message, parts=parts)
+        size, largest = max(payloads)
+        parts[largest] = _shorten_payload(parts[largest], size // 2)
+
+    best = replace(message, parts=parts)
+    if int(best.estimated_tokens or 0) <= ceiling:
+        return best
+    payload_indexes = [
+        index for index, part in enumerate(parts) if _longest_payload(part) is not None
+    ]
+    if not payload_indexes:
+        return best
+    low, high = 0.0, 1.0
+    fitted: Optional[Message] = None
+    for _ in range(MAX_SCALE_STEPS):
+        factor = (low + high) / 2
+        scaled = list(parts)
+        for index in payload_indexes:
+            payload = _longest_payload(scaled[index])
+            if payload is not None:
+                scaled[index] = _shorten_payload(scaled[index], int(len(payload[1]) * factor))
+        trial = replace(message, parts=scaled)
+        if int(trial.estimated_tokens or 0) <= ceiling:
+            fitted = trial
+            low = factor
+        else:
+            high = factor
+    return fitted if fitted is not None else best
 
 
 def bound_oversized_extraction_messages(
