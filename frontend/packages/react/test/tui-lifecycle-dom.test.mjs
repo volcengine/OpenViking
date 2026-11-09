@@ -94,7 +94,7 @@ test('formatted Markdown link labels contain one anchor and invoke the host once
   try {
     assert.equal(view.container.querySelector('ol').start, 3);
     assert.equal(view.container.querySelectorAll('a').length, 2);
-    assert.equal(view.container.querySelector('a a'), null);
+    assert.ok(!view.container.querySelector('a a'));
     await click(view.container.querySelector('a'));
     assert.deepEqual(opened, [uri]);
   } finally {

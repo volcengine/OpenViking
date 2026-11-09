@@ -108,7 +108,7 @@ test('IME Escape is ignored by the editor and document listener, including Safar
       assert.ok(view.container.querySelector('[role="listbox"]'));
     }
     await key(view.input, 'Escape');
-    assert.equal(view.container.querySelector('[role="listbox"]'), null);
+    assert.ok(!view.container.querySelector('[role="listbox"]'));
   } finally {
     await view.dispose();
   }

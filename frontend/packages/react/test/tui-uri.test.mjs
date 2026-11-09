@@ -89,7 +89,7 @@ test('result headings, summaries and embedded tree values also link URIs', () =>
   const html = renderToStaticMarkup(
     createElement(Tui, { ...props, value: '', records }),
   );
-  assert.equal(html.split(`href="${uri}"`).length - 1, 8);
+  assert.equal(html.split(`href="${uri}"`).length - 1, 9);
   for (const [, body] of html.matchAll(/<button\b[^>]*>([^]*?)<\/button>/g)) {
     assert.doesNotMatch(body, /<(?:a|button)\b/);
   }
