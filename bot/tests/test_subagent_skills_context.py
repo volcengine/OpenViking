@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from vikingbot.agent.subagent import SubagentManager
+from vikingbot.agent.subagent import SubagentManager, _format_subagent_error
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
 from vikingbot.bus.queue import MessageBus
 
@@ -17,6 +17,79 @@ def _write_skill(workspace: Path, name: str, content: str) -> None:
     skill_dir = workspace / "skills" / name
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+
+def test_subagent_error_preserves_nested_cause_within_model_visible_bound():
+    try:
+        raise ConnectionResetError("\x1b[31m" * 300 + "socket hang up")
+    except ConnectionResetError as cause:
+        error = RuntimeError("provider request failed")
+        error.__cause__ = cause
+
+    rendered = _format_subagent_error(error)
+
+    assert rendered == "provider request failed (cause: socket hang up)"
+    assert "\x1b" not in rendered
+    assert len(rendered) <= 1500
+
+
+def test_subagent_error_bounds_wrappers_without_evicting_root_cause():
+    try:
+        raise OSError("root detail " + "z" * 2000)
+    except OSError as cause:
+        error = RuntimeError("outer summary " + "x" * 2000)
+        error.__cause__ = cause
+
+    rendered = _format_subagent_error(error)
+
+    assert len(rendered) == 1500
+    assert rendered.startswith("outer summary ")
+    assert "(cause: root detail " in rendered
+    assert rendered.endswith("z" * 20 + ")")
+
+
+@pytest.mark.asyncio
+async def test_chat_subagent_failure_announces_nested_cause(tmp_path, monkeypatch):
+    class FailingProvider:
+        def get_default_model(self):
+            return "fake-model"
+
+        async def chat(self, **kwargs):
+            try:
+                raise ConnectionResetError("socket hang up")
+            except ConnectionResetError as cause:
+                raise RuntimeError("provider request failed") from cause
+
+    manager = SubagentManager(
+        provider=FailingProvider(),
+        workspace=tmp_path,
+        bus=MessageBus(),
+        config=SimpleNamespace(
+            agents=SimpleNamespace(subagent_max_concurrency=1),
+            ov_server=SimpleNamespace(is_available=lambda: False),
+        ),
+    )
+    announcements = []
+
+    async def capture(*args, **kwargs):
+        announcements.append({"result": args[3], "status": args[5]})
+
+    monkeypatch.setattr("vikingbot.agent.tools.register_subagent_tools", lambda **kwargs: None)
+    monkeypatch.setattr(manager, "_announce_result", capture)
+
+    await manager._run_subagent(
+        "chat-1",
+        "probe provider",
+        "probe",
+        SimpleNamespace(),
+    )
+
+    assert announcements == [
+        {
+            "result": "Error: provider request failed (cause: socket hang up)",
+            "status": "error",
+        }
+    ]
 
 
 def test_subagent_prompt_loads_local_skills(tmp_path):
@@ -171,7 +244,10 @@ async def test_managed_subagent_queue_collects_failure_and_cancels_pending_work(
         await started.put(task)
         if task == "first":
             await release.wait()
-            raise ValueError("source unreadable")
+            try:
+                raise OSError("storage connection reset")
+            except OSError as cause:
+                raise ValueError("source unreadable") from cause
         await asyncio.Event().wait()
 
     manager.task_runner = run
@@ -206,7 +282,9 @@ async def test_managed_subagent_queue_collects_failure_and_cancels_pending_work(
         assert len(report["results"]) == 1 and report["capacity"] == 1
         assert report["queue_capacity"] == 1 and report["free_worker_slots"] == 0
         assert report["results"][0]["status"] == "failed"
-        assert report["results"][0]["error"] == "source unreadable"
+        assert report["results"][0]["error"] == (
+            "source unreadable (cause: storage connection reset)"
+        )
         assert not (await manager.wait(block=False))["results"]
         assert "accepted" in await manager.spawn("third", SimpleNamespace())
         await manager.cancel_all()
