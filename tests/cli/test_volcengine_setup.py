@@ -625,20 +625,9 @@ def test_agent_plan_catalog_error_does_not_fall_back_to_payg(account_setup):
     account_setup[3].assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "subscription",
-    [
-        {"Status": "Running", "BizInfo": "max", "ResourceName": "OtherPlan"},
-        {
-            "Status": "Running",
-            "BizInfo": "max",
-            "ResourceName": "RealAgentPlanPersonal",
-            "NeedCheckAgreement": True,
-        },
-    ],
-)
-def test_agent_plan_wrong_pool_or_pending_agreement_never_queries_models(session, subscription):
+def test_agent_plan_wrong_pool_never_queries_models(session):
     account, _ = session
+    subscription = {"Status": "Running", "BizInfo": "max", "ResourceName": "OtherPlan"}
     with patch.object(account, "_call", return_value={"InfoList": [subscription]}) as call:
         with pytest.raises(ark.ArkSetupError):
             account.agent_plan_models()
@@ -844,3 +833,178 @@ def test_null_vlm_message_is_a_failed_probe_instead_of_crashing():
         results = ark.probe_models(config)
     assert results[0][1] is True
     assert results[1] == ("VLM", False, "unexpected model output")
+
+
+@pytest.mark.parametrize("signed", [True, False, None, "true"])
+def test_agent_plan_checks_account_agreement_before_catalog(session, signed):
+    account, _ = session
+    subscription = {
+        "Status": "Running",
+        "BizInfo": "max",
+        "ResourceName": "RealAgentPlanPersonal",
+        "NeedCheckAgreement": True,
+    }
+    with patch.object(
+        account,
+        "_call",
+        side_effect=[
+            {"InfoList": [subscription]},
+            {"IsSigned": signed},
+            {
+                "Data": [
+                    {
+                        "VirtualModelID": "vision",
+                        "ModelCapability": {
+                            "InputModalities": ["text", "image"],
+                            "OutputModalities": ["text"],
+                        },
+                    }
+                ]
+            },
+        ],
+    ) as call:
+        if signed is True:
+            assert account.agent_plan_models() == [{"id": "vision", "domain": "VLM"}]
+            assert call.call_args_list[-1].args[0] == "ListAgentPlanVirtualModelID"
+        else:
+            with pytest.raises(ark.ArkSetupError):
+                account.agent_plan_models()
+            assert call.call_count == 2
+    assert call.call_args_list[1].args == (
+        "GetAccountAgreement",
+        {"AgreementType": "AgreeAgentPlanService"},
+    )
+
+
+def test_agent_plan_agreement_lookup_failure_does_not_query_catalog(session):
+    account, _ = session
+    with patch.object(
+        account,
+        "_call",
+        side_effect=[
+            {
+                "InfoList": [
+                    {
+                        "Status": "Effective",
+                        "BizInfo": "small",
+                        "ResourceName": "RealAgentPlanPersonal",
+                        "NeedCheckAgreement": True,
+                    }
+                ]
+            },
+            ark.ArkSetupError("Agreement lookup unavailable"),
+        ],
+    ) as call:
+        with pytest.raises(ark.ArkSetupError, match="Agreement lookup unavailable"):
+            account.agent_plan_models()
+    assert call.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "inputs,domain",
+    [
+        (["text", "video"], "LLM"),
+        (["text", "image"], "VLM"),
+        (["text", "image", "video"], "VLM"),
+    ],
+)
+def test_agent_plan_vlm_requires_image_input(session, inputs, domain):
+    with patch.object(
+        session[0],
+        "_call",
+        side_effect=[
+            {
+                "InfoList": [
+                    {
+                        "Status": "Effective",
+                        "BizInfo": "small",
+                        "ResourceName": "RealAgentPlanPersonal",
+                    }
+                ]
+            },
+            {
+                "Data": [
+                    {
+                        "VirtualModelID": "model",
+                        "ModelCapability": {
+                            "InputModalities": inputs,
+                            "OutputModalities": ["text"],
+                        },
+                    }
+                ]
+            },
+        ],
+    ):
+        assert session[0].agent_plan_models() == [{"id": "model", "domain": domain}]
+
+
+@pytest.mark.parametrize("verify", [False, True])
+def test_custom_dimension_reprompts_before_saving_or_verifying(account_setup, verify, capsys):
+    account, _, confirm, probe = account_setup
+    plan = wizard.VOLCENGINE_PLANS[0]
+    account.agent_plan_models.return_value = [
+        {"id": plan.default_vlm_model, "domain": "VLM"},
+        {"id": "custom-embed", "domain": "Embedding", "input": "text"},
+    ]
+    confirm.return_value = verify
+    probe.return_value = [("Embedding", True, "ready"), ("VLM", True, "ready")]
+    with (
+        patch.object(wizard, "_select_access_plan", return_value=plan),
+        patch("builtins.input", side_effect=["0", "-1", "1024"]) as prompt,
+    ):
+        config = wizard._wizard_volcengine()
+    assert config["embedding"]["dense"]["dimension"] == 1024
+    assert prompt.call_count == 3
+    assert capsys.readouterr().out.count("Embedding dimension must be positive") == 2
+    if verify:
+        probe.assert_called_once_with(config)
+    else:
+        probe.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "failure,detail",
+    [
+        (httpx.ReadTimeout("secret"), "request timed out; check connectivity and retry"),
+        (httpx.ConnectError("secret"), "connection failed; check network and API address"),
+        (ValueError("secret"), "unexpected model response"),
+    ],
+)
+def test_probe_preserves_sanitized_failure_categories(failure, detail):
+    config = {
+        "embedding": {
+            "dense": {
+                "api_base": "https://example.invalid",
+                "api_key": "secret",
+                "model": "embed",
+                "dimension": 2,
+            }
+        },
+        "vlm": {"api_base": "https://example.invalid", "api_key": "secret", "model": "vlm"},
+    }
+    with patch("httpx.Client.post", side_effect=failure):
+        assert ark.probe_models(config) == [("Embedding", False, detail), ("VLM", False, detail)]
+
+
+@pytest.mark.parametrize("dimension", [0, -1])
+def test_probe_rejects_nonpositive_dimension_before_embedding_request(dimension):
+    config = {
+        "embedding": {
+            "dense": {
+                "api_base": "https://example.invalid",
+                "api_key": "secret",
+                "model": "embed",
+                "dimension": dimension,
+            }
+        },
+        "vlm": {"api_base": "https://example.invalid", "api_key": "secret", "model": "vlm"},
+    }
+    with patch(
+        "httpx.Client.post",
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]}),
+    ) as post:
+        results = ark.probe_models(config)
+    assert results[0] == ("Embedding", False, "embedding dimension must be positive")
+    assert results[1][1] is True
+    post.assert_called_once()
+    assert post.call_args.args[0].endswith("/chat/completions")

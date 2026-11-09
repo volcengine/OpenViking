@@ -2014,11 +2014,15 @@ def _wizard_volcengine() -> dict[str, Any] | object:
                     dimension = preset.default_embedding_dim
                     print(f"  Dimension: {dimension} (auto-filled)")
                 else:
-                    dimension = _prompt_required_int(
-                        "Embedding dimension", default=preset.default_embedding_dim
-                    )
-                    if dimension is None:
-                        return _GO_BACK
+                    while True:
+                        dimension = _prompt_required_int(
+                            "Embedding dimension", default=preset.default_embedding_dim
+                        )
+                        if dimension is None:
+                            return _GO_BACK
+                        if dimension > 0:
+                            break
+                        print(f"  {_red('Embedding dimension must be positive')}")
                 common = {"provider": "volcengine", "api_base": plan.api_base, "api_key": key}
                 config = {
                     "storage": {"workspace": _workspace_path()},

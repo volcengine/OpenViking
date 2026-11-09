@@ -263,7 +263,15 @@ class VolcengineSetup:
                 "Check your subscription in the Ark console."
             )
         if active[0].get("NeedCheckAgreement"):
-            raise ArkSetupError("Review the Agent Plan service agreement in the Ark console first.")
+            agreement = self._call(
+                "GetAccountAgreement", {"AgreementType": "AgreeAgentPlanService"}
+            )
+            if agreement.get("IsSigned") is False:
+                raise ArkSetupError(
+                    "Review the Agent Plan service agreement in the Ark console first."
+                )
+            if agreement.get("IsSigned") is not True:
+                raise ArkSetupError("VolcEngine returned an invalid Agent Plan agreement status.")
         result = self._call(
             "ListAgentPlanVirtualModelID",
             {"Edition": "personal", "BizInfo": active[0]["BizInfo"]},
@@ -286,7 +294,7 @@ class VolcengineSetup:
                 raise ArkSetupError("VolcEngine returned invalid Agent Plan model capabilities.")
             domain = None
             if "text" in outputs:
-                domain = "VLM" if "image" in inputs or "video" in inputs else "LLM"
+                domain = "VLM" if "image" in inputs else "LLM"
             elif "embedding" in outputs:
                 domain = "Embedding"
             model = {"id": model_id, "domain": domain}
@@ -424,6 +432,11 @@ def probe_models(config: dict[str, Any]) -> list[tuple[str, bool, str]]:
     results = []
     with httpx.Client(timeout=30, follow_redirects=False) as client:
         for label, section, endpoint, payload in probes:
+            if label == "Embedding" and (
+                type(dense.get("dimension")) is not int or dense["dimension"] <= 0
+            ):
+                results.append((label, False, "embedding dimension must be positive"))
+                continue
             try:
                 response = client.post(
                     f"{section['api_base']}/{endpoint}",
@@ -462,6 +475,10 @@ def probe_models(config: dict[str, Any]) -> list[tuple[str, bool, str]]:
                     message = body["choices"][0]["message"]
                     valid = isinstance(message, dict) and bool(message.get("content"))
                 results.append((label, valid, "ready" if valid else "unexpected model output"))
-            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
-                results.append((label, False, "request failed or unexpected response"))
+            except httpx.TimeoutException:
+                results.append((label, False, "request timed out; check connectivity and retry"))
+            except httpx.HTTPError:
+                results.append((label, False, "connection failed; check network and API address"))
+            except (ValueError, KeyError, IndexError, TypeError):
+                results.append((label, False, "unexpected model response"))
     return results
