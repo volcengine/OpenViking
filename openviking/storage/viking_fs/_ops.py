@@ -31,7 +31,7 @@ from openviking.storage.abstract_overview import (
     rewrite_abstract_overview_for_transfer,
 )
 from openviking.storage.acl import AclAction, is_acl_uri
-from openviking.storage.expr import And, PathScope, RawDSL
+from openviking.storage.expr import And, Eq, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
@@ -1166,9 +1166,9 @@ class _OpsMixin:
                 vector collection so callers can cross-reference without an
                 extra lookup. Not present for directories (which may have
                 multiple records across L0/L1/L2 levels).
-            count (int): For directories, the number of nodes in the vector index
-                under this directory (including subdirectories). For files, this
-                field is not included.
+            count (int): For directories, the number of visible level-2 vector
+                records under this directory (including subdirectories). For
+                files, this field is not included.
 
         Args:
             uri: Viking URI, or a 32-char hex vector record id (resolves to URI via vector store)
@@ -1215,9 +1215,13 @@ class _OpsMixin:
                     vector_store = self._get_vector_store()
                     if vector_store:
                         if not may_include_hidden_actor_peers(uri, real_ctx):
-                            filter_expr = PathScope("uri", uri, depth=-1)
                             result["count"] = await vector_store.count(
-                                filter=filter_expr,
+                                filter=And(
+                                    [
+                                        PathScope("uri", uri, depth=-1),
+                                        Eq("level", 2),
+                                    ]
+                                ),
                                 ctx=real_ctx,
                             )
                 except Exception as e:
@@ -2528,9 +2532,13 @@ class _OpsMixin:
             if need_count and is_dir and vector_store and entry_uri:
                 try:
                     if not may_include_hidden_actor_peers(entry_uri, real_ctx):
-                        filter_expr = PathScope("uri", entry_uri, depth=-1)
                         entry["count"] = await vector_store.count(
-                            filter=filter_expr,
+                            filter=And(
+                                [
+                                    PathScope("uri", entry_uri, depth=-1),
+                                    Eq("level", 2),
+                                ]
+                            ),
                             ctx=real_ctx,
                         )
                 except Exception as e:

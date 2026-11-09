@@ -412,7 +412,9 @@ The `isLocked` field reports whether the path is currently held by a path lock: 
 
 The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
 
-The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
+The `count` field (directories only) is the number of visible `level=2` vector records under the directory URI subtree. It depends on asynchronous indexing and orphan cleanup, so it is not a physical filesystem entry count. `ls`, `tree`, and `glob` expose it through `extra_fields=count`.
+
+**Breaking change:** `count` previously included all indexed vector levels. It now counts only caller-visible `level=2` records.
 
 On case-insensitive `localfs`, `stat` may also return metadata for a real file or directory through a case-only alias. For example, `viking://resources/docs/REPORT.md` may hit the real `viking://resources/docs/report.md`; on case-sensitive systems, the alias target returns `NOT_FOUND` when it does not exist.
 
