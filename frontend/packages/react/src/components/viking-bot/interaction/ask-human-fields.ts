@@ -78,7 +78,10 @@ export const toDefaultValue = (
     return undefined;
   }
   if (request.kind === 'repair') {
-    return request.initialValue ? { value: request.initialValue } : undefined;
+    // Ark 的 single-select 值是 { type, value } 对象，直接传字符串不会被选中。
+    return request.initialValue
+      ? { value: { type: 'option', value: request.initialValue } }
+      : undefined;
   }
   if (request.kind === 'text') {
     return { value: request.initialValue ?? '' };
@@ -106,8 +109,9 @@ export const isValidAnswer = (
     return request.options.some((option) => option.value === selected.value);
   }
   if (request.kind === 'repair') {
-    if (typeof raw !== 'string') return false;
-    return request.options.some((option) => option.id === raw);
+    const selected = raw as { type?: string; value?: string } | undefined;
+    if (!selected || typeof selected !== 'object') return false;
+    return request.options.some((option) => option.id === selected.value);
   }
   return true;
 };

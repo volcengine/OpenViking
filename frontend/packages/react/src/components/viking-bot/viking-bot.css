@@ -97,33 +97,45 @@
   --color-fill-2: var(--ov-viking-bot-surface-hover);
   --color-primary-light-1: var(--ov-viking-bot-primary-light);
 
-  /* Ark 以 `rgb(var(--primary-N))` 消费主色，因此这里必须是 RGB 通道列表，
-     不能写完整色值——`rgb(#5252ff)` 是非法颜色，浏览器会整条声明丢弃。
-     色阶取自包级基线的主色及其派生，亮/暗两套由下方 `.dark` 覆盖。 */
-  --primary-1: 245, 247, 255;
-  --primary-2: 237, 239, 252;
-  --primary-3: 172, 180, 255;
-  --primary-4: 142, 150, 255;
-  --primary-5: 112, 117, 255;
-  --primary-6: 82, 82, 255;
-  --primary-7: 56, 51, 210;
-  --primary-8: 36, 27, 166;
-  --primary-9: 21, 10, 121;
-  --primary-10: 10, 0, 77;
+  /* Ark 以 `rgb(var(--primary-N))` 消费主色，所以这里必须是 RGB 通道列表，
+     不能写完整色值——`rgb(#5252ff)` 是非法颜色，整条声明会被丢弃。
+     通道值来自 Ark 主题的官方色阶，与包级基线主色一致。
+     宿主换肤时覆盖 `--ov-viking-bot-primary-channels` 即可整体替换主色阶；
+     只想改主色本身则覆盖 `--ov-viking-bot-accent-channels`（同样三个通道值）。 */
+  --ov-viking-bot-accent-channels: 82, 82, 255;
+  --ov-viking-bot-accent-hover-channels: 112, 117, 255;
+  --primary-1: var(--ov-viking-bot-primary-1-channels, 245, 247, 255);
+  --primary-2: var(--ov-viking-bot-primary-2-channels, 237, 239, 252);
+  --primary-3: var(--ov-viking-bot-primary-3-channels, 172, 180, 255);
+  --primary-4: var(--ov-viking-bot-primary-4-channels, 142, 150, 255);
+  --primary-5: var(--ov-viking-bot-primary-5-channels, 112, 117, 255);
+  --primary-6: var(
+    --ov-viking-bot-primary-6-channels,
+    var(--ov-viking-bot-accent-channels)
+  );
+  --primary-7: var(--ov-viking-bot-primary-7-channels, 56, 51, 210);
+  --primary-8: var(--ov-viking-bot-primary-8-channels, 36, 27, 166);
+  --primary-9: var(--ov-viking-bot-primary-9-channels, 21, 10, 121);
+  --primary-10: var(--ov-viking-bot-primary-10-channels, 10, 0, 77);
 }
 
 .dark .ov-viking-bot,
 .dark .ov-viking-bot__interaction {
-  --primary-1: 26, 22, 50;
-  --primary-2: 35, 27, 93;
-  --primary-3: 63, 58, 137;
-  --primary-4: 76, 72, 180;
-  --primary-5: 66, 66, 186;
-  --primary-6: 95, 95, 255;
-  --primary-7: 112, 117, 255;
-  --primary-8: 172, 180, 255;
-  --primary-9: 204, 211, 255;
-  --primary-10: 232, 236, 255;
+  --ov-viking-bot-accent-channels: 95, 95, 255;
+  --ov-viking-bot-accent-hover-channels: 112, 117, 255;
+  --primary-1: var(--ov-viking-bot-primary-1-channels, 26, 22, 50);
+  --primary-2: var(--ov-viking-bot-primary-2-channels, 35, 27, 93);
+  --primary-3: var(--ov-viking-bot-primary-3-channels, 63, 58, 137);
+  --primary-4: var(--ov-viking-bot-primary-4-channels, 76, 72, 180);
+  --primary-5: var(--ov-viking-bot-primary-5-channels, 66, 66, 186);
+  --primary-6: var(
+    --ov-viking-bot-primary-6-channels,
+    var(--ov-viking-bot-accent-channels)
+  );
+  --primary-7: var(--ov-viking-bot-primary-7-channels, 112, 117, 255);
+  --primary-8: var(--ov-viking-bot-primary-8-channels, 172, 180, 255);
+  --primary-9: var(--ov-viking-bot-primary-9-channels, 204, 211, 255);
+  --primary-10: var(--ov-viking-bot-primary-10-channels, 232, 236, 255);
 }
 
 .ov-viking-bot__header,

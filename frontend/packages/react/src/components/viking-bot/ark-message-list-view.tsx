@@ -51,7 +51,9 @@ export function VikingBotMessageListView({
 }: VikingBotMessageListProps) {
   const labels = { ...DEFAULT_LABELS, ...overrides };
   // 同一轮的连续 assistant 消息先合并，列表才按轮次呈现而不是逐条堆叠。
-  const items = toRenderItems(groupMessages(messages), streaming);
+  // 边界必须在原始消息序列上确定：先按 insertIndex 切分，两侧分别合并，
+  // 否则先整体合并会让下标含义漂移，把边界两侧的助手消息并到一起。
+  const items = toRenderItems(messages, streaming, groupMessages);
 
   return (
     <div

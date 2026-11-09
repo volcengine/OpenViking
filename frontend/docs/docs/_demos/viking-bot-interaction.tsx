@@ -76,6 +76,20 @@ export default function VikingBotInteractionBasic() {
         submitting={submitting}
         onSubmit={submit}
       />
+      <VikingBotInteraction
+        request={{
+          kind: 'repair',
+          question: '修复哪一个来源？',
+          initialValue: 'b',
+          options: [
+            { id: 'a', label: '来源 A', description: '缺少权限' },
+            { id: 'b', label: '来源 B', description: '推荐' },
+          ],
+        }}
+        labels={LABELS}
+        submitting={submitting}
+        onSubmit={submit}
+      />
       {answer ? (
         <pre style={{ margin: 0 }}>{JSON.stringify(answer, null, 2)}</pre>
       ) : null}
