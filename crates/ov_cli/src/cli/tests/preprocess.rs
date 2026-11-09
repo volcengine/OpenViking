@@ -1,6 +1,6 @@
 use crate::cli::preprocess::{
     find_command_index, first_command_token, plain_help_misuse, pre_parse_output_options,
-    pre_parse_requires_cli_config_file, preprocess_privacy_args,
+    pre_parse_requires_cli_config_file, preprocess_compact_args, preprocess_privacy_args,
 };
 use crate::cli::tests::os_args;
 use crate::output::OutputFormat;
@@ -358,4 +358,53 @@ fn plain_help_ignores_option_values() {
             "{args:?} should treat help as an option value"
         );
     }
+}
+
+#[test]
+fn compact_preprocessor_preserves_other_option_values() {
+    assert_eq!(
+        preprocess_compact_args(os_args(&["ov", "--account", "-c", "status"])),
+        os_args(&["ov", "--account", "-c", "status"])
+    );
+    assert_eq!(
+        preprocess_compact_args(os_args(&[
+            "ov",
+            "write",
+            "viking://resources/x.md",
+            "--content",
+            "-c",
+            "--compact",
+            "false",
+        ])),
+        os_args(&[
+            "ov",
+            "write",
+            "viking://resources/x.md",
+            "--content",
+            "-c",
+            "--compact=false",
+        ])
+    );
+    assert_eq!(
+        preprocess_compact_args(os_args(&[
+            "ov",
+            "write",
+            "viking://resources/x.md",
+            "--content",
+            "--compact",
+            "false",
+        ])),
+        os_args(&[
+            "ov",
+            "write",
+            "viking://resources/x.md",
+            "--content",
+            "--compact",
+            "false",
+        ])
+    );
+    assert_eq!(
+        preprocess_compact_args(os_args(&["ov", "read", "--", "--compact", "-c"])),
+        os_args(&["ov", "read", "--", "--compact", "-c"])
+    );
 }
