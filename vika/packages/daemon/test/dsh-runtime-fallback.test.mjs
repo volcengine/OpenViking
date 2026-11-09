@@ -26,7 +26,8 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { after, describe, it } from 'node:test';
+import { after } from 'node:test';
+import { describe, it } from './dsh-node-gate.mjs';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
 import { DshAgent } from '../src/dsh.mjs';
 

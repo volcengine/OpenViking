@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
-import test from 'node:test';
+import { test } from './dsh-node-gate.mjs';
 import {
   createBridgeHandlers, DshBridgeFramer, MAX_FRAME_BYTES, wireDshBridge,
 } from '../src/dsh-bridge/protocol.mjs';

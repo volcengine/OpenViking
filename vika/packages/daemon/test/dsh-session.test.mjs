@@ -12,7 +12,7 @@ import { DshAgent } from '../src/dsh.mjs';
 import { dshProfilePatchHash } from '../src/dsh-runtime.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 import { after } from 'node:test';
-import { describe, it } from 'node:test';
+import { describe, it } from './dsh-node-gate.mjs';
 import {
   FakeChild, baseConfig, flush, makeStore, newAgent, startAgent, waitFor, writeProfilePatch, acknowledge, event, settle, defaultModelInfo,
 } from './dsh-agent-fixture.mjs';

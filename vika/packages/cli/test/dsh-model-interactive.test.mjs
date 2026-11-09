@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import test from 'node:test';
+import { test } from '../../daemon/test/dsh-node-gate.mjs';
 import { createCliFixture } from '../../daemon/test/cli-fixture.mjs';
 import { dshModelCommand, modelIdProblem } from '../src/dsh-model.mjs';
 import { guessProtocol } from '../src/dsh-model-wizard.mjs';

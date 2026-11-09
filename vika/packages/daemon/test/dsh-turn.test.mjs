@@ -10,7 +10,7 @@ import { DshAgent } from '../src/dsh.mjs';
 import { MAX_STEER_FRAME_BYTES } from '../src/dsh/turn.mjs';
 import { MAX_FRAME_BYTES } from '../src/dsh-bridge/framer.mjs';
 import { after } from 'node:test';
-import { describe, it } from 'node:test';
+import { describe, it } from './dsh-node-gate.mjs';
 import {
   flush, newAgent, startAgent, waitFor, acknowledge, event, settle,
 } from './dsh-agent-fixture.mjs';
