@@ -375,7 +375,9 @@ jobs:
     # `latest` pointer: Windows stays a preview channel under its own prefix.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The ~100 MB ZIP goes up twice (versioned and latest) and a
+    # GitHub runner reaches the Beijing bucket at roughly 1 Mbps.
+    timeout-minutes: 60
     environment: vika-release
     concurrency:
       group: vika-windows-preview-publish
