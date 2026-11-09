@@ -10,7 +10,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { DshAgent } from '../src/dsh.mjs';
 import { after } from 'node:test';
-import { describe, it } from 'node:test';
+import { describe, it } from './dsh-node-gate.mjs';
 import {
   baseConfig, makeStore, newAgent, quietLogger, startAgent, waitFor, acknowledge,
 } from './dsh-agent-fixture.mjs';

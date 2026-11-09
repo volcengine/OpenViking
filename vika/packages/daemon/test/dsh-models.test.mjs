@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs';
 import { DshAgent } from '../src/dsh.mjs';
-import { describe, it } from 'node:test';
+import { describe, it } from './dsh-node-gate.mjs';
 import {
   FakeChild, flush, newAgent, startAgent, waitFor, event, settle, profilePatchFile,
 } from './dsh-agent-fixture.mjs';

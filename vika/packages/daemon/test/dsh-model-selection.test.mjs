@@ -7,7 +7,8 @@
 // process through the daemon's own transition().
 
 import assert from 'node:assert/strict';
-import { after, describe, it } from 'node:test';
+import { after } from 'node:test';
+import { describe, it } from './dsh-node-gate.mjs';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
 import { adaptRuntime } from '../src/runtime-adapter.mjs';
 import { DshAgent } from '../src/dsh.mjs';

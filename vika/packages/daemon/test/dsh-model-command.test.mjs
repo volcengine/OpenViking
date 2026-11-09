@@ -7,7 +7,7 @@
 // transition's internals.
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it } from './dsh-node-gate.mjs';
 import { executeCommand } from '../src/commands.mjs';
 import {
   DEFAULT_MODELS, defaultModelInfo, selectThroughSlashCommand, startAgent, newAgent, waitFor,
