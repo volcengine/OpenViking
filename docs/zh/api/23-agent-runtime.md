@@ -27,7 +27,7 @@ POST /api/v1/compile/create
 | `to` | string | 是 | 调用者可写、与来源不重叠的输出目录 |
 | `skill` | string | 是 | 可读的 Skill 目录或其 `SKILL.md` URI |
 | `instruction` | string | 否 | 补充指令；null 使用 Skill 默认行为 |
-| `args` | object | 否 | Runtime 参数，可附带 `auto_update` / `update_schedule` 调度控制 |
+| `args` | object | 否 | Runtime 参数，可附带 `owner_user_id` 和 `auto_update` / `update_schedule` 控制 |
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/compile/create \
@@ -52,6 +52,8 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 ```
 
 缺少 `compile_name` 或名称非法时直接报错，服务端不会生成备用名称。同一 account 的同一用户重名创建（包括并发创建）返回冲突，不覆盖配置或增量基线；不同用户可以创建同名配置。配置名称不支持修改。
+
+`args.owner_user_id` 可选，用于选择当前 account 内的配置归属用户，省略时使用当前认证用户。创建、更新和按名称执行统一使用该参数；它只决定配置归属或定位，不改变执行身份、不授予数据访问权限，也不进入保存的 Runtime 参数。`args.owner_id` 不再用于选择配置归属用户。
 
 创建接口同步校验输入、权限及可见的目录标签，必要时创建 `to`，并持久入队独立的内部补标 Task；不等待目录索引、embedding 或 tag 可见性。`to` 是文件或内部任务未能持久入队时返回错误。QueueFS 消费者负责根目录索引和 `compile_target=true` 补齐，失败后重试，不递归标记子目录，并保留已有内容、摘要和其他 tag。目标路径不存在时停止该路径的补标，不重建目录。创建配置本身不执行 Compile、不创建 run、不拍来源快照。
 
@@ -159,7 +161,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 ### 配置与运行历史
 
-配置查询、修改、执行及运行历史均按当前 account 和用户定位；名称仅存在于其他用户名下时返回不存在。读取配置和 run 还需要目标读取权限，修改或执行需要当前写权限。列表只返回当前用户的可读配置，不合并指向相同输出目录的多个配置。
+配置查询及运行历史按当前 account 和用户定位；更新和按名称执行可通过 `args.owner_user_id` 选择同一 account 内的其他配置归属用户，省略时使用当前用户。指定用户下不存在该名称时返回不存在。读取配置和 run 还需要目标读取权限，修改或执行需要当前认证用户的写权限。列表只返回当前用户的可读配置，不合并指向相同输出目录的多个配置。
 
 | HTTP API | 结果 |
 |----------|------|
@@ -172,7 +174,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`latest_snapshot_id`、`change_type`。`snapshot_id` 固定为本次 run 的产出快照；`latest_snapshot_id` 为查询时该文件最近变更的 commit，无历史时为 null。最近变更可能是后续删除，此时读取该版本正文返回 404。仅查询本页产出的文件历史，查询失败直接报错。
 
-配置更新必填 `compile_name`、`from`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。`to` 可选，省略或为 null 时沿用该配置已保存的目标目录；显式传入的 `to` 规范化后必须与已保存的目标目录一致，修改目标目录返回 `400 INVALID_ARGUMENT`，配置保持不变；`from`、`skill` 等其他参数仍可修改。启用计划需要顶层 `update_schedule`；关闭会清空计划。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
+配置更新必填 `compile_name`、`from`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。`to` 可选，省略或为 null 时沿用该配置已保存的目标目录；显式传入的 `to` 规范化后必须与已保存的目标目录一致，修改目标目录返回 `400 INVALID_ARGUMENT`，配置保持不变；`from`、`skill` 等其他参数仍可修改。顶层 `update_schedule` 省略或为 null 时保留已保存的计划。启用自动更新需要本次提供或已保存的计划；关闭时保留计划，清除执行凭据和下次触发时间，并取消调度注册，是否启用计划由 `auto_update` 决定。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
 
 创建配置时，`state.json` 的顶层字段 `updated_by` 记录配置归属用户的 ID。更新时可在请求体顶层传入字符串 `updated_by` 指定记录的值，省略时记录当前认证用户的 ID。
 

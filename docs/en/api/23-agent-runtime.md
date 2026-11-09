@@ -27,7 +27,7 @@ POST /api/v1/compile/create
 | `to` | string | Yes | Output directory, writable by the caller and disjoint from the sources |
 | `skill` | string | Yes | Readable Skill directory or its `SKILL.md` URI |
 | `instruction` | string | No | Additional instructions; null uses the Skill's default behavior |
-| `args` | object | No | Runtime arguments and optional `auto_update` / `update_schedule` controls |
+| `args` | object | No | Runtime arguments and optional `owner_user_id`, `auto_update` / `update_schedule` controls |
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/compile/create \
@@ -52,6 +52,8 @@ The response is `200 OK`:
 ```
 
 Missing or invalid `compile_name` is rejected; the server never generates a fallback name. Duplicate names, including concurrent creation attempts by the same user within one account, return a conflict without replacing configuration or its baseline. Different users can create configurations with the same name. Configuration names cannot be changed.
+
+`args.owner_user_id` optionally selects the configuration owner within the current account; omission defaults to the authenticated user. Creation, updates, and named execution use this same parameter. It only selects configuration ownership or location: it does not change execution identity, grant data permissions, or enter saved Runtime arguments. `args.owner_id` does not select a configuration owner.
 
 Creation synchronously validates inputs, permissions and visible directory tags, creates `to` if needed, and durably enqueues an independent internal tagging Task. It does not wait for directory indexes, embeddings or tag visibility. A file at `to` or failure to durably enqueue the internal task returns an error. A QueueFS consumer prepares the root directory index and applies `compile_target=true`, retrying failures without recursively tagging descendants or replacing existing content, summaries and other tags. If the target path no longer exists, tagging stops for that path without recreating it. Configuration creation does not execute Compile, create a run, or snapshot sources.
 
@@ -159,7 +161,7 @@ The Python example uses `SyncHTTPClient`; use `await` with `AsyncHTTPClient`.
 
 ### Configuration and run history
 
-Configuration lookups, updates, executions and run queries use the current account and user. A name that exists only for another user returns not found. Configuration and run reads also require access to the output; editing or executing requires current write permission. Lists include only the current user's readable configurations. They do not merge configurations sharing one output directory.
+Configuration lookups and run queries use the current account and user. Updates and named executions can select another configuration owner in the same account through `args.owner_user_id`; without it they use the current user. A name absent for the selected owner returns not found. Configuration and run reads also require access to the output; editing or executing requires the authenticated caller's current write permission. Lists include only the current user's readable configurations. They do not merge configurations sharing one output directory.
 
 | HTTP API | Result |
 |----------|--------|
@@ -172,7 +174,7 @@ Configuration lookups, updates, executions and run queries use the current accou
 
 List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id`, `latest_snapshot_id` and `change_type`. `snapshot_id` is the frozen run snapshot; `latest_snapshot_id` is the file’s latest change commit at query time (null if no history). It may identify a later deletion, in which case reading that version returns 404. History errors propagate; only returned page items require history reads.
 
-Configuration updates require `compile_name`, `from`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. The optional `to` field preserves the saved output directory when omitted or null. When supplied, its normalized value must match the configuration's saved output directory. Changing the output directory returns `400 INVALID_ARGUMENT` and leaves the configuration unchanged; other inputs such as `from` and `skill` remain editable. Enabling updates requires top-level `update_schedule`; disabling clears the schedule. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. Updates apply the same directory constraints and durably enqueue independent tagging without waiting for tags. Updating configuration does not run Compile or reset invocation times.
+Configuration updates require `compile_name`, `from`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. The optional `to` field preserves the saved output directory when omitted or null. When supplied, its normalized value must match the configuration's saved output directory. Changing the output directory returns `400 INVALID_ARGUMENT` and leaves the configuration unchanged; other inputs such as `from` and `skill` remain editable. Omitting or passing null for top-level `update_schedule` preserves the saved plan. Enabling updates requires a supplied or saved plan. Disabling updates preserves the plan, clears execution credentials and the next trigger time, and unregisters scheduling; `auto_update` controls whether the plan is active. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. Updates apply the same directory constraints and durably enqueue independent tagging without waiting for tags. Updating configuration does not run Compile or reset invocation times.
 
 At creation, `state.json` records the configuration owner’s user ID in the top-level `updated_by` field. On update, the caller can supply a top-level `updated_by` string. If omitted, the server records the authenticated user’s ID.
 

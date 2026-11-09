@@ -535,7 +535,6 @@ class CompileService:
                 record["next_triggered_slot"] = next_slot(schedule, datetime.now(TZ)).isoformat()
                 record["last_triggered_slot"] = None
         else:
-            schedule = None
             record["execution_context"]["credential"] = None
             record["next_triggered_slot"] = None
         record["auto_update"] = auto_update
@@ -551,6 +550,8 @@ class CompileService:
         CompileLifecycle.validate_layout(normalized.to, normalized.from_)
         public, private = self._split_payload(normalized)
         control, runtime_args = split_control_args(public.get("args"))
+        # Configuration ownership does not enter the Skill's execution arguments.
+        runtime_args.pop("owner_user_id", None)
         schedule = control.get("update_schedule")
         if schedule is not None:
             schedule = parse_schedule(schedule, (ctx.account_id, owner_user_id, compile_name))
@@ -571,7 +572,7 @@ class CompileService:
         """Save configuration and enqueue target tagging without executing Compile or snapshots."""
         lifecycle = self._require_lifecycle()
         compile_name = validate_compile_name(request.compile_name)
-        owner_user_id = (request.args or {}).get("owner_id", ctx.user.user_id)
+        owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)
         record = await self._settings(request, ctx, owner_user_id, compile_name)
 
         async def prepare_target_and_schedule() -> None:
@@ -896,7 +897,12 @@ class CompileService:
         """Replace mutable settings under the state lock; target changes raise InvalidArgumentError."""
         from copy import deepcopy
 
-        configuration = await self._configuration(body.compile_name, ctx, action=AclAction.WRITE)
+        configuration = await self._configuration(
+            body.compile_name,
+            ctx,
+            action=AclAction.WRITE,
+            owner_user_id=(body.args or {}).get("owner_user_id", ctx.user.user_id),
+        )
         if body.to is None:
             body = body.model_copy(update={"to": configuration["to"]})
         target = self._normalize_request_uris(body, ctx).to
@@ -910,7 +916,7 @@ class CompileService:
             )
         args.update(
             auto_update=body.auto_update,
-            update_schedule=body.update_schedule,
+            update_schedule=body.update_schedule or configuration["update_schedule"],
         )
         inputs = CompileInputs.model_validate(
             {

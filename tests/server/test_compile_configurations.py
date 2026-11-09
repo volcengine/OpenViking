@@ -257,7 +257,7 @@ async def test_delegated_execution_owner_actor_and_retries(service, app, client,
             json={
                 **SAVED_INPUTS,
                 "instruction": owner,
-                "args": {"owner_id": owner, "model_name": "saved"},
+                "args": {"owner_user_id": owner, "model_name": "saved"},
             },
         )
         assert created.status_code == 200, created.text
@@ -521,12 +521,13 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
         await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
         == "not_due"
     )
+    plan = {**before["update_schedule"], "hour": 9}
     other_owner = "another-owner"
     await service.compile.create_compile_task(
         CompileCreateRequest.model_validate(
             {
                 **SAVED_INPUTS,
-                "args": {"owner_id": other_owner, "update_schedule": before["update_schedule"]},
+                "args": {"owner_user_id": other_owner, "update_schedule": plan},
             }
         ),
         ctx=ctx,
@@ -552,10 +553,10 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
             )
     assert await store.get(ctx.account_id, ctx.user.user_id, compile_name) == after
     update = CompileConfigUpdate.model_validate(
-        {**SAVED_INPUTS, "auto_update": True, "update_schedule": rule}
+        {**SAVED_INPUTS, "auto_update": False, "args": {"owner_user_id": other_owner}}
     )
     saved = await service.compile.update_config(update, ctx)
-    assert saved["next_triggered_slot"] == after["next_triggered_slot"]
+    assert saved["update_schedule"] == plan
 
 
 async def test_configuration_update_preserves_times_and_retry_payload(service, app, monkeypatch):
