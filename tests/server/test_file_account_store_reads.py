@@ -229,3 +229,26 @@ async def test_new_reader_does_not_bootstrap_over_unreadable_accounts(state, mon
         await replica.load()
     assert agfs._files == original
     assert not agfs._leases
+
+
+async def test_watched_reader_initial_load_is_read_only(state, monkeypatch):
+    manager, agfs, fs, key = state
+    original = dict(agfs._files)
+
+    def fail_write_lock(*args, **kwargs):
+        raise AssertionError("watched reader must not acquire a write lock during initial load")
+
+    monkeypatch.setattr(manager._store._async_agfs, "pathlock_acquire_exact", fail_write_lock)
+    reader = build_api_key_manager(
+        root_key=ROOT_KEY,
+        viking_fs=fs,
+        account_store_watch_enabled=True,
+        account_store_watch_interval_seconds=300,
+    )
+    await reader.load()
+    try:
+        assert (await reader.resolve_identity(key)).role == Role.ADMIN
+        assert agfs._files == original
+        assert not agfs._leases
+    finally:
+        await reader.close()

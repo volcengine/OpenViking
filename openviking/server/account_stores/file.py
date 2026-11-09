@@ -166,6 +166,15 @@ class FileStore(AccountStore):
 
     async def load(self) -> None:
         """Load keys into memory (writable startup path; migrates plaintext; see reload())."""
+        if self._watch_enabled:
+            # Watched file stores are read replicas. The writer has already
+            # bootstrapped the registries, so the initial snapshot must follow
+            # the same read-only path as subsequent watcher refreshes.
+            async with self._mutation_lock:
+                await self._reload_unlocked()
+            self._start_watcher()
+            return
+
         async with self._mutation_lock:
             lease = await self._async_agfs.pathlock_acquire_exact(ACCOUNTS_PATH, timeout_secs=10.0)
             try:

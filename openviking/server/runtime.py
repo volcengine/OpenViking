@@ -139,12 +139,14 @@ class SharedResources:
                 self.service.compile_scheduler.set_identity_resolver(
                     manager.resolve_identity, manager.get_user_group_ids
                 )
-        # Packaged files belong to internal startup identities. Persist them
-        # before installing the registered-user task guard; processing is durable
-        # and must not wait for consumers that have not started yet.
-        await self.service.reconcile_default_system_assets()
-        if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
-            await self.service.reconcile_system_assets(manager)
+        config = get_openviking_config()
+        if config.reconcile_system_assets_on_startup:
+            # Packaged files belong to internal startup identities. Persist them
+            # before installing the registered-user task guard; processing is durable
+            # and must not wait for consumers that have not started yet.
+            await self.service.reconcile_default_system_assets()
+            if manager is not None:
+                await self.service.reconcile_system_assets(manager)
         from openviking.service.deletion import setup_deletion
 
         state = self.app.state if self.app is not None else None
