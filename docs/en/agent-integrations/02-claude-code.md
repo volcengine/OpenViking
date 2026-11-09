@@ -67,6 +67,7 @@ The plugin hooks into the Claude Code lifecycle:
 - **Before compaction and on session end** — commits pending messages
 - **For each subagent** — assigns an isolated memory session
 - **Before a native file tool touches a `viking://` path** — blocks the call and names the OpenViking MCP tool to use instead; a `Write` or `Edit` on a skill path is pointed to `add_skill`
+- **Before a Bash command that uses a saved credential** — when [secret exec](#secret-exec) is on, runs it through a runner that keeps the value out of the conversation
 
 Capture runs in a detached worker and does not block the conversation turn. PreCompact and SessionEnd wait for the session commit, within their hook timeouts.
 
@@ -93,6 +94,8 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV of sed-style regex rules applied to the prompt before it becomes a query ([grammar and examples](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#input-filters)) |
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV of sed-style regex rules applied to every captured turn (same grammar) |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
+| `OPENVIKING_SECRET_EXEC` | `false` | Turn on [secret exec](#secret-exec) |
+| `OPENVIKING_SECRET_EXEC_APPROVAL` | `inherit` | `inherit` leaves the wrapped command to your permission mode and rules; `ask` confirms every use |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
 
 Most of these knobs can also live in `ovcli.conf` under `plugin` — see [Plugin Settings](../configuration/02-client.md#plugin-settings). The two filter knobs are better written there, as JSON arrays, because the environment form is split on commas.
@@ -108,6 +111,20 @@ With a user/admin key, the server derives identity from the key. Set `OPENVIKING
 Memories are filed under a peer derived from the repository you are working in, so one project keeps one memory across clones, worktrees, and subdirectories. The default `peer.source: "git"` uses the repository's normalized `origin` URL — with `origin git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — falling back to the repository root path; outside a repository no peer is sent at all, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. A fork has its own `origin`, so it stays a separate peer.
 
 Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf`, or with `peer.source` in the workspace's `.openviking/config.json` (a `"version": 1` file the team can commit): `"cwd"` restores the previous behavior — the working directory with every non-alphanumeric character replaced by `-` — `"none"` sends no peer, and a template such as `"team-{dir}"` builds your own. To [give a directory that is not a repository its own memory](../configuration/02-client.md#give-a-directory-its-own-peer), create `.openviking/config.json` in it containing `{"version": 1, "peer": {"id": "my-project"}}`. Memories written under the earlier cwd-derived peer are still recalled, so nothing needs migrating. The layer precedence and the full workspace-file schema are in [Client Configuration → Workspace Configuration](../configuration/02-client.md#workspace-configuration).
+
+## Secret exec
+
+Secret exec lets Claude use a credential saved in OpenViking Privacy without the value entering the conversation. It is off by default; turn it on with `OPENVIKING_SECRET_EXEC=1` or `plugin.secretExec: true` in `ovcli.conf`. A workspace file cannot turn it on.
+
+Claude writes the credential's reference, as `privacy_tree` lists it, into a Bash command:
+
+```bash
+curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}" https://api.github.com/user
+```
+
+A `PreToolUse` hook wraps the command in the plugin's runner without touching the network. When the command runs, the runner resolves each reference with your OpenViking key, hands the value to the command through an environment variable, and replaces any value the command prints with its reference. If a reference does not resolve, nothing runs. With secret exec on, the hook also denies `privacy_resolve`, and the session-start context tells Claude how to use references.
+
+The wrapped command follows your permission mode and rules, which Claude Code matches against the wrapped command rather than the original, so a rule such as `Bash(curl:*)` does not apply to it. Set `OPENVIKING_SECRET_EXEC_APPROVAL=ask` to confirm each use. Secret exec covers only commands that use a reference: a pasted key or the output of `cat .env` still reaches the model unless the [Gateway](../guides/15-gateway.md) seals it. A wrapped command runs in its own POSIX shell, so `cd` does not carry over, and the runner needs network access to the OpenViking server. See [Secret exec](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#secret-exec) in the plugin README for the details.
 
 ## Statusline
 

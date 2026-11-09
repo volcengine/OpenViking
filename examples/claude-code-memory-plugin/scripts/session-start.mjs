@@ -18,6 +18,7 @@
  *      This optional injection is disabled by default.
  *
  * The composed payload is mirrored to ~/.openviking/last_inject.md for audit.
+ * While secret exec is on, its usage note follows the envelope.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -41,6 +42,7 @@ import {
 import { statePath, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { SECRET_EXEC_USAGE } from "./shared/secret-exec.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -48,13 +50,18 @@ if (!isPluginEnabled()) {
 }
 
 const { log, logError } = createLogger("session-start");
-const fetchJSON = makeFetchJSON(loadConfig());
+const startupConfig = loadConfig();
+const fetchJSON = makeFetchJSON(startupConfig);
+// No workspace file can set secretExec, so the startup config already holds
+// this session's answer, and every exit below carries the note.
+const usageNote = startupConfig.secretExec ? SECRET_EXEC_USAGE : "";
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-function approve(additionalContext) {
+function approve(envelope) {
+  const additionalContext = [envelope, usageNote].filter(Boolean).join("\n\n");
   const out = { decision: "approve" };
   if (additionalContext) {
     out.hookSpecificOutput = {
@@ -132,8 +139,11 @@ runHookStage({
   }
 
   // 1. Archive injection — resume/compact only, requires session_id. Under a
-  // byte cap it takes up to half, and the profile gets the rest.
-  const maxBytes = cfg.sessionStartMaxBytes || 0;
+  // byte cap it takes up to half, and the profile gets the rest. The usage
+  // note shares the cap.
+  const maxBytes = cfg.sessionStartMaxBytes
+    ? Math.max(1, cfg.sessionStartMaxBytes - Buffer.byteLength(usageNote))
+    : 0;
   let archiveSection = null;
   let ovSessionId = null;
   if (willInjectArchive) {

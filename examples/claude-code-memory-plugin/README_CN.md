@@ -217,6 +217,15 @@ claude
 | `OPENVIKING_CONFIG_FILE`               | `~/.openviking/ov.conf`           | 覆盖 `ov.conf` 路径                          |
 | `OPENVIKING_CLI_CONFIG_FILE`           | `~/.openviking/ovcli.conf`        | 覆盖 `ovcli.conf` 路径                       |
 
+#### Secret exec
+
+| 环境变量                                | 默认值        | 说明                                                                |
+|----------------------------------------|---------------|--------------------------------------------------------------------|
+| `OPENVIKING_SECRET_EXEC`               | `false`       | 让带凭据引用的 Bash 命令经 runner 执行，见 [Secret exec](#secret-exec) |
+| `OPENVIKING_SECRET_EXEC_APPROVAL`      | `inherit`     | `inherit` 让包裹后的命令照常走你自己的权限模式与规则；`ask` 每次使用都确认 |
+
+在 `ovcli.conf` 里对应 `plugin` 或 `plugin.claude_code` 下的 `secretExec` 与 `secretExecApproval`。workspace 配置文件不能设置这两项。
+
 纯环境变量启动（无需配置文件）：
 
 ```bash
@@ -322,6 +331,26 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 ### 遗留 `claude_code` 块（在 `ov.conf` 里）
 
 早期插件版本把调优字段配在 `~/.openviking/ov.conf` 的 `claude_code` 块里。出于向后兼容，这种方式仍能用——上面每个 env var 都有对应的 camelCase 字段（`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`、`OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` JSON 数组等）。env vars 优先级更高。新部署应优先使用 env vars + shell rc——服务端配置文件不应承载每开发机自己的调优偏好。
+
+## Secret exec
+
+默认关闭。设 `OPENVIKING_SECRET_EXEC=1`，或在 `ovcli.conf` 里设 `secretExec: true` 后，Claude 可以使用登记在 OpenViking Privacy 里的凭据，而值不进入对话。它把 `privacy_tree` 列出的引用直接写进 Bash 命令，引号按命令需要随意写：
+
+```bash
+curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}" https://api.github.com/user
+```
+
+一个独立的 `PreToolUse` hook（与 URI guard 无关）把这样的命令包成 `node scripts/secret-run.mjs '<原命令>'`。hook 不联网，也从不接触值。命令执行时，runner 用你的 OpenViking key 逐个取值（`POST /api/v1/privacy-configs/resolve`），以环境变量交给命令，在引用原来的位置展开，值从不拼进 Shell 代码。命令在 stdout、stderr 里输出的值会被换回引用，这一点没有开关可以关闭。任何一个引用取不到值，命令都不会执行。stdin、退出码和信号原样透传。同一个开关还会拒绝 MCP 的 `privacy_resolve`（它会把值放进对话），并在会话开始时注入一段简短的用法说明。
+
+hook 默认不给出权限决定，包裹后的命令和普通命令一样走你自己的权限模式与规则。Claude Code 按包裹后的命令匹配规则，所以 `Bash(curl:*)` 这类规则（无论放行还是拒绝）不再作用于它：默认模式下第一次会提示，放行 runner 后不再打扰。设 `OPENVIKING_SECRET_EXEC_APPROVAL=ask` 则每次使用都要确认，提示里会显示完整命令和要用到的凭据。hook 从不自行放行命令。
+
+不在覆盖范围内的：
+
+- 它不保证密钥永远不到达模型。它只覆盖使用引用的命令；你粘贴的 key、`cat .env` 的输出、召回内容仍会发给模型，除非经过 [OpenViking Gateway](../../docs/zh/guides/15-gateway.md) 在上行时封存。
+- 包裹后的命令在独立的 Shell 里运行：`cd` 不会延续到下一条命令，Shell 配置里的 alias 和函数也不可用。
+- runner 需要能访问 OpenViking 服务器，在沙箱内也一样。
+- 只支持 POSIX Shell：`$SHELL` 是 sh、bash、zsh、dash 或 ksh 时用它，否则用 bash 或 `/bin/sh`。引用出现在带引号定界符的 here-document（`<<'EOF'`）里会被拒绝，因为 Shell 不会在那里展开。
+- 值以数据的形式交给命令。会把自身参数再当作 Shell 代码解析的命令（`eval`、`sh -c '…'`、`ssh host '…'`）也会解析这个值。
 
 ## Hook 超时
 
@@ -493,6 +522,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
 | `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` / `Edit` / `Write` 的路径是 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具；对 skill URI（`viking://~/skills/...`、`viking://user/<id>/skills/...`、`viking://agent/skills/...`）的 `Write` / `Edit` 会被引导到 `add_skill` |
 | `PreToolUse`          | `Bash` 命令里带 `viking://` URI | 照常执行命令，并附一条提醒：如果本意是访问 OpenViking 内容，应改用 OpenViking MCP 工具 |
+| `PreToolUse`          | `Bash` 命令里带凭据引用，或调用 `privacy_resolve` | 可选的 [secret exec](#secret-exec)：把命令包进 runner；拒绝 `privacy_resolve` |
 | `PostToolUse`         | `Read` 读到 `SKILL.md` 文件           | 可选（默认关闭）：OV 有相关 skill 经验记忆时注入经验块                                           |
 
 ### 异步写路径
@@ -540,6 +570,8 @@ claude-code-memory-plugin/
 │   ├── pre-compact.mjs      # PreCompact
 │   ├── subagent-start.mjs   # SubagentStart
 │   ├── subagent-stop.mjs    # SubagentStop
+│   ├── secret-exec.mjs      # PreToolUse：包裹使用凭据引用的命令
+│   ├── secret-run.mjs       # 这些命令经过的 runner
 │   ├── ov-status.mjs        # /ov 状态报告
 │   ├── ov-memory-doctor.mjs # 体检脚本（ov-memory-doctor skill）
 │   └── lib/

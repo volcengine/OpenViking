@@ -67,6 +67,7 @@ curl -fsSL https://openviking.ai/install | bash
 - **上下文压缩（compact）前及会话结束时** — 提交所有待处理的消息记录。
 - **启动子代理（subagent）时** — 为其分配相互隔离的记忆会话。
 - **原生文件工具访问 `viking://` 路径前** — 拦截该调用，并提示改用对应的 OpenViking MCP 工具；对 skill 路径的 `Write` 或 `Edit` 会被引导到 `add_skill`。
+- **执行使用已登记凭据的 Bash 命令前** — 开启 [secret exec](#secret-exec) 时，让命令经 runner 执行，值不进入对话。
 
 捕获在独立后台进程中执行，不阻塞当前对话轮次。PreCompact 和 SessionEnd 会在 hook 超时范围内等待会话提交完成。
 
@@ -93,6 +94,8 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，在 prompt 变成检索 query 前生效（[语法与示例](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#input-filters)） |
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，作用于每个被捕获的回合（同一套语法） |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | 强制开启或关闭插件 |
+| `OPENVIKING_SECRET_EXEC` | `false` | 开启 [secret exec](#secret-exec) |
+| `OPENVIKING_SECRET_EXEC_APPROVAL` | `inherit` | `inherit` 让包裹后的命令走你的权限模式与规则；`ask` 每次使用都确认 |
 | `OPENVIKING_DEBUG` | `false` | 将调试日志输出至 `~/.openviking/logs/cc-hooks.log` |
 
 这些配置大多也可以写在 `ovcli.conf` 的 `plugin` 段下——见[插件配置](../configuration/02-client.md#插件配置)。两个过滤器建议使用 JSON 数组，避免环境变量中的逗号被当作分隔符。
@@ -108,6 +111,20 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 记忆按你所在仓库派生出的 peer 归档，因此同一个项目在不同 clone、worktree 和子目录下共用同一份记忆。默认的 `peer.source: "git"` 取仓库归一化后的 `origin` URL——`origin` 为 `git@github.com:volcengine/OpenViking.git` 时，peer 就是 `github.com-volcengine-openviking`——其次是仓库根路径；不在仓库中则完全不发送 peer，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。fork 的 `origin` 不同，因此默认是独立的 peer。
 
 可通过 `OPENVIKING_PEER_SOURCE`、`ovcli.conf` 中的 `plugin.peerSource`，或工作区 `.openviking/config.json`（`"version": 1` 的配置文件，可提交给团队共用）中的 `peer.source` 修改：`"cwd"` 恢复此前的行为——把工作目录路径中的非字母数字字符全部替换成 `-`；`"none"` 表示不发送 peer；也可以用 `"team-{dir}"` 这样的模板自定义。要[让一个不是仓库的目录拥有独立记忆](../configuration/02-client.md#让一个目录拥有独立记忆)，在该目录下创建 `.openviking/config.json`，内容为 `{"version": 1, "peer": {"id": "my-project"}}`。此前按工作目录派生的 peer 下写入的记忆仍能被召回，无需迁移。分层优先级和工作区配置文件的完整 schema 见[客户端配置 → 工作区配置](../configuration/02-client.md#工作区配置)。
+
+## Secret exec
+
+Secret exec 让 Claude 使用登记在 OpenViking Privacy 里的凭据，而值不进入对话。它默认关闭，用 `OPENVIKING_SECRET_EXEC=1` 或 `ovcli.conf` 里的 `plugin.secretExec: true` 开启；workspace 配置文件不能开启它。
+
+Claude 把 `privacy_tree` 列出的凭据引用写进 Bash 命令：
+
+```bash
+curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}" https://api.github.com/user
+```
+
+一个 `PreToolUse` hook 不联网地把命令包进插件的 runner。命令执行时，runner 用你的 OpenViking key 逐个取值，经环境变量交给命令，并把命令输出里出现的值换回引用。任何引用取不到值，命令都不会执行。开启后 hook 还会拒绝 `privacy_resolve`，会话开始时的上下文也会告诉 Claude 如何使用引用。
+
+包裹后的命令走你自己的权限模式与规则；Claude Code 按包裹后的命令而不是原命令匹配规则，所以 `Bash(curl:*)` 这类规则不作用于它。想逐次确认时设 `OPENVIKING_SECRET_EXEC_APPROVAL=ask`。Secret exec 只覆盖使用引用的命令：粘贴的 key、`cat .env` 的输出仍会发给模型，除非经过 [Gateway](../guides/15-gateway.md) 封存。包裹后的命令在独立的 POSIX Shell 里运行，`cd` 不会延续；runner 需要能访问 OpenViking 服务器。细节见插件 README 的 [Secret exec](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#secret-exec)。
 
 ## 状态行
 

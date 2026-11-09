@@ -34,7 +34,7 @@
  *               as `<name>Configured` and `recall-core` reads it from there.
  */
 
-export const CAPABILITIES = ["connection", "peer", "recall", "capture", "session", "debug"];
+export const CAPABILITIES = ["connection", "peer", "recall", "capture", "session", "secrets", "debug"];
 
 /** @type {ReadonlyArray<object>} */
 export const KNOBS = [
@@ -213,6 +213,14 @@ export const KNOBS = [
   // several spellings case-insensitively (off/false/0/disabled, expanded/full/details).
   { name: "usageView", type: "string", default: "summary", env: "OPENVIKING_USAGE_VIEW", workspace: "usage.view", capability: "session" },
   { name: "usageOutput", type: "string", default: "auto", env: "OPENVIKING_USAGE_OUTPUT", workspace: "usage.output", capability: "session" },
+
+  // ── secrets ───────────────────────────────────────────────────────────
+  // No `workspace` key on purpose: a committed repository file must not be
+  // able to start releasing credentials into its own commands.
+  { name: "secretExec", type: "bool", default: false, env: "OPENVIKING_SECRET_EXEC", capability: "secrets" },
+  // `inherit` leaves the wrapped command to the user's own permission flow;
+  // `ask` confirms each use. There is no `allow`.
+  { name: "secretExecApproval", type: "enum", values: ["inherit", "ask"], default: "inherit", env: "OPENVIKING_SECRET_EXEC_APPROVAL", capability: "secrets" },
 
   // ── debug ─────────────────────────────────────────────────────────────
   { name: "debug", type: "bool", default: false, env: "OPENVIKING_DEBUG", capability: "debug" },

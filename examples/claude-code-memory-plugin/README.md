@@ -249,6 +249,15 @@ The bundled `openviking-skills` skill tells Claude what to do with the catalog: 
 | `OPENVIKING_CONFIG_FILE`               | `~/.openviking/ov.conf`           | Override `ov.conf` path                             |
 | `OPENVIKING_CLI_CONFIG_FILE`           | `~/.openviking/ovcli.conf`        | Override `ovcli.conf` path                          |
 
+#### Secret exec
+
+| Env Var                                | Default      | Description                                                              |
+|----------------------------------------|--------------|--------------------------------------------------------------------------|
+| `OPENVIKING_SECRET_EXEC`               | `false`      | Run Bash commands that carry a credential reference through the runner — see [Secret exec](#secret-exec) |
+| `OPENVIKING_SECRET_EXEC_APPROVAL`      | `inherit`    | `inherit` leaves the wrapped command to your own permission mode and rules; `ask` confirms every use |
+
+In `ovcli.conf` they are `secretExec` and `secretExecApproval`, under `plugin` or `plugin.claude_code`. A workspace file cannot set either.
+
 Pure-env example (no config file required):
 
 ```bash
@@ -374,6 +383,26 @@ Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can neve
 ### Legacy `claude_code` block in `ov.conf`
 
 Earlier plugin versions configured tuning fields under a `claude_code` block in `~/.openviking/ov.conf`. That still works for backward compatibility — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`, `OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` as a JSON array, etc.). Env vars take priority. New deployments should prefer env vars and shell rc — server config files shouldn't carry per-developer-machine tuning.
+
+## Secret exec
+
+Off by default. With `OPENVIKING_SECRET_EXEC=1`, or `secretExec: true` in `ovcli.conf`, Claude can use a credential saved in OpenViking Privacy without the value entering the conversation. It writes the reference that `privacy_tree` lists straight into a Bash command, quoted however the command needs:
+
+```bash
+curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}" https://api.github.com/user
+```
+
+A `PreToolUse` hook of its own, separate from the URI guard, wraps such a command as `node scripts/secret-run.mjs '<the command>'`. The hook makes no network call and never sees a value. When the command runs, the runner resolves every reference with your OpenViking key (`POST /api/v1/privacy-configs/resolve`) and hands each value to the command as an environment variable, expanded where the reference stood, so a value is never pasted into shell code. Any value the command prints on stdout or stderr comes back as its reference; there is no switch to turn that off. If any reference fails to resolve, nothing runs. Stdin, the exit code and signals pass through. The same switch denies the MCP `privacy_resolve` tool, which would put the value in the conversation, and adds a short usage note at session start.
+
+By default the hook makes no permission decision, so the wrapped command goes through your permission mode and rules like any other command. Claude Code matches rules against the wrapped command, so `Bash(curl:*)`-style rules, allow or deny, no longer apply to it: in the default mode you are asked the first time, and allowing the runner stops the prompts. `OPENVIKING_SECRET_EXEC_APPROVAL=ask` confirms every use instead, with the full command and the credentials it uses in the prompt. The hook never approves a command on its own.
+
+What it does not cover:
+
+- It does not guarantee that secrets never reach the model. It covers commands that use a reference; a key you paste, the output of `cat .env`, or recalled content still reach the model unless an [OpenViking Gateway](../../docs/en/guides/15-gateway.md) seals them on the way upstream.
+- A wrapped command runs in its own shell: `cd` does not carry over to the next command, and aliases and functions from your shell profile are not there.
+- The runner needs network access to the OpenViking server, also from inside a sandbox.
+- POSIX shells only: `$SHELL` when it is sh, bash, zsh, dash or ksh, otherwise bash or `/bin/sh`. A reference in a here-document with a quoted delimiter (`<<'EOF'`) is refused, since the shell would never expand it.
+- A value reaches the command as data. A command that parses its own arguments as shell code again (`eval`, `sh -c '…'`, `ssh host '…'`) parses the value too.
 
 ## Hook timeouts
 
@@ -545,6 +574,7 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
 | `PreToolUse`          | Native `Read` / `Glob` / `Grep` / `Edit` / `Write` whose path is a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool; a `Write` / `Edit` on a skill URI (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) is pointed to `add_skill` |
 | `PreToolUse`          | `Bash` command that contains a `viking://` URI | Let the command run and attach a notice pointing Claude to the OpenViking MCP tools in case it meant OpenViking content |
+| `PreToolUse`          | `Bash` command that contains a credential reference, or `privacy_resolve` | Opt-in [secret exec](#secret-exec): wrap the command in the runner; deny `privacy_resolve` |
 | `PostToolUse`         | `Read` of a `SKILL.md` file              | Optional (default off): inject an experience block when OV has relevant skill-experience memories |
 
 ### Async write path
@@ -590,6 +620,8 @@ claude-code-memory-plugin/
 │   ├── pre-compact.mjs      # PreCompact
 │   ├── subagent-start.mjs   # SubagentStart
 │   ├── subagent-stop.mjs    # SubagentStop
+│   ├── secret-exec.mjs      # PreToolUse: wrap commands that use a credential reference
+│   ├── secret-run.mjs       # the runner those commands go through
 │   ├── ov-status.mjs        # /ov status report
 │   ├── ov-memory-doctor.mjs # diagnostics script (ov-memory-doctor skill)
 │   └── lib/

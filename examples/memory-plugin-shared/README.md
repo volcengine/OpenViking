@@ -167,3 +167,14 @@ These settings apply to automatic recall. Explicit MCP search calls retain the
 arguments supplied by the caller. Cloud compression requires a server that
 supports the context-search rewrite API; older-server fallback behavior remains
 specific to each integration.
+
+## Secret exec
+
+`lib/secret-exec.mjs` lets a harness run a shell command that names a saved credential by its reference, `{{ov_privacy:<user>:viking://~/privacy/credential/<target>#/values/<field>}}`, while the value exists only in the environment of the process that runs it. It is off unless `secretExec` (`OPENVIKING_SECRET_EXEC`) is set, and neither it nor `secretExecApproval` has a workspace key, so a committed repository file cannot switch it on. Claude Code is the only host that uses it today.
+
+The module has two halves, and neither does I/O on import:
+
+- `secretExecPreToolUse(event, cfg, { node, runner })` is the hook's answer. A Bash command with a reference becomes `'<node>' '<runner>' '<the command>'`, every other input field kept and the command text unchanged, so the permission prompt and the transcript show only references. It gives no permission decision unless `secretExecApproval` is `ask`, and it never returns `allow`. A `…__privacy_resolve` call is denied with a reason that tells the model to write the reference into the command instead. The hook never reaches the network.
+- `runSecretExec(command, { env, resolve, spawn, shell, stdout, stderr, signals })` is the runner. It resolves every reference, through `privacyResolver(fetchJSON)` in a real plugin (`POST /api/v1/privacy-configs/resolve`), and runs nothing unless all of them resolve; an error names only the reference. `rewriteCommand()` turns each reference into an expansion of `OV_SECRET_<n>` written for the quoting it sits in, so a value is never pasted into shell code, and the command runs under `shell -c` (`posixShell()` picks it) with stdin inherited. `createMasker()` replaces each value on stdout and stderr, raw or JSON-escaped, with its reference; between chunks it holds back only a tail that could still grow into a value. The exit code passes through, or 128 + the signal, and SIGINT, SIGTERM and SIGHUP are forwarded.
+
+`SECRET_EXEC_USAGE` is the note a host adds to its session-start context while the switch is on. The design, including what this does not cover, is in [the RFC](../../docs/repository/rfcs/agent-secret-use.md).
