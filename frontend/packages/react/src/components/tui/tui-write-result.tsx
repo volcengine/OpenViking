@@ -12,7 +12,7 @@ export function TuiWriteResult({ content, onOpenUri }: TuiWriteResultProps) {
     <div className="ov-tui__write">
       {content.title ? (
         <div className="ov-tui__card-title">
-          <TuiUriText text={content.title} onOpenUri={onOpenUri} />
+          <TuiUriText text={content.title} mode="prose" onOpenUri={onOpenUri} />
         </div>
       ) : null}
       <div className="ov-tui__write-lines">
@@ -20,7 +20,7 @@ export function TuiWriteResult({ content, onOpenUri }: TuiWriteResultProps) {
           // 结果行由宿主提供，可能重复，用序号区分。
           <div key={index} className="ov-tui__write-line">
             {typeof line === 'string' ? (
-              <TuiUriText text={line} onOpenUri={onOpenUri} />
+              <TuiUriText text={line} mode="prose" onOpenUri={onOpenUri} />
             ) : (
               line
             )}

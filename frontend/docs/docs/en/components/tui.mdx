@@ -79,7 +79,7 @@ The table describes the implemented behaviour.
 
 Record updates follow the output only while the reader is near the bottom. Scrolling up preserves the reading position; an explicit submission resumes following. Resource tables retain each entry’s title, native URI target and metadata, including entries without detail rows.
 
-Structured resource links accept `viking://`, `https://` and `http://`; unsupported targets render as plain text. Sentence punctuation is excluded from prose URI links. Command, editor and code URI tokens preserve filename punctuation such as commas, semicolons and parentheses; whitespace and quoting delimiters bound literal tokens.
+Structured resource links accept `viking://`, `https://` and `http://`; unsupported targets render as plain text. Sentence punctuation is excluded from prose URI links, including search summaries/excerpts, descriptions, metadata and write-result messages. Resource identities and raw structured values use literal matching. Command, editor and code URI tokens preserve filename punctuation such as commas, semicolons and parentheses; whitespace and quoting delimiters bound literal tokens.
 
 `onSubmit` reports the submitted text and does not await a result. The host owns sending, permissions and execution, and updates pending, successful or failed records. A pending record does not block later submissions.
 

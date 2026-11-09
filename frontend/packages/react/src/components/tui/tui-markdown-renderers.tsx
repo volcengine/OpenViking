@@ -40,7 +40,11 @@ function LinkedText({ children }: { children?: ReactNode }) {
         ? children
         : Children.map(children, (child) =>
             typeof child === 'string' ? (
-              <TuiUriText text={child} onOpenUri={options.onOpenUri} prose />
+              <TuiUriText
+                text={child}
+                mode="prose"
+                onOpenUri={options.onOpenUri}
+              />
             ) : (
               child
             ),
@@ -57,7 +61,11 @@ function MarkdownCode({ children }: ComponentPropsWithoutRef<'code'>) {
       {insideLink ? (
         children
       ) : (
-        <TuiUriText text={textOf(children)} onOpenUri={options.onOpenUri} />
+        <TuiUriText
+          text={textOf(children)}
+          mode="literal"
+          onOpenUri={options.onOpenUri}
+        />
       )}
     </code>
   );

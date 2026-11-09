@@ -89,7 +89,11 @@ function SearchRow({
                 <ResourceUri text={item.uri} />
               </TuiUriLink>
             ) : (
-              <TuiUriText text={item.title} onOpenUri={onOpenUri} />
+              <TuiUriText
+                text={item.title}
+                mode="literal"
+                onOpenUri={onOpenUri}
+              />
             )}
           </span>
           {item.levelLabel ? (
@@ -98,12 +102,20 @@ function SearchRow({
         </span>
         {item.preview ? (
           <span className="ov-tui__search-preview">
-            <TuiUriText text={item.preview} onOpenUri={onOpenUri} />
+            <TuiUriText
+              text={item.preview}
+              mode="prose"
+              onOpenUri={onOpenUri}
+            />
           </span>
         ) : null}
         {item.metaLabel ? (
           <span className="ov-tui__search-meta">
-            <TuiUriText text={item.metaLabel} onOpenUri={onOpenUri} />
+            <TuiUriText
+              text={item.metaLabel}
+              mode="prose"
+              onOpenUri={onOpenUri}
+            />
           </span>
         ) : null}
       </span>
@@ -122,7 +134,11 @@ export function TuiSearchList({
       {content.summary ? (
         <div className="ov-tui__search-summary">
           {typeof content.summary === 'string' ? (
-            <TuiUriText text={content.summary} onOpenUri={onOpenUri} />
+            <TuiUriText
+              text={content.summary}
+              mode="prose"
+              onOpenUri={onOpenUri}
+            />
           ) : (
             content.summary
           )}

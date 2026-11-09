@@ -25,7 +25,11 @@ export function TuiCodeBlock({
         onCopy={onCopy}
       />
       <pre className="ov-tui__code-content">
-        <TuiUriText text={formatTuiJson(text)} onOpenUri={onOpenUri} />
+        <TuiUriText
+          text={formatTuiJson(text)}
+          mode="literal"
+          onOpenUri={onOpenUri}
+        />
       </pre>
     </div>
   );

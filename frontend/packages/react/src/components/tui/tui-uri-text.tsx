@@ -11,8 +11,8 @@ export interface TuiUriTextProps {
   onOpenUri?: (uri: string) => void;
   /** 编辑镜像隐藏重复文字，但保留链接语义及输入框焦点。 */
   editor?: boolean;
-  /** Sentence punctuation is excluded only from prose, never editor/echo values. */
-  prose?: boolean;
+  /** Every caller declares its content semantics; literal values retain filename punctuation. */
+  mode: 'prose' | 'literal';
 }
 
 /** A validated native link; rejected targets remain plain text. */
@@ -55,12 +55,12 @@ export function TuiUriText({
   text,
   onOpenUri,
   editor = false,
-  prose = false,
+  mode,
 }: TuiUriTextProps) {
   const parts: ReactNode[] = [];
   let cursor = 0;
   const pattern = new RegExp(
-    (prose ? TUI_PROSE_URI_PATTERN : TUI_URI_PATTERN).source,
+    (mode === 'prose' ? TUI_PROSE_URI_PATTERN : TUI_URI_PATTERN).source,
     'gi',
   );
   const plain = (value: string, key: number) =>
@@ -74,9 +74,10 @@ export function TuiUriText({
 
   for (const matched of text.matchAll(pattern)) {
     const index = matched.index ?? 0;
-    const uri = prose
-      ? matched[0].replace(/[.!?；;:：！？]+$/u, '')
-      : matched[0];
+    const uri =
+      mode === 'prose'
+        ? matched[0].replace(/[.!?；;:：！？]+$/u, '')
+        : matched[0];
     if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));
     parts.push(
       <TuiUriLink

@@ -139,7 +139,7 @@ function RecordBody({
             />
           ) : (
             <pre className="ov-tui__plain">
-              <TuiUriText text={text} onOpenUri={onOpenUri} prose />
+              <TuiUriText text={text} mode="prose" onOpenUri={onOpenUri} />
             </pre>
           )}
         </div>
@@ -173,10 +173,18 @@ export function TuiRecordItem(props: TuiRecordProps) {
               <span className="ov-tui__bubble-command">
                 <TuiCommandText text={prefix} name={input.command.name} />
               </span>
-              <TuiUriText text={input.rest} onOpenUri={props.onOpenUri} />
+              <TuiUriText
+                text={input.rest}
+                mode="literal"
+                onOpenUri={props.onOpenUri}
+              />
             </>
           ) : (
-            <TuiUriText text={record.command} onOpenUri={props.onOpenUri} />
+            <TuiUriText
+              text={record.command}
+              mode="literal"
+              onOpenUri={props.onOpenUri}
+            />
           )}
         </code>
         {record.createdAt || record.createdAtMs !== undefined ? (

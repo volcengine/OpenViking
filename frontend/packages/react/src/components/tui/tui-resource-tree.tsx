@@ -28,12 +28,16 @@ function TreeIdentity({
             {item.title}
           </TuiUriLink>
         ) : (
-          <TuiUriText text={item.title} onOpenUri={onOpenUri} />
+          <TuiUriText text={item.title} mode="literal" onOpenUri={onOpenUri} />
         )}
       </span>
       {item.metaLabel ? (
         <span className="ov-tui__tree-meta">
-          <TuiUriText text={item.metaLabel} onOpenUri={onOpenUri} />
+          <TuiUriText
+            text={item.metaLabel}
+            mode="prose"
+            onOpenUri={onOpenUri}
+          />
         </span>
       ) : null}
     </>
@@ -63,7 +67,11 @@ export function TuiResourceTree({
     <div className="ov-tui__tree">
       {content.title ? (
         <div className="ov-tui__card-title">
-          <TuiUriText text={content.title} onOpenUri={onOpenUri} />
+          <TuiUriText
+            text={content.title}
+            mode="literal"
+            onOpenUri={onOpenUri}
+          />
         </div>
       ) : null}
       {!content.items.length ? (
@@ -94,7 +102,11 @@ export function TuiResourceTree({
                         ?.value ?? '';
                     return (
                       <td key={column}>
-                        <TuiUriText text={value} onOpenUri={onOpenUri} />
+                        <TuiUriText
+                          text={value}
+                          mode="literal"
+                          onOpenUri={onOpenUri}
+                        />
                       </td>
                     );
                   })}

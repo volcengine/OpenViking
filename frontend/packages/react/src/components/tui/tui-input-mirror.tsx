@@ -42,7 +42,12 @@ export function TuiInputMirror({
                 <TuiCommandText text={input.prefix} name={input.command.name} />
               </span>
             </span>
-            <TuiUriText text={input.rest} onOpenUri={onOpenUri} editor />
+            <TuiUriText
+              text={input.rest}
+              mode="literal"
+              onOpenUri={onOpenUri}
+              editor
+            />
           </>
         ) : colorInput ? (
           <span className="ov-tui__input-command" aria-hidden="true">
@@ -52,7 +57,12 @@ export function TuiInputMirror({
             />
           </span>
         ) : (
-          <TuiUriText text={value} onOpenUri={onOpenUri} editor />
+          <TuiUriText
+            text={value}
+            mode="literal"
+            onOpenUri={onOpenUri}
+            editor
+          />
         )}
         <span aria-hidden="true">
           {inline ? (

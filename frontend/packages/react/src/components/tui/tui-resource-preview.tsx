@@ -26,12 +26,16 @@ export function TuiResourcePreview({
     <div className="ov-tui__preview">
       {metaLabel ? (
         <div className="ov-tui__result-meta">
-          <TuiUriText text={metaLabel} onOpenUri={onOpenUri} />
+          <TuiUriText text={metaLabel} mode="prose" onOpenUri={onOpenUri} />
         </div>
       ) : null}
       {content.title ? (
         <div className="ov-tui__card-title">
-          <TuiUriText text={content.title} onOpenUri={onOpenUri} />
+          <TuiUriText
+            text={content.title}
+            mode="literal"
+            onOpenUri={onOpenUri}
+          />
         </div>
       ) : null}
       <div className="ov-tui__preview-body">
@@ -53,7 +57,11 @@ export function TuiResourcePreview({
           />
         ) : (
           <pre className="ov-tui__preview-content">
-            <TuiUriText text={content.content} onOpenUri={onOpenUri} />
+            <TuiUriText
+              text={content.content}
+              mode="literal"
+              onOpenUri={onOpenUri}
+            />
           </pre>
         )}
       </div>

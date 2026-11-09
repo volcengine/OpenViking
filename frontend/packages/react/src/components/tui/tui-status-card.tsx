@@ -12,7 +12,7 @@ export function TuiStatusCard({ content, onOpenUri }: TuiStatusCardProps) {
     <div className="ov-tui__status">
       {content.title ? (
         <div className="ov-tui__card-title">
-          <TuiUriText text={content.title} onOpenUri={onOpenUri} />
+          <TuiUriText text={content.title} mode="prose" onOpenUri={onOpenUri} />
         </div>
       ) : null}
       <dl className="ov-tui__status-rows">
@@ -25,7 +25,11 @@ export function TuiStatusCard({ content, onOpenUri }: TuiStatusCardProps) {
             <dt className="ov-tui__status-label">{row.label}</dt>
             <dd className="ov-tui__status-value">
               {typeof row.value === 'string' ? (
-                <TuiUriText text={row.value} onOpenUri={onOpenUri} />
+                <TuiUriText
+                  text={row.value}
+                  mode="literal"
+                  onOpenUri={onOpenUri}
+                />
               ) : (
                 row.value
               )}
