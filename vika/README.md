@@ -63,3 +63,10 @@ The release-process guide is currently in Chinese.
 | Reliability and acceptance checks | [Reliability limits](docs/usage-reference.md#reliability-limits) · [Feishu acceptance](docs/usage-reference.md#feishu-acceptance-checks) |
 
 Features in the source tree may not yet be published. Check your installed release.
+
+## MA Cloud with a local or VKE Channel
+
+MA Cloud runs the agent sandbox remotely and dispatches custom tools to Channel Core.
+Connector credentials, freshness checks, SQLite state and external delivery remain in
+the Channel process. See the [deployment runbook](deploy/vke/README.md) for dedicated
+Agent provisioning, file transfer, optional SDK events and single-replica VKE deployment.

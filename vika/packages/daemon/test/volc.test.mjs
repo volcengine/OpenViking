@@ -128,13 +128,14 @@ function config(overrides = {}) {
 }
 
 class VolcAgent extends BaseVolcAgent {
+  async _validateTools() { this.toolsHash = 'test-tools'; }
   async _getEnvironment(environmentId) {
-    return { id: environmentId, config: { type: 'self_hosted' } };
+    return { id: environmentId, config: { type: 'cloud' } };
   }
 }
 
 describe('Volc managed-agent runtime', () => {
-  it('fails closed unless the configured Environment is the template self-hosted Environment', async () => {
+  it('fails closed unless the configured Environment is the template cloud Environment', async () => {
     let requestedEnvironment = 0;
     const mismatched = new BaseVolcAgent(config({
       volcEnvironmentId: 'env-expected12345',
@@ -145,22 +146,22 @@ describe('Volc managed-agent runtime', () => {
         return json({});
       },
     });
-    await assert.rejects(() => mismatched.start(), /does not use the configured self-hosted Environment/);
+    await assert.rejects(() => mismatched.start(), /does not use the configured cloud Environment/);
     assert.equal(requestedEnvironment, 0);
 
     const cloud = new BaseVolcAgent(config(), store(), quietLogger, {
       fetch: async (url) => {
         if (url.endsWith('/sessions/sesn-template12345')) return json(templateSession());
         if (url.endsWith('/environments/env-test12345')) {
-          return json({ id: 'env-test12345', config: { type: 'cloud' } });
+          return json({ id: 'env-test12345', config: { type: 'self_hosted' } });
         }
         throw new Error(`unexpected request: ${url}`);
       },
     });
-    await assert.rejects(() => cloud.start(), /config\.type=self_hosted/);
+    await assert.rejects(() => cloud.start(), /config\.type=cloud/);
   });
 
-  it('keeps one self-hosted turn active across repeated CLI tool results without agent.message or host relay', async () => {
+  it('keeps cloud builtin tool telemetry separate from Core custom tool execution', async () => {
     let succeeded = 0;
     const failures = [];
     const data = store();
@@ -171,10 +172,10 @@ describe('Volc managed-agent runtime', () => {
       onTurnSucceeded: () => { succeeded += 1; },
       onTurnFailed: (info) => failures.push(info),
     });
-    assert.match(agent.transportPolicy, /Managed Agent self-hosted delivery runtime/);
-    assert.match(agent.transportPolicy, /official self-hosted Environment Worker is the only tool executor/);
+    assert.match(agent.transportPolicy, /Managed Agent cloud sandbox/);
+    assert.match(agent.transportPolicy, /All listed Core custom tools execute on the Channel host/);
     assert.doesNotMatch(agent.transportPolicy, /strict JSON|vika-tools\/v1/);
-    assert.match(agent.transportPolicy, /one native turn may call it repeatedly before end_turn/);
+    assert.match(agent.transportPolicy, /Bash runs only in the cloud sandbox/);
 
     agent.connected = true;
     agent.turnActive = true;
@@ -183,19 +184,9 @@ describe('Volc managed-agent runtime', () => {
     agent.expectedUserEventId = 'user-current';
     agent._handleEvent({ id: 'user-current', type: 'user.message' });
     agent._handleEvent({ id: 'tool-1', type: 'agent.tool_use', name: 'bash' });
-    agent._handleEvent({
-      id: 'wait-1',
-      type: 'session.status_idle',
-      stop_reason: { type: 'requires_action', event_ids: ['tool-1'] },
-    });
     assert.equal(agent.turnActive, true);
     agent._handleEvent({ id: 'result-1', type: 'user.tool_result', tool_use_id: 'tool-1' });
     agent._handleEvent({ id: 'tool-2', type: 'agent.tool_use', name: 'bash' });
-    agent._handleEvent({
-      id: 'wait-2',
-      type: 'session.status_idle',
-      stop_reason: { type: 'requires_action', event_ids: ['tool-2'] },
-    });
     assert.equal(agent.turnActive, true);
     agent._handleEvent({ id: 'result-2', type: 'user.tool_result', tool_use_id: 'tool-2' });
     agent._handleEvent({
@@ -208,7 +199,7 @@ describe('Volc managed-agent runtime', () => {
     assert.equal(succeeded, 1);
     assert.deepEqual(failures, []);
     assert.equal(data.activities.filter((activity) => activity.kind === 'agent.tool_called').length, 2);
-    assert.equal(data.activities.filter((activity) => activity.kind === 'agent.tool_waiting').length, 2);
+    assert.equal(data.activities.filter((activity) => activity.kind === 'agent.tool_waiting').length, 0);
     assert.equal(data.activities.filter((activity) => activity.kind === 'agent.tool_completed').length, 2);
   });
 
@@ -268,14 +259,14 @@ describe('Volc managed-agent runtime', () => {
     assert.equal(posted.events.length, 1);
     assert.equal(posted.events[0].type, 'user.message');
     const messageText = posted.events[0].content[0].text;
-    assert.match(messageText, /official self-hosted Environment Worker is the only tool executor/);
-    assert.match(messageText, /one native turn may call it repeatedly before end_turn/);
+    assert.match(messageText, /All listed Core custom tools execute on the Channel host/);
+    assert.match(messageText, /Bash runs only in the cloud sandbox/);
     // The Ark agent template's own system field only carries persona; the
     // injected policy must also explain the [chat=... msg=...] line format
     // and the reply/silence rules, or MA has no way to know them.
-    assert.match(messageText, /^## Inputs\n/);
+    assert.match(messageText, /^# Operating policy\n/);
     assert.match(messageText, /source=github kind=issue.opened/);
-    assert.match(messageText, /Unless the Role below says otherwise/);
+    assert.match(messageText, /Decisions and delivery/);
     assert.match(messageText, /hello$/);
     assert.equal(agent.turnInProgress, false);
     assert.ok(data.activities.some((activity) => activity.kind === 'agent.tool_called'));
@@ -608,7 +599,7 @@ describe('Volc managed-agent runtime', () => {
     await recovered.stop();
   });
 
-  it('queues all input that arrives during an active self-hosted turn', async () => {
+  it('queues active-turn input when durable steering is unavailable', async () => {
     const data = store();
     const agent = new VolcAgent(config(), data, quietLogger, { fetch: async () => json({}) });
     agent.connected = true;
@@ -660,7 +651,7 @@ describe('Volc managed-agent runtime', () => {
       assert.match(agent.transportPolicy, /ROLE_MARKER: Alpha answers garden questions\./);
       assert.doesNotMatch(agent.transportPolicy, /editor note/);
       const plain = new VolcAgent(config(), store(), quietLogger, { fetch: async () => json({}) });
-      assert.match(plain.transportPolicy, /^## Inputs\n/);
+      assert.match(plain.transportPolicy, /^# Operating policy\n/);
       assert.doesNotMatch(plain.transportPolicy, /## Role/);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
@@ -727,7 +718,7 @@ describe('Volc managed-agent runtime', () => {
     assert.equal(failures.length, 2);
   });
 
-  it('keeps a bare requires_action status inside the active self-hosted turn', async () => {
+  it('fails a requires_action status missing the pending tool IDs', async () => {
     const failures = [];
     let succeeded = 0;
     const agent = new VolcAgent(config(), store(), quietLogger, {
@@ -741,12 +732,12 @@ describe('Volc managed-agent runtime', () => {
     agent.expectedUserEventId = 'user-current';
     agent._handleEvent({ id: 'user-current', type: 'user.message' });
     agent._handleEvent({ id: 'idle-current', type: 'status_idle', stop_reason: 'requires_action' });
-    assert.equal(agent.turnActive, true);
-    assert.deepEqual(failures, []);
+    assert.equal(agent.turnActive, false);
+    assert.equal(failures.length, 1);
     agent._handleEvent({ id: 'done-current', type: 'status_idle', stop_reason: 'end_turn' });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(agent.turnActive, false);
-    assert.equal(succeeded, 1);
+    assert.equal(succeeded, 0);
   });
 
 

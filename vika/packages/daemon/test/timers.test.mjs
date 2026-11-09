@@ -97,6 +97,23 @@ describe('timer MCP tools', () => {
     return { occurrenceId: `${created.data.timer_id}:1790000000000`, connector };
   }
 
+  it('keeps MA timer completion and nested delivery inside the authenticated turn', async (t) => {
+    const context = setup(t);
+    const { occurrenceId } = await dueOccurrence(context);
+    const event = context.store.acceptedEvents(`timer:${occurrenceId}`, 'timer')[0];
+    const options = { authority: TOKEN, via: 'ma', turn: { inboundSeqs: [event.seq], conversationKey: event.scope_key } };
+    await assert.rejects(context.service.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId, reason: 'No delivery needed',
+    }, { ...options, turn: { inboundSeqs: [] } }), { code: 'decision_out_of_turn' });
+    assert.equal(context.repository.getOccurrenceCheck(occurrenceId).status, 'pending');
+    const result = await context.service.call('finish_timer_occurrence', {
+      occurrence_id: occurrenceId,
+      delivery: { tool: 'notify_owner', input: { markdown: 'MA timer completed', decision_id: `timer:${occurrenceId}` } },
+    }, options);
+    assert.equal(result.data.completed, true);
+    assert.equal(context.store.db.prepare('SELECT COUNT(*) AS count FROM outbox').get().count, 1);
+  });
+
   it('finishes with one delivery call only after sending, even when a new input arrives during delivery', async (t) => {
     let release;
     const sending = new Promise((resolve) => { release = resolve; });

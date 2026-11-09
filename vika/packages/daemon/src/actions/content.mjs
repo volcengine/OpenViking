@@ -5,15 +5,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { preparePrivateDirectory } from '../private-temp.mjs';
-import { readWorkspaceFile } from '../workspace-file.mjs';
+import { readWorkspaceFile, snapshotWorkspaceFile } from '../workspace-file.mjs';
 import { IMAGE_ALIAS, MAX_CARD_IMAGES, MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, validateCard } from '../card-images.mjs';
 export { MAX_CARD_BYTES } from '../card-images.mjs';
 
-export const MAX_FILE_BYTES = 20 * 1024 * 1024;
-
 export const CONTENT_PROPERTIES = {
   markdown: { type: 'string', minLength: 1, description: 'Message text (Markdown where the connector supports it). Mutually exclusive with file_path/file_key/card/choices.' },
-  file_path: { type: 'string', minLength: 1, description: 'Local file relative to the agent workspace, at most 20 MiB; images are sent as images. No URLs, absolute paths, traversal, or symlinks escaping the workspace.' },
+  file_path: { type: 'string', minLength: 1, description: 'Local file relative to the agent workspace; images are sent as images. Connector/provider size limits still apply. No URLs, absolute paths, traversal, or symlinks escaping the workspace.' },
   file_key: { type: 'string', pattern: '^file_[A-Za-z0-9_-]{8,}$', description: 'Lark only: existing IM file key from trusted tool output, sent without uploading.' },
   card: { type: 'object', description: 'Lark only: inline interactive card JSON (Card 1.0 elements or Card 2.0 body.elements), at most 30 KiB. Callback controls arrive as user input, never executed by the daemon. For a single-choice question prefer choices.' },
   card_images: { type: 'object', minProperties: 1, maxProperties: MAX_CARD_IMAGES,
@@ -105,26 +103,19 @@ export function resolveContent(input, { workspace, tempDir, maxTextChars }) {
   if (kind === 'file_key') {
     return { type: 'file_key', payload: { type: 'file_key', key: value }, canonical: ['file_key', value], summary: '[file attachment]', cleanup: none };
   }
-  if (kind === 'file_path') {
-    const { name, bytes } = readWorkspaceFile(value, workspace);
-    const digest = createHash('sha256').update(bytes).digest('hex');
-    // Upload from a private snapshot under the same configurable temp root
-    // as downloads, even when the original workspace is under /root.
+  if (kind === 'file_path') return (async () => {
     preparePrivateDirectory(tempDir);
     const snapshotDir = preparePrivateDirectory(path.join(tempDir, 'outbox'));
     const directory = fs.mkdtempSync(path.join(snapshotDir, 'upload-'));
-    const snapshot = path.join(directory, name);
-    try {
-      fs.writeFileSync(snapshot, bytes, { mode: 0o600 });
-    } catch (error) {
-      fs.rmSync(directory, { recursive: true, force: true });
-      throw error;
-    }
+    let frozen;
+    try { frozen = await snapshotWorkspaceFile(value, workspace, directory); }
+    catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
+    const { name, path: snapshot, digest } = frozen;
     return {
       type: 'file', payload: { type: 'file', path: snapshot, name }, canonical: ['file', name, digest],
       summary: `[file ${name}]`, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
     };
-  }
+  })();
   if (kind === 'choices') {
     const keys = new Set(value.options.map((option) => option.key));
     if (keys.size !== value.options.length) throw new Error('choices options require unique keys');

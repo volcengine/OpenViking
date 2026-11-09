@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vika
+spec:
+  clusterIP: None
+  selector:
+    app: vika
+  ports:
+    - name: health
+      port: 3738
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vika
+spec:
+  serviceName: vika
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: vika
+  template:
+    metadata:
+      labels:
+        app: vika
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: private-state
+          image: REPLACE_REGISTRY/vika:REPLACE_IMMUTABLE_TAG
+          command: [node, scripts/volc-container-init.mjs]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: credentials
+              mountPath: /credentials
+              readOnly: true
+      containers:
+        - name: channel
+          image: REPLACE_REGISTRY/vika:REPLACE_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: VIKA_CONFIG
+              value: /config/config.json
+            - name: ARK_MA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vika-credentials
+                  key: ARK_MA_API_KEY
+            - name: LARKSUITE_CLI_CONFIG_DIR
+              value: /data/lark-cli
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: credentials
+              mountPath: /credentials
+              readOnly: true
+          startupProbe:
+            exec:
+              command: [node, packages/daemon/scripts/healthcheck.mjs]
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: [node, packages/daemon/scripts/healthcheck.mjs]
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+      volumes:
+        - name: config
+          configMap:
+            name: vika-config
+        - name: credentials
+          secret:
+            secretName: vika-credentials
+            defaultMode: 0440
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: REPLACE_RWO_BLOCK_STORAGE_CLASS
+        resources:
+          requests:
+            storage: 20Gi

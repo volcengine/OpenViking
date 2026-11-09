@@ -32,7 +32,7 @@ export function createRuntimeFactories(config, store, logger, overrides = {}) {
         config,
         store,
         logger.child({ component: definition.id }),
-        backendOptions,
+        { ...backendOptions, actions: overrides.actions },
       );
     }];
   }));

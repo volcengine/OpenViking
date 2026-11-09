@@ -486,7 +486,7 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
   });
 });
 
-test('explicit silence is on by default except on Ark, an explicit false opts out, and it is always pinned in the daemon env', () => {
+test('explicit silence is on by default on every runtime, an explicit false opts out, and it is always pinned in the daemon env', () => {
   const manifest = validManifest();
   delete manifest.agents[0].explicitSilence;
   manifest.agents[1].explicitSilence = false;
@@ -501,16 +501,16 @@ test('explicit silence is on by default except on Ark, an explicit false opts ou
     applyDeploymentAgentEnv(env, deployment, 'beta');
     assert.equal(env.VIKA_EXPLICIT_SILENCE, 'false');
   });
-  // Ark has no Core tools to offer stay_silent through: off unless set.
+  // Cloud Ark offers the same Core stay_silent tool.
   const ark = validManifest();
   Object.assign(ark.agents[0], { model: 'ark', volcSessionId: 'sess', volcEnvironmentId: 'env' });
   delete ark.agents[0].explicitSilence;
   withManifest(ark, (manifestPath) => {
     const env = { VIKA_CONFIG: manifestPath };
     const deployment = loadDeploymentManifest(env);
-    assert.equal(selectDeploymentAgent(deployment, 'alpha').explicitSilence, false);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').explicitSilence, true);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_EXPLICIT_SILENCE, 'false');
+    assert.equal(env.VIKA_EXPLICIT_SILENCE, 'true');
   });
   const broken = validManifest();
   broken.agents[0].explicitSilence = 'true';

@@ -60,6 +60,8 @@ function childConfig(config, instance) {
     tempDir: config.tempDir,
     profile: config.profile,
     larkCliBin: config.larkCliBin,
+    larkSubscription: config.larkSubscription,
+    larkWsCredentials: config.larkWsCredentials,
     slackCliBin: config.slackCliBin,
     weixinLongPollTimeoutMs: config.weixinLongPollTimeoutMs,
     // Slack shows a mention of the bot as this name, the one the prompt knows.

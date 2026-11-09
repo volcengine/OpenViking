@@ -6,7 +6,9 @@ import { spawnDetached } from './platform/index.mjs';
 import { spawn } from './platform/index.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { redactSensitive } from './logger.mjs';
 import { sanitizeNonArkChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { MEETING_EVENT_TYPES } from './meeting/index.mjs';
@@ -157,6 +159,12 @@ export class LarkClient {
       }
       this.profile = active[0].name;
     }
+    if (this.config.larkSubscription === 'sdk') {
+      const credentials = JSON.parse(fs.readFileSync(this.config.larkWsCredentials, 'utf8'));
+      const directory = process.env.LARKSUITE_CLI_CONFIG_DIR || path.join(os.homedir(), '.lark-cli');
+      const profile = JSON.parse(fs.readFileSync(path.join(directory, 'config.json'), 'utf8')).apps?.find((app) => app.name === this.profile);
+      if (!profile?.appId || profile.appId !== credentials.appId) throw new Error('Lark SDK credentials and CLI profile belong to different bots');
+    }
     const prefix = ['--profile', this.profile];
     const checks = [
       { args: ['event', '+subscribe', '--help'], required: ['--event-types', '--quiet'] },
@@ -237,14 +245,25 @@ export class LarkClient {
     ];
 
     this.stopping = false;
-    const child = this.registry.register(spawn(this.config.larkCliBin, args, {
+    const sdk = this.config.larkSubscription === 'sdk';
+    const command = sdk ? process.execPath : this.config.larkCliBin;
+    const commandArgs = sdk ? [fileURLToPath(new URL('./lark-sdk-subscribe.mjs', import.meta.url))] : args;
+    const child = this.registry.register(spawn(command, commandArgs, {
       cwd: this.config.projectDir,
-      env: sanitizeNonArkChildEnv(process.env),
+      env: { ...sanitizeNonArkChildEnv(process.env), ...(sdk ? { VIKA_LARK_WS_CREDENTIALS: this.config.larkWsCredentials } : {}) },
       shell: false,
       detached: this.config.connectorWorker ? false : spawnDetached,
       stdio: ['ignore', 'pipe', 'pipe'],
     }));
     this.subscriber = child;
+    let markReady;
+    let rejectReady;
+    const ready = sdk ? new Promise((resolve, reject) => { markReady = resolve; rejectReady = reject; }) : null;
+    const readyTimer = sdk ? setTimeout(() => rejectReady(new Error('Lark SDK connection timed out')), 8000) : null;
+    const receive = (line) => {
+      if (sdk && line === '{"type":"__vika_sdk_ready"}') { clearTimeout(readyTimer); markReady(child); return; }
+      onLine(line);
+    };
     let buffer = '';
     let stderrTail = '';
     child.stdout?.setEncoding('utf8');
@@ -256,7 +275,7 @@ export class LarkClient {
         if (index < 0) break;
         const line = buffer.slice(0, index);
         buffer = buffer.slice(index + 1);
-        if (line.trim()) onLine(line);
+        if (line.trim()) receive(line);
       }
       if (Buffer.byteLength(buffer, 'utf8') > this.config.maxEventBytes) {
         this.logger.warn('lark_event_line_oversize', {
@@ -273,7 +292,8 @@ export class LarkClient {
     });
     child.once('exit', (code, signal) => {
       this.subscriber = null;
-      if (buffer.trim()) onLine(buffer);
+      if (buffer.trim()) receive(buffer);
+      if (sdk) { clearTimeout(readyTimer); rejectReady(new Error('Lark SDK subscriber exited before readiness')); }
       if (!this.stopping) {
         // Leader is gone; stop() will not see this handle. Reap the group so
         // grandchildren that ignored the leader's death do not leak.
@@ -281,7 +301,7 @@ export class LarkClient {
         onUnexpectedExit({ code, signal, stderr: stderrTail });
       }
     });
-    return child;
+    return ready ?? child;
   }
 
   get subscriptionRunning() {

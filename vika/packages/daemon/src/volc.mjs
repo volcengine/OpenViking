@@ -3,7 +3,9 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
-import { assembleVolcSelfHostedConversationPolicy } from './conversation-policy.mjs';
+import { assembleVolcCloudConversationPolicy } from './conversation-policy.mjs';
+import { MAToolExecutor, maTools, maToolsHash } from './volc-tools.mjs';
+import { MAFiles } from './volc-files.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
@@ -61,11 +63,20 @@ export class VolcAgent {
     this.store = store;
     this.logger = logger;
     this.fetch = options.fetch ?? globalThis.fetch;
+    this.actions = options.actions;
+    this.files = options.files ?? new MAFiles({ config, json: (path, options) => this._json(path, options), fetch: this.fetch });
+    this.customExecutor = this.actions ? new MAToolExecutor({ actions: this.actions, store, files: this.files }) : null;
+    this.customWork = Promise.resolve();
+    this.steerWork = Promise.resolve();
+    this.steerPosting = false;
+    this.steers = [];
+    this.steerDeferredEvents = [];
+    this.customBatches = new Set();
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.environmentId = config.volcEnvironmentId ?? '';
     this.agentName = config.agentName || 'the bot';
-    this.transportPolicy = assembleVolcSelfHostedConversationPolicy(config);
+    this.transportPolicy = assembleVolcCloudConversationPolicy(config);
     this.onTurnAbandoned = options.onTurnAbandoned ?? null;
     this.onAvailable = options.onAvailable ?? null;
 
@@ -152,20 +163,24 @@ export class VolcAgent {
       throw new Error('VIKA_VOLC_SESSION_ID (or SESSION_ID) is required for the Volc managed-agent runtime');
     }
     if (!this.environmentId) {
-      throw new Error('VIKA_VOLC_ENVIRONMENT_ID is required for the self-hosted Volc runtime');
+      throw new Error('VIKA_VOLC_ENVIRONMENT_ID is required for the cloud Volc runtime');
     }
     this.stopping = false;
     this.template = await this._getSession(this.templateSessionId);
     this._validateSessionTemplate(this.template);
     if (this.template.environment_id !== this.environmentId) {
-      throw new Error('Volc template session does not use the configured self-hosted Environment');
+      throw new Error('Volc template session does not use the configured cloud Environment');
     }
     const environment = await this._getEnvironment(this.environmentId);
-    if (environment?.config?.type !== 'self_hosted') {
-      throw new Error('configured Volc Environment must have config.type=self_hosted');
+    if (environment?.config?.type !== 'cloud') {
+      throw new Error('configured Volc Environment must have config.type=cloud');
+    }
+    await this._validateTools();
+    if (this.template.vault_ids?.length) {
+      this.logger.warn('volc_template_vaults_attached', { count: this.template.vault_ids.length, message: 'Keep connector credentials on Channel; review template Vault contents.' });
     }
     this.policyHashValue = createHash('sha256')
-      .update('volc-managed-agent-v2').update('\0')
+      .update('volc-managed-agent-v3').update('\0').update('cloud').update('\0').update(this.toolsHash).update('\0')
       .update(this.baseUrl).update('\0')
       .update(String(this.template.agent.id)).update('\0')
       .update(String(this.template.agent.version ?? '')).update('\0')
@@ -236,7 +251,8 @@ export class VolcAgent {
     const seqs = Array.isArray(pending.inboundSeqs)
       ? pending.inboundSeqs.filter(Number.isSafeInteger)
       : [];
-    const accepted = pending.status === 'ACCEPTED' && pending.expectedUserEventId;
+    const accepted = pending.status === 'ACCEPTED' && pending.expectedUserEventId
+      && !(pending.steers ?? []).some((item) => item.status !== 'ACCEPTED');
     if (!accepted) {
       this._poisonSession();
       this.store.clearManagedTurn?.(this.runtime, { sessionId: this.sessionId });
@@ -256,6 +272,7 @@ export class VolcAgent {
       return;
     }
     this.activeItems = seqs.map((seq) => ({ text: '', seq }));
+    this.steers = (pending.steers ?? []).map((item) => ({ ...item, processed: false }));
     this.activeConversationKey = conversationKey;
     this.turnActive = true;
     this.turnCompleting = false;
@@ -291,6 +308,98 @@ export class VolcAgent {
     });
     void this._runTurn({ deliveredThroughSeq: this.deliveredThroughSeq })
       .catch((error) => this._completeTurn(error));
+  }
+
+  async _validateTools() {
+    if (!this.actions || !this.store.getMAToolCall) throw new Error('Volc cloud requires ActionService and the persistent MA tool journal');
+    const desired = maTools(this.actions);
+    this.toolsHash = maToolsHash(desired);
+    const agentPath = `/agents/${encodeURIComponent(this.template.agent.id)}`;
+    let remote = await this._json(`${agentPath}${Number.isInteger(this.template.agent.version) ? `?version=${this.template.agent.version}` : ''}`);
+    if (maToolsHash(remote.tools ?? []) !== this.toolsHash) {
+      if (this.config.volcAgentSync !== 'update') throw new Error('MA custom tool schema mismatch: run scripts/volc-sync-agent.mjs for this instance');
+      // Only the explicitly provisioned dedicated Vika Agent may be changed.
+      const latest = await this._json(agentPath);
+      if (!latest.name?.startsWith('vika-channel-')) throw new Error('Automatic sync refuses an Agent not provisioned as vika-channel-*');
+      remote = await this._json(agentPath, { method: 'POST', body: { version: latest.version,
+        tools: [...(latest.tools ?? []).filter((tool) => tool.type !== 'custom'), ...desired] } });
+      if (maToolsHash(remote.tools ?? []) !== this.toolsHash) throw new Error('MA did not preserve the Core tool schemas');
+    }
+    this.template.agent = { ...this.template.agent, version: remote.version };
+  }
+
+  _customTurn() {
+    return { sessionId: this.sessionId, epoch: this.cognitionEpoch, authorityToken: this.authorityToken,
+      fenceId: this.expectedUserEventId, conversationKey: this.activeConversationKey,
+      inboundSeqs: this.activeItems.map((item) => item.seq).filter((seq) => Number.isSafeInteger(seq)
+        && !this.steers.some((steer) => !steer.processed && steer.inboundSeqs.includes(seq))) };
+  }
+
+  _customCurrent(turn) {
+    const cognition = this.store.getCognitionState?.();
+    return this.turnActive && !this.stopping && !this.sessionPoisoned && this.turnFenceSeen
+      && this.sessionId === turn.sessionId && this.expectedUserEventId === turn.fenceId
+      && this.authorityToken === turn.authorityToken && this.cognitionEpoch === turn.epoch
+      && (!cognition || (cognition.runtime === this.runtime && cognition.epoch === turn.epoch
+        && cognition.authorityToken === turn.authorityToken));
+  }
+
+  _reconcileCustomHistory(events, turn) {
+    const fence = events.findIndex((event) => event.id === turn.fenceId && event.type === 'user.message');
+    if (fence < 0) throw new Error('MA history is missing the authenticated turn fence');
+    for (const event of events.slice(fence)) this._handleEvent(event);
+  }
+
+  _queueCustomTools(ids) {
+    if (!Array.isArray(ids) || ids.length === 0 || ids.some((id) => typeof id !== 'string')) {
+      void this._completeTurn(new Error('MA requires_action did not identify its custom tool events'));
+      return;
+    }
+    let turn = this._customTurn();
+    const key = JSON.stringify([turn.sessionId, turn.fenceId, ids]);
+    if (this.customBatches.has(key)) return;
+    this.customBatches.add(key);
+    this.customWork = this.customWork.then(async () => {
+      if (!this._customCurrent(turn)) return;
+      if (ids.some((id) => !this.store.getMAToolCall(turn.sessionId, id))) {
+        // Full causal history is needed when a tool event was absent from SSE.
+        this._reconcileCustomHistory(await this._history({ full: true }), turn);
+      }
+      if (!this._customCurrent(turn)) return;
+      // History may have just confirmed a steering user.message. Refresh only
+      // the admitted seq set after preserving the original session/root fence.
+      turn = this._customTurn();
+      const results = [];
+      for (const id of ids) {
+        if (!this._customCurrent(turn)) return;
+        const result = await this.customExecutor.execute(id, turn, () => this._customCurrent(turn));
+        if (result) results.push(result);
+      }
+      if (!results.length || !this._customCurrent(turn)) return;
+      // DONE is durable before network I/O. On ambiguous POST, history confirms
+      // accepted results before the identical stored wire result is retried.
+      for (let retry = 0; retry < 5 && this._customCurrent(turn); retry++) {
+        const pending = results.filter((result) => this.store.getMAToolCall(turn.sessionId, result.custom_tool_use_id)?.status !== 'POSTED');
+        if (!pending.length) return;
+        try {
+          await this._postEvents(pending);
+          for (const result of pending) this.store.updateMAToolCall(turn.sessionId, result.custom_tool_use_id, 'POSTED');
+          this.modelWorking = true; this.modelStartedAtMs = Date.now();
+          return;
+        } catch (error) {
+          this._reconcileCustomHistory(await this._history({ full: true }), turn);
+          if (retry === 4) throw error;
+          await delay(this.reconnectBaseMs * (retry + 1));
+        }
+      }
+    }).catch((error) => {
+      if (this._customCurrent(turn)) {
+        this.logger.warn('volc_custom_tools_failed', { error: safe(error) });
+        // Never release the turn fence while the remote agent can keep running.
+        this._poisonSession();
+        return this._completeTurn(error);
+      }
+    }).finally(() => this.customBatches.delete(key));
   }
 
   _validateSessionTemplate(session) {
@@ -389,6 +498,7 @@ export class VolcAgent {
   deliverBatch(items) {
     if (this.stopping || !Array.isArray(items) || items.length === 0) return false;
     const batch = items.map(deliveryItem);
+    if (this._canSteer(batch)) { this._steerBatch(batch); return true; }
     if (!this.connected || this.sessionPoisoned || this.poisonRecoveryPromise
       || this.turnActive || this.turnCompleting
       || this.rotationPending || this.queue.length > 0) {
@@ -399,6 +509,69 @@ export class VolcAgent {
     }
     this._startBatch(batch);
     return true;
+  }
+
+  _canSteer(items) {
+    return typeof this.store.beginManagedSteer === 'function'
+      && this.connected && this.turnActive && !this.turnCompleting && !this.stopping
+      && !this.steerPosting && !this.sessionPoisoned && !this.rotationPending
+      && this.expectedUserEventId && this.turnFenceSeen && this.queue.length === 0
+      && this._conversationKey(items) === this.activeConversationKey;
+  }
+
+  _maybeSteerQueued() {
+    const next = this.queue[0];
+    if (!next) return;
+    // Preserve queue order when another conversation is waiting.
+    const saved = this.queue; this.queue = [];
+    const can = this._canSteer(next); this.queue = saved;
+    if (can) this._steerBatch(this.queue.shift());
+  }
+
+  _steerBatch(items) {
+    const sessionId = this.sessionId;
+    const rootFence = this.expectedUserEventId;
+    let prepared;
+    try { prepared = this._bodyFor(items); } catch (error) { this._failItems(items, error); return; }
+    const id = randomUUID();
+    let steer;
+    try { steer = this.store.beginManagedSteer(this.runtime, { sessionId, id,
+      authorityToken: this.authorityToken, inboundSeqs: prepared.seqs,
+      conversationKey: this.activeConversationKey, deliveredThroughSeq: prepared.deliveredThroughSeq });
+    } catch (error) { this._failItems(items, error); return; }
+    this.activeItems.push(...items);
+    this.steers.push({ ...steer, processed: false });
+    this.steerPosting = true;
+    this.steerWork = (async () => {
+      try {
+        const posted = await this._postEvents([{ type: 'user.message', content: [{ type: 'text', text: prepared.body }] }]);
+        const accepted = posted?.data?.find((event) => event.type === 'user.message' && event.id);
+        if (!accepted) throw new Error('MA steer acceptance missing event ID');
+        const durable = this.store.acceptManagedSteer(this.runtime, sessionId, id, accepted.id);
+        Object.assign(this.steers.find((item) => item.id === id), durable);
+        this.deliveredThroughSeq = Math.max(this.deliveredThroughSeq, prepared.deliveredThroughSeq);
+        this.syncedThroughSeq = Math.max(this.syncedThroughSeq, prepared.deliveredThroughSeq);
+        this._persistSession();
+        this._recordActivity('agent.input_steered', { inboundSeq: prepared.seqs.at(-1),
+          metadata: { runtime: this.runtime, eventId: accepted.id, inboundSeqs: prepared.seqs } });
+        this.steerPosting = false;
+        // Replay in provider order. The accepted ID is now durable before any
+        // custom call may use its input scope; HTTP acceptance alone is not processing.
+        for (const event of this.steerDeferredEvents.splice(0)) this._handleEvent(event);
+        if (this.turnActive && this.sessionId === sessionId && this.expectedUserEventId === rootFence) {
+          const history = await this._history();
+          if (this.turnActive && this.sessionId === sessionId && this.expectedUserEventId === rootFence) {
+            for (const event of history) this._handleEvent(event);
+          }
+        }
+      } catch (error) {
+        this.steerPosting = false; this.steerDeferredEvents = [];
+        if (sessionId === this.sessionId && this.turnActive && this.expectedUserEventId === rootFence) {
+          this._poisonSession();
+          await this._completeTurn(new Error(`MA steer acceptance uncertain; not resent: ${safe(error)}`));
+        }
+      } finally { this._maybeSteerQueued(); }
+    })();
   }
 
   tryStartBatch(items) {
@@ -454,6 +627,8 @@ export class VolcAgent {
       return;
     }
     this.activeItems = [...items];
+    this.steers = [];
+    this.steerDeferredEvents = [];
     this.activeConversationKey = conversationKey;
     this.turnActive = true;
     this.turnCompleting = false;
@@ -503,7 +678,7 @@ export class VolcAgent {
     }
   }
 
-  async _history({ snapshotOnly = false } = {}) {
+  async _history({ snapshotOnly = false, full = false } = {}) {
     const events = [];
     let page = null;
     for (let index = 0; index < 100; index += 1) {
@@ -516,7 +691,7 @@ export class VolcAgent {
       // Streams emit only events created after attachment. On first attach one
       // newest-page snapshot is enough to establish the overlap fence. During
       // reconnect, stop once history reaches any event already processed.
-      if (snapshotOnly || batch.some((event) => event?.id && this.seenEventIds.has(event.id))) {
+      if (snapshotOnly || (!full && this.turnFenceSeen && batch.some((event) => event?.id && this.seenEventIds.has(event.id)))) {
         return events.reverse();
       }
       page = payload?.next_page ?? null;
@@ -699,11 +874,24 @@ export class VolcAgent {
 
   _handleEvent(event) {
     if (!event || typeof event !== 'object') return;
+    if (event.session_id && event.session_id !== this.sessionId) {
+      this._recordActivity('agent.ignored_foreign_session', { metadata: { runtime: this.runtime } });
+      return;
+    }
+    if (this.steerPosting) { this.steerDeferredEvents.push(event); return; }
+    if (event.type === 'user.message') {
+      const steer = this.steers.find((item) => item.expectedUserEventId === event.id);
+      if (steer) {
+        if (!event.processed_at) return;
+        steer.processed = true;
+      }
+    }
     if (event.id && this.seenEventIds.has(event.id)) return;
     if (!this.turnActive) return;
     if (!this.turnFenceSeen) {
       if (event.type === 'user.message' && event.id === this.expectedUserEventId) {
         this.turnFenceSeen = true;
+        queueMicrotask(() => this._maybeSteerQueued());
       } else {
         // Do not mark pre-fence agent output as seen. If the exact user.message
         // echo is missing from this stream before agent output starts, force
@@ -725,7 +913,14 @@ export class VolcAgent {
       }
     }
     const inboundSeq = this.activeItems.map((item) => item.seq).filter((seq) => seq != null).at(-1) ?? null;
-    if (event.type === 'agent.message') {
+    if (event.type === 'agent.custom_tool_use') {
+      try { this.customExecutor.see(event, this._customTurn()); }
+      catch (error) { this._poisonSession(); void this._completeTurn(error); }
+      this.modelWorking = false; this.modelStartedAtMs = null;
+    } else if (event.type === 'user.custom_tool_result') {
+      const row = this.store.getMAToolCall(this.sessionId, event.custom_tool_use_id);
+      if (row && row.fence_id === this.expectedUserEventId) this.store.updateMAToolCall(this.sessionId, event.custom_tool_use_id, 'POSTED');
+    } else if (event.type === 'agent.message') {
       const text = textContent(event);
       if (text) {
         this.lastMessage = text;
@@ -777,13 +972,14 @@ export class VolcAgent {
         ? event.stop_reason
         : event.stop_reason?.type;
       if (stopType === 'requires_action') {
+        this._queueCustomTools(event.stop_reason?.event_ids ?? event.event_ids);
         this._recordActivity('agent.tool_waiting', {
           inboundSeq,
           metadata: { runtime: this.runtime },
         });
       } else if (stopType !== 'end_turn') {
         void this._completeTurn(new Error(`Volc session stopped with ${stopType ?? 'unknown stop reason'}`));
-      } else {
+      } else if (!this.steers.some((item) => !item.processed)) {
         void this._completeTurn(null);
       }
     } else if (event.type === 'session.status_terminated' || event.type === 'status_terminated'
@@ -879,6 +1075,17 @@ export class VolcAgent {
       || this.rotationPending) return;
     const next = this.queue.shift();
     if (next) this._startBatch(next);
+  }
+
+  async cancelTurn() {
+    if (!this.turnActive) return;
+    this._poisonSession();
+    try { await this._postEvents([{ type: 'user.interrupt' }]); }
+    catch (error) { this._poisonSession(); this.logger.warn('volc_cancel_failed', { error: safe(error) }); }
+    // Interrupt acceptance is not proof that remote work stopped. Quarantine
+    // this session and rotate authority before another turn can start.
+    this._poisonSession();
+    await this._completeTurn(new Error('MA turn cancelled by Core'));
   }
 
   async interruptTurn() {
@@ -1128,6 +1335,8 @@ export class VolcAgent {
     this.queue = [];
     if (queued.length > 0) this._failItems(queued, new Error('Volc runtime stopped before queued work started'));
     if (this.turnActive || this.turnCompleting) await this.interruptTurn();
+    await this.steerWork;
+    await this.customWork;
     this.connected = false;
     this._resolveIdleWaiters();
   }

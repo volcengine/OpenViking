@@ -62,7 +62,7 @@ describe('runtime catalog', () => {
       scopePolicy: 'single-conversation',
       outputOwnership: 'runtime',
       sessionAuthority: 'rotate',
-      agentTools: 'lark-cli',
+      agentTools: 'core',
     });
     assert.deepEqual(getRuntimeDefinition('pi').directAliases, ['pi']);
     assert.deepEqual(getRuntimeDefinition('pi').efforts, [
@@ -102,7 +102,7 @@ describe('runtime catalog', () => {
       agentTools: 'core',
     });
     assert.deepEqual(RUNTIME_IDS.map((id) => [id, getRuntimeDefinition(id).capabilities.agentTools]), [
-      ['codex', 'core'], ['traex', 'core'], ['claude', 'core'], ['volc', 'lark-cli'], ['pi', 'core'],
+      ['codex', 'core'], ['traex', 'core'], ['claude', 'core'], ['volc', 'core'], ['pi', 'core'],
       ['durable', 'core'],
       ['opencode', 'core'],
     ]);

@@ -123,33 +123,33 @@ test('setup cannot overwrite a live primary change from a stale snapshot, and wr
   assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')), first);
 });
 
-test('Slack can be primary or secondary; Ark is rejected', (t) => {
+test('Slack can be primary or secondary; Ark is supported', (t) => {
   const home = tempHome(t);
   const filename = path.join(home, '.vika', 'config.json');
   const sl = agent('sl', { channel: 'slack', connectors: ['slack'], profile: undefined, model: 'pi' });
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, sl)));
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, agent('sl', { connectors: ['lark', 'slack', 'telegram'] }))));
-  assert.throws(() => validateManifest(filename, withInstance(null, { ...sl, model: 'ark',
-    volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })), /slack connector cannot use the ark runtime/);
+  assert.doesNotThrow(() => validateManifest(filename, withInstance(null, { ...sl, model: 'ark',
+    volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })));
 });
 
-test('Telegram can be primary or secondary; Ark and a stray Lark profile are rejected', (t) => {
+test('Telegram can be primary or secondary; Ark is supported and a stray Lark profile is rejected', (t) => {
   const home = tempHome(t);
   const filename = path.join(home, '.vika', 'config.json');
   const wa = agent('wa', { channel: 'telegram', connectors: ['telegram'], profile: undefined, model: 'pi' });
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, wa)));
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, agent('wa', { connectors: ['lark', 'telegram'] }))));
   assert.throws(() => validateManifest(filename, withInstance(null, { ...wa, profile: 'stray' })), /profile/);
-  assert.throws(() => validateManifest(filename, withInstance(null, { ...wa, model: 'ark',
-    volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })), /telegram connector cannot use the ark runtime/);
+  assert.doesNotThrow(() => validateManifest(filename, withInstance(null, { ...wa, model: 'ark',
+    volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })));
 });
 
-test('QQ can be primary or secondary, and cannot select Ark or a Lark-only profile', (t) => {
+test('QQ can be primary or secondary, and can select Ark but not a Lark-only profile', (t) => {
   const filename = path.join(tempHome(t), '.vika', 'config.json');
   const qq = agent('qq', { channel: 'qq', connectors: ['qq'], profile: undefined, model: 'pi' });
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, qq)));
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, agent('qq', { connectors: ['lark', 'qq'] }))));
   assert.throws(() => validateManifest(filename, withInstance(null, { ...qq, profile: 'stray' })), /profile/);
-  assert.throws(() => validateManifest(filename, withInstance(null, { ...qq, model: 'ark',
-    volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })), /qq connector cannot use the ark runtime/);
+  assert.doesNotThrow(() => validateManifest(filename, withInstance(null, { ...qq, model: 'ark',
+    volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })));
 });

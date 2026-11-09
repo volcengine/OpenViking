@@ -8,7 +8,6 @@ import path from 'node:path';
 import { it } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { ActionService } from '../src/actions/service.mjs';
-import { MAX_FILE_BYTES } from '../src/actions/content.mjs';
 import { Harness } from '../src/harness.mjs';
 import { normalizeEvent as normalizeConnectorEvent, deterministicFilter } from '../src/event.mjs';
 import { normalizeLarkMessage, normalizeLarkEvent } from '../src/connectors/lark-events.mjs';
@@ -95,13 +94,13 @@ it('sends a document snapshot from the workspace into the original thread and cl
   assert.equal(f.calls.length, 1);
 });
 
-it('rejects traversal, URLs, escaped symlinks, directories, oversized files, and mixed bodies before sending', async (t) => {
+it('rejects traversal, URLs, escaped symlinks, directories, empty files, and mixed bodies before sending', async (t) => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.directory, 'outside.pdf'), 'private');
   fs.symlinkSync(path.join(f.directory, 'outside.pdf'), path.join(f.workspace, 'link.pdf'));
   fs.mkdirSync(path.join(f.workspace, 'folder'));
   const fd = fs.openSync(path.join(f.workspace, 'large.pdf'), 'w');
-  fs.ftruncateSync(fd, MAX_FILE_BYTES + 1); fs.closeSync(fd);
+  fs.ftruncateSync(fd, 0); fs.closeSync(fd);
   for (const file_path of ['../outside.pdf', '/tmp/outside.pdf', 'https://example.com/a', 'link.pdf', 'folder', 'large.pdf']) {
     await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, file_path }));
   }
@@ -292,4 +291,23 @@ it('validates card structure, size, mentions and choice keys without invoking th
     { choices: { ...question, timeout_seconds: 1 } },
   ]) await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, ...body }));
   assert.equal(f.calls.length, 0);
+});
+
+it('streams a file larger than 20 MiB into an immutable Core upload snapshot', async (t) => {
+  const size = 24 * 1024 * 1024;
+  let snapshot;
+  const f = fixture(t, { run: (_bin, args, options) => {
+    snapshot = path.join(options.cwd, args[args.indexOf('--file') + 1]);
+    assert.equal(fs.statSync(snapshot).size, size);
+    assert.notEqual(snapshot, path.join(f.workspace, 'large.txt'));
+    fs.writeFileSync(path.join(f.workspace, 'large.txt'), 'changed after snapshot');
+    assert.equal(fs.statSync(snapshot).size, size);
+    return success({ message_id: remoteId });
+  } });
+  const source = fs.openSync(path.join(f.workspace, 'large.txt'), 'w');
+  fs.ftruncateSync(source, size); fs.closeSync(source);
+  const result = await f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, file_path: 'large.txt' });
+  assert.equal(result.data.message_id, remoteId);
+  assert.equal(fs.existsSync(snapshot), false);
+  assert.equal(f.calls.length, 1);
 });

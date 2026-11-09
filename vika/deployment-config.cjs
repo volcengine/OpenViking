@@ -16,6 +16,10 @@ const DEPLOYMENT_MANIFEST_MAX_BYTES = 1_048_576;
 const TOP_LEVEL_FIELDS = Object.freeze(['version', 'defaultInstance', 'env', 'agents']);
 const DAEMON_ENV_FIELDS = Object.freeze([
   'LARK_CLI_BIN',
+  'LARKSUITE_CLI_CONFIG_DIR',
+  'VIKA_LARK_SUBSCRIPTION',
+  'VIKA_LARK_WS_CREDENTIALS',
+  'VIKA_LARK_ALLOWED_CHAT_IDS',
   'CODEX_BIN',
   'TRAEX_BIN',
   'TRAECLI_BIN',
@@ -51,6 +55,8 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'VIKA_VOLC_BASE_URL',
   'VIKA_VOLC_REQUEST_TIMEOUT_MS',
   'VIKA_VOLC_STREAM_IDLE_TIMEOUT_MS',
+  'VIKA_VOLC_AGENT_SYNC',
+  'VIKA_VOLC_FILES',
   'FALLBACK_MODEL',
   'VIKA_HISTORY_LIMIT',
 ]);
@@ -58,6 +64,7 @@ const DAEMON_ENV_FIELDS = Object.freeze([
 // processes, but are deliberately excluded from the deployment manifest.
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
+  'ARK_MA_API_KEY',
   // Providers of the durable runtime (pi-ai) read their key from the child
   // environment. They may come from the operator environment or ~/.vika/secrets
   // but never from the deployment manifest.
@@ -262,24 +269,9 @@ function parseAgent(value, index, ignored) {
   if (model === 'ark' && !volcSessionId) {
     throw new Error(`${label} using ark must configure volcSessionId and volcEnvironmentId`);
   }
-  if (connectors.includes('telegram') && model === 'ark') {
-    throw new Error(`${label} using the telegram connector cannot use the ark runtime`);
-  }
-  if (connectors.includes('qq') && model === 'ark') {
-    throw new Error(`${label} using the qq connector cannot use the ark runtime`);
-  }
-  if (connectors.includes('slack') && model === 'ark') {
-    throw new Error(`${label} using the slack connector cannot use the ark runtime`);
-  }
-  if (connectors.includes('weixin') && model === 'ark') {
-    throw new Error(`${label} using the weixin connector cannot use the ark runtime`);
-  }
   const emailAccounts = manifestEmailAccounts(value.emailAccounts, `${label}.emailAccounts`, ignored);
   if (connectors.includes('email') !== (emailAccounts.length > 0)) {
     throw new Error(`${label}.emailAccounts and the email connector must be configured together`);
-  }
-  if (connectors.includes('email') && model === 'ark') {
-    throw new Error(`${label} using the email connector cannot use the ark runtime`);
   }
   // The lark-cli profile belongs to the lark connector; other instances have none.
   if (!connectors.includes('lark') && value.profile !== undefined) {
@@ -325,9 +317,8 @@ function parseAgent(value, index, ignored) {
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
-    // On by default, except on Ark (no Core tools, so no stay_silent); an
-    // explicit false opts out.
-    explicitSilence: value.explicitSilence ?? model !== 'ark',
+// Every runtime now uses Core tools; an explicit false opts out.
+    explicitSilence: value.explicitSilence ?? true,
     stagedReplies: value.stagedReplies ?? false,
     role: manifestRole(value.role, `${label}.role`),
     naturalWriting: value.naturalWriting ?? true,
