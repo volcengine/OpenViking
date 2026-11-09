@@ -14,13 +14,13 @@ OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目�
 | [components/file-preview](./src/components/file-preview/README_CN.md)     | `@openviking/react/components/file-preview`   | 只读预览状态与扩展页签；视图为占位实现                              |
 | [components/tui](./src/components/tui/README_CN.md)                       | `@openviking/react/components/tui`            | 已确认的命令记录、结果与输入区类型；视图仍为占位实现                |
 | [components/scope-switcher](./src/components/scope-switcher/README_CN.md) | `@openviking/react/components/scope-switcher` | 无状态作用域布局与独立 ScopeSelector，提供选项、面板及搜索交互      |
-| [components/agent-connect](./src/components/agent-connect/README_CN.md)   | `@openviking/react/components/agent-connect`  | Agent 接入视图的页签、列表与详情契约；视图仍为占位实现              |
+| [components/agent-connect](./src/components/agent-connect/README_CN.md)   | `@openviking/react/components/agent-connect`  | 固定 Figma 接入视图，内置原始图标、文案与剪贴板反馈                 |
 | [components/viking-bot](./src/components/viking-bot/README_CN.md)         | `@openviking/react/components/viking-bot`     | 对话视图契约，按契约渲染的视图仍为占位实现                          |
 | [modules](./src/modules/README_CN.md)                                     | `@openviking/react/modules/<模块>`            | ScopeCascade 级联 Hook 与组合视图，以及三个业务模块占位组件         |
 | [client](./src/client/index.ts)                                           | `@openviking/react/client`                    | 框架无关的请求客户端：`createOvClient`、`OvClient`、`OvClientError` |
 | [hooks](./src/hooks/README_CN.md)、[utils](./src/utils/README_CN.md)      | 仅包内使用                                    | 跨模块 Hook 与纯工具                                                |
 
-组件按各自契约逐步实现。FileTree 已按契约渲染全部行类型并实现键盘交互；FilePreview 已实现页签外壳、标题操作与纯文本预览、编辑基础，正文尚未接入 FileViewer。ScopeSwitcher 已实现无状态布局，独立 ScopeSelector 子组件管理本级展开，数据订阅、搜索与请求由宿主提供。Tui 与 AgentConnect 只渲染固定尺寸空壳，具体限制见各自文档。包还提供五种文件类型图标。
+组件按各自契约逐步实现。FileTree 已按契约渲染全部行类型并实现键盘交互；FilePreview 已实现页签外壳、标题操作与纯文本预览、编辑基础，正文尚未接入 FileViewer。ScopeSwitcher 已实现无状态布局，独立 ScopeSelector 子组件管理本级展开，数据订阅、搜索与请求由宿主提供。Tui 只渲染固定尺寸空壳；AgentConnect 按 Figma 布局内置中英文 Agent 与开发接入详情和原始图标，由调用方提供密钥与语言，支持可选受控选择和剪贴板反馈，具体限制见各自文档。包还提供五种文件类型图标。
 组件通过 props 接收视图数据与状态，通过回调表达用户意图，遵循 [组件目录约定](./src/components/AGENTS.md)。[modules](./src/modules/README_CN.md) 按业务能力规划 Hook 与视图：Hook 负责取数、状态和操作，组合视图将其接入组件。完整页面与产品专属流程由宿主负责，管理后台不在本期范围内。当前 `file-browser`、`console` 与 `task-center` 已提供占位组件、基础 Props / Labels 类型与样式，可先接入布局；这三个模块的业务 Hook、数据加载和联动尚未实现。
 
 模块默认通过共享 Client 消费 OpenViking 原生 API，由 Provider 下发 `baseURL`、headers 等配置，模块或独立 Hook 可通过 `requestOptions` 局部覆盖。标准接入无需逐模块实现 Adapter；非标准网关集中在宿主请求接入层适配。请求契约——`OvRequestOptions`、`OvClient` 与 `OvClientError`——来自 `@openviking/react/client` 子路径，自带基于 `fetch` 的实现；Provider 从同一子路径导出；这些原生 API 模块的 Hook 尚未实现；ScopeCascade 按宿主提供的三个接口适配函数接入，不依赖 Provider。详见[请求约定](./src/modules/README_CN.md#请求契约与默认配置)。
