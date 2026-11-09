@@ -48,6 +48,16 @@ function context(patch = {}) {
 const body = () => ({ model: "test-model", stream: true, tools: [{ type: "function", function: { name: "test" } }],
   messages: [{ role: "user", content: "Which language do I prefer?" }] });
 
+test("model adapter traffic is native even when user nativeAgents is empty", async (t) => {
+  const f = await fixture(t);
+  const cfg = await loadConfig(f.env, { nativeAgents: [] });
+  assert.ok(cfg.nativeAgents.includes("openviking-models"));
+  const ctx = context({ agent: "openviking-models" });
+  assert.equal(await recallRequest(body(), ctx, f.env, cfg), undefined);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.profileCalls.length, 0);
+});
+
 test("Magpie applies its defaults without changing shared plugin defaults", async (t) => {
   const f = await fixture(t);
   const cfg = await loadConfig(f.env);

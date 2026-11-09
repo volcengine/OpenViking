@@ -1,0 +1,23 @@
+{
+  "name": "@openviking/magpie-models-plugin",
+  "version": "0.1.0",
+  "description": "Manage OpenViking and VikingBot models from Magpie",
+  "type": "module",
+  "main": "./index.mjs",
+  "magpie": {
+    "name": "OpenViking models / VikingBot",
+    "agent": "./openviking.agent.js",
+    "page": { "title": "OpenViking models", "titles": { "zh": "OpenViking 模型" }, "file": "page/index.html" },
+    "options": { "manageVlm": true, "botMode": "preserve", "pollMs": 2000 }
+  },
+  "files": ["index.mjs", "openviking.agent.js", "cli.mjs", "lib/", "page/", "README.md", "README_CN.md", "marketplace.json", "LICENSE"],
+  "scripts": {
+    "check": "node --check index.mjs && node --check openviking.agent.js && node --check cli.mjs && node --check lib/config.mjs && node --check lib/api.mjs && node --check lib/files.mjs && node --check lib/plan.mjs && node --check lib/parameters.mjs && node --check lib/runtime.mjs && node --check page/app.js",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": { "node": ">=22.19.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/volcengine/OpenViking.git", "directory": "examples/magpie-models-plugin" },
+  "keywords": ["magpie-plugin", "magpie-agent", "openviking", "vikingbot"],
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public" }
+}

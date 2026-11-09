@@ -100,7 +100,9 @@ export async function loadConfig(env = process.env, options = {}) {
     recallRewrite: normalizeRewriteMode(settings.recallCompress),
     extraHeaders: file.extra_headers || {}, path: files.cliPath,
     explicitMcpOptIn: options.mcpEnabled === true || (options.mcpEnabled === undefined && scoped?.mcpEnabled === true),
-    nativeAgents,
+    // Requests from the model adapter already belong to OV / VikingBot.
+    // Never recall or capture their own processing through the memory gateway.
+    nativeAgents: [...new Set([...nativeAgents, "openviking-models"])],
   };
   for (const knob of KNOBS.filter((knob) => knob.sendOnlyWhenConfigured)) {
     config[`${knob.name}Configured`] = configured.has(knob.name);

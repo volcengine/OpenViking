@@ -1,0 +1,3 @@
+# These are authored runtime modules, not generated library output.
+!lib/
+!lib/*.mjs

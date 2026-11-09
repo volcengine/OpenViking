@@ -1,0 +1,117 @@
+# OpenViking models for Magpie
+
+Manage the models **OpenViking and VikingBot themselves use** from Magpie's **Agents → OpenViking / VikingBot** row. Magpie owns vendor credentials and routing; OV keeps the gateway URL, gateway key and full model identifier.
+
+[中文说明](README_CN.md)
+
+This is independent of [`@openviking/magpie-plugin`](../magpie-memory-plugin), which recalls and captures memory for other agents behind Magpie.
+
+## Install locally
+
+The package is not published yet. Add the complete directory, including its Bun bridge:
+
+```sh
+magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
+```
+
+Or select the directory in Plugins → Add plugin. Requires Magpie Agent plugins, its Bun host, and OV's startup configuration API. Tested with **Magpie 0.1.2818 on macOS** in an isolated home. Keep Magpie and OV running.
+
+Configure the connection, choose management scope on the plugin's **OpenViking models** page, and pick a chat model on its Agent row. Check adapter logs or `node cli.mjs status`, then **restart OV and VikingBot** after a successful save. With `openviking-server --with-bot`, use the managed server restart lifecycle.
+
+`saved` means the startup file was saved, not that a running process switched models. VLM changes require an OV restart; Bot configuration changes, including changes to its inherited VLM, require a Bot restart. Managing only an independent Bot does not change OV's model. `ovRuntime` and `botRuntime` report these separately; a matching startup file cannot prove a standalone Bot reloaded. Restart reminders survive disconnect/restoration. There is no automatic restart or paid inference probe. Verify VLM image support and Bot streaming, tool execution and input budgets before use.
+
+## Connection
+
+Set options in the plugin page, Plugins → Options, or `~/.config/magpie-openviking-models/adapter.json`. Plugin options override that file:
+
+```json
+{
+  "serverUrl": "http://127.0.0.1:1933",
+  "rootApiKeyFile": "~/.config/magpie-openviking-models/root.key",
+  "manageVlm": true,
+  "botMode": "follow",
+  "pollMs": 2000
+}
+```
+
+The key file contains only an **OV Root key**; use `0600` permissions. This is separate from Magpie's gateway key and ordinary memory access credentials.
+
+Without an explicit URL, read `url` from `OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`, then default to `http://127.0.0.1:1933`. Credential order: `rootApiKeyFile`, `OPENVIKING_ROOT_API_KEY`, `ovcli.conf`'s `root_api_key`. Ordinary `api_key` is not implicitly elevated. Set `ovcliConfig` for a custom client file. An unauthenticated development server can omit credentials. Desktop apps may not inherit shell variables; prefer the adapter file.
+
+## Model roles
+
+| Option | Behavior |
+| --- | --- |
+| `manageVlm: true` (default) | Manage startup `vlm` service binding |
+| `botMode: "preserve"` (default) | Keep explicit Bot settings; a Bot already inheriting root VLM continues to inherit after reload |
+| `botMode: "follow"` | Remove explicit Bot model/credentials so it inherits full root VLM; requires `manageVlm` |
+| `botMode: "independent"` | Give Bot its own Magpie connection, using the Agent row's model unless `botModel` is set |
+| `botModel` | Full `provider/model` or `group/name` for independent Bot mode |
+| `manageVlm: false` with independent mode | Manage only VikingBot |
+| `pollMs` | Polling interval, 500–60000 ms; default 2000 |
+
+The Agent module writes a private selection file; a Bun bridge validates the model catalog and synchronizes through OV's revision-checked configuration API. It replaces legacy service bindings, including credential chains and backups, while preserving other settings. Released roles restore their original fields. Known Bot context-window metadata is synchronized; unknown values remain unchanged.
+
+### Generation parameters
+
+The page exposes separate OV and Bot parameter editors. Use `vlmParameters` and `botParameters` in Options or `adapter.json`:
+
+```json
+{
+  "vlmParameters": { "max_tokens": 8192, "temperature": 0.2, "thinking": false, "timeout": 600 },
+  "botParameters": { "max_tokens": 4096, "thinking": true, "timeout": 120 }
+}
+```
+
+Omitted fields preserve original values. `max_tokens: null` uses provider defaults in OV and independent Bot mode; a following Bot instead continues to use OV's output limit. A non-null Bot budget overrides the inherited limit and is checked separately.
+
+Known catalog `max_output_tokens` caps requested output budgets, never using context-window size as an output limit. An original budget of 32768 switches to 8192 for a model with an 8192 output limit, with an `adjustments` entry. A larger model can recover the original requested budget; disconnect restores original parameters. Unknown limits produce `warnings` instead of fabricated values. Environment-referenced output budgets require an explicit numeric parameter option.
+
+When catalog metadata explicitly disables temperature, inherited sampling values are cleared; an explicit unsupported temperature request blocks synchronization. Thinking settings are preserved with a protocol-compatibility warning. Retry and concurrency settings remain unchanged; timeout changes only when explicitly configured. Parameter changes still require the affected process to restart.
+
+Embedding, Rerank, explicit Query Planner, Bot channels, tools and image-generation models remain configured as before. An unset Query Planner follows VLM according to OV's own rules. Cluster runtime VLM overrides block file management; Account model overrides are outside scope.
+
+## Remote servers
+
+Writes go through the server API to its actual startup file. Non-loopback OV and Magpie URLs require HTTPS; redirects and URL credentials are rejected.
+
+The gateway address Magpie supplies must be reachable from the **OV / Bot machine**. In a container or remote server, loopback refers to that server. Configure a reachable shared gateway address and key in Magpie. Changing `serverUrl` alone does not make the gateway reachable. Catalog checks run on Magpie's machine and cannot prove remote OV connectivity.
+
+## Disconnect and recover
+
+Disconnect the Agent **before** disabling/removing the plugin or quitting Magpie. Keep OV and the bridge running until restoration completes:
+
+```sh
+magpie openviking-models default
+```
+
+Restart OV and Bot after restoring. If the host was removed first, automatic recovery is not guaranteed. From a retained copy of this directory:
+
+```sh
+node cli.mjs status
+node cli.mjs restore
+node cli.mjs sync
+```
+
+`status` reads local diagnostics, without network calls or credentials. `restore` pauses the current selection while restoring owned fields. `sync` resumes management. The standalone CLI does not read Magpie plugin options: use the same adapter file and credentials for recovery.
+
+Keep `~/.config/magpie-openviking-models/state.json` until recovery completes. It contains original settings, potentially including credentials, and intended writes. The directory is `0700`; selection, journal and status are `0600`. `recoveryPending` means ownership/recovery records still exist, including while successfully connected.
+
+Writes use server revisions and a write-ahead journal. Manual edits to managed fields produce `conflict`, listing field names without values. They are never forcibly overwritten. Restore the last adapter-written values before retrying restoration, or back up the recovery record and reconcile the changes manually. Restore the original target before changing backend URL or startup-file location.
+
+## Memory integration
+
+Managed OV and Bot calls use the `openviking-models` gateway identity. The memory plugin in this repository treats it as native and skips recall/capture, preventing recursive memory processing. With an older memory plugin, add `openviking-models` to its `nativeAgents` option or upgrade.
+
+## Validation
+
+```sh
+npm run check
+npm test
+npm pack --dry-run
+MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
+```
+
+The opt-in actual-host smoke uses temporary child-process HOME/XDG directories and fake OV/vendor endpoints, with no real accounts or inference requests. `tests/ov-contract.py` accepts a temporary document on stdin to validate the real OV and Bot parsers in a repository Python environment.
+
+No npm publication or marketplace registration has been performed. `marketplace.json` contains a proposed entry.
