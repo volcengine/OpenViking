@@ -19,7 +19,7 @@ import {
 describe('runtime catalog', () => {
   it('owns runtime ids, aliases, static models, efforts, and capabilities', () => {
     assert.equal(DEFAULT_RUNTIME_ID, 'codex');
-    assert.deepEqual(RUNTIME_IDS, ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'opencode']);
+    assert.deepEqual(RUNTIME_IDS, ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'dsh', 'opencode']);
     assert.deepEqual(RUNTIME_ALIASES, {
       codex: 'codex',
       traex: 'traex',
@@ -34,6 +34,8 @@ describe('runtime catalog', () => {
       durable: 'durable',
       'pi-durable': 'durable',
       pidurable: 'durable',
+      dsh: 'dsh',
+      'deepseek-harness': 'dsh',
       opencode: 'opencode',
     });
     assert.deepEqual(getRuntimeDefinition('claude').models, ['sonnet', 'opus', 'haiku', 'fable']);
@@ -104,6 +106,7 @@ describe('runtime catalog', () => {
     assert.deepEqual(RUNTIME_IDS.map((id) => [id, getRuntimeDefinition(id).capabilities.agentTools]), [
       ['codex', 'core'], ['traex', 'core'], ['claude', 'core'], ['volc', 'lark-cli'], ['pi', 'core'],
       ['durable', 'core'],
+      ['dsh', 'core'],
       ['opencode', 'core'],
     ]);
     assert.equal(Object.isFrozen(RUNTIME_CATALOG), true);
@@ -258,6 +261,8 @@ describe('runtime catalog', () => {
       { id: 'haiku', efforts: getRuntimeDefinition('claude').efforts },
       { id: 'fable', efforts: getRuntimeDefinition('claude').efforts },
       { id: 'ark', efforts: getRuntimeDefinition('volc').efforts },
+      { id: 'deepseek-official/deepseek-flash', efforts: getRuntimeDefinition('dsh').efforts },
+      { id: 'deepseek-official/deepseek-v4-pro', efforts: getRuntimeDefinition('dsh').efforts },
     ]);
   });
 });

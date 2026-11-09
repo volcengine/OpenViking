@@ -25,7 +25,12 @@ export class RuntimeAdapter {
   }
 
   get threadId() { return this.#implementation.threadId ?? null; }
-  get effort() { return this.#implementation.effort ?? 'medium'; }
+  // `null` is a real value now: it means the model has no effort override, and
+  // only an absent field falls back to the transport default.
+  get effort() {
+    const effort = this.#implementation.effort;
+    return effort === undefined ? 'medium' : effort;
+  }
   get model() { return this.#implementation.model ?? ''; }
   get resolvedModel() { return this.#implementation.resolvedModel ?? ''; }
   get state() { return normalizeState(this.#implementation.state); }
@@ -47,12 +52,24 @@ export class RuntimeAdapter {
   setTurnNotice(text) { this.#implementation.turnNotice = text || null; }
   activate() { return this.#implementation.activateSession?.(); }
   listModels() { return this.#implementation.listModels?.() ?? Promise.resolve([]); }
-  selectModel(model, options) { return this.#implementation.setModel(model, options); }
+  // A model change has exactly one entry point: applySettings below. The old
+  // `selectModel` shim forwarded straight to the transport's `setModel`, which
+  // persists on its own and skips the coordinator's bookkeeping (the refusal
+  // record, the version of each request, the session binding), and nothing in
+  // production or in the tests ever called it. Effort keeps its own entry
+  // because the coordinator's /effort path uses it.
   selectEffort(effort, options) { return this.#implementation.setEffort(effort, options); }
 
   // Desired settings are plain fields on every transport. Publish the whole
   // validated pair synchronously, after persistence, before another turn drains.
-  applySettings({ model = this.model, effort = this.effort }) {
+  // A transport that owns state behind those fields (dsh records the pair DSH
+  // refused, and the request still waiting to be applied) exposes applySettings
+  // itself; assigning the fields directly would bypass that bookkeeping.
+  applySettings({ model = this.model, effort = this.effort } = {}) {
+    if (typeof this.#implementation.applySettings === 'function') {
+      this.#implementation.applySettings({ model, effort });
+      return;
+    }
     this.#implementation.model = model;
     this.#implementation.effort = effort;
   }

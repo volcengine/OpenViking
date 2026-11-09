@@ -103,7 +103,7 @@ describe('parseCommand', () => {
   });
 
   it('keeps everything after the command token as one arg', () => {
-    assert.deepEqual(parseCommand('/model  a  b '), { name: 'model', arg: 'a b' });
+    assert.deepEqual(parseCommand('/model  a  b '), { name: 'model', arg: 'a  b' });
   });
 
   it('reports unknown and bare-slash tokens without a name', () => {

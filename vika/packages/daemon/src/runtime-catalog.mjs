@@ -232,6 +232,34 @@ export const RUNTIME_CATALOG = Object.freeze({
       agentTools: 'core',
     },
   }),
+  dsh: runtimeDefinition({
+    id: 'dsh',
+    // Vika gives DSH a private DSH_HOME (`<dataDir>/dsh/home`) and its own
+    // `--patch` overlay, so the runtime never reads the owner's `~/.dsh`
+    // plugins, skills or credentials. That is config-home isolation: the flags
+    // only select the profile and the patch file.
+    ovIsolation: 'config-home',
+    aliases: ['dsh', 'deepseek-harness'],
+    directAliases: ['dsh', 'deepseek-harness'],
+    // A bare `dsh` selector must resolve to a model the runtime can apply: an
+    // empty default made /runtime dsh stage "" and then fail the
+    // "target runtime did not apply the requested model" comparison.
+    defaultModel: 'deepseek-official/deepseek-flash',
+    canonicalDefault: 'dsh',
+    // The static list is what attributes a bare model to this runtime and what
+    // supplies the built-in production default. The live catalog comes from DSH
+    // itself (bridge v2 `vika/llm/models`) and also serves the operator's own
+    // routes (deepseek-chat and the like), so model selection is dynamic
+    // rather than limited to this list. Efforts are the union DSH understands;
+    // which of them a model offers is answered per model.
+    models: ['deepseek-official/deepseek-flash', 'deepseek-official/deepseek-v4-pro'],
+    efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    capabilities: {
+      modelCatalog: 'dynamic', effortControl: 'selectable', activeInput: 'steer',
+      scopePolicy: 'any', outputOwnership: 'runtime', sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    },
+  }),
   opencode: runtimeDefinition({
     id: 'opencode',
     ovIsolation: 'config-home',
