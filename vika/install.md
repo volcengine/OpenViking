@@ -10,7 +10,7 @@ The instructions below use the published **macOS / Linux / WSL2** installer. Nat
 
 ## Prerequisites
 
-- **System:** macOS or Linux, x64 / arm64. On Windows, use WSL2 for this release, or try the experimental [Windows x64 preview package](docs/windows-preview.md#download-and-install) (download: `https://ovrelease.tos-cn-beijing.volces.com/vika/windows-preview/latest/`; no GitHub account needed). musl / Alpine is not supported. You need sh, curl, tar, and sha256sum (or shasum); Node, npm, PM2, and lark-cli need not be installed beforehand.
+- **System:** macOS or Linux, x64 / arm64. On Windows, use WSL2, or the experimental native preview: `irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex` in PowerShell ([details](docs/windows-preview.md)). musl / Alpine is not supported. You need sh, curl, tar, and sha256sum (or shasum); Node, npm, PM2, and lark-cli need not be installed beforehand.
 - **OpenViking:** a reachable OV service is required, either local or remote. Have its address and required credentials ready, or import an existing configuration during setup. There is no skip option.
 - **Runtime:** choose one below and prepare its model authentication or API configuration.
 - **Chat account:** Feishu requires a phone-registered or enterprise account; signing in to Feishu through a Doubao account is not supported for this integration. For other channels, prepare the bot or app credentials requested by setup.
@@ -31,10 +31,10 @@ DeepSeek Harness has no separate sign-in. Its model routes and credentials belon
 ## Install
 
 ```bash
-curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/0.4.0-24e73d5a3f7a/install.sh | sh -s -- --version 0.4.0-24e73d5a3f7a
+curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 ```
 
-This installs the specified release, not a floating latest version. The unversioned `vika/install.sh` and `vika/latest` endpoints are not currently available. Omitting `--version` makes the installer look up `vika/latest`, so keep the version argument with this command.
+This installs the version in `vika/latest` (currently `0.5.0-preview`). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/install.sh | sh -s -- --version <version>`.
 
 The installer verifies the downloaded archive and installs it under `~/.vika/releases/`. A first installation in an interactive terminal opens the setup wizard. If your shell cannot find `vika`, reopen the terminal or use `~/.vika/bin/vika`.
 
