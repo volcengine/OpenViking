@@ -8,6 +8,7 @@ from openviking.core.namespace_policy import (
     SYSTEM_FIXED_DIRECTORIES,
     SYSTEM_MEMORY_BUILTIN_ROOT,
     SYSTEM_MEMORY_CUSTOM_ROOT,
+    SYSTEM_VIKINGBOT_SKILLS_ROOT,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -65,17 +66,21 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
     compile_source = tmp_path / "compile/example-skills/demo/SKILL.md"
     reference_source = tmp_path / "compile/example-skills/demo/references/guide.bin"
     memory_source = tmp_path / "memory/memory_templates/builtin/profile.yaml"
+    vikingbot_source = tmp_path / "vikingbot/skills/compile-manager/SKILL.md"
     compile_source.parent.mkdir(parents=True)
     reference_source.parent.mkdir(parents=True)
     memory_source.parent.mkdir(parents=True)
+    vikingbot_source.parent.mkdir(parents=True)
     compile_source.write_bytes(b"same skill")
     reference_source.write_bytes(b"\x00guide")
     memory_source.write_bytes(b"new profile")
+    vikingbot_source.write_bytes(b"new compile manager")
     write_system_assets_manifest(tmp_path)
 
     compile_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/demo/SKILL.md"
     reference_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/demo/references/guide.bin"
     memory_target = f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml"
+    vikingbot_target = f"{SYSTEM_VIKINGBOT_SKILLS_ROOT}/compile-manager/SKILL.md"
     stale_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/retired/SKILL.md"
     custom_target = f"{SYSTEM_MEMORY_CUSTOM_ROOT}/profile.yaml"
     agfs = _FakeAGFS(
@@ -97,19 +102,23 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
             compile_target,
             reference_target,
             memory_target,
+            vikingbot_target,
             stale_target,
             custom_target,
         )
     }
 
-    assert await synchronizer.sync(ctx, lease_ref={"lease_ref": "account-init"}) == 2
+    assert await synchronizer.sync(ctx, lease_ref={"lease_ref": "account-init"}) == 3
     assert agfs.sync_locks == 0
     assert all(
         viking_fs._uri_to_path(uri, ctx=ctx) in agfs.directories for uri in SYSTEM_FIXED_DIRECTORIES
     )
-    assert sorted(agfs.writes) == sorted([paths[reference_target], paths[memory_target]])
+    assert sorted(agfs.writes) == sorted(
+        [paths[reference_target], paths[memory_target], paths[vikingbot_target]]
+    )
     assert agfs.files[paths[reference_target]] == b"\x00guide"
     assert agfs.files[paths[memory_target]] == b"new profile"
+    assert agfs.files[paths[vikingbot_target]] == b"new compile manager"
     assert agfs.files[paths[stale_target]] == b"keep"
     assert agfs.files[paths[custom_target]] == b"custom"
 
@@ -134,6 +143,7 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
 def concurrent_asset_sync(tmp_path):
     source = tmp_path / "compile/example-skills/demo"
     source.mkdir(parents=True)
+    (tmp_path / "vikingbot/skills").mkdir(parents=True)
     (tmp_path / "memory/memory_templates/builtin").mkdir(parents=True)
     for index in range(9):
         (source / f"{index}.md").write_bytes(b"packaged")
@@ -248,6 +258,7 @@ async def test_system_asset_sync_settles_io_before_unlock(
 @pytest.mark.asyncio
 async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path):
     (tmp_path / "compile/example-skills").mkdir(parents=True)
+    (tmp_path / "vikingbot/skills").mkdir(parents=True)
     agfs = _FakeAGFS()
     synchronizer = SystemAssetSynchronizer(viking_fs=VikingFS(agfs=agfs), assets_dir=tmp_path)
     with pytest.raises(FileNotFoundError, match="memory/memory_templates/builtin"):
