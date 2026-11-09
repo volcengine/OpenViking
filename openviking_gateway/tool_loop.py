@@ -27,8 +27,11 @@ def added_tokens(value):
 
 
 class HiddenToolLoop:
-    def __init__(self, prepared, executor, store, capture, unseal=None):
+    def __init__(self, prepared, executor, store, capture, seal=None, unseal=None):
         self.prepared, self.executor, self.store, self.capture = prepared, executor, store, capture
+        # Tool results are sealed as they arrive, so neither continuations nor the receipts
+        # the gateway stores hold values.
+        self.seal = seal or (lambda value: value)
         # Only the client's copy of its calls gets values; visible history, the final and
         # capture keep references, which the client's next request is matched by.
         self.unseal = unseal or (lambda value: (value, 0))
@@ -176,7 +179,7 @@ class HiddenToolLoop:
         if window:
             self.reset(*window)
         else:
-            results = self.adapter.results(results)
+            results = self.seal(self.adapter.results(results))
             self.transcript.extend(results)
             self.body[self.adapter.field].extend([*self.round.output, *results])
         self.rounds += 1

@@ -236,12 +236,12 @@ API requests that omit `disabled_tools` get the default list; an empty list with
 
 ### Seal credentials {#profile-credentials}
 
-Explained in [Seal credentials](08-context-profiles.md#seal-credentials). Both apply to ongoing conversations too, and `X-OpenViking-Context` cannot set them.
+Explained in [Seal credentials](08-context-profiles.md#seal-credentials). Both apply to ongoing conversations too, and `X-OpenViking-Context` cannot set them. Sealing needs OpenViking Server 0.5.2 or later.
 
 | Studio label | API name | Default | Range | Meaning |
 | --- | --- | --- | --- | --- |
-| Seal credentials | `seal_secrets` | `false` | | Replace registered credentials with their references in everything sent upstream; `privacy_resolve` is not offered. |
-| Put values in tool calls | `unseal_tool_calls` | `false` | Needs `seal_secrets` | Replace the user's references with their values in the tool calls the client runs. |
+| Seal credentials | `seal_secrets` | `false` | | Replace registered credentials with their references in everything sent upstream; conversations that start afterwards are not offered `privacy_resolve`. |
+| Put values in tool calls | `unseal_tool_calls` | `false` | Needs `seal_secrets` | Replace the user's references with their values, 6 characters or longer, in the tool calls the client runs. |
 
 ## Upstream settings {#upstream-settings}
 

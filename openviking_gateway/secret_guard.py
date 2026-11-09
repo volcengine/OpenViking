@@ -11,29 +11,33 @@ caller's own OpenViking key and stay in process memory.
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import time
 from collections import OrderedDict
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 from .cache import TTLCache
 from .client import VikingError
 from .protocols import string_type
+
+logger = logging.getLogger(__name__)
 
 # As OpenViking's privacy sanitizer: shorter values are never replaced.
 MIN_CHARS = 6
 REFRESH_SECONDS = 30
 # A failed refresh keeps using a catalog this old; without one, requests fail closed.
 STALE_SECONDS = 600
-REFERENCE = re.compile(
-    r"\{\{[ \t]*ov_privacy:(?P<owner>[^\s:{}]+):viking://~/privacy/credential/"
-    r"(?P<target>[^#\s]+)#/values/(?P<field>[^}\s]+)[ \t]*\}\}"
-)
+# Only a known reference spelled exactly as rendered unseals: any other spelling would
+# seal back to the rendered one and no longer match the reply the gateway recorded.
+REFERENCE = re.compile(r"\{\{ov_privacy:[^{}\s]+\}\}")
 # Upstreams verify these byte for byte; binary payloads hold no text to seal.
 OPAQUE = {"thinking", "redacted_thinking", "reasoning"}
 SIGNED = {"signature", "encrypted_content"}
-DATA_URI = re.compile(r"data:[^\s,]*;base64,")
+DATA_URI = re.compile(r"data:[^\s,]*;base64,[A-Za-z0-9+/=]*")
 BASE64 = re.compile(r"[A-Za-z0-9+/=_-]{256,}")
+# What a tool read or wrote is never exempt, whatever it looks like.
+TOOL_IO = {"tool_use", "tool_result", "function_call_output", "custom_tool_call_output"}
 # Where a client tool call, or one of its events, holds the arguments, and whether they
 # are JSON text, which takes escaped values.
 ARGUMENTS = {
@@ -77,6 +81,17 @@ def escape(text):
     return json.dumps(text, ensure_ascii=False)[1:-1]
 
 
+def spellings(text):
+    """``text`` inside a JSON string as common encoders write it.
+
+    Minimal escapes, ASCII only as Python writes it, ``\\/`` as PHP writes it, and
+    ``<>&`` escaped as Go writes them.
+    """
+    minimal, ascii_only = escape(text), json.dumps(text)[1:-1]
+    html = minimal.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+    return {minimal, ascii_only, html, *(s.replace("/", "\\/") for s in (minimal, ascii_only))}
+
+
 def alternation(texts):
     """A regex matching the longest of ``texts`` at each position.
 
@@ -95,16 +110,19 @@ def walk(value, edit, exempt=True):
     """``value`` with ``edit(text) -> (text, count)`` applied to its strings, and the count.
 
     Only changed paths are copied, so an unchanged ``value`` is returned itself. With
-    ``exempt``, what upstreams verify and binary payloads are left alone; a tool call's
-    input never is.
+    ``exempt``, what upstreams verify and binary payloads are left alone; a tool's input
+    and output never are.
     """
     if isinstance(value, str):
-        return (value, 0) if exempt and DATA_URI.match(value) else edit(value)
+        return (value, 0) if exempt and DATA_URI.fullmatch(value) else edit(value)
     if isinstance(value, list):
         items = enumerate(value)
     elif isinstance(value, dict):
-        if exempt and string_type(value) in OPAQUE:
+        kind = string_type(value)
+        if exempt and kind in OPAQUE:
             return value, 0
+        # Chat tool results are messages, which have a role instead.
+        exempt = exempt and kind not in TOOL_IO and value.get("role") != "tool"
         items = value.items()
     else:
         return value, 0
@@ -114,8 +132,7 @@ def walk(value, edit, exempt=True):
             key in SIGNED or key == "data" and isinstance(item, str) and BASE64.fullmatch(item)
         ):
             continue
-        arguments = key == "input" and string_type(value).endswith("tool_use")
-        new, count = walk(item, edit, exempt and not arguments)
+        new, count = walk(item, edit, exempt)
         if new is not item:
             if result is value:
                 result = list(value) if isinstance(value, list) else dict(value)
@@ -144,6 +161,7 @@ class Catalog:
     def __init__(self, owner="", targets=None):
         # target -> (version, values), as OpenViking returned them.
         self.owner, self.targets = owner, targets or {}
+        # The value of each reference that unseals; a shorter one would not seal back.
         self.values, smallest = {}, {}
         # Known references map to themselves, so text inside one is never sealed; a forged
         # reference around a value is not known, and the value inside it is sealed.
@@ -153,13 +171,14 @@ class Catalog:
                 ref = reference(owner, target, field)
                 self.replacements[ref] = ref
                 if isinstance(value, str) and len(value) >= MIN_CHARS:
-                    self.values[target, field] = value
+                    self.values[ref] = value
                     # A value in several fields seals to one of them, the same every time.
                     smallest[value] = min(smallest.get(value, ref), ref)
         for value, ref in smallest.items():
             self.replacements.setdefault(value, ref)
         for value, ref in smallest.items():
-            self.replacements.setdefault(escape(value), ref)
+            for spelling in spellings(value):
+                self.replacements.setdefault(spelling, ref)
         self.pattern = re.compile(alternation(self.replacements))
 
     def __bool__(self):
@@ -191,7 +210,8 @@ class Catalog:
             return self.unseal_events(value)
         if not isinstance(value, dict):
             return value, 0
-        kind = string_type(value)
+        # Chat streams may leave a call's type out.
+        kind = string_type(value) or ("function" if "function" in value else "")
         if kind in ARGUMENTS:
             path, quoted = ARGUMENTS[kind]
             return at(value, path, lambda item: walk(item, self.opener(quoted), exempt=False))
@@ -237,9 +257,8 @@ class Catalog:
 
             def replace(match):
                 nonlocal count
-                field = unquote(match["target"]), unquote(match["field"])
-                value = match["owner"] == self.owner and self.values.get(field)
-                if not value:
+                value = self.values.get(match[0])
+                if value is None:
                     return match[0]
                 count += 1
                 return escape(value) if quoted else value
@@ -268,6 +287,9 @@ class Secrets:
             try:
                 catalog = await self.read(key, previous)
             except Exception as error:
+                # Names the cause, never a value: an outage, a rejected key, or a server
+                # older than OpenViking 0.5.2, which has no credential tree.
+                logger.warning("OpenViking Gateway could not read credentials: %r", error)
                 if previous is not None and time.monotonic() - read_at <= STALE_SECONDS:
                     return previous
                 raise VikingError("privacy_unavailable") from error

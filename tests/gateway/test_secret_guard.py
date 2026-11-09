@@ -75,10 +75,12 @@ def test_only_known_references_shield_their_text():
     assert guard.seal(forged)[0] == forged.replace("sk-live-1234567", known)
 
 
-def test_signed_and_binary_content_is_left_alone_but_tool_calls_never_are():
-    guard = catalog()
+def test_signed_and_binary_content_is_left_alone_but_tools_never_are():
+    # In the standard base64 alphabet, so a data URI can spell it.
+    key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    guard = catalog({**CREDENTIALS, "aws": {"secret": key}})
     # Base64 that happens to spell a value.
-    payload = "QUJD" * 100 + TOKEN
+    payload, uri = "QUJD" * 100 + TOKEN, "data:image/png;base64," + "QUJD" * 100 + key
     exempt = [
         {"type": "thinking", "thinking": TOKEN, "signature": "s"},
         {"type": "redacted_thinking", "data": TOKEN},
@@ -86,12 +88,15 @@ def test_signed_and_binary_content_is_left_alone_but_tool_calls_never_are():
         {"type": "text", "text": "hi", "signature": TOKEN},
         {"type": "item", "encrypted_content": TOKEN},
         {"type": "image", "source": {"type": "base64", "data": payload}},
-        {"type": "input_image", "image_url": "data:image/png;base64," + payload},
+        {"type": "input_image", "image_url": uri},
     ]
     for value in exempt:
         assert guard.seal(value)[0] is value
-    calls = [
-        # Argument names never exempt a tool call's input.
+    # Only a whole data URI is binary: text after one is still text.
+    text = f"data:;base64,QUJD then {TOKEN}"
+    assert guard.seal(text) == (text.replace(TOKEN, TOKEN_REF), 1)
+    sealed = [
+        # Argument names never exempt a tool's input, nor shapes its output.
         {
             "type": "tool_use",
             "id": "t",
@@ -99,12 +104,19 @@ def test_signed_and_binary_content_is_left_alone_but_tool_calls_never_are():
             "input": {"signature": TOKEN, "data": payload},
         },
         {"type": "tool_result", "tool_use_id": "t", "content": [{"type": "text", "text": TOKEN}]},
+        {
+            "type": "tool_result",
+            "tool_use_id": "t",
+            "content": [{"type": "reasoning", "text": TOKEN}, {"type": "image", "data": payload}],
+        },
         {"type": "function_call", "call_id": "c", "arguments": json.dumps({"key": TOKEN})},
         {"type": "function_call_output", "call_id": "c", "output": f"data: {TOKEN}"},
-        {"role": "tool", "tool_call_id": "c", "content": f"data:{TOKEN}"},
+        {"type": "custom_tool_call_output", "call_id": "c", "output": uri},
+        {"role": "tool", "tool_call_id": "c", "content": f"data:{TOKEN}", "signature": TOKEN},
     ]
-    sealed, count = guard.seal(calls)
-    assert count == 6 and not leaked(sealed) and TOKEN_REF in str(sealed)
+    for value in sealed:
+        new, count = guard.seal(value)
+        assert count and not leaked(new) and key not in str(new), value
 
 
 def test_values_inside_json_text_are_sealed_in_their_escaped_form():
@@ -115,6 +127,19 @@ def test_values_inside_json_text_are_sealed_in_their_escaped_form():
     sealed, count = guard.seal(call)
     assert count == 1
     assert json.loads(sealed["function"]["arguments"]) == {"command": f"login {PASSWORD_REF}"}
+
+
+def test_values_are_sealed_as_common_json_encoders_escape_them():
+    values = {"latin": "pässwörd-123", "aws": "wJalrXUtnFEMI/K7MDENG", "html": "p&ss<w>rd-123"}
+    guard = catalog({"keys": values})
+    for field, value in values.items():
+        python = json.dumps({"v": value})
+        minimal = json.dumps({"v": value}, ensure_ascii=False)
+        go = minimal.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+        # PHP writes the slash escaped.
+        for text in {python, python.replace("/", "\\/"), minimal.replace("/", "\\/"), go}:
+            sealed, count = guard.seal(text)
+            assert count == 1 and json.loads(sealed) == {"v": reference("alice", "keys", field)}
 
 
 def test_a_value_in_several_fields_seals_to_its_smallest_reference():
@@ -148,6 +173,11 @@ def test_unseal_escapes_values_in_json_text_and_keeps_inputs_raw():
     opened, count = guard.unseal({"choices": [{"message": {"tool_calls": [chat]}}]})
     arguments = opened["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
     assert count == 2 and json.loads(arguments) == {"command": expected}
+    # Some Chat streams leave the type out.
+    untyped = {"index": 0, "function": {"name": "shell", "arguments": raw}}
+    opened, count = guard.unseal({"choices": [{"delta": {"tool_calls": [untyped]}}]})
+    arguments = opened["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+    assert count == 2 and json.loads(arguments) == {"command": expected}
     # Arguments as values: an object input, and custom tools' plain text.
     opened, count = guard.unseal({"type": "tool_use", "input": {"command": [command]}})
     assert count == 2 and opened["input"] == {"command": [expected]}
@@ -168,6 +198,9 @@ def test_unseal_opens_only_the_callers_own_known_client_call_references():
         {"type": "tool_use", "input": {"a": reference("alice", "github", "missing")}},
         {"type": "tool_use", "input": {"a": reference("alice", "db", "port")}},
         {"type": "tool_use", "input": {"a": TOKEN_REF.replace("#/values/", "#/value/")}},
+        # Spellings OpenViking accepts but does not render would seal back to another text.
+        {"type": "tool_use", "input": [TOKEN_REF.replace("{{", "{{ ").replace("}}", "\t}}")]},
+        {"type": "tool_use", "input": [TOKEN_REF.replace("github", "git%68ub")]},
         # Text, thinking and vendor-run tools are never unsealed.
         {
             "content": [
@@ -186,9 +219,6 @@ def test_unseal_opens_only_the_callers_own_known_client_call_references():
     ]
     for value in untouched:
         assert guard.unseal(value) == (value, 0) and guard.unseal(value)[0] is value
-    # Whitespace inside the braces and percent-encoded segments still name the field.
-    spaced = "{{ ov_privacy:alice:viking://~/privacy/credential/git%68ub#/values/tok%65n\t}}"
-    assert guard.unseal({"type": "tool_use", "input": [spaced]})[0]["input"] == [TOKEN]
     assert Catalog().unseal({"type": "tool_use", "input": [TOKEN_REF]})[1] == 0
 
 
@@ -267,7 +297,7 @@ class Privacy:
         return {"meta": {}, "current": {"version": version, "values": values}}
 
 
-async def test_catalog_refreshes_changed_targets_and_survives_short_outages():
+async def test_catalog_refreshes_changed_targets_and_survives_short_outages(caplog):
     privacy = Privacy(CREDENTIALS)
     secrets = Secrets(privacy)
     first = await asyncio.gather(*(secrets.catalog("user-key") for _ in range(5)))
@@ -294,6 +324,8 @@ async def test_catalog_refreshes_changed_targets_and_survives_short_outages():
     privacy.failure = VikingError("openviking_unavailable")
     secrets.fresh.clear()
     assert await secrets.catalog("user-key") is rotated
+    # The log names the cause, such as a server without the credential tree, never a value.
+    assert "openviking_unavailable" in caplog.text and "rotated-password" not in caplog.text
     for name, (read_at, value) in secrets.last.items():
         secrets.last[name] = read_at - STALE_SECONDS - 1, value
     secrets.fresh.clear()
@@ -499,19 +531,32 @@ async def test_recall_and_its_summary_are_sealed_on_the_way_out(running_gateway)
 
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
-async def test_gateway_tool_results_are_sealed_in_hidden_continuations(running_gateway, protocol):
+async def test_recall_and_gateway_tool_results_are_sealed_before_they_are_kept_or_sent(
+    running_gateway, monkeypatch, protocol
+):
     app, client, admin, key, _, _ = running_gateway
-    await enable_tools(client, admin, seal_secrets=True)
+    await enable_tools(client, admin, seal_secrets=True, recall=True)
     app.state.test_backend["catalog"] = [
         *MCP_TOOLS,
         mcp_tool("privacy_resolve", {"selector": TEXT}, ("selector",)),
     ]
-    requests = []
+    requests, kept = [], []
+    put = app.state.store.replay.put
+
+    async def keep(scope, session, kind, anchor, value):
+        kept.append(value)
+        return await put(scope, session, kind, anchor, value)
+
+    monkeypatch.setattr(app.state.store.replay, "put", keep)
     answer = upstream(
-        protocol, True, requests, lambda n: native_response(protocol, n, owned=n == 1)
+        protocol, True, requests, lambda n: native_response(protocol, n, owned=n <= 2)
     )
 
     async def model(request):
+        if request.path == "/api/v1/search/search":
+            entry = {"uri": "viking://user/alice/memories/deploy.md", "text": f"key {TOKEN}"}
+            result = {"entries": [entry], "rendered": f"deploy.md\nkey {TOKEN}"}
+            return web.json_response({"status": "ok", "result": result})
         if request.path == "/mcp":
             # What privacy_resolve would return for a credential.
             content = [{"type": "text", "text": json.dumps({"value": TOKEN})}]
@@ -522,14 +567,18 @@ async def test_gateway_tool_results_are_sealed_in_hidden_continuations(running_g
     body = request_body(protocol, True)
     response = await client.post(PATHS[protocol], headers=headers(key), json=body)
     assert response.status_code == 200, response.text
-    first, continuation = requests
+    first, *continuations = requests
     names = {
         t.get("name") or t.get("function", {}).get("name") for t in orjson.loads(first)["tools"]
     }
     assert "openviking_search" in names and "openviking_privacy_resolve" not in names
-    assert TOKEN_REF.encode() in continuation and not leaked(continuation)
+    assert len(continuations) == 2 and TOKEN_REF.encode() in continuations[-1]
+    assert not any(leaked(raw) for raw in requests)
+    # Recall and tool receipts are kept as references too.
+    assert kept and not leaked(kept)
+    # Each value the gateway added counts once: the recall and two tool results.
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    assert logs[0]["secrets_sealed_egress"] == 1 and logs[0]["hidden_rounds"] == 1
+    assert logs[0]["secrets_sealed_egress"] == 3 and logs[0]["hidden_rounds"] == 2
 
 
 def client_reply(protocol, response, streaming):
@@ -675,6 +724,9 @@ async def test_unavailable_credentials_fail_the_request_before_the_upstream(runn
     response = await client.post(PATHS["chat"], headers=headers(key), json=body)
     assert response.status_code == 503 and response.json()["reason"] == "secrets_unavailable"
     assert not seen
+    # A request without a body has nothing to seal, so it does not wait for credentials.
+    response = await client.get("/v1/files", headers=headers(key))
+    assert response.status_code == 200 and seen[-1][0] == "/v1/files"
 
 
 @pytest.mark.parametrize("field", ["seal_secrets", "unseal_tool_calls"])
@@ -723,14 +775,15 @@ async def test_the_live_profile_decides_and_bodies_it_cannot_read_are_refused(ru
     response = await client.post(PATHS["chat"], headers=session, json=body)
     assert response.status_code == 200 and not leaked(seen[-1][1])
     count = len(seen)
-    for extra, raw, status in [
-        ({"Content-Encoding": "gzip"}, orjson.dumps(body), 415),
-        ({}, b'{"model": "model", "model": "model", "messages": []}', 400),
+    duplicate = f'{{"model": "model", "model": "model", "prompt": "{TOKEN}"}}'.encode()
+    for path, extra, raw, status in [
+        (PATHS["chat"], {"Content-Encoding": "gzip"}, orjson.dumps(body), 415),
+        (PATHS["chat"], {}, b'{"model": "model", "model": "model", "messages": []}', 400),
+        # JSON the gateway could only forward byte for byte, off the model protocols too.
+        ("/v1/completions", {}, duplicate, 400),
     ]:
         response = await client.post(
-            PATHS["chat"],
-            headers={**session, **extra, "Content-Type": "application/json"},
-            content=raw,
+            path, headers={**session, **extra, "Content-Type": "application/json"}, content=raw
         )
         assert response.status_code == status, response.text
     assert len(seen) == count

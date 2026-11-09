@@ -185,8 +185,12 @@ class MemoryKernel:
         counting=False,
         upstreams=(),
         summarize=None,
+        seal=None,
     ):
-        """Build the upstream body; ``summarize(prepared, body)`` sends a summary request."""
+        """Build the upstream body; ``summarize(prepared, body)`` sends a summary request.
+
+        ``seal(text)`` replaces registered credentials in what recall injects and records.
+        """
         adapter = tool_protocol(protocol)
         sent = adapter.messages(body)
         if not isinstance(sent, list) or not all(isinstance(m, dict) for m in sent):
@@ -303,7 +307,7 @@ class MemoryKernel:
         # context the model actually gets.
         if not disabled:
             if kind == "user" and anchor >= 0 and (K.INJECTION, chain[anchor]) not in records:
-                await self.recall(prepared, credential, policy)
+                await self.recall(prepared, credential, policy, seal)
             await remind(self.store, prepared, policy)
         if (
             not disabled
@@ -464,7 +468,7 @@ class MemoryKernel:
         if request.disabled:
             request.metrics["degradation"] = "plugin_present"
 
-    async def recall(self, request, credential, policy):
+    async def recall(self, request, credential, policy, seal=None):
         started = time.monotonic()
         existing = [
             (index, request.records[K.INJECTION, anchor])
@@ -568,6 +572,9 @@ class MemoryKernel:
         # The opening block is immutable with recall but has its own budget, and
         # the window status line costs nothing.
         decision["text"] = "\n\n".join(part for part in (start, recalled) if part)
+        if seal:
+            # Memory written before a value was registered still holds it.
+            decision["text"] = seal(decision["text"])
         if reminder:
             decision["reminder"] = reminder
         if policy.show_recall:

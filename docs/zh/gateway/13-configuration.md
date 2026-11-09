@@ -236,12 +236,12 @@ API 请求省略 `disabled_tools` 时使用默认列表；列表为空且 `gatew
 
 ### 封存凭据 {#profile-credentials}
 
-作用见[封存凭据](08-context-profiles.md#seal-credentials)。两项设置都对进行中的对话生效，`X-OpenViking-Context` 不能修改它们。
+作用见[封存凭据](08-context-profiles.md#seal-credentials)。两项设置都对进行中的对话生效，`X-OpenViking-Context` 不能修改它们。封存需要 OpenViking Server 0.5.2 或更高版本。
 
 | Studio 名称 | API 名称 | 默认值 | 取值范围 | 含义 |
 | --- | --- | --- | --- | --- |
-| 封存凭据 | `seal_secrets` | `false` | | 发往上游的所有内容中，已登记的凭据都换成引用；不提供 `privacy_resolve`。 |
-| 在工具调用中填入真值 | `unseal_tool_calls` | `false` | 需要 `seal_secrets` | 在客户端执行的工具调用里，把用户本人的引用换成真实值。 |
+| 封存凭据 | `seal_secrets` | `false` | | 发往上游的所有内容中，已登记的凭据都换成引用；之后开始的对话不提供 `privacy_resolve`。 |
+| 在工具调用中填入真值 | `unseal_tool_calls` | `false` | 需要 `seal_secrets` | 在客户端执行的工具调用里，把用户本人的引用换成不少于 6 个字符的真实值。 |
 
 ## 上游设置 {#upstream-settings}
 

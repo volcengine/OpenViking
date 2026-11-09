@@ -273,8 +273,6 @@ class ProxyRequest:
         await self.route()
         await self.seal_request()
         await self.prepare()
-        # What the kernel added, such as recall or replayed history, may still hold values.
-        self.body = await self.seal(self.body)
         if self.body != original:
             self.raw = await asyncio.to_thread(orjson.dumps, self.body)
         self.target = self.url(self.upstream)
@@ -315,6 +313,7 @@ class ProxyRequest:
                 routing = json.loads(self.raw)
             except (ValueError, RecursionError):
                 pass
+        self.routing = routing
         self.model = routing.get("model", "") if isinstance(routing, dict) else ""
         binding = await resolve_binding(self.management, self.config, self.credential)
         # Calls on a stored response are pinned to its upstream and carry no model.
@@ -371,7 +370,7 @@ class ProxyRequest:
 
     async def seal_request(self):
         """Seal the client's request before anything reads it, or refuse one it cannot."""
-        if not (self.policy and self.policy.get("seal_secrets")):
+        if not (self.raw and self.policy and self.policy.get("seal_secrets")):
             return
         try:
             self.catalog = await self.app.state.secrets.catalog(self.credential["openviking_key"])
@@ -383,22 +382,30 @@ class ProxyRequest:
                     "detail": "OpenViking credentials could not be read to seal this request.",
                 },
             )
-        if not (self.catalog and self.raw):
+        if not self.catalog:
             return
         if self.request.headers.get("content-encoding", "identity").lower() != "identity":
             raise HTTPException(415, "Compressed request bodies are not supported")
-        if self.body is None and self.protocol:
+        # JSON that only routing could read goes byte for byte, so it cannot be sealed.
+        if self.body is None and (self.protocol or self.routing is not None):
             raise HTTPException(400, "Request body is not a JSON object the gateway can seal")
-        self.body = await self.seal(self.body, "secrets_sealed")
+        self.body = await self.seal_body(self.body, "secrets_sealed")
 
-    async def seal(self, body, metric="secrets_sealed_egress"):
-        """``body`` with registered credentials sealed, counting them in ``metric``."""
-        if not (self.catalog and body):
-            return body
-        body, count = await asyncio.to_thread(self.catalog.seal, body)
+    def seal(self, value, metric="secrets_sealed_egress"):
+        """``value`` with registered credentials sealed, counting them in ``metric``.
+
+        By default it counts what the gateway itself adds: recall, summaries, tool results.
+        """
+        if not self.catalog:
+            return value
+        value, count = self.catalog.seal(value)
         if count:
             self.metrics[metric] = self.metrics.get(metric, 0) + count
-        return body
+        return value
+
+    async def seal_body(self, body, metric="secrets_sealed_egress"):
+        """``seal`` off the event loop, as a body may be megabytes."""
+        return await asyncio.to_thread(self.seal, body, metric) if self.catalog else body
 
     async def prepare(self):
         if (
@@ -419,6 +426,7 @@ class ProxyRequest:
                 self.path.endswith("count_tokens"),
                 self.candidates,
                 self.summarize,
+                self.seal,
             )
             self.metrics.update(metrics)
             if self.prepared:
@@ -429,7 +437,9 @@ class ProxyRequest:
         if self.body:
             self.body = await self.outgoing(self.body, self.upstream, self.prepared)
             if self.prepared:
-                self.prepared.body = self.body
+                # Replayed history recorded before sealing was turned on may hold values;
+                # hidden continuations start from this body too.
+                self.body = self.prepared.body = await self.seal_body(self.body)
                 self.metrics.update(self.prepared.metrics)
 
     def url(self, upstream):
@@ -457,7 +467,7 @@ class ProxyRequest:
         try:
             async with self.app.state.http.post(
                 target,
-                data=orjson.dumps(await self.seal(body)),
+                data=orjson.dumps(await self.seal_body(body)),
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
                 allow_redirects=False,
@@ -554,7 +564,7 @@ class ProxyRequest:
             self.config.max_body_bytes,
             self.config.mcp_file_links,
         )
-        loop = HiddenToolLoop(prepared, executor, self.store, capture, unseal)
+        loop = HiddenToolLoop(prepared, executor, self.store, capture, self.seal, unseal)
         headers = {
             k.lower(): v
             for k, v in filtered_headers(response.headers).items()
@@ -565,7 +575,7 @@ class ProxyRequest:
             # Without a total tool deadline each continuation gets the usual upstream timeout.
             return await self.app.state.http.post(
                 self.target,
-                data=orjson.dumps(await self.seal(payload)),
+                data=orjson.dumps(payload),
                 headers=self.headers,
                 timeout=aiohttp.ClientTimeout(
                     total=timeout or self.config.upstream_timeout_seconds
