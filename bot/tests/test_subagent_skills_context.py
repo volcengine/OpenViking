@@ -9,8 +9,11 @@ from types import SimpleNamespace
 
 import pytest
 from vikingbot.agent.subagent import SubagentManager
+from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
 from vikingbot.bus.queue import MessageBus
+from vikingbot.config.schema import Config, OpenVikingConfig, SessionKey
+from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 def _write_skill(workspace: Path, name: str, content: str) -> None:
@@ -154,6 +157,79 @@ async def test_subagent_spawn_rejects_tasks_above_concurrency_limit(tmp_path, mo
 
     assert "started" in third
     await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_rounds", "answer"),
+    [
+        (0, "direct answer"),
+        (14, "last-round answer"),
+        (15, "summary"),
+        (14, None),
+        (15, None),
+        (15, ""),
+        (15, "  \n"),
+    ],
+)
+async def test_chat_subagent_delivers_answer_after_tool_budget(
+    tmp_path, monkeypatch, tool_rounds, answer
+):
+    calls = []
+    results: list[str] = []
+
+    class LookupTool(Tool):
+        name = "lookup_fact"
+        description = "Return a local fact"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, tool_context, **kwargs):
+            result = f"gathered fact {len(results) + 1}"
+            results.append(result)
+            return result
+
+    def register(registry, config):
+        registry.register(LookupTool())
+
+    monkeypatch.setattr("vikingbot.agent.tools.register_subagent_tools", register)
+
+    class Provider(LLMProvider):
+        async def chat(self, messages, tools=None, *args, **kwargs) -> LLMResponse:
+            calls.append(([dict(message) for message in messages], tools))
+            if len(calls) <= tool_rounds:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[ToolCallRequest(str(len(calls)), "lookup_fact", {}, 1)],
+                )
+            return LLMResponse(content=answer)
+
+        def get_default_model(self) -> str:
+            return "local-fake"
+
+    bus = MessageBus()
+    manager = SubagentManager(
+        provider=Provider(),
+        workspace=tmp_path,
+        bus=bus,
+        config=Config(storage_workspace=str(tmp_path), ov_server=OpenVikingConfig(), hooks=[]),
+    )
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="tool-budget")
+    await manager.spawn("answer using lookup", session_key)
+    message = await asyncio.wait_for(bus.consume_inbound(), timeout=5)
+
+    expected = (
+        answer
+        if answer and answer.strip()
+        else ("Task completed but no final response was generated.")
+    )
+    assert f"Result:\n{expected}\n" in message.content
+    assert message.session_key == session_key
+    assert len(calls) == tool_rounds + 1
+    assert len(results) == tool_rounds
+    assert [m["content"] for m in calls[-1][0] if m["role"] == "tool"] == results
+    if tool_rounds == 15:
+        assert calls[-1][1] == []
+        assert calls[-1][0][1] == {"role": "user", "content": "answer using lookup"}
 
 
 @pytest.mark.asyncio
