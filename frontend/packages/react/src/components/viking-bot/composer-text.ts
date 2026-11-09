@@ -21,6 +21,21 @@ export function toRichText(text: string): RichTextValue[] {
   return content;
 }
 
+/** Sender.setValue dispatches synchronous content events; these are not user edits. */
+export function writeComposerText(
+  sender: SenderInstance | null,
+  text: string,
+  writing: { current: boolean },
+) {
+  const previous = writing.current;
+  writing.current = true;
+  try {
+    sender?.setValue(toRichText(text));
+  } finally {
+    writing.current = previous;
+  }
+}
+
 /** Read the real editor caret in the same text coordinate space as the draft. */
 export function composerCaret(
   sender: SenderInstance | null,

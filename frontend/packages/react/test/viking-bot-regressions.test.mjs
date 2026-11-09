@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createElement, useState } from 'react';
+import {
+  createElement,
+  startTransition,
+  StrictMode,
+  Suspense,
+  useState,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
@@ -45,46 +51,6 @@ test('activity blocks keep independent tool results separate in either arrival o
   }
 });
 
-test('shortcuts replace the owned prompt and preserve custom text before and after it', async () => {
-  const container = document.createElement('div');
-  document.body.append(container);
-  const root = createRoot(container);
-  let setDraft;
-  let draft;
-  function Host() {
-    [draft, setDraft] = useState('Custom text');
-    return createElement(VikingBot, {
-      messages: [],
-      draft,
-      onDraftChange: setDraft,
-      composer: createElement('div'),
-      quickInputs: [
-        { id: 'a', label: 'Prompt A', prompt: 'PROMPT_A' },
-        { id: 'b', label: 'Prompt B', prompt: 'PROMPT_B' },
-      ],
-    });
-  }
-  try {
-    await act(() => root.render(createElement(Host)));
-    const select = (label) =>
-      click(
-        [...container.querySelectorAll('button')].find(
-          (button) => button.textContent === label,
-        ),
-      );
-    await select('Prompt A');
-    await act(() => setDraft(`${draft}\nMore custom text`));
-    await select('Prompt B');
-    await select('Prompt B');
-    assert.equal(draft, 'Custom text\nPROMPT_B\nMore custom text');
-    await select('Prompt A');
-    assert.equal(draft, 'Custom text\nPROMPT_A\nMore custom text');
-  } finally {
-    await act(() => root.unmount());
-    container.remove();
-  }
-});
-
 test('fallback session history notifies directly from opening events, not callback changes', async () => {
   const container = document.createElement('div');
   document.body.append(container);
@@ -121,13 +87,26 @@ test('fallback session history notifies directly from opening events, not callba
   }
 });
 
+const selectShortcut = (container, label) =>
+  click(
+    [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === label,
+    ),
+  );
+
 const quickInputs = [
   { id: 'a', label: 'Prompt A', prompt: 'PROMPT_A' },
   { id: 'b', label: 'Prompt B', prompt: 'PROMPT_B' },
 ];
 
 // Opaque host replacements must preserve user-authored duplicate text.
-for (const [name, edited, expected] of [
+for (const [name, edited, expected, initial = ''] of [
+  [
+    'surrounding text',
+    'Custom text\nPROMPT_A\nMore custom text',
+    'Custom text\nPROMPT_B\nMore custom text',
+    'Custom text',
+  ],
   ['inline suffix', 'PROMPT_A with my details', 'PROMPT_B with my details'],
   ['prefix', 'My details\nPROMPT_A', 'My details\nPROMPT_B'],
   [
@@ -141,6 +120,7 @@ for (const [name, edited, expected] of [
     'PROMPT_A\nPROMPT_A',
     'PROMPT_A\nPROMPT_A\nPROMPT_B',
   ],
+  ['committed clear then restore', ['', 'PROMPT_A'], 'PROMPT_A\nPROMPT_B'],
 ]) {
   test(`external draft changes preserve custom text: ${name}`, async () => {
     const container = document.createElement('div');
@@ -149,7 +129,7 @@ for (const [name, edited, expected] of [
     let draft;
     let setDraft;
     function Host() {
-      [draft, setDraft] = useState('');
+      [draft, setDraft] = useState(initial);
       return createElement(VikingBot, {
         messages: [],
         draft,
@@ -158,23 +138,71 @@ for (const [name, edited, expected] of [
         composer: createElement('div'),
       });
     }
-    const select = (label) =>
-      click(
-        [...container.querySelectorAll('button')].find(
-          (button) => button.textContent === label,
-        ),
-      );
     try {
-      await act(() => root.render(createElement(Host)));
-      await select('Prompt A');
-      await act(() => setDraft(edited));
-      await select('Prompt B');
+      await act(() =>
+        root.render(createElement(StrictMode, null, createElement(Host))),
+      );
+      await selectShortcut(container, 'Prompt A');
+      for (const value of Array.isArray(edited) ? edited : [edited])
+        await act(() => setDraft(value));
+      await selectShortcut(container, 'Prompt B');
       assert.equal(draft, expected);
-      await select('Prompt B');
+      await selectShortcut(container, 'Prompt B');
       assert.equal(draft, expected, 'reselecting does not accumulate prompts');
+      await selectShortcut(container, 'Prompt A');
+      assert.equal(draft, expected.replace('PROMPT_B', 'PROMPT_A'));
     } finally {
       await act(() => root.unmount());
       container.remove();
     }
   });
 }
+
+test('an abandoned controlled clear does not release the committed shortcut', async () => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  const pending = new Promise(() => {});
+  let pause = false;
+  let pausedRenders = 0;
+  let draft;
+  let setDraft;
+  function Composer({ value }) {
+    if (pause && !value) {
+      pausedRenders++;
+      throw pending;
+    }
+    return createElement('output', { 'aria-label': 'Committed draft' }, value);
+  }
+  function Host() {
+    [draft, setDraft] = useState('');
+    return createElement(
+      Suspense,
+      { fallback: 'Waiting' },
+      createElement(VikingBot, {
+        messages: [],
+        draft,
+        onDraftChange: setDraft,
+        quickInputs,
+        composer: createElement(Composer, { value: draft }),
+      }),
+    );
+  }
+  try {
+    await act(() => root.render(createElement(Host)));
+    await selectShortcut(container, 'Prompt A');
+    pause = true;
+    await act(() => startTransition(() => setDraft('')));
+    assert.ok(pausedRenders > 0, 'the controlled clear rendered but suspended');
+    assert.equal(container.querySelector('output').textContent, 'PROMPT_A');
+    await selectShortcut(container, 'Prompt B');
+    assert.equal(
+      draft,
+      'PROMPT_B',
+      'the committed prompt still belongs to the shortcut',
+    );
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+  }
+});

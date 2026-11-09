@@ -14,13 +14,25 @@ export function useQuickInput(
   ownsScope = false,
 ) {
   const inherited = useContext(QuickInputScope);
-  const [local] = useState(() => createQuickInputTracker(value));
-  const tracker = ownsScope ? local : (inherited ?? local);
+  const [local, setLocal] = useState(() => ({
+    value,
+    tracker: createQuickInputTracker(value),
+  }));
+  // Record each rendered value, including clear/restore with a custom composer.
+  // Fork metadata instead of mutating it during render: abandoned renders must
+  // not release the committed prompt. Editor events have already mapped their
+  // changes, so copying that snapshot preserves their caret-based ownership.
+  if (local.value !== value)
+    setLocal({
+      value,
+      tracker: createQuickInputTracker(value, local.tracker.snapshot()),
+    });
+  const tracker = ownsScope ? local.tracker : (inherited ?? local.tracker);
   return {
     tracker,
     select(input: VikingBotQuickInput) {
       if (onSelect) {
-        if (tracker === local) tracker.release();
+        if (tracker === local.tracker) tracker.release();
         onSelect(input);
       } else onChange(tracker.insert(value, input.prompt));
     },

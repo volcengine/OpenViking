@@ -3,6 +3,11 @@ interface PromptRange {
   to: number;
 }
 
+export interface PromptSnapshot {
+  text: string;
+  range: PromptRange | undefined;
+}
+
 /** Map one content edit, using the editor's post-edit caret to disambiguate repeats. */
 function editRange(before: string, after: string, caret?: number) {
   let prefix = 0;
@@ -38,9 +43,12 @@ function editRange(before: string, after: string, caret?: number) {
 }
 
 /** Instance-local ownership metadata; never locates a prompt by matching its text. */
-export function createQuickInputTracker(initial: string) {
-  let text = initial;
-  let range: PromptRange | undefined;
+export function createQuickInputTracker(
+  initial: string,
+  previous?: PromptSnapshot,
+) {
+  let text = previous?.text ?? initial;
+  let range = previous?.range ? { ...previous.range } : undefined;
   const edit = (next: string, caret?: number) => {
     if (text === next) return;
     const change = editRange(text, next, caret);
@@ -55,7 +63,9 @@ export function createQuickInputTracker(initial: string) {
     }
     text = next;
   };
+  edit(initial);
   return {
+    snapshot: (): PromptSnapshot => ({ text, range }),
     edit,
     release() {
       range = undefined;

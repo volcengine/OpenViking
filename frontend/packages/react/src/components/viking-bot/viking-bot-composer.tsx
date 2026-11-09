@@ -15,7 +15,12 @@ import { composerMention, ReferenceTags } from './composer-references.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
 import { useQuickInput } from './use-quick-input.js';
-import { composerCaret, toPlainText, toRichText } from './composer-text.js';
+import {
+  composerCaret,
+  toPlainText,
+  toRichText,
+  writeComposerText,
+} from './composer-text.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
 
 /**
@@ -51,13 +56,14 @@ export const VikingBotComposerView = forwardRef<
 ) {
   const labels = { ...DEFAULT_LABELS, ...overrides };
   const senderRef = useRef<SenderInstance>(null);
+  const writing = useRef(false);
   const readOnly = !onValueChange;
   const remaining = Math.max(0, maxAttachments - attachments.length);
   const limitReached = remaining === 0;
 
   const setText = useCallback(
     (text: string) => {
-      senderRef.current?.setValue(toRichText(text));
+      writeComposerText(senderRef.current, text, writing);
       onValueChange?.(text);
     },
     [onValueChange],
@@ -67,11 +73,12 @@ export const VikingBotComposerView = forwardRef<
   // useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
   // 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
   // 外部文本与编辑器当前纯文本不一致时才写入，避免覆盖用户正在输入的光标。
+  // useQuickInput 已按受控值更新归属；程序写入的同步回调不能再用光标认领文本。
   // 组件卸载或 value 再次变化时由下一次同步覆盖，无需额外清理。
   useEffect(() => {
     const current = toPlainText(senderRef.current?.getValue() ?? []);
     if (current === value) return;
-    senderRef.current?.setValue(toRichText(value));
+    writeComposerText(senderRef.current, value, writing);
   }, [value]);
 
   /** 按剩余额度截断并上报文件。 */
@@ -152,7 +159,7 @@ export const VikingBotComposerView = forwardRef<
         sending={isSending}
         sendDisabled={disabled || readOnly || (!isSending && !onSend)}
         onContentChange={(content) => {
-          if (readOnly) return;
+          if (readOnly || writing.current) return;
           const next = toPlainText(content);
           shortcuts.tracker.edit(next, composerCaret(senderRef.current));
           onValueChange?.(next);
