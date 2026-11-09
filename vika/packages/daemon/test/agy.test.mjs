@@ -337,6 +337,7 @@ describe('AgyAgent ACP backend', () => {
     child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, error: { code: -32000, message: 'Authentication required' } });
     await waitFor(() => failed.length === 1);
     assert.match(failed[0].error, /not logged in: run agy/);
+    assert.equal(agent.needsHistoryPrefix, true, 'a not-logged-in prompt was refused, so the catch-up is still owed');
     await agent.stop();
   });
 

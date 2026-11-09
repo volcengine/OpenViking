@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { agyHandshakeProblem } from './agy-runtime.mjs';
@@ -25,10 +24,9 @@ function notLoggedIn() {
 // - A session/prompt sent during a live turn ends the first turn early, so
 //   this adapter never sends a second one while any prompt is unsettled, even
 //   after interruptTurn has abandoned the turn.
-// - session/load replays the transcript as updates before it answers, and
-//   answers success for an unknown id. A resumed session that replays nothing
-//   is therefore treated as a lost transcript, unless nothing was acknowledged
-//   yet, when it just keeps the journal catch-up.
+// - session/load answers success for an unknown id, so a resumed session that
+//   replays nothing is a lost transcript once anything was acknowledged. With
+//   nothing acknowledged yet, it just keeps the journal catch-up (base class).
 // - Authentication required is an account problem, never a lost transcript.
 export class AgyAgent extends OpencodeAgent {
   constructor(config, store, logger, options = {}) {
@@ -41,16 +39,9 @@ export class AgyAgent extends OpencodeAgent {
       modelConfigKey: 'agyModel',
       modelSettingKey: 'agy_model',
       policyVersion: 'agy-acp-v1',
-      strictRecovery: true,
     });
     this.geminiDir = null;
     this.openPrompts = 0;
-    // The load in progress, tied to its process so a dead process's cleanup
-    // cannot end a newer load's replay.
-    this.replay = null;
-    this.emptyReplay = false;
-    // session ids survive restarts, the activity counter does not.
-    this.instanceId = randomUUID();
   }
 
   // The config home goes in runtimeDir, so it is rebuilt on every launch;
@@ -88,27 +79,11 @@ export class AgyAgent extends OpencodeAgent {
   }
 
   async _loadSession(child) {
-    const replay = { child, chunks: 0 };
-    this.replay = replay;
-    try {
-      const loaded = await super._loadSession(child);
-      if (replay.chunks === 0 && this.syncedThroughSeq > 0) {
-        throw new Error('session/load returned an empty transcript');
-      }
-      this.emptyReplay = replay.chunks === 0;
-      return loaded;
-    } finally {
-      if (this.replay === replay) this.replay = null;
+    const loaded = await super._loadSession(child);
+    if (this.replayedChunks === 0 && this.syncedThroughSeq > 0) {
+      throw new Error('session/load returned an empty transcript');
     }
-  }
-
-  // An empty transcript with no acknowledged history is a session that was
-  // published before its first prompt: a runtime switch does this on purpose
-  // and leaves the catch-up to the first real inbound.
-  async _loadNeedsHistory() {
-    if (!this.emptyReplay) return false;
-    await this.store.prepareOVContext?.(this.cognitionEpoch);
-    return true;
+    return loaded;
   }
 
   _isLoadFatal(error) {
@@ -143,16 +118,6 @@ export class AgyAgent extends OpencodeAgent {
     return this.turnActive || this.openPrompts > 0;
   }
 
-  _handleSessionUpdate(update) {
-    if (this.replay) {
-      if (update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'agent_message_chunk') {
-        this.replay.chunks += 1;
-      }
-      return;
-    }
-    super._handleSessionUpdate(update);
-  }
-
   // The same ids `agy models` and --model use, with the effort in the suffix.
   _captureModelOptions(result) {
     const models = result?.models;
@@ -176,22 +141,5 @@ export class AgyAgent extends OpencodeAgent {
       modelId: model,
     }, this.controlTimeoutMs);
     this.sessionModel = model;
-  }
-
-  // name is the tool's id; title is a human summary of this one call.
-  _toolName(update) {
-    return String(update.name ?? update.title ?? 'unknown tool');
-  }
-
-  _toolOutcome(update) {
-    return update.status === 'failed' ? 'failed' : super._toolOutcome(update);
-  }
-
-  _activityEventKey(kind) {
-    return `${this.runtime}:${this.sessionId ?? 'na'}:${this.instanceId}:${kind}:${this.activitySeq}`;
-  }
-
-  _toolOutput(update) {
-    return Array.isArray(update.content) && update.content.length > 0 ? update.content : update.rawOutput ?? update.content;
   }
 }

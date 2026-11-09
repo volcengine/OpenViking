@@ -25,6 +25,16 @@ const START_STABILITY_MS = 250;
 const CONTROL_TIMEOUT_MS = 15_000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_CAP_MS = 30_000;
+// JSON-RPC parse/request/method/params errors, and ACP's auth-required and
+// resource-not-found: answered without running the prompt. -32603 is not here:
+// OpenCode 1.19.5 answers it for a provider failure, after the user message
+// is already in the transcript.
+const PROMPT_REFUSED_CODES = new Set([-32700, -32600, -32601, -32602, -32000, -32002]);
+// Updates that prove a turn ran. Others (available_commands_update,
+// config_option_update) arrive on their own after session/new.
+const TURN_UPDATE_KINDS = new Set([
+  'user_message_chunk', 'agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update',
+]);
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,10 +74,12 @@ export class OpencodeAgent {
     this.modelConfigKey = options.modelConfigKey ?? `${runtime.id}Model`;
     this.modelSettingKey = options.modelSettingKey ?? `${runtime.id}_model`;
     this.policyVersion = options.policyVersion ?? 'opencode-acp-v1';
-    // Session-recovery behaviour that differs from what OpenCode ships with.
-    // Off for OpenCode, whose failure paths stay as they are; AgyAgent turns it
-    // on. See where it is read.
-    this.strictRecovery = options.strictRecovery ?? false;
+    // Session ids survive restarts; the activity counter does not.
+    this.instanceId = randomUUID();
+    // The session/load in progress, tied to its process so that a dead
+    // process's cleanup cannot end a newer load's replay.
+    this.replay = null;
+    this.replayedChunks = null;
     this.config = config;
     this.store = store;
     this.logger = logger;
@@ -113,6 +125,8 @@ export class OpencodeAgent {
     this.modelWorking = false;
     this.modelStartedAtMs = null;
     this.turnError = null;
+    this.turnAcknowledged = false;
+    this.cancelledOwner = null;
     this.activeItems = [];
     this.activeOwner = null;
     this.queue = [];
@@ -249,7 +263,7 @@ export class OpencodeAgent {
           this.child = null;
           this.connected = false;
         }
-        if (this.strictRecovery) this._rejectRpcsOf(child, new Error(`${this.runtimeLabel} connection lost`));
+        this._rejectRpcsOf(child, new Error(`${this.runtimeLabel} connection lost`));
         this._terminateProcessTree(child, 'SIGKILL');
         this._cleanupRuntimeFiles();
         reject(error);
@@ -298,7 +312,7 @@ export class OpencodeAgent {
           } catch (error) {
             // This process is finished; its load says nothing about the
             // session a later process has resumed by now.
-            if (this.strictRecovery && (settled || this.child !== child)) throw error;
+            if (settled || this.child !== child) throw error;
             if (this._isLoadFatal(error)) throw error;
             // The stored transcript is gone; start fresh with journal catch-up.
             this.logger.warn(`${this.logPrefix}_session_load_failed_fresh_start`, { error: safe(error) });
@@ -389,12 +403,22 @@ export class OpencodeAgent {
     return { mcpServers: [] };
   }
 
-  _loadSession(child) {
-    return this._requestOn(child, 'session/load', {
-      sessionId: this.sessionId,
-      cwd: this.config.workspace,
-      ...this._sessionParams(),
-    });
+  // ACP streams the transcript as updates before session/load answers. They
+  // are history, not this turn, so _handleSessionUpdate only counts them.
+  async _loadSession(child) {
+    const replay = { child, chunks: 0 };
+    this.replay = replay;
+    try {
+      const loaded = await this._requestOn(child, 'session/load', {
+        sessionId: this.sessionId,
+        cwd: this.config.workspace,
+        ...this._sessionParams(),
+      });
+      this.replayedChunks = replay.chunks;
+      return loaded;
+    } finally {
+      if (this.replay === replay) this.replay = null;
+    }
   }
 
   // Whether a failed session/load must fail the start instead of opening a
@@ -403,9 +427,14 @@ export class OpencodeAgent {
     return false;
   }
 
-  // Whether a session that loaded still needs the journal catch-up.
+  // Whether a session that loaded still needs the journal catch-up. A
+  // transcript with content keeps whatever catch-up is still owed. An empty one
+  // never received a prompt: a session can be published before its first one
+  // (a reconnect, a runtime switch), so the catch-up goes to the first inbound.
   async _loadNeedsHistory() {
-    return false;
+    if (this.replayedChunks !== 0) return this.needsHistoryPrefix;
+    await this.store.prepareOVContext?.(this.cognitionEpoch);
+    return true;
   }
 
   _cleanupRuntimeFiles() {
@@ -610,6 +639,7 @@ export class OpencodeAgent {
     this.modelWorking = true;
     this.modelStartedAtMs = this.turnStartedAtMs;
     this.turnError = null;
+    this.turnAcknowledged = false;
     const hadPrefix = this.needsHistoryPrefix;
     this.needsHistoryPrefix = false;
     this.deliveredThroughSeq = Math.max(this.deliveredThroughSeq, prepared.deliveredThroughSeq);
@@ -635,23 +665,32 @@ export class OpencodeAgent {
       (result) => {
         if (this.activeOwner !== owner) return;
         // ACP stop reasons: end_turn, max_tokens, max_turn_requests, refusal,
-        // cancelled. Only end_turn is a normal finish.
-        const failed = result?.stopReason && result.stopReason !== 'end_turn'
-          ? new Error(`${this.runtimeLabel} turn ended: ${result.stopReason}`)
+        // cancelled. Only end_turn is a normal finish. OpenCode answers end_turn
+        // to a cancel that lands while it is retrying a provider error.
+        const stopReason = this.cancelledOwner === owner ? 'cancelled' : result?.stopReason;
+        const failed = stopReason && stopReason !== 'end_turn'
+          ? new Error(`${this.runtimeLabel} turn ended: ${stopReason}`)
           : null;
         this._completeTurn(failed);
       },
       (error) => {
         if (this.activeOwner !== owner) return;
-        if (this.strictRecovery) {
-          // The agent refused this prompt, so the session never accepted its
-          // input: keep the catch-up, and do not advance the watermark.
+        // Only a prompt the agent turned away left the transcript untouched:
+        // keep its catch-up and do not advance the watermark. Any other error
+        // came after the input was accepted, and the catch-up is already there.
+        if (!this.turnAcknowledged && this._promptRefused(error)) {
           if (hadPrefix) this.needsHistoryPrefix = true;
           this.deliveredThroughSeq = this.syncedThroughSeq;
         }
         this._completeTurn(error);
       },
     );
+  }
+
+  // An error without a numeric code never came back from the agent: the prompt
+  // could not be written, or the adapter already mapped it (agy's not logged in).
+  _promptRefused(error) {
+    return !Number.isInteger(error?.code) || PROMPT_REFUSED_CODES.has(error.code);
   }
 
   _applySettings() {
@@ -719,6 +758,7 @@ export class OpencodeAgent {
       if (pending.timer) clearTimeout(pending.timer);
       if (message.error) {
         const error = new Error(message.error.message || `${this.runtimeLabel} rpc error`);
+        error.code = message.error.code;
         error.data = message.error.data;
         pending.reject(error);
       } else {
@@ -764,6 +804,11 @@ export class OpencodeAgent {
 
   _handleSessionUpdate(update) {
     const kind = update.sessionUpdate;
+    if (this.replay) {
+      if (kind === 'user_message_chunk' || kind === 'agent_message_chunk') this.replay.chunks += 1;
+      return;
+    }
+    if (this.turnActive && TURN_UPDATE_KINDS.has(kind)) this.turnAcknowledged = true;
     if (kind === 'agent_thought_chunk') {
       if (!this.modelWorking && this.turnActive) {
         this.modelWorking = true;
@@ -792,15 +837,15 @@ export class OpencodeAgent {
         recorded: false,
       };
       this.toolStarts.set(toolCallId, started);
-      // OpenCode announces a call as pending with an empty rawInput and sends
-      // the arguments in the in_progress update: record it once, with them.
-      if (hasToolInput(update.rawInput)) this._recordToolCalled(toolCallId, started, update);
+      // OpenCode announces a call as pending with partial rawInput (bash: only
+      // its cwd) and sends the arguments in in_progress: record it once, with them.
+      if (update.status !== 'pending' && hasToolInput(update.rawInput)) this._recordToolCalled(toolCallId, started, update);
       return;
     }
     if (kind === 'tool_call_update') {
       const toolCallId = String(update.toolCallId ?? '');
       const started = this.toolStarts.get(toolCallId);
-      if (started && !started.recorded && (update.status !== 'pending' || hasToolInput(update.rawInput))) {
+      if (started && !started.recorded && update.status !== 'pending') {
         this._recordToolCalled(toolCallId, started, update);
       }
       const outcome = started ? this._toolOutcome(update) : null;
@@ -829,18 +874,20 @@ export class OpencodeAgent {
     // usage_update, available_commands_update, plan_update: nothing to mirror.
   }
 
+  // A runtime that sends `name` means the tool's id by it; title then only
+  // summarises this one call.
   _toolName(update) {
-    return String(update.title ?? 'unknown tool');
+    return String(update.name ?? update.title ?? 'unknown tool');
   }
 
   // 'completed', 'failed', or null while the call is still running.
   _toolOutcome(update) {
-    if (update.status === 'error' || update.error) return 'failed';
+    if (update.status === 'failed' || update.status === 'error' || update.error) return 'failed';
     return update.status === 'completed' ? 'completed' : null;
   }
 
   _toolOutput(update) {
-    return update.content;
+    return Array.isArray(update.content) && update.content.length > 0 ? update.content : update.rawOutput ?? update.content;
   }
 
   _activeSeqs() {
@@ -1060,7 +1107,7 @@ export class OpencodeAgent {
         await this._spawnPersistent();
         this.backoffMs = this.reconnectBaseMs;
         // A rotation in progress publishes when the coordinator commits it.
-        if (this.strictRecovery && !this.sessionRotation) this._persistSession();
+        if (!this.sessionRotation) this._persistSession();
         this._drain();
         this._notifyAvailable();
         break;
@@ -1120,16 +1167,14 @@ export class OpencodeAgent {
     await this._terminateCurrent();
     this.sessionId = previous.sessionId;
     this.sessionInitialized = previous.sessionInitialized;
-    this.resumeRequested = this.strictRecovery
-      ? Boolean(previous.sessionId && previous.sessionInitialized)
-      : previous.resumeRequested;
+    this.resumeRequested = Boolean(previous.sessionId && previous.sessionInitialized);
     this.needsHistoryPrefix = previous.needsHistoryPrefix;
     this.syncedThroughSeq = previous.syncedThroughSeq;
     this.deliveredThroughSeq = previous.deliveredThroughSeq;
     this.model = previous.model;
     if (previous.sessionId) await this._spawnPersistent();
     // A load that had to fall back opened a session nobody has published.
-    if (this.strictRecovery && previous.sessionId && this.sessionId !== previous.sessionId) this._persistSession();
+    if (previous.sessionId && this.sessionId !== previous.sessionId) this._persistSession();
     this._drain();
     this._notifyAvailable();
   }
@@ -1189,6 +1234,7 @@ export class OpencodeAgent {
   // into the same session.
   cancelTurn() {
     if (!this.turnActive || !this.sessionId || !this.child?.stdin?.writable) return false;
+    this.cancelledOwner = this.activeOwner;
     this._send({ method: 'session/cancel', params: { sessionId: this.sessionId } });
     return true;
   }
@@ -1264,15 +1310,11 @@ export class OpencodeAgent {
     }
   }
 
-  _activityEventKey(kind) {
-    return `${this.runtime}:${this.sessionId ?? 'na'}:${kind}:${this.activitySeq}`;
-  }
-
   _recordActivity(kind, fields = {}) {
     try {
       this.activitySeq += 1;
       this.store.recordActivity?.({
-        eventKey: this._activityEventKey(kind),
+        eventKey: `${this.runtime}:${this.sessionId ?? 'na'}:${this.instanceId}:${kind}:${this.activitySeq}`,
         kind,
         summary: fields.summary,
         status: fields.status,

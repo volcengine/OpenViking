@@ -145,7 +145,7 @@ function newAgent(store = makeStore(), options = {}, config = baseConfig) {
 
 // Walks initialize -> session/new and lets the stability window pass.
 async function driveStart(agent, child, {
-  sessionId = 'ses_start1', model = 'opencode/big-pickle', load = false, loadResult = {},
+  sessionId = 'ses_start1', model = 'opencode/big-pickle', load = false, loadResult = {}, loadFrames = [], loadError = null,
 } = {}) {
   await waitFor(() => requests(child).some((message) => message.method === 'initialize'));
   const init = requests(child).find((message) => message.method === 'initialize');
@@ -159,15 +159,20 @@ async function driveStart(agent, child, {
   if (load) {
     const sessionLoad = requests(child).find((message) => message.method === 'session/load');
     assert.ok(sessionLoad);
-    child.feed({ jsonrpc: '2.0', id: sessionLoad.id, result: loadResult });
-    await flush();
-    // A resumed session reapplies the configured model before going ready.
-    const setConfig = requests(child).find((message) => message.method === 'session/set_config_option');
-    if (setConfig) {
-      child.feed({ jsonrpc: '2.0', id: setConfig.id, result: {} });
-      await flush();
+    for (const update of loadFrames) {
+      child.feed({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sessionLoad.params.sessionId, update } });
     }
-    return;
+    child.feed({ jsonrpc: '2.0', id: sessionLoad.id, ...(loadError ? { error: loadError } : { result: loadResult }) });
+    await flush();
+    if (!loadError) {
+      // A resumed session reapplies the configured model before going ready.
+      const setConfig = requests(child).find((message) => message.method === 'session/set_config_option');
+      if (setConfig) {
+        child.feed({ jsonrpc: '2.0', id: setConfig.id, result: {} });
+        await flush();
+      }
+      return;
+    }
   }
   const sessionNew = requests(child).find((message) => message.method === 'session/new');
   child.feed({
@@ -204,6 +209,37 @@ async function startSession(agent, children, options = {}) {
 function requests(child) {
   return child ? parsedWrites(child).filter((message) => message.method) : [];
 }
+
+function prompts(child) {
+  return requests(child).filter((message) => message.method === 'session/prompt');
+}
+
+function storedSession(overrides = {}) {
+  return makeStore({
+    globalOverride: {
+      sessionId: 'ses_saved',
+      policyHash: new OpencodeAgent(baseConfig, makeStore(), quietLogger).policyHash,
+      runtime: 'opencode',
+      epoch: 1,
+      sessionReady: true,
+      syncedThroughSeq: 3,
+      ...overrides,
+    },
+  });
+}
+
+function withHistory(store, { journalSeq = 5, inboundSeq = 6 } = {}) {
+  store.getOVContext = () => ({ sessionId: 'ov', messages: [{ parts: [{ type: 'text', text: 'past' }] }] });
+  store.cognitionJournalBeforeInbound = () => journalSeq;
+  store.cognitionJournalSeqForInbound = () => inboundSeq;
+  return store;
+}
+
+const replayedTurn = [
+  { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'earlier question' } },
+  { sessionUpdate: 'tool_call', toolCallId: 'old-1', title: 'ls', status: 'completed', rawInput: { command: 'ls' } },
+  { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'earlier answer' } },
+];
 
 describe('OpencodeAgent ACP backend', () => {
   it('spawns opencode acp with a daemon-owned config, MCP adapter and policy file', async () => {
@@ -569,6 +605,382 @@ describe('OpencodeAgent ACP backend', () => {
     assert.deepEqual((await agent.listModels()).map((entry) => entry.id), [
       'anthropic/claude-sonnet-5', 'opencode/big-pickle',
     ]);
+    await agent.stop();
+  });
+
+  it('leaves the session to the next process when one dies during session/load', async (t) => {
+    const { agent, children } = newAgent(makeStore(), { reconnectBaseMs: 1, reconnectCapMs: 1 });
+    t.after(() => agent.stop());
+    await startSession(agent, children);
+    children[0].finish(1);
+    await waitFor(() => children[1] && requests(children[1]).some((message) => message.method === 'initialize'));
+    children[1].feed({ jsonrpc: '2.0', id: requests(children[1])[0].id, result: { agentInfo: { name: 'OpenCode' } } });
+    await waitFor(() => requests(children[1]).some((message) => message.method === 'session/load'));
+    children[1].finish(1);
+    assert.equal([...agent.pendingRpc.values()].some((pending) => pending.child === children[1]), false,
+      'its load is rejected with the process, not left to time out');
+    await waitFor(() => children[2]);
+    await driveStart(agent, children[2], { load: true });
+    await waitFor(() => agent.connected);
+    assert.equal(agent.sessionId, 'ses_start1');
+    assert.equal(agent.sessionInitialized, true);
+    agent.deliver('after', 9);
+    await waitFor(() => prompts(children[2]).length === 1);
+    assert.equal(prompts(children[2])[0].params.sessionId, 'ses_start1');
+  });
+
+  it('keeps the catch-up and the watermark when OpenCode refuses a prompt', async () => {
+    const store = withHistory(makeStore());
+    const failed = [];
+    const { agent, children } = newAgent(store, { onTurnFailed: (info) => failed.push(info) });
+    const child = await startSession(agent, children);
+    agent.deliver('one', 6);
+    await waitFor(() => prompts(child).length === 1);
+    assert.match(prompts(child)[0].params.prompt[0].text, /daemon OpenViking context/);
+    // Arrives on its own after session/new: not evidence the turn ran.
+    child.feed({ method: 'session/update', params: { sessionId: 'ses_start1', update: { sessionUpdate: 'available_commands_update', availableCommands: [] } } });
+    child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, error: { code: -32602, message: 'Invalid params: session not found: ses_start1', data: { sessionId: 'ses_start1' } } });
+    await waitFor(() => failed.length === 1);
+    assert.equal(agent.needsHistoryPrefix, true);
+    assert.equal(store.global().syncedThroughSeq, 0, 'a refused prompt was not accepted');
+    agent.deliver('two', 7);
+    await waitFor(() => prompts(child).length === 2);
+    assert.match(prompts(child)[1].params.prompt[0].text, /daemon OpenViking context[\s\S]*two$/);
+    child.feed({ jsonrpc: '2.0', id: prompts(child)[1].id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    assert.equal(store.global().syncedThroughSeq, 6, 'an accepted prompt still advances it');
+    await agent.stop();
+  });
+
+  it('publishes the fresh session a mid-turn crash reconnects to', async (t) => {
+    const store = makeStore();
+    store.cognitionJournalSeqForInbound = () => 6;
+    const { agent, children } = newAgent(store, { reconnectBaseMs: 1, reconnectCapMs: 1 });
+    t.after(() => agent.stop());
+    await startSession(agent, children);
+    agent.deliver('work', 6);
+    await waitFor(() => prompts(children[0]).length === 1);
+    children[0].finish(1);
+    await waitFor(() => children[1]);
+    await driveStart(agent, children[1], { sessionId: 'ses_second' });
+    await waitFor(() => agent.connected);
+    assert.equal(agent.sessionId, 'ses_second');
+    assert.equal(store.global().sessionId, 'ses_second');
+    assert.equal(store.global().sessionReady, true);
+    agent.deliver('again', 7);
+    await waitFor(() => prompts(children[1]).length === 1);
+    children[1].feed({ jsonrpc: '2.0', id: prompts(children[1])[0].id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    assert.equal(store.global().syncedThroughSeq, 6, 'the new session owns the watermark');
+  });
+
+  it('does not publish a prepared session when its process crashes before the commit', async (t) => {
+    const store = makeStore();
+    const { agent, children } = newAgent(store, { reconnectBaseMs: 1, reconnectCapMs: 1 });
+    t.after(() => agent.stop());
+    await startSession(agent, children);
+    const preparing = agent.prepareSessionRotation();
+    await waitFor(() => children[1]);
+    await driveStart(agent, children[1], { sessionId: 'ses_prepared' });
+    await preparing;
+    children[1].finish(1);
+    await waitFor(() => children[2]);
+    await driveStart(agent, children[2], { load: true });
+    await waitFor(() => agent.connected);
+    assert.equal(agent.sessionId, 'ses_prepared');
+    assert.equal(store.global().sessionId, 'ses_start1');
+  });
+
+  it('reopens the previous session when a rotation is cancelled', async (t) => {
+    const store = makeStore();
+    const { agent, children } = newAgent(store);
+    t.after(() => agent.stop());
+    await startSession(agent, children);
+    const preparing = agent.prepareSessionRotation();
+    await waitFor(() => children[1]);
+    await driveStart(agent, children[1], { sessionId: 'ses_prepared' });
+    await preparing;
+    const cancelling = agent.cancelSessionRotation();
+    await waitFor(() => children[2]);
+    await driveStart(agent, children[2], { load: true });
+    await cancelling;
+    const load = requests(children[2]).find((message) => message.method === 'session/load');
+    assert.equal(load.params.sessionId, 'ses_start1');
+    assert.equal(requests(children[2]).some((message) => message.method === 'session/new'), false);
+    assert.equal(agent.sessionId, 'ses_start1');
+    assert.equal(store.global().sessionId, 'ses_start1');
+  });
+
+  it('publishes the replacement when a cancelled rotation cannot reopen the previous session', async (t) => {
+    const store = storedSession();
+    const { agent, children } = newAgent(store);
+    t.after(() => agent.stop());
+    await startSession(agent, children, { load: true });
+    const preparing = agent.prepareSessionRotation();
+    await waitFor(() => children[1]);
+    await driveStart(agent, children[1], { sessionId: 'ses_prepared' });
+    await preparing;
+    const cancelling = agent.cancelSessionRotation();
+    await waitFor(() => children[2]);
+    await driveStart(agent, children[2], {
+      load: true, loadError: { code: -32000, message: 'session not found' }, sessionId: 'ses_fallback',
+    });
+    await cancelling;
+    assert.equal(agent.sessionId, 'ses_fallback');
+    assert.equal(store.global().sessionId, 'ses_fallback');
+  });
+
+  it('gives each process its own activity keys for the same resumed session', async () => {
+    const store = storedSession();
+    const runOnce = async () => {
+      const { agent, children } = newAgent(store);
+      const child = await startSession(agent, children, { load: true });
+      agent.deliver('turn', 8);
+      await waitFor(() => prompts(child).length === 1);
+      assert.equal(prompts(child)[0].params.sessionId, 'ses_saved');
+      child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, result: { stopReason: 'end_turn' } });
+      await waitFor(() => !agent.turnActive);
+      await agent.stop();
+    };
+    await runOnce();
+    await runOnce();
+    const keys = store.activities.map((activity) => activity.eventKey);
+    assert.equal(keys.length, 4);
+    assert.equal(new Set(keys).size, 4);
+    assert.ok(keys.every((key) => key.startsWith('opencode:ses_saved:')));
+  });
+
+  it('keeps replayed history out of notes and activity', async () => {
+    const store = storedSession();
+    const { agent, children } = newAgent(store);
+    const child = await startSession(agent, children, { load: true, loadFrames: replayedTurn });
+    assert.equal(agent.threadId, 'ses_saved');
+    assert.equal(agent.noteText, '');
+    assert.equal(agent.toolStarts.size, 0);
+    assert.equal(store.activities.length, 0);
+
+    agent.deliver('continue', 8);
+    await waitFor(() => prompts(child).length === 1);
+    child.feed({
+      method: 'session/update',
+      params: { sessionId: 'ses_saved', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'fresh note' } } },
+    });
+    child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    assert.deepEqual(store.activities.filter((activity) => activity.kind === 'agent.note').map((note) => note.summary), ['fresh note']);
+    await agent.stop();
+  });
+
+  it('ends a tool on status failed, names it by update.name and falls back to rawOutput', async () => {
+    const { agent, children, store } = newAgent();
+    const child = await startSession(agent, children);
+    agent.deliver('work', 7);
+    await waitFor(() => prompts(child).length === 1);
+    const update = (fields) => child.feed({ method: 'session/update', params: { sessionId: 'ses_start1', update: fields } });
+    update({ sessionUpdate: 'tool_call', toolCallId: 't1', name: 'bash', title: 'echo ok', status: 'in_progress', rawInput: { command: 'echo ok' } });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed', content: [], rawOutput: { output: 'from rawOutput' } });
+    update({ sessionUpdate: 'tool_call', toolCallId: 't2', title: 'personal_agent_send_message', status: 'in_progress', rawInput: { chat_id: 'x' } });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't2', status: 'failed', content: [], rawOutput: { error: 'denied' } });
+    assert.equal(agent.toolStarts.size, 0, 'failed ends the call without waiting for the turn');
+    update({ sessionUpdate: 'tool_call', toolCallId: 't3', title: 'read', status: 'in_progress', rawInput: { path: 'a' } });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't3', status: 'completed', content: [{ type: 'text', text: 'from content' }], rawOutput: { output: 'unused' } });
+    child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    const called = store.activities.filter((activity) => activity.kind === 'agent.tool_called');
+    assert.deepEqual(called.map((activity) => [activity.metadata.toolName, activity.summary]), [
+      ['bash', 'echo ok'],
+      ['personal_agent_send_message', 'personal_agent_send_message'],
+      ['read', 'read'],
+    ]);
+    const completed = store.activities.filter((activity) => activity.kind === 'agent.tool_completed');
+    assert.deepEqual(completed.map((activity) => [activity.status, activity.metadata.runtime]), [
+      ['COMPLETED', 'opencode'], ['FAILED', 'opencode'], ['COMPLETED', 'opencode'],
+    ]);
+    assert.match(JSON.stringify(completed[0].metadata.output), /from rawOutput/);
+    assert.match(JSON.stringify(completed[1].metadata.error), /denied/);
+    assert.match(JSON.stringify(completed[2].metadata.output), /from content/);
+    assert.doesNotMatch(JSON.stringify(completed[2].metadata.output), /unused/);
+    await agent.stop();
+  });
+
+  describe('journal catch-up across failures and restarts', () => {
+    const catchup = /daemon OpenViking context/;
+    const update = (child, fields) => child.feed({ method: 'session/update', params: { sessionId: 'ses_start1', update: fields } });
+    const firstPromptAfterRestart = async (store, expectedSession) => {
+      const restart = newAgent(store);
+      const child = await startSession(restart.agent, restart.children, { load: true });
+      assert.equal(requests(child).find((message) => message.method === 'session/load').params.sessionId, expectedSession);
+      restart.agent.deliver('next', 9);
+      await waitFor(() => prompts(child).length === 1);
+      const text = prompts(child)[0].params.prompt[0].text;
+      await restart.agent.stop();
+      return text;
+    };
+
+    it('owes the catch-up after a restart when a mid-turn crash reconnected to a session that never got a prompt', async () => {
+      const store = withHistory(makeStore());
+      const { agent, children } = newAgent(store, { reconnectBaseMs: 1, reconnectCapMs: 1 });
+      await startSession(agent, children);
+      agent.deliver('work', 6);
+      await waitFor(() => prompts(children[0]).length === 1);
+      children[0].finish(1);
+      await waitFor(() => children[1]);
+      await driveStart(agent, children[1], { sessionId: 'ses_second' });
+      await waitFor(() => agent.connected);
+      assert.equal(store.global().sessionId, 'ses_second');
+      await agent.stop();
+      assert.match(await firstPromptAfterRestart(store, 'ses_second'), catchup);
+    });
+
+    it('owes the catch-up after a restart when an idle reconnect fell back to a new session', async () => {
+      const store = withHistory(makeStore());
+      const { agent, children } = newAgent(store, { reconnectBaseMs: 1, reconnectCapMs: 1 });
+      await startSession(agent, children);
+      agent.deliver('work', 6);
+      await waitFor(() => prompts(children[0]).length === 1);
+      children[0].feed({ jsonrpc: '2.0', id: prompts(children[0])[0].id, result: { stopReason: 'end_turn' } });
+      await waitFor(() => !agent.turnActive);
+      children[0].finish(1);
+      await waitFor(() => children[1]);
+      await driveStart(agent, children[1], {
+        load: true, loadError: { code: -32603, message: 'Internal error: OpenCode service failure', data: { service: 'session' } }, sessionId: 'ses_second',
+      });
+      await waitFor(() => agent.connected);
+      assert.equal(store.global().sessionId, 'ses_second');
+      await agent.stop();
+      assert.match(await firstPromptAfterRestart(store, 'ses_second'), catchup);
+    });
+
+    it('does not repeat the catch-up after a restart into a transcript that has content', async () => {
+      const store = withHistory(storedSession());
+      const { agent, children } = newAgent(store);
+      const child = await startSession(agent, children, { load: true, loadFrames: replayedTurn });
+      agent.deliver('next', 9);
+      await waitFor(() => prompts(child).length === 1);
+      assert.doesNotMatch(prompts(child)[0].params.prompt[0].text, catchup);
+      await agent.stop();
+    });
+
+    it('keeps the catch-up owed by a session that never got a prompt when its rotation is cancelled', async () => {
+      const store = withHistory(makeStore());
+      const { agent, children } = newAgent(store);
+      await startSession(agent, children);
+      assert.equal(agent.needsHistoryPrefix, true);
+      const preparing = agent.prepareSessionRotation();
+      await waitFor(() => children[1]);
+      await driveStart(agent, children[1], { sessionId: 'ses_prepared' });
+      await preparing;
+      const cancelling = agent.cancelSessionRotation();
+      await waitFor(() => children[2]);
+      await driveStart(agent, children[2], { load: true });
+      await cancelling;
+      assert.equal(agent.sessionId, 'ses_start1');
+      agent.deliver('first', 6);
+      await waitFor(() => prompts(children[2]).length === 1);
+      assert.match(prompts(children[2])[0].params.prompt[0].text, catchup);
+      await agent.stop();
+    });
+
+    it('keeps a refused prompt\'s catch-up across a reconnect into a transcript that has content', async () => {
+      const store = withHistory(makeStore());
+      const failed = [];
+      const { agent, children } = newAgent(store, { onTurnFailed: (info) => failed.push(info), reconnectBaseMs: 1, reconnectCapMs: 1 });
+      await startSession(agent, children);
+      agent.deliver('one', 6);
+      await waitFor(() => prompts(children[0]).length === 1);
+      children[0].feed({ jsonrpc: '2.0', id: prompts(children[0])[0].id, error: { code: -32602, message: 'Invalid params: session not found' } });
+      await waitFor(() => failed.length === 1);
+      children[0].finish(1);
+      await waitFor(() => children[1]);
+      await driveStart(agent, children[1], { load: true, loadFrames: replayedTurn });
+      await waitFor(() => agent.connected);
+      agent.deliver('two', 7);
+      await waitFor(() => prompts(children[1]).length === 1);
+      assert.match(prompts(children[1])[0].params.prompt[0].text, catchup);
+      await agent.stop();
+    });
+
+    it('treats a prompt error after the turn produced updates as accepted, whatever its code', async () => {
+      const store = withHistory(makeStore());
+      const failed = [];
+      const { agent, children } = newAgent(store, { onTurnFailed: (info) => failed.push(info) });
+      const child = await startSession(agent, children);
+      agent.deliver('one', 6);
+      await waitFor(() => prompts(child).length === 1);
+      update(child, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } });
+      update(child, { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'read', status: 'in_progress', rawInput: { path: 'a' } });
+      child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, error: { code: -32000, message: 'stream ended' } });
+      await waitFor(() => failed.length === 1);
+      assert.equal(agent.needsHistoryPrefix, false);
+      assert.equal(store.global().syncedThroughSeq, 6);
+      agent.deliver('two', 7);
+      await waitFor(() => prompts(child).length === 2);
+      assert.equal(prompts(child)[1].params.sessionId, 'ses_start1');
+      assert.doesNotMatch(prompts(child)[1].params.prompt[0].text, catchup);
+      await agent.stop();
+    });
+
+    it('does not repeat the catch-up after a provider failure, which OpenCode answers without any update', async () => {
+      const store = withHistory(makeStore());
+      const failed = [];
+      const { agent, children } = newAgent(store, { onTurnFailed: (info) => failed.push(info) });
+      const child = await startSession(agent, children);
+      agent.deliver('one', 6);
+      await waitFor(() => prompts(child).length === 1);
+      assert.match(prompts(child)[0].params.prompt[0].text, catchup);
+      child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, error: { code: -32603, message: 'Internal error: stub http 400', data: { service: 'session', errorName: 'APIError' } } });
+      await waitFor(() => failed.length === 1);
+      assert.equal(agent.needsHistoryPrefix, false);
+      assert.equal(store.global().syncedThroughSeq, 6);
+      agent.deliver('two', 7);
+      await waitFor(() => prompts(child).length === 2);
+      assert.doesNotMatch(prompts(child)[1].params.prompt[0].text, catchup);
+      await agent.stop();
+    });
+  });
+
+  it('records a pending bash call with its command, not the cwd-only input it is announced with', async () => {
+    const { agent, children, store } = newAgent();
+    const child = await startSession(agent, children);
+    agent.deliver('work', 7);
+    await waitFor(() => prompts(child).length === 1);
+    const update = (fields) => child.feed({ method: 'session/update', params: { sessionId: 'ses_start1', update: fields } });
+    update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'bash', kind: 'execute', status: 'pending', rawInput: { cwd: '/work' } });
+    assert.equal(store.activities.some((activity) => activity.kind === 'agent.tool_called'), false);
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'pending', title: 'bash', rawInput: { cwd: '/work' } });
+    assert.equal(store.activities.some((activity) => activity.kind === 'agent.tool_called'), false);
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'in_progress', title: 'echo hi', rawInput: { cwd: '/work', command: 'echo hi' } });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed', title: 'echo hi', rawInput: { cwd: '/work', command: 'echo hi' }, content: [] });
+    child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    const called = store.activities.filter((activity) => activity.kind === 'agent.tool_called');
+    assert.equal(called.length, 1);
+    assert.equal(called[0].summary, 'echo hi');
+    assert.match(JSON.stringify(called[0].metadata.input), /echo hi/);
+    await agent.stop();
+  });
+
+  it('fails a cancelled turn that OpenCode still answers with end_turn, and only that turn', async () => {
+    const succeeded = [];
+    const failed = [];
+    const { agent, children } = newAgent(makeStore(), {
+      onTurnSucceeded: (info) => succeeded.push(info),
+      onTurnFailed: (info) => failed.push(info),
+    });
+    const child = await startSession(agent, children);
+    agent.deliver('retrying', 6);
+    await waitFor(() => prompts(child).length === 1);
+    assert.equal(agent.cancelTurn(), true);
+    child.feed({ jsonrpc: '2.0', id: prompts(child)[0].id, result: { stopReason: 'end_turn', usage: { totalTokens: 0 } } });
+    await waitFor(() => !agent.turnActive);
+    assert.equal(succeeded.length, 0);
+    assert.deepEqual(failed.map((info) => info.inboundSeqs), [[6]]);
+    assert.match(failed[0].error, /turn ended: cancelled/);
+    agent.deliver('later', 7);
+    await waitFor(() => prompts(child).length === 2);
+    child.feed({ jsonrpc: '2.0', id: prompts(child)[1].id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    assert.deepEqual(succeeded.map((info) => info.inboundSeqs), [[7]]);
     await agent.stop();
   });
 });
