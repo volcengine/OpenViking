@@ -3,10 +3,14 @@
  * the value exists only in the environment of the process that runs it.
  *
  *   model writes  curl -H "Authorization: Bearer {{ov_privacy:...}}" https://...
- *   hook rewrites '<node>' '<runner>' 'curl -H "Authorization: Bearer {{ov_privacy:...}}" https://...'
+ *   hook rewrites false && curl -H "Authorization: Bearer {{ov_privacy:...}}" https://...
+ *                 <node> <runner> 'curl -H "Authorization: Bearer {{ov_privacy:...}}" https://...'
  *   runner        resolves each reference, runs the command with ${OV_SECRET_0}
  *                 where the reference stood, and masks the values in the output
  *                 back to their references
+ *
+ * The first line never runs. It shows the command to the host's permission
+ * rules, which would otherwise see only the runner and a quoted string.
  *
  * The hook half never touches the network and never sees a value, so a hook
  * failure leaves the references in place and the command fails rather than
@@ -188,9 +192,124 @@ export function shellQuote(text) {
   return `'${String(text).replaceAll("'", "'\\''")}'`;
 }
 
-/** `'<node>' '<runner>' '<command>'`, the command intact so a permission prompt shows what will run. */
+// A path the shell reads as one word as it stands.
+const PLAIN_WORD = /^[\w@%+=:,./-]+$/;
+
+/**
+ * `<node> <runner> '<command>'`, the command intact so a permission prompt
+ * shows what will run. The two paths go unquoted where they can, so a
+ * permission rule for the runner is the line's own first two words.
+ */
 export function wrapCommand(command, { node, runner }) {
-  return [node, runner, command].map(shellQuote).join(" ");
+  const word = (path) => (PLAIN_WORD.test(path) ? path : shellQuote(path));
+  return `${word(node)} ${word(runner)} ${shellQuote(command)}`;
+}
+
+// A word that opens or closes a compound command.
+const COMPOUND = /(?:if|then|elif|else|fi|for|select|while|until|do|done|case|esac|function|time|coproc|!|\{|\}|\[\[)(?=[\s;&|()<>]|$)/y;
+// A parameter expansion with nothing in it that could hold a quote or a command.
+const PARAMETER = /\$\{[\w:+=?.,@/%#^*!\[\]-]*\}/y;
+
+/**
+ * The pipelines `command` runs one after another, or null when it is more than
+ * a plain list of them: a here-document, `$( )`, backticks, a subshell or a
+ * compound command are not read, because a separator missed in one would let
+ * part of a guard line run.
+ */
+export function splitCommands(command) {
+  const reference = new RegExp(REFERENCE.source, "y");
+  const at = (pattern, index) => {
+    pattern.lastIndex = index;
+    return pattern.exec(command)?.[0];
+  };
+  const parts = [];
+  let part = "";
+  let quote = "";
+  // Whether the next word is a command name: at the start, and after each `|`.
+  let head = true;
+  let i = 0;
+  const take = (n) => {
+    part += command.slice(i, i + n);
+    i += n;
+  };
+  const cut = (n) => {
+    if (part.trim()) parts.push(part.trim());
+    part = "";
+    head = true;
+    i += n;
+  };
+
+  while (i < command.length) {
+    const c = command[i];
+    const next = command[i + 1];
+    if (head && /\S/.test(c)) {
+      if (at(COMPOUND, i)) return null;
+      head = false;
+    }
+    const whole = quote !== "'" && (at(reference, i) || at(PARAMETER, i));
+    if (quote === "'") {
+      if (c === "'") quote = "";
+      take(1);
+    } else if (whole) {
+      take(whole.length);
+    } else if (c === "\\") {
+      take(2);
+    } else if (c === "`" || (c === "$" && "({['".includes(next ?? " "))) {
+      return null;
+    } else if (quote) {
+      if (c === '"') quote = "";
+      take(1);
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      take(1);
+    } else if (c === "(" || c === ")") {
+      return null;
+    } else if (c === "<" && next === "<") {
+      if (command[i + 2] !== "<") return null;
+      take(3);
+    } else if (c === "#" && (i === 0 || /[\s;&|]/.test(command[i - 1]))) {
+      const eol = command.indexOf("\n", i);
+      i = eol < 0 ? command.length : eol;
+    } else if (c === ";") {
+      cut(1);
+    } else if (c === "\n") {
+      // A pipeline goes on past a line that ends in its `|`.
+      if (/\|&?$/.test(part.trimEnd())) take(1);
+      else cut(1);
+    } else if (c === "&") {
+      if (next === "&") cut(2);
+      // `&>`, `>&` and `<&` are redirections.
+      else if (next === ">" || /[<>]$/.test(part)) take(1);
+      else cut(1);
+    } else if (c === "|") {
+      if (next === "|") {
+        cut(2);
+      } else {
+        take(next === "&" ? 2 : 1);
+        head = true;
+      }
+    } else {
+      take(1);
+    }
+  }
+  if (quote) return null;
+  cut(0);
+  // A trailing backslash would join a guard line to the line after it.
+  return parts.some((text) => text.endsWith("\\")) ? null : parts;
+}
+
+/**
+ * The wrapper for `command` behind one guard line per pipeline in it, or null
+ * when `splitCommands` cannot tell them apart.
+ *
+ * `false && <pipeline>` never runs the pipeline, but a permission check that
+ * goes by the text of a command reads it like any other. So the guarded
+ * command needs what `command` itself needs, plus the runner: a deny rule
+ * still denies, and allowing the runner allows nothing else.
+ */
+export function guardCommand(command, wrapper) {
+  const commands = splitCommands(command);
+  return commands && [...commands.map((text) => `false && ${text}`), wrapCommand(command, wrapper)].join("\n");
 }
 
 const decode = (segment) => {
@@ -214,18 +333,25 @@ const RESOLVE_DENIED = "OpenViking secret exec is on, so credential values are n
   + "the value is put in place when the command runs and masked in its output.";
 
 const RUNS_RUNNER = "OpenViking secret exec: this command starts the secret-exec runner itself, "
-  + "which puts the value of every credential reference that reaches it into the command it runs.";
+  + "which puts the value of every credential reference that reaches it into the command it runs. "
+  + "Your permission rules cannot see what it will run, so it is yours to confirm.";
+
+const UNGUARDED = " This command is more than a list of plain commands, so your permission rules "
+  + "cannot be checked against what it runs; it is yours to confirm.";
 
 const preToolUse = (fields) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", ...fields } });
 
 /**
  * The PreToolUse answer for one tool call, or null to leave it alone.
  *
- * A Bash command that names a credential is wrapped in the runner, with every
- * other input field kept. No decision is given, so the wrapper goes through the
- * user's own permission flow, unless `secretExecApproval` is `ask`. It is never
- * `allow`: a reference would then be a way past approval for any command.
- * `privacy_resolve` is denied: it would put the value in the conversation.
+ * A Bash command that names a credential is wrapped in the runner behind its
+ * guard lines, with every other input field kept. No decision is given, so the
+ * user's own rules decide, as they would for the command itself. The user is
+ * asked instead when `secretExecApproval` is `ask`, or when the rules could
+ * not see the command: it cannot be guarded, or it starts the runner itself.
+ * It is never `allow`: a reference would then be a way past approval for any
+ * command. `privacy_resolve` is denied: it would put the value in the
+ * conversation.
  */
 export function secretExecPreToolUse(event = {}, cfg = {}, wrapper = {}) {
   if (!cfg.secretExec) return null;
@@ -236,13 +362,14 @@ export function secretExecPreToolUse(event = {}, cfg = {}, wrapper = {}) {
   const input = event.tool_input;
   const command = input?.command;
   if (toolName !== "Bash" || typeof command !== "string") return null;
-  const ask = cfg.secretExecApproval === "ask" ? { permissionDecision: "ask" } : null;
-  // A command that already starts a runner, from any install since an update
-  // moves the plugin root, is not wrapped again: the inner runner would get the
-  // outer one's values as command text. `ask` still confirms it, because the
-  // runner resolves whatever reference reaches it, however it was spelled.
-  if (command.includes(basename(String(wrapper.runner)))) {
-    return ask && preToolUse({ ...ask, permissionDecisionReason: RUNS_RUNNER });
+  // The hook sees only what the model wrote, so a command that names a runner,
+  // from any install since an update moves the plugin root, starts it by hand.
+  // It is not wrapped again: the inner runner would get the outer one's values
+  // as command text. It is confirmed, because the runner resolves whatever
+  // reference reaches it and the rules that allow the runner cannot see inside.
+  const runner = basename(String(wrapper.runner ?? ""));
+  if (runner && command.includes(runner)) {
+    return preToolUse({ permissionDecision: "ask", permissionDecisionReason: RUNS_RUNNER });
   }
   if (!hasReference(command)) return null;
 
@@ -251,12 +378,13 @@ export function secretExecPreToolUse(event = {}, cfg = {}, wrapper = {}) {
     return preToolUse({ permissionDecision: "deny", permissionDecisionReason: `OpenViking secret exec: ${plan.error}` });
   }
   if (!plan.references.length) return null;
+  const guarded = guardCommand(command, wrapper);
   return preToolUse({
-    ...ask,
+    ...((cfg.secretExecApproval === "ask" || !guarded) && { permissionDecision: "ask" }),
     permissionDecisionReason: `OpenViking secret exec runs this command with ${plan.references.map(credentialName).join(", ")}. `
       + "Each value is put in place at run time through an environment variable and masked in the output; "
-      + "the command itself holds only references.",
-    updatedInput: { ...input, command: wrapCommand(command, wrapper) },
+      + `the command itself holds only references.${guarded ? "" : UNGUARDED}`,
+    updatedInput: { ...input, command: guarded ?? wrapCommand(command, wrapper) },
   });
 }
 
@@ -267,7 +395,8 @@ export const SECRET_EXEC_USAGE = "OpenViking secret exec is on. When a shell com
   + "runner: the value goes into the command's environment when it runs, and any value the command prints comes "
   + "back as its reference. Do not call privacy_resolve, ask for the value, or try to print, encode or store it. "
   + "The command runs in its own shell, so cd and exported variables do not carry over, and a here-document that "
-  + "holds a reference needs an unquoted delimiter (<<EOF).";
+  + "holds a reference needs an unquoted delimiter (<<EOF). Keep such a command to plain commands and pipelines "
+  + "where you can: with $( ), a here-document, a subshell or if/for in it, the user is asked to confirm it each time.";
 
 /**
  * Replace every secret value in a byte stream by its reference.

@@ -222,7 +222,7 @@ claude
 | 环境变量                                | 默认值        | 说明                                                                |
 |----------------------------------------|---------------|--------------------------------------------------------------------|
 | `OPENVIKING_SECRET_EXEC`               | `false`       | 让带凭据引用的 Bash 命令经 runner 执行，见 [Secret exec](#secret-exec) |
-| `OPENVIKING_SECRET_EXEC_APPROVAL`      | `inherit`     | `inherit` 让包裹后的命令照常走你自己的权限模式与规则；`ask` 在每条使用凭据的命令执行前确认 |
+| `OPENVIKING_SECRET_EXEC_APPROVAL`      | `inherit`     | `inherit` 让命令照常走你自己的权限模式与规则，和没开 secret exec 时一样；`ask` 在每条使用凭据的命令执行前确认 |
 
 在 `ovcli.conf` 里对应 `plugin` 或 `plugin.claude_code` 下的 `secretExec` 与 `secretExecApproval`。workspace 配置文件不能设置这两项。
 
@@ -340,9 +340,32 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}" https://api.github.com/user
 ```
 
-一个独立的 `PreToolUse` hook（与 URI guard 无关）把这样的命令包成 `node scripts/secret-run.mjs '<原命令>'`。hook 不联网，也从不接触值。命令执行时，runner 用你的 OpenViking key 逐个取值（`POST /api/v1/privacy-configs/resolve`），以环境变量交给命令，在引用原来的位置展开，值从不拼进 Shell 代码。命令在 stdout、stderr 里输出的值会被换回引用，这一点没有开关可以关闭。任何一个引用取不到值，命令都不会执行；开关关闭时 runner 什么值都不取。stdin、退出码和信号原样透传。同一个开关还会拒绝 MCP 的 `privacy_resolve`（它会把值放进对话），并在会话开始时注入一段简短的用法说明。
+一个独立的 `PreToolUse` hook（与 URI guard 无关）把这样的命令交给插件的 runner：`node scripts/secret-run.mjs '<原命令>'`。一个独立的 `PreToolUse` hook（与 URI guard 无关）把这样的命令包成 `node scripts/secret-run.mjs '<原命令>'`。hook 不联网，也从不接触值。命令执行时，runner 用你的 OpenViking key 逐个取值（`POST /api/v1/privacy-configs/resolve`），以环境变量交给命令，在引用原来的位置展开，值从不拼进 Shell 代码。命令在 stdout、stderr 里输出的值会被换回引用，这一点没有开关可以关闭。任何一个引用取不到值，命令都不会执行；开关关闭时 runner 什么值都不取。stdin、退出码和信号原样透传。同一个开关还会拒绝 MCP 的 `privacy_resolve`（它会把值放进对话），并在会话开始时注入一段简短的用法说明。
 
-hook 默认不给出权限决定，包裹后的命令和普通命令一样走你自己的权限模式与规则。Claude Code 按包裹后的命令匹配规则，所以 `Bash(curl:*)` 这类规则（无论放行还是拒绝）不再作用于它：默认模式下第一次会提示，放行 runner 后不再打扰。设 `OPENVIKING_SECRET_EXEC_APPROVAL=ask` 则每条带引用、或自己启动 runner 的命令执行前都要确认，提示里会显示完整命令和要用到的凭据。它防的是失误，不防存心要把值弄出去的模型：把引用和 runner 都藏起来的命令，或者自己读 OpenViking key 去调服务器的命令，都拦不住。hook 从不自行放行命令。
+hook 默认不给出权限决定：由你自己的权限模式与规则决定，和 Claude 写的原命令一样。Claude Code 按改写后的命令匹配规则，而原命令在改写后被包在引号里，规则看不见。所以 hook 在 runner 前面为原命令里的每条命令各加一行永不执行的守卫行：
+
+```bash
+false && curl -H "Authorization: Bearer {{…}}" https://api.github.com/user
+/usr/bin/node /…/scripts/secret-run.mjs 'curl -H "Authorization: Bearer {{…}}" https://api.github.com/user'
+```
+
+Claude Code 按命令文本检查，不管其中一段实际会不会执行，所以守卫行会像原命令一样被检查：
+
+| 你的规则 | 结果 |
+| --- | --- |
+| 原命令里的每条命令都已放行，runner 也已放行 | 直接执行，不提示 |
+| 原命令里有一条命中拒绝规则 | 拒绝，bypass 模式下也一样 |
+| 原命令里有一条没放行，或 runner 没放行 | 走正常审批 |
+
+改写后的命令需要的权限 = 原命令需要的权限 + runner 的权限，所以放行 runner 不会连带放行别的命令。放行一次即可，例如加一条规则 `Bash(*/node */scripts/secret-run.mjs *)`；之后你本来就放行的命令，带上凭据也照样不提示。
+
+下面三种情况不管规则怎么写都会请你确认：
+
+- 设了 `OPENVIKING_SECRET_EXEC_APPROVAL=ask`。每条使用凭据的命令执行前都确认，提示里显示完整命令和要用到的凭据。
+- 命令不只是一串普通命令和管道：里面有 here-document、`$( )`、反引号、子 Shell，或 `if`、`for` 这类复合语句。hook 不去猜其中每条命令的起止，所以不写守卫行，改为请你确认。
+- 命令里自己写了 runner。放行 runner 的规则看不到它要跑什么。
+
+它防的是失误，不防存心要把值弄出去的模型：把引用和 runner 都藏起来的命令，或者自己读 OpenViking key 去调服务器的命令，都拦不住。hook 从不自行放行命令。Claude Code 会检查不执行的那一行，这是实测行为（在 Claude Code 2.1.321 上验证），不是文档承诺的契约。
 
 不在覆盖范围内的：
 

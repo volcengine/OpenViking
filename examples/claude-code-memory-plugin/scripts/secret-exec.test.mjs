@@ -87,7 +87,14 @@ test("the hook wraps the command without a value, and the wrapped command runs i
     assert.ok(!("permissionDecision" in out), "the user's own permission flow decides by default");
     assert.equal(out.updatedInput.description, "use the token");
     assert.equal(out.updatedInput.timeout, 60000);
-    assert.ok(out.updatedInput.command.includes(RUNNER));
+    const lines = out.updatedInput.command.split("\n");
+    assert.deepEqual(lines.slice(0, 3), [
+      `false && printf 'out:%s\\n' "${REF}"`,
+      `false && printf 'err:%s\\n' '${REF}' >&2`,
+      `false && printf %s ${REF} | wc -c | tr -d ' '`,
+    ], "one guard line per command, for the user's permission rules");
+    assert.equal(lines.length, 4);
+    assert.ok(lines[3].includes(RUNNER));
 
     const ran = await runShell(out.updatedInput.command, { env: { ...env, ...ON }, cwd });
     assert.equal(ran.code, 0, ran.stderr);
@@ -120,6 +127,15 @@ test("the hook prints nothing when it has nothing to do or cannot tell", async (
 test("the hook asks when approval is ask, and denies privacy_resolve", async () => {
   await withServer(async ({ env, cwd }) => {
     const on = { ...env, OPENVIKING_SECRET_EXEC: "1", OPENVIKING_SECRET_EXEC_APPROVAL: "ask" };
+    const unguarded = await runHookScript(HOOK, {
+      input: { tool_name: "Bash", cwd, tool_input: { command: `echo "$(date) ${REF}"` } },
+      env: { ...env, ...ON },
+      cwd,
+    });
+    const fallback = JSON.parse(unguarded.stdout).hookSpecificOutput;
+    assert.equal(fallback.permissionDecision, "ask", "a command the rules could not see is confirmed without the setting");
+    assert.ok(!fallback.updatedInput.command.startsWith("false"));
+
     const asked = await runHookScript(HOOK, {
       input: { tool_name: "Bash", cwd, tool_input: { command: `echo ${REF}` } },
       env: on,

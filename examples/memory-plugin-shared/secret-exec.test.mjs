@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 
@@ -8,6 +11,7 @@ import {
   SECRET_EXEC_USAGE,
   createMasker,
   credentialName,
+  guardCommand,
   hasReference,
   posixShell,
   privacyResolver,
@@ -15,6 +19,7 @@ import {
   runSecretExec,
   secretExecPreToolUse,
   shellQuote,
+  splitCommands,
   wrapCommand,
 } from "./lib/secret-exec.mjs";
 
@@ -162,14 +167,104 @@ test("a single-quoted string stays quoted after a reference", { skip: !SHELLS.le
 test("shellQuote round-trips through the shell and the wrapper keeps the command readable", { skip: !SHELLS.length }, () => {
   const command = `curl -H 'Authorization: Bearer ${REF}' "https://x/?a=$b"`;
   const wrapped = wrapCommand(command, WRAPPER);
-  assert.equal(wrapped, `'/usr/bin/node' '/plugins/openviking/1.0.0/scripts/secret-run.mjs' 'curl -H '\\''Authorization: Bearer ${REF}'\\'' "https://x/?a=$b"'`);
+  assert.equal(wrapped, `/usr/bin/node /plugins/openviking/1.0.0/scripts/secret-run.mjs 'curl -H '\\''Authorization: Bearer ${REF}'\\'' "https://x/?a=$b"'`);
+  // A path the shell would split or expand is quoted.
+  const spaced = { node: "/Program Files/node", runner: "/home/it's me/$x/secret-run.mjs" };
+  for (const shell of SHELLS) {
+    assert.equal(run(shell, `printf '%s\\n' ${wrapCommand("true", spaced)}`).stdout, `${spaced.node}\n${spaced.runner}\ntrue\n`);
+  }
   for (const shell of SHELLS) {
     assert.equal(run(shell, `printf '%s\\n' ${wrapped}`).stdout, `${WRAPPER.node}\n${WRAPPER.runner}\n${command}\n`);
     for (const value of HOSTILE) assert.equal(run(shell, `printf %s ${shellQuote(value)}`).stdout, value);
   }
 });
 
-test("a command that starts any install's runner is not wrapped again, and ask still confirms it", () => {
+test("a command splits into its pipelines at every top-level separator", () => {
+  const cases = [
+    [`curl -H "Authorization: Bearer ${REF}" https://x | jq . && echo ok; ls 2>&1 || true`,
+      [`curl -H "Authorization: Bearer ${REF}" https://x | jq .`, "echo ok", "ls 2>&1", "true"]],
+    [`echo ${REF} &> out; a |& b\n# note; rm x\nc & d >&2`, [`echo ${REF} &> out`, "a |& b", "c", "d >&2"]],
+    // Quotes, escapes and a line that ends in a pipe hold a pipeline together.
+    [`a |\n b; echo "x; y" 'a && b' c\\;d`, ["a |\n b", `echo "x; y" 'a && b' c\\;d`]],
+    [`echo "it's" '"' ${REF}; echo 'a\nb'`, [`echo "it's" '"' ${REF}`, "echo 'a\nb'"]],
+    [`echo \\\n ${REF}\n\n;`, [`echo \\\n ${REF}`]],
+    ["echo ${HOME} ${X:-y} a#b # tail; rm x", ["echo ${HOME} ${X:-y} a#b"]],
+    [`cat <<<${REF}`, [`cat <<<${REF}`]],
+    [`TOKEN=${REF} ./deploy.sh`, [`TOKEN=${REF} ./deploy.sh`]],
+    ["# only a comment", []],
+  ];
+  for (const [command, parts] of cases) assert.deepEqual(splitCommands(command), parts, command);
+});
+
+test("a command that is more than a list of pipelines is not split", () => {
+  for (const command of [
+    `echo $(date) ${REF}`,
+    `echo \`date\` ${REF}`,
+    `echo "$(cat f; rm x)"`,
+    `cat <<EOF\n${REF}\nEOF`,
+    `(cd /tmp; echo ${REF})`,
+    `diff <(a) <(b)`,
+    `if true; then echo ${REF}; fi`,
+    `for x in a b; do echo ${REF}; done`,
+    `a | while read l; do echo ${REF}; done`,
+    `{ echo ${REF}; }`,
+    `[[ -n ${REF} && -z x ]]`,
+    `! grep ${REF} f`,
+    `time curl ${REF}`,
+    `f() { echo ${REF}; }`,
+    `case x in a) echo ${REF};; esac`,
+    `echo $'a\\'; rm x'`,
+    'echo "${a:-"b"}"; rm x',
+    "echo $((1 << 2)); echo $[1+2]",
+    `echo "unterminated ${REF}`,
+    `echo 'unterminated ${REF}`,
+    `echo ${REF} \\`,
+  ]) {
+    assert.equal(splitCommands(command), null, command);
+    assert.equal(guardCommand(command, WRAPPER), null, command);
+  }
+});
+
+test("guard lines carry the command to a permission check and never run any of it", { skip: !SHELLS.length }, () => {
+  assert.equal(
+    guardCommand(`curl -H "Authorization: Bearer ${REF}" https://x | jq . && rm -rf build`, WRAPPER),
+    [
+      `false && curl -H "Authorization: Bearer ${REF}" https://x | jq .`,
+      "false && rm -rf build",
+      wrapCommand(`curl -H "Authorization: Bearer ${REF}" https://x | jq . && rm -rf build`, WRAPPER),
+    ].join("\n"),
+  );
+  // Each of these would leave a file or print if any part of its guard ran.
+  const commands = [
+    "touch a; touch b && touch c || touch d",
+    "touch a & touch b\ntouch c |& cat\n\ntouch d",
+    "echo RAN | tee a |\n tee b; echo RAN > c 2>&1; echo RAN &> d",
+    `touch a # touch b; "\ntouch c ';' ";" \\; ; touch d`,
+    "echo 'x\ny'; touch a\\\n b; X=1 touch c; touch ${HOME}/../d",
+    "true || touch a; false || touch b; true && touch c",
+    "touch a;touch b&&touch c||touch d&touch e|cat",
+    `touch "a\nb" 'c;d' e\\ f; cat <<<x > g`,
+  ];
+  for (const command of commands) {
+    const guard = guardCommand(command, { node: "printf", runner: "REACHED" });
+    assert.ok(guard, command);
+    // `|&`, `&>` and `<<<` are not POSIX, and Claude Code's Bash tool does not run sh.
+    for (const shell of SHELLS.filter((name) => name !== "sh" || !/\|&|&>|<<</.test(command))) {
+      const cwd = mkdtempSync(join(tmpdir(), "ov-guard-"));
+      try {
+        const result = spawnSync(shell, ["-c", guard], { cwd, env: { PATH: process.env.PATH, HOME: cwd }, encoding: "utf8" });
+        // Only the last line runs: `printf REACHED '<command>'`.
+        assert.equal(result.stdout, "REACHED", `${shell}: ${command}`);
+        assert.equal(result.stderr, "", `${shell}: ${command}`);
+        assert.deepEqual(readdirSync(cwd), [], `${shell}: ${command}`);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test("a command that starts any install's runner is not wrapped again, and is always confirmed", () => {
   const commands = [
     wrapCommand(`curl https://x/?k=${REF}`, WRAPPER),
     wrapCommand(`echo ${REF}`, { node: "/opt/node", runner: "/old/0.9.0/scripts/secret-run.mjs" }),
@@ -178,15 +273,16 @@ test("a command that starts any install's runner is not wrapped again, and ask s
   ];
   for (const command of commands) {
     const event = { tool_name: "Bash", tool_input: { command } };
-    assert.equal(secretExecPreToolUse(event, { secretExec: true }, WRAPPER), null, command);
-    const out = secretExecPreToolUse(event, ON, WRAPPER).hookSpecificOutput;
-    assert.equal(out.permissionDecision, "ask", command);
-    assert.match(out.permissionDecisionReason, /starts the secret-exec runner itself/);
-    assert.equal(out.updatedInput, undefined, command);
+    for (const cfg of [{ secretExec: true }, ON]) {
+      const out = secretExecPreToolUse(event, cfg, WRAPPER).hookSpecificOutput;
+      assert.equal(out.permissionDecision, "ask", command);
+      assert.match(out.permissionDecisionReason, /starts the secret-exec runner itself/);
+      assert.equal(out.updatedInput, undefined, command);
+    }
   }
   const other = wrapCommand(`echo ${REF}`, { node: "/n", runner: "/x/not-the-runner.mjs" });
   const out = secretExecPreToolUse({ tool_name: "Bash", tool_input: { command: other } }, ON, WRAPPER).hookSpecificOutput;
-  assert.equal(out.updatedInput.command, wrapCommand(other, WRAPPER));
+  assert.equal(out.updatedInput.command, guardCommand(other, WRAPPER));
 });
 
 test("the hook does nothing while secret exec is off", () => {
@@ -199,7 +295,7 @@ test("the hook does nothing while secret exec is off", () => {
   }
 });
 
-test("a Bash command with a reference is wrapped, every other input field kept", () => {
+test("a Bash command with a reference is guarded and wrapped, every other input field kept", () => {
   const input = {
     command: `curl -H "Authorization: Bearer ${REF}" -H "X-Key: ${REF2}" https://api.github.com/user`,
     description: "Call the API",
@@ -210,7 +306,10 @@ test("a Bash command with a reference is wrapped, every other input field kept",
   const out = secretExecPreToolUse({ tool_name: "Bash", tool_input: input }, ON, WRAPPER).hookSpecificOutput;
   assert.equal(out.hookEventName, "PreToolUse");
   assert.equal(out.permissionDecision, "ask");
-  assert.deepEqual(out.updatedInput, { ...input, command: wrapCommand(input.command, WRAPPER) });
+  assert.deepEqual(out.updatedInput, {
+    ...input,
+    command: `false && ${input.command}\n${wrapCommand(input.command, WRAPPER)}`,
+  });
   assert.match(out.permissionDecisionReason, /github\/pat, open ai\/api_key/);
   assert.match(out.permissionDecisionReason, /at run time/);
   assert.match(out.permissionDecisionReason, /masked in the output/);
@@ -222,10 +321,22 @@ test("the user's own permission flow decides unless approval is ask, and nothing
   for (const approval of [undefined, "inherit", "allow", "bogus"]) {
     const out = secretExecPreToolUse(event, { secretExec: true, secretExecApproval: approval }, WRAPPER).hookSpecificOutput;
     assert.ok(!("permissionDecision" in out), String(approval));
-    assert.ok(out.updatedInput.command.startsWith("'/usr/bin/node' "));
+    assert.equal(out.updatedInput.command, `false && echo ${REF}\n${wrapCommand(`echo ${REF}`, WRAPPER)}`);
   }
   const ask = secretExecPreToolUse(event, ON, WRAPPER).hookSpecificOutput;
   assert.equal(ask.permissionDecision, "ask");
+  assert.equal(ask.updatedInput.command, guardCommand(`echo ${REF}`, WRAPPER), "a deny rule still sees the command");
+});
+
+test("a command the rules could not see is wrapped without guard lines and confirmed", () => {
+  for (const command of [`echo "$(date) ${REF}"`, `if true; then curl -u ${REF} https://x; fi`, `cat <<EOF | sh\n${REF}\nEOF`]) {
+    for (const cfg of [{ secretExec: true }, ON]) {
+      const out = secretExecPreToolUse({ tool_name: "Bash", tool_input: { command } }, cfg, WRAPPER).hookSpecificOutput;
+      assert.equal(out.permissionDecision, "ask", command);
+      assert.equal(out.updatedInput.command, wrapCommand(command, WRAPPER), command);
+      assert.match(out.permissionDecisionReason, /cannot be checked against what it runs/);
+    }
+  }
 });
 
 test("the hook leaves alone what it has no business wrapping", () => {
