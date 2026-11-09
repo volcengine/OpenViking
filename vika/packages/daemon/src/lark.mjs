@@ -496,11 +496,13 @@ export class LarkClient {
     return { chats: matched.slice(0, limit), has_more: hasMore || matched.length > limit };
   }
 
-  async listChatMessages({ chat_id: chatId, limit = 20, as = 'bot' }) {
+  async listChatMessages({ chat_id: chatId, limit = 20, as = 'bot', cursor }) {
     const data = await this.im([
       '+chat-messages-list', '--as', as, '--chat-id', chatId, '--sort', 'desc', '--page-size', String(limit), '--format', 'json',
+      ...(cursor ? ['--page-token', cursor] : []),
     ], 'list chat messages');
-    return { messages: messageList(data), has_more: Boolean(data.has_more) };
+    return { messages: messageList(data), has_more: Boolean(data.has_more),
+      next_cursor: data.has_more && typeof data.page_token === 'string' ? data.page_token : '' };
   }
 
   // As the owner by default; as the bot, the search covers only the chats it
@@ -513,11 +515,13 @@ export class LarkClient {
     return { messages: messageList(data).slice(0, limit), has_more: Boolean(data.has_more) };
   }
 
-  async listThreadMessages({ thread_id: threadId, limit = 50, as = 'bot' }) {
+  async listThreadMessages({ thread_id: threadId, limit = 50, as = 'bot', cursor }) {
     const data = await this.im([
       '+threads-messages-list', '--as', as, '--thread', threadId, '--order', 'asc', '--page-size', String(limit), '--format', 'json',
+      ...(cursor ? ['--page-token', cursor] : []),
     ], 'list thread messages');
-    return { messages: messageList(data), has_more: Boolean(data.has_more) };
+    return { messages: messageList(data), has_more: Boolean(data.has_more),
+      next_cursor: data.has_more && typeof data.page_token === 'string' ? data.page_token : '' };
   }
 
   // Downloads one message resource into the private media directory. The
