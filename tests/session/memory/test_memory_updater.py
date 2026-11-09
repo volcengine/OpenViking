@@ -2527,7 +2527,9 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch):
+    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(
+        self, monkeypatch, caplog
+    ):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2560,11 +2562,7 @@ class TestConsecutivePatchesSameURI:
         store[uri] = existing_content
 
         trace_info = MagicMock()
-        patch_warning = MagicMock()
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
-        monkeypatch.setattr(
-            "openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning
-        )
 
         op = ResolvedOperation(
             old_memory_file_content=MemoryFile(
@@ -2582,7 +2580,7 @@ class TestConsecutivePatchesSameURI:
 
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["content"] == "Original body"
-        patch_warning.assert_not_called()
+        assert not any(record.name.endswith("merge_op.patch_handler") for record in caplog.records)
         assert any(
             "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
             and f"uri={uri}" in call.args[0]

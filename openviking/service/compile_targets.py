@@ -1406,6 +1406,7 @@ class CompileLifecycle:
                                         )
                                     run_meta["target_head"] = head
                                     run_meta["snapshot_committed"] = True
+                                    run_meta["target_committed_at"] = int(time.time() * 1000)
                                     await self._store.put_operation(account_id, target_to, run)
                                 head = run_meta["target_head"]
                                 if not head:
@@ -1425,6 +1426,19 @@ class CompileLifecycle:
                                 record = await self._store.get(account_id, request["to"])
                                 await self.versions.record_compile(
                                     account_id, record, run, head, changes, ctx
+                                )
+                                if not run_meta.get("target_committed_at"):
+                                    run_meta["target_committed_at"] = int(time.time() * 1000)
+                                    await self._store.put_operation(account_id, target_to, run)
+                                from openviking.observability.reporting.facts import (
+                                    emit_compile_outputs,
+                                )
+
+                                emit_compile_outputs(
+                                    task,
+                                    changes,
+                                    snapshot_id=head,
+                                    committed_at=run_meta["target_committed_at"],
                                 )
                                 if (
                                     any(is_versioned(change["uri"]) for change in changes)

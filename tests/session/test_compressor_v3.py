@@ -97,7 +97,11 @@ def test_factory_defaults_to_v3():
 
 @pytest.mark.asyncio
 async def test_commit_extraction_propagates_template_conflict():
-    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace())),
+    )
     conflict = ConflictError("Conflicting memory template snapshots; Re-extract before retrying")
     compressor._extract_user_memories = AsyncMock(side_effect=conflict)
     compressor._write_final_memory_diff = AsyncMock()
@@ -441,9 +445,6 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         async def run(self):
             return None, []
 
-    compressor = SessionCompressorV3(vikingdb=None)
-    compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
-    compressor._write_final_memory_diff = AsyncMock()
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_viking_fs",
         lambda: SimpleNamespace(),
@@ -452,6 +453,17 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
     )
+    monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(return_value=DummyRegistry()),
+    )
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace())),
+    )
+    compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
+    compressor._write_final_memory_diff = AsyncMock()
 
     await compressor.extract_long_term_memories(
         messages=_messages(),
@@ -562,7 +574,9 @@ async def test_train_from_extracted_cases_submits_streaming_rollout(monkeypatch)
             policies=[],
         )
 
-        async def submit_gradients(self, gradients, *, analysis=None, rollout=None):
+        async def submit_gradients(
+            self, gradients, *, analysis=None, rollout=None, batch_finalizer=None
+        ):
             submitted_gradients.append(gradients)
             submitted_analyses.append(analysis)
             return RolloutTrainingResult(
@@ -881,7 +895,16 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
                 apply_result=result,
             )
 
-    compressor = SessionCompressorV3(vikingdb=None)
+    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: FakeFS())
+    monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(return_value=DummyRegistry()),
+    )
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace())),
+    )
     compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
 
     async def fake_train_from_extracted_cases(**kwargs):
@@ -890,7 +913,6 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
 
     compressor.train_from_extracted_cases = fake_train_from_extracted_cases
 
-    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: FakeFS())
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
@@ -900,13 +922,13 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
         AsyncMock(return_value=FakeStreamingUpdater()),
     )
 
-    contexts = await compressor.extract_long_term_memories(
+    result = await compressor.extract_long_term_memories(
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
     )
 
-    assert [context.uri for context in contexts] == [canonical_uri]
+    assert [context.uri for context in result] == [canonical_uri]
     assert len(trained_kwargs) == 1
     assert [case.name for case in trained_kwargs[0]["cases"]] == ["duplicate_booking"]
     assert trained_kwargs[0]["cases"][0].metadata["case_uris"] == [canonical_uri]

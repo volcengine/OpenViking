@@ -5,7 +5,7 @@ import importlib
 import threading
 import weakref
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, model_validator
 
@@ -61,6 +61,10 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
 
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
+
+    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = RuntimeField(
+        default=None, description="Billing owner supplied by the credential provisioner"
+    )
 
     id: Optional[str] = RuntimeField(
         default=None, description="Unique identifier for this credential"
@@ -737,6 +741,7 @@ class VLMConfig(BaseModel):
         """Build VLM instance config dict for a specific credential."""
         result = {
             "model": credential.model or self.model,
+            "cost_bearer": credential.cost_bearer,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "timeout": self.timeout,

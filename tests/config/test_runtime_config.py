@@ -720,6 +720,7 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         "provider": "openai",
         "api_key": "account-secret",
         "api_base": "https://account.invalid/v1",
+        "cost_bearer": "ov",
     }
     settings = {
         "output_language_override": "",
@@ -751,11 +752,13 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         account, default = await resolver.resolve("a"), await resolver.resolve("b")
         assert account.dedicated_vectordb and account.vectordb.dimension == 8
         assert account.embedding.dense.credentials[0].api_key == "account-secret"
+        assert account.embedding.dense.credentials[0].cost_bearer == "ov"
         assert account.embedding.dense.api_key is None
         assert default.embedding.dense.api_key == "cluster-secret"
         assert default.vectordb.dimension == 4 and not default.dedicated_vectordb
         vlm = (await manager.get_account("a", "vlm")).to_vlm_config(cluster.vlm)
         assert vlm.model == "account-vlm" and vlm.credentials[0].api_key == "account-secret"
+        assert vlm.credentials[0].cost_bearer == "ov"
         assert vlm.api_key is None
 
         before = await source.load(ConfigScope.account("a"))
@@ -772,6 +775,11 @@ async def test_account_runtime_binding_and_updates_are_isolated():
             "a", {"embedding": {"dense": {"credentials": [{**credential, "api_key": "rotated"}]}}}
         )
         assert (await resolver.resolve("a")).embedding.dense.credentials[0].api_key == "rotated"
+        await manager.patch_account(
+            "a", {"vlm": {"credentials": [{**credential, "cost_bearer": "customer"}]}}
+        )
+        assert (await manager.get_account("a", "vlm")).credentials[0].cost_bearer == "customer"
+        assert (await resolver.resolve("a")).embedding.dense.credentials[0].cost_bearer == "ov"
         assert (await resolver.resolve("b")).embedding.dense.api_key == "cluster-secret"
         await manager.patch_account("a", {"output_language_override": None, "memory": None})
         assert await get_output_language_override(manager, "a") == "en"

@@ -331,34 +331,39 @@ class ContentWriteCoordinator:
                     user_id=ctx.user.user_id,
                     resource_id=uri,
                     task_id=task_id,
+                    meta={"mode": mode},
                 )
             if task is None:
                 raise RuntimeError("Content write Task was not created")
             return task
 
-        try:
-            result = await self._write(
-                uri=uri,
-                content=content,
-                ctx=ctx,
-                mode=mode,
-                wait=wait,
-                processing_mode=processing_mode,
-                tags=tags,
-                tag_mode=tag_mode,
-                acl=acl,
-                resolve_conflicts=resolve_conflicts,
-                root_operation="content_write",
-                root_task_factory=create_root_task,
-            )
-        except BaseException as exc:
-            if task_id is not None and not _root_owns_failure(exc):
-                await self._fail_content_write_task(
-                    task.task_id if task is not None else task_id, exc, ctx=ctx
+        from openviking.observability.reporting.facts import defer_file_changes
+
+        with defer_file_changes() as pending_file_changes:
+            try:
+                result = await self._write(
+                    uri=uri,
+                    content=content,
+                    ctx=ctx,
+                    mode=mode,
+                    wait=wait,
+                    processing_mode=processing_mode,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    acl=acl,
+                    resolve_conflicts=resolve_conflicts,
+                    root_operation="content_write",
+                    root_task_factory=create_root_task,
                 )
-            raise
-        if task is None:
-            raise RuntimeError("Content write completed without creating a root Task")
+            except BaseException as exc:
+                if task_id is not None and not _root_owns_failure(exc):
+                    await self._fail_content_write_task(
+                        task.task_id if task is not None else task_id, exc, ctx=ctx
+                    )
+                raise
+            if task is None:
+                raise RuntimeError("Content write completed without creating a root Task")
+            pending_file_changes.publish(task)
         return await self._return_or_wait_for_content_write_task(
             task.task_id,
             result,
@@ -460,6 +465,8 @@ class ContentWriteCoordinator:
                 ctx.account_id,
                 ctx.user.user_id,
                 enqueued_work=[],
+                task_type=task.task_type,
+                mode=task.meta.get("mode"),
             ):
                 return await self._enqueue_content_write_root(
                     operation=operation,

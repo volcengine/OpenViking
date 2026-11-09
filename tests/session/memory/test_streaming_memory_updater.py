@@ -760,63 +760,101 @@ async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_streaming_memory_updater_batches_non_append_only_submits(monkeypatch):
-    fs = InMemoryVikingFS({})
-    fs.search = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
-        lambda: fs,
+async def test_streaming_memory_updater_batches_non_append_only_submits(tmp_path, monkeypatch):
+    from openviking.observability.context import (
+        bind_root_observability_context,
+        reset_root_observability_context,
     )
-    monkeypatch.setattr(
-        "openviking.session.memory.memory_updater.get_viking_fs",
-        lambda: fs,
-    )
+    from openviking.observability.events import get_event_bus, try_publish_event
+    from openviking.observability.reporting import runtime
+    from openviking.storage.viking_fs import VikingFS
+    from openviking.telemetry.span_models import RootSpanAttributes
+    from tests.utils.mock_agfs import MockLocalAGFS
 
+    _patch_language_config(monkeypatch)
+    monkeypatch.setattr(runtime, "_reporter", object())
+    fs = VikingFS(agfs=MockLocalAGFS(root_path=tmp_path))
+    monkeypatch.setattr(fs, "search", AsyncMock(return_value=[]))
+    for module in ("streaming_memory_updater", "memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+
+    async def merge(_self):
+        try_publish_event("vlm.call", {"prompt_tokens": 17, "completion_tokens": 3})
+        return ResolvedOperations(
+            upsert_operations=[_note_op("b"), _note_op("c")],
+            delete_file_contents=[],
+            errors=[],
+        ), []
+
+    monkeypatch.setattr("openviking.session.memory.streaming_memory_updater.ExtractLoop.run", merge)
     updater = StreamingMemoryUpdater(
         registry=_registry(),
+        vlm_resolver=_TestVLMResolver(),
         config=StreamingMemoryUpdaterConfig(
-            max_operations_per_update=2,
-            max_wait_seconds=0.01,
+            max_operations_per_update=3,
+            max_wait_seconds=0.03,
             timer_check_interval_seconds=0.01,
         ),
     )
-    op1 = _note_op("note_a")
-    op2 = _note_op("note_b")
-
-    result1, result2 = await asyncio.gather(
-        updater.submit(
-            MemoryUpdateRequest(
-                operations=ResolvedOperations(
-                    upsert_operations=[op1],
-                    delete_file_contents=[],
-                    errors=[],
-                ),
-                messages=[Message(id="m1", role="user", parts=[TextPart("note A")])],
-                ctx=_ctx(),
-            )
-        ),
-        updater.submit(
-            MemoryUpdateRequest(
-                operations=ResolvedOperations(
-                    upsert_operations=[op2],
-                    delete_file_contents=[],
-                    errors=[],
-                ),
-                messages=[Message(id="m2", role="user", parts=[TextPart("note B")])],
-                ctx=_ctx(),
-            )
-        ),
+    events = []
+    bus = get_event_bus()
+    bus.register(
+        "memory-batch-reporting", runtime.make_subscriber(SimpleNamespace(report=events.append), {})
     )
 
-    assert result1 is not result2
-    assert result1.request_count == 1
-    assert result2.request_count == 1
-    assert result1.metadata["flush_reason"] == "count"
-    assert result1.metadata["batch_request_count"] == 2
-    assert result1.metadata["scoped_to_submitter"] is True
-    assert result1.apply_result.written_uris == [op1.uris[0]]
-    assert result2.apply_result.written_uris == [op2.uris[0]]
-    assert sorted(result1.metadata["unscoped_written_uris"]) == sorted([op1.uris[0], op2.uris[0]])
+    async def submit(name):
+        token = bind_root_observability_context(
+            RootSpanAttributes(
+                http_method="QUEUE",
+                http_route="/queuefs/session_commit",
+                request_id=f"task_{name}",
+                account_id=_ctx().account_id,
+                user_id=_ctx().user.user_id,
+            )
+        )
+        try:
+            return await updater.submit(
+                MemoryUpdateRequest(
+                    operations=ResolvedOperations(
+                        upsert_operations=[_note_op(name)], delete_file_contents=[], errors=[]
+                    ),
+                    messages=[],
+                    ctx=_ctx(),
+                    metadata={
+                        "task_id": f"task_{name}",
+                        "source_extraction_id": f"extract_{name}",
+                        "session_id": name,
+                    },
+                )
+            )
+        finally:
+            reset_root_observability_context(token)
+
+    try:
+        first = await submit("a")
+        assert first.apply_result.written_uris == _note_op("a").uris
+        events.clear()
+        second, third = await asyncio.gather(submit("b"), submit("c"))
+        assert second is not third
+        assert second.request_count == third.request_count == 1
+        assert second.apply_result.written_uris == _note_op("b").uris
+        assert third.apply_result.written_uris == _note_op("c").uris
+        assert all(not result.apply_result.errors for result in (second, third))
+        assert await fs.read_file(_note_op("b").uris[0], ctx=_ctx())
+        assert await fs.read_file(_note_op("c").uris[0], ctx=_ctx())
+        calls = [e for e in events if e["event_name"] == "vlm_call"]
+        assert len(calls) == 1
+        assert calls[0]["task_id"] == ""
+        assert calls[0]["source_task_ids"] == ["task_b", "task_c"]
+        assert (calls[0]["prompt_tokens"], calls[0]["completion_tokens"]) == (17, 3)
+        writes = [e for e in events if e["event_name"] == "file_mutation"]
+        assert {(e["uri"], e["task_id"]) for e in writes} == {
+            (_note_op("b").uris[0], "task_b"),
+            (_note_op("c").uris[0], "task_c"),
+        }
+    finally:
+        await updater.close()
+        bus.unregister("memory-batch-reporting")
 
 
 @pytest.mark.asyncio
