@@ -121,16 +121,16 @@ class TestWatchManager:
         assert await watch_manager.get_task(task.task_id) is not None
 
     @pytest.mark.asyncio
-    async def test_create_for_missing_target_locks_existing_ancestor(
+    async def test_create_for_missing_target_does_not_block_sibling(
         self, watch_manager: WatchManager, watch_vfs, tmp_path
     ):
-        await _create(watch_manager, "viking://resources/pending/doc.md")
-
-        assert not await watch_vfs.exists("viking://resources/pending")
-        assert not list((tmp_path / "agfs").rglob("pending"))
-
         await watch_vfs.mkdir("viking://resources/held")
         async with watch_manager.locks.tree(TEST_ACCOUNT_ID, "viking://resources/held"):
+            await _create(watch_manager, "viking://resources/pending")
+
+            assert not await watch_vfs.exists("viking://resources/pending")
+            assert not list((tmp_path / "agfs").rglob("pending"))
+
             with pytest.raises(ResourceBusyError):
                 await _create(watch_manager, "viking://resources/held/new/doc.md")
 
