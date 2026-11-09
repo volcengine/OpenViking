@@ -25,6 +25,12 @@ React imports these SVG files directly during its build.
   their own.
 - `svg/file-type/` — the file-type icon set vendored from `@pierre/trees`
   (Apache-2.0, see that directory's `LICENSE.md`). One SVG per icon.
+- `empty-state.png` — the empty-state illustration for the file browser
+  (258 × 140 at 2×). Supplied by the design; the module imports it and the build
+  inlines it as a data URI, so no separate asset file ships. It is a bitmap rather
+  than an SVG because the original carries gradients and anti-aliased edges that a
+  redraw would not match.
+
 - `file-type-rules.json` — data rather than artwork: the file-name and extension
   rules that pick an icon, plus each icon's brand colour for light and dark
   backgrounds.

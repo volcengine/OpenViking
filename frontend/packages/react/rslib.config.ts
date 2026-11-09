@@ -29,7 +29,13 @@ export default defineConfig({
           'modules/console': './src/modules/console/index.ts',
         },
       },
-      output: { emitCss: false },
+      // 位图内联成 data URI，产物不落独立的资源文件：库的 JS 入口要能在没有
+      // 打包器的环境（Node、SSR）直接 import，外部 .png 在那里解析不了。
+      //
+      // Inline bitmaps as data URIs instead of emitting separate asset files: the
+      // package's JS entries must stay importable without a bundler (Node, SSR),
+      // where an external .png cannot be resolved.
+      output: { emitCss: false, dataUriLimit: { image: 64 * 1024 } },
       tools: {
         rspack: {
           optimization: { splitChunks: { chunks: 'all', minSize: 0 } },

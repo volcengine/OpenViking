@@ -24,6 +24,7 @@ import type {
   OvRequestOptions,
   OvRequestSpec,
   OvResolvedOptions,
+  OvResponseEnvelope,
   OvStream,
   OvStreamEvent,
   OvStreamSpec,
@@ -117,15 +118,35 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
     }
   }
 
+  /** 发一次 JSON 请求，返回 `result` 与外壳里的分页标记。 */
+  async function requestJson<TResult>(
+    spec: OvRequestSpec,
+  ): Promise<OvResponseEnvelope<TResult>> {
+    const { response, effective } = await send(spec);
+
+    // 先读文本再解析：读取失败是传输失败（含取消），必须上报；只有解析失败
+    // 才是「响应不是 JSON」，此时按原文返回。
+    const raw = await readText(response, effective.signal);
+    const body = parseJson(raw) ?? (raw.trim() ? raw : undefined);
+
+    if (!response.ok) throw toClientError(response, body);
+    throwIfErrorEnvelope(response, body);
+
+    const envelope = readEnvelope(body);
+    return {
+      result: ('result' in envelope ? envelope.result : body) as TResult,
+      hasMore: envelope.has_more === true,
+    };
+  }
+
   const client: OvClient = {
     get baseURL() {
       return defaults.baseURL ?? '';
     },
 
     async request<TResult>(spec: OvRequestSpec): Promise<TResult> {
-      const { response, effective } = await send(spec);
-
       if (spec.responseType === 'blob') {
+        const { response, effective } = await send(spec);
         if (!response.ok) {
           // 失败响应仍是 JSON 外壳，先解析才能保留服务端的错误码。
           const raw = await readText(response, effective.signal);
@@ -134,16 +155,22 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
         return (await readBlob(response, effective.signal)) as TResult;
       }
 
-      // 先读文本再解析：读取失败是传输失败（含取消），必须上报；只有解析失败
-      // 才是「响应不是 JSON」，此时按原文返回。
-      const raw = await readText(response, effective.signal);
-      const body = parseJson(raw) ?? (raw.trim() ? raw : undefined);
+      const { result } = await requestJson<TResult>(spec);
+      return result;
+    },
 
-      if (!response.ok) throw toClientError(response, body);
-      throwIfErrorEnvelope(response, body);
-
-      const envelope = readEnvelope(body);
-      return ('result' in envelope ? envelope.result : body) as TResult;
+    requestEnvelope<TResult>(
+      spec: OvRequestSpec,
+    ): Promise<OvResponseEnvelope<TResult>> {
+      if (spec.responseType === 'blob') {
+        return Promise.reject(
+          new OvClientError({
+            code: 'INVALID_REQUEST',
+            message: 'requestEnvelope does not support responseType: blob',
+          }),
+        );
+      }
+      return requestJson<TResult>(spec);
     },
 
     async stream(spec: OvStreamSpec): Promise<OvStream> {

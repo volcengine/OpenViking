@@ -10,7 +10,9 @@ import {
   showsInlineDescription,
 } from './file-tree-info.js';
 import { resolveInfoCopy } from './file-tree-info-labels.js';
-import { FileTreeTooltipSurface } from './file-tree-tooltip-surface.js';
+import { Popover } from '../../shared/components/popover/index.js';
+import { resolveFileTreeInfoCopy } from './file-tree-info-tooltip.js';
+import { FileTreeTooltipContent } from './file-tree-tooltip-surface.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { Guides, rowStyle } from './file-tree-row-shared.js';
 import type { FileTreeEntryRow } from './types.js';
@@ -32,7 +34,6 @@ export function FileTreeRowView({
   const {
     text,
     selectedId,
-    tooltipRowId,
     getRowAttributes,
     renderDashboard,
     renderRowTooltip,
@@ -41,8 +42,6 @@ export function FileTreeRowView({
     onToggleExpand,
     onOpenRetentionSettings,
     onRowKeyDown,
-    onRowEnter,
-    onRowLeave,
   } = ctx;
 
   const isDirectory = row.type === 'directory';
@@ -76,7 +75,7 @@ export function FileTreeRowView({
     onToggleExpand?.(row);
   };
 
-  return (
+  const rowNode = (
     <div
       role="treeitem"
       tabIndex={0}
@@ -97,10 +96,6 @@ export function FileTreeRowView({
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) =>
         onRowKeyDown(event, row)
       }
-      onMouseEnter={() => onRowEnter(row.id)}
-      onMouseLeave={onRowLeave}
-      onFocus={() => onRowEnter(row.id)}
-      onBlur={onRowLeave}
     >
       {/* 每一级祖先画一条竖线，上下各溢出 1px 让相邻行接上。 */}
       <Guides depth={row.depth} />
@@ -178,14 +173,34 @@ export function FileTreeRowView({
       {dashboard ? (
         <span className="ov-file-tree__dashboard">{dashboard}</span>
       ) : null}
-
-      {tooltipRowId === row.id ? (
-        <FileTreeTooltipSurface
-          row={row}
-          infoLabels={ctx.infoLabels}
-          renderRowTooltip={renderRowTooltip}
-        />
-      ) : null}
     </div>
+  );
+
+  // 有没有内容要先算出来，不能靠渲染后的元素判断——JSX 元素永远非空，那样
+  // 守卫会失效，每行都会挂一个空浮层。
+  //
+  // Whether there is content is decided up front rather than from the rendered
+  // element: a JSX element is never null, so that guard would never fire and every
+  // row would carry an empty surface.
+  const custom = renderRowTooltip?.(row);
+  const hasContent = renderRowTooltip
+    ? custom !== null && custom !== undefined && custom !== false
+    : resolveFileTreeInfoCopy(row, ctx.infoLabels) !== null;
+  if (!hasContent) return rowNode;
+
+  const tooltipContent = (
+    <FileTreeTooltipContent
+      row={row}
+      infoLabels={ctx.infoLabels}
+      renderRowTooltip={renderRowTooltip}
+    />
+  );
+
+  // 悬停延迟、翻面与 portal 都由 Popover 负责：它渲染到 body，因此不会被树的
+  // `overflow` 裁掉；方位固定在右侧，与设计稿一致。
+  return (
+    <Popover content={tooltipContent} placement="right" trigger="hover">
+      {rowNode}
+    </Popover>
   );
 }

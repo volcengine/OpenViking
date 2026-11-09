@@ -28,6 +28,10 @@ export const OV_PATHS = {
   fsMv: '/api/v1/fs/mv',
   /** 读取文件正文。Read file content. */
   contentRead: '/api/v1/content/read',
+  /** 读取目录的 L0 摘要。Read a directory's L0 abstract. */
+  contentAbstract: '/api/v1/content/abstract',
+  /** 读取目录的 L1 概览。Read a directory's L1 overview. */
+  contentOverview: '/api/v1/content/overview',
   /** 下载文件原始字节。Download a file's raw bytes. */
   contentDownload: '/api/v1/content/download',
   /** 写入文件正文。Write file content. */

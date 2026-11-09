@@ -6,7 +6,7 @@ English / [中文](README_CN.md)
 
 ## Placeholder components available today
 
-Two modules ship importable placeholder components, public Props / Labels / Slots types and standalone stylesheet entries, so an integrator can finish page layout first. The props are settled: each module declares its request options, controlled state, callbacks, slots and copy. The components themselves still render only a module name and placeholder copy, and consume none of those props yet; business Hooks and the interactions described below are still to come.
+`file-browser` is implemented: `useFileBrowser` loads the data and coordinates the directory, the search and the preview, and the `FileBrowser` composite view renders the tree and the preview. `console` is still a placeholder that renders only a module name and placeholder copy; its business Hook and interactions are still to come.
 
 Because a module loads its own data, no prop carries data. A host supplies configuration, the controlled value and the copy; the module reports changes through callbacks.
 
@@ -121,7 +121,7 @@ History lists and version comparison start as preview capabilities of `file-brow
 - The composite view owns the search, directory and preview layout within the area. Pure view components such as `FileTree` and `FilePreview` stay independent and take on no data loading or cross-component coordination.
 - Entries such as connecting an agent or importing resources come in through host callbacks or slots; the module embeds no connection dialog, import flow or product onboarding. Product content such as quota hints also comes in through host slots.
 
-The interactions above and `useFileBrowser` are still planned; only the `FileBrowser` placeholder component and base types are exported today.
+The interactions above are implemented: `useFileBrowser` loads the data and coordinates the directory, the search and the preview, and the `FileBrowser` composite view lays them out as the console's context panel does.
 
 ### Interaction panel module
 

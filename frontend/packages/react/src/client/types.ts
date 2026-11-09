@@ -139,6 +139,19 @@ export interface OvRequestSpec {
  */
 export type OvResponseType = 'json' | 'blob';
 
+/**
+ * 一次 JSON 请求的外壳与 `result`。列表接口把 `has_more` 放在 `result` 之外，
+ * 需要分页时用 {@link OvClient.requestEnvelope} 才能读到它。
+ * The envelope and `result` of one JSON request. A listing puts `has_more`
+ * outside `result`, so paging reads it through {@link OvClient.requestEnvelope}.
+ */
+export interface OvResponseEnvelope<TResult = unknown> {
+  /** 原生响应的 `result`。The native response's `result`. */
+  result: TResult;
+  /** 是否还有下一页；接口不返回该字段时为 `false`。 */
+  hasMore: boolean;
+}
+
 /** 查询参数可接受的值；`undefined` 与 `null` 表示不发送。 */
 export type OvQueryValue =
   | string
@@ -244,6 +257,17 @@ export interface OvClient {
    * Sends one request and returns the native response's `result`.
    */
   request<TResult>(spec: OvRequestSpec): Promise<TResult>;
+  /**
+   * 与 `request` 相同，但同时返回 `result` 之外的分页标记。列表接口用它判断
+   * 是否还有下一页；`responseType: 'blob'` 不适用。
+   *
+   * Same as `request`, but also returns the pagination flag that sits outside
+   * `result`. A listing uses it to decide whether a next page exists; not
+   * applicable to `responseType: 'blob'`.
+   */
+  requestEnvelope<TResult>(
+    spec: OvRequestSpec,
+  ): Promise<OvResponseEnvelope<TResult>>;
   /**
    * 建立一条 SSE 流。响应到达后即返回，事件随后逐个产出；HTTP 失败、非事件流
    * 响应与外壳里的 `status: 'error'` 都在返回前抛出。

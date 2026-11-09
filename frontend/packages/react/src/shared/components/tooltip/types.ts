@@ -1,12 +1,13 @@
 import type { CSSProperties, ReactElement, ReactNode } from 'react';
 
+import type { OverlayPlacement } from '../overlay/types.js';
+
 /**
- * 浮层相对触发元素的方位。空间不足时会自动翻到对侧。
- *
- * Where the surface sits relative to its trigger. It flips to the opposite side
- * when there is not enough room.
+ * 提示相对触发元素的方位，与浮层共用一套取值。空间不足时自动翻到对侧。
+ * Where the hint sits relative to its trigger, sharing the overlay's values. It
+ * flips to the opposite side when there is not enough room.
  */
-export type TooltipPlacement = 'top' | 'bottom' | 'left' | 'right';
+export type TooltipPlacement = OverlayPlacement;
 
 /**
  * 触发方式。`hover` 悬停与聚焦都展示，适合按钮提示；`click` 点击切换，

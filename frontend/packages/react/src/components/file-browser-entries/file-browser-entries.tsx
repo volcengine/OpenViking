@@ -61,7 +61,19 @@ export function FileBrowserEntries({
       {/* The divider appears only when both entries are present: a single entry has
           no neighbour to separate from. */}
       {onConnectAgent && onImportResources ? (
-        <Divider className="ov-file-browser-entries__divider" length={12} />
+        <Divider
+          className="ov-file-browser-entries__divider"
+          length={12}
+          // 入口条是主色浅底，分隔线取主色并压到半透明，才不像一道灰线；
+          // 颜色走 prop 而不是 CSS 覆盖——组件把颜色写在行内，类选择器盖不过。
+          //
+          // The row sits on a primary tint, so the divider takes the primary colour
+          // at half opacity instead of reading as a grey line. The colour goes
+          // through the prop rather than a CSS override: the component writes it
+          // inline, which a class selector cannot beat.
+          color="var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff))"
+          style={{ opacity: 0.5 }}
+        />
       ) : null}
       {onImportResources ? (
         <button

@@ -6,7 +6,7 @@ import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters
 
 import { FilePreviewEditor } from './file-preview-editor.js';
 import { isEmptyFile } from './file-preview-source.js';
-import { EmptyFileState } from './file-preview-state.js';
+import { EmptyFileState, LoadingState } from './file-preview-state.js';
 import { LazyFilePreviewViewer } from './file-preview-lazy-viewer.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
@@ -71,6 +71,10 @@ export function FilePreviewBody({
       />
     );
   }
+
+  // 加载中优先于空文件：`source` 还没填上，不能当成「文件为空」。
+  // Loading outranks empty: `source` is not filled in yet, which is not an empty file.
+  if (fileTab.loading) return <LoadingState text={text} />;
 
   if (isEmptyFile(fileTab.source)) return <EmptyFileState text={text} />;
 

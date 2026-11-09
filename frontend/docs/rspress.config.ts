@@ -56,6 +56,10 @@ export default defineConfig({
               items: [
                 { text: '概览', link: '/components/' },
                 { text: '图标', link: '/components/icons' },
+                {
+                  text: 'FileBrowserEntries 入口条',
+                  link: '/components/file-browser-entries',
+                },
                 { text: 'FileTree 文件树', link: '/components/file-tree' },
                 {
                   text: 'FilePreview 文件预览',
@@ -130,6 +134,10 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/en/components/' },
                 { text: 'Icons', link: '/en/components/icons' },
+                {
+                  text: 'FileBrowserEntries',
+                  link: '/en/components/file-browser-entries',
+                },
                 { text: 'FileTree', link: '/en/components/file-tree' },
                 { text: 'FilePreview', link: '/en/components/file-preview' },
                 { text: 'Tui', link: '/en/components/tui' },

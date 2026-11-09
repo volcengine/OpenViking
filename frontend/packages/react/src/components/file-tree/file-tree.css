@@ -13,7 +13,7 @@
 .ov-file-tree {
   --ov-ui-file-tree-row-height: 32px;
   --ov-ui-file-tree-row-radius: 4px;
-  --ov-ui-file-tree-indent: 20px;
+  --ov-ui-file-tree-indent: 16px;
   --ov-ui-file-tree-text: var(
     --ov-ui-color-text-1,
     var(--ov-ui-text-1-default, #0b0b0f)
@@ -22,9 +22,22 @@
     --ov-ui-color-text-3,
     var(--ov-ui-text-3-default, #6e718c)
   );
+  /* 图标比名称浅一档：名称是正文，图标只是辅助识别，与设计稿的 fill-3 一致。 */
+  /* Icons sit one step lighter than names: the name is the content, the icon only
+     aids recognition, matching the design's fill-3. */
+  /*
+   * 目录图标用中性色；文件类型图标带品牌色，由行图标上的两个私有变量给出，
+   * 浅色取 `-light`、暗色取 `-dark`。宿主只改 `--ov-ui-color-text-3` 就能让
+   * 目录图标跟随，文件图标不受影响。
+   *
+   * Directory icons use the neutral colour; file-type icons carry brand colours
+   * through two private variables on the row icon — `-light` in the light theme and
+   * `-dark` under `.dark`. A host changing `--ov-ui-color-text-3` moves directory
+   * icons only, leaving file icons alone.
+   */
   --ov-ui-file-tree-icon: var(
-    --ov-ui-color-text-2,
-    var(--ov-ui-text-2-default, #3f3f51)
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default, #6e718c)
   );
   --ov-ui-file-tree-row-hover: var(
     --ov-ui-color-bg-5,
@@ -91,11 +104,13 @@
   display: flex;
   box-sizing: border-box;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   height: var(--ov-ui-file-tree-row-height);
-  padding-right: 8px;
+  padding-right: 4px;
   border-radius: var(--ov-ui-file-tree-row-radius);
-  cursor: default;
+  /* 行本身可点选，光标提示它可交互；禁用的行单独覆盖。 */
+  /* A row is clickable, so the cursor says so; a disabled row overrides it. */
+  cursor: pointer;
   outline: none;
   user-select: none;
 }
@@ -213,16 +228,33 @@
   overflow: hidden;
 }
 
+/**
+ * 名称最多占 60%，其余留给说明；两者都按需省略。比例与控制台的树一致——名称
+ * 太长时不能把说明挤没，说明也不能把名称挤没。
+ *
+ * The name takes at most 60% and the description gets the rest; both truncate as
+ * needed. The ratio matches the console tree: a long name must not squeeze the
+ * description away, and the description must not squeeze the name away either.
+ */
 .ov-file-tree__label {
+  flex: 0 1 auto;
+  max-width: 60%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ov-file-tree__description {
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   color: var(--ov-ui-file-tree-text-muted);
-  font-size: 12px;
+  /* 设计稿里说明比名称小两号，靠字号而不是颜色区分主次。 */
+  /* The design drops the description two steps below the name, using size rather than colour. */
+  font-size: 10px;
+  line-height: 20px;
+  letter-spacing: 0.03px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -256,38 +288,25 @@
   align-items: center;
 }
 
-.ov-file-tree__tooltip {
-  position: absolute;
-  z-index: 1;
-  top: calc(100% + 4px);
-  left: 0;
-  max-width: 320px;
-  padding: 6px 8px;
-  border-radius: var(--ov-ui-file-tree-row-radius);
-  background: var(
-    --ov-ui-color-tooltip-bg,
-    var(--ov-ui-tooltip-bg-default, #1f2329)
-  );
-  color: var(
-    --ov-ui-color-tooltip-text,
-    var(--ov-ui-tooltip-text-default, #fff)
-  );
-  font-size: 12px;
-  line-height: 18px;
-  pointer-events: none;
-}
-
-/* 内置浮层：标题、说明、触发行为与路径。 */
+/*
+ * 内置浮层内容：标题、说明、触发行为与路径。外壳由共享的 Popover 提供（白底
+ * 卡片、右侧定位、portal 到 body），这里只负责内部排版，颜色取基线。
+ *
+ * Built-in surface content: title, description, trigger copy and path. The shell
+ * comes from the shared Popover — white card, right placement, portal into the
+ * body — so this only lays out the inside, with colours from the baseline.
+ */
 .ov-file-tree__info {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .ov-file-tree__info-title {
+  color: var(--ov-ui-file-tree-text);
   font-size: 13px;
   font-weight: 500;
-  line-height: 20px;
+  line-height: 22px;
   word-break: break-all;
 }
 
@@ -297,19 +316,23 @@
   gap: 8px;
 }
 
+/* 字段名弱化、取值用正文色：与设计稿一致，靠颜色而不是透明度分层。 */
+/* The field name recedes and the value uses body colour, matching the design: the
+   split is by colour rather than opacity. */
 .ov-file-tree__info-label {
   flex: none;
-  opacity: 0.65;
+  color: var(--ov-ui-file-tree-text-muted);
 }
 
 .ov-file-tree__info-value {
   min-width: 0;
+  color: var(--ov-ui-file-tree-text);
   word-break: break-word;
 }
 
 .ov-file-tree__info-path {
   min-width: 0;
-  opacity: 0.8;
+  color: var(--ov-ui-file-tree-text-muted);
   word-break: break-all;
 }
 
@@ -401,4 +424,21 @@
   .ov-file-tree__spinner {
     animation-duration: 2s;
   }
+}
+
+/*
+ * 文件类型图标：用图标集自带的品牌色，暗色下换另一套。没有登记色值的键回退
+ * 到目录图标的中性色，因此未识别类型不会突兀地变成品牌色。
+ *
+ * File-type icons use the icon set's own brand colours, swapping to the dark
+ * variant under `.dark`. A key without a registered colour falls back to the
+ * neutral used by directory icons, so an unrecognised type never turns brand
+ * coloured by accident.
+ */
+.ov-file-tree__file-type-icon {
+  color: var(--ov-file-tree-icon-light, var(--ov-ui-file-tree-icon));
+}
+
+.dark .ov-file-tree__file-type-icon {
+  color: var(--ov-file-tree-icon-dark, var(--ov-ui-file-tree-icon));
 }

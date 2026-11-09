@@ -14,6 +14,7 @@ export type {
   OvRequestOptions,
   OvRequestSpec,
   OvResolvedOptions,
+  OvResponseEnvelope,
   OvResponseType,
   OvStream,
   OvStreamEvent,

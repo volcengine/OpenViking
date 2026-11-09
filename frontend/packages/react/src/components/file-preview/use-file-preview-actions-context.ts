@@ -6,6 +6,7 @@ import type { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewActions,
   FilePreviewFileTab,
+  FilePreviewSource,
   FilePreviewTab,
   FilePreviewViewMode,
 } from './types.js';
@@ -24,6 +25,8 @@ type Editing = ReturnType<typeof useFilePreviewEditing>;
 export function useFilePreviewActionsContext({
   activeTab,
   fileTab,
+  currentPath,
+  currentSource,
   viewMode,
   canSwitchView,
   setViewMode,
@@ -32,6 +35,10 @@ export function useFilePreviewActionsContext({
 }: {
   activeTab: FilePreviewTab;
   fileTab?: FilePreviewFileTab;
+  /** 当前页签的路径；目录页签也有。The current tab's path; a directory has one too. */
+  currentPath?: string;
+  /** 当前页签的正文来源；目录页签取当前那一级。The body source; a directory uses its active level. */
+  currentSource?: FilePreviewSource;
   viewMode: FilePreviewViewMode;
   canSwitchView: boolean;
   setViewMode: (mode: FilePreviewViewMode) => void;
@@ -63,17 +70,23 @@ export function useFilePreviewActionsContext({
     setViewMode('preview');
   }, [activeTab, editing, setViewMode]);
 
+  // 复制正文同样按来源判断：目录的当前摘要也是一段可复制的文本。
+  // Copy-content is decided by the source too: a directory's active summary is
+  // copyable text as well.
+  const copyable = currentSource ? readCopyableText(currentSource) : undefined;
   const copyContent = useCallback(async () => {
-    const copyable = fileTab && readCopyableText(fileTab.source);
-    if (!fileTab || !copyable) return false;
-    return operations.copyContent(fileTab, copyable);
-  }, [fileTab, operations]);
+    if (!copyable) return false;
+    return operations.copyContent(activeTab, copyable);
+  }, [activeTab, copyable, operations]);
 
+  // 复制路径按路径判断，不按页签类型：目录与文件都有路径行，两者都需要它。
+  // Copy-path is decided by the path, not the tab kind: both a directory and a
+  // file have a path row and both need it.
   const copyPath = useCallback(async () => {
-    const path = fileTab?.source.path;
+    const path = currentPath;
     if (!path) return false;
     return operations.copyPath(activeTab, path);
-  }, [activeTab, fileTab, operations]);
+  }, [activeTab, currentPath, operations]);
 
   const download = useCallback(() => {
     if (fileTab) void operations.download(fileTab);
@@ -89,9 +102,9 @@ export function useFilePreviewActionsContext({
     startEditing,
     saveEditing,
     cancelEditing,
-    canCopyContent: Boolean(fileTab && readCopyableText(fileTab.source)),
+    canCopyContent: Boolean(copyable),
     copyContent,
-    canCopyPath: Boolean(fileTab?.source.path),
+    canCopyPath: Boolean(currentPath),
     copyPath,
     canDownload: Boolean(fileTab?.operations?.download),
     download,
