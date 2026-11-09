@@ -2459,39 +2459,25 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def admin_add_group_members(
-        self, account_id: str, group_id: str, user_ids: List[str]
-    ) -> Dict[str, Any]:
-        """Atomically add 1–1000 existing account users to a group."""
-        response = await self._request(
-            "PUT",
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
-            json={"user_ids": user_ids},
-        )
-        return self._handle_response(response)
-
-    async def admin_remove_group_members(
-        self, account_id: str, group_id: str, user_ids: List[str]
-    ) -> Dict[str, Any]:
-        """Atomically remove 1–1000 user IDs; report whether any membership was removed."""
-        response = await self._request(
-            "DELETE",
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
-            json={"user_ids": user_ids},
-        )
-        return self._handle_response(response)
-
     async def admin_add_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        """Add one existing account user through the batch membership API."""
-        return await self.admin_add_group_members(account_id, group_id, [user_id])
+        response = await self._request(
+            "PUT",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
+        )
+        return self._handle_response(response)
 
     async def admin_remove_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        """Remove one user through the batch membership API."""
-        return await self.admin_remove_group_members(account_id, group_id, [user_id])
+        response = await self._request(
+            "DELETE",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
+        )
+        return self._handle_response(response)
 
     async def list_experience_trajectories(
         self,
@@ -3729,31 +3715,17 @@ class SyncHTTPClient:
     def admin_list_group_members(self, account_id: str, group_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_list_group_members(account_id, group_id))
 
-    def admin_add_group_members(
-        self, account_id: str, group_id: str, user_ids: List[str]
-    ) -> Dict[str, Any]:
-        """Atomically add 1–1000 existing account users to a group."""
-        return run_async(self._async_client.admin_add_group_members(account_id, group_id, user_ids))
-
-    def admin_remove_group_members(
-        self, account_id: str, group_id: str, user_ids: List[str]
-    ) -> Dict[str, Any]:
-        """Atomically remove 1–1000 user IDs; report whether any membership was removed."""
-        return run_async(
-            self._async_client.admin_remove_group_members(account_id, group_id, user_ids)
-        )
-
     def admin_add_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        """Add one existing account user through the batch membership API."""
-        return self.admin_add_group_members(account_id, group_id, [user_id])
+        return run_async(self._async_client.admin_add_group_member(account_id, group_id, user_id))
 
     def admin_remove_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        """Remove one user through the batch membership API."""
-        return self.admin_remove_group_members(account_id, group_id, [user_id])
+        return run_async(
+            self._async_client.admin_remove_group_member(account_id, group_id, user_id)
+        )
 
     def list_experience_trajectories(
         self,

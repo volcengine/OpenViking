@@ -23,25 +23,21 @@ from openviking_sdk.errors import NotFoundError
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
 @pytest.mark.parametrize(
-    "method_name,user_ids,http_method,result",
+    "method_name,user_id,http_method,result",
     [
-        ("admin_add_group_members", ["alice", "bob"], "PUT", {"added": True}),
         ("admin_add_group_member", "alice", "PUT", {"added": True}),
-        ("admin_remove_group_members", ["alice", "bob"], "DELETE", {"removed": True}),
-        ("admin_remove_group_members", ["missing"], "DELETE", {"removed": False}),
         ("admin_remove_group_member", "alice", "DELETE", {"removed": True}),
+        ("admin_remove_group_member", "missing", "DELETE", {"removed": False}),
     ],
 )
 async def test_group_membership_clients_use_batch_http_contract(
-    client_type, method_name, user_ids, http_method, result
+    client_type, method_name, user_id, http_method, result
 ):
     def handle(request):
         assert request.method == http_method
         assert request.url.path == "/api/v1/admin/accounts/acme/groups/engineering/members"
         assert request.headers["content-type"] == "application/json"
-        assert json.loads(request.content) == {
-            "user_ids": [user_ids] if isinstance(user_ids, str) else user_ids
-        }
+        assert json.loads(request.content) == {"user_ids": [user_id]}
         return httpx.Response(200, json={"status": "ok", "result": result})
 
     client = client_type(url="http://localhost:1933")
@@ -50,7 +46,7 @@ async def test_group_membership_clients_use_batch_http_contract(
         base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
     )
     try:
-        response = getattr(client, method_name)("acme", "engineering", user_ids)
+        response = getattr(client, method_name)("acme", "engineering", user_id)
         if client_type is AsyncHTTPClient:
             response = await response
         assert response == result

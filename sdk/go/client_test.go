@@ -649,24 +649,14 @@ func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
 
 func TestAdminGroupMembersUseBatchEndpoint(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		method  string
-		userIDs []any
-		result  map[string]any
-		call    func(*Client) (map[string]any, error)
+		name   string
+		method string
+		result map[string]any
+		call   func(*Client, context.Context, string, string, string) (map[string]any, error)
 	}{
-		{"add batch", http.MethodPut, []any{"alice", "bob", "alice"}, map[string]any{"added": true}, func(c *Client) (map[string]any, error) {
-			return c.AdminAddGroupMembers(context.Background(), "acct", "engineering", []string{"alice", "bob", "alice"})
-		}},
-		{"remove batch", http.MethodDelete, []any{"alice", "bob", "alice"}, map[string]any{"removed": false}, func(c *Client) (map[string]any, error) {
-			return c.AdminRemoveGroupMembers(context.Background(), "acct", "engineering", []string{"alice", "bob", "alice"})
-		}},
-		{"add single", http.MethodPut, []any{"alice"}, map[string]any{"added": true}, func(c *Client) (map[string]any, error) {
-			return c.AdminAddGroupMember(context.Background(), "acct", "engineering", "alice")
-		}},
-		{"remove single", http.MethodDelete, []any{"alice"}, map[string]any{"removed": true}, func(c *Client) (map[string]any, error) {
-			return c.AdminRemoveGroupMember(context.Background(), "acct", "engineering", "alice")
-		}},
+		{"add", http.MethodPut, map[string]any{"added": true}, (*Client).AdminAddGroupMember},
+		{"remove", http.MethodDelete, map[string]any{"removed": true}, (*Client).AdminRemoveGroupMember},
+		{"remove non-member", http.MethodDelete, map[string]any{"removed": false}, (*Client).AdminRemoveGroupMember},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -676,14 +666,14 @@ func TestAdminGroupMembersUseBatchEndpoint(t *testing.T) {
 				if got := r.Header.Get("Content-Type"); got != "application/json" {
 					t.Errorf("Content-Type = %q", got)
 				}
-				if body := readJSONBody(t, r); !reflect.DeepEqual(body, map[string]any{"user_ids": tc.userIDs}) {
+				if body := readJSONBody(t, r); !reflect.DeepEqual(body, map[string]any{"user_ids": []any{"alice"}}) {
 					t.Errorf("body = %#v", body)
 				}
 				writeOK(t, w, tc.result)
 			}))
 			defer closeServer()
 
-			result, err := tc.call(client)
+			result, err := tc.call(client, context.Background(), "acct", "engineering", "alice")
 			if err != nil {
 				t.Fatal(err)
 			}

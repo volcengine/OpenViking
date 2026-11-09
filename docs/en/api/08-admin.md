@@ -77,10 +77,10 @@ The server adds memberships to `RequestContext.group_ids` for each request. Addi
 
 ```bash
 ov --sudo admin create-group acme engineering
-ov --sudo admin add-group-members acme engineering alice bob
+ov --sudo admin add-group-member acme engineering alice
 ov acl grant viking://resources/project-a \
   --principal group:engineering --level read
-ov --sudo admin remove-group-members acme engineering alice bob
+ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
 
@@ -95,14 +95,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineeri
 
 To delete a group that still has members, call `DELETE /api/v1/admin/accounts/acme/groups/engineering`.
 
-The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_members`, `admin_remove_group_members`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names. TypeScript exposes `adminAddGroupMembers` and `adminRemoveGroupMembers`. Batch methods accept an array/list of 1–1000 user IDs. Removal returns `{"removed": true}` if any membership was removed, otherwise `{"removed": false}`.
-
-The singular Python/Go methods and CLI command aliases (`add-group-member`, `remove-group-member`) remain available; existing single-user calls now use the batch API.
-
-```python
-client.admin_add_group_members("acme", "engineering", ["alice", "bob"])
-client.admin_remove_group_members("acme", "engineering", ["alice", "bob"])
-```
+The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
 ## API Reference
 

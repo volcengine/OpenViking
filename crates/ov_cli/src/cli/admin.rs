@@ -95,25 +95,23 @@ pub(crate) enum AdminCommands {
         #[arg(value_name = "group-id")]
         group_id: String,
     },
-    /// Add 1–1000 existing account users to a group atomically
-    #[command(visible_alias = "add-group-member")]
-    AddGroupMembers {
+    /// Add an existing account user to a group
+    AddGroupMember {
         #[arg(value_name = "account-id")]
         account_id: String,
         #[arg(value_name = "group-id")]
         group_id: String,
-        #[arg(value_name = "user-id", num_args = 1..=1000, required = true)]
-        user_ids: Vec<String>,
+        #[arg(value_name = "user-id")]
+        user_id: String,
     },
-    /// Remove 1–1000 users from a group atomically
-    #[command(visible_alias = "remove-group-member")]
-    RemoveGroupMembers {
+    /// Remove a user from a group
+    RemoveGroupMember {
         #[arg(value_name = "account-id")]
         account_id: String,
         #[arg(value_name = "group-id")]
         group_id: String,
-        #[arg(value_name = "user-id", num_args = 1..=1000, required = true)]
-        user_ids: Vec<String>,
+        #[arg(value_name = "user-id")]
+        user_id: String,
     },
     /// Delete an empty group
     DeleteGroup {

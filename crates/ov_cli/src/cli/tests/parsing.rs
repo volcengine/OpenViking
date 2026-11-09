@@ -1,36 +1,6 @@
-use crate::cli::{AdminCommands, Cli, Commands, CompileCommands, ObserverCommands, SnapshotCmd};
+use crate::cli::{Cli, Commands, CompileCommands, ObserverCommands, SnapshotCmd};
 use crate::handlers;
 use clap::{CommandFactory, Parser};
-
-#[test]
-fn cli_group_members_accepts_batches_and_singular_aliases() {
-    for command in [
-        "add-group-members",
-        "remove-group-members",
-        "add-group-member",
-        "remove-group-member",
-    ] {
-        for count in [0, 1, 2, 1000, 1001] {
-            let mut args = vec!["ov", "admin", command, "acme", "engineering"];
-            args.extend(std::iter::repeat_n("alice", count));
-            let parsed = Cli::try_parse_from(args);
-            if !(1..=1000).contains(&count) {
-                assert!(parsed.is_err(), "{command} must reject {count} users");
-                continue;
-            }
-            let cli = parsed.expect("membership command should parse");
-            let Commands::Admin { action } = cli.command else {
-                panic!("expected admin command")
-            };
-            let user_ids = match action {
-                AdminCommands::AddGroupMembers { user_ids, .. }
-                | AdminCommands::RemoveGroupMembers { user_ids, .. } => user_ids,
-                _ => panic!("expected membership command"),
-            };
-            assert_eq!(user_ids, vec!["alice"; count]);
-        }
-    }
-}
 
 #[test]
 fn cli_parses_global_identity_override_flags() {

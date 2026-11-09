@@ -175,34 +175,34 @@ pub async fn list_group_members(
     )
 }
 
-pub async fn add_group_members(
+pub async fn add_group_member(
     client: &HttpClient,
     account_id: &str,
     group_id: &str,
-    user_ids: &[String],
+    user_id: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     show_admin(
         client
-            .admin_add_group_members(account_id, group_id, user_ids)
+            .admin_add_group_member(account_id, group_id, user_id)
             .await?,
         output_format,
         compact,
     )
 }
 
-pub async fn remove_group_members(
+pub async fn remove_group_member(
     client: &HttpClient,
     account_id: &str,
     group_id: &str,
-    user_ids: &[String],
+    user_id: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     show_admin(
         client
-            .admin_remove_group_members(account_id, group_id, user_ids)
+            .admin_remove_group_member(account_id, group_id, user_id)
             .await?,
         output_format,
         compact,

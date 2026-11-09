@@ -245,8 +245,6 @@ ov session commit s1 --no-event-tags
 - `admin delete-account` - 删除 account，仅 ROOT。
 - `admin register-user` - 注册用户。
 - `admin list-users` - 列出 account 内用户。
-- `admin add-group-members <account-id> <group-id> <user-id>...` - 原子添加 1–1000 个已有用户；保留 `add-group-member` 别名。
-- `admin remove-group-members <account-id> <group-id> <user-id>...` - 原子移除 1–1000 个用户；保留 `remove-group-member` 别名。
 - `admin remove-user` - 移除用户。
 - `admin set-role` - 修改用户角色，仅 ROOT。
 - `admin regenerate-key` - 轮转用户 API key。

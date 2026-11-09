@@ -1871,31 +1871,31 @@ impl HttpClient {
         self.get(&path, &[]).await
     }
 
-    pub async fn admin_add_group_members(
+    pub async fn admin_add_group_member(
         &self,
         account_id: &str,
         group_id: &str,
-        user_ids: &[String],
+        user_id: &str,
     ) -> Result<Value> {
         let path = format!(
             "/api/v1/admin/accounts/{}/groups/{}/members",
             account_id, group_id
         );
-        self.put(&path, &serde_json::json!({"user_ids": user_ids}))
+        self.put(&path, &serde_json::json!({"user_ids": [user_id]}))
             .await
     }
 
-    pub async fn admin_remove_group_members(
+    pub async fn admin_remove_group_member(
         &self,
         account_id: &str,
         group_id: &str,
-        user_ids: &[String],
+        user_id: &str,
     ) -> Result<Value> {
         let path = format!(
             "/api/v1/admin/accounts/{}/groups/{}/members",
             account_id, group_id
         );
-        self.delete_with_body(&path, &serde_json::json!({"user_ids": user_ids}))
+        self.delete_with_body(&path, &serde_json::json!({"user_ids": [user_id]}))
             .await
     }
 
@@ -2355,21 +2355,20 @@ mod tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn admin_group_members_send_batch_json_to_collection_route() {
-        let user_ids = vec!["alice".to_string(), "bob".to_string()];
+    async fn admin_group_members_send_singleton_json_to_collection_route() {
         for method in ["PUT", "DELETE"] {
             let (base_url, request_rx) = spawn_request_capture_server().await;
             let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
             if method == "PUT" {
                 client
-                    .admin_add_group_members("acme", "engineering", &user_ids)
+                    .admin_add_group_member("acme", "engineering", "alice")
                     .await
             } else {
                 client
-                    .admin_remove_group_members("acme", "engineering", &user_ids)
+                    .admin_remove_group_member("acme", "engineering", "alice")
                     .await
             }
-            .expect("batch membership request should succeed");
+            .expect("membership request should succeed");
             let request = request_rx.await.expect("request should be captured");
             assert!(request.starts_with(&format!(
                 "{method} /api/v1/admin/accounts/acme/groups/engineering/members HTTP/1.1\r\n"
@@ -2382,7 +2381,7 @@ mod tests {
             );
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(body).unwrap(),
-                json!({"user_ids": user_ids})
+                json!({"user_ids": ["alice"]})
             );
         }
     }
