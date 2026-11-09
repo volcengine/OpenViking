@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::SnapshotCmd;
+use crate::cli::SnapshotCmd;
 use crate::client::{HttpClient, SnapshotCommitReq, SnapshotRestoreReq, SnapshotShowResult};
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};

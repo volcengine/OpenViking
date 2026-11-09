@@ -464,7 +464,7 @@ async def test_oidc_issuer_matches_exactly(configured_issuer, token_issuer, acce
             await plugin._validate_token(token)
 
 
-@pytest.mark.parametrize("role", ["root", "global", "unknown"])
+@pytest.mark.parametrize("role", ["root", "unknown"])
 async def test_snapshot_cannot_bypass_main_registered_role_validation(role):
     store = AsyncMock(spec=AccountStore)
     store.get_auth_snapshot.return_value = {
@@ -479,7 +479,9 @@ async def test_snapshot_cannot_bypass_main_registered_role_validation(role):
 
 
 async def test_snapshot_accepts_a_registered_custom_role(monkeypatch):
-    monkeypatch.setitem(Role._CUSTOM_RANK, "snapshot-reviewer", 1)
+    monkeypatch.setitem(
+        Role._TOKEN_ROLE_ALLOWLIST, "snapshot-reviewer", frozenset({"snapshot-reviewer"})
+    )
     store = AsyncMock(spec=AccountStore)
     store.get_auth_snapshot.return_value = {
         "account_id": "acme",

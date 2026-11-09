@@ -18,13 +18,14 @@ class FakeUsageEvent:
         event_id: str = "ue_recall",
         event_type: str = "memory.recalled",
         session_id: str = "session-1",
+        account_id: str = "default",
         resource_uri: str = ("viking://user/default/memories/experiences/生成请假邮件通用模版.md"),
     ) -> None:
         self._record = {
             "schema_version": "v1",
             "event_id": event_id,
             "event_type": event_type,
-            "account_id": "default",
+            "account_id": account_id,
             "user_id": "default",
             "session_id": session_id,
             "task_id": "task-1",
@@ -224,11 +225,60 @@ def test_file_log_sink_uses_hourly_utc_rotation(tmp_path):
             {"path": "usage.log", "backup_count": -1},
             "backup_count must be non-negative",
         ),
+        (
+            {"path": "usage.log", "resource_id_source": "pod"},
+            "resource_id_source must be environment or account",
+        ),
     ],
 )
 def test_file_log_sink_validates_config(kwargs, message):
     with pytest.raises(ValueError, match=message):
         FileLogUsageSink(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_account_resource_id_source_attributes_each_event_to_its_account(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("OV_RESOURCE_ID")
+    log_path = tmp_path / "usage.log"
+    sink = FileLogUsageSink(path=log_path, resource_id_source="account")
+    uri = "viking://user/default/memories/experiences/report.md"
+
+    try:
+        await sink.write(
+            events=[
+                FakeUsageEvent(event_id="ue_a", account_id="res-a", resource_uri=uri),
+                FakeUsageEvent(event_id="ue_b", account_id="res-b", resource_uri=uri),
+            ]
+        )
+    finally:
+        sink.close()
+
+    records = [_parse_line(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert [(record["object_id"], record["tenant_id"]) for record in records] == [
+        ("ue_a", f"resource_id:res-a;account_id:res-a;user_id:default;resource_uri:{uri}"),
+        ("ue_b", f"resource_id:res-b;account_id:res-b;user_id:default;resource_uri:{uri}"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_account_resource_id_source_rejects_batch_without_account(tmp_path):
+    log_path = tmp_path / "usage.log"
+    sink = FileLogUsageSink(path=log_path, resource_id_source="account")
+
+    try:
+        with pytest.raises(ValueError, match="account_id is required"):
+            await sink.write(
+                events=[
+                    FakeUsageEvent(event_id="ue_a", account_id="res-a"),
+                    FakeUsageEvent(event_id="ue_missing", account_id=" "),
+                ]
+            )
+    finally:
+        sink.close()
+
+    assert not log_path.exists() or log_path.read_text(encoding="utf-8") == ""
 
 
 def test_file_log_sink_requires_resource_id(tmp_path, monkeypatch):

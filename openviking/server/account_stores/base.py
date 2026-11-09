@@ -34,6 +34,8 @@ class AccountStore(ABC):
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -42,6 +44,8 @@ class AccountStore(ABC):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None: ...
 
     @abstractmethod

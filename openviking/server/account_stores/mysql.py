@@ -44,7 +44,11 @@ from openviking.server.account_stores.mysql_schema import (
     GroupMember,
     User,
 )
-from openviking.server.identity import Role
+from openviking.server.identity import (
+    ACCOUNT_USER_ASSIGNABLE_ROLES,
+    ACCOUNT_USER_CREATION_ROLES,
+    Role,
+)
 from openviking.storage.mysql_runtime import (
     MySQLRuntime,
     get_shared_mysql_runtime,
@@ -88,8 +92,17 @@ def _validate(value: str, validator, name: str) -> None:
 def _validate_role(role: str) -> Role:
     if role == Role.ROOT:
         raise PermissionDeniedError("Account users cannot be assigned ROOT")
-    if role not in (Role.ADMIN, Role.USER):
+    if role not in ACCOUNT_USER_ASSIGNABLE_ROLES:
         raise InvalidArgumentError("Account user role must be user or admin.")
+    return Role(role)
+
+
+def _validate_creation_role(role: str) -> Role:
+    """Role accepted when creating an account user; GLOBAL is creation-only."""
+    if role == Role.ROOT:
+        raise PermissionDeniedError("Account users cannot be assigned ROOT")
+    if role not in ACCOUNT_USER_CREATION_ROLES:
+        raise InvalidArgumentError("Account user role must be user, admin, or global.")
     return Role(role)
 
 
@@ -498,7 +511,10 @@ class MySQLAccountStore(AccountStore):
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         _validate(account_id, validate_account_id, "account_id")
         _validate(admin_user_id, validate_user_id, "admin_user_id")
         try:
@@ -523,7 +539,10 @@ class MySQLAccountStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         _validate(account_id, validate_account_id, "account_id")
         _validate(admin_user_id, validate_user_id, "admin_user_id")
         try:
@@ -553,7 +572,7 @@ class MySQLAccountStore(AccountStore):
 
     async def create_user(self, account_id: str, user_id: str, role: str) -> None:
         _validate(user_id, validate_user_id, "user_id")
-        role = _validate_role(role)
+        role = _validate_creation_role(role)
         try:
             async with self._transaction() as session:
                 account = await self._lock_account(session, account_id)
@@ -578,7 +597,7 @@ class MySQLAccountStore(AccountStore):
         api_key: str,
     ) -> None:
         _validate(user_id, validate_user_id, "user_id")
-        role = _validate_role(role)
+        role = _validate_creation_role(role)
         try:
             async with self._transaction() as session:
                 account = await self._lock_account(session, account_id)
@@ -739,6 +758,10 @@ class MySQLAccountStore(AccountStore):
             self._require_active(account)
             user = await self._lock_user(session, account, user_id)
             self._require_active(user)
+            if user.role == Role.GLOBAL:
+                raise InvalidArgumentError(
+                    "GLOBAL identities cannot change roles; delete and recreate instead."
+                )
             if role != Role.ADMIN:
                 await self._protect_last_admin(session, account, user)
             user.role = role

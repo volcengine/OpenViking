@@ -108,6 +108,13 @@ app = typer.Typer(
     help=f"{__logo__} vikingbot - Personal AI Assistant",
     no_args_is_help=True,
 )
+# Force UTF-8 stdio on Windows. rich's legacy Windows renderer writes through
+# sys.stdout/stderr; on Chinese Windows (code page 936/gbk) that stream cannot
+# encode "✓" (U+2713), raising UnicodeEncodeError when output is redirected.
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}

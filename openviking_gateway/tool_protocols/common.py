@@ -31,9 +31,10 @@ SUMMARY_HEADROOM = 16000
 
 
 class ToolLoopError(Exception):
-    def __init__(self, reason, status=502, content=None, headers=None):
+    def __init__(self, reason, status=502, content=None, headers=None, event=None):
         super().__init__(reason)
         self.status, self.content, self.headers = status, content, headers or {}
+        self.event = event
 
 
 class SummaryError(Exception):

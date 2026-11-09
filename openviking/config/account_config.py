@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import ClassVar, List, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from openviking.config.account_vector import AccountEmbeddingConfig, AccountVectorDBConfig
 from openviking.models.vlm.registry import is_valid_provider
@@ -36,6 +36,25 @@ class AccountAclSettings(BaseModel):
     """Account-scoped ACL switch."""
 
     enabled: bool = RuntimeField(default=False)
+
+
+class AccountMemoryConfig(BaseModel):
+    """Account-owned SessionCommit long-term extraction switch."""
+
+    extraction_enabled: bool = RuntimeField(default=True)
+
+
+class AccountParserApiConfig(BaseModel):
+    """Account-owned external parser identity; operational settings are Cluster-owned."""
+
+    api_key: str = RuntimeField(min_length=1, repr=False)
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("api_key must not be blank")
+        return value
 
 
 class AccountFeishuConfig(BaseModel):
@@ -106,9 +125,7 @@ class AccountVLMConfig(BaseModel):
         for index, credential in enumerate(self.credentials):
             provider = credential.provider.strip().lower() if credential.provider else ""
             if not provider:
-                raise ValueError(
-                    f"credentials[{index}].provider is required for Account VLM"
-                )
+                raise ValueError(f"credentials[{index}].provider is required for Account VLM")
             if not is_valid_provider(provider):
                 raise ValueError(
                     f"credentials[{index}].provider '{credential.provider}' is not supported"
@@ -117,9 +134,7 @@ class AccountVLMConfig(BaseModel):
             for field_name in ("model", "api_key", "api_base", "api_version"):
                 value = getattr(credential, field_name)
                 if value is not None and not value.strip():
-                    raise ValueError(
-                        f"credentials[{index}].{field_name} must not be blank"
-                    )
+                    raise ValueError(f"credentials[{index}].{field_name} must not be blank")
         self.to_vlm_config()
         return self
 
@@ -138,7 +153,10 @@ class AccountConfig(BaseModel):
     """
 
     # Account-level settings with active business consumers.
+    output_language_override: Optional[str] = RuntimeField(default=None)
+    memory: Optional[AccountMemoryConfig] = RuntimeField(default=None)
     feishu: Optional[AccountFeishuConfig] = RuntimeField(default=None)
+    parser_api: Optional[AccountParserApiConfig] = RuntimeField(default=None)
     vlm: Optional[AccountVLMConfig] = RuntimeField(default=None)
     query_planner: Optional[AccountVLMConfig] = RuntimeField(default=None)
     github: Optional[GitHubConfig] = RuntimeField(default=None)

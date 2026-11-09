@@ -19,7 +19,6 @@ from openviking.session.memory.tools import add_tool_call_pair_to_messages, get_
 from openviking.session.memory.utils.language import resolve_output_language_from_text
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError
-from openviking_cli.utils.config import get_openviking_config
 
 _RESERVED_NAMES = {".overview.md", ".abstract.md"}
 _LANGUAGE_SAMPLE_FILES = 3
@@ -43,8 +42,15 @@ class ConsolidationExtractContextProvider(SessionExtractContextProvider):
         output_language: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         viking_fs: Optional[VikingFS] = None,
+        output_language_override: str | None = None,
     ):
-        super().__init__(messages=[], ctx=ctx, viking_fs=viking_fs, memory_registry=memory_registry)
+        super().__init__(
+            messages=[],
+            ctx=ctx,
+            viking_fs=viking_fs,
+            memory_registry=memory_registry,
+            output_language_override=output_language_override,
+        )
         self.memory_types = list(dict.fromkeys(memory_types))
         # Canonical `--to` directory. When provided, prefetch lists exactly this
         # directory instead of re-deriving it from ctx.user_id, which can be
@@ -52,11 +58,11 @@ class ConsolidationExtractContextProvider(SessionExtractContextProvider):
         self.target_directory = target_directory.rstrip("/") if target_directory else None
         self._instruction_text = (instruction or "").strip()
         self._output_language = resolve_output_language_from_text(
-            "", fallback_language=output_language or "en"
+            "",
+            output_language_override=self._output_language_override,
+            fallback_language=output_language or "en",
         )
-        self._language_resolved = bool(
-            output_language or get_openviking_config().output_language_override.strip()
-        )
+        self._language_resolved = bool(output_language or self._output_language_override.strip())
 
     def bind_isolation_handler(self, isolation_handler: MemoryIsolationHandler) -> None:
         self._isolation_handler = isolation_handler
@@ -67,7 +73,10 @@ class ConsolidationExtractContextProvider(SessionExtractContextProvider):
         for memory_type in self.memory_types:
             schema = self._get_registry().get(memory_type)
             if schema is None or not schema.enabled:
-                raise ValueError(f"Memory schema not found or disabled: {memory_type}")
+                raise ValueError(
+                    "use ov compile memory to update all files, rollback with ov snapshot restore, "
+                    "details in docs/en/context-compilation/06-memory-consolidation.md"
+                )
             schemas.append(schema)
         return schemas
 
@@ -180,11 +189,6 @@ All memory content MUST be written in {output_language}.
     async def prepare_extraction_messages(self) -> None:
         if self._language_resolved:
             return
-        config = get_openviking_config()
-        if config.output_language_override.strip():
-            self._output_language = resolve_output_language_from_text("", config=config)
-            self._language_resolved = True
-            return
         samples: list[str] = []
         sampled_uris: set[str] = set()
         for directory in self._target_directories():
@@ -217,7 +221,9 @@ All memory content MUST be written in {output_language}.
                 # The byte cap can cut the metadata comment before its closing delimiter.
                 samples.append(_MEMORY_FIELDS_START.split(text, maxsplit=1)[0])
         self._output_language = resolve_output_language_from_text(
-            "\n".join(samples), config=config, fallback_language="en"
+            "\n".join(samples),
+            output_language_override=self._output_language_override,
+            fallback_language="en",
         )
         self._language_resolved = True
 

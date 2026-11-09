@@ -2045,6 +2045,7 @@ async def test_patch_merge_uses_original_messages_for_output_language(monkeypatc
         ctx=_ctx(),
         registry=_registry(),
         vlm_resolver=_TestVLMResolver(),
+        output_language_override="",
     )
 
     assert captured_languages == ["zh-CN"]
