@@ -18,8 +18,5 @@ export { FileBrowser } from './modules/file-browser/index.js';
 export type { FileBrowserProps } from './modules/file-browser/index.js';
 export { Console } from './modules/console/index.js';
 export type { ConsoleProps } from './modules/console/index.js';
-export { TaskCenter } from './modules/task-center/index.js';
-export type { TaskCenterProps } from './modules/task-center/index.js';
-
 export { ScopeCascade } from './modules/scope-cascade/index.js';
 export type { ScopeCascadeProps } from './modules/scope-cascade/index.js';

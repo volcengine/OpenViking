@@ -6,7 +6,7 @@ English / [中文](README_CN.md)
 
 ## Placeholder components available today
 
-Four modules ship importable placeholder components, public Props / Labels / Slots types and standalone stylesheet entries, so an integrator can finish page layout first. The props are settled: each module declares its request options, controlled state, callbacks, slots and copy. The components themselves still render only a module name and placeholder copy, and consume none of those props yet; business Hooks and the interactions described below are still to come.
+Two modules ship importable placeholder components, public Props / Labels / Slots types and standalone stylesheet entries, so an integrator can finish page layout first. The props are settled: each module declares its request options, controlled state, callbacks, slots and copy. The components themselves still render only a module name and placeholder copy, and consume none of those props yet; business Hooks and the interactions described below are still to come.
 
 Because a module loads its own data, no prop carries data. A host supplies configuration, the controlled value and the copy; the module reports changes through callbacks.
 
@@ -14,7 +14,6 @@ Because a module loads its own data, no prop carries data. A host supplies confi
 | -------------- | ------------- | ---------------------------------------- |
 | `file-browser` | `FileBrowser` | `@openviking/react/modules/file-browser` |
 | `console`      | `Console`     | `@openviking/react/modules/console`      |
-| `task-center`  | `TaskCenter`  | `@openviking/react/modules/task-center`  |
 
 ```tsx
 import { FileBrowser } from '@openviking/react/modules/file-browser';
@@ -23,7 +22,7 @@ import '@openviking/react/modules/file-browser/style.css';
 <FileBrowser labels={{ title: 'File browser' }} />;
 ```
 
-The three components and their main Props types are also exported from the `@openviking/react` root entry; Labels, Slots and the enum types come from the module subpath. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
+The two components and their main Props types are also exported from the `@openviking/react` root entry; Labels, Slots and the enum types come from the module subpath. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
 
 ## Responsibilities
 
@@ -62,7 +61,7 @@ React integration is provided by `OpenVikingProvider` from `@openviking/react/cl
 | `resourceId`  | Current library; data-plane requests need it                                                                                                                                                                   |
 | `credentials` | `RequestCredentials` for `fetch`. Defaults to `same-origin`; the commercial edition sets `include` for cross-origin calls                                                                                      |
 
-Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. Every module's `FileBrowserProps`, `ConsoleProps` and `TaskCenterProps` already declares this field.
+Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. The `FileBrowserProps` and `ConsoleProps` types already declare this field.
 
 The Provider is implemented; the business Hooks are not, so a module does not request anything yet. The host configures it once at the application root:
 
@@ -103,13 +102,12 @@ Provider inheritance follows [React Context](https://react.dev/reference/react/u
 
 ## Business module breakdown
 
-The three module directories and their placeholder components exist; below are the target capabilities each will take on, none implemented yet. The components these composite views build on are also placeholders today, so a module's real implementation depends on those views landing first. Product onboarding, the resource and Skill import flows and sync configuration belong to the host, with no corresponding business module.
+The two module directories and their placeholder components exist; below are the target capabilities each will take on, none implemented yet. The components these composite views build on are also placeholders today, so a module's real implementation depends on those views landing first. Product onboarding, the resource and Skill import flows and sync configuration belong to the host, with no corresponding business module.
 
 | Module         | Hook and business responsibility                                                                                                                                              | Composite view                                                                                                           |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `file-browser` | Manages directory, retrieval, current URI, preview loading and edit saving; coordinates positioning, refresh, history and version comparison                                  | Composes `FileTree`, the search interaction and `FilePreview` into a file browsing area that links directory and content |
 | `console`      | Manages conversation / TUI mode, common context and toolbar; handles conversation sessions, message streams, attachments, memory submission and command execution and records | Composes the module's own conversation view, `Tui` and mode switching into a complete interaction panel                  |
-| `task-center`  | Lists, filters, details, execution records and permitted operations for tasks visible to the current identity                                                                 | Task list and detail; this phase of the personal terminal focuses on resource import and knowledge organisation tasks    |
 
 History lists and version comparison start as preview capabilities of `file-browser`, and compile confirmation as a Bot action flow in `console`; they become public modules only once an independent consumer appears, and no module is created per button or dialog. Public view components are added when real reuse appears, and the composite views in the table do not require new component placeholders ahead of time.
 
