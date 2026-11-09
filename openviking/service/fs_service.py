@@ -392,9 +392,14 @@ class FSService:
         extra_fields = extra_fields or []
         if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             await viking_fs._ensure_access(uri, ctx)
-            unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
-                extra_fields
-            )
+            unsupported_fields = {
+                "id",
+                "count",
+                "l2_count",
+                "abstract",
+                "overview",
+                "tags",
+            }.intersection(extra_fields)
             if tags or include_tags:
                 raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
             if include_abstract is True or include_overview is True:
@@ -1394,9 +1399,14 @@ class FSService:
         viking_fs = self._ensure_initialized()
         if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             await viking_fs._ensure_access(uri, ctx)
-            unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
-                extra_fields or []
-            )
+            unsupported_fields = {
+                "id",
+                "count",
+                "l2_count",
+                "abstract",
+                "overview",
+                "tags",
+            }.intersection(extra_fields or [])
             if tags or include_tags:
                 raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
             if include_abstract is True or include_overview is True:
@@ -1719,9 +1729,14 @@ class FSService:
             await viking_fs._ensure_access(uri, ctx)
             if tags or include_tags:
                 raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
-        unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
-            extra_fields or []
-        )
+        unsupported_fields = {
+            "id",
+            "count",
+            "l2_count",
+            "abstract",
+            "overview",
+            "tags",
+        }.intersection(extra_fields or [])
         if unsupported_fields and (
             namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY
         ):
