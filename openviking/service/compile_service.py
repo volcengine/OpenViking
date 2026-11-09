@@ -86,7 +86,8 @@ class CompileInputs(BaseModel):
             if normalized not in sources:
                 sources.append(normalized)
         self.from_ = sources
-        self.to = self.to.strip().rstrip("/")
+        if self.to is not None:
+            self.to = self.to.strip().rstrip("/")
         self.skill = self.skill.strip().rstrip("/")
         self.instruction = (
             self.instruction.strip() if self.instruction and self.instruction.strip() else None
@@ -97,7 +98,7 @@ class CompileInputs(BaseModel):
             raise ValueError(
                 f"Compile execution controls are server-owned: {', '.join(sorted(reserved))}"
             )
-        if not self.to:
+        if self.to is not None and not self.to:
             raise ValueError("to must not be empty")
         if not self.skill:
             raise ValueError("skill must not be empty")
@@ -186,8 +187,13 @@ class CompileRequest(BaseModel):
 
 
 class CompileConfigUpdate(CompileCreateRequest):
-    """Replace a named configuration; scheduling changes preserve execution timestamps."""
+    """Replace a named configuration while keeping its output directory and execution timestamps."""
 
+    to: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Output directory; omission or null preserves the saved directory.",
+    )
     auto_update: bool
     update_schedule: UpdateSchedule | None = None
     updated_by: str | None = Field(
@@ -886,10 +892,15 @@ class CompileService:
         return self._config_view(compile_name, await self._configuration(compile_name, ctx))
 
     async def update_config(self, body: CompileConfigUpdate, ctx: RequestContext) -> dict[str, Any]:
-        """Replace settings under the state lock, preserving times and invalidating changed inputs."""
+        """Replace mutable settings under the state lock; target changes raise InvalidArgumentError."""
         from copy import deepcopy
 
         configuration = await self._configuration(body.compile_name, ctx, action=AclAction.WRITE)
+        if body.to is None:
+            body = body.model_copy(update={"to": configuration["to"]})
+        target = self._normalize_request_uris(body, ctx).to
+        if target != configuration["to"]:
+            raise InvalidArgumentError("to must match the saved compile configuration's directory")
         owner_user_id = configuration["execution_context"]["owner_user_id"]
         args = dict(body.args or {})
         if {"auto_update", "update_schedule"}.intersection(args):
@@ -903,7 +914,7 @@ class CompileService:
         inputs = CompileInputs.model_validate(
             {
                 "from": body.from_,
-                "to": body.to,
+                "to": target,
                 "skill": body.skill,
                 "instruction": body.instruction,
                 "args": args,
@@ -920,8 +931,7 @@ class CompileService:
                 ctx.user.user_id if body.updated_by is None else body.updated_by
             )
             replacement["execution_context"]["owner_user_id"] = owner_user_id
-            if replacement["to"] == record["to"]:
-                replacement["conflict_num"] = record["conflict_num"]
+            replacement["conflict_num"] = record["conflict_num"]
             old_private = await self._private_args(
                 ctx.account_id, record["execution_context"].get("private_args") or {}
             )

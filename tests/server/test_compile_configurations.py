@@ -562,11 +562,14 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     async with store.edit(ctx.account_id, ctx.user.user_id, compile_name) as record:
         record["progress"] = {"source_commit": "old-success"}
         record["conflict_num"] = 7
+    source = SOURCE + "-updated"
+    await service.viking_fs.write_file(f"{source}/source.md", "source", ctx=ctx)
     await service.compile.update_config(
         CompileConfigUpdate.model_validate(
             {
-                **INPUTS,
                 "compile_name": compile_name,
+                "from": [source],
+                "skill": "viking://system/compile/example-skills/daily-report",
                 "instruction": "changed",
                 "auto_update": False,
                 "updated_by": "bob",
@@ -579,14 +582,16 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
     assert updated["progress"] == {}
     assert updated["conflict_num"] == 7
+    assert updated["to"] == TARGET
+    assert updated["from"] == [source]
+    assert updated["skill"] == "viking://system/compile/example-skills/daily-report"
     changed = CompileConfigUpdate.model_validate(
         {**INPUTS, "compile_name": compile_name, "auto_update": False}
     )
     changed.to = "viking://resources/new-target"
-    await service.compile.update_config(changed, ctx)
-    updated = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
-    assert updated["conflict_num"] is None
-    assert updated["updated_by"] == ctx.user.user_id
+    with pytest.raises(InvalidArgumentError, match="to must match"):
+        await service.compile.update_config(changed, ctx)
+    assert await store.get(ctx.account_id, ctx.user.user_id, compile_name) == updated
     recovered = await service.compile.create(
         request, ctx=ctx, connection={}, idempotency_key="compile-frozen-config"
     )
