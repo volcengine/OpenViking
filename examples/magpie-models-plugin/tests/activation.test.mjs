@@ -16,7 +16,7 @@ async function fixture(t) {
   const config = { directory, statusFile: join(directory, "status.json"), serverUrl: "http://127.0.0.1:1933", apiKey: "root-test", timeoutMs: 100, restartTimeoutMs: 1000 };
   await writeJSON(config.statusFile, { status: "saved", revision: "rev-1", restartRequired: true, ovRuntime: "restart_required", botRuntime: "restart_or_verify_required" });
   let clock = 0, requested = false;
-  const backend = { posts: 0, supported: true, complete: true, alreadyRestarted: false, rolledBack: false, loseReply: false, botStatus: 200, revision: "rev-1", reads: 0,
+  const backend = { posts: 0, supported: true, complete: true, alreadyRestarted: false, rolledBack: false, loseReply: false, botStatus: 200, revision: "rev-1", reads: 0, filePath: "/fake/ov.conf",
     async fetcher(url, init) {
       assert.equal(init.headers["X-API-Key"], "root-test");
       if (url.endsWith("/bot/v1/health")) return Response.json({ status: "healthy" }, { status: backend.botStatus });
@@ -29,7 +29,7 @@ async function fixture(t) {
       }
       backend.reads++;
       const complete = (requested || backend.alreadyRestarted) && backend.complete;
-      return Response.json({ status: "ok", result: { revision: backend.revision, restart_required: !complete,
+      return Response.json({ status: "ok", result: { revision: backend.revision, file_path: backend.filePath, restart_required: !complete,
         restart: { supported: backend.supported, instance_id: complete ? "new-instance" : "old-instance", restarting: false, rolled_back: requested && backend.rolledBack } } });
     },
   };
@@ -129,4 +129,21 @@ test("local CLI installation and remote runtime capability are independent", asy
   assert.equal(result.localServerCLIInstalled, false);
   assert.equal(result.serverRestartSupported, true);
   assert.equal(result.bot, "disabled");
+});
+
+
+test("automatic apply rechecks revision ownership and target inside the activation lock", async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(f.run({ automatic: true }), /configuration_not_saved_by_plugin/);
+  await writeJSON(f.config.statusFile, { status: "saved", revision: "rev-1", savedRevision: "rev-1", ovRuntime: "restart_required", botRuntime: "not_managed" });
+  const savedFile = join(f.config.directory, "saved.json");
+  const own = { serverUrl: f.config.serverUrl, filePath: f.backend.filePath, revision: "rev-1" };
+  for (const foreign of [{ ...own, serverUrl: "https://another.example" }, { ...own, revision: "external-edit" }, { ...own, filePath: "/other/ov.conf" }]) {
+    await writeJSON(savedFile, foreign);
+    await assert.rejects(f.run({ automatic: true }), /configuration_not_saved_by_plugin/);
+  }
+  assert.equal(f.backend.posts, 0);
+  await writeJSON(savedFile, own);
+  assert.equal((await f.run({ automatic: true })).status, "applied");
+  assert.equal(f.backend.posts, 1);
 });

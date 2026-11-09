@@ -156,13 +156,17 @@ MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 | `adapter.json` | 插件连接和行为配置；Magpie Options 的同名字段优先 |
 | `state.json` | 原配置与恢复记录，可能包含凭据；恢复完成前不要删除 |
 | `status.json` | 插件最近一次同步或生效检查结果 |
+| `saved.json` | 插件保存目标、完整配置指纹及确认版本；用于限定自动重启范围 |
 | `activation.json` | 重启请求与验证记录，用于避免重复重启 |
 | `paused.json` | 手动恢复后的暂停标记，防止立刻再次接管 |
 | `saved` | 实际服务配置已保存，仍需检查重启状态 |
 | `applied` | 插件已完成生效检查；同时核对 `ovRuntime`、`botRuntime`、`restartRequired` |
+| `external_restart_required` | 插件之外的配置修改待重启；不会自动应用这些修改 |
 | `conflict` / `apply_failed` | 存在手动修改冲突或重启失败，需要处理后再继续 |
 
 以上插件文件默认位于 `~/.config/magpie-openviking-models/`。实际流程为：Magpie 写入 `selection.json`，桥接程序调用 API 更新服务真正使用的 `ov.conf`，再按设置重启并验证。Magpie 行上的“已接入”只表示其接管配置已写入，不代表 OV 已经切换模型。
+
+自动重启仅应用插件自己保存的版本，发起重启前还会再次核对服务器、配置文件及版本归属。外部修改的待重启状态单独提示；保存响应丢失时，通过完整配置指纹确认归属。非独立模式会忽略保留在界面选项中的 Bot 模型 ID；独立模式留空则使用 Agent 选择。
 
 ## 常见问题
 
@@ -171,6 +175,7 @@ MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 | `root_authentication_required` / `root_permission_required` | 核对当前 CLI 配置的 Root Key 或 `rootApiKeyFile`，普通记忆访问 Key 不具备模型管理权限 |
 | `bot_not_enabled_or_detected` | Bot 未启用或未检测到；选择保留 Bot 配置，或先按原部署方式启用 Bot |
 | `runtime_vlm_override` | 存在 Cluster VLM 运行覆盖；先明确实际配置来源，不能仅靠修改启动文件判断生效 |
+| `adapter_locked` | 其他同步或重启正在持锁。若进程在过期锁回收期间崩溃，先停用适配器及 CLI，检查 `adapter.lock.reclaim` 中的 PID；确认该进程已退出后才移除回收锁，保留恢复记录 |
 | `server_restart_unsupported` | 当前启动方式不支持重启 API，使用原来的 systemd / Docker / 进程管理方式重启 |
 | `saved` 后模型看起来没变化 | 检查 `restartRequired` 并完成重启；确认没有 Account 覆盖，也没有连接到另一台 OV |
 | 界面显示已接入，但仍不确定是否生效 | 查看插件日志，运行 `node cli.mjs doctor` 和 `node cli.mjs status`；不要把 Magpie 的接入标记当作最终状态 |

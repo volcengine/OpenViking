@@ -38,6 +38,7 @@ export async function synchronize(config, { restore = false, resume = false, fet
       // old model. Do not erase a pending restart on the next disconnected poll.
       return publish(config, ["restored", "applied", "apply_failed"].includes(last?.status) ? last : { status: "disconnected", restartRequired: false });
     }
+    const savedFile = join(config.directory, "saved.json");
     const api = createAPI(config, fetcher);
     const current = await api(route);
     if (typeof current.content !== "string" || typeof current.revision !== "string" || typeof current.file_path !== "string") throw new AdapterError("unsupported_config_api");
@@ -76,21 +77,32 @@ export async function synchronize(config, { restore = false, resume = false, fet
       // Persist original values before the potentially ambiguous network write.
       state = { version: 1, serverUrl: config.serverUrl, filePath: current.file_path, structure, records: result.records };
       await writeJSON(config.stateFile, state);
+      // Keep the full intended document fingerprint before the ambiguous write,
+      // so a lost response can be recovered without claiming an external edit.
+      const ownership = { serverUrl: config.serverUrl, filePath: current.file_path, contentHash: digest(result.document) };
+      await writeJSON(savedFile, ownership);
       const saved = await api(route, { content, revision: current.revision });
       current.revision = saved.revision;
+      await writeJSON(savedFile, { ...ownership, revision: current.revision });
     }
     const records = acknowledge(result.records);
     if (Object.keys(records).length) {
       await writeJSON(config.stateFile, { version: 1, serverUrl: config.serverUrl, filePath: current.file_path, structure, records });
     } else await fs.rm(config.stateFile, { force: true });
     if (restoring && paused) await writeJSON(pauseFile, { fingerprint: paused.fingerprint, restorePending: false });
+    const ownership = await readJSON(savedFile);
+    const ownsRevision = ownership?.serverUrl === config.serverUrl && ownership.filePath === current.file_path
+      && ownership.contentHash === digest(result.document) && (!ownership.revision || ownership.revision === current.revision);
+    const savedRevision = ownsRevision ? current.revision : undefined;
+    if (ownsRevision && !ownership.revision) await writeJSON(savedFile, { ...ownership, revision: savedRevision });
     const activation = await readJSON(join(config.directory, "activation.json"));
     const verified = !changed && !current.restart_required && activation?.status === "complete"
       && activation.serverUrl === config.serverUrl && activation.revision === current.revision
       && activation.instanceId === current.restart?.instance_id;
     return publish(config, {
-      status: verified ? "applied" : restoring ? "restored" : "saved",
+      status: verified ? "applied" : !changed && current.restart_required && !ownsRevision ? "external_restart_required" : restoring ? "restored" : "saved",
       revision: current.revision,
+      ...(savedRevision ? { savedRevision } : {}),
       restartRequired: changed || current.restart_required === true || (verified && botAffected && !activation.botVerified),
       ovRuntime: vlmManaged ? (verified ? "applied" : changed || current.restart_required ? "restart_required" : "startup_file_matches") : "not_managed",
       botRuntime: botAffected ? (verified && activation.botVerified ? "managed_restart_verified" : "restart_or_verify_required") : "not_managed",
@@ -128,7 +140,7 @@ export function startAdapter(input, options = {}) {
       if (selection !== lastSelection) lastSelection = selection;
       else {
         let result = await synchronize(config);
-        if (config.restartOnChange && result.restartRequired && ["saved", "restored"].includes(result.status)) result = await activate(config);
+        if (config.restartOnChange && result.restartRequired && result.savedRevision && result.savedRevision === result.revision && ["saved", "restored"].includes(result.status)) result = await activate(config, { automatic: true });
         log([result.status, result.code, result.ovRuntime && `OV:${result.ovRuntime}`, result.botRuntime && `Bot:${result.botRuntime}`,
           ...(result.adjustments || []).map((entry) => `${entry.field}=${entry.value}`),
           ...(result.warnings || [])].filter(Boolean).join(" · "));

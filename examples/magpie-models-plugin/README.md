@@ -148,13 +148,17 @@ The optional `npm run test:ui` checks the parameter forms inside a sandbox with 
 | `adapter.json` | Connection and behavior settings; matching Magpie Options take precedence |
 | `state.json` | Original configuration and recovery journal; may contain credentials. Keep until recovery completes |
 | `status.json` | The last synchronization or activation-check result |
+| `saved.json` | Target, full-document fingerprint and acknowledged revision of the plugin's own save; gates automatic restarts |
 | `activation.json` | Restart request and verification records, used to avoid duplicate restarts |
 | `paused.json` | Pause marker after manual restoration, preventing immediate reconnection |
 | `saved` | The service configuration was saved; check restart requirements |
 | `applied` | Activation checks completed; also inspect `ovRuntime`, `botRuntime` and `restartRequired` |
+| `external_restart_required` | A configuration saved outside this plugin needs a restart; it is not restarted automatically |
 | `conflict` / `apply_failed` | Manual-edit conflict or restart failure requiring attention |
 
 Plugin files default to `~/.config/magpie-openviking-models/`. Magpie writes `selection.json`; the bridge calls the server API to update its actual `ov.conf`, then restarts and verifies as configured. Magpie's connected badge only confirms its wiring was written; it is not proof that OV switched models.
+
+Automatic restart only applies a revision saved by this plugin, and checks its server and configuration file again immediately before requesting a restart. External pending changes are reported separately. The marker also recovers a lost save response by matching the complete intended document. Inactive Bot model IDs are ignored outside independent mode; an empty independent ID uses the Agent selection.
 
 ## Troubleshooting
 
@@ -163,6 +167,7 @@ Plugin files default to `~/.config/magpie-openviking-models/`. Magpie writes `se
 | `root_authentication_required` / `root_permission_required` | Check the selected CLI Root key or `rootApiKeyFile`; ordinary memory credentials cannot manage models |
 | `bot_not_enabled_or_detected` | Preserve Bot settings, or first enable Bot through the existing deployment method |
 | `runtime_vlm_override` | Resolve the Cluster VLM runtime override; editing the startup file alone cannot prove activation |
+| `adapter_locked` | Another sync/apply owns the lock. After a crash during stale-lock recovery, stop the adapter/CLI and inspect `adapter.lock.reclaim`; remove it only after verifying its recorded PID is no longer running. Keep recovery journals |
 | `server_restart_unsupported` | Restart with the original systemd / Docker / process manager |
 | Model unchanged after `saved` | Complete pending restarts; check Account overrides and that this is the intended OV server |
 | Connected badge leaves activation unclear | Check adapter logs, `node cli.mjs doctor` and `node cli.mjs status` instead of relying on Magpie's badge |

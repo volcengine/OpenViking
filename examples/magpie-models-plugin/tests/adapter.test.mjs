@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { synchronize, status } from "../lib/runtime.mjs";
 import { settings, normalizeURL } from "../lib/config.mjs";
 import { readJSON, withLock } from "../lib/files.mjs";
@@ -27,7 +28,8 @@ async function fixture(t, document = original) {
   const backend = {
     overrides: [], failSave: false, lostResponse: false, failDryRun: false, output: undefined, botStatus: 200,
     get document() { return current; },
-    edit(fn) { fn(current); revision++; },
+    edit(fn) { fn(current); revision++; restart = true; },
+    markApplied() { restart = false; },
     async fetcher(url, init) {
       requests.push({ url, init });
       if (url.endsWith("/bot/v1/health")) return Response.json({ status: "healthy" }, { status: backend.botStatus });
@@ -280,4 +282,105 @@ test("concurrency keeps omission distinct and rejects unsupported Bot values", (
   const desired = {};
   modelParameters(original, {}, desired, selection, { manageVlm: true });
   assert.equal(Object.hasOwn(desired, "vlm.max_concurrent"), false);
+});
+
+
+test("native Bot mode switches ignore retained model ids and an empty independent id follows Agent selection", async (t) => {
+  const f = await fixture(t), cli = join(f.config.directory, "ovcli.conf");
+  await fs.writeFile(cli, JSON.stringify({ url: f.config.serverUrl }));
+  const env = { PATH: "", OPENVIKING_MAGPIE_MODELS_DIR: f.config.directory };
+  for (const botMode of ["follow", "preserve"]) {
+    const cfg = await settings({ ovcliConfig: cli, botMode, botModel: "vendor/bot" }, env);
+    assert.equal(cfg.botModel, undefined);
+    assert.equal(cfg.botMode, botMode);
+    Object.assign(f.config, { botMode: cfg.botMode, botModel: cfg.botModel });
+    await f.run();
+  }
+  const cfg = await settings({ ovcliConfig: cli, botMode: "independent", botModel: "  " }, env);
+  assert.equal(cfg.botModel, undefined);
+  Object.assign(f.config, { botMode: cfg.botMode, botModel: cfg.botModel });
+  await f.run();
+  assert.equal(f.backend.document.bot.agents.model, selection.model);
+  await assert.rejects(settings({ ovcliConfig: cli, botMode: "independent", botModel: {} }, env), /invalid_bot_model/);
+});
+
+test("only plugin-saved revisions remain eligible for automatic restart", async (t) => {
+  const f = await fixture(t);
+  const own = await f.run();
+  assert.equal(own.savedRevision, own.revision);
+  const unchanged = await f.run();
+  assert.equal(unchanged.savedRevision, own.revision);
+  f.backend.markApplied();
+  // An unrelated operator edit is preserved but must never be claimed as ours.
+  f.backend.edit((doc) => { doc.server.port = 9123; });
+  const savesBefore = f.requests.filter((r) => r.init.method === "PATCH").length;
+  const external = await f.run();
+  assert.equal(external.status, "external_restart_required");
+  assert.equal(external.restartRequired, true);
+  assert.equal(external.savedRevision, undefined);
+  assert.equal(f.requests.filter((r) => r.init.method === "PATCH").length, savesBefore);
+  assert.equal(f.backend.document.server.port, 9123);
+});
+
+test("a lost save response and disconnect restoration retain exact revision ownership", async (t) => {
+  const f = await fixture(t); f.backend.lostResponse = true;
+  await assert.rejects(f.run(), /server_unreachable/);
+  const recovered = await f.run();
+  assert.equal(recovered.savedRevision, recovered.revision);
+  const restored = await f.run({ restore: true });
+  assert.equal(restored.savedRevision, restored.revision);
+  assert.notEqual(restored.savedRevision, recovered.savedRevision);
+  // With no journal left, the disconnected poll retains the restore's ownership.
+  await fs.rm(f.config.selectionFile);
+  assert.equal((await f.run()).savedRevision, restored.savedRevision);
+});
+
+test("simultaneous stale-lock recovery never deletes a new owner's lock", async (t) => {
+  const f = await fixture(t), file = join(f.config.directory, "adapter.lock");
+  await fs.writeFile(file, JSON.stringify({ pid: 99999999 }));
+  const scope = new AsyncLocalStorage();
+  let releaseInspection, inspectionStarted, entered, secondDone;
+  const inspecting = new Promise((r) => { inspectionStarted = r; });
+  const release = new Promise((r) => { releaseInspection = r; });
+  const firstEntered = new Promise((r) => { entered = r; });
+  const finishedSecond = new Promise((r) => { secondDone = r; });
+  const originalRead = fs.readFile, originalOpen = fs.open, originalRemove = fs.rm;
+  fs.readFile = async (name, ...args) => {
+    const data = await originalRead(name, ...args);
+    if (name === file) {
+      if (scope.getStore() === "A") { inspectionStarted(); await release; }
+      else if (scope.getStore() === "B") releaseInspection();
+    }
+    return data;
+  };
+  fs.open = async (name, ...args) => {
+    try { return await originalOpen(name, ...args); }
+    catch (error) {
+      if (name === `${file}.reclaim` && scope.getStore() === "B" && error.code === "EEXIST") releaseInspection();
+      throw error;
+    }
+  };
+  fs.rm = async (name, ...args) => {
+    if (name === file && scope.getStore() === "B") await firstEntered;
+    return originalRemove(name, ...args);
+  };
+  let active = 0, peak = 0;
+  const worker = (name) => scope.run(name, () => withLock(f.config.directory, async () => {
+    peak = Math.max(peak, ++active);
+    if (name === "A") { entered(); await finishedSecond; }
+    active--;
+  }));
+  try {
+    const first = worker("A"); await inspecting;
+    const second = worker("B").finally(secondDone);
+    const outcomes = await Promise.allSettled([first, second]);
+    assert.equal(peak, 1, "at most one owner may enter the critical section");
+    assert.equal(outcomes[0].status, "fulfilled");
+    assert.equal(outcomes[1].status, "rejected");
+    assert.match(outcomes[1].reason.message, /adapter_locked/);
+  } finally {
+    releaseInspection(); entered(); secondDone();
+    fs.readFile = originalRead; fs.open = originalOpen; fs.rm = originalRemove;
+  }
+  await withLock(f.config.directory, async () => {});
 });

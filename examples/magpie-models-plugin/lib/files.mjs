@@ -37,13 +37,24 @@ export async function withLock(directory, run) {
     try { handle = await fs.open(file, "wx", 0o600); break; }
     catch (error) {
       if (error.code !== "EEXIST") throw error;
-      const lock = await readJSON(file);
-      if (!Number.isSafeInteger(lock?.pid) || lock.pid < 1) throw new AdapterError("adapter_locked");
-      try { process.kill(lock.pid, 0); throw new AdapterError("adapter_locked"); }
-      catch (cause) {
-        if (cause.code !== "ESRCH") throw new AdapterError("adapter_locked");
-        await fs.rm(file, { force: true });
-      }
+      // Serialize stale-lock inspections. Re-read under this guard: another
+      // contender may already have replaced the dead owner's lock with its own.
+      // Never reclaim this short-lived guard automatically; ambiguous recovery
+      // fails closed instead of deleting a live contender's lock.
+      const recoveryFile = `${file}.reclaim`;
+      let recovery;
+      try { recovery = await fs.open(recoveryFile, "wx", 0o600); }
+      catch (cause) { if (cause.code === "EEXIST") throw new AdapterError("adapter_locked"); throw cause; }
+      try {
+        await recovery.writeFile(JSON.stringify({ pid: process.pid }));
+        const lock = await readJSON(file);
+        if (lock) {
+          if (!Number.isSafeInteger(lock.pid) || lock.pid < 1) throw new AdapterError("adapter_locked");
+          try { process.kill(lock.pid, 0); throw new AdapterError("adapter_locked"); }
+          catch (cause) { if (cause.code !== "ESRCH") throw new AdapterError("adapter_locked"); }
+          await fs.rm(file, { force: true });
+        }
+      } finally { await recovery.close(); await fs.rm(recoveryFile, { force: true }); }
     }
   }
   if (!handle) throw new AdapterError("adapter_locked");

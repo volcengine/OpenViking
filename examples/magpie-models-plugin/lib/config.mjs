@@ -47,13 +47,16 @@ export async function settings(options = {}, env = process.env) {
   if (!["preserve", "follow", "independent"].includes(botMode)) throw new AdapterError("invalid_bot_mode");
   const manageVlm = config.manageVlm ?? true;
   if (typeof manageVlm !== "boolean" || (!manageVlm && botMode === "follow")) throw new AdapterError("invalid_model_roles");
-  if (config.botModel != null && (typeof config.botModel !== "string" || !config.botModel.trim() || botMode !== "independent")) throw new AdapterError("invalid_bot_model");
+  // Native forms retain inactive fields. Only consume the model in independent
+  // mode; an empty field means the Agent selection, as the UI promises.
+  if (botMode === "independent" && config.botModel != null && typeof config.botModel !== "string") throw new AdapterError("invalid_bot_model");
+  const botModel = botMode === "independent" ? config.botModel?.trim() || undefined : undefined;
   const pollMs = config.pollMs ?? 2000;
   if (!Number.isSafeInteger(pollMs) || pollMs < 500 || pollMs > 60000) throw new AdapterError("invalid_poll_interval");
   const restartOnChange = config.restartOnChange ?? false;
   if (typeof restartOnChange !== "boolean") throw new AdapterError("invalid_restart_policy");
   return { directory, selectionFile: join(directory, "selection.json"), stateFile: join(directory, "state.json"),
-    statusFile: join(directory, "status.json"), serverUrl, apiKey, manageVlm, botMode, botModel: config.botModel,
+    statusFile: join(directory, "status.json"), serverUrl, apiKey, manageVlm, botMode, botModel,
     vlmParameters: validateParameters(config.vlmParameters), botParameters: validateParameters(config.botParameters, "bot"),
     restartOnChange, pollMs, timeoutMs: 10000 };
 }

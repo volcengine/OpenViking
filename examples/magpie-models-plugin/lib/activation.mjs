@@ -7,13 +7,20 @@ const route = "/api/v1/admin/configuration?source=file";
 
 // The startup API does not hot-reload root VLM or Bot. Use the existing server
 // lifecycle (including --with-bot cleanup/recreation), never a shell command.
-export async function activate(config, { fetcher = fetch, retry = false, wait = delay, now = Date.now } = {}) {
+export async function activate(config, { fetcher = fetch, retry = false, automatic = false, wait = delay, now = Date.now } = {}) {
   return withLock(config.directory, async () => {
     const api = createAPI(config, fetcher);
     const last = await readJSON(config.statusFile);
     if (!last?.revision || !["saved", "restored", "applied", "applying", "apply_failed"].includes(last.status)) throw new AdapterError("no_saved_configuration_to_apply");
     const file = await api(route);
     if (file.revision !== last.revision) throw new AdapterError("config_changed_before_apply");
+    if (automatic) {
+      const ownership = await readJSON(join(config.directory, "saved.json"));
+      if (!last.savedRevision || last.savedRevision !== file.revision || ownership?.revision !== file.revision
+        || ownership.serverUrl !== config.serverUrl || ownership.filePath !== file.file_path) {
+        throw new AdapterError("configuration_not_saved_by_plugin");
+      }
+    }
     const attemptFile = join(config.directory, "activation.json");
     const attempt = await readJSON(attemptFile);
     if (attempt && attempt.serverUrl !== config.serverUrl) throw new AdapterError("recovery_target_changed");
