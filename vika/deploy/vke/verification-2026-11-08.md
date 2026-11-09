@@ -188,3 +188,19 @@ Reproduce MA tests with `scripts/volc-verify.mjs` as documented in the runbook.
 Session IDs, local SQLite/outbox evidence and recorder outputs are retained in the
 operator's isolated `mini-vika/.runtime/` directories; these contain private test
 state and are not part of this repository.
+
+## PR integration verification — 2026-11-09
+
+Rebased by cherry-picking onto `feat/vika` at `5b8fd327d`, preserving its Windows
+platform changes and relocated English reference docs. Syntax checks passed.
+The full suite on Node v26.11.1/macOS ran 1,325 tests: 1,311 passed, 11 skipped,
+and three failed. Two CLI failures (install shell PATH and QR footer layout)
+reproduced on pristine `5b8fd327d` (10 passed, two failed). The third asserted
+that every Core-tool runtime must be local; it now explicitly verifies MA is
+remote while dispatching Core tools in Channel. A focused rerun also exposed a
+timing-dependent interrupted-stream fixture; it now fails on the next consumed
+read instead of racing filesystem initialization with a 20 ms timer.
+After these test-only corrections, the affected isolation/catalog/custom-tool/
+download suite passed: 35 passed, one skipped, zero failures. The entire suite
+was not rerun after these test-only changes. No new live provider acceptance is
+claimed for the integration onto the newer target branch.

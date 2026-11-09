@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { downloadMAFile } from '../src/ma-download.mjs';
@@ -20,7 +19,13 @@ const whole = (body = bytes, extra = {}) => new Response(body, { headers: { etag
 const tail = (start = 4, extra = {}) => new Response(bytes.subarray(start), { status: 206,
   headers: { etag: '"one"', 'content-length': String(bytes.length - start), 'content-range': `bytes ${start}-9/10`, ...extra } });
 function interrupted(extra = {}) {
-  const stream = Readable.toWeb(Readable.from((async function* () { yield bytes.subarray(0, 4); await delay(20); throw new Error('connection reset'); })()));
+  // Fail on the next read, after the downloader has persisted the first chunk.
+  // A timer can fire before filesystem setup finishes on a busy machine.
+  let sent = false;
+  const stream = new ReadableStream({ pull(controller) {
+    if (sent) controller.error(new Error('connection reset'));
+    else { sent = true; controller.enqueue(bytes.subarray(0, 4)); }
+  } }, { highWaterMark: 0 });
   return whole(stream, extra);
 }
 

@@ -28,8 +28,11 @@ test('every runtime declares how it keeps its own OpenViking plugin out', () => 
   for (const runtime of Object.values(RUNTIME_CATALOG)) {
     assert.ok(OV_ISOLATION.includes(runtime.ovIsolation), `${runtime.id} declares ovIsolation`);
   }
-  // A runtime that runs on this machine cannot claim to load nothing from it.
-  for (const runtime of Object.values(RUNTIME_CATALOG).filter((item) => item.capabilities.agentTools === 'core')) {
+  // Core tool execution is independent of where the model runtime runs.
+  // MA is remote but dispatches custom tools back to Channel Core.
+  assert.equal(RUNTIME_CATALOG.volc.ovIsolation, 'remote');
+  assert.equal(RUNTIME_CATALOG.volc.capabilities.agentTools, 'core');
+  for (const runtime of Object.values(RUNTIME_CATALOG).filter((item) => item.id !== 'volc')) {
     assert.notEqual(runtime.ovIsolation, 'remote', runtime.id);
   }
 });
