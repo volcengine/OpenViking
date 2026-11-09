@@ -11,8 +11,8 @@ and `vika upgrade` stay macOS/Linux only.
 The package's `release.json` identifies the exact built commit (a PR run normally
 builds GitHub's merge commit), Node version and ZIP SHA-256.
 For a manual Windows-only test run, select the branch under **Vika Release → Run
-workflow** and enable `windows_preview_only`. This skips the POSIX build and TOS
-publisher. Leaving that option off preserves the existing manual POSIX publishing
+workflow** and enable `windows_preview_only`. This skips the POSIX build and POSIX TOS
+publisher; the Windows preview is still published to TOS. Leaving that option off preserves the existing manual POSIX publishing
 behavior as well as building the Windows artifact.
 
 The ZIP includes committed Vika source, Windows Node/npm, production dependencies,
@@ -33,18 +33,25 @@ Use a normal, non-administrator Windows 10/11 x64 account. Paste this into
 PowerShell 7 or Windows PowerShell 5.1:
 
 ```powershell
-$base = 'https://ovrelease.tos-cn-beijing.volces.com/vika/windows-preview/latest'
-$dir = Join-Path $env:TEMP ('vika-preview-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $dir | Out-Null
-foreach ($f in 'vika-windows-preview-win32-x64.zip', 'vika-windows-preview-win32-x64.zip.sha256', 'install-preview.ps1') {
-    Invoke-WebRequest -UseBasicParsing -Uri "$base/$f" -OutFile (Join-Path $dir $f)
-}
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'install-preview.ps1') -File (Join-Path $dir 'vika-windows-preview-win32-x64.zip')
+irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
 ```
 
-The installer verifies the SHA-256 before installing, then continues as in
-[Install a local artifact](#install-a-local-artifact) below. The execution-policy
-option applies only to that one installer process.
+The installer resolves `windows-preview/latest/version` once, downloads that
+version's ZIP and required SHA-256, verifies it, and uses the same install,
+self-check, PATH and first-run setup steps as the local installer. Download or
+verification failure leaves the installed release unchanged. Temporary downloads
+are removed on success and failure. The current terminal can run `vika` afterwards.
+
+To pin a preview version or pass options without `iex`:
+
+```powershell
+& ([scriptblock]::Create((irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1))) -Version '<version>' -NoSetup -Lang en
+```
+
+`VIKA_VERSION` and `VIKA_DOWNLOAD_BASE` environment variables are also accepted
+by the one-line command. The download base is the Vika root (before
+`/windows-preview`), must use HTTPS, and defaults to the release bucket above.
+The existing `install-preview.ps1 -File <zip>` offline entry remains available.
 
 ## Community setup wizard
 

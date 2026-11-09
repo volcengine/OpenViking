@@ -12,17 +12,22 @@
 # user PATH. -Destination instead installs exactly into that new directory and
 # changes nothing else, which is what side-by-side testing and CI use.
 #
-# The package is a local .zip: nothing here downloads. Options: -File <zip>,
+# With no -File, download from the Windows preview channel (checksum required).
+#   irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
+# Options: -File <zip>, -Version <version>, -DownloadBase <url>,
 # -Destination <dir>, -Lang <zh|en>, -NoSetup.
+# VIKA_VERSION and VIKA_DOWNLOAD_BASE also work with irm | iex.
 # Vika's home is HOME when it is set, otherwise the profile, as vika itself
 # resolves it; bin\vika.cmd finds its .vika directory instead of guessing one.
 # Environment: VIKA_LANG picks the language, NO_COLOR turns the colours off,
 # VIKA_HOME overrides the installer destination for tests only.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$File,
+    [string]$File,
+    [string]$Version = $env:VIKA_VERSION,
+    [string]$DownloadBase = $env:VIKA_DOWNLOAD_BASE,
     [string]$Destination,
-    [ValidateSet('zh', 'en')][string]$Lang,
+    [ValidateSet('', 'zh', 'en')][string]$Lang,
     [switch]$NoSetup
 )
 $ErrorActionPreference = 'Stop'
@@ -112,22 +117,26 @@ function Ok([string]$text) { if ($Fancy) { Say "  ${GREEN}$Check${RESET} $text" 
 function Note([string]$text) { if ($Fancy) { Say "  ${GRAY}$Arrow${RESET} $text" } else { Say $text } }
 function Warn([string]$text) { if ($Fancy) { Say "  ${YELLOW}$Bang${RESET} $text" } else { Say $text } }
 
-$Stage = ''
-$Lock = ''
-$Finished = $false
+# Mutable state also works when invoked as a scriptblock (irm with options).
+$InstallerState = @{}
+$InstallerState.DownloadDir = ''
+$InstallerState.Stage = ''
+$InstallerState.Lock = ''
+$InstallerState.Finished = $false
 function Cleanup {
-    if ($script:Finished) { return }
-    $script:Finished = $true
+    if ($InstallerState.Finished) { return }
+    $InstallerState.Finished = $true
     if ($Fancy) { [Console]::Error.Write("$ESC[?25h") }
     if ($PreviousEncoding) { try { [Console]::OutputEncoding = $PreviousEncoding } catch { } }
-    if ($Stage -and (Test-Path -LiteralPath $Stage)) { Remove-Item -LiteralPath $Stage -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($Lock -and [IO.Directory]::Exists($Lock)) { try { [IO.Directory]::Delete($Lock) } catch { } }
+    if ($InstallerState.DownloadDir -and (Test-Path -LiteralPath $InstallerState.DownloadDir)) { Remove-Item -LiteralPath $InstallerState.DownloadDir -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($InstallerState.Stage -and (Test-Path -LiteralPath $InstallerState.Stage)) { Remove-Item -LiteralPath $InstallerState.Stage -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($InstallerState.Lock -and [IO.Directory]::Exists($InstallerState.Lock)) { try { [IO.Directory]::Delete($InstallerState.Lock) } catch { } }
 }
 function Die([string]$message) {
     $failed = M 'vika 安装失败：' 'vika install failed: '
     if ($Fancy) { Say "  ${RED}$Cross${RESET} $failed$message" } else { Say "$failed$message" }
     Cleanup
-    exit 1
+    throw "$failed$message"
 }
 
 # ~ for the home directory, so paths stay short.
@@ -148,17 +157,17 @@ function Header([string]$what) {
 
 # ---- Spinner --------------------------------------------------------------
 $SpinFrames = @([char]0x280B, [char]0x2819, [char]0x2839, [char]0x2838, [char]0x283C, [char]0x2834, [char]0x2826, [char]0x2827, [char]0x2807, [char]0x280F)
-$SpinShown = $false
+$InstallerState.SpinShown = $false
 function Spin([string]$label, [int]$step = 1) {
     if (-not $Fancy) { return }
-    if (-not $script:SpinShown) { [Console]::Error.Write("$ESC[?25l"); $script:SpinShown = $true }
+    if (-not $InstallerState.SpinShown) { [Console]::Error.Write("$ESC[?25l"); $InstallerState.SpinShown = $true }
     $frame = $SpinFrames[$step % $SpinFrames.Count]
     [Console]::Error.Write("`r$ESC[2K  $VIOLET$frame$RESET $label")
 }
 function SpinDone {
-    if (-not $Fancy -or -not $script:SpinShown) { return }
+    if (-not $Fancy -or -not $InstallerState.SpinShown) { return }
     [Console]::Error.Write("`r$ESC[2K$ESC[?25h")
-    $script:SpinShown = $false
+    $InstallerState.SpinShown = $false
 }
 
 # ---- Files ----------------------------------------------------------------
@@ -358,7 +367,11 @@ function Test-Release([string]$root) {
     $preview = Join-Path $root 'vika-preview.ps1'
     if (Test-Path -LiteralPath $preview) {
         $global:LASTEXITCODE = 0
-        & $preview -Action check
+        # irm | iex works under the default Windows execution policy too.
+        # Keep PSScriptRoot intact in the package check, without changing the
+        # caller's policy or requiring a globally installed PowerShell 7.
+        $hostExe = (Get-Process -Id $PID).Path
+        & $hostExe -NoProfile -ExecutionPolicy Bypass -File $preview -Action check
         if ($LASTEXITCODE -ne 0) {
             throw "vika-preview.ps1 -Action check exited $LASTEXITCODE"
         }
@@ -436,14 +449,14 @@ function Install-Release([string]$stageDir, [string]$version) {
         # Refuse any links in an existing tree before descending into it.
         Assert-SameRelease $stageDir $place
         Remove-Item -LiteralPath $stageDir -Recurse -Force
-        $script:Stage = ''
+        $InstallerState.Stage = ''
         if ($previous -and ([IO.Path]::GetFullPath($previous) -eq $place)) {
             Ok (M "已经是 Vika $version" "Vika $version is installed already")
             return [pscustomobject]@{ Changed = $false; Previous = $previous }
         }
     } else {
         Move-Into $stageDir $place
-        $script:Stage = ''
+        $InstallerState.Stage = ''
     }
     Switch-ReleaseLinks $current (Join-Path $VikaHome 'rollback') $place $previous
     Ok ("$(M '安装' 'Install ')  ${GRAY}Vika $version → $(Short $place)${RESET}")
@@ -491,10 +504,39 @@ function Add-ToPath([string]$binDir) {
     }
 }
 
+# Resolve a version once, then use its versioned objects, never the mutable ZIP
+# alias. A missing checksum is fatal for downloads, optional only for local files.
+function Download-Package {
+    if (-not $DownloadBase) { $DownloadBase = '__VIKA_DOWNLOAD_BASE__' }
+    if ($DownloadBase.StartsWith('__VIKA_')) { $DownloadBase = 'https://ovrelease.tos-cn-beijing.volces.com/vika' }
+    $DownloadBase = $DownloadBase.TrimEnd('/')
+    $uri = [uri]$DownloadBase
+    if (-not $uri.IsAbsoluteUri -or ($uri.Scheme -ne 'https' -and -not ($uri.Scheme -eq 'http' -and $uri.IsLoopback))) {
+        throw 'DownloadBase must use HTTPS (HTTP is allowed only for loopback tests)'
+    }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if (-not $Version) { $Version = ([string](Invoke-RestMethod -Uri "$DownloadBase/windows-preview/latest/version")).Trim() }
+    Assert-Version $Version
+    $InstallerState.RequestedVersion = $Version
+    $name = "vika-$Version-win32-x64.zip"
+    $base = "$DownloadBase/windows-preview/$Version"
+    $InstallerState.DownloadDir = Join-Path ([IO.Path]::GetTempPath()) ('vika-download-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($InstallerState.DownloadDir)
+    $target = Join-Path $InstallerState.DownloadDir $name
+    Note (M "下载 Vika $Version" "Downloading Vika $Version")
+    Invoke-WebRequest -UseBasicParsing -Uri "$base/$name.sha256" -OutFile "$target.sha256"
+    Invoke-WebRequest -UseBasicParsing -Uri "$base/$name" -OutFile $target
+    return $target
+}
+
 # ---- Main ----------------------------------------------------------------
+try {
 if (-not (Test-Path -LiteralPath $HomeBase -PathType Container)) {
     Die (M "家目录不存在：$HomeBase（HOME 和 USERPROFILE 都不是一个目录）" "the home directory does not exist: $HomeBase (HOME and USERPROFILE point nowhere)")
 }
+$InstallerState.RequestedVersion = $null
+if ($File -and $Version) { Die 'Use either -File or -Version, not both' }
+if (-not $File) { $File = Download-Package }
 if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { Die (M "找不到 $File" "$File is not there") }
 $archive = (Resolve-Path -LiteralPath $File).Path
 $archiveName = [IO.Path]::GetFileName($archive)
@@ -537,8 +579,8 @@ if (Test-Path -LiteralPath $checksumFile) {
 if ($Isolated) {
     try {
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Place))
-        $Stage = Join-Path ([IO.Path]::GetDirectoryName($Place)) ('.vika-pending-' + [guid]::NewGuid().ToString('N'))
-        [void][IO.Directory]::CreateDirectory($Stage)
+        $InstallerState.Stage = Join-Path ([IO.Path]::GetDirectoryName($Place)) ('.vika-pending-' + [guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($InstallerState.Stage)
     } catch { Die (M "写不了 $Place：$($_.Exception.Message)" "cannot write $Place`: $($_.Exception.Message)") }
 } else {
     # The updater takes the same lock while it upgrades.
@@ -547,19 +589,19 @@ if ($Isolated) {
         [void][IO.Directory]::CreateDirectory($VikaHome)
         [void][IO.Directory]::CreateDirectory((Join-Path $VikaHome 'releases'))
         New-Item -ItemType Directory -Path $deadlock -ErrorAction Stop | Out-Null
-        $Lock = $deadlock
+        $InstallerState.Lock = $deadlock
     } catch { Die (M "另一个安装或升级正在进行（$(Short $deadlock)）" "another install or upgrade is running ($(Short $deadlock))") }
     try {
-        $Stage = Join-Path (Join-Path $VikaHome 'releases') ".pending-$PID"
-        [void][IO.Directory]::CreateDirectory($Stage)
+        $InstallerState.Stage = Join-Path (Join-Path $VikaHome 'releases') ".pending-$PID"
+        [void][IO.Directory]::CreateDirectory($InstallerState.Stage)
     } catch { Die (M "写不了 $(Short $VikaHome)：$($_.Exception.Message)" "cannot write $(Short $VikaHome)`: $($_.Exception.Message)") }
 }
 
-try { Expand-Package $archive $Stage }
+try { Expand-Package $archive $InstallerState.Stage }
 catch { $detail = $_.Exception.Message; Die ((M '解压失败：' 'unpacking failed: ') + $detail) }
 
 # What the package says about itself, then the name it arrived under.
-$metadata = Read-Metadata $Stage
+$metadata = Read-Metadata $InstallerState.Stage
 $version = $null
 if ($metadata) {
     if ($metadata.platform -and $metadata.platform -ne $Platform) {
@@ -575,8 +617,9 @@ if ($metadata) {
 if (-not $version -and ($archiveName -match '^vika-(.+)-win32-x64\.zip$')) { $version = $Matches[1] }
 if (-not $version) { Die (M "认不出这个包的版本：$archiveName" "cannot tell which version this package is: $archiveName") }
 try { Assert-Version $version } catch { Die $_.Exception.Message }
+if ($InstallerState.RequestedVersion -and $version -cne $InstallerState.RequestedVersion) { Die "Package version $version does not match requested version $($InstallerState.RequestedVersion)" }
 
-try { Test-Release $Stage }
+try { Test-Release $InstallerState.Stage }
 catch {
     $reason = M '这台机器运行不了这个版本（系统库太旧或 CPU 不匹配）' 'this machine cannot run this release (its system libraries are too old, or the CPU differs)'
     $detail = $_.Exception.Message
@@ -592,21 +635,21 @@ Ok ("$(M '自检' 'Check   ')  ${GRAY}$(M '自带的 Node 能在这台机器上�
 $configFile = if ($env:VIKA_CONFIG) { $env:VIKA_CONFIG } else { Join-Path $VikaHome 'config.json' }
 $interactive = -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
 $setupNext = -not $Isolated -and -not $NoSetup -and $interactive -and -not (Test-Path -LiteralPath $configFile)
-if (-not $Isolated -and -not $setupNext) { Test-OpenViking $Stage }
+if (-not $Isolated -and -not $setupNext) { Test-OpenViking $InstallerState.Stage }
 
-$node = Get-BundledNode $Stage
+$node = Get-BundledNode $InstallerState.Stage
 $nodeRelative = $null
-if ($node) { $nodeRelative = $node.Substring($Stage.Length).TrimStart(@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) }
+if ($node) { $nodeRelative = $node.Substring($InstallerState.Stage.Length).TrimStart(@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) }
 
 if ($Isolated) {
-    try { Move-Into $Stage $Place }
+    try { Move-Into $InstallerState.Stage $Place }
     catch { $detail = $_.Exception.Message; Die (M "装不到 $Place：$detail" "cannot install to $Place`: $detail") }
-    $Stage = ''
+    $InstallerState.Stage = ''
     Ok ("$(M '安装' 'Install ')  ${GRAY}Vika $version → $(Short $Place)${RESET}")
     $changed = $true
     $previous = $null
 } else {
-    try { $result = Install-Release $Stage $version }
+    try { $result = Install-Release $InstallerState.Stage $version }
     catch { $detail = $_.Exception.Message; Die (M "装不到 $(Short $VikaHome)：$detail" "cannot install to $(Short $VikaHome)`: $detail") }
     $changed = $result.Changed
     $previous = $result.Previous
@@ -634,8 +677,8 @@ if ($Isolated) {
     # As install.sh does: the first install goes straight into setup, in the
     # terminal that ran the installer, which now knows vika.
     & (Join-Path (Join-Path $VikaHome 'bin') 'vika.cmd') setup
-    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    if ($LASTEXITCODE) { throw "vika setup exited $LASTEXITCODE" }
 } else {
     Note (M '下一步：运行 vika setup' 'next: run vika setup')
 }
-exit 0
+} finally { Cleanup }

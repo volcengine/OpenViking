@@ -25,7 +25,7 @@ on:
         options: [all, linux-x64]
         default: all
       windows_preview_only:
-        description: "Build only the Windows artifact; do not publish to TOS"
+        description: "Build and publish only the Windows preview"
         type: boolean
         default: false
   pull_request:
@@ -313,6 +313,13 @@ jobs:
           & ./scripts/windows/test-install-transactions.ps1
           powershell.exe -NoProfile -File ./scripts/windows/test-install-transactions.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell transaction tests failed' }
+      - name: Test online installer (PowerShell 7 and 5.1)
+        run: |
+          node scripts/windows/test-install-online.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 online installer tests failed' }
+          $env:POWERSHELL_EXE = 'powershell.exe'
+          node scripts/windows/test-install-online.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 online installer tests failed' }
       - name: Build committed Windows preview
         run: |
           node scripts/build-windows-preview.mjs "$env:RUNNER_TEMP/vika-windows-dist"
@@ -437,6 +444,7 @@ jobs:
           # Versioned copy: immutable, exactly what the Actions artifact holds.
           upload "${ZIP}" "${DIR}/${ZIP}" application/zip "${IMMUTABLE}"
           upload "${ZIP}.sha256" "${DIR}/${ZIP}.sha256" "${TEXT}" "${IMMUTABLE}"
+          upload install.ps1 "${DIR}/install.ps1" "${TEXT}" "${IMMUTABLE}"
           upload install-preview.ps1 "${DIR}/install-preview.ps1" "${TEXT}" "${IMMUTABLE}"
           upload README.md "${DIR}/README.md" "text/markdown; charset=utf-8" "${IMMUTABLE}"
           upload release.json "${DIR}/release.json" application/json "${IMMUTABLE}"
@@ -452,11 +460,16 @@ jobs:
           upload "${ALIAS}.sha256" "${PREFIX}/latest/${ALIAS}.sha256" "${TEXT}" "${NO_CACHE}"
           upload install-preview.ps1 "${PREFIX}/latest/install-preview.ps1" "${TEXT}" "${NO_CACHE}"
           upload README.md "${PREFIX}/latest/README.md" "text/markdown; charset=utf-8" "${NO_CACHE}"
+          upload install.ps1 "${PREFIX}/latest/install.ps1" "${TEXT}" "${NO_CACHE}"
+          upload install.ps1 "${VIKA_TOS_PREFIX}/install.ps1" "${TEXT}" "${NO_CACHE}"
           upload latest "${PREFIX}/latest/version" "${TEXT}" "${NO_CACHE}"
 
           {
             echo "## Windows x64 preview on TOS"
             echo "Version: \`${VERSION}\`"
+            echo '```powershell'
+            echo "irm ${VIKA_DOWNLOAD_BASE}/install.ps1 | iex"
+            echo '```'
             echo "- Latest ZIP: ${VIKA_DOWNLOAD_BASE}/windows-preview/latest/${ALIAS}"
             echo "- This build: ${VIKA_DOWNLOAD_BASE}/windows-preview/${VERSION}/${ZIP}"
             echo "Stable \`latest\` for macOS/Linux is unchanged."
