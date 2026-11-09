@@ -67,6 +67,28 @@ export default defineConfig([
   reactHooksPlugin.configs.recommended,
   jsxA11yPlugin.configs.recommended,
   {
+    // 可拖拽的分隔条是 WAI-ARIA 的 window splitter：`role="separator"` 在可聚
+    // 焦时就属于可交互角色，`tabIndex` 与方向键处理都是规范要求的。默认配置按
+    // 「装饰性分隔线」判定，这里只对这一个组件放开，不放松其他文件。
+    //
+    // A draggable divider is the WAI-ARIA window splitter: a focusable
+    // `role="separator"` is an interactive role, and both `tabIndex` and the arrow
+    // keys are required by the pattern. The default config judges it as a
+    // decorative rule; the exception is narrowed to this one component.
+    files: ['packages/react/src/shared/components/resizable/*.tsx'],
+    rules: {
+      'jsx-a11y/no-noninteractive-tabindex': [
+        'error',
+        {
+          tags: [],
+          roles: ['tabpanel', 'separator'],
+          allowExpressionValues: true,
+        },
+      ],
+      'jsx-a11y/no-noninteractive-element-interactions': 'off',
+    },
+  },
+  {
     files: ['**/*.{jsx,tsx}'],
     rules: {
       // TypeScript props and the automatic JSX runtime replace these checks.

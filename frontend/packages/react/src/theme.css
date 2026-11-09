@@ -36,10 +36,13 @@
  * the fallback applies otherwise.
  */
 .ov-agent-connect,
+.ov-divider,
 .ov-file-browser,
+.ov-file-browser-entries,
 .ov-file-preview,
 .ov-file-tree,
 .ov-module-placeholder,
+.ov-popover,
 .ov-scope-switcher,
 .ov-tooltip,
 .ov-tui,
@@ -90,10 +93,13 @@
 }
 
 .dark .ov-agent-connect,
+.dark .ov-divider,
 .dark .ov-file-browser,
+.dark .ov-file-browser-entries,
 .dark .ov-file-preview,
 .dark .ov-file-tree,
 .dark .ov-module-placeholder,
+.dark .ov-popover,
 .dark .ov-scope-switcher,
 .dark .ov-tooltip,
 .dark .ov-tui,

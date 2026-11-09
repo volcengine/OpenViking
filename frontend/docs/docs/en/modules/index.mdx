@@ -1,6 +1,6 @@
 # Modules
 
-Two placeholder components are available for integrating the personal-terminal layout. Their props are settled — request options, controlled state, callbacks, slots and copy — though each component still renders only a module name and a replaceable placeholder message. Business Hooks, API requests, and module interactions will be added as the implementations land.
+`file-browser` is implemented and wires the directory tree, the search and the preview together; `console` is still a placeholder that renders only a module name and a replaceable message.
 
 Placeholder modules do not carry data props. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
 

@@ -4,9 +4,9 @@
 
 `modules/` 按共同完成的交互流程组织 Hook 与组合视图，共享状态与联动在模块内维护。Hook 负责加载请求、适配数据与维护状态，组合视图把 Hook 返回的数据和操作接入 `components/`。完整页面由宿主组装。
 
-## 当前可接入的占位组件
+## 当前可接入的模块
 
-两个模块已提供可导入的占位组件、公开的 Props / Labels / Slots 类型和独立样式入口，接入方可以先完成页面布局。props 已定型：每个模块都声明了请求配置、受控状态、回调、插槽与文案。组件本体目前仍只渲染模块名称与占位文案，尚未消费这些 props；业务 Hook 与下文的业务交互仍待实现。
+`file-browser` 已实现：`useFileBrowser` 取数并协调目录、搜索与预览，`FileBrowser` 组合视图渲染目录树与文件预览。`console` 仍是占位组件，只渲染模块名称与占位文案；它的业务 Hook 与交互仍待实现。
 
 模块自己取数，因此 props 里没有数据字段：宿主给配置、受控值与文案，模块通过回调上报变化。
 
@@ -85,7 +85,7 @@ import { OpenVikingProvider } from '@openviking/react/client';
 ```ts
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
-  path: '/api/v1/fs/ls',
+  path: OV_PATHS.fsLs,
   query: { uri },
   options: { resourceId: libraryId },
 });
@@ -93,8 +93,8 @@ const rows = await client.request<FsEntry[]>({
 
 该 Hook 不对外导出：宿主不需要知道模块会发什么请求。纯视图组件完全不需要 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
 
-- **路径只有一处拼接**：Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
-- **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。JSON 响应保留 `result` 及分页等外层元数据；上传、下载和流式响应按接口契约处理，不统一强转 JSON。
+- **路径只有一处拼接**：接口路径由 `@openviking/react/client` 的 `OV_PATHS` / `OV_PATH_BUILDERS` 集中维护，模块不写字面量。Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
+- **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。`request` 默认返回 `result`；二进制响应用 `responseType: 'blob'` 取原始字节，事件流用 `stream` 逐个消费，两者都不强转 JSON。`has_more` 这类 `result` 之外的分页元数据目前不返回，需要分页的模块按 `offset` / `node_limit` 自行判断。
 - **配置与身份变化要隔离**：请求、缓存键和订阅以实际生效的服务地址及宿主当前连接 / 身份作用域隔离。切换服务或账号后取消旧请求并忽略过期结果；动态 headers 不代替身份切换信号，也不把 API Key 明文放入缓存键。
 - **适配集中在接入层**：原生接口只需配置地址和 headers；存量网关若有额外封装，由宿主在共享 Client 接入层统一适配，并保留取消信号、响应状态及流。无法等价表达的能力通过显式扩展契约接入，不在每个模块增加宿主分支。
 
@@ -121,7 +121,7 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 - 组合视图负责区域内的搜索、目录与预览布局。`FileTree`、`FilePreview` 等纯视图组件保持独立，不承担数据加载或跨组件编排。
 - 连接 Agent、导入资源等操作入口通过宿主回调或插槽接入；模块不内置接入弹窗、导入流程或产品引导。配额提示等产品内容也通过宿主插槽接入。
 
-以上交互与 `useFileBrowser` 仍为规划；当前仅导出 `FileBrowser` 占位组件和基础类型。
+以上交互已实现：`useFileBrowser` 取数与协调目录、搜索、预览的联动，`FileBrowser` 组合视图按控制台的上下文面板布局渲染。
 
 ### 交互面板模块
 

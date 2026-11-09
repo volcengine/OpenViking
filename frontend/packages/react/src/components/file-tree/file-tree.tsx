@@ -6,7 +6,6 @@ import type {
   FileTreeRowContext,
   ResolvedLabels,
 } from './file-tree-row-context.js';
-import { useRowTooltip } from './file-tree-tooltip.js';
 import type {
   FileTreeComponent,
   FileTreeHandle,
@@ -106,7 +105,6 @@ export const FileTree: FileTreeComponent = forwardRef<
     ...labels,
     info: labels?.info ?? DEFAULT_LABELS.info,
   };
-  const tooltip = useRowTooltip();
   const actions = useFileTreeActions({
     operations,
     onSelect,
@@ -134,7 +132,6 @@ export const FileTree: FileTreeComponent = forwardRef<
     text,
     infoLabels: labels?.info,
     selectedId,
-    tooltipRowId: tooltip.tooltipRowId,
     getRowAttributes,
     renderDashboard,
     renderRowTooltip,
@@ -148,8 +145,6 @@ export const FileTree: FileTreeComponent = forwardRef<
         onSelect: actions.onSelect,
         onToggleExpand: actions.onToggleExpand,
       }),
-    onRowEnter: tooltip.show,
-    onRowLeave: tooltip.hide,
   };
 
   return (

@@ -116,11 +116,40 @@ export interface OvRequestSpec {
   query?: Readonly<Record<string, OvQueryValue>>;
   body?: unknown;
   /**
+   * 响应体的读取方式。省略时为 `json`：解析原生外壳并返回 `result`。需要原始
+   * 字节时传 `blob`，此时 `TResult` 应声明为 `Blob`。
+   *
+   * How the response body is read. Omitted means `json`: the native envelope is
+   * parsed and its `result` returned. Pass `blob` for raw bytes, declaring
+   * `TResult` as `Blob`.
+   */
+  responseType?: OvResponseType;
+  /**
    * 本次请求的身份、作用域与服务地址覆盖，例如切换到另一个库或另一个网关。
    * Identity, scope and service-address override for this request, for example
    * switching to another library or another gateway.
    */
   options?: OvRequestOptions;
+}
+
+/**
+ * 响应体的读取方式：`json` 解析外壳后返回 `result`，`blob` 返回原始字节。
+ * How the response body is read: `json` parses the envelope and returns
+ * `result`, `blob` returns the raw bytes.
+ */
+export type OvResponseType = 'json' | 'blob';
+
+/**
+ * 一次 JSON 请求的外壳与 `result`。列表接口把 `has_more` 放在 `result` 之外，
+ * 需要分页时用 {@link OvClient.requestEnvelope} 才能读到它。
+ * The envelope and `result` of one JSON request. A listing puts `has_more`
+ * outside `result`, so paging reads it through {@link OvClient.requestEnvelope}.
+ */
+export interface OvResponseEnvelope<TResult = unknown> {
+  /** 原生响应的 `result`。The native response's `result`. */
+  result: TResult;
+  /** 是否还有下一页；接口不返回该字段时为 `false`。 */
+  hasMore: boolean;
 }
 
 /** 查询参数可接受的值；`undefined` 与 `null` 表示不发送。 */
@@ -154,6 +183,68 @@ export interface OvErrorEnvelope {
 }
 
 /**
+ * 一个 SSE 事件。字段按 SSE 规范解析，`data` 保持原文——OpenViking 把事件类型
+ * 与事件 id 放在 `data` 的 JSON 里，不占 SSE 的 `event` / `id` 字段，调用方需要
+ * 自己解析 `data` 才能读到它们。
+ *
+ * One SSE event. Fields follow the SSE specification and `data` stays raw:
+ * OpenViking puts the event type and event id inside the `data` JSON rather than
+ * in the SSE `event` / `id` fields, so a caller parses `data` to read them.
+ */
+export interface OvStreamEvent {
+  /**
+   * `data:` 字段，多行按换行拼接，原样保留不做 JSON 解析。
+   * The `data:` field, with multiple lines joined by newlines and kept verbatim.
+   */
+  data: string;
+  /**
+   * `event:` 字段，服务端未发送时省略。
+   * The `event:` field, omitted when the server sends none.
+   */
+  event?: string;
+  /**
+   * `id:` 字段，服务端未发送时省略。
+   * The `id:` field, omitted when the server sends none.
+   */
+  id?: string;
+  /**
+   * `retry:` 字段，单位毫秒，服务端未发送时省略。
+   * The `retry:` field in milliseconds, omitted when the server sends none.
+   */
+  retry?: number;
+}
+
+/**
+ * 一次流式请求。除 `headers` 外与 {@link OvRequestSpec} 相同。
+ * A streaming request. It matches {@link OvRequestSpec} apart from `headers`.
+ */
+export interface OvStreamSpec extends Omit<OvRequestSpec, 'responseType'> {
+  /**
+   * 追加的请求头。身份字段仍由 Client 组装并在同名时胜出，调用方无法误改凭证。
+   * `accept: text/event-stream` 默认发送，可在此覆盖。
+   *
+   * Extra request headers. Identity headers are still assembled by the Client
+   * and win on a name clash, so a caller cannot accidentally replace a
+   * credential. `accept: text/event-stream` is sent by default and may be
+   * overridden here.
+   */
+  headers?: Readonly<Record<string, string>>;
+}
+
+/**
+ * 已建立的流。异步迭代得到事件，`abort` 中止请求后迭代器以 `AbortError` 拒绝。
+ * 响应体边读边消费，因此只能迭代一次。
+ *
+ * An open stream. Iterating yields events; `abort` stops the request and the
+ * iterator then rejects with an `AbortError`. The body is consumed as it is
+ * read, so it can be iterated only once.
+ */
+export interface OvStream extends AsyncIterable<OvStreamEvent> {
+  /** 中止请求并释放连接。Aborts the request and releases the connection. */
+  abort: () => void;
+}
+
+/**
  * 框架无关的请求能力。库自带基于 `fetch` 的实现，宿主也可以自行实现以复用
  * 已有请求层；模块只依赖本接口。
  * Framework-neutral request capability. The library ships a `fetch`-based
@@ -166,6 +257,26 @@ export interface OvClient {
    * Sends one request and returns the native response's `result`.
    */
   request<TResult>(spec: OvRequestSpec): Promise<TResult>;
+  /**
+   * 与 `request` 相同，但同时返回 `result` 之外的分页标记。列表接口用它判断
+   * 是否还有下一页；`responseType: 'blob'` 不适用。
+   *
+   * Same as `request`, but also returns the pagination flag that sits outside
+   * `result`. A listing uses it to decide whether a next page exists; not
+   * applicable to `responseType: 'blob'`.
+   */
+  requestEnvelope<TResult>(
+    spec: OvRequestSpec,
+  ): Promise<OvResponseEnvelope<TResult>>;
+  /**
+   * 建立一条 SSE 流。响应到达后即返回，事件随后逐个产出；HTTP 失败、非事件流
+   * 响应与外壳里的 `status: 'error'` 都在返回前抛出。
+   *
+   * Opens an SSE stream. It resolves once the response arrives and yields events
+   * afterwards; an HTTP failure, a non-event-stream response and a
+   * `status: 'error'` envelope all throw before it resolves.
+   */
+  stream(spec: OvStreamSpec): Promise<OvStream>;
   /**
    * 当前生效的服务地址，用于缓存键与订阅隔离。
    * The effective service address, used to isolate caches and subscriptions.

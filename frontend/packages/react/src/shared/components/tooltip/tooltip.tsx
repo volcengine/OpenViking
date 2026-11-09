@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import { useTooltipPosition } from './use-tooltip-position.js';
+import { useOverlayPosition } from '../overlay/use-overlay-position.js';
 import type { TooltipLabels, TooltipProps } from './types.js';
 
 export type {
@@ -88,7 +88,7 @@ export function Tooltip({
   // ref 变化不会触发重渲染，effect 便看不到它。
   const [surfaceNode, setSurfaceNode] = useState<HTMLDivElement | null>(null);
   const id = useId();
-  const position = useTooltipPosition(open, triggerRef, surfaceNode, placement);
+  const position = useOverlayPosition(open, triggerRef, surfaceNode, placement);
 
   const change = useCallback(
     (next: boolean) => {

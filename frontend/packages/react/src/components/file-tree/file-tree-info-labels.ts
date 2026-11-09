@@ -27,6 +27,10 @@ const DESCRIPTION: InfoCopy = {
   experiences: 'Execution experience distilled automatically',
   sharedResources: 'External resources the agent can reference',
   agentRoot: 'Agent capabilities, tools and experience',
+  agentEndpoints: 'Communication endpoints shared across the account',
+  agentPayments: 'Payment capabilities shared across the account',
+  agentSkills: 'Skill definitions callable across the account',
+  agentTools: 'Tool configuration shared across the account',
   memoryRoot: 'Long-term memory and accumulated information',
   resourceRoot: 'External knowledge the agent can reference',
   sessionRoot: 'Raw session records of the user',
@@ -67,6 +71,13 @@ const TRIGGER_BEHAVIOR: InfoCopy = {
     'A task containing decisions, tool calls or multi-step execution is committed',
   experiences: 'Distilled from task cases and execution trajectories',
   sharedResources: 'Imported material, uploaded to a shared resource space',
+  agentEndpoints:
+    'Configured when an integration endpoint is registered for the account',
+  agentPayments:
+    'Configured when a payment capability is enabled for the account',
+  agentSkills:
+    'Installed or imported as a shared skill available to every agent',
+  agentTools: 'Configured when a tool is registered for the account',
 };
 
 /**

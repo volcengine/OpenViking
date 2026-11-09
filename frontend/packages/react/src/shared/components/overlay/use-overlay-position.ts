@@ -1,21 +1,21 @@
 import { useLayoutEffect, useState } from 'react';
 
-import type { TooltipPlacement } from './types.js';
+import type { OverlayPlacement } from './types.js';
 
 /** 浮层与触发元素之间的间隙。 Gap between the surface and its trigger. */
-export const OFFSET = 6;
+export const OVERLAY_OFFSET = 6;
 /** 浮层与视口边缘的最小留白。 Minimum distance from the viewport edge. */
 const VIEWPORT_MARGIN = 8;
 
-export interface TooltipPosition {
+export interface OverlayPosition {
   top: number;
   left: number;
   /** 实际采用的方位，可能与请求的不同。 The placement actually used. */
-  placement: TooltipPlacement;
+  placement: OverlayPlacement;
 }
 
 /** 方位翻转到对侧。 The opposite side of a placement. */
-const OPPOSITE: Record<TooltipPlacement, TooltipPlacement> = {
+const OPPOSITE: Record<OverlayPlacement, OverlayPlacement> = {
   top: 'bottom',
   bottom: 'top',
   left: 'right',
@@ -33,23 +33,24 @@ const OPPOSITE: Record<TooltipPlacement, TooltipPlacement> = {
 export function resolvePosition(
   trigger: DOMRect,
   surface: { width: number; height: number },
-  placement: TooltipPlacement,
-): TooltipPosition {
+  placement: OverlayPlacement,
+): OverlayPosition {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
 
-  const fits = (side: TooltipPlacement) => {
+  const fits = (side: OverlayPlacement) => {
     if (side === 'top')
-      return trigger.top - surface.height - OFFSET >= VIEWPORT_MARGIN;
+      return trigger.top - surface.height - OVERLAY_OFFSET >= VIEWPORT_MARGIN;
     if (side === 'bottom')
       return (
-        trigger.bottom + surface.height + OFFSET <=
+        trigger.bottom + surface.height + OVERLAY_OFFSET <=
         viewportHeight - VIEWPORT_MARGIN
       );
     if (side === 'left')
-      return trigger.left - surface.width - OFFSET >= VIEWPORT_MARGIN;
+      return trigger.left - surface.width - OVERLAY_OFFSET >= VIEWPORT_MARGIN;
     return (
-      trigger.right + surface.width + OFFSET <= viewportWidth - VIEWPORT_MARGIN
+      trigger.right + surface.width + OVERLAY_OFFSET <=
+      viewportWidth - VIEWPORT_MARGIN
     );
   };
 
@@ -64,8 +65,8 @@ export function resolvePosition(
   if (side === 'top' || side === 'bottom') {
     const top =
       side === 'top'
-        ? trigger.top - surface.height - OFFSET
-        : trigger.bottom + OFFSET;
+        ? trigger.top - surface.height - OVERLAY_OFFSET
+        : trigger.bottom + OVERLAY_OFFSET;
     const left = trigger.left + trigger.width / 2 - surface.width / 2;
     return {
       top: clamp(top, surface.height, viewportHeight),
@@ -76,8 +77,8 @@ export function resolvePosition(
 
   const left =
     side === 'left'
-      ? trigger.left - surface.width - OFFSET
-      : trigger.right + OFFSET;
+      ? trigger.left - surface.width - OVERLAY_OFFSET
+      : trigger.right + OVERLAY_OFFSET;
   const top = trigger.top + trigger.height / 2 - surface.height / 2;
   return {
     top: clamp(top, surface.height, viewportHeight),
@@ -102,13 +103,13 @@ export function resolvePosition(
  * that is derivable during render. Scroll is captured so inner scroll containers
  * count too; listeners are removed on close or unmount.
  */
-export function useTooltipPosition(
+export function useOverlayPosition(
   open: boolean,
   triggerRef: React.RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
-  placement: TooltipPlacement,
+  placement: OverlayPlacement,
 ) {
-  const [position, setPosition] = useState<TooltipPosition>({
+  const [position, setPosition] = useState<OverlayPosition>({
     top: 0,
     left: 0,
     placement,
