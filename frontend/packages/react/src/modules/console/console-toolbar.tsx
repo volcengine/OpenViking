@@ -18,6 +18,7 @@ export function ConsoleToolbar({
   onClear,
   onRecall,
   children,
+  conversationActions,
 }: {
   mode: ConsoleMode;
   panelId: string;
@@ -29,6 +30,7 @@ export function ConsoleToolbar({
   onClear: () => void;
   onRecall: (command: string) => void;
   children?: ReactNode;
+  conversationActions?: ReactNode;
 }) {
   const [sessionVersion, setSessionVersion] = useState(0);
   return (
@@ -80,7 +82,9 @@ export function ConsoleToolbar({
             </button>
           </Tooltip>
         </div>
-      ) : null}
+      ) : (
+        conversationActions
+      )}
     </div>
   );
 }

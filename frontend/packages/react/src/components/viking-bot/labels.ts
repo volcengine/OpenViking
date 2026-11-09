@@ -1,6 +1,25 @@
 import type { VikingBotLabels } from './model.js';
 
 export const DEFAULT_LABELS: Required<VikingBotLabels> = {
+  activityRunning: 'Running',
+  activityCompleted: 'Completed',
+  toolInput: 'Input',
+  toolOutput: 'Output',
+  similarity: 'Similarity',
+  sessionHistory: 'Session history',
+  newSession: 'New session',
+  emptySessions: 'No sessions yet',
+  loading: 'Loading…',
+  loadMore: 'Load more',
+  reference: 'Reference a file or directory',
+  searchReferences: 'Search files and directories',
+  emptyReferences: 'No matching files or directories',
+  removeReference: 'Remove reference',
+  expandReference: 'Expand {name}',
+  collapseReference: 'Collapse {name}',
+  welcomeTitle: 'Welcome to VikingBot',
+  welcomeDescription:
+    'Connect your resources, memories and context to turn your data into usable knowledge.',
   placeholder: 'Ask VikingBot anything',
   send: 'Send',
   stop: 'Stop',
@@ -17,7 +36,6 @@ export const DEFAULT_LABELS: Required<VikingBotLabels> = {
   toolError: 'Failed',
   context: 'Context',
   empty: 'Start a conversation',
-  newSession: 'New chat',
   retry: 'Retry',
   scrollToLatest: 'Scroll to latest',
   unavailable: 'VikingBot is unavailable',

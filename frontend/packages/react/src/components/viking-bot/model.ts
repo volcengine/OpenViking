@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { VikingBotReference } from './capabilities.js';
 
 /**
  * 片段类型判别值。两种宿主风格共用这一层：宿主在接入层把各自的流事件
@@ -14,9 +15,8 @@ export interface VikingBotTextPart {
   /** 文本内容。Text content. */
   text: string;
   /**
-   * 文本格式，缺省为 `plain`。开源版的回答是 Markdown，火山版的工具输出是纯文本。
-   * Text format, `plain` by default. Open-source answers are Markdown while
-   * managed-agent tool output is plain text.
+   * 文本格式，缺省为 `markdown`。逐字展示时显式传 `plain`。
+   * Text format, `markdown` by default. Pass `plain` for literal text.
    */
   format?: 'plain' | 'markdown';
 }
@@ -61,6 +61,13 @@ export interface VikingBotContextPart {
   abstract?: string;
 }
 
+/** Host-normalized resource links returned by a tool. */
+export interface VikingBotToolResultLink {
+  uri: string;
+  label?: string;
+  score?: number;
+}
+
 /** 工具调用片段。A tool call part. */
 export interface VikingBotToolPart {
   /** 片段类型。Part type. */
@@ -75,8 +82,13 @@ export interface VikingBotToolPart {
   input?: Record<string, unknown>;
   /** 调用输出文本。Call output text. */
   output?: string;
+  /** Normalized result cards; the host adapts its search response. */
+  results?: readonly VikingBotToolResultLink[];
   /** 调用耗时，单位毫秒。Call duration in milliseconds. */
   durationMs?: number;
+  /** Execution timestamps for the activity duration. */
+  startedAt?: number | string;
+  completedAt?: number | string;
   /** 所属执行块标识。Owning activity block. */
   groupId?: string;
   /** MCP 服务名，火山版按服务分组展示。MCP server name; the managed agent groups by it. */
@@ -95,6 +107,8 @@ export interface VikingBotToolResultPart {
   name: string;
   /** 工具输出文本。Tool output text. */
   output: string;
+  /** Normalized result cards, replacing the raw output presentation. */
+  results?: readonly VikingBotToolResultLink[];
   /** 该结果是否为错误。Whether the result is an error. */
   isError?: boolean;
   /** 所属执行块标识。Owning activity block. */
@@ -225,10 +239,31 @@ export interface VikingBotDraft {
   text: string;
   /** 附带的附件。Attached files. */
   attachments: readonly VikingBotAttachment[];
+  /** Selected context, separate from editable text. Omitted when references are not configured. */
+  references?: readonly VikingBotReference[];
 }
 
 /** 可替换文案，组件内置英文默认值。Replaceable copy; the component ships English defaults. */
 export interface VikingBotLabels {
+  activityRunning?: string;
+  activityCompleted?: string;
+  toolInput?: string;
+  toolOutput?: string;
+  similarity?: string;
+  sessionHistory?: string;
+  emptySessions?: string;
+  loading?: string;
+  loadMore?: string;
+  reference?: string;
+  searchReferences?: string;
+  emptyReferences?: string;
+  removeReference?: string;
+  expandReference?: string;
+  collapseReference?: string;
+  /** 欢迎标题。Welcome heading. */
+  welcomeTitle?: string;
+  /** 欢迎说明。Welcome description. */
+  welcomeDescription?: string;
   /** 输入框占位文本。Input placeholder. */
   placeholder?: string;
   /** 发送按钮文案。Send button label. */

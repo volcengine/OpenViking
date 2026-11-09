@@ -70,21 +70,21 @@
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   margin-inline-start: auto;
 }
 .ov-console__action {
   display: inline-flex;
   box-sizing: border-box;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 0;
   background: transparent;
-  color: var(--ov-ui-console-secondary);
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   cursor: pointer;
   list-style: none;
   transition:
@@ -93,8 +93,12 @@
 }
 .ov-console__action > svg {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
+}
+.ov-console__action > svg path {
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
 }
 .ov-console__action:hover,
 .ov-console__action[data-open] {

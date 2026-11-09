@@ -62,7 +62,7 @@ React 接入由 `@openviking/react/client` 的 `OpenVikingProvider` 通过 Conte
 | `accountId`   | OpenViking 账号，对应数据空间                                                                                          |
 | `userId`      | 账号内的用户                                                                                                           |
 | `resourceId`  | 当前库；数据面接口需要它                                                                                               |
-| `credentials` | 传给 `fetch` 的 `RequestCredentials`。默认 `same-origin`；商业版跨源调用时设为 `include`                               |
+| `credentials` | 传给 `fetch` 的 `RequestCredentials`。默认 `include`，可按需覆盖为 `same-origin` 或 `omit`                             |
 
 模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值，显式传空字符串则清除它。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。三个模块的 `FileBrowserProps`、`ConsoleProps` 与 `TaskCenterProps` 均已声明该字段。
 

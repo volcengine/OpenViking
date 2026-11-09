@@ -9,7 +9,12 @@ import {
 } from 'react';
 
 import { DEFAULT_LABELS } from './labels.js';
-import type { VikingBotDraft } from './model.js';
+import { VikingBotSubmit } from './composer-controls.js';
+import { ComposerAttachments } from './composer-attachments.js';
+import { composerMention, ReferenceTags } from './composer-references.js';
+import { ComposerFooter } from './composer-footer.js';
+import { QuickInputs } from './quick-inputs.js';
+import { quickInputText } from './capabilities.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
 
 const HARD_BREAK = 'hardBreak';
@@ -47,6 +52,9 @@ export const VikingBotComposerView = forwardRef<
     accept,
     maxAttachments = 10,
     actions,
+    quickInputs,
+    onQuickInputSelect,
+    references,
     onValueChange,
     onFilesAdded,
     onAttachmentRemove,
@@ -58,7 +66,6 @@ export const VikingBotComposerView = forwardRef<
 ) {
   const labels = { ...DEFAULT_LABELS, ...overrides };
   const senderRef = useRef<SenderInstance>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const readOnly = !onValueChange;
   const remaining = Math.max(0, maxAttachments - attachments.length);
   const limitReached = remaining === 0;
@@ -105,7 +112,11 @@ export const VikingBotComposerView = forwardRef<
     const text = toPlainText(
       senderRef.current?.getValue() ?? toRichText(value),
     );
-    onSend({ text, attachments } satisfies VikingBotDraft);
+    onSend({
+      text,
+      attachments,
+      ...(references ? { references: references.selected } : {}),
+    });
   };
 
   // 拦截拖放的默认行为与是否接受文件是两件事：满额或禁用时仍要阻止浏览器
@@ -140,74 +151,73 @@ export const VikingBotComposerView = forwardRef<
           {disabledReason}
         </p>
       ) : null}
-      {attachments.length > 0 ? (
-        <ul className="ov-viking-bot__attachments">
-          {attachments.map((attachment) => (
-            <li key={attachment.key}>
-              <span>{attachment.name}</span>
-              {attachment.status === 'error' ? (
-                <span className="ov-viking-bot__attachment-status">
-                  {attachment.errorMessage ?? labels.toolError}
-                </span>
-              ) : null}
-              {onAttachmentRemove ? (
-                <button
-                  type="button"
-                  aria-label={labels.removeAttachment}
-                  disabled={disabled}
-                  onClick={() => onAttachmentRemove(attachment)}
-                >
-                  ×
-                </button>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <QuickInputs
+        items={quickInputs}
+        disabled={disabled || readOnly || isSending}
+        onSelect={(item) => {
+          if (onQuickInputSelect) onQuickInputSelect(item);
+          else setText(quickInputText(value, item, quickInputs ?? []));
+          senderRef.current?.getEditor()?.commands.focus('end');
+        }}
+      />
       <Sender
         ref={senderRef}
         className="ov-viking-bot__sender"
         defaultContent={toRichText(value)}
         sending={isSending}
-        sendDisabled={disabled || readOnly}
+        sendDisabled={disabled || readOnly || (!isSending && !onSend)}
         onContentChange={(content) => {
           if (!readOnly) onValueChange?.(toPlainText(content));
         }}
-        onSend={() => {
-          submit();
-        }}
+        onSend={submit}
         onStop={() => onCancel?.()}
+        renderHeader={() => (
+          <>
+            <ReferenceTags
+              config={references}
+              labels={labels}
+              disabled={disabled || isSending}
+            />
+            <ComposerAttachments
+              items={attachments}
+              onRemove={onAttachmentRemove}
+              labels={labels}
+              disabled={disabled || isSending}
+            />
+          </>
+        )}
+        renderSubmit={(props) =>
+          isSending && !onCancel ? null : (
+            <VikingBotSubmit
+              {...props}
+              label={isSending ? labels.stop : labels.send}
+            />
+          )
+        }
         richTextAreaProps={{
+          mentionConfig: composerMention(
+            references,
+            Boolean(disabled || readOnly || isSending),
+            labels,
+          ),
           placeholder: labels.placeholder,
           disabled,
+          minRows: 1,
+          maxRows: 6,
+          style: { minHeight: 44 },
         }}
         renderFooter={({ components }) => (
-          <div className="ov-viking-bot__composer-actions">
-            {components.sendBtnComponent}
-            {onFilesAdded ? (
-              <>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept={accept}
-                  multiple
-                  hidden
-                  onChange={(event) => {
-                    reportFiles([...(event.target.files ?? [])]);
-                    event.target.value = '';
-                  }}
-                />
-                <button
-                  type="button"
-                  disabled={disabled || limitReached}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  {labels.attach}
-                </button>
-              </>
-            ) : null}
-            {actions}
-          </div>
+          <ComposerFooter
+            references={references}
+            senderRef={senderRef}
+            labels={labels}
+            disabled={Boolean(disabled || readOnly || isSending)}
+            filesDisabled={Boolean(disabled || limitReached || isSending)}
+            accept={accept}
+            onFiles={onFilesAdded ? reportFiles : undefined}
+            actions={actions}
+            submit={components.sendBtnComponent}
+          />
         )}
       />
     </div>

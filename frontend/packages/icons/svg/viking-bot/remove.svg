@@ -1,15 +1,14 @@
 <svg
   xmlns="http://www.w3.org/2000/svg"
-  width="16"
-  height="16"
-  viewBox="0 0 16 16"
+  width="12"
+  height="12"
+  viewBox="0 0 12 12"
   fill="none"
 >
   <path
-    d="M2.6 5.7A5.5 5.5 0 1 1 2.5 10M2.6 2.7v3.1h3.1M8 4.8V8l2 1.3"
+    d="m3 3 6 6m0-6-6 6"
     stroke="currentColor"
     stroke-width="1.2"
     stroke-linecap="round"
-    stroke-linejoin="round"
   />
 </svg>

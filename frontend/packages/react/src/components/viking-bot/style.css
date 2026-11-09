@@ -9,3 +9,7 @@
 @import '@ark-design/ui/sender/style/index.css';
 @import '@ark-design/ui/ask-human/style/index.css';
 @import '@ark-design/ui/error-card/style/index.css';
+@import '../file-tree/style.css';
+@import '../../shared/components/tooltip/style.css';
+@import './viking-bot-features.css';
+@import './viking-bot-messages.css';

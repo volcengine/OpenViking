@@ -1,6 +1,9 @@
 import { useId, useRef } from 'react';
 import { Tui } from '../../components/tui/index.js';
-import { VikingBot } from '../../components/viking-bot/index.js';
+import {
+  VikingBot,
+  VikingBotSessionActions,
+} from '../../components/viking-bot/index.js';
 import { useConsole } from './use-console.js';
 import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
@@ -15,6 +18,7 @@ export function Console({
   requestOptions,
   onModeChange,
   onOpenUri,
+  conversation,
   slots,
   labels: overrides,
   className,
@@ -29,6 +33,8 @@ export function Console({
     onModeChange,
   });
   const labels = consoleLabels(locale, overrides);
+  const { sessions, headerActions, ...conversationProps } = conversation ?? {};
+  const botLabels = { ...labels.vikingBot, ...conversationProps.labels };
   const id = useId();
   const commandPanel = useRef<HTMLDivElement>(null);
   const fillCommand = (command: string) => {
@@ -55,6 +61,14 @@ export function Console({
           fillCommand('');
         }}
         onRecall={fillCommand}
+        conversationActions={
+          <VikingBotSessionActions
+            sessions={sessions}
+            extra={headerActions}
+            labels={botLabels}
+            locale={locale}
+          />
+        }
       >
         {slots?.toolbar}
       </ConsoleToolbar>
@@ -65,12 +79,21 @@ export function Console({
       >
         {state.mode === 'conversation' ? (
           <VikingBot
-            messages={[]}
-            draft={state.conversationDraft}
-            onDraftChange={state.setConversationDraft}
-            footer={slots?.conversationContext}
-            emptyState={<p role="status">{labels.description}</p>}
-            labels={labels.vikingBot}
+            {...conversationProps}
+            onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+            messages={conversationProps.messages ?? []}
+            draft={conversationProps.draft ?? state.conversationDraft}
+            onDraftChange={
+              conversationProps.draft === undefined
+                ? (value) => {
+                    state.setConversationDraft(value);
+                    conversationProps.onDraftChange?.(value);
+                  }
+                : conversationProps.onDraftChange
+            }
+            footer={slots?.conversationContext ?? conversationProps.footer}
+            locale={conversationProps.locale ?? locale}
+            labels={botLabels}
           />
         ) : null}
       </div>

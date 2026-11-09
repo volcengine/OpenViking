@@ -1,4 +1,13 @@
 export { VikingBot } from './viking-bot.js';
+export { VikingBotSessionActions } from './session-actions.js';
+export type {
+  VikingBotQuickInput,
+  VikingBotReference,
+  VikingBotReferences,
+  VikingBotSession,
+  VikingBotSessions,
+  VikingBotInputFeatures,
+} from './capabilities.js';
 export { VikingBotComposer } from './lazy-composer.js';
 export { VikingBotMessageList } from './viking-bot-message-list.js';
 export {
@@ -27,6 +36,7 @@ export type {
   VikingBotTextPart,
   VikingBotToolPart,
   VikingBotToolResultPart,
+  VikingBotToolResultLink,
 } from './model.js';
 export type {
   VikingBotComposerProps,

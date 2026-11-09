@@ -75,3 +75,5 @@ export {
   resolveFileTypeIconKey,
 } from './file-type-icon.js';
 export type { FileTypeIconComponent } from './file-type-icon.js';
+export { VikingBotIcon } from './viking-bot-icons.js';
+export type { VikingBotIconName } from './viking-bot-icons.js';

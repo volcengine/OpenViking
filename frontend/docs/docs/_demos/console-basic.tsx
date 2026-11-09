@@ -4,12 +4,14 @@ import { OpenVikingProvider } from '@openviking/react/client';
 import { Console } from '@openviking/react/modules/console';
 import '@openviking/react/modules/console/style.css';
 import { consoleTransport } from '#console-transport';
+import { useConsoleConversation } from '#console-conversation';
 
 const transport = consoleTransport();
 
 export default function ConsoleBasic() {
   const zh = useLang() === 'zh';
   const [opened, setOpened] = useState('');
+  const conversation = useConsoleConversation(zh);
   return (
     <div>
       <p>
@@ -27,9 +29,9 @@ export default function ConsoleBasic() {
           }}
         >
           <Console
-            defaultMode="command"
             locale={zh ? 'zh' : 'en'}
             onOpenUri={setOpened}
+            conversation={conversation}
           />
         </div>
       </OpenVikingProvider>

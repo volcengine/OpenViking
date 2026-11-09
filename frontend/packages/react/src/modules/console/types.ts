@@ -1,7 +1,10 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import type { TuiLabels, TuiRecord } from '../../components/tui/index.js';
-import type { VikingBotLabels } from '../../components/viking-bot/index.js';
+import type {
+  VikingBotLabels,
+  VikingBotProps,
+} from '../../components/viking-bot/index.js';
 
 export type ConsoleMode = 'conversation' | 'command';
 
@@ -12,7 +15,7 @@ export interface ConsoleSlots {
 }
 
 export interface ConsoleLabels {
-  /** Conversation availability notice; replaces the former placeholder copy. */
+  /** Conversation welcome description. */
   description?: string;
   conversation?: string;
   command?: string;
@@ -30,6 +33,7 @@ export interface ConsoleLabels {
 /** Options shared by Console and its internal Hook. */
 export interface ConsoleOptions {
   mode?: ConsoleMode;
+  /** Initial uncontrolled mode. Defaults to VikingBot ('conversation'). */
   defaultMode?: ConsoleMode;
   locale?: 'en' | 'zh';
   /** Change with the identity when using dynamic credential/identity functions. */
@@ -42,6 +46,8 @@ export interface ConsoleProps
   extends
     ConsoleOptions,
     Omit<HTMLAttributes<HTMLDivElement>, 'onSelect' | 'children'> {
+  /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
+  conversation?: Partial<VikingBotProps>;
   /** Reports navigation intent; the host opens the resource. */
   onOpenUri?: (uri: string) => void;
   slots?: ConsoleSlots;
