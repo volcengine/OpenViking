@@ -355,3 +355,109 @@ jobs:
           This package passed offline runtime checks, not real connector/account acceptance.
           No TOS upload, stable latest update, autostart or automatic upgrade is performed.
           "@ >> $env:GITHUB_STEP_SUMMARY
+
+  windows-preview-publish:
+    name: Publish Windows preview to TOS
+    needs: windows-preview
+    # Same triggers as the POSIX publisher, but never touches the stable
+    # `latest` pointer: Windows stays a preview channel under its own prefix.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: vika-release
+    concurrency:
+      group: vika-windows-preview-publish
+      queue: max
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vika-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install AWS CLI
+        run: |
+          python -m pip install --upgrade awscli
+          aws configure set default.s3.addressing_style virtual
+
+      - name: Upload Windows preview
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_RELEASE_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION TOS_BUCKET TOS_ENDPOINT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::TOS is not configured: ${name} is empty"
+              exit 1
+            fi
+          done
+          TOS_ENDPOINT="${TOS_ENDPOINT#https://}"
+          TOS_ENDPOINT="${TOS_ENDPOINT#http://}"
+          case "${TOS_ENDPOINT}" in
+            tos-s3-*) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+            tos-*) TOS_S3_ENDPOINT="tos-s3-${TOS_ENDPOINT#tos-}" ;;
+            *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+          esac
+          IMMUTABLE="public, max-age=31536000, immutable"
+          NO_CACHE="no-store, no-cache, must-revalidate, max-age=0"
+          TEXT="text/plain; charset=utf-8"
+
+          upload() {
+            disposition=()
+            case "$3" in text/*) disposition=(--content-disposition inline) ;; esac
+            aws s3 cp "$1" "s3://${TOS_BUCKET}/$2" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --content-type "$3" \
+              --cache-control "$4" \
+              ${disposition[@]+"${disposition[@]}"} \
+              --only-show-errors
+            echo "Uploaded $2"
+          }
+
+          cd dist
+          shopt -s nullglob
+          zips=(vika-*-win32-x64.zip)
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one Windows preview ZIP, found ${#zips[@]}"
+            exit 1
+          fi
+          ZIP="${zips[0]}"
+          VERSION="${ZIP#vika-}"
+          VERSION="${VERSION%-win32-x64.zip}"
+          PREFIX="${VIKA_TOS_PREFIX}/windows-preview"
+          DIR="${PREFIX}/${VERSION}"
+
+          # Versioned copy: immutable, exactly what the Actions artifact holds.
+          upload "${ZIP}" "${DIR}/${ZIP}" application/zip "${IMMUTABLE}"
+          upload "${ZIP}.sha256" "${DIR}/${ZIP}.sha256" "${TEXT}" "${IMMUTABLE}"
+          upload install-preview.ps1 "${DIR}/install-preview.ps1" "${TEXT}" "${IMMUTABLE}"
+          upload README.md "${DIR}/README.md" "text/markdown; charset=utf-8" "${IMMUTABLE}"
+          upload release.json "${DIR}/release.json" application/json "${IMMUTABLE}"
+
+          # Stable alias for documentation links. The installer requires the
+          # checksum file to name the ZIP it sits next to, so it is rewritten
+          # for the fixed name rather than copied.
+          ALIAS="vika-windows-preview-win32-x64.zip"
+          cp "${ZIP}" "${ALIAS}"
+          printf '%s  %s\n' "$(cut -d' ' -f1 "${ZIP}.sha256")" "${ALIAS}" > "${ALIAS}.sha256"
+          printf '%s\n' "${VERSION}" > latest
+          upload "${ALIAS}" "${PREFIX}/latest/${ALIAS}" application/zip "${NO_CACHE}"
+          upload "${ALIAS}.sha256" "${PREFIX}/latest/${ALIAS}.sha256" "${TEXT}" "${NO_CACHE}"
+          upload install-preview.ps1 "${PREFIX}/latest/install-preview.ps1" "${TEXT}" "${NO_CACHE}"
+          upload README.md "${PREFIX}/latest/README.md" "text/markdown; charset=utf-8" "${NO_CACHE}"
+          upload latest "${PREFIX}/latest/version" "${TEXT}" "${NO_CACHE}"
+
+          {
+            echo "## Windows x64 preview on TOS"
+            echo "Version: \`${VERSION}\`"
+            echo "- Latest ZIP: ${VIKA_DOWNLOAD_BASE}/windows-preview/latest/${ALIAS}"
+            echo "- This build: ${VIKA_DOWNLOAD_BASE}/windows-preview/${VERSION}/${ZIP}"
+            echo "Stable \`latest\` for macOS/Linux is unchanged."
+          } >> "$GITHUB_STEP_SUMMARY"
