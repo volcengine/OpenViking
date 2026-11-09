@@ -75,9 +75,17 @@ async def test_frontmatter_is_removed_only_when_explicitly_requested(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
 @pytest.mark.parametrize("extract_frontmatter", [False, True], ids=["keep", "remove"])
-async def test_frontmatter_title_and_body(newline: str, extract_frontmatter: bool) -> None:
-    body = "# Guide\n\nbody text\n".replace("\n", newline)
-    document = "---\ntitle: Release Notes\nowner: team\n---\n".replace("\n", newline) + body
+@pytest.mark.parametrize(
+    "body, closing_newline",
+    [("# Guide\n\nbody text\n", True), ("", True), ("", False)],
+    ids=["body", "empty-body", "eof"],
+)
+async def test_frontmatter_title_and_body(
+    newline: str, extract_frontmatter: bool, body: str, closing_newline: bool
+) -> None:
+    body = body.replace("\n", newline)
+    document = "---\ntitle: Release Notes\nowner: team\n---".replace("\n", newline)
+    document += (newline if closing_newline else "") + body
 
     layout = await MarkdownParser(extract_frontmatter=extract_frontmatter)._compute_layout(
         document, "viking://temp/test", source_path="/tmp/notes.md"
@@ -108,3 +116,17 @@ sources:
         "date": "2026-10-08",
         "sources": [{"id": "cited", "title": "Cited document"}],
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closing_line", ["---suffix", "----"])
+async def test_frontmatter_requires_a_complete_closing_delimiter(closing_line: str) -> None:
+    document = f"---\ntitle: Release Notes\n{closing_line}"
+
+    layout = await MarkdownParser()._compute_layout(
+        document, "viking://temp/test", source_path="/tmp/notes.md"
+    )
+
+    assert layout.doc_title == "notes"
+    assert "frontmatter" not in layout.meta
+    assert _written(layout) == [document]
