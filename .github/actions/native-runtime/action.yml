@@ -32,6 +32,8 @@ runs:
       if: inputs.artifact == ''
       shell: bash
       env:
+        # maturin emits Unicode logs that Windows' legacy stdout cannot encode.
+        PYTHONIOENCODING: utf-8
         OV_REQUIRE_RAGFS_BUILD: '1'
         OV_SKIP_STUDIO_BUILD: '1'
       run: uv run --no-sync python setup.py build_ext --inplace

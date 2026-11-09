@@ -8,7 +8,7 @@ import subprocess
 FULL_OS = [
     "ubuntu-24.04",
     "ubuntu-24.04-arm",
-    "macos-14",
+    "macos-15",
     "macos-15-intel",
     "windows-latest",
 ]
