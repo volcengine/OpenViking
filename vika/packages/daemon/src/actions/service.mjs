@@ -1162,8 +1162,11 @@ export class ActionService {
 
   async query(caller, operation, { source, ...input }, ids = {}) {
     const connector = this.route(caller, operation, 'queries', source, ids);
-    if (input.cursor !== undefined && this.manifest(connector).name !== 'slack') {
-      throw blocked('unsupported', 'cursor is currently supported only for Slack queries.');
+    const connectorName = this.manifest(connector).name;
+    const supportsCursor = connectorName === 'slack'
+      || (connectorName === 'lark' && ['chat.messages', 'thread.messages'].includes(operation));
+    if (input.cursor !== undefined && !supportsCursor) {
+      throw blocked('unsupported', 'cursor is supported only for Slack queries and Lark chat/thread message history.');
     }
     // A bot-only Lark instance reads every message as the bot, so only in the
     // chats it has joined; the tool schema already offers no other identity.

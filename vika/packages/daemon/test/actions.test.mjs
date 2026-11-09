@@ -133,20 +133,71 @@ describe('agent tools', () => {
     assert.equal(connectors.calls.length, 0);
   });
 
-  it('keeps empty Slack pages pageable, rejects Lark cursors and fences query results after runtime retirement', async (t) => {
+  it('keeps empty Slack pages pageable, rejects unsupported Lark list cursors and fences query results after runtime retirement', async (t) => {
     let finish;
     const { call, service, store, connectors } = setup(t, { ids: ['lark', 'slack'], run: async (_id, _action, input) => {
       if (input.query === 'pending') return new Promise(resolve => { finish = resolve; });
       return { chats: [], has_more: true, next_cursor: 'next=' };
     } });
     assert.match((await call('list_chats', { source: 'slack', query: 'design' })).text, /cursor="next="/);
-    await assert.rejects(call('list_chat_messages', { source: 'lark', chat_id: 'oc_test', cursor: 'next=' }), /only for Slack/);
+    await assert.rejects(call('list_chats', { source: 'lark', cursor: 'next=' }), /only for Slack queries and Lark chat\/thread/);
     assert.equal(connectors.calls.length, 1);
     const pending = call('list_chats', { source: 'slack', query: 'pending' });
     store.initializeCognition('claude', 'new-owner');
     finish({ chats: [{ chat_id: 'C0OLD', name: 'old' }] });
     await assert.rejects(pending, /no longer owns/);
     assert.equal(service.queryTargets.size, 0);
+  });
+
+  it('pages Lark chat and thread history through the tool and CLI without changing identity', async (t) => {
+    for (const [tool, target, command, order] of [
+      ['list_chat_messages', { chat_id: 'oc_test12345678' }, '+chat-messages-list', 'desc'],
+      ['list_thread_messages', { thread_id: 'omt_test12345678' }, '+threads-messages-list', 'asc'],
+    ]) {
+      for (const as of ['bot', 'user']) {
+        const pages = [
+          { messages: [{ message_id: 'om_first12345678' }], has_more: true, page_token: 'opaque+/token=' },
+          { messages: [], has_more: true, page_token: 'empty-page-next=' },
+          { items: [{ message_id: 'om_last123456789' }], has_more: false, page_token: 'stale-token' },
+        ];
+        const connectors = larkConnectors({ tempDir: os.tmpdir(), run: async () => ({
+          code: 0, stdout: JSON.stringify({ ok: true, data: pages.shift() }), stderr: '',
+        }) });
+        const { call, service } = setup(t, { connectors, larkMessageAccess: as === 'bot' ? 'bot' : 'owner' });
+        const input = { source: 'lark', ...target, limit: 2, as };
+        const schema = service.tools().find(item => item.name === tool).inputSchema;
+        assert.match(schema.properties.cursor.description, /Lark or Slack/);
+        const first = await call(tool, input);
+        assert.deepEqual(first.data.messages.map(item => item.message_id), ['om_first12345678']);
+        assert.equal(first.data.next_cursor, 'opaque+/token=');
+        assert.match(first.text, /cursor="opaque\+\/token="/);
+        const middle = await call(tool, { ...input, cursor: first.data.next_cursor });
+        assert.equal(middle.data.messages.length, 0);
+        assert.equal(middle.data.has_more, true);
+        assert.match(middle.text, /cursor="empty-page-next="/);
+        const last = await call(tool, { ...input, cursor: middle.data.next_cursor });
+        assert.deepEqual(last.data.messages.map(item => item.message_id), ['om_last123456789']);
+        assert.equal(last.data.has_more, false);
+        assert.equal(last.data.next_cursor, '');
+        assert.doesNotMatch(last.text, /More results|cursor=/);
+        assert.equal(connectors.calls.length, 3);
+        for (const { args } of connectors.calls) {
+          assert.ok(args.includes(command));
+          assert.equal(args[args.indexOf('--as') + 1], as);
+          assert.equal(args[args.indexOf('--page-size') + 1], '2');
+          assert.ok(args.includes(order));
+          assert.ok(args.includes(Object.values(target)[0]));
+          assert.ok(!args.includes('--page-all'));
+        }
+        assert.ok(!connectors.calls[0].args.includes('--page-token'));
+        assert.deepEqual(connectors.calls[1].args.slice(-2), ['--page-token', first.data.next_cursor]);
+        assert.deepEqual(connectors.calls[2].args.slice(-2), ['--page-token', middle.data.next_cursor]);
+        if (as === 'bot') {
+          await assert.rejects(call(tool, { ...input, as: 'user', cursor: first.data.next_cursor }), /as must be one of bot/);
+          assert.equal(connectors.calls.length, 3);
+        }
+      }
+    }
   });
 
   it('separates response attribution from the latest freshness fence', async (t) => {
