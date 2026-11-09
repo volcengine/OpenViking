@@ -106,8 +106,15 @@ async function main([command, ...args], lang) {
     }
     case 'logs': {
       if (args.length > 1) break;
-      const [{ logsCommand }, { chooseInstance, loadInstances }, { Prompter }] = await Promise.all([
-        import('../src/control.mjs'), import('../src/instances.mjs'), import('../src/prompt.mjs')]);
+      // Sequential on purpose: `control.mjs` imports the platform facade and
+      // `instances.mjs` reaches the same facade through the CommonJS
+      // `deployment-config.cjs`, so loading both at once makes the CJS `require`
+      // run while the ES module is still evaluating (ERR_REQUIRE_ESM_RACE_CONDITION,
+      // Node's own message names the fix). Loading one at a time costs nothing
+      // here: these are three small modules and the command tails a log file.
+      const { logsCommand } = await import('../src/control.mjs');
+      const { chooseInstance, loadInstances } = await import('../src/instances.mjs');
+      const { Prompter } = await import('../src/prompt.mjs');
       const prompter = new Prompter();
       const agent = await chooseInstance({ deployment: loadInstances(), requested: args[0], prompter, question: t('看哪个实例的日志', 'Whose logs') })
         .finally(() => prompter.close());
