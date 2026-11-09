@@ -375,3 +375,62 @@
   color: var(--ov-viking-bot-text-muted);
   font-size: 12px;
 }
+
+/* Ark 用 `rgb(var(--primary-N))` 消费主色，而公开契约给的是完整色值
+   `--ov-ui-color-primary`。CSS 无法把完整色值拆成通道列表，因此这里覆盖 Ark
+   实际用到主色的那几条声明，让它们直接读公开主色——宿主按原有契约覆盖
+   `--ov-ui-color-primary` 与 `--ov-ui-color-primary-hover` 即可让 Ark 控件一起
+   换色，不需要额外配置通道变量。所有选择器都限定在组件根节点内，不改宿主全局。
+
+   Ark consumes the primary colour through `rgb(var(--primary-N))`, which needs an
+   RGB channel list, while the public contract supplies a full colour value. CSS
+   cannot split a colour into channels, so the declarations Ark actually uses are
+   overridden here to read the public colour directly. A host re-skins by
+   overriding `--ov-ui-color-primary` / `--ov-ui-color-primary-hover` as before. */
+.ov-viking-bot .ark-agentic-sender-send-btn--submit-button,
+.ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button {
+  background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-sender-send-btn--submit-button:hover,
+.ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button:hover {
+  background-color: var(
+    --ov-ui-color-primary-hover,
+    var(--ov-viking-bot-accent-hover)
+  );
+}
+
+.ov-viking-bot .ark-agentic-sender-send-btn--submit-button:active,
+.ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button:active {
+  background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-ask-human-custom-editing,
+.ov-viking-bot__interaction .ark-agentic-ask-human-custom-editing {
+  border-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-ask-human-step-arrow:focus-visible,
+.ov-viking-bot__interaction .ark-agentic-ask-human-step-arrow:focus-visible {
+  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-bubble__edit-btn--confirm,
+.ov-viking-bot__interaction .ark-agentic-bubble__edit-btn--confirm {
+  background: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-bubble-tools__button:focus-visible,
+.ov-viking-bot .ark-agentic-bubble-tools__menu-item:focus-visible,
+.ov-viking-bot__interaction .ark-agentic-bubble-tools__button:focus-visible,
+.ov-viking-bot__interaction .ark-agentic-bubble-tools__menu-item:focus-visible {
+  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-activity-activityTimeline,
+.ov-viking-bot__interaction .ark-agentic-activity-activityTimeline {
+  --agentic-activity-focus: var(
+    --ov-ui-color-primary,
+    var(--ov-viking-bot-accent)
+  );
+}

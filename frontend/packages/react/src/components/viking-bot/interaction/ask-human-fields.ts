@@ -28,6 +28,18 @@ export const toFields = (
       {
         type: 'single-select',
         field: 'value',
+        // Ark 的 SingleSelectList 用 useState 初始化 activeIndex，只在首次渲染
+        // 读一次值；而 AskHuman 的 defaultValue 要等 Effect 才写进 Form，那时
+        // 已晚一步。因此初始值必须由 Form.Item 在首次渲染就注入，否则显示与
+        // 提交值会不一致。
+        formItemProps: request.initialValue
+          ? {
+              initialValue: {
+                type: 'option',
+                value: request.initialValue,
+              },
+            }
+          : undefined,
         options: request.options.map((option) => ({
           value: option.id,
           label: option.label,
