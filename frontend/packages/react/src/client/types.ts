@@ -72,12 +72,12 @@ export interface OvRequestOptions {
  */
 export interface OvClientOptions extends OvRequestOptions {
   /**
-   * 是否携带浏览器 Cookie。商业版的数据面与控制面接口都依赖 Cookie 鉴权，
-   * 跨源调用时需要设为 `include`。
+   * 是否携带浏览器 Cookie。默认 `include`，跨源请求也允许携带 Cookie；
+   * 可显式覆盖为 `same-origin` 或 `omit`。仍遵循服务端 CORS 与浏览器 Cookie 策略。
    *
-   * Whether browser cookies are sent. The commercial edition authenticates both
-   * data-plane and control-plane requests with a cookie, so a cross-origin call
-   * needs `include`.
+   * Whether browser cookies are sent. Defaults to `include`, including for
+   * cross-origin requests. Override with `same-origin` or `omit` as needed.
+   * Server CORS and browser cookie policies still apply.
    */
   credentials?: RequestCredentials;
   /**

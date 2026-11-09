@@ -21,7 +21,7 @@ import { OpenVikingProvider } from '@openviking/react/client';
 </OpenVikingProvider>;
 ```
 
-开源版额外传 `apiKey`；商业版由浏览器 Cookie 鉴权，因此不传 `apiKey`，跨源调用时把 `credentials` 设为 `include`。
+开源版额外传 `apiKey`；商业版由浏览器 Cookie 鉴权，因此不传 `apiKey`。`credentials` 默认 `include`，跨源调用也无需显式传入，仍遵循服务端 CORS 与浏览器 Cookie 策略。
 
 Provider 挂载本身不发请求，也不读取浏览器中保存的凭证。
 
@@ -29,16 +29,16 @@ Provider 挂载本身不发请求，也不读取浏览器中保存的凭证。
 
 每个字段都是值。请求头由 Client 组装，调用方不需要手写 `X-API-Key`、`X-OpenViking-Account`、`X-OpenViking-User` 或 `V-Resource-Id`。
 
-| 字段          | 请求头                 | 说明                                                                           |
-| ------------- | ---------------------- | ------------------------------------------------------------------------------ |
-| `baseURL`     | —                      | 服务地址及可选网关前缀，不含 `/api/v1`。空字符串表示同源。                     |
-| `apiKey`      | `X-API-Key`            | 开源版使用。函数形式每次请求重新求值，可读取轮换后的凭证。                     |
-| `accountId`   | `X-OpenViking-Account` | OpenViking 账号，对应数据空间。                                                |
-| `userId`      | `X-OpenViking-User`    | 账号内的用户。                                                                 |
-| `resourceId`  | `V-Resource-Id`        | 当前库。数据面接口需要它。                                                     |
-| `credentials` | —                      | 传给 `fetch` 的 `RequestCredentials`。默认 `same-origin`；商业版需 `include`。 |
-| `signal`      | —                      | 调用方的 `AbortSignal`。                                                       |
-| `fetch`       | —                      | 传输层覆盖，用于测试或没有全局 `fetch` 的平台。                                |
+| 字段          | 请求头                 | 说明                                                                                         |
+| ------------- | ---------------------- | -------------------------------------------------------------------------------------------- |
+| `baseURL`     | —                      | 服务地址及可选网关前缀，不含 `/api/v1`。空字符串表示同源。                                   |
+| `apiKey`      | `X-API-Key`            | 开源版使用。函数形式每次请求重新求值，可读取轮换后的凭证。                                   |
+| `accountId`   | `X-OpenViking-Account` | OpenViking 账号，对应数据空间。                                                              |
+| `userId`      | `X-OpenViking-User`    | 账号内的用户。                                                                               |
+| `resourceId`  | `V-Resource-Id`        | 当前库。数据面接口需要它。                                                                   |
+| `credentials` | —                      | 传给 `fetch` 的 `RequestCredentials`。默认 `include`，可按需覆盖为 `same-origin` 或 `omit`。 |
+| `signal`      | —                      | 调用方的 `AbortSignal`。                                                                     |
+| `fetch`       | —                      | 传输层覆盖，用于测试或没有全局 `fetch` 的平台。                                              |
 
 字段省略或为空字符串时不发送对应请求头。商业版的控制面接口只需 Cookie，因此不传 `apiKey`，也不传身份头。
 
