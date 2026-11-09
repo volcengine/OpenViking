@@ -1775,7 +1775,7 @@ async function setupFlow({
   writeManifest(configPath, manifestWith(agent), { expected: manifest });
   pendingOV.delete(agent.ovConfig);
   registrations?.keep(agent.ovConfig);
-  if (ov && agent.ovConfig !== current?.ovConfig) saveOVConnection(ov, { env, homeDir });
+  if (ov && agent.ovConfig !== current?.ovConfig) saveOVConnection(ov, { env, homeDir, instanceId: agent.id });
   for (const mailbox of mail.removed) fs.rmSync(mailbox.config, { force: true });
 
   prompter.section(current ? t('重启', 'Restart') : t('启动', 'Start'));

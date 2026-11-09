@@ -202,6 +202,26 @@ test('editing the OV connection drops the old peer and keeps the old file; Save 
   }
 });
 
+test('editing a connection that already names the instance keeps the owner’s user for the next instance', async (t) => {
+  // asd's own config, the only candidate · hosted · manual: keep the URL, no key, keep account/user/agent, then Save.
+  const h = harness(t, ['2', '9', '3', '', '2', '', '', '', '11']);
+  const before = existing(h);
+  fs.mkdirSync(path.dirname(before.ovConfig), { recursive: true });
+  fs.writeFileSync(before.ovConfig, JSON.stringify({ url: 'http://127.0.0.1:1933', account: 'team', user: 'weihan.liu.asd' }));
+  h.options.configureOV = configureOpenViking;
+  h.options.detect.openViking = detectOpenViking;
+  h.options.fetchImpl = async (url, init) => {
+    const valid = url.startsWith('http://127.0.0.1:1933') && init.headers['X-OpenViking-Account'] === 'team';
+    return Response.json({ status: valid ? 'ok' : 'error', auth_mode: 'trusted', result: [] }, { status: valid ? 200 : 400 });
+  };
+  assert.equal(await setupCommand(h.options), 0);
+  const [after] = h.manifest().agents;
+  assert.notEqual(after.ovConfig, before.ovConfig);
+  assert.equal(JSON.parse(fs.readFileSync(after.ovConfig, 'utf8')).user, 'weihan.liu.asd');
+  assert.deepEqual(JSON.parse(fs.readFileSync(savedOVConfigPath(h.home), 'utf8')),
+    { url: 'http://127.0.0.1:1933', account: 'team', user: 'weihan.liu' });
+});
+
 test('adding an instance offers shared OV connections only and makes it a Trusted user of its own', async (t) => {
   const h = harness(t, ['1', '1', 'fresh', 'Fresh', '', '', '1', '2', 'y']);
   const before = existing(h);
