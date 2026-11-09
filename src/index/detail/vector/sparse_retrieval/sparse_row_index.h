@@ -116,6 +116,15 @@ class SparseRowIndex {
                      std::vector<IndexT>& mutable_indices,
                      std::vector<ValueT>& mutable_values);
 
+  // Generate a query sparse vector without modifying term_index. Searches only
+  // hold the index's shared lock, so they must not insert terms. Unseen terms
+  // get indices past the dictionary: they match no record, but still count in
+  // squared L2 the way a term no record has does.
+  int lookup_by_terms(const std::vector<TermKey>& terms,
+                      const std::vector<ValueT>& values,
+                      std::vector<IndexT>& mutable_indices,
+                      std::vector<ValueT>& mutable_values) const;
+
  protected:
   bool finish_populate_terms_ = false;
   std::vector<TermKey> index_term_;
