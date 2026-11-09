@@ -7,6 +7,11 @@ import { Store } from './store.mjs';
 import { ProcessRegistry } from './process-utils.mjs';
 import { AgentRuntime } from './agent-runtime.mjs';
 import { Harness } from './harness.mjs';
+import { MessageInbox } from './inbox.mjs';
+import { TaskManager } from './tasks.mjs';
+import { WorkerExecutor } from './worker-executor.mjs';
+import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
+import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { executeCommand } from './commands.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
@@ -85,6 +90,13 @@ export class PersonalAgentDaemon {
     this.ovContext = null;
     this.ovSyncTimer = null;
     this.ovSyncBusy = false;
+  }
+
+  // A turn's end takes its OnIt reactions down, except where a task's worker
+  // is still at work: the relayed result takes those down.
+  keepReactions() {
+    const live = this.tasks?.liveScopes();
+    return live?.size ? { keep: (scope) => live.has(scope) } : {};
   }
 
   recordSystemActivity(kind, fields = {}, eventSuffix = null) {
@@ -238,7 +250,7 @@ export class PersonalAgentDaemon {
         // no repeated calls counted toward the loop breaker.
         onTurnFailed: (info) => {
           this.actions.resetLoopGuard();
-          void this.actions.clearTemporaryReactions('turn_end');
+          void this.actions.clearTemporaryReactions('turn_end', this.keepReactions());
           void this.failurePolicy.onTurnFailed(info)
             .catch((error) => {
               this.logger.warn('turn_failure_handler_failed', { error: safeError(error) });
@@ -246,19 +258,19 @@ export class PersonalAgentDaemon {
         },
         onTurnSucceeded: (info) => {
           this.actions.resetLoopGuard();
-          void this.actions.clearTemporaryReactions('turn_end');
+          void this.actions.clearTemporaryReactions('turn_end', this.keepReactions());
           this.failurePolicy.onTurnSucceeded(info);
           this.decisionPolicy?.onTurnSucceeded(info);
         },
         onTurnAbandoned: (info) => {
           this.actions.resetLoopGuard();
-          void this.actions.clearTemporaryReactions('turn_end');
+          void this.actions.clearTemporaryReactions('turn_end', this.keepReactions());
         },
         // A turn the loop breaker ended: no failure notice, and what it held
         // and left undecided comes back once (on any instance).
         onTurnStopped: (info) => {
           this.actions.resetLoopGuard();
-          void this.actions.clearTemporaryReactions('turn_end');
+          void this.actions.clearTemporaryReactions('turn_end', this.keepReactions());
           this.decisionPolicy?.onTurnStopped(info);
         },
         recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
@@ -287,7 +299,45 @@ export class PersonalAgentDaemon {
         mentionTarget: (event) => this.connectors.mentionTarget(event),
         isStopping: () => this.shuttingDown,
       });
+      // The inbox scheduler (agents[].scheduler): inputs that arrive while
+      // the model works wait here, and the model reads them at a checkpoint.
+      this.inbox = ['inbox', 'workers'].includes(this.config.scheduler) ? new MessageInbox({
+        db: this.store.db,
+        runtime: this.agentRuntime,
+        capabilities: () => getRuntimeDefinition(this.agentRuntime.runtime)?.capabilities,
+        logger: this.logger.child({ component: 'inbox' }),
+        recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
+        maxAgeMs: this.config.maxEventAgeMs,
+      }) : null;
+      this.actions.attachInbox(this.inbox);
+      // The workers scheduler: tasks the router hands to worker sessions on
+      // its own runtime. Their reports come back through the inbox.
+      if (this.config.scheduler === 'workers') {
+        const executor = new WorkerExecutor({
+          config: this.config,
+          logger: this.logger.child({ component: 'worker' }),
+          settings: () => ({ runtime: this.agentRuntime.runtime, model: this.agentRuntime.model, effort: this.agentRuntime.effort }),
+        });
+        this.tasks = new TaskManager({
+          db: this.store.db,
+          config: this.config,
+          executor,
+          inbox: this.inbox,
+          lineFor: (row) => {
+            const event = this.store.inboundBySeq(row.seq);
+            return formatInboundLine(event, null, {
+              owner: this.connectors.isOwner(event), mention: this.connectors.mentionTarget(event),
+              replyTo: resolveReplyTarget(this.store, event),
+            });
+          },
+          logger: this.logger.child({ component: 'tasks' }),
+          recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
+        });
+        this.actions.attachTasks(this.tasks, { runtime: () => this.agentRuntime.runtime, supports: (id) => executor.supports(id) });
+      }
       this.harness = new Harness({
+        inbox: this.inbox,
+        taskHint: this.tasks ? (event, options) => this.tasks.hintFor(event, options) : null,
         config: this.config,
         store: this.store,
         logger: this.logger,
@@ -348,6 +398,10 @@ export class PersonalAgentDaemon {
       });
       this.meeting.attachHarness({ runtime: this.agentRuntime });
       await this.agentRuntime.start();
+      // Inputs the previous daemon accepted but never handed to the model,
+      // and tasks whose worker it was running.
+      this.inbox?.restore();
+      this.tasks?.restore();
       this.timerConnector = new TimerConnector({
         repository: this.timers,
         submitEvent: (event) => this.harness.handleConnectorEvent(event),
@@ -553,6 +607,7 @@ export class PersonalAgentDaemon {
       } catch (error) {
         this.logger.warn('meeting_stop_failed', { error });
       }
+      this.tasks?.shutdown();
       this.harness?.stop();
       // Give an in-flight turn a bounded chance to finish before the backends
       // are killed. A mid-turn kill poisons the native transcript: resuming it

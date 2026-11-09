@@ -41,6 +41,13 @@ const HANDLERS = {
   react_to_message: 'reactToMessage',
   retract_message: 'retractMessage',
   stay_silent: 'staySilent',
+  message_check: 'messageCheck',
+  task_create: 'taskCreate',
+  task_route: 'taskRoute',
+  task_stop: 'taskStop',
+  task_list: 'taskList',
+  task_check: 'taskCheck',
+  task_report: 'taskReport',
   list_chats: 'listChats',
   list_chat_members: 'listChatMembers',
   list_chat_messages: 'listChatMessages',
@@ -63,6 +70,15 @@ const HANDLERS = {
   openviking_add_resource: 'openvikingAddResource',
   openviking_remember: 'openvikingRemember',
 };
+
+// What a worker's authority may call (workers scheduler): its own task's
+// tools and reads. Never a delivery, a decision, a timer or a memory write:
+// the router is the only outlet.
+const WORKER_TOOLS = new Set([
+  'task_check', 'task_report', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
+  'list_thread_messages', 'get_message_media', 'read_email', 'read_meeting_note', 'read_openviking_session_context',
+  'get_time', 'openviking_find', 'openviking_search', 'openviking_read', 'openviking_list',
+]);
 
 // A refusal the model can act on; `code` is what logs and activities record.
 function blocked(code, message) {
@@ -159,6 +175,148 @@ export class ActionService {
     this.reactionRemovals = new Set();
     // Query context may identify a reply target, but never an input/decision.
     this.queryTargets = new Map();
+    // The inbox scheduler's waiting inputs (inbox.mjs), attached once the
+    // runtime exists; null under the legacy scheduler.
+    this.inbox = null;
+    this.tasks = null;
+  }
+
+  attachInbox(inbox) {
+    this.inbox = inbox;
+  }
+
+  // The workers scheduler's tasks (tasks.mjs), and the router's runtime, on
+  // which new tasks run.
+  attachTasks(tasks, { runtime = () => null, supports = () => false } = {}) {
+    this.tasks = tasks;
+    this.taskRuntime = runtime;
+    this.taskRuntimeSupported = supports;
+  }
+
+  // The accepted inputs a router names by event=, oldest first.
+  taskInputs(ids, instance) {
+    const rows = ids.map((id) => {
+      const found = this.inputEvents(id, instance ?? null);
+      if (found.length !== 1) {
+        throw blocked(found.length ? 'decision_ambiguous' : 'unknown_decision',
+          `trigger_ids must be event= values of accepted inputs, each on one instance (${id}). ${NO_ACTION}`);
+      }
+      return found[0];
+    });
+    return [...new Map(rows.map((row) => [row.seq, row])).values()].sort((a, b) => a.seq - b.seq);
+  }
+
+  // Routing an input to a task is the router's decision on it: the turn-end
+  // check must not ask for another. The relayed result later records the
+  // delivery over it.
+  routedDecisions(rows) {
+    if (!this.config.explicitSilence) return;
+    for (const row of rows) {
+      try { this.store.recordDecision({ row, outcome: 'silent' }); } catch (error) {
+        this.logger.warn('decision_record_failed', { error: safeError(error) });
+      }
+    }
+  }
+
+  requireTasks() {
+    if (!this.tasks) throw blocked('unsupported', `There are no workers on this instance. ${NO_ACTION}`);
+    return this.tasks;
+  }
+
+  async taskCreate(input) {
+    const tasks = this.requireTasks();
+    const runtime = this.taskRuntime();
+    if (!this.taskRuntimeSupported(runtime)) {
+      throw blocked('unsupported', `Workers run on pi, codex or claude; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
+    }
+    const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
+    const requester = senderLabel(this.store.inboundBySeq(rows[0].seq));
+    const task = tasks.create({ rows, title: input.title, note: input.note ?? '', requester, runtime });
+    this.routedDecisions(rows);
+    return {
+      text: `Created ${task.id}: a worker is on it. Tell the requester once that you are on it; the result comes back as a [task report] input.`,
+      data: { task_id: task.id, status: task.status },
+    };
+  }
+
+  async taskRoute(input) {
+    const tasks = this.requireTasks();
+    const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
+    let task;
+    try { task = tasks.route(input.task_id, rows, input.role); } catch (error) {
+      throw blocked('unknown_task', `${error.message}. ${NO_ACTION}`);
+    }
+    this.routedDecisions(rows);
+    return {
+      text: `Routed ${rows.length} input(s) to ${task.id} as ${input.role}; status ${task.status}.`,
+      data: { task_id: task.id, status: task.status },
+    };
+  }
+
+  async taskStop(input) {
+    let task;
+    try { task = this.requireTasks().stop(input.task_id, input.reason ?? ''); } catch (error) {
+      if (error.code) throw error;
+      throw blocked('unknown_task', `${error.message}. ${NO_ACTION}`);
+    }
+    return { text: `${task.id} is ${task.status}.`, data: { task_id: task.id, status: task.status } };
+  }
+
+  async taskList(input) {
+    const lines = this.requireTasks().list({ taskId: input.task_id ?? null, query: input.query ?? '', includeEnded: Boolean(input.include_ended) });
+    return { text: lines.length ? lines.join('\n') : 'No tasks.', data: { count: lines.length } };
+  }
+
+  async taskCheck(_input, caller) {
+    const rows = this.requireTasks().check(caller.task);
+    if (rows.length === 0) return { text: 'No new inputs for your task.', data: { count: 0 } };
+    const text = rows.map((row) => (row.role === 'owner' ? row.text : `[context] ${row.text}`)).join('\n');
+    return { text: `New inputs for your task, oldest first:\n${text}`, data: { count: rows.length } };
+  }
+
+  async taskReport(input, caller) {
+    try {
+      this.requireTasks().report(caller.task, {
+        state: input.state, summary: input.summary ?? '', draft: input.draft ?? '', question: input.question ?? '', artifacts: input.artifacts ?? [],
+      });
+    } catch (error) {
+      throw blocked('invalid_input', `${error.message}. ${NO_ACTION}`);
+    }
+    return {
+      text: input.state === 'progress' ? 'Recorded. Keep working; finish with a final report.'
+        : 'Recorded. End your turn now: the agent relays your report.',
+      data: { state: input.state },
+    };
+  }
+
+  // message_check: the waiting inputs, oldest first, as the model's next input.
+  async messageCheck(input) {
+    if (!this.inbox) throw blocked('unsupported', `There is no inbox on this instance. ${NO_ACTION}`);
+    const result = this.inbox.check({
+      chatId: input.chat_id ?? null, threadId: input.thread_id ?? null, source: input.source ?? null, limit: input.limit ?? 20,
+    });
+    if (result.error) throw blocked('inbox_unavailable', `Waiting inputs could not be delivered now (${result.error}); try again at your next checkpoint.`);
+    const where = input.chat_id ? ' in that chat' : '';
+    if (result.delivered === 0) {
+      return { text: `No inputs are waiting${where}. ${result.waiting} waiting elsewhere.`, data: { delivered: 0, waiting: result.waiting } };
+    }
+    const when = result.now ? 'They follow as your next input' : 'They arrive when this turn ends';
+    return {
+      text: `Delivered ${result.delivered} waiting input(s)${where}, oldest first. ${when}; decide on each as usual. ${result.waiting} still waiting.`,
+      data: { delivered: result.delivered, waiting: result.waiting },
+    };
+  }
+
+  // Newer input in a decision's scope may still be waiting in the inbox: the
+  // model was never shown it, so a refusal alone would leave it nothing to
+  // reconsider. Deliver that scope's waiting inputs; returns how many.
+  deliverWaiting(scopeKey) {
+    try {
+      return this.inbox?.deliverScope(scopeKey) ?? 0;
+    } catch (error) {
+      this.logger.warn('inbox_scope_delivery_failed', { error: safeError(error) });
+      return 0;
+    }
   }
 
   manifest(connector) {
@@ -192,11 +350,26 @@ export class ActionService {
     if (tool.openviking) return Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
+    if (tool.inbox) return ['inbox', 'workers'].includes(this.config.scheduler);
+    if (tool.router) return this.config.scheduler === 'workers';
+    if (tool.worker) return false;
     return true;
   }
 
-  tools() {
+  // The tools this authority may call: a worker's own set, or the instance's.
+  tools({ authority = null } = {}) {
+    if (this.workerTask(authority)) {
+      return TOOLS.filter((tool) => this.workerMay(tool)).map((tool) => publicTool(this.definition(tool)));
+    }
     return TOOLS.filter((tool) => this.offered(tool)).map((tool) => publicTool(this.definition(tool)));
+  }
+
+  workerTask(authority) {
+    return this.tasks?.workerFor(authority) ?? null;
+  }
+
+  workerMay(tool) {
+    return Boolean(tool) && WORKER_TOOLS.has(tool.name) && (tool.worker || this.offered(tool));
   }
 
   definition(tool) {
@@ -219,9 +392,11 @@ export class ActionService {
     // tool is offered (explicitSilence on).
     const silence = name === 'stay_silent' && Boolean(this.config.explicitSilence);
     try {
-      if (!tool || !this.offered(tool)) throw blocked('unknown_tool', `unknown tool: ${name}`);
+      caller.task = this.workerTask(authority);
+      if (caller.task ? !this.workerMay(tool) : !tool || !this.offered(tool)) throw blocked('unknown_tool', `unknown tool: ${name}`);
       try { validateInput(this.definition(tool).inputSchema, input); } catch (error) { throw blocked('invalid_input', error.message); }
       this.assertAuthority(authority);
+      if (caller.task) trace.task = caller.task;
       trace.runtime = this.store.getCognitionState().runtime;
       if (tool.timer && this.timers.needsRefresh) {
         try { await this.timers.load(); } catch {
@@ -328,12 +503,14 @@ export class ActionService {
   // A turn that ended is no longer working on anything, whatever it delivered:
   // its OnIt reactions go too. Each is forgotten at once, before any removal is
   // awaited, so one a later turn sets is never taken for it.
-  async clearTemporaryReactions(reason) {
-    const scopes = [...this.temporaryReactions.keys()];
+  async clearTemporaryReactions(reason, { keep = () => false } = {}) {
+    const scopes = [...this.temporaryReactions.keys()].filter((scope) => !keep(scope));
     await Promise.allSettled(scopes.map((scope) => this.clearTemporaryReaction(scope, reason)));
   }
 
   assertAuthority(authority) {
+    // A worker's authority holds for its turn only (TaskManager.runTurn).
+    if (this.workerTask(authority)) return;
     if (!authority || authority !== this.store.getCognitionState().authorityToken) {
       throw blocked('authority_revoked', `Blocked: this model runtime no longer owns tool authority. ${NO_ACTION}`);
     }
@@ -442,6 +619,7 @@ export class ActionService {
     }
     // A superseded input's OnIt may belong to work on the newer one.
     if (!superseded && row.conv_key) await this.clearTemporaryReaction(row.conv_key, 'silent');
+    const waiting = superseded ? this.deliverWaiting(row.scope_key) : 0;
     try {
       this.store.recordActivity({
         eventKey: `decision:silent:${row.connector_instance}:${row.event_id}`, kind: 'delivery.silent',
@@ -454,7 +632,9 @@ export class ActionService {
       this.logger.warn('activity_persist_failed', { kind: 'delivery.silent', error: safeError(error) });
     }
     return {
-      text: `Recorded: nothing is sent for this input.${superseded ? ' A newer input has arrived there; decide on that one from its own line.' : ''}`,
+      text: `Recorded: nothing is sent for this input.${!superseded ? ''
+        : waiting > 0 ? ` ${waiting} newer input(s) there were waiting in your inbox and follow as your next input; decide on the newest from its own line.`
+          : ' A newer input has arrived there; decide on that one from its own line.'}`,
       data: { silent: true, superseded },
     };
   }
@@ -466,6 +646,11 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
+      const waiting = this.deliverWaiting(decision.scope_key);
+      if (waiting > 0) {
+        caller.trace.inboxDelivered = waiting;
+        throw blocked('stale_decision', `Delivery blocked: ${waiting} newer input(s) in the same chat/thread, or about the same subject, were waiting in your inbox; they follow as your next input. Read them, then use the newest event= as decision_id if the action still fits.`);
+      }
       throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
     }
   }
