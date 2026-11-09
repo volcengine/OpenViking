@@ -1,0 +1,436 @@
+/**
+ * VikingBot 的组件变量。颜色全部从包级主题基线 `src/theme.css` 的
+ * `--ov-ui-color-*` 派生，因此跟随宿主主题切换；只有纯几何量（尺寸、间距、
+ * 圆角）在组件里直接赋值。宿主想换肤时改基线，只想调这一处时覆盖下面任意
+ * 一条即可。
+ *
+ * Component variables of VikingBot. Every colour derives from the package-level
+ * baseline in `src/theme.css` (`--ov-ui-color-*`), so it follows the host's theme;
+ * only pure geometry (size, spacing, radius) is assigned here. A host re-skins by
+ * overriding the baseline, or adjusts just this component by overriding any
+ * variable below.
+ */
+.ov-viking-bot {
+  --ov-viking-bot-radius: 6px;
+  --ov-viking-bot-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-viking-bot-text-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default, #6e718c)
+  );
+  --ov-viking-bot-accent: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-viking-bot-accent-hover: var(
+    --ov-ui-color-primary-hover,
+    var(--ov-ui-primary-hover-default, #7075ff)
+  );
+  --ov-viking-bot-on-accent: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-viking-bot-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+  --ov-viking-bot-border-strong: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default, #d7daea)
+  );
+  --ov-viking-bot-surface: var(
+    --ov-ui-color-bg-4,
+    var(--ov-ui-bg-4-default, #f6f7fa)
+  );
+  --ov-viking-bot-bg: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-viking-bot-primary-light: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
+  );
+  --ov-viking-bot-surface-hover: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default, #f1f2f9)
+  );
+  --ov-viking-bot-focus: var(
+    --ov-ui-color-focus,
+    var(--ov-ui-focus-default, #5252ff)
+  );
+  --ov-viking-bot-danger: var(
+    --ov-ui-color-status-error,
+    var(--ov-ui-status-error-default, #c43838)
+  );
+
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  color: var(--ov-viking-bot-text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+/* Ark 控件读取 Arco 的 --color-* 与 --primary-* 变量。独立消费本组件的 CSS
+   时宿主可能没有全局 Arco 主题，这里把 Arco 变量接到包级主题基线上，让 Ark
+   控件的文字、底色、边框与主色跟随 --ov-ui-color-* 与暗色切换。只在组件
+   作用域内赋值，不修改宿主全局。 */
+.ov-viking-bot,
+.ov-viking-bot__interaction {
+  --color-text-1: var(--ov-viking-bot-text);
+  --color-text-2: var(--ov-viking-bot-text);
+  --color-text-3: var(--ov-viking-bot-text-muted);
+  --color-text-4: var(--ov-viking-bot-text-muted);
+  --color-bg-1: var(--ov-viking-bot-bg);
+  --color-bg-2: var(--ov-viking-bot-surface);
+  --color-bg-3: var(--ov-viking-bot-surface);
+  --color-bg-4: var(--ov-viking-bot-surface);
+  --color-bg-5: var(--ov-viking-bot-surface-hover);
+  --color-border-1: var(--ov-viking-bot-border);
+  --color-border-2: var(--ov-viking-bot-border);
+  --color-border-3: var(--ov-viking-bot-border-strong);
+  --color-border-4: var(--ov-viking-bot-border-strong);
+  --color-fill-2: var(--ov-viking-bot-surface-hover);
+  --color-primary-light-1: var(--ov-viking-bot-primary-light);
+
+  /* Ark 以 `rgb(var(--primary-N))` 消费主色，所以这里必须是 RGB 通道列表，
+     不能写完整色值——`rgb(#5252ff)` 是非法颜色，整条声明会被丢弃。
+     通道值来自 Ark 主题的官方色阶，与包级基线主色一致。
+     宿主换肤时覆盖 `--ov-viking-bot-primary-channels` 即可整体替换主色阶；
+     只想改主色本身则覆盖 `--ov-viking-bot-accent-channels`（同样三个通道值）。 */
+  --ov-viking-bot-accent-channels: 82, 82, 255;
+  --ov-viking-bot-accent-hover-channels: 112, 117, 255;
+  --primary-1: var(--ov-viking-bot-primary-1-channels, 245, 247, 255);
+  --primary-2: var(--ov-viking-bot-primary-2-channels, 237, 239, 252);
+  --primary-3: var(--ov-viking-bot-primary-3-channels, 172, 180, 255);
+  --primary-4: var(--ov-viking-bot-primary-4-channels, 142, 150, 255);
+  --primary-5: var(--ov-viking-bot-primary-5-channels, 112, 117, 255);
+  --primary-6: var(
+    --ov-viking-bot-primary-6-channels,
+    var(--ov-viking-bot-accent-channels)
+  );
+  --primary-7: var(--ov-viking-bot-primary-7-channels, 56, 51, 210);
+  --primary-8: var(--ov-viking-bot-primary-8-channels, 36, 27, 166);
+  --primary-9: var(--ov-viking-bot-primary-9-channels, 21, 10, 121);
+  --primary-10: var(--ov-viking-bot-primary-10-channels, 10, 0, 77);
+}
+
+.dark .ov-viking-bot,
+.dark .ov-viking-bot__interaction {
+  --ov-viking-bot-accent-channels: 95, 95, 255;
+  --ov-viking-bot-accent-hover-channels: 112, 117, 255;
+  --primary-1: var(--ov-viking-bot-primary-1-channels, 26, 22, 50);
+  --primary-2: var(--ov-viking-bot-primary-2-channels, 35, 27, 93);
+  --primary-3: var(--ov-viking-bot-primary-3-channels, 63, 58, 137);
+  --primary-4: var(--ov-viking-bot-primary-4-channels, 76, 72, 180);
+  --primary-5: var(--ov-viking-bot-primary-5-channels, 66, 66, 186);
+  --primary-6: var(
+    --ov-viking-bot-primary-6-channels,
+    var(--ov-viking-bot-accent-channels)
+  );
+  --primary-7: var(--ov-viking-bot-primary-7-channels, 112, 117, 255);
+  --primary-8: var(--ov-viking-bot-primary-8-channels, 172, 180, 255);
+  --primary-9: var(--ov-viking-bot-primary-9-channels, 204, 211, 255);
+  --primary-10: var(--ov-viking-bot-primary-10-channels, 232, 236, 255);
+}
+
+.ov-viking-bot__header,
+.ov-viking-bot__footer {
+  flex: none;
+}
+
+.ov-viking-bot__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ov-viking-bot__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.ov-viking-bot__message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ov-viking-bot__message--user {
+  align-items: flex-end;
+}
+
+.ov-viking-bot__message--assistant {
+  align-items: flex-start;
+}
+
+.ov-viking-bot__block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.ov-viking-bot__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.ov-viking-bot__text--markdown {
+  white-space: normal;
+}
+
+.ov-viking-bot__activity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 整组折叠入口：一个执行块只有一个开关，组内片段不再各自折叠。 */
+.ov-viking-bot__activity-toggle {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  color: var(--ov-viking-bot-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ov-viking-bot__activity-toggle:hover {
+  color: var(--ov-viking-bot-text);
+}
+
+.ov-viking-bot__activity-toggle:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 2px;
+}
+
+.ov-viking-bot__reasoning,
+.ov-viking-bot__tool {
+  border-radius: var(--ov-viking-bot-radius);
+  background: var(--ov-viking-bot-surface);
+  padding: 6px 8px;
+}
+
+.ov-viking-bot__reasoning > summary,
+.ov-viking-bot__tool > summary {
+  display: flex;
+  cursor: pointer;
+  align-items: center;
+  gap: 6px;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 12px;
+  list-style: none;
+}
+
+.ov-viking-bot__reasoning > summary::-webkit-details-marker,
+.ov-viking-bot__tool > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ov-viking-bot__reasoning > summary:focus-visible,
+.ov-viking-bot__tool > summary:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 2px;
+}
+
+.ov-viking-bot__reasoning-body,
+.ov-viking-bot__tool-input,
+.ov-viking-bot__tool-output {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ov-viking-bot__tool-name {
+  color: var(--ov-viking-bot-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+}
+
+.ov-viking-bot__tool-status {
+  margin-left: auto;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 11px;
+}
+
+.ov-viking-bot__tool-output--error {
+  color: var(--ov-viking-bot-danger);
+}
+
+.ov-viking-bot__iteration {
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.ov-viking-bot__context,
+.ov-viking-bot__attachment {
+  align-self: flex-start;
+  max-width: 100%;
+  border: 1px solid var(--ov-viking-bot-border);
+  border-radius: var(--ov-viking-bot-radius);
+  background: none;
+  padding: 2px 8px;
+  color: var(--ov-viking-bot-accent);
+  font: inherit;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.ov-viking-bot__context:hover,
+.ov-viking-bot__attachment:hover {
+  background: var(--ov-viking-bot-surface-hover);
+}
+
+.ov-viking-bot__context:focus-visible,
+.ov-viking-bot__attachment:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 1px;
+}
+
+.ov-viking-bot__image {
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: var(--ov-viking-bot-radius);
+  object-fit: contain;
+}
+
+.ov-viking-bot__notice {
+  margin: 0;
+  border-radius: var(--ov-viking-bot-radius);
+  background: var(--ov-viking-bot-surface);
+  padding: 6px 8px;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 12px;
+}
+
+.ov-viking-bot__message--system {
+  align-items: center;
+}
+
+.ov-viking-bot__message--system [role='alert'] {
+  color: var(--ov-viking-bot-danger);
+}
+
+.ov-viking-bot__copy,
+.ov-viking-bot__message-action {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--ov-viking-bot-text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ov-viking-bot__copy:hover,
+.ov-viking-bot__message-action:hover:not(:disabled) {
+  color: var(--ov-viking-bot-text);
+}
+
+.ov-viking-bot__copy:focus-visible,
+.ov-viking-bot__message-action:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 2px;
+}
+
+.ov-viking-bot__message-action {
+  border: 1px solid var(--ov-viking-bot-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--ov-viking-bot-accent);
+}
+
+.ov-viking-bot__message-action:disabled {
+  color: var(--ov-viking-bot-text-muted);
+  cursor: default;
+}
+
+.ov-viking-bot__thinking {
+  margin: 0;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 12px;
+}
+
+.ov-viking-bot__empty,
+.ov-viking-bot__unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 12px;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 12px;
+}
+
+/* Ark 用 `rgb(var(--primary-N))` 消费主色，而公开契约给的是完整色值
+   `--ov-ui-color-primary`。CSS 无法把完整色值拆成通道列表，因此这里覆盖 Ark
+   实际用到主色的那几条声明，让它们直接读公开主色——宿主按原有契约覆盖
+   `--ov-ui-color-primary` 与 `--ov-ui-color-primary-hover` 即可让 Ark 控件一起
+   换色，不需要额外配置通道变量。所有选择器都限定在组件根节点内，不改宿主全局。
+
+   Ark consumes the primary colour through `rgb(var(--primary-N))`, which needs an
+   RGB channel list, while the public contract supplies a full colour value. CSS
+   cannot split a colour into channels, so the declarations Ark actually uses are
+   overridden here to read the public colour directly. A host re-skins by
+   overriding `--ov-ui-color-primary` / `--ov-ui-color-primary-hover` as before. */
+.ov-viking-bot .ark-agentic-sender-send-btn--submit-button,
+.ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button {
+  background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-sender-send-btn--submit-button:hover,
+.ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button:hover {
+  background-color: var(
+    --ov-ui-color-primary-hover,
+    var(--ov-viking-bot-accent-hover)
+  );
+}
+
+.ov-viking-bot .ark-agentic-sender-send-btn--submit-button:active,
+.ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button:active {
+  background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-ask-human-custom-editing,
+.ov-viking-bot__interaction .ark-agentic-ask-human-custom-editing {
+  border-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-ask-human-step-arrow:focus-visible,
+.ov-viking-bot__interaction .ark-agentic-ask-human-step-arrow:focus-visible {
+  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-bubble__edit-btn--confirm,
+.ov-viking-bot__interaction .ark-agentic-bubble__edit-btn--confirm {
+  background: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-bubble-tools__button:focus-visible,
+.ov-viking-bot .ark-agentic-bubble-tools__menu-item:focus-visible,
+.ov-viking-bot__interaction .ark-agentic-bubble-tools__button:focus-visible,
+.ov-viking-bot__interaction .ark-agentic-bubble-tools__menu-item:focus-visible {
+  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
+}
+
+.ov-viking-bot .ark-agentic-activity-activityTimeline,
+.ov-viking-bot__interaction .ark-agentic-activity-activityTimeline {
+  --agentic-activity-focus: var(
+    --ov-ui-color-primary,
+    var(--ov-viking-bot-accent)
+  );
+}

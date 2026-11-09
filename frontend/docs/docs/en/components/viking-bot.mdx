@@ -1,0 +1,86 @@
+# VikingBot
+
+The conversation view: message list, composer and the pending-interaction area. The open-source and managed-agent hosts speak different protocols, so the component takes an already normalized message model and lets each host replace the regions it renders differently.
+
+**This is a placeholder.** The API contract is settled and a working view renders against it, but the view has not been through design review and will be rewritten. Treat the props and the interaction model as the deliverable; treat the visuals as provisional.
+
+## Basic usage
+
+```tsx file="../../_demos/viking-bot-basic.tsx" preview
+
+```
+
+## How the two hosts connect
+
+| Difference          | Handling                                                                |
+| ------------------- | ----------------------------------------------------------------------- |
+| Message shape       | Normalized to `parts[]`, with roles user, assistant, system and tool    |
+| Activity collapsing | Parts carry `groupId`; `startedAt` and `durationMs` feed the display    |
+| Text format         | `text.format` separates `plain` from `markdown`                         |
+| Tool calls          | `server`, `endpoint` and `durationMs` cover MCP semantics               |
+| Message actions     | `message.action` declares one; `onMessageAction` reports it             |
+| Streaming           | `{ parts, insertIndex, iteration }`; append-at-end passes the count     |
+| Human confirmation  | The `components/viking-bot/interaction` subpath, four forms plus custom |
+| Render base         | `messageList`, `composer`, `interaction` and `children` replace regions |
+
+Protocol adaptation stays in each host repository; the component imports no backend event type.
+
+## Props
+
+### VikingBotProps
+
+| Prop                 | Type                                             | Default  | Description                                         |
+| -------------------- | ------------------------------------------------ | -------- | --------------------------------------------------- |
+| `messages`           | `readonly VikingBotMessage[]`                    | required | Messages in the current session.                    |
+| `className`          | `string`                                         | —        | Class name applied to the root element.             |
+| `streaming`          | `VikingBotStreamingState`                        | —        | Parts appended while the assistant is streaming.    |
+| `draft`              | `string`                                         | —        | Controlled draft; omit to hide the composer.        |
+| `attachments`        | `readonly VikingBotAttachment[]`                 | —        | Attachments already selected by the host.           |
+| `isSending`          | `boolean`                                        | —        | Whether a reply is streaming.                       |
+| `isAvailable`        | `boolean`                                        | `true`   | Whether the bot can accept input.                   |
+| `unavailableMessage` | `string`                                         | —        | Message shown while the bot is unavailable.         |
+| `emptyState`         | `ReactNode`                                      | —        | Shown instead of the list before the first message. |
+| `header`             | `ReactNode`                                      | —        | Header slot.                                        |
+| `footer`             | `ReactNode`                                      | —        | Slot above the composer.                            |
+| `children`           | `ReactNode`                                      | —        | Replaces the whole body.                            |
+| `messageList`        | `ReactNode`                                      | —        | Replaces the message list.                          |
+| `composer`           | `ReactNode`                                      | —        | Replaces the composer.                              |
+| `interaction`        | `VikingBotInteractionProps`                      | —        | A pending interaction; replaces the composer.       |
+| `listKey`            | `string`                                         | —        | Identity scope; changes reset display state.        |
+| `composerRef`        | `RefObject<VikingBotComposerRef \| null>`        | —        | Imperative handle of the composer.                  |
+| `onDraftChange`      | `(value: string) => void`                        | —        | Invoked when the draft changes.                     |
+| `onFilesAdded`       | `(files: readonly File[]) => void`               | —        | Reports files the user picked or dropped.           |
+| `onAttachmentRemove` | `(attachment: VikingBotAttachment) => void`      | —        | Removes an attachment.                              |
+| `onSend`             | `(draft: VikingBotDraft) => void`                | —        | Reports the send intent; omission disables sending. |
+| `onCancel`           | `() => void`                                     | —        | Stops the streaming reply.                          |
+| `onOpenUri`          | `(uri: string) => void`                          | —        | Opens a resource referenced by a message.           |
+| `onCopy`             | `(text: string) => void`                         | —        | Called after a copy; the host performs it.          |
+| `onMessageAction`    | `(messageId: string, actionKey: string) => void` | —        | Fires a message action.                             |
+| `labels`             | `VikingBotLabels`                                | English  | Replaceable copy.                                   |
+
+## Pending interaction
+
+```tsx file="../../_demos/viking-bot-interaction.tsx" preview
+
+```
+
+An interaction is host state, not a backend pause: the host derives the question from its own stream and clears it once the answer is sent. `choice`, `text`, `schedule` and `repair` render built in; use `custom` when a question needs a tree picker or an uploader.
+
+### VikingBotInteractionProps
+
+| Prop         | Type                                | Default  | Description                                      |
+| ------------ | ----------------------------------- | -------- | ------------------------------------------------ |
+| `request`    | `VikingBotInteractionRequest`       | required | The current question.                            |
+| `className`  | `string`                            | —        | Class name applied to the root element.          |
+| `index`      | `number`                            | `0`      | Current step index, starting at 0.               |
+| `total`      | `number`                            | `1`      | Total steps; progress shows when greater than 1. |
+| `disabled`   | `boolean`                           | —        | Whether the form is disabled.                    |
+| `submitting` | `boolean`                           | —        | Whether a submission is in flight.               |
+| `error`      | `ReactNode`                         | —        | Why the last submission failed.                  |
+| `onSubmit`   | `(answer) => void \| Promise<void>` | —        | Reports an answer.                               |
+| `onCancel`   | `() => void`                        | —        | Abandons the interaction; omission hides cancel. |
+| `labels`     | `VikingBotInteractionLabels`        | English  | Replaceable copy.                                |
+
+## Development entry
+
+The standalone style entry is `@openviking/react/components/viking-bot/style.css`, which already includes the theme baseline and can be consumed on its own.
