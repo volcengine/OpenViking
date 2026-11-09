@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import { EventEmitter } from 'node:events';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
 import { OpencodeAgent } from '../src/opencode.mjs';
+import { AgyAgent } from '../src/agy.mjs';
 import { resolveRuntimeModelTarget as parseRuntimeModelTarget } from '../src/runtime-catalog.mjs';
 import { adaptRuntime } from '../src/runtime-adapter.mjs';
 import { ActionService } from '../src/actions/service.mjs';
@@ -103,6 +104,67 @@ function autoAnsweringOpencode(spawns, { defaultModel = 'volcengine-ark/ep-defau
     spawns.push(child);
     return child;
   };
+}
+
+// An `agy acp` child that answers its own handshake, with agy's model calls.
+function autoAnsweringAgy(spawns, { defaultModel = 'gemini-3.8-flash-low' } = {}) {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 987_654_500 + spawns.length;
+    child.exitCode = null;
+    child.stdout = new EventEmitter();
+    child.stdout.setEncoding = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stdin = new EventEmitter();
+    child.stdin.writable = true;
+    child.stdin.end = () => {};
+    child.kill = (signal) => {
+      if (child.exitCode !== null) return;
+      child.exitCode = 0;
+      child.emit('exit', 0, signal);
+    };
+    child.requests = [];
+    const send = (frame) => setImmediate(() => child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', ...frame })}\n`));
+    const answer = (id, result) => send({ id, result });
+    const models = [defaultModel, 'gemini-3.8-flash-high'];
+    child.stdin.write = (line) => {
+      const message = JSON.parse(line);
+      if (message.method) child.requests.push(message);
+      if (message.method === 'initialize') {
+        answer(message.id, {
+          protocolVersion: 1,
+          agentInfo: { name: 'Antigravity ACP Server', version: '1.5.3' },
+          agentCapabilities: { _meta: { antigravity: { systemPrompt: { append: true } } } },
+        });
+      } else if (message.method === 'session/new') {
+        answer(message.id, {
+          sessionId: 'agy_switch',
+          models: { availableModels: models.map((modelId) => ({ modelId, name: modelId })), currentModelId: defaultModel },
+        });
+      } else if (message.method === 'session/set_model') {
+        if (models.includes(message.params.modelId)) answer(message.id, {});
+        else send({ id: message.id, error: { code: -32602, message: `Unknown model ID: ${message.params.modelId}` } });
+      }
+      return true;
+    };
+    spawns.push(child);
+    return child;
+  };
+}
+
+function agySwitchRuntime(directory, store, spawns) {
+  const config = {
+    agyBin: 'agy', agyModel: '', workspace: directory, dataDir: directory,
+    profile: 'test-profile', connectors: ['lark'], actionSocketPath: path.join(directory, 'actions.sock'),
+    actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs', sendTimeoutMs: 5_000, maxReplyChars: 1_000,
+  };
+  return new AgentRuntime(config, store, quietLogger, {
+    codexFactory: (options) => backend('codex', options),
+    agyFactory: (options) => new AgyAgent(config, store, quietLogger, {
+      ...options, spawn: autoAnsweringAgy(spawns), startStabilityMs: 1,
+    }),
+  });
 }
 
 // A real OpencodeAgent behind AgentRuntime, starting from a fake Codex.
@@ -729,6 +791,50 @@ describe('global Codex/Claude hard switch', () => {
       assert.equal(runtime.runtime, 'opencode');
       assert.equal(runtime.backend.model, '');
       assert.equal(runtime.backend.resolvedModel, 'volcengine-ark/ep-default');
+      assert.equal(spawns.length, 2);
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('switches to Antigravity with no configured model, keeping the session default', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-agy-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const spawns = [];
+    const runtime = agySwitchRuntime(directory, store, spawns);
+
+    try {
+      await runtime.start();
+      const result = await runtime.transition({ kind: 'select-runtime', runtime: 'agy' });
+      assert.equal(result.runtimeChanged, true);
+      assert.equal(runtime.runtime, 'agy');
+      assert.equal(runtime.model, 'agy');
+      assert.equal(runtime.backend.model, '');
+      assert.equal(runtime.backend.resolvedModel, 'gemini-3.8-flash-low');
+      assert.equal(spawns.at(-1).requests.some((message) => message.method === 'session/set_model'), false);
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the Antigravity default when the saved model is gone', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-agy-gone-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const spawns = [];
+    const runtime = agySwitchRuntime(directory, store, spawns);
+
+    try {
+      await runtime.start();
+      store.setSetting('agy_model', 'gemini-removed');
+      const result = await runtime.transition({ kind: 'select-runtime', runtime: 'agy' });
+      assert.equal(result.runtimeChanged, true);
+      assert.equal(runtime.runtime, 'agy');
+      assert.equal(runtime.backend.model, '');
+      assert.equal(runtime.backend.resolvedModel, 'gemini-3.8-flash-low');
       assert.equal(spawns.length, 2);
     } finally {
       await runtime.stop();

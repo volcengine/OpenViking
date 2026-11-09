@@ -236,7 +236,7 @@ Every outbound action, whichever runtime asked, goes through one Core service
 and one SQLite `outbox` table:
 
 ```
-agent runtime ── MCP adapter (Codex, TraeX, Claude, Pi, OpenCode) ──> <dataDir>/actions.sock
+agent runtime ── MCP adapter (Codex, TraeX, Claude, Pi, OpenCode, Antigravity) ──> <dataDir>/actions.sock
                                                    │ Core ActionService
                                                    │  runtime authority
                                                    │  route to a Connector

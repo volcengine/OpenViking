@@ -34,6 +34,6 @@ _Avoid_: meeting stack
 **Agent tools**:
 The one tool surface every runtime uses for messaging and chat reads, served by
 the Core's ActionService over `<dataDir>/actions.sock`. The MCP adapter (Codex,
-TraeX, Claude, Pi, OpenCode) only relays; every outbound action is checked there and
+TraeX, Claude, Pi, OpenCode, Antigravity) only relays; every outbound action is checked there and
 recorded in the single `outbox` table before a Connector executes it.
 _Avoid_: Lark tools, sidecar, delivery CLI per connector

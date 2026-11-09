@@ -203,6 +203,203 @@ export function prepareOpencodeConfigHome(target, env = process.env) {
   return target;
 }
 
+// Antigravity CLI reads everything from --gemini-dir, so that directory is
+// replaced the way OpenCode's config folder is. Measured on agy 1.5.3:
+// - antigravity-cli holds the token, sessions and tool cache; it is linked
+//   whole, so login and session/load keep their usual paths.
+// - config/ is real: agy rewrites config.json, and a link would be replaced.
+//   Files a plugin carries (hooks, MCP servers, rules, skills) go with it.
+// - config/.migrated is always written. Without it agy migrates any legacy
+//   antigravity-cli/{mcp_config,hooks}.json into config/: over the filtered
+//   copies, and by moving the owner's files into this temporary directory.
+// - plugins.json-style files register directories, so what they name is
+//   filtered there too: an entry's path has no other way to be left out.
+// HOME stays, so the tools agy runs keep their usual configuration and
+// plugin secrets stay in ~/.config/antigravity. Returns the directory.
+export function prepareAgyGeminiDir(target, env = process.env) {
+  const source = path.join(home(env), '.gemini');
+  const sourceConfig = path.join(source, 'config');
+  const config = path.join(target, 'config');
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.mkdirSync(config, { recursive: true, mode: 0o700 });
+  for (const entry of safeList(source)) {
+    if (entry !== 'config') linkConfig(path.join(source, entry), path.join(target, entry));
+  }
+  const write = (name, value) => fs.writeFileSync(path.join(config, name), JSON.stringify(value), { mode: 0o600 });
+  fs.writeFileSync(path.join(config, '.migrated'), '', { mode: 0o600 });
+  const mcp = readJson(path.join(sourceConfig, 'mcp_config.json')) ?? {};
+  write('mcp_config.json', mcp.mcpServers ? { ...mcp, mcpServers: withoutOpenViking(mcp.mcpServers) } : mcp);
+  write('hooks.json', withoutOpenViking(readJson(path.join(sourceConfig, 'hooks.json'))));
+  const settings = readJson(path.join(sourceConfig, 'config.json')) ?? {};
+  if (settings.plugins && typeof settings.plugins === 'object') {
+    settings.plugins = Object.fromEntries(Object.entries(settings.plugins).filter(([name]) => !isOpenViking(name)));
+  }
+  write('config.json', settings);
+  const items = {
+    plugins: agyPluginIsOpenViking,
+    skills: (_, name) => isOpenViking(name),
+    rules: (_, name) => isOpenViking(name),
+  };
+  for (const [folder, isOv] of Object.entries(items)) {
+    const from = path.join(sourceConfig, folder);
+    fs.mkdirSync(path.join(config, folder), { recursive: true });
+    for (const item of safeList(from)) {
+      if (!isOv(path.join(from, item), item)) linkConfig(path.join(from, item), path.join(config, folder, item));
+    }
+  }
+  const isOvItem = { 'plugins.json': agyPluginIsOpenViking };
+  let inheritedCopies = 0;
+  const copyInherited = (name, value) => {
+    fs.mkdirSync(path.join(config, AGY_INHERITED_DIR), { recursive: true, mode: 0o700 });
+    inheritedCopies += 1;
+    const copy = path.join(AGY_INHERITED_DIR, `${inheritedCopies}-${path.basename(name)}`);
+    write(copy, value);
+    return path.join(config, copy);
+  };
+  for (const name of AGY_DECLARATIVE_CONFIGS) {
+    const filtered = agyFilteredDeclaration(path.join(sourceConfig, name), isOvItem[name] ?? ((_, item) => isOpenViking(item)), env, copyInherited);
+    if (filtered) write(name, filtered.declaration);
+  }
+  for (const entry of safeList(sourceConfig)) {
+    if (!AGY_MANAGED_CONFIG.has(entry) && !isOpenViking(entry)) linkConfig(path.join(sourceConfig, entry), path.join(config, entry));
+  }
+  return target;
+}
+
+const AGY_DECLARATIVE_CONFIGS = ['plugins.json', 'skills.json', 'rules.json', 'agents.json'];
+const AGY_INHERITED_DIR = 'vika-inherited';
+// `.migrated` and `projects` are agy's own bookkeeping for this home; the
+// marker is written fresh above.
+const AGY_MANAGED_CONFIG = new Set([
+  'mcp_config.json', 'hooks.json', 'config.json', 'plugins', 'skills', 'rules', '.migrated', 'projects',
+  ...AGY_DECLARATIVE_CONFIGS,
+]);
+const AGY_PLUGIN_MANIFESTS = [
+  'plugin.json', '.antigravity-plugin/plugin.json', '.gemini-plugin/plugin.json', '.claude-plugin/plugin.json', 'gemini-extension.json',
+];
+
+const withoutOpenViking = (entries) => Object.fromEntries(Object.entries(entries ?? {})
+  .filter(([name, value]) => !isOpenViking(name) && !isOpenViking(JSON.stringify(value))));
+
+// A plugin is OpenViking's by its name, what its folder links to, its manifest,
+// or the MCP servers and hooks it brings, whatever the folder is called.
+function agyPluginIsOpenViking(directory, name) {
+  if (isOpenViking(name)) return true;
+  try { if (isOpenViking(path.basename(fs.realpathSync(directory)))) return true; } catch { /* a broken link is no plugin */ }
+  if (AGY_PLUGIN_MANIFESTS.some((file) => isOpenViking(readJson(path.join(directory, file))?.name))) return true;
+  return ['mcp_config.json', 'hooks.json'].some((file) => {
+    const contents = readJson(path.join(directory, file));
+    return contents && isOpenViking(JSON.stringify(contents));
+  });
+}
+
+// The last two segments, as for Pi above: an entry is not OpenViking's because
+// its checkout's ancestors happen to be named so.
+function agyPathNamesOpenViking(file) {
+  const label = (value) => `${path.basename(path.dirname(value))}/${path.basename(value)}`;
+  if (isOpenViking(label(file))) return true;
+  try { return isOpenViking(label(fs.realpathSync(file))); } catch { return false; }
+}
+
+// One plugins.json-style file. An entry names a directory scanned one level
+// deep and an inherits item another such file; both can bring OpenViking in
+// from outside config/. Relative paths are the owner's config/ folder's, so
+// they are rewritten: this copy lives elsewhere. An inherited file that brings
+// OpenViking only through its own entries is replaced by a filtered copy, so
+// the rest of what it declares still loads. Returns the filtered declaration
+// and whether anything was left out.
+function agyFilteredDeclaration(file, isOvItem, env, copyInherited, ancestors = new Set()) {
+  const declaration = readJson(file);
+  if (!declaration || typeof declaration !== 'object') return null;
+  const chain = new Set(ancestors).add(path.resolve(file));
+  let changed = false;
+  const base = path.dirname(file);
+  const resolved = (value) => value.startsWith('~/') ? path.join(home(env), value.slice(2)) : path.resolve(base, value);
+  const located = (value) => value.startsWith('~/') ? value : path.resolve(base, value);
+  const usable = (entry) => typeof entry?.path === 'string' && !agyPathNamesOpenViking(resolved(entry.path));
+  const result = { ...declaration };
+  if (Array.isArray(declaration.entries)) {
+    const kept = declaration.entries.filter(usable);
+    if (kept.length !== declaration.entries.length) changed = true;
+    result.entries = kept.map((entry) => {
+      const directory = resolved(entry.path);
+      const excluded = safeList(directory).filter((item) => isOvItem(path.join(directory, item), item));
+      if (excluded.length > 0) changed = true;
+      return {
+        ...entry,
+        path: located(entry.path),
+        ...(excluded.length > 0
+          ? { exclude: [...(Array.isArray(entry.exclude) ? entry.exclude : []), ...excluded.map(escapePattern)] }
+          : {}),
+      };
+    });
+  }
+  if (Array.isArray(declaration.inherits)) {
+    result.inherits = [];
+    for (const entry of declaration.inherits) {
+      const target = usable(entry) ? resolved(entry.path) : null;
+      // An inherit cycle adds nothing its ancestors have not already declared.
+      if (!target || isOpenViking(read(target)) || chain.has(path.resolve(target))) {
+        changed = true;
+        continue;
+      }
+      const inherited = agyFilteredDeclaration(target, isOvItem, env, copyInherited, chain);
+      if (inherited?.changed) changed = true;
+      result.inherits.push({
+        ...entry,
+        path: inherited?.changed ? copyInherited(target, inherited.declaration) : located(entry.path),
+      });
+    }
+  }
+  return { declaration: result, changed };
+}
+
+const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// agy also loads these folders at every level from the working directory up to
+// its git root, and has no switch for them. Vika's own workspace has none, so a
+// piece found there is warned about, not refused; the OPENVIKING_* variables
+// keep it inert meanwhile. Only reads.
+const AGY_WORKSPACE_FOLDERS = ['.agents', '.agent', '_agents', '_agent'];
+const AGY_WORKSPACE_FILES = ['mcp_config.json', 'hooks.json', ...AGY_DECLARATIVE_CONFIGS];
+
+function agyWorkspaceLevels(workspace) {
+  const levels = [];
+  let directory = workspace;
+  for (;;) {
+    levels.push(directory);
+    if (fs.existsSync(path.join(directory, '.git'))) return levels;
+    const parent = path.dirname(directory);
+    if (parent === directory) return [workspace];
+    directory = parent;
+  }
+}
+
+export function agyWorkspaceOpenVikingPieces(workspace) {
+  if (!workspace) return [];
+  const pieces = [];
+  for (const level of agyWorkspaceLevels(path.resolve(workspace))) {
+    for (const folder of AGY_WORKSPACE_FOLDERS) {
+      const agents = path.join(level, folder);
+      for (const name of AGY_WORKSPACE_FILES) {
+        const file = path.join(agents, name);
+        if (isOpenViking(read(file))) pieces.push(file);
+      }
+      const plugins = path.join(agents, 'plugins');
+      for (const entry of safeList(plugins)) {
+        const directory = path.join(plugins, entry);
+        if (agyPluginIsOpenViking(directory, entry)) pieces.push(directory);
+      }
+      for (const kind of ['skills', 'rules']) {
+        for (const entry of safeList(path.join(agents, kind))) {
+          if (isOpenViking(entry)) pieces.push(path.join(agents, kind, entry));
+        }
+      }
+    }
+  }
+  return pieces;
+}
+
 function safeList(folder) {
   try { return fs.readdirSync(folder); } catch { return []; }
 }

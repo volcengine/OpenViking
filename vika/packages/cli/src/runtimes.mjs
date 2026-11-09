@@ -3,13 +3,16 @@
 
 import { execFile as execFileCallback } from '../../daemon/src/platform/index.mjs';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { safeError } from '../../daemon/src/logger.mjs';
+import { prepareAgyGeminiDir } from '../../daemon/src/ov-isolation.mjs';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
 import { DSH_DEFAULT_MODEL, assertSupportedDshVersion } from '../../daemon/src/dsh-runtime.mjs';
 import { t } from './i18n.mjs';
-import { probeAcp, probeAppServer, probeDsh } from './runtime-probe.mjs';
+import { probeAcp, probeAgyAcp, probeAppServer, probeDsh } from './runtime-probe.mjs';
 
 // Setup only checks the agent runtimes; installing and logging in to them is
 // the user's business. Pi ships with Vika and reuses the user's ~/.pi/agent.
@@ -35,7 +38,7 @@ async function run(execFileImpl, command, args, env) {
     const { stdout } = await execFileImpl(command, args, { env, timeout: 20_000 });
     return { ok: true, stdout: String(stdout) };
   } catch (error) {
-    return { ok: false, stdout: String(error?.stdout ?? '') };
+    return { ok: false, stdout: String(error?.stdout ?? ''), stderr: String(error?.stderr ?? '') };
   }
 }
 
@@ -47,6 +50,7 @@ export async function detectRuntimes({
   piBin = managedPiBin(),
   probe = probeAppServer,
   acpProbe = probeAcp,
+  agyProbe = probeAgyAcp,
   dshProbe = probeDsh,
 } = {}) {
   const runtimes = [];
@@ -86,6 +90,7 @@ export async function detectRuntimes({
   if (traex) runtimes.push(traex);
   const opencode = await detectOpencode({ env, execFileImpl, probe: acpProbe });
   if (opencode) runtimes.push(opencode);
+  runtimes.push(await detectAgy({ env, execFileImpl, probe: agyProbe }));
   const dsh = await detectDsh({ env, execFileImpl, probe: dshProbe });
   runtimes.push(dsh);
   return runtimes;
@@ -303,5 +308,64 @@ async function detectOpencode({ env, execFileImpl, probe }) {
   result.available = true;
   result.note = t(`protocol 兼容（${version.raw}），使用 opencode 自己的模型和登录配置`,
     `ACP compatible (${version.raw}), uses OpenCode's own model and login`);
+  return result;
+}
+
+// `agy models` starts every MCP server it finds, OpenViking's included, and
+// unlike `agy acp` takes no --gemini-dir, so the same filtered config home
+// reaches it through HOME. The token stays reachable through its links.
+async function agyLoginCheck(execFileImpl, bin, env) {
+  let isolated;
+  try {
+    isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-agy-detect-'));
+    prepareAgyGeminiDir(path.join(isolated, '.gemini'), env);
+    return await run(execFileImpl, bin, ['models'], { ...env, HOME: isolated, USERPROFILE: isolated });
+  } catch (error) {
+    return { ok: false, stdout: '', stderr: safeError(error) };
+  } finally {
+    if (isolated) fs.rmSync(isolated, { recursive: true, force: true });
+  }
+}
+
+// Antigravity runs over ACP; an explicit AGY_BIN is authoritative. Handshake
+// before login: an agy that is not Antigravity cannot answer the login check
+// meaningfully, and `agy models` exits non-zero when nobody is signed in.
+async function detectAgy({ env, execFileImpl, probe }) {
+  const explicit = env.AGY_BIN?.trim();
+  const bin = explicit ? locateBinary(explicit, env) : which('agy', env);
+  const result = {
+    id: 'agy', label: 'Antigravity', model: 'agy', bin: bin ?? null, binEnv: 'AGY_BIN',
+    installed: Boolean(bin), available: false, note: '',
+  };
+  if (!bin) {
+    result.note = explicit
+      ? t(`找不到可执行文件：${explicit}（既不是绝对路径，也不在 PATH 里）`,
+        `Cannot find the executable ${explicit}: it is neither an absolute path nor on PATH`)
+      : t('未安装', 'not installed');
+    return result;
+  }
+  const version = await run(execFileImpl, bin, ['--version'], env);
+  if (!version.ok) {
+    result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
+    return result;
+  }
+  const handshake = await probe(bin, { env });
+  if (!handshake.compatible) {
+    result.note = t(`ACP 握手失败：${handshake.reason}`, `ACP handshake failed: ${handshake.reason}`);
+    return result;
+  }
+  const login = await agyLoginCheck(execFileImpl, bin, env);
+  if (!login.ok) {
+    if (/sign in/i.test(login.stderr)) {
+      result.note = t('未登录：先运行 agy 登录', 'not logged in: run agy and sign in first');
+      return result;
+    }
+    const detail = login.stderr.trim().split('\n').at(-1) || `${bin} models`;
+    result.note = t(`无法列出模型：${detail}`, `Could not list models: ${detail}`);
+    return result;
+  }
+  result.available = true;
+  result.note = t(`protocol 兼容（${version.stdout.trim()}），已登录`,
+    `ACP compatible (${version.stdout.trim()}), logged in`);
   return result;
 }

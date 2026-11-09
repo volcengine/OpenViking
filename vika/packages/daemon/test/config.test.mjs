@@ -217,6 +217,19 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal(Object.hasOwn(config, 'codexModel'), false);
   });
 
+  it('accepts the Antigravity CLI path and model, defaulting to the session\'s own', () => {
+    setEnv('AGY_BIN', undefined);
+    setEnv('VIKA_AGY_MODEL', undefined);
+    assert.equal(getConfig().agyBin, 'agy');
+    assert.equal(getConfig().agyModel, '');
+    setEnv('AGY_BIN', '/opt/agy/bin/agy');
+    setEnv('VIKA_AGY_MODEL', 'gemini-3.8-flash-low');
+    assert.equal(getConfig().agyBin, '/opt/agy/bin/agy');
+    assert.equal(getConfig().agyModel, 'gemini-3.8-flash-low');
+    setEnv('AGY_BIN', undefined);
+    setEnv('VIKA_AGY_MODEL', undefined);
+  });
+
   it('accepts TraeX CLI path and reasoning effort', () => {
     setEnv('TRAEX_BIN', '/opt/local/bin/traecli');
     setEnv('TRAECLI_BIN', '/ignored/traecli');

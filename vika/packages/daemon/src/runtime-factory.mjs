@@ -8,6 +8,7 @@ import { VolcAgent } from './volc.mjs';
 import { PiAgent } from './pi.mjs';
 import { DurableAgent } from './durable.mjs';
 import { OpencodeAgent } from './opencode.mjs';
+import { AgyAgent } from './agy.mjs';
 import { DshAgent } from './dsh.mjs';
 import { RUNTIME_IDS, getRuntimeDefinition } from './runtime-catalog.mjs';
 
@@ -23,6 +24,7 @@ export function createRuntimeFactories(config, store, logger, overrides = {}) {
     pi: PiAgent,
     durable: DurableAgent,
     opencode: OpencodeAgent,
+    agy: AgyAgent,
     dsh: DshAgent,
   };
   return Object.fromEntries(definitions.map((definition) => {

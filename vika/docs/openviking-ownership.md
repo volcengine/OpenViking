@@ -18,7 +18,7 @@ Keep these rules when you change any of it:
 
 ## Every runtime keeps its own OpenViking plugin out
 
-Codex, TraeX, Claude Code, Pi and OpenCode each have an OpenViking plugin of their own, and the owner may have installed it. In a runtime Vika launches it must not load. It speaks as the whole process, with no idea who sent a line, and its hooks recall and capture on their own.
+Codex, TraeX, Claude Code, Pi, OpenCode and Antigravity each have, or can import, an OpenViking plugin of their own, and the owner may have installed it. In a runtime Vika launches it must not load. It speaks as the whole process, with no idea who sent a line, and its hooks recall and capture on their own.
 
 A runtime is registered in `runtime-catalog.mjs` with a required `ovIsolation`:
 
@@ -34,11 +34,12 @@ The registration throws without one.
 1. Find how that runtime discovers plugins, hooks, MCP servers, extensions and skills, and how its own CLI flags or environment can turn OpenViking's off. Never rely on the plugin honoring a switch: Vika does not control its version. Only OpenViking's pieces go; the owner's other plugins stay.
 2. Implement it in `ov-isolation.mjs`, which only reads the owner's files and never writes them. Call it from the runtime's launcher.
 3. Test it in `test/ov-isolation.test.mjs` and in the runtime's own launch test.
-4. Verify against the real CLI before you rely on it. Install the OpenViking plugin into a throwaway home (`CODEX_HOME`, `TRAE_HOME` with `TRAECLI_HOME`, `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `XDG_CONFIG_HOME`) and check what actually loaded:
+4. Verify against the real CLI before you rely on it. Install the OpenViking plugin into a throwaway home (`CODEX_HOME`, `TRAE_HOME` with `TRAECLI_HOME`, `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `XDG_CONFIG_HOME`, Antigravity's `HOME`) and check what actually loaded:
    - Codex/TraeX: app-server `hooks/list` and `mcpServerStatus/list`.
    - Claude Code: the stream-json `init` event (`plugins`, `mcp_servers`) and hook events.
    - Pi: a real RPC turn must expose the Core's six `mcp__personal_agent__openviking_*` tools, built-in coding tools, and other extensions and MCP tools; marker extensions must prove OpenViking never loaded. Check direct, codemode and deferred MCP exposure.
    - OpenCode: a marker file plugin; `opencode debug config` alone is not proof, since a plugins-folder file loads even when the config lists none.
+   - Antigravity: marker files written by OpenViking-named global plugins, MCP servers, hooks, skills and rules, plus `antigravity-cli/mcp/<server>/`. A tool list is not proof: MCP tools outside the session's own `mcpServers` are deferred behind `call_mcp_tool`, so they do not appear as `mcp_*` tools. `--include-default-customizations=false` does nothing and `--app-data-dir` refuses an absolute path. The workspace's `.agents/`, `.agent/`, `_agents/` and `_agent/`, at every level up to the git root, load anyway with no switch to stop them (agy 1.5.3); Vika warns about OpenViking pieces there instead, and the `OPENVIKING_*` variables keep them inert. `agy models` also starts the MCP servers it finds and takes no `--gemini-dir`, so setup's login check runs it with `HOME` pointing at the same filtered config home.
 
    Never point these at the owner's real homes: some CLIs write to the real config even when only part of the home is redirected. TraeX, for example, needs `TRAE_HOME`, not just `TRAECLI_HOME`.
 

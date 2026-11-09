@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { probeAcp, probeAppServer } from '../src/runtime-probe.mjs';
+import { probeAcp, probeAgyAcp, probeAppServer } from '../src/runtime-probe.mjs';
 
 function fixture(t, script) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-app-server-'));
@@ -116,6 +116,38 @@ test('ACP probe sends only initialize to `acp` and accepts an OpenCode answer', 
   assert.equal(requests[0].jsonrpc, '2.0');
   assert.equal(requests[0].params.protocolVersion, 1);
   assert.equal(f.children[0].signalCode, 'SIGKILL');
+});
+
+function agyServer(result) {
+  return `
+    const readline = require('node:readline');
+    if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['acp'])) process.exit(2);
+    readline.createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: ${JSON.stringify(result)} }) + '\\n');
+    });
+  `;
+}
+
+test('Antigravity probe needs the agent name and the append capability', async (t) => {
+  const good = fixture(t, agyServer({
+    agentInfo: { name: 'Antigravity ACP Server', version: '1.5.3' },
+    agentCapabilities: { _meta: { antigravity: { systemPrompt: { append: true } } } },
+  }));
+  assert.equal((await probeAgyAcp(good.bin, good.options)).compatible, true);
+  await Promise.all(good.closed);
+
+  const other = fixture(t, agyServer({ agentInfo: { name: 'OpenCode' } }));
+  const refused = await probeAgyAcp(other.bin, other.options);
+  assert.equal(refused.compatible, false);
+  assert.match(refused.reason, /unrecognised ACP agent/);
+  await Promise.all(other.closed);
+
+  const old = fixture(t, agyServer({ agentInfo: { name: 'Antigravity ACP Server' }, agentCapabilities: {} }));
+  const stale = await probeAgyAcp(old.bin, old.options);
+  assert.equal(stale.compatible, false);
+  assert.match(stale.reason, /cannot append a system prompt/);
+  await Promise.all(old.closed);
 });
 
 test('ACP probe rejects an initialize error', async (t) => {
