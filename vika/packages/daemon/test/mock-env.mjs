@@ -352,10 +352,18 @@ export async function startMockEnv({
       check: ovCheck,
       namespace: 'mock-namespace',
       messages: new Map(),
+      identityFiles: new Map(),
+      async read(uri) {
+        if (!this.identityFiles.has(uri)) throw Object.assign(new Error('missing'), { httpStatus: 404 });
+        return this.identityFiles.get(uri);
+      },
       async create(sessionId) { return { session_id: sessionId, uri: `viking://session/${sessionId}` }; },
       async append(id, message) { const rows = this.messages.get(id) || []; rows.push({ ...message, parts: [{ type: 'text', text: message.content }] }); this.messages.set(id, rows); },
       async context(id) { return { latest_archive_overview: '', messages: this.messages.get(id) || [], stats: { totalArchives: 0 } }; },
-      async request() { return { pending_tokens: 0 }; },
+      async request(route, body) {
+        if (route === '/content/write') this.identityFiles.set(body.uri, body.content);
+        return { pending_tokens: 0 };
+      },
       ...ovClient,
     },
   });

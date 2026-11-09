@@ -325,6 +325,15 @@ describe('release-owned prompts and the instance role', () => {
     assert.throws(() => getConfig(), /VIKA_ROLE must be a role name or an absolute path/);
   });
 
+  it('defaults personality to outgoing and validates the selection', () => {
+    setEnv('VIKA_PERSONALITY', undefined);
+    assert.equal(getConfig().personality, 'outgoing');
+    setEnv('VIKA_PERSONALITY', 'reserved');
+    assert.equal(getConfig().personality, 'reserved');
+    setEnv('VIKA_PERSONALITY', 'quiet');
+    assert.throws(() => getConfig(), /VIKA_PERSONALITY must be outgoing or reserved/);
+  });
+
   it('turns natural writing off only when asked', () => {
     setEnv('VIKA_NATURAL_WRITING', 'false');
     assert.equal(getConfig().naturalWriting, false);

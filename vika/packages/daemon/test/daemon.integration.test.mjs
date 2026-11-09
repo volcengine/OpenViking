@@ -511,11 +511,11 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
-  it('gives codex the instance role after the Core', async () => {
+  it('gives codex the instance role and OV personality after the Core', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-e2e-role-'));
     const rolePromptPath = path.join(dir, 'role.md');
     fs.writeFileSync(rolePromptPath, '<!-- editor note -->\nYou are {{AGENT_NAME}}. Role fixture marker: zircon-e2e-7742\n');
-    const env = await startMockEnv({ config: { rolePromptPath, agentName: 'Alpha' } });
+    const env = await startMockEnv({ config: { rolePromptPath, agentName: 'Alpha', personality: 'reserved' } });
     try {
       const instructions = process.platform === 'win32' ? env.codexThreadParams()[0].developerInstructions
         : env.codexSpawnArgs()[0].find((argument) => argument.startsWith('developer_instructions='));
@@ -523,6 +523,10 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
       assert.match(instructions, /## Role/);
       assert.match(instructions, /You are Alpha\. Role fixture marker: zircon-e2e-7742/);
       assert.doesNotMatch(instructions, /editor note/);
+      assert.match(instructions, /### 沉静内敛/);
+      assert.match(instructions, /same thread/);
+      assert.doesNotMatch(instructions, /### 外向活泼/);
+      assert.ok(instructions.indexOf('## Personality') > instructions.indexOf('## Role'));
       assert.ok(instructions.indexOf('## Role') > instructions.indexOf('# Operating policy'));
     } finally {
       await env.stop();

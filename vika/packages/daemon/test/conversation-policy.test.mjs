@@ -255,7 +255,7 @@ describe('the instance role', () => {
   it('runs on the Core defaults without a role', () => {
     const text = assembleConversationPolicy({ connectors: ['lark'] });
     assert.doesNotMatch(text, /## Role/);
-    assert.match(text, /The Role decides when you speak\. Where it says nothing, use these defaults:/);
+    assert.match(text, /The Personality decides group participation; the Role defines responsibilities and privacy\. Where neither says anything, use these defaults:/);
     assert.match(text, /Reply in Chinese by default, or in the language the person wrote in\./);
   });
 });

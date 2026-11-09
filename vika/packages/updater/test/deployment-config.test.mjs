@@ -763,3 +763,24 @@ test('rejects invalid defaults, relative paths, and overlapping agent storage', 
     });
   }
 });
+
+test('personality defaults to outgoing, validates and reaches the daemon independently of role', () => {
+  const value = validManifest();
+  value.agents[0].personality = 'reserved';
+  withManifest(value, (manifestPath) => {
+    const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+    assert.equal(deployment.agents[0].personality, 'reserved');
+    assert.equal(deployment.agents[1].personality, 'outgoing');
+    assert.deepEqual(deployment.ignoredFields, []);
+    const env = { VIKA_INSTANCE_ID: 'alpha' };
+    applyDeploymentAgentEnv(env, deployment);
+    assert.equal(env.VIKA_PERSONALITY, 'reserved');
+    env.VIKA_INSTANCE_ID = 'beta';
+    applyDeploymentAgentEnv(env, deployment);
+    assert.equal(env.VIKA_PERSONALITY, 'outgoing');
+  });
+  value.agents[0].personality = 'quiet';
+  withManifest(value, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /personality must be outgoing, reserved/);
+  });
+});

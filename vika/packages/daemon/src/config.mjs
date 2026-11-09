@@ -49,8 +49,14 @@ function boolEnv(name, fallback) {
   throw new Error(`${name} must be a boolean`);
 }
 
-// VIKA_ROLE: a role shipped under agent/roles, or the absolute path of the
-// owner's own role file. Unset, the agent runs on the Core's defaults alone.
+// The selector only; the participation prompt is read from OV at startup.
+function personalityEnv() {
+  const value = (process.env.VIKA_PERSONALITY ?? 'outgoing').trim();
+  if (!['outgoing', 'reserved'].includes(value)) throw new Error('VIKA_PERSONALITY must be outgoing or reserved');
+  return value;
+}
+
+// VIKA_ROLE: a shipped role or the absolute path of the owner's own file.
 function rolePromptEnv(promptDir) {
   const role = (process.env.VIKA_ROLE ?? '').trim();
   if (!role) return '';
@@ -207,6 +213,7 @@ export function getConfig() {
     workspace,
     promptDir,
     rolePromptPath: rolePromptEnv(promptDir),
+    personality: personalityEnv(),
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),

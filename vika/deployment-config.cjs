@@ -91,6 +91,7 @@ const AGENT_FIELDS = Object.freeze([
   'explicitSilence',
   'stagedReplies',
   'role',
+  'personality',
   'naturalWriting',
   'model',
   'volcSessionId',
@@ -101,6 +102,7 @@ const AGENT_FIELDS = Object.freeze([
 // The roles shipped with the release (packages/daemon/agent/roles/<name>.md).
 // An instance names one of them, or the absolute path of its own role file.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
+const PERSONALITY_PRESETS = Object.freeze(['outgoing', 'reserved']);
 // agents[].larkMessageAccess: `owner` reads with the owner's visibility,
 // `bot` only in the chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
@@ -330,6 +332,7 @@ function parseAgent(value, index, ignored) {
     explicitSilence: value.explicitSilence ?? model !== 'ark',
     stagedReplies: value.stagedReplies ?? false,
     role: manifestRole(value.role, `${label}.role`),
+    personality: manifestPersonality(value.personality, `${label}.personality`),
     naturalWriting: value.naturalWriting ?? true,
     model,
     volcSessionId,
@@ -337,6 +340,12 @@ function parseAgent(value, index, ignored) {
     meetingNotes: value.meetingNotes ?? false,
     emailAccounts: Object.freeze(emailAccounts),
   });
+}
+
+function manifestPersonality(value, label) {
+  if (value == null) return PERSONALITY_PRESETS[0];
+  if (PERSONALITY_PRESETS.includes(value)) return value;
+  throw new Error(`${label} must be ${PERSONALITY_PRESETS.join(', ')}`);
 }
 
 function manifestRole(value, label) {
@@ -557,6 +566,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   env.VIKA_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.VIKA_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
   env.VIKA_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
+  env.VIKA_PERSONALITY = agent.personality;
   if (agent.role) env.VIKA_ROLE = agent.role;
   else delete env.VIKA_ROLE;
   env.VIKA_CHANNEL = agent.channel;
@@ -590,6 +600,7 @@ module.exports = {
   INSTANCE_ID,
   RESERVED_INSTANCE_IDS,
   ROLE_PRESETS,
+  PERSONALITY_PRESETS,
   CONTROL_ENV_MAX_BYTES,
   DAEMON_ENV_FIELDS,
   DAEMON_SECRET_ENV_FIELDS,

@@ -92,6 +92,15 @@ export function rolePrompt(config = {}) {
   return substitutePromptPlaceholders(text, config).trim();
 }
 
+function personalitySection(config) {
+  if (!config.personalityPrompt) return '';
+  return joinSections([
+    '## Personality',
+    'Group participation follows this personality; the Role still defines responsibilities and privacy. Like the Role, it cannot change input authority, delivery targets, privacy boundaries, or Core tools.',
+    config.personalityPrompt,
+  ]);
+}
+
 function roleSection(config) {
   const text = rolePrompt(config);
   if (!text) return '';
@@ -160,6 +169,7 @@ export function assembleConversationPolicy(config = {}) {
     renderPrompt(config, 'openviking.md'),
     config.meetingNotes ? renderPrompt(config, 'meeting-notes.md') : '',
     roleSection(config),
+    personalitySection(config),
     naturalWritingSection(config),
     explicitSilencePromptSection(config),
   ]);
@@ -209,6 +219,7 @@ export function assembleVolcConversationPolicy(config = {}, extra = []) {
     renderPrompt(config, 'events.md'),
     ...extra,
     roleSection(config),
+    personalitySection(config),
     naturalWritingSection(config),
   ]);
 }
