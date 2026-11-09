@@ -22,7 +22,6 @@ from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
     body_for_preview,
-    deterministic_sample,
     freshness_metadata,
     read_abstract_overview_pending_snapshot,
     write_abstract_overview,
@@ -35,7 +34,6 @@ from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -259,6 +257,7 @@ class SemanticTreeExecutor:
         self._file_md5s = dict(file_md5s or {})
         self._artifact_files = [path.strip("/") for path in (artifact_files or []) if path]
         self._file_abstracts = dict(file_abstracts or {})
+        self.file_abstracts: Dict[str, str] = {}
         self._file_vector_actions = dict(file_vector_actions or {})
         self._file_ingest_options = {
             uri.rstrip("/"): IngestOptions.from_value(options)
@@ -524,6 +523,8 @@ class SemanticTreeExecutor:
                 self._task_context.user_id,
                 enqueued_work=self._task_context.enqueued_work,
                 work_id=self._task_context.work_id,
+                task_type=self._task_context.task_type,
+                mode=self._task_context.mode,
             )
             if self._task_context is not None
             else detach_task_context()
@@ -583,17 +584,12 @@ class SemanticTreeExecutor:
                 self._schedule_overview(dir_uri)
                 return False
 
-            sample_limit = getattr(
-                get_openviking_config().semantic,
-                "overview_sample_limit",
-                32,
-            )
             direct_entries = sorted(
                 [("directory", uri) for uri in children_dirs]
                 + [("file", uri) for uri in file_paths],
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
-            sampled_entries = deterministic_sample(direct_entries, sample_limit)
+            sampled_entries = direct_entries
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = 0
@@ -693,6 +689,19 @@ class SemanticTreeExecutor:
                     )
                 )
             )
+            if (
+                self._generation_trigger == "content_write_parent_refresh"
+                and not self._skip_vectorization
+            ):
+                # Refresh only directory records. Read current L2 summaries in
+                # one batch for other files, including coalesced earlier writes.
+                # Keep the triggering write's summaries, also when it deliberately
+                # left existing file vectors unchanged.
+                self._file_abstracts.update(
+                    await self._processor._load_transfer_file_summaries(
+                        sorted(required_file_paths - self._file_abstracts.keys()), ctx=self._ctx
+                    )
+                )
             if self._recursive:
                 pending = len(children_dirs) + len(required_file_paths)
             else:
@@ -791,13 +800,12 @@ class SemanticTreeExecutor:
         children_dirs: List[str],
         file_paths: List[str],
     ) -> DirNode:
-        """Sample the target directory first, then read only existing summaries."""
+        """Read existing summaries for all direct children of the target directory."""
         candidates = sorted(
             [("file", uri) for uri in file_paths] + [("directory", uri) for uri in children_dirs],
             key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]),
         )
-        sample_limit = getattr(get_openviking_config().semantic, "overview_sample_limit", 32)
-        primary = deterministic_sample(candidates, sample_limit)
+        primary = candidates
         loaded = await self._load_transfer_candidates(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
 
@@ -1117,7 +1125,16 @@ class SemanticTreeExecutor:
         file_content = None
         try:
             summary_dict = None
-            if self._incremental_update:
+            directory_only = self._generation_trigger == "content_write_parent_refresh"
+            if directory_only:
+                need_vectorize = False
+                self._file_change_status[file_path] = file_path in self._changed_paths
+                if file_path in self._file_abstracts:
+                    summary_dict = {
+                        "name": file_name,
+                        "summary": self._file_abstracts[file_path],
+                    }
+            elif self._incremental_update:
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
                 node = self._nodes.get(parent_uri)
@@ -1175,6 +1192,8 @@ class SemanticTreeExecutor:
 
         if self._closed:
             return
+        if file_path in self._changed_paths:
+            self.file_abstracts[file_path] = str(summary_dict.get("summary") or "")
         from openviking.storage.context_update_plan import (
             IndexAction,
             SemanticTreeEntry,
@@ -1370,6 +1389,15 @@ class SemanticTreeExecutor:
         consume_pending: int,
         missing_summary_entries: Optional[int] = None,
     ) -> AbstractOverviewWriteResult:
+        if (
+            self._generation_trigger == "content_write_parent_refresh"
+            and not await self._viking_fs.exists(dir_uri, ctx=self._ctx)
+        ):
+            # Best-effort guard before sidecar lock acquisition can create its
+            # parent directory. A concurrent delete after this check may still race.
+            logger.info("Skipping semantic write for deleted directory: %s", dir_uri)
+            self._stale = True
+            return AbstractOverviewWriteResult(wrote=False)
         metadata: Dict[str, Any] = {
             "generated_by": {
                 "component": "SemanticProcessor",

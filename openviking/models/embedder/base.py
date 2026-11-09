@@ -72,9 +72,9 @@ class QueryEmbeddingCache(dict[Any, _SharedQueryEmbedding]):
             self.pop(key, None)
 
     async def close(self) -> None:
-        pending = {
-            entry.task for entry in self.values() if not entry.task.done()
-        } | {task for task in self._pending_tasks if not task.done()}
+        pending = {entry.task for entry in self.values() if not entry.task.done()} | {
+            task for task in self._pending_tasks if not task.done()
+        }
         for task in pending:
             task.cancel()
         if pending:
@@ -165,6 +165,17 @@ def extract_text_from_content(content: "EmbeddingInput") -> str:
 
 
 async def embed_compat(
+    embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
+) -> "EmbedResult":
+    from contextlib import nullcontext
+
+    from openviking.observability.reporting.facts import bind_embedding_purpose
+
+    with bind_embedding_purpose("search_query") if is_query else nullcontext():
+        return await _embed_compat_impl(embedder, content, is_query=is_query)
+
+
+async def _embed_compat_impl(
     embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
 ) -> "EmbedResult":
     """Prepare input, then call the embedder's async-compatible entrypoint.
@@ -392,16 +403,20 @@ class EmbedderBase(ABC):
         self,
         func: Callable[[], Awaitable[T]],
         *,
+        is_query: bool,
         logger=None,
         operation_name: str,
     ) -> T:
-        """Run one async provider request with concurrency and telemetry guards."""
-        semaphore = getattr(self, "_account_semaphore", None)
-        if semaphore is None:
-            semaphore = _get_async_embed_semaphore(self.max_concurrent)
-        wait_started = time.monotonic()
-        await semaphore.acquire()
-        wait_elapsed = time.monotonic() - wait_started
+        """Limit document embedding concurrency while letting retrieval queries through."""
+        semaphore = None
+        wait_elapsed = 0.0
+        if not is_query:
+            semaphore = getattr(self, "_account_semaphore", None)
+            if semaphore is None:
+                semaphore = _get_async_embed_semaphore(self.max_concurrent)
+            wait_started = time.monotonic()
+            await semaphore.acquire()
+            wait_elapsed = time.monotonic() - wait_started
         telemetry = get_current_telemetry()
         telemetry.set("embedding.async.max_concurrent", self.max_concurrent)
         telemetry.set("embedding.async.wait_ms", round(wait_elapsed * 1000, 3))
@@ -424,7 +439,8 @@ class EmbedderBase(ABC):
                     elapsed * 1000,
                 )
             self._active_call_started_at = previous_started_at
-            semaphore.release()
+            if semaphore is not None:
+                semaphore.release()
 
     @property
     def is_dense(self) -> bool:
@@ -492,6 +508,7 @@ class EmbedderBase(ABC):
                 account_id=getattr(self, "_account_id", None)
                 or (root_context.account_id if root_context is not None else None),
                 source_type=get_ingestion_source_type(),
+                cost_bearer=getattr(self, "cost_bearer", None),
             )
         except Exception as e:
             # Metrics must never break embedding execution.

@@ -140,8 +140,8 @@ class _SessionContextClient:
         enable_working_memory=None,
         retention_mode,
         keep_recent_turn_count,
-        retained_message_token_budget,
         min_raw_tail_steps,
+        **budget_kwargs,
     ):
         assert retention_mode == "turn_budget"
         assert enable_working_memory is True
@@ -159,8 +159,8 @@ class _SessionContextClient:
 def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
     agent_defaults = {
         "session_context_enabled": False,
-        "session_context_token_budget": 12000,
-        "commit_token_threshold": 6000,
+        "context_window_tokens": 1000,
+        "async_compress_ratio": 1.0,
         "commit_keep_recent_count": 10,
         "commit_keep_recent_turn_count": 3,
     }
@@ -1192,7 +1192,12 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
             }
 
     fake_client = _FakeClient()
-    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_count=2)
+    hook = compact_hook(
+        fake_client,
+        context_window_tokens=100,
+        async_compress_ratio=1.0,
+        commit_keep_recent_count=2,
+    )
 
     session_key = SessionKey(
         type="cli",
@@ -1283,7 +1288,12 @@ async def test_reset_openviking_state_replaces_persisted_sender_cursors(temp_dir
 @pytest.mark.asyncio
 async def test_compact_hook_force_commit_does_not_resync_already_synced_messages(compact_hook):
     fake_client = _SessionContextClient(pending_tokens=120, fail_commit=False)
-    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_turn_count=2)
+    hook = compact_hook(
+        fake_client,
+        context_window_tokens=100,
+        async_compress_ratio=1.0,
+        commit_keep_recent_turn_count=2,
+    )
 
     context = HookContext(
         event_type="message.compact",
@@ -1318,7 +1328,12 @@ async def test_compact_hook_force_commit_commits_current_session_without_unsynce
     compact_hook,
 ):
     fake_client = _SessionContextClient(pending_tokens=120, fail_commit=False)
-    hook = compact_hook(fake_client, commit_token_threshold=1000, commit_keep_recent_turn_count=2)
+    hook = compact_hook(
+        fake_client,
+        context_window_tokens=1000,
+        async_compress_ratio=1.0,
+        commit_keep_recent_turn_count=2,
+    )
 
     context = HookContext(
         event_type="message.compact",
@@ -1352,7 +1367,12 @@ async def test_compact_hook_session_context_append_failure_does_not_advance_sync
     compact_hook,
 ):
     fake_client = _SessionContextClient(pending_tokens=120, fail_append=True)
-    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_count=2)
+    hook = compact_hook(
+        fake_client,
+        context_window_tokens=100,
+        async_compress_ratio=1.0,
+        commit_keep_recent_count=2,
+    )
 
     context = HookContext(
         event_type="message.compact",
@@ -1387,7 +1407,12 @@ async def test_compact_hook_session_context_commits_when_message_threshold_reach
     compact_hook,
 ):
     fake_client = _SessionContextClient(pending_tokens=0, fail_commit=False)
-    hook = compact_hook(fake_client, commit_token_threshold=1000, commit_keep_recent_turn_count=2)
+    hook = compact_hook(
+        fake_client,
+        context_window_tokens=1000,
+        async_compress_ratio=1.0,
+        commit_keep_recent_turn_count=2,
+    )
 
     context = HookContext(
         event_type="message.compact",
@@ -1424,7 +1449,12 @@ async def test_compact_hook_session_commit_failure_retries_without_resyncing_mes
     compact_hook,
 ):
     fake_client = _SessionContextClient(pending_tokens=120, fail_commit=True)
-    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_turn_count=2)
+    hook = compact_hook(
+        fake_client,
+        context_window_tokens=100,
+        async_compress_ratio=1.0,
+        commit_keep_recent_turn_count=2,
+    )
 
     context = HookContext(
         event_type="message.compact",
@@ -1467,7 +1497,12 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
     compact_hook,
 ):
     fake_client = _SessionContextClient(pending_tokens=0)
-    hook = compact_hook(fake_client, commit_token_threshold=1000, commit_keep_recent_count=2)
+    hook = compact_hook(
+        fake_client,
+        context_window_tokens=1000,
+        async_compress_ratio=1.0,
+        commit_keep_recent_count=2,
+    )
 
     context = HookContext(
         event_type="message.compact",
@@ -2723,16 +2758,24 @@ async def test_openviking_request_connection_client_is_closed_after_tool_call(mo
 @pytest.mark.asyncio
 async def test_experience_reminder_follows_direct_case_experience_links(monkeypatch, tmp_path):
     from openviking.session.memory.dataclass import MemoryFile, StoredLink
+    from openviking.session.memory.memory_type_registry import get_default_registry
     from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
     case_uri = "viking://user/admin/memories/cases/case1.md"
-    exp_uri = "viking://user/admin/memories/experiences/exp1.md"
+    exp_uri = "viking://user/admin/memories/experiences/exp 10%#(1).md"
     direct_exp_uri = "viking://user/admin/memories/experiences/direct.md"
-    MemoryFileUtils.write(
+    case_content = MemoryFileUtils.write(
         MemoryFile(
             uri=case_uri,
-            content="# case1\n\n## Linked Experiences\n- exp1",
+            content="",
             memory_type="cases",
+            extra_fields={
+                "case_name": "case1",
+                "task_signature": "task",
+                "input": "{}",
+                "rubric": "{}",
+                "evidence": "",
+            },
             links=[
                 StoredLink(
                     from_uri=case_uri,
@@ -2743,7 +2786,8 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
                     description="",
                 ).model_dump()
             ],
-        )
+        ),
+        content_template=get_default_registry().get("cases").content_template,
     )
 
     class _FakeClient:
@@ -2767,7 +2811,7 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
         async def read_content(self, uri, level="read"):
             self.read_calls.append((uri, level))
             if uri == case_uri:
-                return "# case1\n\n## Linked Experiences\n- [exp1](../experiences/exp1.md)"
+                return case_content
             if uri == exp_uri:
                 return "linked exp content"
             if uri == direct_exp_uri:
@@ -2801,7 +2845,96 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
     assert fake_client.search_calls == [("hello", "viking://user/admin/memories/cases/", 1)]
     assert fake_client.search_experience_calls == []
     assert (case_uri, "read") in fake_client.read_calls
+    assert (exp_uri, "read") in fake_client.read_calls
     assert "linked exp content" in content
     assert "direct exp content" not in content
     assert exp_uri in uris
     assert direct_exp_uri not in uris
+
+
+@pytest.mark.asyncio
+async def test_repeated_builtin_hook_registration_executes_once_per_event(monkeypatch):
+    from vikingbot.hooks.manager import HookManager
+
+    first = SimpleNamespace(is_sync=False, name="first", execute=AsyncMock())
+    second = SimpleNamespace(is_sync=False, name="second", execute=AsyncMock())
+    manager = HookManager()
+    mapping = {"tool.post_call": [first, second], "message.compact": [first]}
+    monkeypatch.setattr(manager, "import_path", lambda _path: mapping)
+    for _ in range(5):
+        manager.register_path(["builtin.hooks"])
+
+    await manager.execute_hooks(HookContext(event_type="tool.post_call"))
+    assert first.execute.await_count == 1
+    assert second.execute.await_count == 1
+    await manager.execute_hooks(HookContext(event_type="message.compact"))
+    assert first.execute.await_count == 2
+    assert second.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_type", ["post_call", "compact"])
+@pytest.mark.parametrize("explicit_connection", [False, True])
+@pytest.mark.parametrize("explicit_config", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_builtin_hook_releases_invocation_client(
+    monkeypatch, hook_type, explicit_connection, explicit_config, outcome
+):
+    import asyncio
+
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(server_url="http://localhost:1933", admin_user_id="admin"),
+        agents=SimpleNamespace(session_context_enabled=False),
+    )
+    monkeypatch.setattr(openviking_hooks_module, "load_config", lambda: config)
+    cache = {}
+    monkeypatch.setattr(openviking_hooks_module, "_global_clients", cache)
+    entered = asyncio.Event()
+
+    async def operation(*_args, **_kwargs):
+        entered.set()
+        if outcome == "error":
+            raise ValueError("injected hook failure")
+        if outcome == "cancel":
+            await asyncio.Future()
+        return []
+
+    client = SimpleNamespace(
+        search_experiences=operation,
+        commit=operation,
+        close=AsyncMock(),
+        session_owner_user_id=lambda: "admin",
+    )
+    factory = AsyncMock(return_value=client)
+    monkeypatch.setattr(openviking_hooks_module, "VikingClient", SimpleNamespace(create=factory))
+    context = HookContext(
+        event_type="tool.post_call" if hook_type == "post_call" else "message.compact",
+        workspace_id="workspace",
+        session_key=SessionKey(type="test", channel_id="channel", chat_id="chat"),
+        config=config if explicit_config else None,
+        openviking_connection={"user": "test"} if explicit_connection else None,
+    )
+    if hook_type == "post_call":
+        call = openviking_hooks_module.OpenVikingPostCallHook().execute(
+            context,
+            "read_file",
+            {"path": "skills/example/SKILL.md"},
+            "---\nname: example\ndescription: example skill\n---\n",
+        )
+    else:
+        call = OpenVikingCompactHook().execute(context, session=SimpleNamespace(messages=[]))
+    task = asyncio.create_task(call)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        if outcome == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
+        client.close.assert_awaited_once()
+        assert cache == {}, "completed hooks must not retain clients in the global cache"
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

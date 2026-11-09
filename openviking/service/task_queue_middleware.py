@@ -5,8 +5,11 @@
 import asyncio
 from typing import TYPE_CHECKING
 
-from openviking.service.task_domain import TERMINAL_TASK_STATUSES
-from openviking.service.task_store import WorkRegistration
+from openviking.service.task_store import (
+    StoreOperationCode,
+    StoreOperationResult,
+    WorkRegistration,
+)
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.service.task_work_index import (
     TaskWorkRejected,
@@ -98,7 +101,7 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
         except BaseException as exc:
             if ctx.committed:
                 record_enqueued_work(ctx.queue, metadata.work_id)
-            else:
+            elif registration is WorkRegistration.CREATED:
                 failure_message = str(exc) or type(exc).__name__
                 await run_to_completion(
                     lambda: self._tracker.mark_work_failed(
@@ -110,6 +113,8 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                     )
                 )
                 record_enqueued_work(ctx.queue, metadata.work_id)
+            # Existing Work may still own a delivery; leave its outcome to
+            # the consumer rather than changing it on an enqueue failure.
             raise
 
         if ctx.committed:
@@ -132,102 +137,82 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
         if not metadata.account_id or not metadata.user_id:
             raise TaskWorkRejected(f"Task {metadata.task_id} work is missing owner metadata")
 
-        duplicate = await self._reconcile_delivery(metadata, ctx.queue)
-        if duplicate is not None:
-            return duplicate
+        owner = {"account_id": metadata.account_id, "user_id": metadata.user_id}
+        started: StoreOperationResult | None = None
+        registering = False
+        handler_raised = False
 
-        if await self._tracker.is_cancelling(
-            metadata.task_id,
-            account_id=metadata.account_id,
-            user_id=metadata.user_id,
-        ):
-            result = await ctx.cancel()
-            await self._persist_result(metadata, result)
-            return result
+        async def start() -> None:
+            nonlocal started
+            started = await self._tracker.start_work(
+                metadata.task_id,
+                metadata.work_id,
+                queue_name=ctx.queue,
+                **owner,
+            )
 
-        await self._tracker.start_work(
-            metadata.task_id,
-            metadata.work_id,
-            account_id=metadata.account_id,
-            user_id=metadata.user_id,
-        )
-        await self._tracker.register_running_task(
-            metadata.task_id,
-            work_id=metadata.work_id,
-            account_id=metadata.account_id,
-            user_id=metadata.user_id,
-        )
-        enqueued_work: list[tuple[str, str]] = []
         try:
+            # Keep the admission result even if cancellation arrives during its commit.
+            await run_to_completion(start)
+            assert started is not None
+            if not started.is_applied:
+                if started.code in (
+                    StoreOperationCode.ALREADY_CANCELLED,
+                    StoreOperationCode.NOT_FOUND,
+                ):
+                    result = await ctx.cancel()
+                    await self._persist_result(metadata, result)
+                    return result
+                if started.code is StoreOperationCode.ALREADY_TERMINAL:
+                    await self._tracker.settle_work(metadata.task_id, metadata.work_id, **owner)
+                    return ProcessResult.success()
+                if started.code is StoreOperationCode.WORK_NOT_OPEN:
+                    return ProcessResult.success()
+                raise TaskWorkRejected(started.message or started.code.value)
+            enqueued_work: list[tuple[str, str]] = []
+            registering = True
+            await self._tracker.register_running_task(
+                metadata.task_id, work_id=metadata.work_id, **owner
+            )
             with bind_task_context(
                 metadata.task_id,
                 metadata.account_id,
                 metadata.user_id,
                 enqueued_work=enqueued_work,
                 work_id=metadata.work_id,
+                task_type=metadata.task_type,
+                mode=metadata.mode,
             ):
                 try:
                     result = await call_next(ctx)
                 except asyncio.CancelledError:
-                    if not await self._tracker.is_cancelling(
-                        metadata.task_id,
-                        account_id=metadata.account_id,
-                        user_id=metadata.user_id,
-                    ):
+                    if not await self._tracker.is_cancelling(metadata.task_id, **owner):
                         raise
                     result = ProcessResult.cancelled()
                 except Exception as exc:
+                    handler_raised = True
                     await self._tracker.record_work_error(
                         metadata.task_id,
                         metadata.work_id,
                         str(exc) or type(exc).__name__,
-                        account_id=metadata.account_id,
-                        user_id=metadata.user_id,
+                        **owner,
                     )
                     raise
             await self._persist_result(metadata, result)
             return result
+        except BaseException:
+            # Unhandled handler exceptions keep Work open with its diagnostic error.
+            # Release admitted Work only for other unsettled interruptions.
+            if started is not None and started.is_applied and not handler_raised:
+                await run_to_completion(
+                    lambda: self._tracker.mark_work_requeued(
+                        metadata.task_id, metadata.work_id, delta=0, **owner
+                    )
+                )
+            raise
         finally:
-            await self._tracker.unregister_running_task(metadata.task_id)
-
-    async def _reconcile_delivery(
-        self,
-        metadata: "QueueTaskMetadata",
-        queue_name: str,
-    ) -> ProcessResult | None:
-        from openviking.service.task_domain import WorkState
-
-        state = await self._tracker.get_work_state(
-            metadata.task_id,
-            metadata.work_id,
-            account_id=metadata.account_id,
-            user_id=metadata.user_id,
-        )
-        if state is None:
-            status = await self._tracker.get_task_status(
-                metadata.task_id,
-                account_id=metadata.account_id,
-                user_id=metadata.user_id,
-            )
-            if status in TERMINAL_TASK_STATUSES:
-                return ProcessResult.success()
-            await self._tracker.reconcile_delivery(
-                metadata.task_id,
-                metadata.work_id,
-                queue_name,
-                account_id=metadata.account_id,
-                user_id=metadata.user_id,
-            )
-            return None
-        if state in (WorkState.DONE, WorkState.FAILED):
-            await self._tracker.settle_work(
-                metadata.task_id,
-                metadata.work_id,
-                account_id=metadata.account_id,
-                user_id=metadata.user_id,
-            )
-            return ProcessResult.success()
-        return None
+            if registering:
+                await self._tracker.unregister_running_task(metadata.task_id)
 
     async def _persist_result(
         self,

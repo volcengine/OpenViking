@@ -148,7 +148,7 @@ API authentication guide covering OAuth 2.0, JWT tokens, and API keys.
 - `unsampled_entries`: direct entries not sampled, with `sampled + unsampled = total`.
 - `pending_child_changes`: direct-child change events not yet reflected in the current body (repeated changes to one child count separately).
 
-When the direct-entry count exceeds `semantic.overview_sample_limit` (32 by default), OpenViking uses deterministic, order-preserving stable sampling. Repeated refreshes of an unchanged tree choose the same sample, reducing differences caused by sampling. Model-generated text can still change between refreshes.
+Summary generation collects all direct-child summaries without a count cap. The existing overview budget remains 60000 characters by default; oversized summary inputs are batched or truncated. `semantic.overview_sample_limit` remains only a small-directory threshold for freshness scheduling.
 
 `pending_child_changes > 0` means the body is still readable but is known to lag behind lower-level changes. A successful parent refresh resets the value to 0 as part of the new coverage metadata.
 

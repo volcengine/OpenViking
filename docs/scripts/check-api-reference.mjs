@@ -81,7 +81,6 @@ const internalRouterFiles = new Set([
   'console.py',
   'debug.py',
   'stats.py',
-  'user_settings.py',
 ])
 const routerFiles = fs.readdirSync(routerDir)
   .filter((name) => name.endsWith('.py') && !internalRouterFiles.has(name))

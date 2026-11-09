@@ -659,7 +659,7 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
-    const listPage = await client.listPage("viking://session", {
+    const listPage = await client.listPage("viking://~/sessions", {
       nodeLimit: 200,
       offset: 4,
       limit: 5,
@@ -671,7 +671,7 @@ describe("OpenVikingClient", () => {
       extraFields: ["locked", "id"],
     });
     expect(listPage).toEqual({ result: entries, hasMore: true });
-    await expect(client.list("viking://session")).resolves.toEqual(entries);
+    await expect(client.list("viking://~/sessions")).resolves.toEqual(entries);
     const treePage = await client.treePage("viking://resources/docs", {
       levelLimit: 2,
       offset: 6,

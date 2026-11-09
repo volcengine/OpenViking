@@ -973,6 +973,13 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
         ),
     ]
 
+    shared_uri = "viking://user/u/memories/trajectories/shared.md"
+    for gradient, case_name in zip(gradients, ("cancel", "refund"), strict=True):
+        gradient.links.append(
+            StoredLink(from_uri=gradient.target_uri, to_uri=shared_uri, link_type="derived_from")
+        )
+        gradient.metadata["case_uris"] = [f"viking://user/u/memories/cases/{case_name}.md"]
+
     class FakeExtractLoop:
         def __init__(self, **kwargs):
             pass
@@ -988,7 +995,7 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
                                 "content": "取消前核验资格",
                             },
                             memory_type="experiences",
-                            uris=[f"{root}/取消资格核验.md"],
+                            uris=[],
                         ),
                         ResolvedOperation(
                             old_memory_file_content=None,
@@ -1014,11 +1021,30 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
         PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
-    links_by_name = {item.target_name: {link.to_uri for link in item.links} for item in plan.items}
-    assert links_by_name == {
-        "取消资格核验": {"viking://user/u/memories/trajectories/traj_cancel.md"},
-        "退款总额传达": {"viking://user/u/memories/trajectories/traj_refund.md"},
+    links_by_name = {
+        item.target_name: {link.to_uri for link in item.links if link.link_type == "derived_from"}
+        for item in plan.items
     }
+    assert links_by_name == {
+        "取消资格核验": {"viking://user/u/memories/trajectories/traj_cancel.md", shared_uri},
+        "退款总额传达": {"viking://user/u/memories/trajectories/traj_refund.md", shared_uri},
+    }
+    assert {
+        item.target_name: {link.from_uri for link in item.links if "/cases/" in link.from_uri}
+        for item in plan.items
+    } == {
+        "取消资格核验": {"viking://user/u/memories/cases/cancel.md"},
+        "退款总额传达": {"viking://user/u/memories/cases/refund.md"},
+    }
+    assert {item.target_name: item.target_uri for item in plan.items} == {
+        "取消资格核验": f"{root}/new_experience.md",
+        "退款总额传达": f"{root}/退款总额传达.md",
+    }
+    for item in plan.items:
+        assert all(
+            (link.from_uri if link.link_type == "derived_from" else link.to_uri) == item.target_uri
+            for link in item.links
+        )
 
 
 @pytest.mark.asyncio
@@ -1042,7 +1068,9 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
             version=1,
             content="old insight",
             status="production",
-            links=[StoredLink(from_uri=old_uri, to_uri=old_history, link_type="derived_from")],
+            links=[
+                StoredLink(from_uri=old_uri, to_uri=old_history, link_type="derived_from").model_dump()
+            ],
         )
     )
     gradients = [
@@ -1083,7 +1111,10 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
 
     class FakeExtractLoop:
         def __init__(self, **kwargs):
-            pass
+            provider = kwargs["context_provider"]
+            if supersedes:
+                assert old_uri in provider.required_file_uris
+                assert provider.read_file_contents[old_uri].content == "old insight"
 
         async def run(self):
             return (
@@ -1117,7 +1148,7 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
 
     upserts = [item for item in plan.items if item.kind == "upsert"]
     deletes = [item for item in plan.items if item.kind == "delete"]
-    assert [item.target_uri for item in deletes] == ([old_uri] if supersedes else [])
+    assert deletes == []
     assert len(upserts) == 1
     assert {link.to_uri for link in upserts[0].links} == {
         "viking://user/u/memories/trajectories/traj1.md",

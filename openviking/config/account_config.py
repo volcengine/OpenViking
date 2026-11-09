@@ -21,13 +21,14 @@ from __future__ import annotations
 
 from typing import ClassVar, List, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from openviking.config.account_vector import AccountEmbeddingConfig, AccountVectorDBConfig
 from openviking.models.vlm.registry import is_valid_provider
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.github_config import GitHubConfig
 from openviking_cli.utils.config.runtime_field import RuntimeField
+from openviking_cli.utils.config.ttl_config import TTLConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
 
@@ -35,6 +36,25 @@ class AccountAclSettings(BaseModel):
     """Account-scoped ACL switch."""
 
     enabled: bool = RuntimeField(default=False)
+
+
+class AccountMemoryConfig(BaseModel):
+    """Account-owned SessionCommit long-term extraction switch."""
+
+    extraction_enabled: bool = RuntimeField(default=True)
+
+
+class AccountParserApiConfig(BaseModel):
+    """Account-owned external parser identity; operational settings are Cluster-owned."""
+
+    api_key: str = RuntimeField(min_length=1, repr=False)
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("api_key must not be blank")
+        return value
 
 
 class AccountFeishuConfig(BaseModel):
@@ -134,7 +154,10 @@ class AccountConfig(BaseModel):
     """
 
     # Account-level settings with active business consumers.
+    output_language_override: Optional[str] = RuntimeField(default=None)
+    memory: Optional[AccountMemoryConfig] = RuntimeField(default=None)
     feishu: Optional[AccountFeishuConfig] = RuntimeField(default=None)
+    parser_api: Optional[AccountParserApiConfig] = RuntimeField(default=None)
     vlm: Optional[AccountVLMConfig] = RuntimeField(default=None)
     query_planner: Optional[AccountVLMConfig] = RuntimeField(default=None)
     github: Optional[GitHubConfig] = RuntimeField(default=None)
@@ -143,6 +166,8 @@ class AccountConfig(BaseModel):
         fallback="agent_evolution",
     )
     acl: Optional[AccountAclSettings] = RuntimeField(default=None)
+
+    ttl: Optional[TTLConfig] = RuntimeField(default=None)
 
     embedding: Optional[AccountEmbeddingConfig] = RuntimeField(default=None)
     vectordb: Optional[AccountVectorDBConfig] = RuntimeField(

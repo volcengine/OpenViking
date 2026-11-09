@@ -1,0 +1,87 @@
+name: Cache native compilers
+description: Cache Cargo intermediates and C++ compiler output with toolchain isolation
+inputs:
+  target:
+    description: Explicit Cargo target or host
+    default: host
+runs:
+  using: composite
+  steps:
+    - name: Install ccache
+      shell: bash
+      run: |
+        if ! command -v ccache >/dev/null; then
+          case "$RUNNER_OS" in
+            Linux)
+              if [ "$(id -u)" = 0 ]; then
+                apt-get update && apt-get install -y ccache
+              else
+                sudo apt-get update && sudo apt-get install -y ccache
+              fi ;;
+            macOS) brew install ccache ;;
+            Windows) choco install ccache --no-progress -y ;;
+          esac
+        fi
+    - name: Fingerprint toolchain
+      id: toolchain
+      shell: bash
+      env:
+        CACHE_TARGET: ${{ inputs.target }}
+      run: |
+        fingerprint=$(
+          { rustc -vV;
+            for compiler in "${CC:-gcc}" "${CXX:-g++}"; do
+              if command -v "$compiler" >/dev/null; then "$compiler" --version; fi
+            done
+            cmake --version; printf '%s\n' "$CACHE_TARGET" "${RUSTFLAGS:-}" "${CFLAGS:-}" "${CXXFLAGS:-}";
+          } | { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1
+        )
+        echo "hash=$fingerprint" >> "$GITHUB_OUTPUT"
+        echo "CCACHE_DIR=$GITHUB_WORKSPACE/.cache/ccache" >> "$GITHUB_ENV"
+        echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+        echo "CCACHE_COMPILERCHECK=content" >> "$GITHUB_ENV"
+        echo "CCACHE_MAXSIZE=256M" >> "$GITHUB_ENV"
+        echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+        echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+        echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+    # Only official main runs populate shared caches. PRs, forks and tag builds
+    # restore without registering a post-job save. Commit suffixes allow each
+    # main revision to save new compiler output into immutable cache entries.
+    - uses: actions/cache/restore@v5
+      if: github.repository != 'volcengine/OpenViking' || github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git/db
+          target
+        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+        restore-keys: |
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-
+    - uses: actions/cache@v5
+      if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git/db
+          target
+        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+        restore-keys: |
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-
+    - uses: actions/cache/restore@v5
+      if: github.repository != 'volcengine/OpenViking' || github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
+      with:
+        path: .cache/ccache
+        key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-${{ github.sha }}
+        restore-keys: |
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}
+    - uses: actions/cache@v5
+      if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      with:
+        path: .cache/ccache
+        key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-${{ github.sha }}
+        restore-keys: |
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}

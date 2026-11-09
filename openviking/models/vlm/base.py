@@ -7,7 +7,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.models.model_error import model_error_kind
 from openviking.utils.exceptions import AllCredentialsFailedError
@@ -22,6 +22,17 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+
+ToolResultMediaMode = Literal["native", "user_message"]
+
+
+def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
+    """Use tool images only for all-native chains; otherwise use user images."""
+    modes = []
+    for backend in backends:
+        capability = getattr(backend, "tool_result_media_mode", None)
+        modes.append(capability() if callable(capability) else None)
+    return "native" if modes and all(mode == "native" for mode in modes) else "user_message"
 
 
 class UnsupportedMediaInputError(RuntimeError):
@@ -66,11 +77,12 @@ class VLMBase(ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.cost_bearer = config.get("cost_bearer")
         self.provider = config.get("provider", "openai")
         self.model = config.get("model")
         self.api_key = config.get("api_key")
         self.api_base = config.get("api_base")
-        self.temperature = config.get("temperature", 0.0)
+        self.temperature = config.get("temperature")
         self.max_retries = config.get("max_retries", 3)
         self.timeout = config.get("timeout", 600.0)
         self.max_tokens = config.get("max_tokens")
@@ -114,6 +126,7 @@ class VLMBase(ABC):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously
 
@@ -179,6 +192,10 @@ class VLMBase(ABC):
             str if no tools provided, VLMResponse if tools provided
         """
         pass
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        """Declare image transport, independently of a model's vision capability."""
+        return None
 
     def supports_media(
         self,
@@ -282,6 +299,7 @@ class VLMBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
+                cost_bearer=self.cost_bearer,
             )
         except Exception as e:
             # Metrics must never break model inference.
@@ -308,6 +326,7 @@ class VLMBase(ABC):
                 prompt_tokens=0,
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
+                cost_bearer=self.cost_bearer,
                 account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as metrics_error:
@@ -462,6 +481,9 @@ class FailoverVLM(VLMBase):
             failback_request_count=failback_request_count,
         )
 
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode([self.primary, self.backup])
+
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
 
@@ -615,6 +637,7 @@ class FailoverVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with failover support."""
         return await self._get_completion_with_failover_async(
@@ -625,6 +648,7 @@ class FailoverVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def get_vision_completion(
@@ -843,6 +867,9 @@ class MultiCredentialVLM(VLMBase):
             failback_request_count=failback_request_count,
         )
 
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode(self._vlm_instances)
+
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.
 
@@ -1014,6 +1041,7 @@ class MultiCredentialVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with multi-credential failover support."""
         return await self._get_completion_with_failover_async(
@@ -1024,6 +1052,7 @@ class MultiCredentialVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def get_vision_completion(

@@ -20,7 +20,7 @@ export default [
     ignores: [
       ...(config.ignores ?? []),
       ...GENERATED_IGNORES,
-      'src/components/ui/**',
+      'src/shared/ui/**',
     ],
   })),
   {

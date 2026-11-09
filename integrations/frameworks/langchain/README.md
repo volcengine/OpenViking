@@ -36,6 +36,7 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(
     url="http://127.0.0.1:1933",
     api_key="your-user-api-key",
+    auth_mode="api_key",
 )
 client.initialize()
 retriever = OpenVikingRetriever(
@@ -49,9 +50,22 @@ finally:
     client.close()
 ```
 
+For API-key-only integrations, pass `auth_mode="api_key"` alongside `api_key`.
+The authentication mode is forwarded to owned synchronous and asynchronous SDK
+clients, including clients rebuilt during safe-read recovery. Leaving it unset
+preserves the SDK's existing configuration defaults. The same option is available
+on the recorder, retriever, message history, store, tools, and context wrappers.
+
 The package also provides `OpenVikingSessionRecorder`,
 `OpenVikingContextMiddleware`, `OpenVikingStore`,
 `OpenVikingChatMessageHistory`, and `create_openviking_tools`.
+
+`create_openviking_tools` includes `viking_rule_search` in the retrieval, agent,
+and admin profiles. Pass `task_context` and optionally `rule_probability_threshold`
+(default `0.65`) to check compiled constraints before an action or response.
+It returns the full rendered Rules without truncation. Use an SDK client exposing
+`rule_search` and a server with `POST /api/v1/rules/search`; an error must not be
+treated as no applicable Rules.
 
 ## Client ownership
 

@@ -1,5 +1,9 @@
 import asyncio
+import base64
 import copy
+import random
+import struct
+import zlib
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +17,7 @@ from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.agent.tools.registry import ToolExecutionResult
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import AgentsConfig, Config, SessionKey
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -67,6 +71,44 @@ class _FakeOVClient:
     async def get_session_context(self, session_id, token_budget):
         self.context_calls.append((session_id, token_budget))
         return self.context_payload
+
+
+def test_agents_config_preserves_independent_deprecated_session_budgets():
+    legacy_only = AgentsConfig(
+        commit_token_threshold=200000,
+        session_context_token_budget=3000,
+        commit_retained_message_token_budget=6000,
+    )
+
+    assert legacy_only.context_window_tokens == 128000
+    assert legacy_only.async_compress_ratio == 0.7
+    assert legacy_only.effective_session_context_token_budget == 3000
+    assert legacy_only.effective_commit_token_threshold == 200000
+    assert legacy_only.retained_token_ratio == 6000 / 128000
+    assert legacy_only.commit_token_threshold == 200000
+    assert legacy_only.session_context_token_budget == 3000
+    assert legacy_only.commit_retained_message_token_budget == 6000
+    from vikingbot.openviking_mount.session_budget import session_budget
+
+    assert session_budget(legacy_only) == (128000, 3000, 200000)
+
+    valid_legacy = AgentsConfig(
+        commit_token_threshold=64000,
+        session_context_token_budget=96000,
+    )
+    assert valid_legacy.context_window_tokens == 128000
+    assert valid_legacy.effective_session_context_token_budget == 96000
+    assert valid_legacy.async_compress_ratio == 0.5
+
+    config = AgentsConfig(
+        context_window_tokens=1000,
+        async_compress_ratio=0.7,
+        commit_token_threshold=200000,
+        session_context_token_budget=3000,
+    )
+    assert config.effective_session_context_token_budget == 1000
+    assert config.async_compress_ratio == 0.7
+    assert config.effective_commit_token_threshold == 700
 
 
 class _BlockingFirstProvider(_RecordingProvider):
@@ -128,8 +170,16 @@ class _MediaProvider(_FakeProvider):
 
 
 class _ImageRegistry:
-    def __init__(self, content=None):
+    def __init__(
+        self,
+        content=None,
+        *,
+        preserve_complete_result=False,
+        legacy_outcome=False,
+    ):
         self.content = content
+        self.preserve_complete_result = preserve_complete_result
+        self.legacy_outcome = legacy_outcome
 
     def get_definitions(self, **kwargs):
         return [
@@ -153,9 +203,98 @@ class _ImageRegistry:
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZGF0YQ=="}},
             ]
         )
+        result = MultimodalToolResult(text=label, content=content)
+        if self.legacy_outcome:
+            return SimpleNamespace(result=result, effective_params=params, skill_uris=())
         return ToolExecutionResult(
-            result=MultimodalToolResult(text=label, content=content), effective_params=params
+            result=result,
+            effective_params=params,
+            preserve_complete_result=self.preserve_complete_result,
         )
+
+
+@pytest.fixture
+def large_png_url():
+    # A reproducible, valid PNG whose encoded payload exceeds the text budget
+    # while its decoded size remains well below the existing media byte limit.
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    pixels = random.Random(0).randbytes(300 * 300 * 3)
+    rows = b"".join(b"\0" + pixels[offset : offset + 900] for offset in range(0, len(pixels), 900))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 300, 300, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+    assert 240_000 < len(png) < loop_module.MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["user", "tool"])
+@pytest.mark.parametrize("budget", [None, 240_000])
+async def test_agent_loop_accepts_large_png_with_text_budget(
+    make_loop, large_png_url, source, budget
+):
+    image = {"type": "image_url", "image_url": {"url": large_png_url}}
+    user: dict = {"role": "user", "content": "Describe the image."}
+    if source == "user":
+        user["content"] = [{"type": "text", "text": "Describe the image."}, image]
+    provider = _MediaProvider([[_image_call("image")]] if source == "tool" else [])
+    loop = make_loop(provider=provider, max_iterations=2)
+    final, *_ = await loop._run_agent_loop(
+        messages=[user],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="large-png"),
+        publish_events=False,
+        tool_registry=_ImageRegistry([{"type": "text", "text": "Image source."}, image]),
+        context_compact_budget=budget,
+    )
+    assert final == "done"
+    assert len(provider.calls) == (2 if source == "tool" else 1)
+    sent = provider.calls[-1]
+    media_message = next(message for message in sent if message["role"] == source)
+    assert image in media_message["content"]
+    assert loop_module._inline_media_bytes(sent) < loop_module.MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+    assert loop_module._compact_msg_chars(sent) < 240_000
+
+
+@pytest.mark.parametrize("image_type", ["image_url", "input_image"])
+def test_text_budget_counts_multimodal_text_but_not_base64(large_png_url, image_type):
+    image = {
+        "type": image_type,
+        "image_url": {"url": large_png_url} if image_type == "image_url" else large_png_url,
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "x" * 250_000}, image],
+        }
+    ]
+    original = copy.deepcopy(messages)
+    size = loop_module._compact_msg_chars(messages)
+    assert 250_000 <= size < 251_000
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_final_fallback_bounds_context_even_without_compaction_setting(make_loop):
+    provider = _MediaProvider([[_image_call("call-1", "source " * 1_000)]])
+    loop = make_loop(provider=provider, max_iterations=1)
+    task = {"role": "user", "content": "Original task " + "x" * 239_000}
+    final, *_ = await loop._run_agent_loop(
+        messages=[task],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="budget-fallback"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(),
+    )
+    assert final == "done"
+    assert len(provider.calls) == 2
+    assert all(loop_module._compact_msg_chars(messages) <= 240_000 for messages in provider.calls)
+    assert task in provider.calls[-1]
 
 
 class _SteerProvider(LLMProvider):
@@ -279,8 +418,8 @@ async def test_context_build_messages_can_skip_system_prompt(temp_dir: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("supports_media", [False, True])
-async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, supports_media: bool):
+@pytest.mark.parametrize("scope", ["disabled", "native", "chat", "compile"])
+async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, monkeypatch, scope):
     content = [
         {"type": "text", "text": "Source: viking://resources/image.png"},
         {
@@ -289,7 +428,29 @@ async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, support
         },
     ]
 
-    provider = _MediaProvider([[_image_call("call-1")]], supports_media=supports_media)
+    provider: LLMProvider
+    if scope in {"chat", "compile"}:
+        from vikingbot.compile.service import _CompileProvider
+        from vikingbot.integrations.langfuse import LangfuseClient
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        from openviking.models.vlm import VLMFactory
+        from openviking.models.vlm.base import ToolCall, VLMResponse
+
+        vlm = VLMFactory.create({"provider": "kimi", "model": "kimi-k2"})
+        completion = AsyncMock(
+            side_effect=[
+                VLMResponse(tool_calls=[ToolCall("call-1", "read_image", {})]),
+                VLMResponse(content="done"),
+            ]
+        )
+        monkeypatch.setattr(vlm, "get_completion_async", completion)
+        adapter = VLMProviderAdapter(vlm, "kimi-k2", langfuse_client=LangfuseClient())
+        provider = (
+            _CompileProvider(adapter, asyncio.Semaphore(1)) if scope == "compile" else adapter
+        )
+    else:
+        provider = _MediaProvider([[_image_call("call-1")]], supports_media=scope == "native")
     loop = make_loop(provider=provider, max_iterations=2)
 
     final, _reasoning, tools_used, _usage, _iteration = await loop._run_agent_loop(
@@ -300,13 +461,55 @@ async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, support
     )
 
     assert final == "done"
-    tool_message = next(message for message in provider.calls[1] if message["role"] == "tool")
-    if supports_media:
+    sent = (
+        provider.calls[1]
+        if isinstance(provider, _MediaProvider)
+        else completion.await_args_list[-1].kwargs["messages"]
+    )
+    tool_message = next(message for message in sent if message["role"] == "tool")
+    assert bool(loop_module._inline_media_bytes(sent)) == (scope in {"native", "compile"})
+    if scope == "native":
         assert tool_message["content"] == content
-    else:
+    elif scope != "compile":
         assert tool_message["content"].startswith("Image resource.")
-        assert "does not support media in tool results" in tool_message["content"]
+        assert "tool-result media policy" in tool_message["content"]
     assert tools_used[0]["result"] == "Image resource."
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_honors_tool_result_preservation_policy(make_loop, monkeypatch):
+    provider = _MediaProvider([[_image_call("call-1")]])
+    loop = make_loop(provider=provider, max_iterations=2)
+    preview = AsyncMock(side_effect=lambda result, *_args, **_kwargs: result)
+    monkeypatch.setattr(loop, "_preview_tool_result", preview)
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "read it"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="result-policy"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(preserve_complete_result=True),
+    )
+
+    assert final == "done"
+    assert preview.await_args.kwargs["preserve_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop, monkeypatch):
+    provider = _MediaProvider([[_image_call("call-1")]])
+    loop = make_loop(provider=provider, max_iterations=2)
+    preview = AsyncMock(side_effect=lambda result, *_args, **_kwargs: result)
+    monkeypatch.setattr(loop, "_preview_tool_result", preview)
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "read it"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="legacy-outcome"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(legacy_outcome=True),
+    )
+
+    assert final == "done"
+    assert preview.await_args.kwargs["preserve_complete"] is False
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1217,8 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_
         storage_workspace=str(temp_dir),
         agents={
             "session_context_enabled": True,
-            "commit_token_threshold": 1,
+            "context_window_tokens": 1,
+            "async_compress_ratio": 1.0,
             "commit_keep_recent_count": 0,
         },
     )
@@ -1075,7 +1279,7 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
     config = Config(
         storage_workspace=str(temp_dir),
         ov_server={"server_url": "http://127.0.0.1:1933"},
-        agents={"session_context_enabled": True, "session_context_token_budget": 321},
+        agents={"session_context_enabled": True, "context_window_tokens": 321},
     )
     loop = make_loop(bus=bus, config=config)
 
@@ -1113,7 +1317,7 @@ async def test_agent_loop_build_prompt_history_falls_back_to_loaded_local_histor
     config = Config(
         storage_workspace=str(temp_dir),
         ov_server={"server_url": "http://127.0.0.1:1933"},
-        agents={"session_context_enabled": True, "session_context_token_budget": 321},
+        agents={"session_context_enabled": True, "context_window_tokens": 321},
     )
     loop = make_loop(config=config)
 
@@ -1155,7 +1359,7 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
     config = Config(
         storage_workspace=str(temp_dir),
         ov_server={"server_url": "http://127.0.0.1:1933"},
-        agents={"session_context_enabled": True, "session_context_token_budget": 321},
+        agents={"session_context_enabled": True, "context_window_tokens": 321},
     )
     loop = make_loop(bus=bus, config=config)
 
@@ -1180,6 +1384,7 @@ async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_to
     tool_output = "x" * 10_000
     fake_ov_client = _FakeOVClient(
         context_payload={
+            "latest_archive_overview": "Earlier decisions",
             "messages": [
                 {"role": "user", "parts": [{"type": "text", "text": "original query"}]},
                 *[
@@ -1193,7 +1398,7 @@ async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_to
                     for index in range(10)
                 ],
                 {"role": "assistant", "parts": [{"type": "text", "text": "final answer"}]},
-            ]
+            ],
         }
     )
 
@@ -1203,7 +1408,7 @@ async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_to
         config=Config(
             storage_workspace=str(temp_dir),
             ov_server={"server_url": "http://127.0.0.1:1933"},
-            agents={"session_context_enabled": True, "session_context_token_budget": 3000},
+            agents={"session_context_enabled": True, "context_window_tokens": 3000},
         )
     )
     session = loop.sessions.get_or_create(
@@ -1218,6 +1423,7 @@ async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_to
     history = await loop._build_prompt_history(session)
 
     assert fake_ov_client.context_calls == [("ov-session-large-tools", 3000)]
+    assert history[0]["content"] == "[Earlier conversation summary]\nEarlier decisions"
     assert sum(loop._history_message_tokens(message) for message in history) <= 3000
     assert history[-1]["content"] == "final answer"
     assert sum(str(message.get("content", "")).count("x") for message in history) < 100_000
@@ -1243,7 +1449,7 @@ async def test_agent_loop_build_prompt_history_preserves_anchor_when_final_needs
         config=Config(
             storage_workspace=str(temp_dir),
             ov_server={"server_url": "http://127.0.0.1:1933"},
-            agents={"session_context_enabled": True, "session_context_token_budget": 3000},
+            agents={"session_context_enabled": True, "context_window_tokens": 3000},
         )
     )
     session = loop.sessions.get_or_create(
@@ -1265,11 +1471,20 @@ async def test_agent_loop_build_prompt_history_preserves_anchor_when_final_needs
 
 
 @pytest.mark.parametrize(
-    "token_threshold, pending_tokens, memory_window",
-    [pytest.param(100, 100, 50, id="token-budget"), pytest.param(1000, 0, 3, id="message-window")],
+    "context_window_tokens, async_compress_ratio, pending_tokens, memory_window",
+    [
+        pytest.param(100, 1.0, 100, 50, id="token-budget"),
+        pytest.param(1000, 1.0, 0, 3, id="message-window"),
+    ],
 )
 async def test_agent_loop_commits_before_model_at_context_limit(
-    make_loop, temp_dir: Path, monkeypatch, token_threshold, pending_tokens, memory_window
+    make_loop,
+    temp_dir: Path,
+    monkeypatch,
+    context_window_tokens,
+    async_compress_ratio,
+    pending_tokens,
+    memory_window,
 ):
     events = []
 
@@ -1324,8 +1539,8 @@ async def test_agent_loop_commits_before_model_at_context_limit(
         ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={
             "session_context_enabled": True,
-            "session_context_token_budget": 321,
-            "commit_token_threshold": token_threshold,
+            "context_window_tokens": context_window_tokens,
+            "async_compress_ratio": async_compress_ratio,
             "commit_keep_recent_turn_count": 2,
         },
     )
@@ -1355,7 +1570,7 @@ async def test_agent_loop_commits_before_model_at_context_limit(
     assert response is not None
     assert response.content == "final answer"
     assert events[0] == ("hook", True, 2, loop.memory_window)
-    assert events[1] == ("context", "cli__default__session-precommit", 321)
+    assert events[1] == ("context", "cli__default__session-precommit", context_window_tokens)
     assert events[2][0] == "model"
     assert events[-1] == ("hook", False, None, loop.memory_window)
     persisted_session = SessionManager(config.bot_data_path).get_or_create(
@@ -1395,7 +1610,8 @@ async def test_agent_loop_precommit_counts_messages_since_last_commit(
         ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={
             "session_context_enabled": True,
-            "commit_token_threshold": 1000,
+            "context_window_tokens": 1000,
+            "async_compress_ratio": 1.0,
             "commit_keep_recent_turn_count": 2,
         },
     )

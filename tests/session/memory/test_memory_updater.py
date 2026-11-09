@@ -27,6 +27,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
+    ChunkMeta,
     ExtractContext,
     MemoryReadError,
     MemoryUpdater,
@@ -67,6 +68,81 @@ class TestMemoryUpdateResult:
 
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
+
+    @pytest.mark.parametrize(
+        ("user_peer", "assistant_peer", "expected"),
+        [
+            (None, None, "**user**: OWNER_REQUEST\n**assistant**: AGENT_RESPONSE"),
+            (
+                "workspace-agent",
+                "workspace-agent",
+                "**user [peer=workspace-agent]**: OWNER_REQUEST\n"
+                "**assistant [peer=workspace-agent]**: AGENT_RESPONSE",
+            ),
+            (
+                "owner",
+                "agent",
+                "**user [peer=owner]**: OWNER_REQUEST\n**assistant [peer=agent]**: AGENT_RESPONSE",
+            ),
+        ],
+    )
+    def test_event_chatlog_preserves_role_and_peer(self, user_peer, assistant_peer, expected):
+        """通过事件模板验证持久化正文保留角色和 peer。"""
+        context = ExtractContext(
+            [
+                Message(id="u", role="user", peer_id=user_peer, parts=[TextPart("OWNER_REQUEST")]),
+                Message(
+                    id="a",
+                    role="assistant",
+                    peer_id=assistant_peer,
+                    parts=[TextPart("AGENT_RESPONSE")],
+                ),
+            ]
+        )
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
+        schema = registry.get("events")
+        assert schema is not None
+        rendered = MemoryFileUtils.write(
+            MemoryFile(extra_fields={"ranges": "0-1", "summary": "对话记录"}),
+            content_template=schema.content_template,
+            extract_context=context,
+        )
+        assert expected in rendered
+
+    @pytest.mark.parametrize(
+        ("second_role", "second_peer", "expected"),
+        [
+            ("user", "workspace-agent", "**user [peer=workspace-agent]**: first second"),
+            (
+                "assistant",
+                "workspace-agent",
+                "**user [peer=workspace-agent]**: first...\n"
+                "**assistant [peer=workspace-agent]**: ...second",
+            ),
+            (
+                "user",
+                "other-agent",
+                "**user [peer=workspace-agent]**: first...\n**user [peer=other-agent]**: ...second",
+            ),
+        ],
+    )
+    def test_event_chatlog_merges_chunks_only_for_same_role_and_peer(
+        self, second_role, second_peer, expected
+    ):
+        """即使分块来源相同，也不能跨角色或 peer 合并正文。"""
+        messages = [
+            Message(id="c0", role="user", peer_id="workspace-agent", parts=[TextPart("first ")]),
+            Message(id="c1", role=second_role, peer_id=second_peer, parts=[TextPart("second")]),
+        ]
+        context = ExtractContext(
+            messages,
+            chunk_meta={
+                id(message): ChunkMeta(source_message_id="source", chunk_index=i, chunk_count=2)
+                for i, message in enumerate(messages)
+            },
+        )
+        assert context.get_event_content("0-1", "") == expected
 
     def test_extract_context_initializes_page_id_map(self):
         extract_context = ExtractContext(
@@ -192,7 +268,7 @@ class TestMemoryUpdater:
         ]
         original = deepcopy(messages)
         context = ExtractContext(messages)
-        speaker = peer_id or "assistant"
+        speaker = f"assistant [peer={peer_id}]" if peer_id else "assistant"
         expected = (
             f"**{speaker}**: Started writing. Keep spacing.\n**{speaker}**: Finished writing."
         )
@@ -244,8 +320,10 @@ class TestMemoryUpdater:
         context = ExtractContext(messages)
 
         assert len(context.messages) > len(messages)
+        assistant_speaker = f"assistant [peer={peer_id}]" if peer_id else "assistant"
+        user_speaker = f"user [peer={peer_id}]" if peer_id else "user"
         assert context.get_event_content(f"0-{len(context.messages) - 1}", "", 0) == (
-            f"**{peer_id or 'assistant'}**: {text}\n**{peer_id or 'user'}**: Confirmed."
+            f"**{assistant_speaker}**: {text}\n**{user_speaker}**: Confirmed."
         )
 
     def test_create(self):
@@ -1803,7 +1881,11 @@ class TestMemoryUpdater:
         registry = MagicMock()
         registry.get.return_value = schema
 
-        store = {}
+        store = {
+            profile_uri: MemoryFileUtils.write(
+                MemoryFile(uri=profile_uri, memory_type="profile", content="Caroline's profile")
+            )
+        }
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
@@ -1840,19 +1922,23 @@ class TestMemoryUpdater:
                     to_uri=caroline_uri,
                     match_text="career",
                     description="Caroline's profile references her career plans",
-                )
+                ),
+                StoredLink(
+                    from_uri="viking://user/Melanie/memories/cases/missing.md", to_uri=melanie_uri
+                ),
             ],
         )
 
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         caroline = parse_memory_file_with_fields(store[caroline_uri])
         melanie = parse_memory_file_with_fields(store[melanie_uri])
 
         assert [link["to_uri"] for link in caroline["backlinks"]] == [caroline_uri]
         assert melanie.get("backlinks", []) == []
+        assert result.errors == []
 
     @pytest.mark.asyncio
     async def test_apply_operations_does_not_write_backlinks_to_resource_targets(self):
@@ -2449,7 +2535,9 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch):
+    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(
+        self, monkeypatch, caplog
+    ):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2482,11 +2570,7 @@ class TestConsecutivePatchesSameURI:
         store[uri] = existing_content
 
         trace_info = MagicMock()
-        patch_warning = MagicMock()
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
-        monkeypatch.setattr(
-            "openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning
-        )
 
         op = ResolvedOperation(
             old_memory_file_content=MemoryFile(
@@ -2504,7 +2588,7 @@ class TestConsecutivePatchesSameURI:
 
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["content"] == "Original body"
-        patch_warning.assert_not_called()
+        assert not any(record.name.endswith("merge_op.patch_handler") for record in caplog.records)
         assert any(
             "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
             and f"uri={uri}" in call.args[0]

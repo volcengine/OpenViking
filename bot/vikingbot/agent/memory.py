@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
@@ -1210,7 +1211,7 @@ class MemoryStore:
         if not section:
             return []
 
-        targets = re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", section)
+        targets = [link.target for link in LinkRenderer.iter_markdown_links(section)]
         if not targets:
             targets = [
                 line.lstrip("- ").strip()
@@ -1232,6 +1233,7 @@ class MemoryStore:
         target = str(target or "").strip()
         if not target:
             return ""
+        target = LinkRenderer.normalize_markdown_target(target)
         if "://" in target:
             return target
         if "/" not in target:
