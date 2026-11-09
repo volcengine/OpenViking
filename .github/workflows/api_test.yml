@@ -37,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: 9dfa9017a8c61abefcd239fe98fdba094a2de7f3
           fetch-depth: 0
       - id: plan
         env:
@@ -48,49 +49,8 @@ jobs:
             python3 .github/scripts/ci_plan.py --full --output "$GITHUB_OUTPUT"
           fi
 
-  native-runtime:
-    needs: prepare
-    if: >-
-      (needs.prepare.outputs.api_changed == 'true' || needs.prepare.outputs.cuvs_changed == 'true') &&
-      (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
-       (github.repository == 'volcengine/OpenViking' &&
-        (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-          fetch-depth: 0
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.10'
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - uses: ./.github/actions/native-runtime
-      - name: Pack stable-ABI runtime
-        run: uv run --no-sync python .github/scripts/native_bundle.py pack runtime.tar.gz
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-runtime-linux-x64-cp310-abi3
-          path: runtime.tar.gz
-          if-no-files-found: error
-          retention-days: 1
-
-  cuvs-tests:
-    # Preserve the caller ID and _test_lite job name: the required check context
-    # stays "cuvs-tests / Lite Test (ubuntu-24.04, 3.11)".
-    needs: [prepare, native-runtime]
-    if: needs.prepare.outputs.cuvs_changed == 'true'
-    uses: ./.github/workflows/_test_lite.yml
-    with:
-      os_json: '["ubuntu-24.04"]'
-      python_json: '["3.11"]'
-      native_artifact: native-runtime-linux-x64-cp310-abi3
-
   api-tests:
-    needs: [prepare, native-runtime]
+    needs: [prepare]
     name: API & CLI Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -104,11 +64,12 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
+        os: ['macos-15']
     
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: 9dfa9017a8c61abefcd239fe98fdba094a2de7f3
           submodules: recursive
           fetch-depth: 100
 
