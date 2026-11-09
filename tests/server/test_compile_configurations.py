@@ -514,7 +514,7 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     assert after["last_triggered_slot"] == due.isoformat()
     assert after["next_triggered_slot"] == (due + timedelta(days=1)).isoformat()
     runs = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
-    assert len(runs) == 1 and runs[0]["meta"]["trigger"] == "scheduled"
+    assert len(runs) == 1 and runs[0]["meta"]["trigger"] == "initial"
     assert runs[0]["actor"] == executor.user.user_id
     assert await store.get(ctx.account_id, executor.user.user_id, compile_name) is None
     assert (

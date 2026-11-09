@@ -352,7 +352,8 @@ async def test_acceptance_times_are_idempotent_and_never_move_backwards(setup, r
     assert (await setup.store.list_runs("acme", "alice", compile_name, cursor=runs[-1]["task_id"]))[
         0
     ]["created_at"] == 100
-    assert len(await setup.store.list_runs("acme", "alice", compile_name)) == 3
+    runs = await setup.store.list_runs("acme", "alice", compile_name)
+    assert [run["meta"]["trigger"] for run in runs] == ["scheduled", "manual", "initial"]
 
 
 @pytest.mark.parametrize(
@@ -480,6 +481,7 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(s
     )
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["status"] == status
+    assert run["meta"]["trigger"] == "initial"
     assert run["meta"]["finish_snapshot"] is not None
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == record["progress"]
     assert "secret_value" not in run["error"] and "bearer-secret" not in run["error"]
@@ -669,6 +671,8 @@ async def test_first_acceptance_discovers_a_task_whose_state_publication_was_int
     assert state["last_run_time"] == 200
     await setup.lifecycle.record_queued(scheduled)
     assert (await setup.store.get("acme", "alice", compile_name))["task_first_create_time"] == 100
+    runs = await setup.store.list_runs("acme", "alice", compile_name)
+    assert [run["meta"]["trigger"] for run in runs] == ["manual", "initial"]
 
 
 async def test_creator_and_account_isolation_with_paging(setup):

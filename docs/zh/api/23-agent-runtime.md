@@ -191,7 +191,7 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 
 | 字段 | 含义 |
 |------|------|
-| `trigger` | `manual` 或 `scheduled` |
+| `trigger` | 配置的第一次受理运行为 `initial`，与触发来源和执行结果无关；后续运行为 `manual` 或 `scheduled` |
 | `mode` | 实际执行策略：`full` 或 `incremental` |
 | `base_snapshot` | 本次采用的成功源基线；完整重算时为 null |
 | `start_snapshot` | 执行开始时冻结的来源及目标状态 |

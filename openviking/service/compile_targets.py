@@ -659,7 +659,7 @@ class CompileLifecycle:
             )
 
     async def record_queued(self, task: Any, *, locked_record: Optional[dict] = None) -> None:
-        """Create history and acceptance times idempotently, before queue dispatch."""
+        """Record acceptance idempotently before dispatch, marking the first run as initial."""
         compile_name = self._compile_name(task)
         if not compile_name:
             return
@@ -669,32 +669,37 @@ class CompileLifecycle:
             ) as record:
                 await self.record_queued(task, locked_record=record)
             return
-        # Writing the run first lets a replay repair times after interrupted state publication.
-        if (
-            await self._store.get_run(
-                task.account_id, self._owner_user_id(task), compile_name, task.task_id
-            )
-            is None
+        run = await self._store.get_run(
+            task.account_id, self._owner_user_id(task), compile_name, task.task_id
+        )
+        first = None
+        if locked_record["task_first_create_time"] is None or (
+            run is None and task.created_at == locked_record["task_first_create_time"]
         ):
-            await self._store.put_run(
-                task.account_id, self._owner_user_id(task), compile_name, new_run(task)
-            )
-        if locked_record["task_first_create_time"] is None:
             from openviking.service.task_tracker import get_task_tracker
 
             accepted = await get_task_tracker()._store.list_durable(
                 task.account_id, task_type="compile"
             )
             # A prior Task can survive an interrupted configuration publication.
-            locked_record["task_first_create_time"] = min(
-                [task.created_at]
+            first = min(
+                [task]
                 + [
-                    prior.created_at
+                    prior
                     for prior in accepted
                     if self._compile_name(prior) == compile_name
                     and self._owner_user_id(prior) == self._owner_user_id(task)
-                ]
+                ],
+                key=lambda prior: (prior.created_at, prior.task_id),
             )
+        # Writing the run first lets a replay repair times after interrupted state publication.
+        if run is None:
+            run = new_run(task)
+            if first is not None and first.task_id == task.task_id:
+                run["meta"]["trigger"] = "initial"
+            await self._store.put_run(task.account_id, self._owner_user_id(task), compile_name, run)
+        if locked_record["task_first_create_time"] is None:
+            locked_record["task_first_create_time"] = first.created_at
         locked_record["last_run_time"] = max(
             locked_record["last_run_time"] or task.created_at, task.created_at
         )

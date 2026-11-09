@@ -191,7 +191,7 @@ A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `f
 
 | Field | Meaning |
 |-------|---------|
-| `trigger` | `manual` or `scheduled` |
+| `trigger` | `initial` for the configuration's first accepted run, regardless of trigger source or execution outcome; subsequent runs use `manual` or `scheduled` |
 | `mode` | Actual strategy, `full` or `incremental` |
 | `base_snapshot` | Successful source baseline used for this run, or null for a full calculation |
 | `start_snapshot` | Frozen source and target state at execution start |
