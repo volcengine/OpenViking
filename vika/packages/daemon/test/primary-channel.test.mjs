@@ -20,7 +20,7 @@ import { chatEvent, subjectEvent } from './event-fixture.mjs';
 const require = createRequire(import.meta.url);
 const { loadDeploymentManifest, applyDeploymentAgentEnv } = require('../../../deployment-config.cjs');
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
-const ids = ['lark', 'weixin', 'telegram', 'slack', 'qq'];
+const ids = ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot'];
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-primary-'));
@@ -69,7 +69,7 @@ test('every IM switches live through ingress/outbox and survive config reload wi
   const initial = fs.readFileSync(f.manifestPath, 'utf8');
   assert.match((await f.receive('telegram', '/primary status')).text, /当前主 IM：飞书（lark）/);
   assert.equal(fs.readFileSync(f.manifestPath, 'utf8'), initial);
-  for (const source of ['telegram', 'slack', 'qq', 'weixin', 'lark']) {
+  for (const source of ['telegram', 'slack', 'qq', 'onebot', 'weixin', 'lark']) {
     const result = await f.receive(source, source === 'slack' ? ' /primary' : '/primary');
     assert.match(result.text, /立即生效，无需重启/);
     assert.equal(result.reply.connector, source);

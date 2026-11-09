@@ -61,6 +61,16 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal(config.qqAppSecret, undefined);
   });
 
+  it('accepts OneBot as the primary channel and next to the QQ bot connector', () => {
+    setEnv('VIKA_CHANNEL', 'onebot');
+    setEnv('VIKA_CONNECTORS_JSON', '["onebot","qq"]');
+    const config = getConfig();
+    assert.equal(config.channel, 'onebot');
+    assert.deepEqual(config.connectors, ['onebot', 'qq']);
+    setEnv('VIKA_CONNECTORS_JSON', '["onebot","matrix"]');
+    assert.throws(() => getConfig(), /unsupported connector/);
+  });
+
   it('moves temporary files independently of persistent data and ignores TMPDIR', () => {
     setEnv('VIKA_DATA_DIR', '/root/.local/share/vika-primary');
     setEnv('VIKA_WORKSPACE', '/work/vika-primary');

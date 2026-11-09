@@ -30,7 +30,7 @@ check(process.execPath, '--check', [
   'packages/daemon/src/actions/*.mjs', 'packages/daemon/src/connectors/*.mjs',
   'packages/daemon/src/extensions/*.mjs', 'packages/daemon/src/meeting/*.mjs',
   'packages/daemon/src/qq/*.mjs', 'packages/daemon/src/telegram/*.mjs',
-  'packages/daemon/src/slack/*.mjs', 'packages/daemon/src/weixin/*.mjs',
+  'packages/daemon/src/slack/*.mjs', 'packages/daemon/src/onebot/*.mjs', 'packages/daemon/src/weixin/*.mjs',
   'packages/daemon/src/email/*.mjs', 'packages/daemon/scripts/*.mjs',
   'packages/web/src/*.mjs', 'packages/web/scripts/*.mjs', 'packages/web/public/*.js',
   'packages/updater/src/*.mjs', 'packages/cli/src/*.mjs', 'packages/cli/bin/*.mjs',

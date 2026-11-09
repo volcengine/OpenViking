@@ -39,8 +39,9 @@ function withRoleFile(body, callback) {
 
 describe('conversation policy assemble', () => {
   it('assembles one Core for every connector set, with a section per connector in use', () => {
-    const order = ['## Lark', '## Slack', '## Weixin', '## Telegram', '## QQ', '## Email'];
-    for (const connectors of [['lark'], ['weixin'], ['telegram', 'email'], ['slack'], ['qq'], ['qq', 'email'], ['slack', 'qq'], ['lark', 'slack', 'weixin', 'telegram', 'qq', 'email']]) {
+    const order = ['## Lark', '## Slack', '## Weixin', '## Telegram', '## QQ', '## OneBot', '## Email'];
+    for (const connectors of [['lark'], ['weixin'], ['telegram', 'email'], ['slack'], ['qq'], ['qq', 'email'], ['slack', 'qq'], ['onebot'],
+      ['qq', 'onebot'], ['lark', 'slack', 'weixin', 'telegram', 'qq', 'onebot', 'email']]) {
       const text = assembleConversationPolicy({ connectors, agentName: 'Vee' });
       const label = connectors.join('+');
       assert.ok(text.startsWith('# Operating policy\n'), label);
@@ -67,8 +68,23 @@ describe('conversation policy assemble', () => {
       assert.ok(text.indexOf('## QQ') < text.indexOf('## Role'));
     }
     const single = assembleConversationPolicy({ connectors: ['qq', 'email'] });
-    assert.doesNotMatch(single, /voice transcript|^## (Lark|Slack|Telegram|Weixin)$/m);
+    assert.doesNotMatch(single, /voice transcript|^## (Lark|Slack|Telegram|Weixin|OneBot)$/m);
     assert.doesNotMatch(assembleConversationPolicy({ connectors: ['lark'] }), /^## QQ$/m);
+  });
+
+  it('explains OneBot batches, the account\'s other programs and other people\'s direct chats', () => {
+    for (const connectors of [['onebot'], ['qq', 'onebot', 'email']]) {
+      const text = assembleConversationPolicy({ connectors, rolePromptPath: role('assistant') });
+      assert.match(text, /^## OneBot$/m);
+      assert.match(text, /source=onebot/);
+      assert.match(text, /decide once, on the newest/);
+      assert.match(text, /On `source=onebot`, every `sender=bot` line was sent from this same account/);
+      assert.match(text, /`owner=1` still marks the owner's/);
+      assert.match(text, /plain text: no Markdown/);
+      assert.match(text, /`mention_user_ids` is not available/);
+      assert.ok(text.indexOf('## OneBot') < text.indexOf('## Role'));
+    }
+    assert.doesNotMatch(assembleConversationPolicy({ connectors: ['qq'] }), /^## OneBot$/m);
   });
 
   it('delivers only through the Core tools and keeps the final text internal', () => {

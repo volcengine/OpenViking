@@ -134,6 +134,16 @@ test('Slack can be primary or secondary; Ark is rejected', (t) => {
     volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })), /slack connector cannot use the ark runtime/);
 });
 
+test('OneBot can be primary or secondary, next to the QQ bot; Ark and a stray Lark profile are rejected', (t) => {
+  const filename = path.join(tempHome(t), '.vika', 'config.json');
+  const ob = agent('ob', { channel: 'onebot', connectors: ['onebot'], profile: undefined, model: 'pi' });
+  assert.doesNotThrow(() => validateManifest(filename, withInstance(null, ob)));
+  assert.doesNotThrow(() => validateManifest(filename, withInstance(null, agent('ob', { connectors: ['lark', 'onebot', 'qq'] }))));
+  assert.throws(() => validateManifest(filename, withInstance(null, { ...ob, profile: 'stray' })), /profile/);
+  assert.throws(() => validateManifest(filename, withInstance(null, { ...ob, model: 'ark',
+    volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })), /onebot connector cannot use the ark runtime/);
+});
+
 test('Telegram can be primary or secondary; Ark and a stray Lark profile are rejected', (t) => {
   const home = tempHome(t);
   const filename = path.join(home, '.vika', 'config.json');
