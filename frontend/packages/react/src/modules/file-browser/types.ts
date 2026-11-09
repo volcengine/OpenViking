@@ -49,6 +49,8 @@ export interface FileBrowserLabels {
   history?: string;
   /** 视图切换分组的无障碍名称。Accessible name of the view-switch group. */
   viewSwitch?: string;
+  /** 树与详情之间分隔条的无障碍名称。Accessible name of the divider between the tree and the detail. */
+  resizeTree?: string;
   /** 目录预览的 L0 摘要页签。The L0 summary tab of a directory preview. */
   l0Summary?: string;
   /** 目录预览的 L1 总览页签。The L1 overview tab of a directory preview. */

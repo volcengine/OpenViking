@@ -34,6 +34,10 @@ The tree never inspects parent/child relationships. The host flattens its own st
 
 Emit only the ones your data source needs. A host that returns all children at once never emits `load-more`.
 
+Rows size to their content rather than being squeezed into the container width: names render in full and the container scrolls sideways. Deep indentation gets its space the same way, so deep nodes never squeeze each other. The description is capped at 200px and truncates as needed — it is supplementary, and one long description would drag a row hundreds of pixels wide, making horizontal scrolling harder rather than easier.
+
+The name is the only way to tell nodes apart, so it never truncates; a host that wants a tighter column narrows the container rather than asking the component to clip names.
+
 ## Slots and host content
 
 - `slots.toolbar` — search, import sources, refresh. The component does not know what is inside.

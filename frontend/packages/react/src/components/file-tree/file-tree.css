@@ -95,6 +95,17 @@
 .ov-file-tree__rows {
   display: flex;
   flex-direction: column;
+  /*
+   * 行按内容撑开，不把内容硬塞进栏宽：名称、说明与行尾标记都保持完整，容器
+   * 横向滚动。层级很深时缩进也靠它获得空间，否则深层节点只能互相挤。
+   *
+   * Rows size to their content instead of being forced into the column width, so
+   * names, descriptions and row-end markers stay whole and the container scrolls
+   * sideways. Deep indentation gets its space the same way; without it, deep nodes
+   * only squeeze each other.
+   */
+  width: max-content;
+  min-width: 100%;
 }
 
 /* 行：缩进、竖向连线、图标、名称与行尾内容的横向排布。 */
@@ -105,6 +116,8 @@
   box-sizing: border-box;
   align-items: center;
   gap: 2px;
+  width: max-content;
+  min-width: 100%;
   height: var(--ov-ui-file-tree-row-height);
   padding-right: 4px;
   border-radius: var(--ov-ui-file-tree-row-radius);
@@ -221,33 +234,34 @@
 
 .ov-file-tree__label-group {
   display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: none;
   align-items: center;
   gap: 8px;
-  overflow: hidden;
 }
 
 /**
- * 名称最多占 60%，其余留给说明；两者都按需省略。比例与控制台的树一致——名称
- * 太长时不能把说明挤没，说明也不能把名称挤没。
+ * 名称不截断：它是辨认节点的唯一依据，长名字被换成省略号就只能靠悬停去猜。行
+ * 本身按内容撑开、容器横向滚动，因此不必为了塞进栏宽牺牲名称。
  *
- * The name takes at most 60% and the description gets the rest; both truncate as
- * needed. The ratio matches the console tree: a long name must not squeeze the
- * description away, and the description must not squeeze the name away either.
+ * 说明仍然限制宽度——它是补充信息，一条长说明会把行拉到几百像素之外，横向滚动
+ * 反而更难用。
+ *
+ * The name never truncates: it is the only way to tell nodes apart, and an ellipsis
+ * leaves a long name to be guessed at on hover. Rows size to their content and the
+ * container scrolls sideways, so nothing has to be sacrificed to fit the column.
+ *
+ * The description is still capped: it is supplementary, and one long description
+ * would drag the row hundreds of pixels wide, making horizontal scrolling worse
+ * rather than better.
  */
 .ov-file-tree__label {
-  flex: 0 1 auto;
-  max-width: 60%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
   white-space: nowrap;
 }
 
 .ov-file-tree__description {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: none;
+  max-width: 200px;
   overflow: hidden;
   color: var(--ov-ui-file-tree-text-muted);
   /* 设计稿里说明比名称小两号，靠字号而不是颜色区分主次。 */

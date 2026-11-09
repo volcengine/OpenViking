@@ -1,12 +1,18 @@
 import { useCallback, useId, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
 
-import { FileTree } from '../../components/file-tree/index.js';
+import { ResizableHandle } from '../../shared/components/resizable/index.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
 import { FileBrowserEmpty } from './file-browser-empty.js';
-import { FileBrowserToolbar } from './file-browser-toolbar.js';
-import { fileTypeIcon } from './fs-icon.js';
+import {
+  TREE_DEFAULT_WIDTH,
+  TREE_MIN_WIDTH,
+  resolveTreeMaxWidth,
+} from './file-browser-layout.js';
+import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
 import { resolveTreeLabels } from './tree-info-copy.js';
+import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowser } from './use-file-browser.js';
 import type { FileBrowserProps } from './types.js';
 
@@ -18,14 +24,16 @@ export type {
 } from './types.js';
 
 /**
- * 文件浏览模块的组合视图，对齐控制台设计稿：左侧 352px 的目录树（入口条、
- * 搜索行、树），右侧详情区（面包屑、标题行、正文、底部元信息）。取数与联动
- * 都在 {@link useFileBrowser} 里，这里只组装视图。
+ * 文件浏览模块的组合视图，对齐控制台设计稿：左侧目录树（入口条、搜索行、树），
+ * 右侧详情区（面包屑、标题行、正文、底部元信息）。两栏之间有一条可拖拽的
+ * 分隔条，拖动改树宽；取数与联动都在 {@link useFileBrowser} 里，这里只组装
+ * 视图。
  *
- * The file browser module's composite view, matching the console design: a 352px
- * tree on the left (entry row, search row, tree) and the detail pane on the right
- * (breadcrumb, header, body, footer). Loading and coordination live in
- * {@link useFileBrowser}; this only assembles the view.
+ * The file browser module's composite view, matching the console design: the tree
+ * on the left (entry row, search row, tree) and the detail pane on the right
+ * (breadcrumb, header, body, footer). A draggable divider between them resizes the
+ * tree; loading and coordination live in {@link useFileBrowser}, and this only
+ * assembles the view.
  */
 export function FileBrowser({
   uri,
@@ -38,14 +46,29 @@ export function FileBrowser({
   labels,
   requestOptions,
   className,
+  style,
   ...rest
 }: FileBrowserProps) {
   const [internalUri, setInternalUri] = useState<string | null>(
     () => defaultUri ?? null,
   );
+  const [preferredTreeWidth, setPreferredTreeWidth] =
+    useState(TREE_DEFAULT_WIDTH);
   const searchId = useId();
   const currentUri = uri !== undefined ? (uri ?? null) : internalUri;
   const text = resolveLabels(labels);
+  const { ref: layoutRef, width: layoutWidth } =
+    useContainerWidth<HTMLDivElement>();
+
+  // 上限随容器变化：宿主把整个模块塞进窄栏时，树不能继续按 520px 抢地方。当前
+  // 宽度再夹一次而不是丢掉，容器重新变宽时树会回到拖动过的位置。
+  //
+  // The cap follows the container: a host squeezing the module into a narrow column
+  // must not have the tree keep claiming 520px. The current width is re-clamped
+  // rather than discarded, so the tree returns to where it was dragged once the
+  // container widens again.
+  const treeMaxWidth = resolveTreeMaxWidth(layoutWidth);
+  const treeWidth = Math.min(preferredTreeWidth, treeMaxWidth);
 
   // 引用必须稳定：它一路传到预览的取数 effect，每次渲染换新函数会让 effect
   // 反复重跑并取消上一次请求，预览永远加载不出来。
@@ -79,6 +102,11 @@ export function FileBrowser({
     [labels],
   );
 
+  const treeLabels = useMemo(
+    () => resolveTreeLabels(locale, text.tree),
+    [locale, text.tree],
+  );
+
   const browser = useFileBrowser({
     rootUri,
     summaryLabels,
@@ -91,48 +119,39 @@ export function FileBrowser({
   return (
     <div
       {...rest}
+      ref={layoutRef}
       className={['ov-file-browser', className].filter(Boolean).join(' ')}
+      style={
+        {
+          ...style,
+          // 分隔条是独立一列，树宽只作用在自己身上，两者相加才是左栏占用。
+          // The divider is its own column: the tree width applies to the tree alone
+          // and the two together are what the left side occupies.
+          '--ov-file-browser-tree-width': `${treeWidth}px`,
+        } as CSSProperties
+      }
     >
       <div className="ov-file-browser__tree">
-        {toolbarActions ? (
-          <div className="ov-file-browser__entries">{toolbarActions}</div>
-        ) : null}
-
-        <FileBrowserToolbar
+        <FileBrowserTreePane
+          toolbarActions={toolbarActions}
           searchId={searchId}
-          query={browser.query}
-          refreshing={browser.refreshing}
-          canRefresh={browser.isReady}
-          placeholder={text.searchPlaceholder}
+          browser={browser}
+          treeLabels={treeLabels}
+          searchPlaceholder={text.searchPlaceholder}
           refreshLabel={text.refresh}
-          onQueryChange={browser.actions.setQuery}
-          onRefresh={() => void browser.actions.refresh()}
+          searchLoading={text.searchLoading}
+          searchEmpty={text.searchEmpty}
         />
-        <div className="ov-file-browser__tree-scroll">
-          <FileTree
-            rows={browser.rows}
-            selectedId={browser.selectedId}
-            isReady={browser.isReady}
-            labels={resolveTreeLabels(locale, text.tree)}
-            emptyFallback={
-              browser.searching ? (
-                <p className="ov-file-browser__hint">
-                  {browser.searchLoading
-                    ? text.searchLoading
-                    : text.searchEmpty}
-                </p>
-              ) : undefined
-            }
-            renderRowIcon={({ name }) => fileTypeIcon(name)}
-            operations={{
-              select: browser.actions.select,
-              toggleExpand: browser.actions.toggleExpand,
-              loadMore: browser.actions.loadMore,
-              retry: browser.actions.retry,
-            }}
-          />
-        </div>
       </div>
+
+      <ResizableHandle
+        label={text.resizeTree}
+        min={TREE_MIN_WIDTH}
+        max={treeMaxWidth}
+        value={treeWidth}
+        onResize={setPreferredTreeWidth}
+        className="ov-file-browser__resizer"
+      />
 
       {browser.previewTabs && browser.previewTabs.length > 0 ? (
         <FileBrowserDetail

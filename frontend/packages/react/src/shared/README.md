@@ -11,6 +11,9 @@ Styles here are pulled in by the consuming component's own stylesheet, not by `c
 ## Contents
 
 - `components/tooltip`: a positioned surface rendered into `document.body`, used by `file-preview` for the copy-path hint and the collapsed-level menu. It exists because an ancestor's `overflow: hidden` would clip an in-flow popover.
+- `components/popover`: the white-card surface, also portalled into `document.body`, used by the file tree's node info and by the file preview.
+- `components/divider`: a single rule whose extent and colour the caller passes inline.
+- `components/resizable`: the draggable `ResizableHandle` divider, which uses pointer capture for the drag, supports the arrow keys, and keeps the width controlled by its caller. `file-browser` uses it to resize the directory tree.
 
 ## Boundaries
 

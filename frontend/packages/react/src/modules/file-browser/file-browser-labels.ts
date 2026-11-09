@@ -26,6 +26,7 @@ export const DEFAULT_LABELS: Required<ShellLabels> = {
   download: 'Download',
   history: 'Version history',
   viewSwitch: 'Switch view',
+  resizeTree: 'Resize the directory tree',
   l0Summary: 'L0 Summary',
   l1Overview: 'L1 Overview',
   summaryEmpty: 'No summary generated yet',
