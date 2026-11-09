@@ -176,6 +176,7 @@ export function Tui({
         onActiveIndexChange={setActiveIndexSafely}
         onValueChange={onValueChange ? updateValue : undefined}
         onSubmit={onSubmit}
+        onOpenUri={onOpenUri}
       />
     </div>
   );

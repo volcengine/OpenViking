@@ -24,6 +24,7 @@ export interface TuiComposerProps {
   onActiveIndexChange: (index: number | ((current: number) => number)) => void;
   onValueChange?: (value: string) => void;
   onSubmit?: (command: string) => void;
+  onOpenUri?: (uri: string) => void;
 }
 
 /** 命令输入区：受控输入、键盘补全与提交意图。 */
@@ -44,6 +45,7 @@ export function TuiComposer({
   onActiveIndexChange,
   onValueChange,
   onSubmit,
+  onOpenUri,
 }: TuiComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
@@ -84,17 +86,22 @@ export function TuiComposer({
       className="ov-tui__composer"
       data-disabled={disabled || undefined}
     >
-      <label
-        className="ov-tui__input-row"
-        htmlFor={inputId}
-        data-value={`${value}\n`}
-      >
-        <span className="ov-tui__input-label">{labels.placeholder}</span>
+      <div className="ov-tui__input-row" data-value={`${value}\n`}>
+        <label className="ov-tui__input-label" htmlFor={inputId}>
+          {labels.placeholder}
+        </label>
         <TuiInputMirror
           value={value}
           input={completion.activeInput}
           inline={inline}
           colorInput={completion.query.colorInput}
+          onOpenUri={onOpenUri}
+          onScroll={(event) => {
+            if (inputRef.current) {
+              inputRef.current.scrollTop = event.currentTarget.scrollTop;
+              inputRef.current.scrollLeft = event.currentTarget.scrollLeft;
+            }
+          }}
           mirrorRef={mirrorRef}
           hintId={`${inputId}-hint`}
         />
@@ -131,7 +138,7 @@ export function TuiComposer({
           }}
           onKeyDown={keyboard.handleKeyDown}
         />
-      </label>
+      </div>
       <div className="ov-tui__shortcuts" id={`${inputId}-shortcuts`}>
         <span className="ov-tui__shortcut">
           <kbd>/</kbd>

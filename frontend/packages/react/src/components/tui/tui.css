@@ -9,6 +9,7 @@
   --ov-ui-tui-gap: 16px;
   --ov-ui-tui-bubble-bg: rgb(128 128 128 / 12%);
   --ov-ui-tui-card-bg: rgb(128 128 128 / 6%);
+  --ov-ui-tui-result-bg: var(--ov-ui-surface, Canvas);
   --ov-ui-tui-card-border: rgb(128 128 128 / 22%);
   --ov-ui-tui-skeleton: rgb(128 128 128 / 16%);
   --ov-ui-tui-skeleton-bright: rgb(128 128 128 / 28%);
@@ -110,67 +111,109 @@
 
 .ov-tui__result {
   display: flex;
-  min-width: 0;
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 100%;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   border: 1px solid var(--ov-ui-tui-card-border);
   border-radius: 14px;
-  background: var(--ov-ui-tui-card-bg);
+  background: var(--ov-ui-tui-result-bg);
   padding: 12px;
 }
 
 .ov-tui__record[data-status='error'] .ov-tui__result {
-  border-color: var(--ov-ui-tui-error);
+  border-color: color-mix(
+    in srgb,
+    var(--ov-ui-tui-error) 32%,
+    var(--ov-ui-tui-result-bg)
+  );
+  background: color-mix(
+    in srgb,
+    var(--ov-ui-tui-error) 2%,
+    var(--ov-ui-tui-result-bg)
+  );
 }
 
 .ov-tui__result-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+}
+
+.ov-tui__result-command,
+.ov-tui__card-title {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
 }
 
 .ov-tui__result-body {
-  min-width: 0;
+  min-inline-size: 0;
+  max-inline-size: 100%;
   overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 22px;
 }
 
-.ov-tui__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ov-ui-text-muted, rgb(128 128 128));
-  font-size: 12px;
-}
-
-.ov-tui__status-dot {
-  width: 7px;
-  height: 7px;
+.ov-tui__result-state {
+  position: relative;
+  display: inline-block;
+  inline-size: 14px;
+  block-size: 14px;
   flex: none;
+  color: var(--ov-ui-text-muted, rgb(128 128 128));
+}
+
+.ov-tui__result-state[data-status='success'] {
   border-radius: 50%;
-  background: currentColor;
+  background: var(--ov-ui-tui-success);
 }
 
-.ov-tui__status[data-status='success'] {
-  color: var(--ov-ui-tui-success);
+.ov-tui__result-state[data-status='success']::before {
+  position: absolute;
+  inset-block-start: 3px;
+  inset-inline-start: 5px;
+  inline-size: 4px;
+  block-size: 7px;
+  border: solid white;
+  border-width: 0 1.8px 1.8px 0;
+  transform: rotate(45deg);
+  content: '';
 }
 
-.ov-tui__status[data-status='error'] {
+.ov-tui__result-state[data-status='error'] {
   color: var(--ov-ui-tui-error);
 }
-
-.ov-tui__status[data-status='pending'] .ov-tui__status-dot {
-  animation: ov-tui-pulse 1.1s ease-in-out infinite;
+.ov-tui__result-state[data-status='error']::before,
+.ov-tui__result-state[data-status='error']::after {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-start: 1px;
+  inline-size: 12px;
+  block-size: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: rotate(45deg);
+  content: '';
+}
+.ov-tui__result-state[data-status='error']::after {
+  transform: rotate(-45deg);
 }
 
-@keyframes ov-tui-pulse {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
+.ov-tui__result-state[data-status='pending'] {
+  border: 1.8px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-block-start-color: currentColor;
+  border-radius: 50%;
+  animation: ov-tui-spin 900ms linear infinite;
+}
 
-  50% {
-    opacity: 1;
+@keyframes ov-tui-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -216,13 +259,6 @@
   text-underline-offset: 3px;
 }
 
-.ov-tui__card-title {
-  color: inherit;
-  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
-  font-size: 13px;
-  font-weight: 600;
-}
-
 /* 文本结果。 */
 .ov-tui__text {
   position: relative;
@@ -234,7 +270,7 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: break-word;
-  font: inherit;
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 13px;
   line-height: 22px;
 }
@@ -247,7 +283,7 @@
   transition: opacity 120ms;
 }
 
-.ov-tui__text:hover .ov-tui__copy--inline,
+.ov-tui__code-block:hover .ov-tui__copy--inline,
 .ov-tui__copy--inline:focus-visible {
   opacity: 1;
 }
@@ -273,7 +309,30 @@
 
 .ov-tui__markdown ul,
 .ov-tui__markdown ol {
-  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-tui__markdown li {
+  min-inline-size: 0;
+  margin: 0;
+  border: 1px solid var(--ov-ui-tui-card-border);
+  border-radius: 8px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.ov-tui__markdown li > p {
+  margin: 4px 0 0;
+}
+.ov-tui__markdown li > p:first-child {
+  margin-block-start: 0;
 }
 
 .ov-tui__markdown code {
@@ -284,21 +343,29 @@
   font-size: 12px;
 }
 
-.ov-tui__markdown pre {
-  max-width: 100%;
-  overflow: auto;
-  margin: 6px 0;
+.ov-tui__code-block {
+  position: relative;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  margin-block: 6px;
   border-radius: 8px;
   background: var(--ov-ui-tui-card-bg);
-  padding: 10px 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  padding: 12px;
 }
 
-.ov-tui__markdown pre code {
-  background: none;
-  padding: 0;
-  font-size: 12px;
+.ov-tui__code-block > .ov-tui__copy--inline {
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+}
+
+.ov-tui__code-content {
+  max-inline-size: 100%;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  font-size: 13px;
   line-height: 20px;
 }
 
@@ -351,11 +418,13 @@
 }
 
 .ov-tui__search-summary {
-  border-radius: 10px;
-  background: var(--ov-ui-tui-bubble-bg);
-  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 14px 16px;
   color: var(--ov-ui-text-muted, rgb(128 128 128));
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 24px;
+  white-space: pre-line;
 }
 
 .ov-tui__search-items,
@@ -366,30 +435,72 @@
   gap: 8px;
 }
 
-.ov-tui__search-item,
-.ov-tui__tree-item {
+.ov-tui__search-item {
   display: flex;
   width: 100%;
   min-width: 0;
   align-items: stretch;
   gap: 10px;
   border: 1px solid var(--ov-ui-tui-card-border);
-  border-radius: 12px;
-  background: transparent;
-  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--ov-ui-tui-result-bg);
+  padding: 12px 14px;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
 }
 
-.ov-tui__search-item--action,
-.ov-tui__tree-item--action {
-  cursor: pointer;
+.ov-tui__search-items {
+  gap: 10px;
 }
-
-.ov-tui__search-item--action:hover,
-.ov-tui__tree-item--action:hover {
+.ov-tui__search-item {
+  position: relative;
+}
+.ov-tui__search-open {
+  display: flex;
+  inline-size: 100%;
+  font-weight: 600;
+  font-size: 12px;
+}
+.ov-tui__search-open::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+}
+.ov-tui__search-item :is(button, a:not(.ov-tui__search-open)) {
+  position: relative;
+  z-index: 1;
+}
+.ov-tui__search-item:has(.ov-tui__search-open:hover) {
   border-color: var(--ov-ui-tui-link);
+  background: var(--ov-ui-tui-card-bg);
+}
+.ov-tui__search-item:has(.ov-tui__search-open:focus-visible) {
+  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
+  outline-offset: 1px;
+}
+.ov-tui__search-uri {
+  display: flex;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.ov-tui__search-uri-prefix {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-tui__search-uri-suffix {
+  flex: none;
+  max-inline-size: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-tui__search-uri-full {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ov-tui__search-metrics {
@@ -398,7 +509,9 @@
   flex: none;
   flex-direction: column;
   align-items: flex-start;
+  justify-content: space-between;
   gap: 6px;
+  min-block-size: 44px;
 }
 
 .ov-tui__search-score-wrap {
@@ -468,12 +581,10 @@
 .ov-tui__search-title {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 12px;
   font-weight: 600;
   line-height: 22px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -506,7 +617,7 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .ov-tui__tree-title {
@@ -524,14 +635,15 @@
 }
 
 .ov-tui__load-more {
-  align-self: flex-start;
+  inline-size: 100%;
   border: 1px solid var(--ov-ui-tui-card-border);
-  border-radius: 6px;
-  background: transparent;
-  padding: 4px 10px;
-  color: inherit;
+  border-radius: 10px;
+  background: var(--ov-ui-tui-result-bg);
+  padding: 8px 12px;
+  color: var(--ov-ui-tui-link);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 22px;
   cursor: pointer;
 }
 
@@ -542,89 +654,181 @@
 .ov-tui__write-lines {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
-.ov-tui__write-line {
+.ov-tui__write-line,
+.ov-tui__tree-item {
+  inline-size: 100%;
+  min-inline-size: 0;
+  border-radius: 10px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 10px 12px;
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  font-size: 13px;
+  line-height: 22px;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ov-tui__tree-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* 状态卡片。 */
 .ov-tui__status-rows {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
 }
 
 .ov-tui__status-row {
   display: grid;
-  grid-template-columns: minmax(88px, 34%) minmax(0, 1fr);
-  gap: 10px;
+  min-inline-size: 0;
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+  column-gap: 12px;
   align-items: start;
+  border-radius: 10px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 8px 10px;
 }
 
 .ov-tui__status-row[data-variant='long-text'] {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 6px;
 }
 
 .ov-tui__status-label {
   color: var(--ov-ui-text-muted, rgb(128 128 128));
+  margin: 0;
   font-size: 12px;
+  font-weight: 400;
+  line-height: 22px;
+  white-space: nowrap;
 }
 
 .ov-tui__status-value {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-tui__status-row[data-variant='long-text'] .ov-tui__status-value {
+  max-block-size: 168px;
+  overflow: auto;
+  padding-inline-end: 4px;
+  white-space: pre-wrap;
 }
 
 .ov-tui__status-row[data-variant='pre'] .ov-tui__status-value {
+  max-block-size: 168px;
   overflow: auto;
-  white-space: pre-wrap;
+  white-space: pre;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 12px;
+  line-height: 20px;
 }
 
 /* 资源预览。 */
-.ov-tui__preview-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
+.ov-tui__result-meta {
+  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .ov-tui__preview-uri {
-  align-self: flex-start;
+  display: inline-block;
+  max-inline-size: 100%;
+  margin-block-end: 10px;
   font-size: 12px;
 }
 
 .ov-tui__preview-body {
-  max-height: 280px;
-  overflow: auto;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  border-radius: 12px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 14px 16px;
+  overflow-wrap: anywhere;
+}
+
+.ov-tui__preview-content {
   margin: 0;
-  border-radius: 10px;
-  background: var(--ov-ui-tui-bubble-bg);
-  padding: 10px 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  word-break: break-word;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 12px;
   line-height: 20px;
+}
+
+.ov-tui__no-result {
+  border-radius: 12px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 16px;
+  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-tui__tree .ov-tui__table-frame {
+  border-radius: 10px;
+  background: var(--ov-ui-tui-card-bg);
+}
+
+.ov-tui__table {
+  min-inline-size: 520px;
+  margin: 0;
+}
+
+.ov-tui__table :is(th, td) {
+  min-inline-size: 96px;
+  border: 0;
+  border-block-end: 1px solid var(--ov-ui-tui-card-border);
+  padding: 8px 10px;
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-tui__table th {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ov-tui__table tbody tr:last-child td {
+  border-block-end: 0;
 }
 
 /* 命令帮助。 */
 .ov-tui__help {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+}
+
+.ov-tui__help-lead {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.ov-tui__help-footer {
+  color: var(--ov-ui-text-muted, rgb(128 128 128));
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .ov-tui__help-section {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .ov-tui__help-section-label {
@@ -641,17 +845,19 @@
 
 .ov-tui__help-item {
   display: grid;
-  width: 100%;
-  grid-template-columns: minmax(13ch, 22ch) minmax(0, 1fr);
-  gap: 16px;
-  align-items: baseline;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  padding: 4px 6px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 36px;
+  grid-template-columns: minmax(13ch, 23ch) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  border: 1px solid var(--ov-ui-tui-card-border);
+  border-radius: 8px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 8px;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 
@@ -828,16 +1034,33 @@
 
 .ov-tui__input-mirror {
   position: absolute;
+  z-index: 1;
   inset: 0;
   display: block;
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-width: none;
   pointer-events: none;
+}
+
+.ov-tui__input-mirror .ov-tui__link {
+  pointer-events: auto;
+  font: inherit;
 }
 
 .ov-tui__bubble-command,
 .ov-tui__input-command {
-  color: var(--ov-ui-tui-link);
-  color: var(--ov-ui-primary, color-mix(in srgb, #5252ff 80%, CanvasText));
+  color: var(--ov-ui-text, inherit);
+}
+
+.ov-tui__command-prefix {
+  color: var(--ov-ui-text-muted, rgb(128 128 128));
+}
+
+.ov-tui__command-name {
+  /* 轻量加重且不改变字宽，保持原生 textarea 的光标与镜像对齐。 */
+  text-shadow:
+    0.025em 0 currentColor,
+    -0.025em 0 currentColor;
 }
 
 .ov-tui__input-completion,
@@ -853,7 +1076,8 @@
   scrollbar-width: none;
 }
 
-.ov-tui__input::-webkit-scrollbar {
+.ov-tui__input::-webkit-scrollbar,
+.ov-tui__input-mirror::-webkit-scrollbar {
   display: none;
 }
 
@@ -862,9 +1086,6 @@
 }
 
 @media (forced-colors: active) {
-  .ov-tui__input-mirror {
-    display: none;
-  }
   .ov-tui__input {
     color: CanvasText;
     -webkit-text-fill-color: CanvasText;
@@ -1252,7 +1473,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ov-tui__skeleton-line,
-  .ov-tui__status[data-status='pending'] .ov-tui__status-dot {
+  .ov-tui__result-state[data-status='pending'] {
     animation: none;
   }
 }

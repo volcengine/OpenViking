@@ -1,14 +1,21 @@
 import type { TuiCommandHelpContent } from './types.js';
+import type { ResolvedTuiLabels } from './tui-labels.js';
 
 export interface TuiCommandHelpProps {
   content: TuiCommandHelpContent;
   onPick: (command: string) => void;
+  labels: ResolvedTuiLabels;
 }
 
 /** 命令帮助：按分组列出命令，点击填入输入框。 */
-export function TuiCommandHelp({ content, onPick }: TuiCommandHelpProps) {
+export function TuiCommandHelp({
+  content,
+  onPick,
+  labels,
+}: TuiCommandHelpProps) {
   return (
     <div className="ov-tui__help">
+      <div className="ov-tui__help-lead">{labels.availableCommands}</div>
       {content.sections.map((section) => (
         <section key={section.key} className="ov-tui__help-section">
           <div className="ov-tui__help-section-label">{section.label}</div>
@@ -29,6 +36,7 @@ export function TuiCommandHelp({ content, onPick }: TuiCommandHelpProps) {
           </div>
         </section>
       ))}
+      <div className="ov-tui__help-footer">{labels.helpHint}</div>
     </div>
   );
 }

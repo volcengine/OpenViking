@@ -334,8 +334,8 @@ export interface TuiCommandHelpItem {
    */
   key: string;
   /**
-   * 命令名，包含开头的斜杠。
-   * Command name including the leading slash.
+   * 用于显示和填入的命令文本。
+   * Command text used for display and insertion.
    */
   name: string;
   /**
@@ -378,10 +378,15 @@ export interface TuiRecord {
    */
   content?: TuiRecordContent;
   /**
-   * 记录头部的展示时间。
-   * Timestamp rendered in the record header.
+   * 未提供有效 createdAtMs 时使用的展示时间，不解析为日期。
+   * Display text used without a valid createdAtMs; never parsed as a date.
    */
   createdAt?: string;
+  /**
+   * 发送时的 Unix 毫秒时间戳，优先在客户端格式化为相对时间或本地日期。
+   * Unix timestamp in milliseconds; preferred for relative time or local date display on the client.
+   */
+  createdAtMs?: number;
 }
 
 /**
@@ -449,6 +454,13 @@ export interface TuiLabels {
    * Message shown when there are no records.
    */
   empty?: string;
+  /** 无返回结果时的提示。Message for an empty command result. */
+  noResult?: string;
+  /** 刚刚发送的时间文案。Time label for a just-sent record. */
+  justNow?: string;
+  /** 命令帮助的标题与操作提示。Command-help heading and hint. */
+  availableCommands?: string;
+  helpHint?: string;
   /** 参数帮助标题、示例与空参数提示。Parameter help headings and empty copy. */
   parameters?: string;
   examples?: string;
@@ -462,6 +474,10 @@ export interface TuiLabels {
   no?: string;
   /** 资源列表分页。Resource list pagination. */
   loadMore?: string;
+  /** 格式化已过去的整分钟。Formats elapsed whole minutes. */
+  formatMinutesAgo?: (minutes: number) => string;
+  /** 格式化已过去的整小时。Formats elapsed whole hours. */
+  formatHoursAgo?: (hours: number) => string;
 }
 
 /**
@@ -521,8 +537,9 @@ export interface TuiProps extends Omit<
    */
   onSubmit?: (command: string) => void;
   /**
-   * 资源成功打开后触发，参数为已打开的资源 URI；失败时不触发。
-   * Called after a resource opens successfully, with its URI; not called on failure.
+   * 点击资源 URI 时触发，由宿主接管打开；覆盖输入区、命令记录和结果中的链接。
+   * Called when a resource URI is activated in the input, command echo or results;
+   * the host owns navigation. Without a handler, text links use their native href.
    */
   onOpenUri?: (uri: string) => void;
   /**

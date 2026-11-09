@@ -172,20 +172,18 @@ test('locale changes generic UI, labels override it, and host command copy is pr
   const chinese = renderToStaticMarkup(
     createElement(Tui, { ...props, locale: 'zh' }),
   );
-  for (const text of ['宿主操作', '刷新宿主索引', '执行成功', '复制'])
+  for (const text of ['宿主操作', '刷新宿主索引', '执行成功'])
     assert.ok(chinese.includes(text), text);
   const override = renderToStaticMarkup(
     createElement(Tui, {
       ...props,
       locale: 'zh',
       labels: {
-        copy: 'Custom copy',
         success: 'Custom status',
         allCommands: 'Custom catalogue',
       },
     }),
   );
-  assert.ok(override.includes('Custom copy'));
   assert.ok(override.includes('Custom status'));
   assert.ok(override.includes('Custom catalogue'));
   assert.ok(!chinese.includes('aria-activedescendant'));

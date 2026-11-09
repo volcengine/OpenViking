@@ -5,11 +5,19 @@ import {
   matchTuiCommandInput,
 } from './command-input.js';
 import { TuiCommandHelp } from './tui-command-help.js';
-import { TuiCopyButton } from './tui-copy-button.js';
+import { TuiCommandText } from './tui-command-text.js';
+import { TuiRecordTime } from './tui-record-time.js';
+import { TuiCodeBlock } from './tui-code-block.js';
 import type { ResolvedTuiLabels } from './tui-labels.js';
 import { TuiMarkdown } from './tui-markdown.js';
 import { TuiResourcePreview } from './tui-resource-preview.js';
 import { TuiResourceTree } from './tui-resource-tree.js';
+import { TuiResultHeader } from './tui-result-header.js';
+import {
+  getTuiResultText,
+  getVisibleTuiResultTitle,
+  isTuiJson,
+} from './tui-result-text.js';
 import { TuiSearchList } from './tui-search-list.js';
 import { TuiSkeleton } from './tui-skeleton.js';
 import { TuiStatusCard } from './tui-status-card.js';
@@ -44,48 +52,95 @@ function RecordBody({
   if (!content) {
     return (
       <div className="ov-tui__muted">
-        {record.status === 'error' ? labels.error : labels.success}
+        {record.status === 'error' ? labels.error : labels.noResult}
       </div>
     );
   }
 
   switch (content.variant) {
     case 'search-list':
-      return <TuiSearchList content={content} onOpenUri={onOpenUri} />;
+      return (
+        <TuiSearchList
+          content={content}
+          onOpenUri={onOpenUri}
+          noResultLabel={labels.noResult}
+        />
+      );
     case 'resource-preview':
-      return <TuiResourcePreview content={content} onOpenUri={onOpenUri} />;
+      return (
+        <TuiResourcePreview
+          content={{
+            ...content,
+            title: getVisibleTuiResultTitle(content.title, command) ?? '',
+          }}
+          labels={labels}
+          onCopy={onCopy}
+          onOpenUri={onOpenUri}
+        />
+      );
     case 'resource-tree':
       return (
         <TuiResourceTree
-          content={content}
+          content={{
+            ...content,
+            title: getVisibleTuiResultTitle(content.title, command),
+          }}
           onOpenUri={onOpenUri}
           loadMoreLabel={labels.loadMore}
+          noResultLabel={labels.noResult}
         />
       );
     case 'status':
-      return <TuiStatusCard content={content} />;
+      return (
+        <TuiStatusCard
+          content={{
+            ...content,
+            title: getVisibleTuiResultTitle(content.title, command),
+          }}
+          onOpenUri={onOpenUri}
+        />
+      );
     case 'write-result':
-      return <TuiWriteResult content={content} />;
+      return (
+        <TuiWriteResult
+          content={{
+            ...content,
+            title: getVisibleTuiResultTitle(content.title, command),
+          }}
+          onOpenUri={onOpenUri}
+        />
+      );
     case 'command-help':
-      return <TuiCommandHelp content={content} onPick={onPickCommand} />;
+      return (
+        <TuiCommandHelp
+          content={content}
+          onPick={onPickCommand}
+          labels={labels}
+        />
+      );
     default: {
-      const text = formatTuiJson(content.text);
+      const text = getTuiResultText(formatTuiJson(content.text), command);
       return (
         <div className="ov-tui__text">
           {content.format === 'markdown' ? (
-            <TuiMarkdown text={text} onOpenUri={onOpenUri} />
+            <TuiMarkdown
+              text={text}
+              labels={labels}
+              onCopy={onCopy}
+              onOpenUri={onOpenUri}
+            />
+          ) : isTuiJson(text) ? (
+            <TuiCodeBlock
+              text={text}
+              labels={labels}
+              onCopy={onCopy}
+              onOpenUri={onOpenUri}
+            />
           ) : (
             <pre className="ov-tui__plain">
               <TuiUriText text={text} onOpenUri={onOpenUri} />
             </pre>
           )}
-          <TuiCopyButton
-            text={content.text}
-            label={labels.copy}
-            copiedLabel={labels.copied}
-            onCopy={onCopy}
-            className="ov-tui__copy--inline"
-          />
         </div>
       );
     }
@@ -106,9 +161,6 @@ export function TuiRecordItem(props: TuiRecordProps) {
     ? matchTuiCommandInput(record.command, [props.command])
     : undefined;
   const prefix = input ? getTuiCommandInputText(input.command) : '';
-  const commandText = input
-    ? `${input.leadingWhitespace}${prefix}${input.rest}`
-    : record.command;
 
   return (
     <div className="ov-tui__record" data-status={record.status}>
@@ -117,34 +169,29 @@ export function TuiRecordItem(props: TuiRecordProps) {
           {input ? (
             <>
               {input.leadingWhitespace}
-              <span className="ov-tui__bubble-command">{prefix}</span>
-              {input.rest}
+              <span className="ov-tui__bubble-command">
+                <TuiCommandText text={prefix} name={input.command.name} />
+              </span>
+              <TuiUriText text={input.rest} onOpenUri={props.onOpenUri} />
             </>
           ) : (
-            record.command
+            <TuiUriText text={record.command} onOpenUri={props.onOpenUri} />
           )}
         </code>
-        {record.createdAt ? (
-          <span className="ov-tui__bubble-time">{record.createdAt}</span>
+        {record.createdAt || record.createdAtMs !== undefined ? (
+          <TuiRecordTime record={record} labels={labels} />
         ) : null}
       </div>
-      <div className="ov-tui__result">
-        <div className="ov-tui__result-head">
-          <span className="ov-tui__status" data-status={record.status}>
-            <span className="ov-tui__status-dot" aria-hidden="true" />
-            {statusLabel}
-          </span>
-          <TuiCopyButton
-            text={commandText}
-            label={labels.copy}
-            copiedLabel={labels.copied}
-            onCopy={props.onCopy}
-          />
-        </div>
+      <article className="ov-tui__result">
+        <TuiResultHeader
+          command={prefix || record.command}
+          status={record.status}
+          label={statusLabel}
+        />
         <div className="ov-tui__result-body">
           <RecordBody {...props} />
         </div>
-      </div>
+      </article>
     </div>
   );
 }

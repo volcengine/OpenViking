@@ -1,10 +1,12 @@
 import { useState } from 'react';
 
 import type { TuiSearchListContent, TuiSearchResultItem } from './types.js';
+import { TuiUriText } from './tui-uri-text.js';
 
 export interface TuiSearchListProps {
   content: TuiSearchListContent;
   onOpenUri?: (uri: string) => void;
+  noResultLabel: string;
 }
 
 function ScoreDetails({ item }: { item: TuiSearchResultItem }) {
@@ -42,6 +44,22 @@ function ScoreDetails({ item }: { item: TuiSearchResultItem }) {
   );
 }
 
+function ResourceUri({ text }: { text: string }) {
+  const boundary = text.lastIndexOf('/');
+  return boundary > 'viking://'.length ? (
+    <span className="ov-tui__search-uri">
+      <span className="ov-tui__search-uri-prefix">
+        {text.slice(0, boundary + 1)}
+      </span>
+      <span className="ov-tui__search-uri-suffix">
+        {text.slice(boundary + 1)}
+      </span>
+    </span>
+  ) : (
+    <span className="ov-tui__search-uri-full">{text}</span>
+  );
+}
+
 function SearchRow({
   item,
   onOpenUri,
@@ -62,16 +80,23 @@ function SearchRow({
       <span className="ov-tui__search-body">
         <span className="ov-tui__search-main">
           <span className="ov-tui__search-title" title={item.uri ?? item.title}>
-            {item.uri && onOpenUri ? (
-              <button
-                type="button"
-                className="ov-tui__link"
-                onClick={() => onOpenUri(item.uri ?? '')}
+            {item.uri ? (
+              <a
+                href={item.uri}
+                className="ov-tui__link ov-tui__search-open"
+                onClick={
+                  onOpenUri
+                    ? (event) => {
+                        event.preventDefault();
+                        onOpenUri(item.uri ?? '');
+                      }
+                    : undefined
+                }
               >
-                {item.title}
-              </button>
+                <ResourceUri text={item.uri} />
+              </a>
             ) : (
-              item.title
+              <TuiUriText text={item.title} onOpenUri={onOpenUri} />
             )}
           </span>
           {item.levelLabel ? (
@@ -79,10 +104,14 @@ function SearchRow({
           ) : null}
         </span>
         {item.preview ? (
-          <span className="ov-tui__search-preview">{item.preview}</span>
+          <span className="ov-tui__search-preview">
+            <TuiUriText text={item.preview} onOpenUri={onOpenUri} />
+          </span>
         ) : null}
         {item.metaLabel ? (
-          <span className="ov-tui__search-meta">{item.metaLabel}</span>
+          <span className="ov-tui__search-meta">
+            <TuiUriText text={item.metaLabel} onOpenUri={onOpenUri} />
+          </span>
         ) : null}
       </span>
     </>
@@ -90,22 +119,32 @@ function SearchRow({
 }
 
 /** 检索结果列表。Search result list. */
-export function TuiSearchList({ content, onOpenUri }: TuiSearchListProps) {
+export function TuiSearchList({
+  content,
+  onOpenUri,
+  noResultLabel,
+}: TuiSearchListProps) {
   return (
     <div className="ov-tui__search">
       {content.summary ? (
-        <div className="ov-tui__search-summary">{content.summary}</div>
+        <div className="ov-tui__search-summary">
+          {typeof content.summary === 'string' ? (
+            <TuiUriText text={content.summary} onOpenUri={onOpenUri} />
+          ) : (
+            content.summary
+          )}
+        </div>
       ) : null}
       {content.items.length ? (
         <div className="ov-tui__search-items">
           {content.items.map((item) => (
-            <div key={item.id} className="ov-tui__search-item">
+            <article key={item.id} className="ov-tui__search-item">
               <SearchRow item={item} onOpenUri={onOpenUri} />
-            </div>
+            </article>
           ))}
         </div>
       ) : (
-        <div className="ov-tui__muted">—</div>
+        <div className="ov-tui__no-result">{noResultLabel}</div>
       )}
     </div>
   );

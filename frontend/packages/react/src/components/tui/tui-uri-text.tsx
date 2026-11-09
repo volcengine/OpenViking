@@ -5,44 +5,54 @@ import { TUI_URI_PATTERN } from './tui-text.js';
 export interface TuiUriTextProps {
   text: string;
   onOpenUri?: (uri: string) => void;
+  /** 编辑镜像隐藏重复文字，但保留链接语义及输入框焦点。 */
+  editor?: boolean;
 }
 
-function renderUri(
-  uri: string,
-  key: string,
-  onOpenUri?: (uri: string) => void,
-) {
-  if (!onOpenUri) {
-    return <span key={key}>{uri}</span>;
-  }
-
-  return (
-    <button
-      key={key}
-      type="button"
-      className="ov-tui__link"
-      onClick={() => onOpenUri(uri)}
-    >
-      {uri}
-    </button>
-  );
-}
-
-/** 把纯文本中的 URI 渲染成可打开入口。Turns URIs in plain text into links. */
-export function TuiUriText({ text, onOpenUri }: TuiUriTextProps) {
+/** 把纯文本中的 URI 渲染成链接；宿主可通过回调接管打开。 */
+export function TuiUriText({
+  text,
+  onOpenUri,
+  editor = false,
+}: TuiUriTextProps) {
   const parts: ReactNode[] = [];
   let cursor = 0;
-  const pattern = new RegExp(TUI_URI_PATTERN.source, 'g');
+  const pattern = new RegExp(TUI_URI_PATTERN.source, 'gi');
+  const plain = (value: string, key: number) =>
+    editor ? (
+      <span key={key} aria-hidden="true">
+        {value}
+      </span>
+    ) : (
+      value
+    );
 
   for (const matched of text.matchAll(pattern)) {
     const index = matched.index ?? 0;
-    const value = matched[0];
-    if (index > cursor) parts.push(text.slice(cursor, index));
-    parts.push(renderUri(value, `${index}-${value}`, onOpenUri));
-    cursor = index + value.length;
+    const uri = matched[0];
+    if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));
+    parts.push(
+      <a
+        key={`${index}-${uri}`}
+        href={uri}
+        className="ov-tui__link"
+        onMouseDown={editor ? (event) => event.preventDefault() : undefined}
+        onClick={
+          onOpenUri
+            ? (event) => {
+                event.preventDefault();
+                onOpenUri(uri);
+              }
+            : undefined
+        }
+      >
+        {uri}
+      </a>,
+    );
+    cursor = index + uri.length;
   }
 
-  if (!parts.length) return <>{text}</>;
-  if (cursor < text.length) parts.push(text.slice(cursor));
+  if (!parts.length) return <>{plain(text, 0)}</>;
+  if (cursor < text.length) parts.push(plain(text.slice(cursor), cursor));
   return <>{parts}</>;
 }

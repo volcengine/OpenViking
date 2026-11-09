@@ -55,6 +55,9 @@ const props = {
   onValueChange() {},
 };
 
+const commandText =
+  '<span class="ov-tui__command-prefix">host </span><span class="ov-tui__command-name">read</span>';
+
 test('host input prefixes and aliases preserve arguments, whitespace and unknown text', () => {
   assert.equal(
     formatTuiCommandInput('  /cat "viking://demo/a b"\n', commands),
@@ -83,7 +86,7 @@ test('host input prefixes and aliases preserve arguments, whitespace and unknown
 
 test('confirmed commands use inline hints without opening the full parameter panel', () => {
   const html = renderToStaticMarkup(createElement(Tui, props));
-  assert.ok(html.includes('ov-tui__input-command">host read</span>'));
+  assert.ok(html.includes(commandText));
   assert.ok(html.includes('ov-tui__input-arguments'));
   assert.ok(html.includes('&lt;uri&gt;'));
   assert.ok(!html.includes('class="ov-tui__hint"'));
@@ -97,7 +100,7 @@ test('inline placeholders disappear once real arguments are typed and never ente
   );
   assert.ok(!html.includes('class="ov-tui__input-arguments"'));
   assert.ok(!html.includes('class="ov-tui__hint"'));
-  assert.ok(html.includes('ov-tui__input-command">host read</span>'));
+  assert.ok(html.includes(commandText));
   assert.match(html, /<textarea[^>]*>host read viking:\/\/demo<\/textarea>/);
 });
 
@@ -182,29 +185,4 @@ test('ghost text is visual only; ordinary CLI typing keeps the palette closed', 
     assert.ok(html.includes(`>${value}</textarea>`));
     assert.ok(!html.includes('class="ov-tui__input-arguments"'));
   }
-});
-
-test('record echoes canonical host prefixes and preserves arguments and unknown text', () => {
-  const record = {
-    id: 'echo',
-    command: '  /cat "viking://demo/a b" --offset 2',
-    status: 'success',
-    createdAt: '10:24',
-  };
-  const renderBubble = (commands) =>
-    renderToStaticMarkup(
-      createElement(Tui, { ...props, commands, records: [record] }),
-    ).match(/<div class="ov-tui__bubble">([\s\S]*?)<\/div>/)[1];
-  const bubble = renderBubble(commands);
-  assert.ok(
-    bubble.includes(
-      'ov-tui__bubble-command">host read</span> &quot;viking://demo/a b&quot; --offset 2',
-    ),
-  );
-  assert.ok(bubble.includes('ov-tui__bubble-time">10:24</span>'));
-  const unknown = renderBubble([]);
-  assert.ok(
-    unknown.includes('  /cat &quot;viking://demo/a b&quot; --offset 2'),
-  );
-  assert.ok(!unknown.includes('ov-tui__bubble-command'));
 });

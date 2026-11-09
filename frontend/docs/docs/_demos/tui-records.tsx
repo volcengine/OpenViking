@@ -1,8 +1,12 @@
 import type { TuiRecord } from '@openviking/react/components/tui';
+import { createTuiCompileRecord } from './tui-result-fixtures';
 
-export function createTuiRecords(isChinese: boolean): readonly TuiRecord[] {
+export function createTuiRecords(
+  isChinese: boolean,
+  now = Date.now(),
+): readonly TuiRecord[] {
   const t = (en: string, zh: string) => (isChinese ? zh : en);
-  return [
+  const records: readonly TuiRecord[] = [
     {
       id: 'find',
       command: '/find "release checklist"',
@@ -148,54 +152,10 @@ export function createTuiRecords(isChinese: boolean): readonly TuiRecord[] {
         ),
       },
     },
+    createTuiCompileRecord(),
   ];
-}
-
-export function createTuiHelp(isChinese: boolean): TuiRecord {
-  const t = (en: string, zh: string) => (isChinese ? zh : en);
-  return {
-    id: 'help',
-    command: '/help',
-    status: 'success',
-    content: {
-      variant: 'command-help',
-      sections: [
-        {
-          key: 'core',
-          label: t('Core workflow', '核心流程'),
-          items: [
-            {
-              key: 'add-resource',
-              name: '/add-resource',
-              description: t(
-                'Add resources into OpenViking',
-                '添加路径或 URL 到资源',
-              ),
-            },
-            {
-              key: 'add-memory',
-              name: '/add-memory',
-              description: t('Add memory in one shot', '直接添加记忆'),
-            },
-          ],
-        },
-        {
-          key: 'search',
-          label: t('Search & context', '检索与上下文'),
-          items: [
-            {
-              key: 'find',
-              name: '/find',
-              description: t('Run semantic retrieval', '语义检索相关上下文'),
-            },
-            {
-              key: 'read',
-              name: '/read',
-              description: t('Read file content', '读取文件内容'),
-            },
-          ],
-        },
-      ],
-    },
-  };
+  return records.map((record, index) => ({
+    ...record,
+    createdAtMs: now - (records.length - index - 1) * 60_000,
+  }));
 }
