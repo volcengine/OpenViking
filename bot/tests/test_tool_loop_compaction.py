@@ -19,6 +19,11 @@ def loop():
 
 
 SESSION = SessionKey(type="test", channel_id="channel", chat_id="chat")
+# VLMProviderAdapter reports a failed model call as a response, not an exception.
+SUMMARY_ERROR = LLMResponse(
+    content="Error calling LLM in VLM Adapter: Summary service unavailable",
+    finish_reason="error",
+)
 RULE_TOOLS = [
     "openviking_rule_search",
     "rule_search",
@@ -70,6 +75,13 @@ def assert_tool_pairs(messages):
     assert not outstanding
 
 
+def fail_summaries(loop, summary_failure):
+    if summary_failure == "exception":
+        loop.provider.chat.side_effect = RuntimeError("Summary service unavailable")
+    elif summary_failure == "error_response":
+        loop.provider.chat.return_value = SUMMARY_ERROR
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rule_tool", RULE_TOOLS)
 async def test_compaction_keeps_rule_lookup_after_user_correction(loop, rule_tool):
@@ -90,12 +102,11 @@ async def test_compaction_keeps_rule_lookup_after_user_correction(loop, rule_too
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rule_tool", RULE_TOOLS)
-@pytest.mark.parametrize("summary_fails", [False, True])
+@pytest.mark.parametrize("summary_failure", [None, "exception", "error_response"])
 async def test_compaction_preserves_latest_user_when_rules_exceed_budget(
-    loop, rule_tool, summary_fails
+    loop, rule_tool, summary_failure
 ):
-    if summary_fails:
-        loop.provider.chat.side_effect = RuntimeError("Summary service unavailable")
+    fail_summaries(loop, summary_failure)
     rule_turn = tool_turn(rule_tool, "old-rules", "Exact Rule condition.\n" * 600)
     correction = {"role": "user", "content": "Do not publish; prepare a local draft only."}
     latest_turn = tool_turn("read_file", "latest-read", "Ready to prepare the local draft.")
@@ -142,12 +153,11 @@ async def test_compaction_preserves_entire_parallel_rule_tool_turn(loop):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("old_turn_in_tail", [False, True])
-@pytest.mark.parametrize("summary_fails", [False, True])
+@pytest.mark.parametrize("summary_failure", [None, "exception", "error_response"])
 async def test_expired_rules_preserve_parallel_write_progress(
-    loop, old_turn_in_tail, summary_fails
+    loop, old_turn_in_tail, summary_failure
 ):
-    if summary_fails:
-        loop.provider.chat.side_effect = RuntimeError("Summary service unavailable")
+    fail_summaries(loop, summary_failure)
     old_rule = tool_turn("rule_search", "old-rules", "OLD RULE BODY " * 1_000)
     write = tool_turn("write_file", "draft-write", "Saved draft successfully at /draft/report.md.")
     old_rule[0]["content"] = "Saving completed draft."
@@ -175,8 +185,9 @@ async def test_expired_rules_preserve_parallel_write_progress(
     retained = "\n".join(str(message.get("content", "")) for message in result)
     assert "/draft/report.md" in retained + summary_input
     assert "Saved draft successfully" in retained + summary_input
-    if summary_fails:
+    if summary_failure:
         assert write[1] in result
+        assert "Error calling LLM" not in retained
     assert "OLD RULE BODY" not in retained + summary_input
     assert all(
         call["id"] != "old-rules" for message in result for call in message.get("tool_calls", [])
@@ -276,7 +287,15 @@ async def test_compaction_reuses_note_even_when_pinned_rules_leave_a_short_tail(
 
 
 @pytest.mark.asyncio
-async def test_compaction_without_rules_summarizes_older_work_and_keeps_recent_turn(loop):
+@pytest.mark.parametrize("first_summary_fails", [False, True])
+async def test_compaction_without_rules_summarizes_older_work_and_keeps_recent_turn(
+    loop, first_summary_fails
+):
+    if first_summary_fails:
+        loop.provider.chat.side_effect = [
+            SUMMARY_ERROR,
+            LLMResponse(content="Saved earlier progress."),
+        ]
     messages = [
         *history_prefix(),
         {"role": "assistant", "content": "Recent plan."},
