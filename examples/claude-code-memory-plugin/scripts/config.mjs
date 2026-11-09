@@ -95,6 +95,17 @@ export function isPluginEnabled() {
 }
 
 /**
+ * Whether the usage cards module (mods/usage) should register its handlers.
+ *
+ * The cards are display-only, so a user who turns them off should not keep
+ * seeing the per-event skip notices hosts print when they intercept the
+ * module's events; not registering is the only way to silence those.
+ */
+export function usageCardsEnabled(cwd = process.cwd(), { env = process.env } = {}) {
+  return loadConfig(cwd, { env }).usageCards !== false;
+}
+
+/**
  * Load the full plugin configuration.
  *
  * `cwd` selects the workspace layer (`.openviking/config.json` and the

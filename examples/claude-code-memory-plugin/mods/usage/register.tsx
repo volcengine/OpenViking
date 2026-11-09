@@ -1,5 +1,6 @@
 import type { EngineInterface, Register, ResolveInput } from "claude-code";
 import type { Lookup, Turn } from "./types";
+import { usageCardsEnabled } from "../../scripts/config.mjs";
 import {
   ICON,
   classifyCall,
@@ -139,6 +140,9 @@ async function card($: EngineInterface, e: ResolveInput, turn: Turn) {
 }
 
 export const register: Register = (on) => {
+  // Opt out at registration: a module that registers no handlers neither draws
+  // cards nor triggers the skip notices hosts print for events they intercept.
+  if (!usageCardsEnabled()) return;
   on("session.start", async ($, e, next) => {
     await safely($, "restore", () => restore($));
     await $.command.register({
