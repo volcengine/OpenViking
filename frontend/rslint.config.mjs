@@ -29,6 +29,18 @@ export default defineConfig([
     },
   },
   {
+    // 文档示例以数据为主：一棵示例树、它的渲染、演示用的产品图标和少量样式
+    // 都放在同一个文件里，而 rspress 的虚拟 demo 只打包入口文件、无法解析
+    // 相对导入的兄弟模块。上限放宽到 1000 行，仍保留限制以免示例无限膨胀。
+    files: ['docs/docs/_demos/**/*.tsx'],
+    rules: {
+      'max-lines': [
+        'error',
+        { max: 1000, skipBlankLines: true, skipComments: true },
+      ],
+    },
+  },
+  {
     files: ['**/*.{ts,tsx,mts,cts}'],
     languageOptions: {
       parserOptions: {

@@ -17,5 +17,10 @@
     "@rspress/core": "~2.1.0",
     "@rspress/plugin-preview": "~2.1.0",
     "rsbuild-plugin-workspace-dev": "^1.0.0"
+  },
+  "imports": {
+    "#scope-switcher-icons": "./docs/_demos/scope-switcher-icons.tsx",
+    "#scope-switcher-source": "./docs/_demos/scope-switcher-source.ts",
+    "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts"
   }
 }

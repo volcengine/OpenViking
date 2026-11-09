@@ -50,6 +50,15 @@
       "import": "./dist/components/agent-connect.js"
     },
     "./components/agent-connect/style.css": "./dist/components/agent-connect/style.css",
+    "./components/viking-bot": {
+      "types": "./dist/components/viking-bot/index.d.ts",
+      "import": "./dist/components/viking-bot.js"
+    },
+    "./components/viking-bot/style.css": "./dist/components/viking-bot/style.css",
+    "./components/viking-bot/interaction": {
+      "types": "./dist/components/viking-bot/interaction/index.d.ts",
+      "import": "./dist/components/viking-bot/interaction.js"
+    },
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./modules/file-browser": {
@@ -76,21 +85,26 @@
     "./client": {
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client.js"
-    }
+    },
+    "./modules/scope-cascade": {
+      "types": "./dist/modules/scope-cascade/index.d.ts",
+      "import": "./dist/modules/scope-cascade.js"
+    },
+    "./modules/scope-cascade/style.css": "./dist/modules/scope-cascade/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",
     "build": "rslib build"
   },
   "peerDependencies": {
+    "@ark-design/ui": ">=0.0.0-beta.7",
     "react": "^18.2.0 || ^19.0.0",
-    "react-dom": "^18.2.0 || ^19.0.0",
-    "@ark-design/ui": "^0.0.0-beta.5"
+    "react-dom": "^18.2.0 || ^19.0.0"
   },
   "devDependencies": {
+    "@ark-design/ui": "0.0.0-beta.7",
     "@rsbuild/plugin-react": "^2.1.1",
-    "@rslib/core": "^1.0.5",
-    "@ark-design/ui": "0.0.0-beta.5"
+    "@rslib/core": "^1.0.5"
   },
   "peerDependenciesMeta": {
     "@ark-design/ui": {

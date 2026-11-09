@@ -18,11 +18,15 @@ The reviewed API for command records, results and input. The current view is a p
 
 ### [ScopeSwitcher](./scope-switcher)
 
-A header scope breadcrumb. The host declares the levels and their options; the component renders the triggers, dropdown panels, option list and search, and reports switch intent.
+A stateless header breadcrumb containing independent ScopeSelector views. Each host level owns its data, search and requests; only selected identities participate in cascading updates.
 
 ### [AgentConnect](./agent-connect)
 
 An agent connection view. The host supplies the tabs, the items of the active tab and the detail body; the component renders the list and detail, and reports switch and copy intent.
+
+### [VikingBot](./viking-bot)
+
+The conversation view: message list, composer and pending-interaction area. Renders a working view against the normalized message model; the view is a placeholder pending design review.
 
 ### [Icons](./icons)
 

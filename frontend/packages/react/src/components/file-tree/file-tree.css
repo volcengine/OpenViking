@@ -1,10 +1,68 @@
+/**
+ * 文件树的组件变量。颜色全部从包级主题基线 `src/theme.css` 的
+ * `--ov-ui-color-*` 派生，因此跟随宿主主题切换；只有纯几何量（行高、圆角、
+ * 缩进）在组件里直接赋值。宿主想换肤时改基线，只想调这一处时覆盖下面任意
+ * 一条即可。
+ *
+ * Component variables of the file tree. Every colour derives from the
+ * package-level baseline in `src/theme.css` (`--ov-ui-color-*`), so it follows the
+ * host's theme; only pure geometry (row height, radius, indent) is assigned here.
+ * A host re-skins by overriding the baseline, or adjusts just this component by
+ * overriding any variable below.
+ */
 .ov-file-tree {
+  --ov-ui-file-tree-row-height: 32px;
+  --ov-ui-file-tree-row-radius: 4px;
+  --ov-ui-file-tree-indent: 20px;
+  --ov-ui-file-tree-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-ui-file-tree-text-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default, #6e718c)
+  );
+  --ov-ui-file-tree-icon: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default, #3f3f51)
+  );
+  --ov-ui-file-tree-row-hover: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default, #f1f2f9)
+  );
+  /* 选中态用中性底而非主色浅底：主色浅底在白底上几乎看不出差别，
+     且与宿主的树一致，选中只靠底色深浅区分，不额外引入品牌色。 */
+  --ov-ui-file-tree-row-selected: var(
+    --ov-ui-color-bg-4,
+    var(--ov-ui-bg-4-default, #f6f7fa)
+  );
+  --ov-ui-file-tree-guide: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+  --ov-ui-file-tree-spinner-track: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default, #d7daea)
+  );
+  --ov-ui-file-tree-spinner: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-ui-file-tree-action: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-ui-file-tree-warning: var(
+    --ov-ui-color-warning,
+    var(--ov-ui-warning-default, #b26a00)
+  );
+
   display: flex;
-  flex-direction: column;
   box-sizing: border-box;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  color: inherit;
+  color: var(--ov-ui-file-tree-text);
   font-family: inherit;
   font-size: 13px;
   line-height: 20px;
@@ -26,53 +84,63 @@
   flex-direction: column;
 }
 
-.ov-file-tree__row {
+/* 行：缩进、竖向连线、图标、名称与行尾内容的横向排布。 */
+.ov-file-tree__row,
+.ov-file-tree__state-row {
   position: relative;
   display: flex;
+  box-sizing: border-box;
   align-items: center;
   gap: 4px;
-  box-sizing: border-box;
-  height: 28px;
+  height: var(--ov-ui-file-tree-row-height);
   padding-right: 8px;
-  border-radius: var(--ov-ui-radius, 6px);
-  color: inherit;
+  border-radius: var(--ov-ui-file-tree-row-radius);
   cursor: default;
   outline: none;
   user-select: none;
 }
 
-.ov-file-tree__row:hover {
-  background: var(
-    --ov-ui-row-hover,
-    color-mix(in srgb, currentColor 6%, transparent)
-  );
+.ov-file-tree__row {
+  transition: background-color 120ms;
 }
 
-.ov-file-tree__row:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
-  outline-offset: -2px;
+.ov-file-tree__row:hover {
+  background-color: var(--ov-ui-file-tree-row-hover);
 }
 
 .ov-file-tree__row[data-selected] {
-  background: var(--ov-ui-row-selected, rgb(37 99 197 / 10%));
+  background-color: var(--ov-ui-file-tree-row-selected);
+}
+
+.ov-file-tree__row:focus-visible,
+.ov-file-tree__state-row:focus-visible {
+  outline: 2px solid var(--ov-ui-file-tree-action);
+  outline-offset: -2px;
 }
 
 .ov-file-tree__row[data-disabled] {
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+  color: var(--ov-ui-file-tree-text-muted);
   cursor: not-allowed;
+}
+
+/* 每一级祖先的竖线；上下各溢出 1px，让相邻行接成一条连续线。 */
+.ov-file-tree__guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background-color: var(--ov-ui-file-tree-guide);
+  pointer-events: none;
 }
 
 .ov-file-tree__toggle,
 .ov-file-tree__toggle-spacer {
   display: inline-flex;
   flex: none;
-  align-items: center;
-  justify-content: center;
   width: 16px;
   height: 16px;
+  align-items: center;
+  justify-content: center;
 }
 
 .ov-file-tree__toggle {
@@ -80,42 +148,69 @@
   border: 0;
   border-radius: 4px;
   background: none;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+  color: var(--ov-ui-file-tree-text-muted);
   cursor: pointer;
 }
 
-.ov-file-tree__toggle:hover {
-  background: color-mix(in srgb, currentColor 10%, transparent);
+.ov-file-tree__toggle:hover:not(:disabled) {
+  background-color: var(--ov-ui-file-tree-row-hover);
+}
+
+.ov-file-tree__toggle:disabled {
+  cursor: default;
 }
 
 .ov-file-tree__chevron {
-  transition: transform 120ms ease;
+  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .ov-file-tree__chevron[data-expanded] {
   transform: rotate(90deg);
 }
 
+/* 图标槽位：固定 16px，内部图形统一 14px，展开与收起大小一致。 */
 .ov-file-tree__icon-slot {
   display: inline-flex;
   flex: none;
+  width: 16px;
+  height: 16px;
   align-items: center;
-  color: var(--ov-ui-icon, color-mix(in srgb, currentColor 62%, transparent));
+  justify-content: center;
+  color: var(--ov-ui-file-tree-icon);
 }
 
-.ov-file-tree__icon {
-  display: block;
+.ov-file-tree__folder {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
+.ov-file-tree__folder-layer {
+  position: absolute;
+  inset: 0;
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ov-file-tree__folder-layer[data-open='true'] {
+  opacity: 1;
+}
+
+.ov-file-tree__file-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .ov-file-tree__label-group {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
 }
 
 .ov-file-tree__label {
@@ -126,10 +221,7 @@
 
 .ov-file-tree__description {
   overflow: hidden;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+  color: var(--ov-ui-file-tree-text-muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -137,23 +229,14 @@
 
 .ov-file-tree__level {
   flex: none;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: var(
-    --ov-ui-chip,
-    color-mix(in srgb, currentColor 10%, transparent)
-  );
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  font-size: 11px;
-  line-height: 16px;
+  margin-left: auto;
+  color: var(--ov-ui-file-tree-text-muted);
+  font-size: 14px;
 }
 
 .ov-file-tree__expiry {
   flex: none;
-  color: var(--ov-ui-warning, #b26a00);
+  color: var(--ov-ui-file-tree-warning);
   font-size: 12px;
 }
 
@@ -180,44 +263,65 @@
   left: 0;
   max-width: 320px;
   padding: 6px 8px;
-  border-radius: var(--ov-ui-radius, 6px);
-  background: var(--ov-ui-tooltip-bg, #1f2329);
-  color: var(--ov-ui-tooltip-text, #fff);
+  border-radius: var(--ov-ui-file-tree-row-radius);
+  background: var(
+    --ov-ui-color-tooltip-bg,
+    var(--ov-ui-tooltip-bg-default, #1f2329)
+  );
+  color: var(
+    --ov-ui-color-tooltip-text,
+    var(--ov-ui-tooltip-text-default, #fff)
+  );
   font-size: 12px;
   line-height: 18px;
   pointer-events: none;
 }
 
-.ov-file-tree__child-row {
+/* 内置浮层：标题、说明、触发行为与路径。 */
+.ov-file-tree__info {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  box-sizing: border-box;
-  height: 28px;
-  padding-right: 8px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ov-file-tree__info-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  word-break: break-all;
+}
+
+.ov-file-tree__info-row {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.ov-file-tree__info-label {
+  flex: none;
+  opacity: 0.65;
+}
+
+.ov-file-tree__info-value {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.ov-file-tree__info-path {
+  min-width: 0;
+  opacity: 0.8;
+  word-break: break-all;
+}
+
+.ov-file-tree__state-row {
+  color: var(--ov-ui-file-tree-text-muted);
+}
+
+.ov-file-tree__state-row[data-tone='error'] {
   color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
+    --ov-ui-color-status-error,
+    var(--ov-ui-status-error-default, #c43838)
   );
-}
-
-.ov-file-tree__child-row[data-tone='error'] {
-  color: var(--ov-ui-status-error, #c43838);
-}
-
-.ov-file-tree__child-action {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.ov-file-tree__child-action:disabled {
-  cursor: default;
-  opacity: 0.6;
 }
 
 .ov-file-tree__state {
@@ -227,22 +331,33 @@
   box-sizing: border-box;
   min-height: 120px;
   padding: 24px;
+  color: var(--ov-ui-file-tree-text-muted);
 }
 
 .ov-file-tree__muted {
+  overflow: hidden;
   color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/**
+ * 展开目录加载子节点时，替换展开箭头显示的转圈。
+ * 由纯 CSS 画环，不依赖图标资源。
+ *
+ * The spinner shown in place of the expand chevron while a directory loads its
+ * children. Drawn with CSS alone, so it needs no icon asset.
+ */
 .ov-file-tree__spinner {
   display: inline-block;
   flex: none;
   box-sizing: border-box;
   width: 12px;
   height: 12px;
-  border: 1.5px solid currentColor;
-  border-right-color: transparent;
+  border: 1px solid var(--ov-ui-file-tree-spinner-track);
+  border-top-color: var(--ov-ui-file-tree-spinner);
   border-radius: 50%;
-  animation: ov-file-tree-spin 720ms linear infinite;
+  animation: ov-file-tree-spin 900ms linear infinite;
 }
 
 @keyframes ov-file-tree-spin {
@@ -251,8 +366,35 @@
   }
 }
 
+/**
+ * 行内文字操作，例如「加载更多」「加载失败，点击重试」。次要文字色，
+ * 悬停转主色；不加下划线，与宿主的树一致。
+ *
+ * A text action inside a row, such as "Load more" or a retry hint. Secondary
+ * text that turns into the primary colour on hover, with no underline — the same
+ * treatment the host's tree uses.
+ */
+.ov-file-tree__action {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: color 120ms;
+}
+
+.ov-file-tree__action:hover:not(:disabled) {
+  color: var(--ov-ui-file-tree-action);
+}
+
+.ov-file-tree__action:disabled {
+  cursor: default;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .ov-file-tree__chevron {
+  .ov-file-tree__chevron,
+  .ov-file-tree__folder-layer {
     transition: none;
   }
 
