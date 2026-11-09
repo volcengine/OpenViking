@@ -51,13 +51,14 @@ exit ${nodeWorks ? 0 : 1}
 
 test('installs a release under ~/.vika, adds the launcher and PATH, and never touches pm2', (t) => {
   const m = machine(t);
+  const bashRc = path.join(m.home, process.platform === 'darwin' ? '.bash_profile' : '.bashrc');
   const first = m.install('--file', m.archive('0.5.0'));
   assert.equal(first.status, 0, first.stderr);
   assert.equal(fs.realpathSync(path.join(m.vika, 'current')), fs.realpathSync(path.join(m.vika, 'releases', '0.5.0')));
   const launcher = fs.readFileSync(path.join(m.vika, 'bin', 'vika'), 'utf8');
   assert.match(launcher, /exec "\$HOME\/\.vika\/current\/node\/bin\/node" "\$HOME\/\.vika\/current\/packages\/cli\/bin\/vika\.mjs" "\$@"/);
   assert.equal(fs.statSync(path.join(m.vika, 'bin', 'vika')).mode & 0o111, 0o111);
-  assert.match(fs.readFileSync(path.join(m.home, '.bashrc'), 'utf8'), /export PATH="\$HOME\/\.vika\/bin:\$PATH"/);
+  assert.match(fs.readFileSync(bashRc, 'utf8'), /export PATH="\$HOME\/\.vika\/bin:\$PATH"/);
   assert.equal(fs.existsSync(path.join(m.vika, 'deploy.lock')), false, 'the lock is released');
   assert.match(first.stderr, /下一步：运行 ~\/\.vika\/bin\/vika setup/);
   // Without an instance, running the installer again still leads to setup.
@@ -73,7 +74,7 @@ test('installs a release under ~/.vika, adds the launcher and PATH, and never to
   const again = m.install('--file', m.archive('0.6.0'));
   assert.match(again.stderr, /已经是 Vika 0\.6\.0/);
   assert.doesNotMatch(again.stderr, /vika restart|下一步/);
-  assert.equal(fs.readFileSync(path.join(m.home, '.bashrc'), 'utf8').match(/\.vika\/bin/g).length, 1, 'PATH is added once');
+  assert.equal(fs.readFileSync(bashRc, 'utf8').match(/\.vika\/bin/g).length, 1, 'PATH is added once');
   assert.equal(m.pm2Calls(), false);
 });
 

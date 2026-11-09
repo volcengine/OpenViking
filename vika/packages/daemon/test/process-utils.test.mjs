@@ -16,6 +16,9 @@ import { sanitizeClaudeEnv } from '../src/claude.mjs';
 import { sanitizePiEnv } from '../src/pi.mjs';
 import { sanitizeTraexEnv } from '../src/traex.mjs';
 import { sanitizeAgentChildEnv, sanitizeNonArkChildEnv } from '../src/process-utils.mjs';
+import { supportsShellScripts } from '../src/platform/index.mjs';
+
+const posixShell = { skip: !supportsShellScripts && 'requires POSIX /bin/sh fixtures' };
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-agent-cli-'));
@@ -39,7 +42,7 @@ function shell(command, env, cwd) {
 }
 
 for (const layout of ['source', 'release']) {
-  test(`agent shell resolves the pinned CLI from a ${layout} outside the workspace`, (t) => {
+  test(`agent shell resolves the pinned CLI from a ${layout} outside the workspace`, posixShell, (t) => {
     const { root, workspace, systemBin } = fixture(t);
     const install = layout === 'source' ? path.join(root, 'checkout', 'vika') : path.join(root, '.vika', 'releases', '1.0');
     const relativeBin = 'node_modules/@larksuite/cli/bin/lark-cli';
@@ -59,7 +62,7 @@ for (const layout of ['source', 'release']) {
   });
 }
 
-test('the configured CLI takes precedence over a global CLI without duplicating its directory', (t) => {
+test('the configured CLI takes precedence over a global CLI without duplicating its directory', posixShell, (t) => {
   const { root, workspace, systemBin } = fixture(t);
   const larkCliBin = path.join(root, 'custom tools', 'lark-cli');
   executable(larkCliBin, 'configured');
@@ -70,7 +73,7 @@ test('the configured CLI takes precedence over a global CLI without duplicating 
   assert.equal(sanitizeAgentChildEnv(env, { cliBins: [larkCliBin] }).PATH, env.PATH);
 });
 
-test('additional bundled CLIs share discovery without runtime-specific PATH changes', (t) => {
+test('additional bundled CLIs share discovery without runtime-specific PATH changes', posixShell, (t) => {
   const { root, workspace, systemBin } = fixture(t);
   const bin = path.join(root, 'future-cli', 'enterprise-chat');
   executable(bin, 'future-pinned');
@@ -79,7 +82,7 @@ test('additional bundled CLIs share discovery without runtime-specific PATH chan
 });
 
 for (const sanitize of [sanitizeCodexEnv, sanitizeClaudeEnv, sanitizePiEnv, sanitizeTraexEnv]) {
-  test(`${sanitize.name} uses configured CLIs and the daemon profile from an unrelated workspace`, (t) => {
+  test(`${sanitize.name} uses configured CLIs and the daemon profile from an unrelated workspace`, posixShell, (t) => {
     const { root, workspace, systemBin } = fixture(t);
     const config = { larkCliBin: path.join(root, 'lark', 'lark-cli'), slackCliBin: path.join(root, 'slack', 'slack') };
     executable(config.larkCliBin, 'lark');
@@ -91,7 +94,7 @@ for (const sanitize of [sanitizeCodexEnv, sanitizeClaudeEnv, sanitizePiEnv, sani
   });
 }
 
-test('missing or empty PATH retains system commands without adding the workspace to PATH', (t) => {
+test('missing or empty PATH retains system commands without adding the workspace to PATH', posixShell, (t) => {
   const { root, workspace } = fixture(t);
   const larkCliBin = path.join(root, 'bin', 'lark-cli');
   executable(larkCliBin, 'configured');
@@ -135,7 +138,7 @@ test('CLI discovery preserves the agent credential boundary and leaves connector
 
 const bundled = bundledLarkCli();
 test('the installed bundled CLI runs --version in an agent shell', {
-  skip: !path.isAbsolute(bundled) && 'run scripts/install-lark-cli.mjs to install the pinned binary',
+  skip: posixShell.skip || (!path.isAbsolute(bundled) && 'run scripts/install-lark-cli.mjs to install the pinned binary'),
 }, (t) => {
   const { root, workspace, systemBin } = fixture(t);
   const env = sanitizeAgentChildEnv({ HOME: root, PATH: systemBin });
@@ -146,7 +149,7 @@ test('the installed bundled CLI runs --version in an agent shell', {
 });
 
 test('the installed Slack CLI runs version in an agent shell', {
-  skip: !fs.existsSync(bundledSlackCli()) && 'run scripts/install-slack-cli.mjs to install the pinned binary',
+  skip: posixShell.skip || (!fs.existsSync(bundledSlackCli()) && 'run scripts/install-slack-cli.mjs to install the pinned binary'),
 }, (t) => {
   const { root, workspace, systemBin } = fixture(t);
   const env = sanitizeAgentChildEnv({ HOME: root, PATH: systemBin, SLACK_DISABLE_TELEMETRY: 'true' });

@@ -11,13 +11,14 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { McpClient, StdioTransport } from '@earendil-works/pi-mcp';
 import { createMcpHandler, serveMcp } from '../src/actions/mcp.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 
 const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url));
 const deferred = () => Promise.withResolvers();
 
 async function fixture(t, run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-transport-'));
-  const socketPath = path.join(root, 'actions.sock');
+  const socketPath = localSocketPath(root);
   const server = http.createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
