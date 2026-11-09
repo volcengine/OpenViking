@@ -437,3 +437,66 @@
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
   font-weight: 500;
 }
+
+/*
+ * 读失败态：结论、原始原因与重试。原因用等宽字与次要色，与服务端给的措辞保持
+ * 一致，不在这里改写。
+ *
+ * The read-failure state: conclusion, raw reason and retry. The reason uses a
+ * monospace face in the muted colour and keeps the server's own wording rather
+ * than being rewritten here.
+ */
+.ov-file-browser__failure {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.ov-file-browser__failure-title {
+  margin: 0;
+  color: var(
+    --ov-ui-color-status-error,
+    var(--ov-ui-status-error-default, #c43838)
+  );
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-file-browser__failure-detail {
+  max-width: 480px;
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.ov-file-browser__failure-retry {
+  padding: 4px 12px;
+  border: var(--ov-file-browser-stroke) solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.ov-file-browser__failure-retry:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+}
+
+.ov-file-browser__failure-retry:focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
+  outline-offset: 1px;
+}

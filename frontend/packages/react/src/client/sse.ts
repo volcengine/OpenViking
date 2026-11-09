@@ -1,14 +1,52 @@
 import type { OvStreamEvent } from './types.js';
 
-const EVENT_BOUNDARY = '\n\n';
+/**
+ * 事件块的分隔：空行，也就是连续两个行终止符。行终止符可以是 `\r\n`、`\n` 或
+ * `\r`，两两组合都合法（`\r\n\r\n`、`\r\n\n`、`\r\r\n`、`\r\r`……），因此这里
+ * 按「两个终止符」匹配，而不是只找 `\n\n`——后者会把整个 CRLF 流当成一个事件。
+ *
+ * `\r` 必须排除后面紧跟 `\n` 的情况：否则 `\r\n` 会被回溯成 `\r` + `\n` 两个
+ * 终止符，一个普通的行尾就被误判成空行，事件从中间被切开。
+ *
+ * `\r` excludes a following `\n`: otherwise `\r\n` backtracks into `\r` + `\n`,
+ * counting one ordinary line ending as two terminators and splitting an event in
+ * half.
+ *
+ * 只在**已完整到达**的文本里找分隔：末尾若是孤立的 `\r`，它可能是下一块的
+ * `\r\n` 的前半段，先留在缓冲区等下一个 chunk，否则会把一个事件从中间切断。
+ *
+ * The boundary between event blocks is a blank line, meaning two consecutive line
+ * terminators. A terminator may be `\r\n`, `\n` or `\r`, and every pairing is
+ * valid (`\r\n\r\n`, `\r\n\n`, `\r\r\n`, `\r\r` …), so this matches "two
+ * terminators" rather than looking for `\n\n` alone, which treats a whole CRLF
+ * stream as one event.
+ *
+ * Only text that has fully arrived is searched: a trailing lone `\r` may be the
+ * first half of a `\r\n` belonging to the next block, so it stays buffered until
+ * the next chunk — otherwise an event would be cut in half.
+ */
+const BOUNDARY = /(?:\r\n|\r(?!\n)|\n){2}/;
+
+/** 末尾孤立 `\r` 的位置：它还不能判定是不是分隔的一部分。 */
+/** Position of a trailing lone `\r`, which cannot yet be judged part of a boundary. */
+function trailingCarriageReturn(text: string): number {
+  return text.endsWith('\r') ? text.length - 1 : -1;
+}
 
 /**
  * 按行解析一个事件块。字段名按规范只认 `data` / `event` / `id` / `retry`，
  * 注释行（以 `:` 开头）忽略；`data` 多行用换行拼接，`retry` 只接受整数。
  *
+ * 块内换行可能是 `\r\n`、`\n` 或 `\r`，这里统一按三种切行，而不是只去掉行尾
+ * 的 `\r`——单独 `\r` 换行的流此前会被当成一整行。
+ *
  * Parses one event block line by line. Only `data` / `event` / `id` / `retry` are
  * recognised, comment lines (starting with `:`) are ignored, multi-line `data`
  * joins with newlines, and `retry` accepts integers only.
+ *
+ * Lines inside a block may end with `\r\n`, `\n` or `\r`; all three split here
+ * rather than only stripping a trailing `\r`, which treated a `\r`-only stream as
+ * one long line.
  */
 function parseEvent(block: string): OvStreamEvent | undefined {
   let data: string | undefined;
@@ -16,8 +54,7 @@ function parseEvent(block: string): OvStreamEvent | undefined {
   let id: string | undefined;
   let retry: number | undefined;
 
-  for (const rawLine of block.split('\n')) {
-    const line = rawLine.replace(/\r$/, '');
+  for (const line of block.split(/\r\n|\r|\n/)) {
     if (!line || line.startsWith(':')) continue;
 
     const colon = line.indexOf(':');
@@ -90,8 +127,18 @@ export function decodeEventStream(
     new TransformStream<string, OvStreamEvent>({
       transform(chunk, controller) {
         pending += chunk;
-        const blocks = pending.split(EVENT_BOUNDARY);
-        pending = blocks.pop() ?? '';
+        // 末尾孤立的 `\r` 先留在缓冲区：它可能是下一个 `\r\n` 的前半段。
+        const holdFrom = trailingCarriageReturn(pending);
+        const searchable = holdFrom < 0 ? pending : pending.slice(0, holdFrom);
+        const blocks: string[] = [];
+        let rest = searchable;
+        for (;;) {
+          const match = BOUNDARY.exec(rest);
+          if (!match) break;
+          blocks.push(rest.slice(0, match.index));
+          rest = rest.slice(match.index + match[0].length);
+        }
+        pending = rest + (holdFrom < 0 ? '' : '\r');
         for (const block of blocks) {
           const parsed = parseEvent(block);
           if (parsed) controller.enqueue(parsed);

@@ -40,6 +40,34 @@ export const emptyDir = (): DirState => ({
   error: null,
 });
 
+/**
+ * 把新到的一页并入目录状态：`offset` 为 0 是首屏、直接替换，否则追加到已有
+ * 子节点之后。
+ *
+ * 追加而不是替换，是因为分页要保留前几页；替换会让「加载更多」把列表截成最后
+ * 一页。
+ *
+ * Merges an arriving page into a directory's state: `offset` 0 is the first page and
+ * replaces, anything else appends to the children already loaded.
+ *
+ * It appends rather than replaces because paging has to keep the earlier pages;
+ * replacing would truncate the list to its last page on "load more".
+ */
+export function mergePage(
+  current: DirState | undefined,
+  page: { entries: FsEntry[]; hasMore: boolean },
+  offset: number,
+): DirState {
+  const previous = current ?? emptyDir();
+  return {
+    entries:
+      offset === 0 ? page.entries : [...previous.entries, ...page.entries],
+    hasMore: page.hasMore,
+    loading: false,
+    error: null,
+  };
+}
+
 /** 从 URI 取末段名称。最后一段为空时回退到整个 URI。 */
 export function nameFromUri(uri: string): string {
   const trimmed = uri.replace(/\/+$/, '');

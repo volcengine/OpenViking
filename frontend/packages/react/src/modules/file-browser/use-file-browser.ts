@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import type {
   FileTreeEntryRow,
@@ -44,6 +44,13 @@ export function useFileBrowser({
   const [query, setQuery] = useState('');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
   const [refreshing, setRefreshing] = useState(false);
+  // 刷新代次：外部改动后目录、搜索与预览都要重新取数，但它们的依赖（URI、查询
+  // 词、客户端）都没有变化，因此需要一个显式信号让三者一起重跑。
+  //
+  // Refresh generation: after an external change the tree, the search and the
+  // preview all need to reload, but none of their dependencies (URI, query, client)
+  // changed, so an explicit signal makes all three re-run.
+  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const tree = useFsTree({
     client,
     rootUri,
@@ -54,43 +61,56 @@ export function useFileBrowser({
     client,
     query,
     targetUri: rootUri,
+    generation: refreshGeneration,
     requestOptions,
   });
-  // 当前资源是目录还是文件，决定预览读摘要还是正文。树上能找到这一行就用它的
-  // 类型；找不到（例如宿主直接传了一个 URI）按文件处理。
+  // 当前资源是目录还是文件，决定预览读摘要还是正文。
   //
-  // Whether the current resource is a directory decides whether the preview reads
-  // a summary or content. A row in the tree answers it; when the host passes a URI
-  // the tree does not contain, it is treated as a file.
+  // 判定不能用「可见行里有没有这一行」：根目录本身从不出现在 `tree.rows` 里，
+  // 祖先折叠后其后代也从那份展平列表里消失。两者都会被误判成文件，于是根目录
+  // 和折叠中的子目录丢掉 L0/L1 摘要、改去读正文。这里改为按树已知的目录集合
+  // 判定，它与可见性无关。
+  //
+  // Whether the current resource is a directory decides whether the preview reads a
+  // summary or content.
+  //
+  // The answer cannot come from "is this row visible": the root itself never appears
+  // in `tree.rows`, and collapsing an ancestor removes its descendants from that
+  // flattened list. Both would be misread as files, so the root and a nested
+  // directory under a collapsed ancestor would lose their L0/L1 summary and read
+  // content instead. The decision therefore uses the set of directories the tree
+  // knows about, which is independent of visibility.
   const activeUri = currentUri ?? pendingUri;
-  const isDirectory = useMemo(() => {
-    if (!activeUri) return false;
-    const row = tree.rows.find(
-      (candidate) => candidate.kind === 'entry' && candidate.id === activeUri,
-    );
-    return row?.kind === 'entry' && row.type === 'directory';
-  }, [activeUri, tree.rows]);
+  const isDirectory = activeUri !== null && tree.directoryUris.has(activeUri);
 
   // 面包屑上点某一级祖先，就选中它——和点树上的那一行是同一个动作，因此共用
   // 同一条选中路径，而不是另开一个只改预览的入口。
   //
+  // 回调引用必须稳定，且不能依赖 `onUriChange`：宿主传内联箭头函数时它每轮都
+  // 变，这个回调跟着变，预览的取数 effect 依赖它，于是每次提交都重跑并取消
+  // 上一次请求——一次选中就能滚成无限重载。用 ref 读最新的通知函数，依赖只留
+  // `openTree`。
+  //
   // Clicking an ancestor in the breadcrumb selects it — the same action as clicking
   // that row in the tree, so it goes through the same selection path rather than a
   // second entry point that only changes the preview.
-  // 只依赖 `tree.open` 本身，不依赖整个 `tree` 对象：后者每次展开都会换新引用，
-  // 让这个回调跟着变，进而让预览的取数 effect 反复重跑并取消请求。
   //
-  // Depend on `tree.open` alone, never on the whole `tree` object: the latter gets
-  // a new identity on every expansion, which would change this callback and make
-  // the preview's loading effect re-run and cancel itself.
+  // The callback must keep a stable identity and must not depend on `onUriChange`:
+  // a host passing an inline arrow function changes it every render, which would
+  // change this callback, and the preview's loading effect depends on it — so every
+  // commit would re-run the effect and cancel the previous request, turning one
+  // selection into an endless reload. A ref carries the latest notification and
+  // only `openTree` remains as a dependency.
   const openTree = tree.open;
+  const notifyUriChange = useRef(onUriChange);
+  notifyUriChange.current = onUriChange;
   const openParent = useMemo(
     () => async (uri: string) => {
       setPendingUri(uri);
-      onUriChange(uri);
+      notifyUriChange.current(uri);
       await openTree(uri);
     },
-    [onUriChange, openTree],
+    [openTree],
   );
 
   const preview = useFsPreview({
@@ -105,6 +125,7 @@ export function useFileBrowser({
     isDirectory,
     labels: summaryLabels,
     openParent,
+    generation: refreshGeneration,
     requestOptions,
   });
 
@@ -137,13 +158,22 @@ export function useFileBrowser({
       // 目录与文件都上报当前资源：控制台里点目录既展开也选中，右侧显示该目录的
       // 摘要。只展开不上报会让树上看不出选中了哪一行。
       //
+      // 先选中再等子节点：首次展开要发请求，若等它回来才上报，用户在此期间点了
+      // 别的资源，这个旧回调会把选中改回目录。选中属于点击那一刻的意图，不该被
+      // 一次迟到的列表请求覆盖。
+      //
       // Both directories and files report the current resource: in the console a
       // directory click expands it and selects it, with its summary on the right.
       // Expanding without reporting would leave no visible selection in the tree.
+      //
+      // Select first, then wait for the children: a first expansion issues a request,
+      // and reporting only after it returns would let this late callback overwrite a
+      // resource the user picked in the meantime. The selection belongs to the moment
+      // of the click, not to a listing that arrives afterwards.
       select: async (row: FileTreeEntryRow) => {
-        if (row.type === 'directory') await open(row.uri);
         setPendingUri(row.uri);
-        onUriChange(row.uri);
+        notifyUriChange.current(row.uri);
+        if (row.type === 'directory') await open(row.uri);
       },
       toggleExpand,
       loadMore: async (row: FileTreeRow) => {
@@ -154,9 +184,19 @@ export function useFileBrowser({
         const parentId = 'parentId' in row ? row.parentId : undefined;
         if (parentId) await retry(parentId);
       },
+      // 刷新覆盖三个数据源：目录列表、当前预览与进行中的搜索。只刷树会让右侧
+      // 继续显示旧正文、搜索结果继续指向旧路径——外部改动（例如别的会话写了同
+      // 一个文件）之后，那是最容易误导人的状态。
+      //
+      // Refresh covers all three sources: the listings, the current preview and an
+      // active search. Reloading only the tree would leave the detail pane showing
+      // old content and the search results pointing at stale paths — the most
+      // misleading state after an external change such as another session writing
+      // the same file.
       refresh: async () => {
         setRefreshing(true);
         try {
+          setRefreshGeneration((generation) => generation + 1);
           await refresh();
         } finally {
           setRefreshing(false);
@@ -171,15 +211,7 @@ export function useFileBrowser({
     // Narrow the dependencies to the operations themselves rather than the whole
     // `tree`: the latter gets a new identity on every expansion, which would
     // replace `actions` and with it the `operations` handed to `FileTree`.
-    [
-      onUriChange,
-      preview.setActiveKey,
-      open,
-      toggleExpand,
-      loadMore,
-      retry,
-      refresh,
-    ],
+    [preview.setActiveKey, open, toggleExpand, loadMore, retry, refresh],
   );
 
   return {
@@ -188,6 +220,8 @@ export function useFileBrowser({
     currentUri,
     isReady: tree.isReady,
     error: tree.error ?? search.error ?? preview.error,
+    treeError: tree.error,
+    previewError: preview.error,
     previewTabs: preview.tabs,
     previewKey: preview.activeKey,
     previewFooter: preview.footer,

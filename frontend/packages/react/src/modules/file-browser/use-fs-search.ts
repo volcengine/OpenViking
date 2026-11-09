@@ -22,6 +22,15 @@ export interface UseFsSearchOptions {
   /** 已去抖的查询词；空串表示没有搜索。The debounced query; empty means no search. */
   query: string;
   targetUri: string;
+  /**
+   * 重新取数的代次。宿主调用刷新时递增，让同一查询词重新请求——外部数据变了
+   * 而查询词没变，只靠依赖是看不出来的。
+   *
+   * Reload generation. A host increments it on refresh so the same query is
+   * requested again: the data changed while the query did not, which dependencies
+   * alone cannot express.
+   */
+  generation?: number;
   requestOptions?: OvRequestOptions;
 }
 
@@ -37,6 +46,7 @@ export function useFsSearch({
   client,
   query,
   targetUri,
+  generation = 0,
   requestOptions,
 }: UseFsSearchOptions): SearchState {
   const [results, setResults] = useState<FsEntry[] | null>(null);
@@ -77,7 +87,7 @@ export function useFsSearch({
       );
 
     return () => controller.abort();
-  }, [client, query, targetUri, requestOptions]);
+  }, [client, query, targetUri, generation, requestOptions]);
 
   return { results, loading, error };
 }

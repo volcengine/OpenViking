@@ -29,43 +29,36 @@
 
 - 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
 - 登录、账号作用域、路由与权限。
-- 顶部入口条里的按钮，例如连接 Agent、导入资源。用 `FileBrowserToolbarButton` 在 `toolbarActions` 里组合，外观与控制台一致。只靠点击不够时，入口可以包在气泡或下拉里。
+- 顶部入口条里的入口，例如连接 Agent、导入资源。用 `FileBrowserEntries` 在 `toolbarActions` 里组合，图标、文案与分隔线由它负责。需要菜单时把它包在气泡或下拉里。
 - 接入弹窗、导入流程与引导。模块都不内置。
 
 ## 入口与工具栏
 
-顶部是宿主入口条（主色浅底），其下是模块自己的搜索框与刷新按钮。宿主通过 `toolbarActions` 添加入口，用 `FileBrowserToolbarButton` 保证外观一致：
+顶部是宿主入口条（主色浅底），其下是模块自己的搜索框与刷新按钮。宿主通过 `toolbarActions` 添加入口，用 `FileBrowserEntries` 保证外观一致：
 
 ```tsx
-import {
-  FileBrowser,
-  FileBrowserToolbarButton,
-} from '@openviking/react/modules/file-browser';
+import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
+import '@openviking/react/components/file-browser-entries/style.css';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
 
 <FileBrowser
   toolbarActions={
-    <>
-      <FileBrowserToolbarButton icon={<ConnectIcon />} onClick={connect}>
-        连接 Agent
-      </FileBrowserToolbarButton>
-      <span className="ov-file-browser__entry-divider" aria-hidden="true" />
-      <FileBrowserToolbarButton icon={<UploadIcon />} onClick={openImport}>
-        导入资源
-      </FileBrowserToolbarButton>
-    </>
+    <FileBrowserEntries
+      onConnectAgent={connect}
+      onImportResources={openImport}
+      labels={{ connectAgent: '连接 Agent', importResources: '导入资源' }}
+    />
   }
 />;
 ```
 
-入口之间的分隔线用 `ov-file-browser__entry-divider` 显式插入——它是一根竖线，不是自动推断的，所以宿主想在哪两个入口之间分隔就在哪里放。
+`FileBrowserEntries` 固定是两个入口，省略某个回调即隐藏对应入口；图标、文案与两者之间的分隔线都由它负责，宿主只决定显示哪几个与点击后做什么。只显示一个入口时不画分隔线。
 
-`toolbarActions` 是节点，需要菜单的入口直接把自己的按钮包起来，不需要再加字段：
+`toolbarActions` 是节点，需要菜单的入口直接把 `FileBrowserEntries` 包起来，不需要再加字段：
 
 ```tsx
 <Popover content={<ResourceMenu />} trigger="hover">
-  <FileBrowserToolbarButton icon={<UploadIcon />}>
-    导入资源
-  </FileBrowserToolbarButton>
+  <FileBrowserEntries onImportResources={openImport} />
 </Popover>
 ```
 
@@ -81,16 +74,26 @@ import {
 
 分隔条的无障碍名称来自 `labels.resizeTree`，需要跟随界面语言时覆盖它。
 
+## 失败态
+
+读不到和读到空是两件事，模块分开呈现：
+
+- 目录列表失败时，树里显示失败行与重试按钮，而不是「没有文件」。根目录失败也一样——把它画成空态会让 403 看起来像目录本来就没有内容。
+- 预览失败时，右侧显示失败态：`labels.error` 作结论、服务端返回的原始消息作原因、`labels.retry` 作重试。有选中的资源却读不出来时不会回落到空态插画。
+- 只有真正没选中资源时才显示空态。
+
+失败态的重试会重新取数目录、当前预览与进行中的搜索——外部改动之后，只刷树会让右侧继续显示旧正文。
+
 ## 属性
 
-模块从子路径和根入口导出 `FileBrowserProps`，`FileBrowserToolbarButton`、`FileBrowserToolbarButtonProps` 与 `FileBrowserLabels` 只从子路径导出。
+模块从子路径和根入口导出 `FileBrowserProps`；`FileBrowserLabels` 只从子路径导出。入口条 `FileBrowserEntries` 属于组件层，从 `@openviking/react/components/file-browser-entries` 导入。
 
 | 属性                 | 类型                            | 默认值      | 说明                                                                                                                                                                                                                       |
 | -------------------- | ------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `requestOptions`     | `OvRequestOptions`              | —           | 请求配置覆盖，逐字段覆盖最近的 Provider。                                                                                                                                                                                  |
 | `uri`                | `string`                        | —           | 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。                                                                                                                                                         |
 | `defaultUri`         | `string`                        | —           | 非受控时的初始资源 URI。省略时不选中任何资源。                                                                                                                                                                             |
-| `toolbarActions`     | `ReactNode`                     | —           | 工具栏左侧的宿主入口，用 `FileBrowserToolbarButton` 组合。搜索、刷新与入口之间的分隔线由模块负责。                                                                                                                         |
+| `toolbarActions`     | `ReactNode`                     | —           | 工具栏上方的宿主入口，用 `FileBrowserEntries` 组合。搜索框与刷新按钮由模块自己渲染。                                                                                                                                       |
 | `onUriChange`        | `(uri: string \| null) => void` | —           | 当前资源变化后触发；清除选中时传入 `null`。                                                                                                                                                                                |
 | `rootUri`            | `string`                        | `viking://` | 目录树的根，宿主据此把浏览范围收敛到某个子树。                                                                                                                                                                             |
 | `defaultExpandedUri` | `string`                        | —           | 首次加载后自动展开到的路径，逐级展开并加载。省略时只展开根，其余折叠。                                                                                                                                                     |

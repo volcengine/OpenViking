@@ -178,6 +178,23 @@ export interface FileBrowserApi {
   isReady: boolean;
   /** 整体加载失败的原因。Reason the whole tree failed to load. */
   error: Error | null;
+  /**
+   * 目录列表本身的失败原因。与 {@link error} 的区别是来源单一：宿主据此在树的
+   * 位置渲染失败态并给出重试，而不是把 403 显示成「没有文件」。
+   *
+   * Why the directory listing itself failed. It differs from {@link error} by having
+   * a single source: a host renders a failure state with a retry in the tree's place
+   * instead of showing a 403 as "no files".
+   */
+  treeError: Error | null;
+  /**
+   * 当前资源预览的失败原因。选中了资源但读不出来时用它区分「读失败」与「什么
+   * 都没选」。
+   *
+   * Why the preview of the current resource failed. It separates "could not read"
+   * from "nothing selected" when a resource is selected.
+   */
+  previewError: Error | null;
   /** 当前资源的预览页签，没有选中时为 `null`。Preview tabs of the current resource, `null` when nothing is selected. */
   previewTabs: readonly FilePreviewTab[] | null;
   /** 当前预览页签 key。Active preview tab key. */

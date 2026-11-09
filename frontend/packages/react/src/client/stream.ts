@@ -1,0 +1,187 @@
+import { OvClientError } from './errors.js';
+import {
+  isAbortError,
+  parseJson,
+  readText,
+  throwIfErrorEnvelope,
+  toClientError,
+} from './response.js';
+import { decodeEventStream } from './sse.js';
+import type {
+  OvClientOptions,
+  OvRequestOptions,
+  OvResolvedOptions,
+  OvStream,
+  OvStreamEvent,
+  OvStreamSpec,
+} from './types.js';
+
+/** 流式响应要求的 content-type。The content type a streamed response must carry. */
+const EVENT_STREAM = 'text/event-stream';
+
+/**
+ * `stream()` 需要的两件外部能力：发一次请求，以及解析本次请求生效的配置。
+ * 抽成参数而不是复制实现，是为了让流式逻辑单独成文件、守住单文件行数上限。
+ *
+ * The two capabilities `stream()` needs: send one request, and resolve the
+ * configuration in effect for it. They are passed in rather than duplicated so the
+ * streaming logic can live in its own file and stay within the per-file line limit.
+ */
+export interface StreamDeps {
+  send: (
+    spec: OvStreamSpec,
+    headers?: Record<string, string>,
+    signal?: AbortSignal,
+  ) => Promise<{ response: Response; effective: OvResolvedOptions }>;
+  resolveFor: (
+    defaults: OvClientOptions,
+    override: OvRequestOptions | undefined,
+  ) => Promise<OvResolvedOptions>;
+  defaults: OvClientOptions;
+}
+
+/**
+ * 建立一条事件流：自己的控制器与调用方取消联动，建立阶段的失败按普通请求上报，
+ * 迭代结束（正常结束、提前 `break` 或出错）都释放底层流。
+ *
+ * Opens an event stream: its own controller is linked to caller cancellation, setup
+ * failures are reported like an ordinary request, and every way iteration ends —
+ * completion, an early `break` or an error — releases the underlying stream.
+ */
+export async function openStream(
+  spec: OvStreamSpec,
+  { send, resolveFor, defaults }: StreamDeps,
+): Promise<OvStream> {
+  // 自己的控制器与调用方的 signal 联动：`abort()` 与调用方取消都能停掉连接，
+  // 任一方触发即中止。
+  //
+  // Its own controller is linked to the caller's signal, so `abort()` and caller
+  // cancellation both stop the connection.
+  const controller = new AbortController();
+  // 取消时唤醒正在等待的读取：底层读取不一定随 signal 结束，靠它自己返回可能
+  // 永远等下去。
+  //
+  // Cancellation wakes a waiting read: the underlying read does not necessarily end
+  // with the signal, and waiting for it to return could hang forever.
+  let releaseAbort: (() => void) | undefined;
+  const aborted = new Promise<'aborted'>((resolve) => {
+    releaseAbort = () => resolve('aborted');
+  });
+
+  const stop = () => {
+    releaseAbort?.();
+    controller.abort();
+  };
+
+  // 客户端级 signal 与本次请求的覆盖都要接上，并沿用「请求覆盖优先」的常规优先
+  // 级：此前只读 `spec.options.signal`，于是 `createOvClient({ signal })` 取消后
+  // 传给 fetch 的 signal 仍是未中止的那个。
+  //
+  // Both the client-level signal and this request's override are honoured, in the
+  // usual "request overrides default" precedence: reading only `spec.options.signal`
+  // meant aborting `createOvClient({ signal })` left the signal handed to fetch
+  // un-aborted.
+  const resolved = await resolveFor(defaults, spec.options);
+  const callerSignals = [resolved.signal, spec.options?.signal].filter(
+    (candidate): candidate is AbortSignal => Boolean(candidate),
+  );
+  const forward = () => stop();
+  for (const callerSignal of callerSignals) {
+    if (callerSignal.aborted) {
+      forward();
+      break;
+    }
+    callerSignal.addEventListener('abort', forward, { once: true });
+  }
+
+  // 事件流用完之后要摘掉监听，否则一个长期存活的客户端会为每条流留下一份引用。
+  // Detach once the stream is done, or a long-lived client keeps a reference per
+  // stream it ever opened.
+  const detach = () => {
+    for (const callerSignal of callerSignals) {
+      callerSignal.removeEventListener('abort', forward);
+    }
+  };
+
+  const { response } = await send(
+    spec,
+    { accept: EVENT_STREAM, ...spec.headers },
+    controller.signal,
+  );
+
+  // 建立阶段失败（HTTP 错误、内容类型不对）时也要摘监听：这条流不会再有消费者，
+  // 留下的监听只会指向一个已经抛出的调用。
+  //
+  // Setup failures — an HTTP error or an unexpected content type — detach too: this
+  // stream will have no consumer, and a leftover listener would only point at a call
+  // that already threw.
+  let body: ReadableStream<Uint8Array>;
+  try {
+    if (!response.ok) {
+      const raw = await readText(response, controller.signal);
+      throw toClientError(response, parseJson(raw) ?? raw);
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes(EVENT_STREAM) || !response.body) {
+      // 服务端可能用 JSON 外壳报告失败，例如代理层在建立流之前就拒绝了请求。
+      const envelope = parseJson(await readText(response, controller.signal));
+      if (envelope !== undefined) throwIfErrorEnvelope(response, envelope);
+      throw new OvClientError({
+        code: 'UNEXPECTED_CONTENT_TYPE',
+        message: `Expected ${EVENT_STREAM}, got ${contentType || 'no content type'}`,
+        statusCode: response.status,
+        requestId: response.headers.get('x-request-id') ?? undefined,
+        responseBody: envelope,
+      });
+    }
+    body = response.body;
+  } catch (error) {
+    detach();
+    throw error;
+  }
+
+  const reader = decodeEventStream(body)[Symbol.asyncIterator]();
+
+  // 无论正常结束、提前 `break` 还是出错，都要释放底层流并摘掉监听：只结束包装
+  // 层的生成器不会取消响应体，长连接的 SSE 因此会在消费者退出后继续占着连接。
+  //
+  // Release the underlying stream and detach the listeners on normal completion, an
+  // early `break` and an error alike: closing only the wrapper generator does not
+  // cancel the response body, so a long-lived SSE connection keeps running after its
+  // consumer exits.
+  async function* iterate(): AsyncGenerator<OvStreamEvent> {
+    try {
+      for (;;) {
+        const next = await Promise.race([reader.next(), aborted]);
+        if (next === 'aborted') return;
+        if (next.done) return;
+        yield next.value;
+      }
+    } catch (error) {
+      // 取消是调用方的意图，不是失败：迭代安静结束，调用点不必再吞一次
+      // AbortError。连接已断时的读取错误也一并忽略。
+      //
+      // Cancellation is the caller's intent rather than a failure, so iteration ends
+      // quietly and the call site need not swallow another AbortError; a read error
+      // after the connection dropped is ignored the same way.
+      if (isAbortError(error)) return;
+      throw error;
+    } finally {
+      detach();
+      // 先让底层读取停下来再返回：`return()` 会关闭解码器并把取消传到响应体。
+      // Stop the underlying read before returning: `return()` closes the decoder and
+      // propagates the cancellation to the response body.
+      void Promise.resolve(reader.return?.(undefined)).catch(() => {});
+    }
+  }
+
+  return {
+    abort: () => {
+      stop();
+      detach();
+      void Promise.resolve(reader.return?.(undefined)).catch(() => {});
+    },
+    [Symbol.asyncIterator]: iterate,
+  };
+}

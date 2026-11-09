@@ -39,6 +39,15 @@ export interface UseFsPreviewOptions {
    * Opens one ancestor level; the breadcrumb and a directory tab share it.
    */
   openParent?: (uri: string) => Promise<void>;
+  /**
+   * 重新取数的代次。宿主调用刷新时递增，让同一资源的正文重新请求——内容在服务
+   * 端变了而 URI 没变，只靠依赖是看不出来的。
+   *
+   * Reload generation. A host increments it on refresh so the same resource is read
+   * again: the content changed on the server while the URI did not, which
+   * dependencies alone cannot express.
+   */
+  generation?: number;
   requestOptions?: OvRequestOptions;
 }
 
@@ -62,6 +71,7 @@ export function useFsPreview({
   isDirectory = false,
   labels = DEFAULT_SUMMARY_LABELS,
   openParent,
+  generation = 0,
   requestOptions,
 }: UseFsPreviewOptions): PreviewState {
   const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
@@ -101,8 +111,20 @@ export function useFsPreview({
       ? readDirectory(client, uri, options, labels, openParent)
       : readFile(client, uri, options, openParent);
 
+    // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
+    // 时切换资源，`readDirectory` 会把被中止的那一级当成「没有生成」而正常返回，
+    // 于是一个已经过期的目录页签会盖住新选中的资源。取消是调用方的意图，任何
+    // 结果都不该在它之后落地。
+    //
+    // Successes are re-checked for cancellation too: with a directory's two summary
+    // levels, one may resolve while the other is still in flight, and switching
+    // resources then makes `readDirectory` treat the aborted level as "not
+    // generated" and resolve successfully — so an obsolete directory tab would
+    // overwrite the newly selected resource. Cancellation is the caller's intent and
+    // no result may land after it.
     void read.then(
       (tab) => {
+        if (controller.signal.aborted) return;
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
@@ -115,14 +137,22 @@ export function useFsPreview({
         setFooter(`${body.length} characters`);
       },
       (cause: unknown) => {
-        if (isAbort(cause)) return;
+        if (isAbort(cause) || controller.signal.aborted) return;
         setTabs([]);
         setError(cause instanceof Error ? cause : new Error(String(cause)));
       },
     );
 
     return () => controller.abort();
-  }, [client, uri, isDirectory, labels, openParent, requestOptions]);
+  }, [
+    client,
+    uri,
+    isDirectory,
+    labels,
+    openParent,
+    generation,
+    requestOptions,
+  ]);
 
   return { tabs, activeKey, error, footer, setActiveKey };
 }
@@ -271,6 +301,16 @@ async function readDirectory(
     read(OV_PATHS.contentAbstract),
     read(OV_PATHS.contentOverview),
   ]);
+  // 被取消的那一级不是「没有生成」，而是「这次请求作废了」：把它当作空摘要
+  // 返回，调用方就会拿着一个过期结果当成成功。取消优先于其余失败上报。
+  //
+  // An aborted level is not "not generated" but "this request was cancelled":
+  // returning it as an empty summary would hand the caller a stale success. A
+  // cancellation therefore outranks any other failure.
+  const aborted = [abstractResult, overviewResult].find(
+    (result) => !result.ok && isAbort(result.cause),
+  );
+  if (aborted && !aborted.ok) throw aborted.cause;
   if (!abstractResult.ok && !overviewResult.ok) {
     throw abstractResult.cause;
   }

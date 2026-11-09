@@ -18,6 +18,7 @@ import { FilePreviewTabRow } from './file-preview-tab-row.js';
 import { useFilePreviewActions } from './use-file-preview-actions.js';
 import { useFilePreviewActionsContext } from './use-file-preview-actions-context.js';
 import { useFilePreviewIds } from './use-file-preview-ids.js';
+import { useDirectoryLevel } from './use-directory-level.js';
 import { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewComponent,
@@ -199,14 +200,17 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const linkClickHandler = fileTab?.operations?.openUri
     ? onLinkClick
     : undefined;
+  // 目录页签的当前层级由外壳持有，复制正文、复制路径与正文因此取同一份来源。
+  // The shell owns the active level, so copy-content, copy-path and the body read the
+  // same source.
+  const level = useDirectoryLevel(directoryTab);
   // 目录与文件都有路径行，复制路径按钮按路径出现，不按页签类型。
   // Both a directory and a file have a path row, so copy-path follows the path
   // rather than the tab kind.
-  const currentPath =
-    directoryTab?.levels[0]?.source.path ?? fileTab?.source.path;
+  const currentPath = level.source?.path ?? fileTab?.source.path;
   // 目录的正文取当前那一级：复制正文要复制用户正在看的那一份。
   // A directory's body is its active level: copy-content copies what is on screen.
-  const currentSource = directoryTab?.levels[0]?.source ?? fileTab?.source;
+  const currentSource = level.source ?? fileTab?.source;
 
   const actionContext = useFilePreviewActionsContext({
     activeTab,
@@ -236,7 +240,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       />
       <FilePreviewPanels
         contentTab={contentTab}
-        directoryTab={directoryTab}
+        directoryTab={level.directoryTab}
         fileTab={fileTab}
         panelProps={panelProps}
         panelClass={panelClass}

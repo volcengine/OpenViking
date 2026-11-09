@@ -161,9 +161,29 @@ export function Popover({
   const childRef = (child as unknown as { ref?: React.Ref<HTMLElement> }).ref;
   const mergedRef = useMergedRef(childRef, triggerRef);
 
+  // 触发元素声明过 `aria-expanded` 就一律不动它：文件树的行用它表达「目录展开
+  // 与否」，浮层可见性只是另一件事。覆盖会让每个挂了浮层的目录行都报
+  // `aria-expanded=false`；文件行更糟——它们显式传了 `undefined`，按值判断会
+  // 被当成「没声明」而凭空多出一个属性，读屏器拿到的树结构因此是错的。
+  //
+  // 判据是「声明过」而不是「值不为 undefined」：文件行传的正是 `undefined`，
+  // 那表示「这一行没有展开状态」，而不是「请帮我补一个」。只有完全没声明该属性
+  // 的触发元素，才由浮层用可见性填上。
+  //
+  // A trigger that declares `aria-expanded` keeps it untouched: a file tree row uses
+  // it for "directory expanded or not", which is unrelated to whether a popover is
+  // open. Overwriting reports `aria-expanded=false` on every directory row with a
+  // popover, and file rows are worse — they pass `undefined` explicitly, so a
+  // value-based check would treat that as "not declared" and invent the attribute,
+  // leaving assistive technology with the wrong tree structure.
+  //
+  // The test is "declared", not "value is not undefined": a file row passes
+  // `undefined`, which means "this row has no expansion state", not "please supply
+  // one". Only a trigger that never declares the attribute gets the visibility value.
+  const declaresExpanded = 'aria-expanded' in childProps;
   const triggerElement = cloneElement(child, {
     ref: mergedRef,
-    'aria-expanded': open,
+    ...(declaresExpanded ? {} : { 'aria-expanded': open }),
     onMouseEnter: (event: React.MouseEvent) => {
       (
         childProps.onMouseEnter as ((e: React.MouseEvent) => void) | undefined

@@ -8,7 +8,6 @@ import {
   resolveRequestOptions,
 } from './options.js';
 import {
-  isAbortError,
   normalizeTransportError,
   parseJson,
   readBlob,
@@ -17,7 +16,7 @@ import {
   throwIfErrorEnvelope,
   toClientError,
 } from './response.js';
-import { decodeEventStream } from './sse.js';
+import { openStream } from './stream.js';
 import type {
   OvClient,
   OvClientOptions,
@@ -26,12 +25,8 @@ import type {
   OvResolvedOptions,
   OvResponseEnvelope,
   OvStream,
-  OvStreamEvent,
   OvStreamSpec,
 } from './types.js';
-
-/** 流式响应要求的 content-type。The content type a streamed response must carry. */
-const EVENT_STREAM = 'text/event-stream';
 
 /**
  * 逐字段解析本次请求生效的配置。身份层每次请求只求值一次，父层与请求覆盖共用
@@ -126,8 +121,20 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
 
     // 先读文本再解析：读取失败是传输失败（含取消），必须上报；只有解析失败
     // 才是「响应不是 JSON」，此时按原文返回。
+    //
+    // `parseJson` 用 `undefined` 表示「不是 JSON」，合法的 `null` 要保留：
+    // 否则响应体为 `null` 时会被替换成字符串 `"null"`，调用方拿到的类型就变了。
+    //
+    // Read the text before parsing: a read failure is a transport failure (including
+    // an abort) and must surface, while only a parse failure means "not JSON", in
+    // which case the raw text is returned.
+    //
+    // `parseJson` reports "not JSON" with `undefined`, so a legitimate `null` is
+    // kept: otherwise a `null` body becomes the string `"null"` and the caller's
+    // type is silently different.
     const raw = await readText(response, effective.signal);
-    const body = parseJson(raw) ?? (raw.trim() ? raw : undefined);
+    const parsed = parseJson(raw);
+    const body = parsed !== undefined ? parsed : raw.trim() ? raw : undefined;
 
     if (!response.ok) throw toClientError(response, body);
     throwIfErrorEnvelope(response, body);
@@ -173,76 +180,8 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
       return requestJson<TResult>(spec);
     },
 
-    async stream(spec: OvStreamSpec): Promise<OvStream> {
-      // 自己的控制器与调用方的 signal 联动：`abort()` 与调用方取消都能停掉
-      // 连接，任一方触发即中止。
-      const controller = new AbortController();
-      // 取消时唤醒正在等待的读取：底层读取不一定随 signal 结束，靠它自己返回
-      // 可能永远等下去。
-      let releaseAbort: (() => void) | undefined;
-      const aborted = new Promise<'aborted'>((resolve) => {
-        releaseAbort = () => resolve('aborted');
-      });
-
-      const stop = () => {
-        releaseAbort?.();
-        controller.abort();
-      };
-      const callerSignal = spec.options?.signal;
-      const forward = () => stop();
-      if (callerSignal?.aborted) forward();
-      else callerSignal?.addEventListener('abort', forward, { once: true });
-
-      const { response } = await send(
-        spec,
-        { accept: EVENT_STREAM, ...spec.headers },
-        controller.signal,
-      );
-
-      if (!response.ok) {
-        const raw = await readText(response, controller.signal);
-        throw toClientError(response, parseJson(raw) ?? raw);
-      }
-
-      const contentType = response.headers.get('content-type') ?? '';
-      if (!contentType.includes(EVENT_STREAM) || !response.body) {
-        // 服务端可能用 JSON 外壳报告失败，例如代理层在建立流之前就拒绝了请求。
-        const body = parseJson(await readText(response, controller.signal));
-        if (body !== undefined) throwIfErrorEnvelope(response, body);
-        throw new OvClientError({
-          code: 'UNEXPECTED_CONTENT_TYPE',
-          message: `Expected ${EVENT_STREAM}, got ${contentType || 'no content type'}`,
-          statusCode: response.status,
-          requestId: response.headers.get('x-request-id') ?? undefined,
-          responseBody: body,
-        });
-      }
-
-      const reader = decodeEventStream(response.body)[Symbol.asyncIterator]();
-
-      // 取消是调用方的意图，不是失败：迭代安静结束，调用点不必再吞一次
-      // AbortError。连接已断时的读取错误也在此时一并忽略。
-      async function* iterate(): AsyncGenerator<OvStreamEvent> {
-        try {
-          for (;;) {
-            const next = await Promise.race([reader.next(), aborted]);
-            if (next === 'aborted') return;
-            if (next.done) return;
-            yield next.value;
-          }
-        } catch (error) {
-          if (isAbortError(error)) return;
-          throw error;
-        }
-      }
-
-      return {
-        abort: () => {
-          stop();
-          void Promise.resolve(reader.return?.(undefined)).catch(() => {});
-        },
-        [Symbol.asyncIterator]: iterate,
-      };
+    stream(spec: OvStreamSpec): Promise<OvStream> {
+      return openStream(spec, { send, resolveFor, defaults });
     },
   };
 
