@@ -11,6 +11,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { GoBack, Prompter } from '../src/prompt.mjs';
 import { OWNER_MESSAGE_SCOPES, connectLark, expandHome, larkMessageListener, larkScopes, registerApp, setupCommand } from '../src/setup.mjs';
+import { vikaCommand } from '../src/manifest.mjs';
 import { stripAnsi } from '../src/ui.mjs';
 import { connectTelegram } from '../src/telegram.mjs';
 import { TelegramState } from '../../daemon/src/telegram/state.mjs';
@@ -71,8 +72,8 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
 test('a startup failure points to the instance logs before retrying start', async (t) => {
   const h = harness(t, ['Vika', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(h.options), 1);
-  assert.match(h.written(), /vika logs primary 查看具体错误/);
-  assert.match(h.written(), /vika start primary/);
+  assert.ok(h.written().includes(`${vikaCommand(h.options.env)} logs primary 查看具体错误`));
+  assert.ok(h.written().includes(`${vikaCommand(h.options.env)} start primary`));
 });
 
 test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after every answer, then it starts', async (t) => {
@@ -1321,7 +1322,7 @@ test('on a terminal, setup asks the owner to reply on Feishu and waits; s skips 
       assert.match(screen, /飞书：已经收到你的消息，接着聊就行/);
     } else {
       assert.match(screen, /跳过了；之后它要是收不到你的消息，按下面查：\n {4}1\. 开放平台「事件与回调」里，事件订阅方式是长连接/);
-      assert.match(screen, /4\. 运行 ~\/\.vika\/bin\/vika logs primary 看飞书连接有没有报错/);
+      assert.ok(screen.includes(`4. 运行 ${vikaCommand(h.options.env)} logs primary 看飞书连接有没有报错`));
       assert.match(screen, /飞书：私聊里它已经跟你打了招呼，直接回它/);
     }
   }
@@ -1608,7 +1609,7 @@ test('with a locale that is not Chinese, a terminal setup asks the language firs
   const piped = harness(t, ['', '', '', '1', '1', '', '', 'n']);
   piped.options.env.LANG = 'en_US.UTF-8';
   assert.equal(await setupCommand(piped.options), 1);
-  assert.match(piped.written(), /什么都没保存；准备好了再运行 ~\/\.vika\/bin\/vika setup。/);
+  assert.ok(piped.written().includes(`什么都没保存；准备好了再运行 ${vikaCommand(piped.options.env)} setup。`));
   assert.equal(fs.existsSync(path.join(piped.home, '.vika', 'language')), false);
 });
 

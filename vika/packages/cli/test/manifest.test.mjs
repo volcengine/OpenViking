@@ -9,7 +9,8 @@ import test from 'node:test';
 import { updateManifest } from '../../daemon/src/deployment-manifest.mjs';
 import { InstanceLock } from '../../daemon/src/lock.mjs';
 import {
-  allocatePort, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, withDefaultTempDir, withInstance, writeManifest,
+  allocatePort, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, vikaCommand,
+  withDefaultTempDir, withInstance, writeManifest,
 } from '../src/manifest.mjs';
 
 function agent(id, overrides = {}) {
@@ -152,4 +153,20 @@ test('QQ can be primary or secondary, and cannot select Ark or a Lark-only profi
   assert.throws(() => validateManifest(filename, withInstance(null, { ...qq, profile: 'stray' })), /profile/);
   assert.throws(() => validateManifest(filename, withInstance(null, { ...qq, model: 'ark',
     volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })), /qq connector cannot use the ark runtime/);
+});
+
+test('the vika command is named by its launcher until ~/.vika/bin is on PATH', async () => {
+  const posix = await import('../../daemon/src/platform/posix.mjs');
+  const windows = await import('../../daemon/src/platform/win32.mjs');
+  const home = path.join(path.sep, 'home', 'alice');
+  const bin = path.join(home, '.vika', 'bin');
+  assert.equal(vikaCommand({ HOME: home, PATH: '' }, posix), '~/.vika/bin/vika');
+  // Where no shell script runs, the launcher's full name is needed: cmd.exe
+  // expands no ~ and adds no extension.
+  assert.equal(vikaCommand({ HOME: home, PATH: '' }, windows), path.join(bin, 'vika.cmd'));
+  assert.equal(vikaCommand({ HOME: home, PATH: ['/usr/bin', bin].join(posix.pathDelimiter) }, posix), 'vika');
+  // A Windows PATH is compared without case; a POSIX one as written.
+  const shouted = ['C:\\Windows', bin.toUpperCase()].join(windows.pathDelimiter);
+  assert.equal(vikaCommand({ HOME: home, PATH: shouted }, windows), 'vika');
+  assert.equal(vikaCommand({ HOME: home, PATH: shouted }, posix), '~/.vika/bin/vika');
 });

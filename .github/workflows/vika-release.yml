@@ -310,6 +310,9 @@ jobs:
           & ./scripts/windows/test-install-preview.ps1
           powershell.exe -NoProfile -File ./scripts/windows/test-install-preview.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell installer tests failed' }
+          & ./scripts/windows/test-install-transactions.ps1
+          powershell.exe -NoProfile -File ./scripts/windows/test-install-transactions.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell transaction tests failed' }
       - name: Build committed Windows preview
         run: |
           node scripts/build-windows-preview.mjs "$env:RUNNER_TEMP/vika-windows-dist"

@@ -3,7 +3,7 @@
 
 import { capabilities } from '../../daemon/src/capabilities.mjs';
 
-import { expandHome as platformExpandHome } from '../../daemon/src/platform/index.mjs';
+import { expandHome as platformExpandHome, homeDir as platformHomeDir } from '../../daemon/src/platform/index.mjs';
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -1460,7 +1460,7 @@ export async function setupCommand(options = {}) {
 async function setupFlow({
   prompter,
   env = process.env,
-  homeDir = os.homedir(),
+  homeDir = platformHomeDir(env) || os.homedir(),
   fetchImpl = globalThis.fetch,
   detect = { runtimes: detectRuntimes, openViking: detectOpenViking, larkApps: checkLarkApps },
   configureOV = configureOpenViking,
@@ -1822,7 +1822,8 @@ async function setupFlow({
   const received = listener
     ? await confirmReceiving({ prompter, listener, greeted, name: state.displayName, id, vika })
     : false;
-  if (!current && prompter.tty && control.autostart && !autostartEnabled({ homeDir })) await offerAutostart({ prompter, env, homeDir, control, vika });
+  // Only offer mechanisms implemented by this platform (including Windows logon).
+  if (!current && prompter.tty && capabilities.autostart && control.autostart && !autostartEnabled({ homeDir, env })) await offerAutostart({ prompter, env, homeDir, control, vika });
 
   // What to do next, one line per thing; on Weixin the owner has to write first.
   const next = [];

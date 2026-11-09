@@ -51,11 +51,27 @@ function npmShimEntrypoint(shim) {
   return match?.[1] ?? null;
 }
 
+// A Vika release ships bin\pm2.cmd, so `pm2` typed in a terminal uses that
+// release's own pm2 and Node. It is our file, with a known layout: launch the
+// entrypoint it wraps instead of reading it as an npm shim, and never pass the
+// arguments to cmd.exe.
+function releaseShimInvocation(resolved, args) {
+  if (path.win32.basename(resolved).toLowerCase() !== 'pm2.cmd') return null;
+  const release = path.dirname(path.dirname(resolved));
+  const entrypoint = path.join(release, 'node_modules', 'pm2', 'bin', 'pm2');
+  if (!fs.existsSync(entrypoint)) return null;
+  const node = [path.join(release, 'runtime', 'node.exe'), path.join(release, 'node', 'bin', 'node.exe')]
+    .find(candidate => fs.existsSync(candidate)) || process.execPath;
+  return { command: node, args: [entrypoint, ...args] };
+}
+
 // Run npm's Node entrypoint directly. Never interpolate model/user arguments
 // into cmd.exe: its expansion rules differ from CreateProcess argument quoting.
 export function executableInvocation(command, args, { env = process.env } = {}) {
   const resolved = findExecutable(command, env) || command;
   if (/\.(?:cmd|bat)$/i.test(resolved)) {
+    const release = releaseShimInvocation(resolved, args);
+    if (release) return release;
     const shim = fs.readFileSync(resolved, 'utf8');
     const relativeEntrypoint = npmShimEntrypoint(shim);
     if (!relativeEntrypoint) throw new Error(`Unsupported Windows command shim: ${resolved}. Configure the native .exe or Node entrypoint.`);
@@ -145,7 +161,9 @@ export const supportsPosixSignals = false;
 export const supportsFileModes = false;
 export const supportsShellScripts = false;
 export const pathDelimiter = ';';
-export const loginService = null;
+// No service manager to register with: `vika autostart` writes the user's own
+// Startup folder instead, which needs no elevation.
+export const loginService = 'startupFolder';
 export const systemEnvironmentKeys = Object.freeze(['USERPROFILE', 'SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME']);
 export const hostPlatformId = `win32-${process.arch}`;
 export const environmentCaseSensitive = false;

@@ -4,7 +4,9 @@ import path from 'node:path';
 import * as platform from '../../daemon/src/platform/index.mjs';
 
 export function pm2Bin(release, implementation = platform) {
-  return implementation.supportsShellScripts ? path.join(release, 'bin', 'pm2') : 'pm2';
+  // A POSIX release carries a shell script; Windows has neither shebangs nor
+  // exec bits, so the same shim is committed as a batch file next to it.
+  return path.join(release, 'bin', implementation.supportsShellScripts ? 'pm2' : 'pm2.cmd');
 }
 export function pm2Options(implementation = platform) {
   return implementation.supportsPosixSignals ? {} : { shutdown_with_message: true };

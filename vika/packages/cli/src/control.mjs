@@ -56,8 +56,8 @@ function defaults(options = {}) {
     execFileImpl: options.execFileImpl ?? execFile,
     fetchImpl: options.fetchImpl ?? globalThis.fetch,
     readyOptions: options.readyOptions,
-    releaseLink: options.releaseLink ?? env.VIKA_UPDATER_RELEASE_LINK ?? defaultReleaseLink(),
-    socketPath: options.socketPath ?? env.VIKA_UPDATER_SOCKET ?? defaultSocketPath(),
+    releaseLink: options.releaseLink ?? env.VIKA_UPDATER_RELEASE_LINK ?? defaultReleaseLink(homeDir(env)),
+    socketPath: options.socketPath ?? env.VIKA_UPDATER_SOCKET ?? defaultSocketPath(homeDir(env)),
     pm2Env: options.pm2Env ?? pm2.pm2Env,
     stdout: options.stdout ?? process.stdout,
   };
