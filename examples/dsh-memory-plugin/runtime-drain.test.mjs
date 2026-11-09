@@ -45,6 +45,7 @@ test("drainTick sends queued messages once the server recovers and clears the la
   }, config(), { debug() {} });
   const session = { id: "recover", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
+  runtime.stateFor(session).sessionReady = true;
 
   runtime.capture(session, userEvent("Queued during the outage."));
   await runtime.flush(session);
@@ -61,6 +62,89 @@ test("drainTick sends queued messages once the server recovers and clears the la
   await runtime.flush(session);
   assert.equal(addCalls, 2);
   assert.equal((await listPending()).length, 0);
+});
+
+test("drainTick creates a session before replaying a capture queued by failed creation", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-drain-create-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+
+  const calls = [];
+  let created = false;
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      calls.push("create");
+      if (calls.filter(call => call === "create").length === 1) {
+        return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+      }
+      created = true;
+      return { ok: true };
+    },
+    async fetchJSON(path) {
+      if (path.endsWith("/messages")) {
+        calls.push("replay");
+        return created
+          ? { ok: true }
+          : { ok: false, status: 404, error: { code: "NOT_FOUND" } };
+      }
+      return { ok: true, result: [] };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "create-retry", header: { cwd: "/workspace" } };
+
+  runtime.capture(session, userEvent("Keep this message."));
+  await runtime.flush(session);
+  assert.deepEqual(calls, ["create"]);
+  assert.equal((await listPending()).length, 1);
+
+  await runtime.drainTick();
+
+  assert.deepEqual(calls, ["create", "create", "replay"]);
+  assert.deepEqual(await listPending(), []);
+});
+
+test("one uncreatable session does not block another session's pending replay", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-drain-isolated-create-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const now = Date.now();
+  await enqueue("addMessage", "dsh-bad", { content: "retry later" }, { createdAt: now });
+  await enqueue("addMessage", "dsh-good", { content: "send now" }, { createdAt: now + 1 });
+
+  const calls = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult(sessionId) {
+      calls.push(`create:${sessionId}`);
+      return sessionId === "dsh-bad"
+        ? { ok: false, status: 503, error: { code: "UNAVAILABLE" } }
+        : { ok: true };
+    },
+    async fetchJSON(path) {
+      calls.push(`replay:${path}`);
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const bad = { id: "bad", header: { cwd: "/workspace" } };
+  const good = { id: "good", header: { cwd: "/workspace" } };
+  runtime.stateFor(bad).ready = true;
+  runtime.stateFor(good).ready = true;
+
+  await runtime.drainTick();
+
+  assert.deepEqual(calls, [
+    "create:dsh-bad",
+    "create:dsh-good",
+    "replay:/api/v1/sessions/dsh-good/messages",
+  ]);
+  assert.deepEqual((await listPending()).map(item => item.entry.sessionId), ["dsh-bad"]);
+  assert.equal(runtime.stateFor(bad).hasPendingWrites, true);
+  assert.equal(runtime.stateFor(good).hasPendingWrites, false);
 });
 
 test("drainTick keeps the latch while the server stays down and leaves the entry retryable", async () => {
@@ -83,6 +167,7 @@ test("drainTick keeps the latch while the server stays down and leaves the entry
   }, config(), { debug() {} });
   const session = { id: "still-down", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
+  runtime.stateFor(session).sessionReady = true;
 
   runtime.capture(session, userEvent("First queued message."));
   await runtime.flush(session);
@@ -148,6 +233,7 @@ test("commit resumes once the drain clears the backlog", async () => {
   const session = { id: "commit-resume", header: { cwd: "/workspace" } };
   const state = runtime.stateFor(session);
   state.ready = true;
+  state.sessionReady = true;
 
   runtime.capture(session, userEvent("Queued during the outage."));
   await runtime.flush(session);
@@ -195,6 +281,7 @@ test("startDrainer drains the queue on its interval", async t => {
   }, config(), { debug() {} });
   const session = { id: "interval", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
+  runtime.stateFor(session).sessionReady = true;
 
   runtime.capture(session, userEvent("Queued."));
   await runtime.flush(session);
@@ -236,7 +323,9 @@ test("drainTick runs single-flight", async () => {
       return { ok: true };
     },
   }, config(), { debug() {} });
-  runtime.stateFor({ id: "single", header: { cwd: "/workspace" } }).ready = true;
+  const state = runtime.stateFor({ id: "single", header: { cwd: "/workspace" } });
+  state.ready = true;
+  state.sessionReady = true;
 
   const first = runtime.drainTick();
   await started;
@@ -266,7 +355,9 @@ test("drainTick derives each session's latch from its own entries", async () => 
   const backlogged = { id: "backlogged", header: { cwd: "/workspace" } };
   const clean = { id: "clean", header: { cwd: "/workspace" } };
   runtime.stateFor(backlogged).ready = true;
+  runtime.stateFor(backlogged).sessionReady = true;
   runtime.stateFor(clean).ready = true;
+  runtime.stateFor(clean).sessionReady = true;
 
   runtime.capture(backlogged, userEvent("Queued."));
   await runtime.flush(backlogged);
@@ -294,7 +385,9 @@ test("startDrainer is idempotent, stopDrainer is safe, and an invalid env falls 
       return { ok: true };
     },
   }, config(), { debug() {} });
-  runtime.stateFor({ id: "fallback", header: { cwd: "/workspace" } }).ready = true;
+  const state = runtime.stateFor({ id: "fallback", header: { cwd: "/workspace" } });
+  state.ready = true;
+  state.sessionReady = true;
 
   const timer = runtime.startDrainer();
   assert.equal(runtime.startDrainer(), timer);

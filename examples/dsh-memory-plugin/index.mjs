@@ -34,8 +34,8 @@ export function apply(ctx, input = {}) {
     "openvikingMemory.stopDrainer()",
   );
 
-  // Per-agent startup: register the session's disposal commit, initialize the
-  // OpenViking session, and inject the profile while the agent is still idle.
+  // Per-agent startup: register disposal, load the profile while the agent is
+  // still idle, and leave session creation to the first captured message.
   // Runs at most once per agent, whichever DSH event reaches it.
   const started = new WeakSet();
   const startAgent = async (agent, signal) => {

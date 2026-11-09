@@ -47,6 +47,7 @@ test("capture queues retryable failures but drops permanent client errors", asyn
     }, config(), { debug() {} });
     const session = { id: `session-${status}`, header: { cwd: "/workspace" } };
     runtime.stateFor(session).ready = true;
+    runtime.stateFor(session).sessionReady = true;
 
     runtime.capture(session, userEvent(`Remember the ${status} behavior.`));
     await runtime.flush(session);
@@ -79,12 +80,15 @@ test("existing OpenViking sessions are reusable on DSH resume", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-resume-"));
   tempDirs.push(pendingDir);
   process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  let ensured = 0;
+  let added = 0;
 
   const runtime = new OpenVikingRuntime({
     async healthResult() {
       return { ok: true };
     },
     async ensureSessionResult() {
+      ensured += 1;
       return {
         ok: false,
         status: 409,
@@ -94,14 +98,341 @@ test("existing OpenViking sessions are reusable on DSH resume", async () => {
     async fetchJSON() {
       return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
     },
+    async addMessage() {
+      added += 1;
+      return { ok: true };
+    },
   }, config(), { debug() {} });
 
-  const state = await runtime.initialize({
-    session: { id: "resume", header: { cwd: "/workspace" } },
-  });
+  const session = { id: "resume", header: { cwd: "/workspace" } };
+  const state = await runtime.initialize({ session });
+  assert.equal(ensured, 0);
+  runtime.capture(session, userEvent("Continue the resumed conversation."));
+  await runtime.flush(session);
 
   assert.equal(state.ready, true);
+  assert.equal(state.sessionReady, true);
   assert.equal(state.initializationRetryable, false);
+  assert.equal(ensured, 1);
+  assert.equal(added, 1);
+});
+
+test("startup without captured messages never creates or commits an empty session", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-empty-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const calls = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      calls.push("create");
+      return { ok: true };
+    },
+    async fetchJSON() {
+      return { ok: true, result: [] };
+    },
+    async getSession() {
+      calls.push("get");
+      return { pending_tokens: 20000 };
+    },
+    async commitSession() {
+      calls.push("commit");
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "empty", header: { cwd: "/workspace" } };
+
+  assert.equal((await runtime.initialize({ session })).ready, true);
+  runtime.capture(session, userEvent(""));
+  runtime.capture(session, {
+    type: "user/message",
+    data: { role: "user", content: [{ type: "text", text: "Injected context" }], source: { kind: "plugin" } },
+  });
+  runtime.maybeCommit(session, { type: "turn/end" });
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+  await runtime.dispose(session);
+
+  assert.deepEqual(calls, []);
+});
+
+test("first capturable message creates one session before sending, then disposal commits", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-lazy-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const calls = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      calls.push("create");
+      return { ok: true };
+    },
+    async fetchJSON() {
+      return { ok: true, result: [] };
+    },
+    async addMessage() {
+      calls.push("message");
+      return { ok: true };
+    },
+    async commitSession() {
+      calls.push("commit");
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "first-message", header: { cwd: "/workspace" } };
+
+  assert.equal((await runtime.initialize({ session })).ready, true);
+  assert.deepEqual(calls, []);
+  runtime.capture(session, userEvent("First message."));
+  runtime.capture(session, userEvent("Second message."));
+  await runtime.flush(session);
+  await runtime.dispose(session);
+
+  assert.deepEqual(calls, ["create", "message", "message", "commit"]);
+});
+
+test("a permanently rejected first message does not trigger empty commits", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-rejected-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const calls = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      calls.push("create");
+      return { ok: true };
+    },
+    async fetchJSON() {
+      return { ok: true, result: [] };
+    },
+    async addMessage() {
+      calls.push("rejected-message");
+      return { ok: false, status: 400, error: { code: "INVALID_ARGUMENT" } };
+    },
+    async commitSession() {
+      calls.push("commit");
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "rejected", header: { cwd: "/workspace" } };
+
+  runtime.capture(session, userEvent("Rejected message."));
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+  await runtime.dispose(session);
+
+  assert.deepEqual(calls, ["create", "rejected-message"]);
+});
+
+test("startup restores a queued capture before replaying it", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-pending-startup-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  await enqueue("addMessage", "dsh-pending-startup", { content: "Saved before restart." });
+  const calls = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      calls.push("create");
+      return { ok: true };
+    },
+    async fetchJSON(path) {
+      if (path.endsWith("/messages")) calls.push("replay");
+      return { ok: true, result: [] };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "pending-startup", header: { cwd: "/workspace" } };
+
+  const state = await runtime.initialize({ session });
+
+  assert.equal(state.ready, true);
+  assert.equal(state.hasCapturedData, true);
+  assert.deepEqual(calls, ["create", "replay"]);
+  assert.deepEqual(await listPending(), []);
+});
+
+test("replaying a queued final commit does not create another empty shutdown commit", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-pending-commit-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const createdAt = Date.now();
+  await enqueue("addMessage", "dsh-pending-commit", { content: "Saved before restart." }, { createdAt });
+  await enqueue("commitSession", "dsh-pending-commit", { keep_recent_count: 0 }, { createdAt: createdAt + 1 });
+  const calls = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      calls.push("create");
+      return { ok: true };
+    },
+    async fetchJSON(path) {
+      if (path.endsWith("/messages")) calls.push("replay-message");
+      if (path.endsWith("/commit")) calls.push("replay-commit");
+      return { ok: true, result: [] };
+    },
+    async commitSession() {
+      calls.push("shutdown-commit");
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "pending-commit", header: { cwd: "/workspace" } };
+
+  await runtime.initialize({ session });
+  await runtime.dispose(session);
+
+  assert.deepEqual(calls, ["create", "replay-message", "replay-commit"]);
+  assert.deepEqual(await listPending(), []);
+});
+
+test("a pending write's session creation failure does not block profile reads", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-pending-profile-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  await enqueue("addMessage", "dsh-pending-profile", { content: "Retry later." });
+  let profileReads = 0;
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    },
+    async fetchJSON() {
+      profileReads += 1;
+      return { ok: false, status: 404, error: { code: "NOT_FOUND" } };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "pending-profile", header: { cwd: "/workspace" } };
+
+  const state = await runtime.initialize({ session });
+
+  assert.equal(state.ready, true);
+  assert.ok(profileReads > 0);
+  assert.equal(state.hasPendingWrites, true);
+  assert.equal((await listPending()).length, 1);
+});
+
+test("recall uses session context only for an existing OpenViking session", async () => {
+  for (const exists of [false, true]) {
+    const searchBodies = [];
+    let reads = 0;
+    let creates = 0;
+    const runtime = new OpenVikingRuntime({
+      async getSessionResult() {
+        reads += 1;
+        return exists
+          ? { ok: true, result: { pending_tokens: 0 } }
+          : { ok: false, status: 404, error: { code: "NOT_FOUND" } };
+      },
+      async ensureSessionResult() {
+        creates += 1;
+        return { ok: true };
+      },
+      async fetchJSON(path, init) {
+        if (path === "/api/v1/search/search") searchBodies.push(JSON.parse(init.body));
+        return {
+          ok: true,
+          result: { context: "<openviking-context>\nrecalled\n</openviking-context>", stats: {} },
+        };
+      },
+    }, { ...config(), autoRecall: true, minQueryLength: 0 }, { debug() {} });
+    const session = { id: `recall-${exists}`, header: { cwd: "/workspace" } };
+    runtime.stateFor(session).ready = true;
+    const agent = { session };
+
+    await runtime.recallMessage(agent, [userEvent("What did we decide?").data]);
+    await runtime.recallMessage(agent, [userEvent("And why?").data]);
+
+    assert.equal(reads, 1);
+    assert.equal(creates, 0);
+    assert.equal(searchBodies.length, 2);
+    assert.deepEqual(searchBodies.map(body => body.session_id),
+      exists ? ["dsh-recall-true", "dsh-recall-true"] : [undefined, undefined]);
+  }
+});
+
+test("an in-flight missing-session probe cannot undo capture's successful creation", async () => {
+  let releaseLookup;
+  let lookupStarted;
+  const started = new Promise(resolve => { lookupStarted = resolve; });
+  const lookup = new Promise(resolve => { releaseLookup = resolve; });
+  let creates = 0;
+  const bodies = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      lookupStarted();
+      return lookup.then(() => null);
+    },
+    async getSessionResult() {
+      lookupStarted();
+      return lookup;
+    },
+    async ensureSessionResult() {
+      creates += 1;
+      return { ok: true };
+    },
+    async addMessage() {
+      return { ok: true };
+    },
+    async fetchJSON(path, init) {
+      if (path === "/api/v1/search/search") bodies.push(JSON.parse(init.body));
+      return { ok: true, result: { context: "recalled", stats: {} } };
+    },
+  }, { ...config(), autoRecall: true, minQueryLength: 0 }, { debug() {} });
+  const session = { id: "recall-race", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  const recalling = runtime.recallMessage({ session }, [userEvent("What is known?").data]);
+  await started;
+  runtime.capture(session, userEvent("First capture."));
+  await runtime.flush(session);
+  releaseLookup({ ok: false, status: 404, error: { code: "NOT_FOUND" } });
+  await recalling;
+  runtime.capture(session, userEvent("Second capture."));
+  await runtime.flush(session);
+
+  assert.equal(creates, 1);
+  assert.equal(runtime.stateFor(session).sessionReady, true);
+  assert.equal(bodies[0].session_id, "dsh-recall-race");
+});
+
+test("transient session lookup failure is retried on the next recall", async () => {
+  let lookups = 0;
+  const bodies = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      lookups += 1;
+      return lookups === 1 ? null : { pending_tokens: 0 };
+    },
+    async getSessionResult() {
+      lookups += 1;
+      return lookups === 1
+        ? { ok: false, status: 503, error: { code: "UNAVAILABLE" } }
+        : { ok: true, result: { pending_tokens: 0 } };
+    },
+    async fetchJSON(path, init) {
+      if (path === "/api/v1/search/search") bodies.push(JSON.parse(init.body));
+      return { ok: true, result: { context: "recalled", stats: {} } };
+    },
+  }, { ...config(), autoRecall: true, minQueryLength: 0 }, { debug() {} });
+  const session = { id: "recall-retry", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  await runtime.recallMessage({ session }, [userEvent("First query.").data]);
+  await runtime.recallMessage({ session }, [userEvent("Second query.").data]);
+
+  assert.equal(lookups, 2);
+  assert.deepEqual(bodies.map(body => body.session_id), [undefined, "dsh-recall-retry"]);
 });
 
 test("a retryable threshold commit failure is queued", async () => {
@@ -118,6 +449,8 @@ test("a retryable threshold commit failure is queued", async () => {
   }, config(), { debug() {} });
   const session = { id: "commit-failure", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
+  runtime.stateFor(session).sessionReady = true;
+  runtime.stateFor(session).hasCapturedData = true;
 
   runtime.maybeCommit(session, { type: "turn/end" });
   await runtime.flush(session);
@@ -145,6 +478,8 @@ test("compaction/start commits below the token threshold without reading session
   }, config(), { debug() {} });
   const session = { id: "compaction-commit", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
+  runtime.stateFor(session).sessionReady = true;
+  runtime.stateFor(session).hasCapturedData = true;
 
   runtime.maybeCommit(session, { type: "compaction/start" });
   await runtime.flush(session);
@@ -177,6 +512,7 @@ test("once a write is queued, later messages and the final commit stay ordered o
   }, config(), { debug() {} });
   const session = { id: "ordered", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
+  runtime.stateFor(session).sessionReady = true;
 
   runtime.capture(session, userEvent("First queued message."));
   runtime.capture(session, userEvent("Second queued message."));
@@ -271,6 +607,8 @@ test("dispose waits for the final commit before deleting session state", async (
   }, config(), { debug() {} });
   const session = { id: "dispose", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
+  runtime.stateFor(session).sessionReady = true;
+  runtime.stateFor(session).hasCapturedData = true;
 
   let settled = false;
   const disposing = runtime.dispose(session).then(() => {
@@ -391,7 +729,10 @@ test("disposeAll drains every live session", async () => {
     },
   }, config(), { debug() {} });
   for (const id of ["one", "two"]) {
-    runtime.stateFor({ id, header: { cwd: `/workspace/${id}` } }).ready = true;
+    const state = runtime.stateFor({ id, header: { cwd: `/workspace/${id}` } });
+    state.ready = true;
+    state.sessionReady = true;
+    state.hasCapturedData = true;
   }
 
   await runtime.disposeAll();
