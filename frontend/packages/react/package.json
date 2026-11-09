@@ -71,11 +71,6 @@
       "import": "./dist/modules/console.js"
     },
     "./modules/console/style.css": "./dist/modules/console/style.css",
-    "./modules/task-center": {
-      "types": "./dist/modules/task-center/index.d.ts",
-      "import": "./dist/modules/task-center.js"
-    },
-    "./modules/task-center/style.css": "./dist/modules/task-center/style.css",
     "./modules/style.css": "./dist/modules/style.css",
     "./package.json": "./package.json",
     "./icons": {
