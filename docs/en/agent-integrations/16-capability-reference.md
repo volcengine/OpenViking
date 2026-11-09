@@ -602,7 +602,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Claude Code
 
-[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with 9 hooks, an MCP proxy, a slash command, a status line, and 4 skills.
+[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with 10 hooks, an MCP proxy, a slash command, a status line, and 4 skills.
 
 - It registers more hooks than any other integration: `SessionStart`, `UserPromptSubmit`, `PostToolUse:Read` (the skill-experience hook, off by default), `PreToolUse` on Read, Glob, Grep, Edit, Write, and Bash (the URI guard), a second `PreToolUse` on Bash and `privacy_resolve` (secret exec, off by default), `Stop`, `PreCompact`, `SessionEnd`, `SubagentStart`, and `SubagentStop`.
 - Recall digests are on by default through a local `claude -p`, with the server digest as the fallback.

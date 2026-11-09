@@ -22,7 +22,8 @@
  *   default     value when no layer supplies one
  *   harness     per-harness default, where one genuinely differs
  *   min/max     clamped, not rejected: a config file must not kill a hook
- *   values      the enum's members; anything else falls back to the default
+ *   values      the enum's members, lower case and matched in any case;
+ *               anything else falls back to the default
  *   env         OPENVIKING_* variable, the highest-priority layer
  *   aliases     older spellings, honoured forever; the doctor names them
  *   workspace   dotted key in `.openviking/config.json`
@@ -214,11 +215,11 @@ export const KNOBS = [
   { name: "usageOutput", type: "string", default: "auto", env: "OPENVIKING_USAGE_OUTPUT", workspace: "usage.output", capability: "session" },
 
   // ── secrets ───────────────────────────────────────────────────────────
-  // No `workspace` key on purpose: a committed repository file must not be
-  // able to start releasing credentials into its own commands.
+  // No `workspace` key on purpose: a repository's .openviking/config.json must
+  // not be able to start releasing credentials into its own commands.
   { name: "secretExec", type: "bool", default: false, env: "OPENVIKING_SECRET_EXEC", capability: "secrets" },
   // `inherit` leaves the wrapped command to the user's own permission flow;
-  // `ask` confirms each use. There is no `allow`.
+  // `ask` confirms each command that uses a credential. There is no `allow`.
   { name: "secretExecApproval", type: "enum", values: ["inherit", "ask"], default: "inherit", env: "OPENVIKING_SECRET_EXEC_APPROVAL", capability: "secrets" },
 
   // ── debug ─────────────────────────────────────────────────────────────
@@ -329,7 +330,7 @@ export function coerceKnobValue(knob, raw, fallback) {
       return knob.max === undefined ? floored : Math.min(knob.max, floored);
     }
     case "enum": {
-      const word = String(raw ?? "").trim();
+      const word = String(raw ?? "").trim().toLowerCase();
       return (knob.values || []).includes(word) ? word : fallback;
     }
     // A peer template may be one string or an ordered list of fallbacks, and

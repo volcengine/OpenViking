@@ -44,17 +44,19 @@ import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { SECRET_EXEC_USAGE } from "./shared/secret-exec.mjs";
 
+const startupConfig = loadConfig();
+// No workspace file can set secretExec, so the startup config already holds
+// this session's answer, and every exit below carries the note. Secret exec
+// has a switch of its own, so the note does not wait for memory to be on.
+const usageNote = startupConfig.secretExec ? SECRET_EXEC_USAGE : "";
+
 if (!isPluginEnabled()) {
-  process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
+  approve();
   process.exit(0);
 }
 
 const { log, logError } = createLogger("session-start");
-const startupConfig = loadConfig();
 const fetchJSON = makeFetchJSON(startupConfig);
-// No workspace file can set secretExec, so the startup config already holds
-// this session's answer, and every exit below carries the note.
-const usageNote = startupConfig.secretExec ? SECRET_EXEC_USAGE : "";
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");

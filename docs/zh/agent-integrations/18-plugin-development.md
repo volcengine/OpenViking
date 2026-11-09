@@ -167,7 +167,7 @@ sync / install / pack 负责把这张依赖图完整交付到机器上
 
 连接和身份必须走 `credentials.mjs` 的 `resolveConnection()`，`buildPluginConfig()` 就是调用它。`OPENVIKING_CREDENTIAL_SOURCE` 的 `auto`、`cli`、`env` 控制凭据来源，不能简单套用行为配置优先级。MCP proxy 导出 `readProxyConfig(env)`，经与 hook 相同的 loader 解析，再用 `toMcpProxyConfig()` 映射，不手工挑字段，也不直接调用 `credentials.mjs`。宿主若只把白名单里的环境变量交给 MCP 进程，白名单必须覆盖 `MCP_PROXY_ENV_VARS`；宿主若给的是封闭环境，就用 `forwardConnectionEnv()` 转发解析好的连接。新 proxy 必须加入 `mcp-hook-parity.test.mjs`，缺行时该测试会失败。
 
-workspace 文件不得包含 URL、API key、用户凭据等禁止字段，也不做环境变量插值。规则由 [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) 执行，不在每个宿主增加自己的白名单。会放出凭据的配置（例如 `secretExec`）声明时不带 workspace 键，提交进仓库的文件无法开启它。安装器不得把解析后的 API key 固化到 `.mcp.json`，也不得替换用户已选择的云端连接。
+workspace 文件不得包含 URL、API key、用户凭据等禁止字段，也不做环境变量插值。规则由 [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) 执行，不在每个宿主增加自己的白名单。会放出凭据的配置（例如 `secretExec`）声明时不带 workspace 键，workspace 文件无法开启它。安装器不得把解析后的 API key 固化到 `.mcp.json`，也不得替换用户已选择的云端连接。
 
 请求头由 `buildOvHeaders()` 构造：API key 使用 `Authorization: Bearer`，不再另发 `X-API-Key`；只有解析结果 `sendIdentityHeaders` 为真时才发送 account/user 头。保留 `User-Agent` 和错误中的 `traceId`，便于确认实际运行版本和追踪请求。不要在健康检查、状态栏或诊断探针里另写鉴权。
 

@@ -14,7 +14,7 @@
  */
 
 import { constants } from "node:os";
-import { basename } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { Transform } from "node:stream";
 
 // Canonical references only. Every segment of one is percent-encoded, so a
@@ -31,8 +31,9 @@ export function hasReference(text) {
 
 // The variable is always expanded, never pasted: an expansion's result is not
 // parsed again as shell syntax, so no value can become code. A context the
-// scanner misreads costs a wrongly quoted expansion or a literal
-// `${OV_SECRET_n}`; the value stays in the environment either way.
+// scanner misreads still costs something: a literal `${OV_SECRET_n}`, or an
+// expansion left unquoted, which splits a value holding blanks into a form the
+// masker does not know.
 const EXPANSION = {
   plain: (name) => `"${name}"`,
   double: (name) => name,
@@ -79,7 +80,7 @@ function readHeredoc(command, at) {
  * `references[n]` is what `OV_SECRET_<n>` must hold, or `{ error }`.
  *
  * The scanner tracks backslashes, the three kinds of quotes, comments,
- * here-documents and, best effort, `$( )` and backticks.
+ * here-documents, arithmetic and, best effort, `$( )` and backticks.
  */
 export function rewriteCommand(command) {
   const references = [];
@@ -90,8 +91,8 @@ export function rewriteCommand(command) {
     return EXPANSION[kind](`\${OV_SECRET_${n}}`);
   };
   const sticky = new RegExp(REFERENCE.source, "y");
-  const everywhere = new RegExp(REFERENCE.source, "g");
-  // `plain` is unquoted shell: the top level, or the inside of `$( )` or backticks.
+  // `plain` is unquoted shell: the top level, or the inside of `$( )`, `$(( ))`
+  // or backticks. A `heredoc` frame is a here-document body.
   const stack = [{ kind: "plain" }];
   const heredocs = [];
   let script = "";
@@ -103,6 +104,22 @@ export function rewriteCommand(command) {
 
   while (i < command.length) {
     const frame = stack.at(-1);
+    if (frame.kind === "heredoc" && command[i - 1] === "\n") {
+      // A body line: the delimiter ends the here-document, and under a quoted
+      // delimiter the line is literal.
+      const end = command.indexOf("\n", i) + 1 || command.length;
+      const line = command.slice(i, end);
+      if ((frame.strip ? line.replace(/^\t+/, "") : line).replace(/\n$/, "") === frame.word) {
+        stack.pop();
+        take(end - i);
+        continue;
+      }
+      if (!frame.expand) {
+        if (REFERENCE.test(line)) return { error: QUOTED_HEREDOC };
+        take(end - i);
+        continue;
+      }
+    }
     sticky.lastIndex = i;
     const reference = sticky.exec(command)?.[0];
     if (reference) {
@@ -119,6 +136,10 @@ export function rewriteCommand(command) {
     } else if (frame.kind === "ansi") {
       if (c === "'") stack.pop();
       take(1);
+    } else if (command.startsWith("$((", i) || (frame.kind === "plain" && command.startsWith("((", i))) {
+      // Arithmetic, where `<<` is a shift and not a here-document.
+      stack.push({ kind: "plain", close: ")", depth: 1, arith: true });
+      take(c === "$" ? 3 : 2);
     } else if (command.startsWith("$(", i)) {
       stack.push({ kind: "plain", close: ")", depth: 0 });
       take(2);
@@ -126,8 +147,10 @@ export function rewriteCommand(command) {
       if (frame.close === "`") stack.pop();
       else stack.push({ kind: "plain", close: "`" });
       take(1);
-    } else if (frame.kind === "double") {
-      if (c === '"') stack.pop();
+    } else if (frame.kind !== "plain") {
+      // In double quotes or a here-document body nothing else is syntax, but
+      // a double quote may end the string.
+      if (c === '"' && frame.kind === "double") stack.pop();
       take(1);
     } else if (c === "'" || c === '"') {
       stack.push({ kind: c === "'" ? "single" : "double" });
@@ -145,27 +168,14 @@ export function rewriteCommand(command) {
       take((eol < 0 ? command.length : eol) - i);
     } else if (command.startsWith("<<<", i)) {
       take(3);
-    } else if (command.startsWith("<<", i)) {
+    } else if (command.startsWith("<<", i) && !frame.arith) {
       const { end, doc } = readHeredoc(command, i + 2);
-      if (doc) heredocs.push(doc);
+      if (doc) heredocs.push({ kind: "heredoc", ...doc });
       take(end - i);
     } else if (c === "\n" && heredocs.length) {
       take(1);
-      for (const doc of heredocs.splice(0)) {
-        while (i < command.length) {
-          const eol = command.indexOf("\n", i);
-          const end = eol < 0 ? command.length : eol + 1;
-          const line = command.slice(i, end);
-          const text = line.endsWith("\n") ? line.slice(0, -1) : line;
-          if ((doc.strip ? text.replace(/^\t+/, "") : text) === doc.word) {
-            take(end - i);
-            break;
-          }
-          if (!doc.expand && REFERENCE.test(line)) return { error: QUOTED_HEREDOC };
-          script += doc.expand ? line.replace(everywhere, (found) => expand("heredoc", found)) : line;
-          i = end;
-        }
-      }
+      // The bodies follow in the order of their operators, so the first goes on top.
+      stack.push(...heredocs.splice(0).reverse());
     } else {
       take(1);
     }
@@ -181,15 +191,6 @@ export function shellQuote(text) {
 /** `'<node>' '<runner>' '<command>'`, the command intact so a permission prompt shows what will run. */
 export function wrapCommand(command, { node, runner }) {
   return [node, runner, command].map(shellQuote).join(" ");
-}
-
-// Any install's runner counts, not only this one: an update moves the plugin
-// root, and a command wrapped twice would hand the inner runner its values as
-// command text.
-const WRAPPED = /^'[^']*' '[^']*\/([^/']+)' '/;
-
-export function isWrapped(command, { runner }) {
-  return String(command).match(WRAPPED)?.[1] === basename(String(runner));
 }
 
 const decode = (segment) => {
@@ -212,6 +213,9 @@ const RESOLVE_DENIED = "OpenViking secret exec is on, so credential values are n
   + "Write the reference itself, {{ov_privacy:...}}, verbatim into the Bash command that needs it: "
   + "the value is put in place when the command runs and masked in its output.";
 
+const RUNS_RUNNER = "OpenViking secret exec: this command starts the secret-exec runner itself, "
+  + "which puts the value of every credential reference that reaches it into the command it runs.";
+
 const preToolUse = (fields) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", ...fields } });
 
 /**
@@ -231,8 +235,16 @@ export function secretExecPreToolUse(event = {}, cfg = {}, wrapper = {}) {
   }
   const input = event.tool_input;
   const command = input?.command;
-  if (toolName !== "Bash" || typeof command !== "string" || !hasReference(command)) return null;
-  if (isWrapped(command, wrapper)) return null;
+  if (toolName !== "Bash" || typeof command !== "string") return null;
+  const ask = cfg.secretExecApproval === "ask" ? { permissionDecision: "ask" } : null;
+  // A command that already starts a runner, from any install since an update
+  // moves the plugin root, is not wrapped again: the inner runner would get the
+  // outer one's values as command text. `ask` still confirms it, because the
+  // runner resolves whatever reference reaches it, however it was spelled.
+  if (command.includes(basename(String(wrapper.runner)))) {
+    return ask && preToolUse({ ...ask, permissionDecisionReason: RUNS_RUNNER });
+  }
+  if (!hasReference(command)) return null;
 
   const plan = rewriteCommand(command);
   if (plan.error) {
@@ -240,7 +252,7 @@ export function secretExecPreToolUse(event = {}, cfg = {}, wrapper = {}) {
   }
   if (!plan.references.length) return null;
   return preToolUse({
-    ...(cfg.secretExecApproval === "ask" ? { permissionDecision: "ask" } : {}),
+    ...ask,
     permissionDecisionReason: `OpenViking secret exec runs this command with ${plan.references.map(credentialName).join(", ")}. `
       + "Each value is put in place at run time through an environment variable and masked in the output; "
       + "the command itself holds only references.",
@@ -261,9 +273,10 @@ export const SECRET_EXEC_USAGE = "OpenViking secret exec is on. When a shell com
  * Replace every secret value in a byte stream by its reference.
  *
  * Each value is matched as written and as it reads inside a JSON string,
- * leftmost first and longest first where two start together. Between chunks
- * only the longest tail that could still grow into a value is held back, so
- * output with no near-miss passes through at once.
+ * leftmost first and longest first where two start together. A value saved
+ * under several fields becomes the smallest of their references, as the
+ * Gateway seals it. Between chunks only the longest tail that could still grow
+ * into a value is held back, so output with no near-miss passes through at once.
  */
 export function createMasker(secrets = []) {
   const needles = [];
@@ -272,7 +285,7 @@ export function createMasker(secrets = []) {
       if (form) needles.push({ bytes: Buffer.from(form), reference: Buffer.from(reference) });
     }
   }
-  needles.sort((a, b) => b.bytes.length - a.bytes.length);
+  needles.sort((a, b) => b.bytes.length - a.bytes.length || a.reference.compare(b.reference));
 
   // Where the longest suffix of data[from:] that some needle starts with begins.
   const heldFrom = (data, from) => {
@@ -331,21 +344,26 @@ export function privacyResolver(fetchJSON) {
       method: "POST",
       body: JSON.stringify({ selector: reference }),
     });
-    const value = res.ok ? res.result?.value : undefined;
-    if (typeof value === "string" && value) return { ok: true, value };
-    const reason = res.ok ? "no value is stored" : res.error?.code || (res.status ? `HTTP ${res.status}` : "OpenViking is unreachable");
-    return { ok: false, reason };
+    if (!res.ok) {
+      return { ok: false, reason: res.error?.code || (res.status ? `HTTP ${res.status}` : "OpenViking is unreachable") };
+    }
+    const value = res.result?.value;
+    // An environment variable holds text, and no NUL byte.
+    if (typeof value === "string" && value && !value.includes("\0")) return { ok: true, value };
+    return { ok: false, reason: value == null || value === "" ? "no value is stored" : "the stored value is not text" };
   };
 }
 
-const POSIX_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
-
-/** The user's shell when it is a POSIX one, else bash from PATH, else /bin/sh. */
+/**
+ * The shell Claude Code's Bash tool would pick, so a command behaves the same
+ * wrapped: CLAUDE_CODE_SHELL or SHELL when it is bash or zsh, else zsh or bash
+ * from PATH, and /bin/sh only when neither is installed.
+ */
 export function posixShell(env = {}, exists = () => false) {
-  const shell = String(env.SHELL || "");
-  if (POSIX_SHELLS.has(basename(shell))) return shell;
-  const bash = String(env.PATH || "").split(":").filter(Boolean).map((dir) => `${dir}/bash`).find(exists);
-  return bash || "/bin/sh";
+  const preferred = [env.CLAUDE_CODE_SHELL, env.SHELL]
+    .find((shell) => /^(bash|zsh)$/.test(basename(String(shell || ""))) && exists(shell));
+  const onPath = (name) => String(env.PATH || "").split(delimiter).filter(Boolean).map((dir) => join(dir, name)).find(exists);
+  return preferred || onPath("zsh") || onPath("bash") || "/bin/sh";
 }
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -392,10 +410,17 @@ export async function runSecretExec(command, { env, resolve, spawn, shell, stdou
   if (failed.length) return refuse(failed);
 
   const secrets = plan.references.map((reference, n) => ({ reference, value: answers[n].value }));
-  const child = spawn(shell, ["-c", plan.script], {
-    env: { ...env, ...Object.fromEntries(secrets.map(({ value }, n) => [`OV_SECRET_${n}`, value])) },
-    stdio: ["inherit", "pipe", "pipe"],
-  });
+  const cannotStart = (error) => refuse(`cannot start ${shell} (${error.code || "spawn failed"})`);
+  let child;
+  try {
+    child = spawn(shell, ["-c", plan.script], {
+      env: { ...env, ...Object.fromEntries(secrets.map(({ value }, n) => [`OV_SECRET_${n}`, value])) },
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+  } catch (error) {
+    // Its message quotes the environment entry it rejected, value included.
+    return cannotStart(error);
+  }
   const forward = (signal) => child.kill(signal);
   for (const signal of FORWARDED_SIGNALS) signals.on(signal, forward);
   const drained = Promise.all([pipeMasked(child.stdout, stdout, secrets), pipeMasked(child.stderr, stderr, secrets)]);
@@ -405,6 +430,6 @@ export async function runSecretExec(command, { env, resolve, spawn, shell, stdou
   });
   for (const signal of FORWARDED_SIGNALS) signals.off(signal, forward);
   await drained;
-  if (exit.error) return refuse(`cannot start ${shell} (${exit.error.code || "spawn failed"})`);
+  if (exit.error) return cannotStart(exit.error);
   return exit.code ?? 128 + (constants.signals[exit.signal] || 0);
 }

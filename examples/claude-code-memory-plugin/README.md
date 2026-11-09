@@ -249,12 +249,12 @@ The bundled `openviking-skills` skill tells Claude what to do with the catalog: 
 | `OPENVIKING_CONFIG_FILE`               | `~/.openviking/ov.conf`           | Override `ov.conf` path                             |
 | `OPENVIKING_CLI_CONFIG_FILE`           | `~/.openviking/ovcli.conf`        | Override `ovcli.conf` path                          |
 
-#### Secret exec
+#### Secret exec settings
 
 | Env Var                                | Default      | Description                                                              |
 |----------------------------------------|--------------|--------------------------------------------------------------------------|
 | `OPENVIKING_SECRET_EXEC`               | `false`      | Run Bash commands that carry a credential reference through the runner — see [Secret exec](#secret-exec) |
-| `OPENVIKING_SECRET_EXEC_APPROVAL`      | `inherit`    | `inherit` leaves the wrapped command to your own permission mode and rules; `ask` confirms every use |
+| `OPENVIKING_SECRET_EXEC_APPROVAL`      | `inherit`    | `inherit` leaves the wrapped command to your own permission mode and rules; `ask` asks before each command that uses a credential |
 
 In `ovcli.conf` they are `secretExec` and `secretExecApproval`, under `plugin` or `plugin.claude_code`. A workspace file cannot set either.
 
@@ -392,17 +392,20 @@ Off by default. With `OPENVIKING_SECRET_EXEC=1`, or `secretExec: true` in `ovcli
 curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}" https://api.github.com/user
 ```
 
-A `PreToolUse` hook of its own, separate from the URI guard, wraps such a command as `node scripts/secret-run.mjs '<the command>'`. The hook makes no network call and never sees a value. When the command runs, the runner resolves every reference with your OpenViking key (`POST /api/v1/privacy-configs/resolve`) and hands each value to the command as an environment variable, expanded where the reference stood, so a value is never pasted into shell code. Any value the command prints on stdout or stderr comes back as its reference; there is no switch to turn that off. If any reference fails to resolve, nothing runs. Stdin, the exit code and signals pass through. The same switch denies the MCP `privacy_resolve` tool, which would put the value in the conversation, and adds a short usage note at session start.
+A `PreToolUse` hook of its own, separate from the URI guard, wraps such a command as `node scripts/secret-run.mjs '<the command>'`. The hook makes no network call and never sees a value. When the command runs, the runner resolves every reference with your OpenViking key (`POST /api/v1/privacy-configs/resolve`) and hands each value to the command as an environment variable, expanded where the reference stood, so a value is never pasted into shell code. Any value the command prints on stdout or stderr comes back as its reference; there is no switch to turn that off. If any reference fails to resolve, nothing runs, and while the switch is off the runner resolves nothing at all. Stdin, the exit code and signals pass through. The same switch denies the MCP `privacy_resolve` tool, which would put the value in the conversation, and adds a short usage note at session start.
 
-By default the hook makes no permission decision, so the wrapped command goes through your permission mode and rules like any other command. Claude Code matches rules against the wrapped command, so `Bash(curl:*)`-style rules, allow or deny, no longer apply to it: in the default mode you are asked the first time, and allowing the runner stops the prompts. `OPENVIKING_SECRET_EXEC_APPROVAL=ask` confirms every use instead, with the full command and the credentials it uses in the prompt. The hook never approves a command on its own.
+By default the hook makes no permission decision, so the wrapped command goes through your permission mode and rules like any other command. Claude Code matches rules against the wrapped command, so `Bash(curl:*)`-style rules, allow or deny, no longer apply to it: in the default mode you are asked the first time, and allowing the runner stops the prompts. `OPENVIKING_SECRET_EXEC_APPROVAL=ask` asks instead before every command that holds a reference or starts the runner itself, with the full command and the credentials it uses in the prompt. That guards against mistakes, not against a model set on getting a value out: a command that hides both, or reads your OpenViking key and calls the server itself, is not caught. The hook never approves a command on its own.
 
 What it does not cover:
 
 - It does not guarantee that secrets never reach the model. It covers commands that use a reference; a key you paste, the output of `cat .env`, or recalled content still reach the model unless an [OpenViking Gateway](../../docs/en/guides/15-gateway.md) seals them on the way upstream.
+- Masking matches each value as written and as it reads inside a JSON string. A value the command prints encoded or in part, such as the Basic header `curl -v -u user:{{…}}` shows, comes back unmasked.
+- The runner reads the command's quoting with a small scanner. Where it misreads it, a `case` pattern inside `$( )` for one, a reference can end up unquoted, and a value holding blanks is then split into a form masking does not match.
 - A wrapped command runs in its own shell: `cd` does not carry over to the next command, and aliases and functions from your shell profile are not there.
 - The runner needs network access to the OpenViking server, also from inside a sandbox.
-- POSIX shells only: `$SHELL` when it is sh, bash, zsh, dash or ksh, otherwise bash or `/bin/sh`. A reference in a here-document with a quoted delimiter (`<<'EOF'`) is refused, since the shell would never expand it.
+- The shell is the one Claude Code's Bash tool uses: `CLAUDE_CODE_SHELL` or `$SHELL` when it is bash or zsh, otherwise zsh or bash from `PATH`, and `/bin/sh` only when neither is installed. A reference in a here-document with a quoted delimiter (`<<'EOF'`) is refused, since the shell would never expand it.
 - A value reaches the command as data. A command that parses its own arguments as shell code again (`eval`, `sh -c '…'`, `ssh host '…'`) parses the value too.
+- No workspace file can turn it on, but Claude Code's project settings (`.claude/settings.json`) can set `OPENVIKING_SECRET_EXEC` in their `env` block, just as they can add hooks of their own.
 
 ## Hook timeouts
 

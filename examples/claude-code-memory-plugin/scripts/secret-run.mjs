@@ -12,9 +12,12 @@ import { loadConfig } from "./config.mjs";
 import { makeFetchJSON } from "./lib/ov-session.mjs";
 import { posixShell, privacyResolver, runSecretExec } from "./shared/secret-exec.mjs";
 
+const cfg = loadConfig();
+
 process.exitCode = await runSecretExec(process.argv[2], {
   env: process.env,
-  resolve: privacyResolver(makeFetchJSON(loadConfig())),
+  // Off means no value leaves OpenViking, whoever starts the runner.
+  resolve: cfg.secretExec ? privacyResolver(makeFetchJSON(cfg)) : async () => ({ ok: false, reason: "secret exec is off" }),
   spawn,
   shell: posixShell(process.env, existsSync),
   stdout: process.stdout,

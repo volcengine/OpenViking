@@ -219,8 +219,9 @@ not echo resolved secrets in chat. Tree and upsert return no stored values.
 With [secret exec](../agent-integrations/02-claude-code.md#secret-exec) on in the
 Claude Code plugin, do not call `privacy_resolve`: write the reference verbatim
 into the Bash command that needs it. The plugin denies `privacy_resolve`, resolves
-the reference when the command runs, and masks the value in the output, so the
-plaintext never enters the Agent context.
+the reference when the command runs, and masks the value in the output. Masking
+matches the value as written or JSON-escaped, so a command that prints it encoded
+or in part still shows it.
 
 ### Resource permissions and sharing
 

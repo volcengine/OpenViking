@@ -67,7 +67,7 @@ The plugin hooks into the Claude Code lifecycle:
 - **Before compaction and on session end** — commits pending messages
 - **For each subagent** — assigns an isolated memory session
 - **Before a native file tool touches a `viking://` path** — blocks the call and names the OpenViking MCP tool to use instead; a `Write` or `Edit` on a skill path is pointed to `add_skill`
-- **Before a Bash command that uses a saved credential** — when [secret exec](#secret-exec) is on, runs it through a runner that keeps the value out of the conversation
+- **Before a Bash command that uses a saved credential** — when [secret exec](#secret-exec) is on, runs it through a runner that hands the value to the command and masks it in the output
 
 Capture runs in a detached worker and does not block the conversation turn. PreCompact and SessionEnd wait for the session commit, within their hook timeouts.
 
@@ -95,7 +95,7 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV of sed-style regex rules applied to every captured turn (same grammar) |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
 | `OPENVIKING_SECRET_EXEC` | `false` | Turn on [secret exec](#secret-exec) |
-| `OPENVIKING_SECRET_EXEC_APPROVAL` | `inherit` | `inherit` leaves the wrapped command to your permission mode and rules; `ask` confirms every use |
+| `OPENVIKING_SECRET_EXEC_APPROVAL` | `inherit` | `inherit` leaves the wrapped command to your permission mode and rules; `ask` asks before each command that uses a credential |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
 
 Most of these knobs can also live in `ovcli.conf` under `plugin` — see [Plugin Settings](../configuration/02-client.md#plugin-settings). The two filter knobs are better written there, as JSON arrays, because the environment form is split on commas.
@@ -124,7 +124,7 @@ curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/
 
 A `PreToolUse` hook wraps the command in the plugin's runner without touching the network. When the command runs, the runner resolves each reference with your OpenViking key, hands the value to the command through an environment variable, and replaces any value the command prints with its reference. If a reference does not resolve, nothing runs. With secret exec on, the hook also denies `privacy_resolve`, and the session-start context tells Claude how to use references.
 
-The wrapped command follows your permission mode and rules, which Claude Code matches against the wrapped command rather than the original, so a rule such as `Bash(curl:*)` does not apply to it. Set `OPENVIKING_SECRET_EXEC_APPROVAL=ask` to confirm each use. Secret exec covers only commands that use a reference: a pasted key or the output of `cat .env` still reaches the model unless the [Gateway](../guides/15-gateway.md) seals it. A wrapped command runs in its own POSIX shell, so `cd` does not carry over, and the runner needs network access to the OpenViking server. See [Secret exec](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#secret-exec) in the plugin README for the details.
+The wrapped command follows your permission mode and rules, which Claude Code matches against the wrapped command rather than the original, so a rule such as `Bash(curl:*)` does not apply to it. Set `OPENVIKING_SECRET_EXEC_APPROVAL=ask` to be asked before each command that uses a credential; that guards against mistakes, not against a model set on getting a value out. Secret exec covers only commands that use a reference: a pasted key or the output of `cat .env` still reaches the model unless the [Gateway](../guides/15-gateway.md) seals it. Masking matches the value as written or JSON-escaped, so a value printed encoded or in part, such as the Basic header `curl -v -u` shows, is not masked. A wrapped command runs in its own POSIX shell, so `cd` does not carry over, and the runner needs network access to the OpenViking server. See [Secret exec](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#secret-exec) in the plugin README for the details.
 
 ## Statusline
 

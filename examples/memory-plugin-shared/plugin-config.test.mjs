@@ -411,6 +411,12 @@ test("secret exec is switched on from ovcli.conf or the environment, never from 
     assert.equal(cfg.secretExec, true);
     assert.equal(cfg.secretExecApproval, "inherit");
   });
+
+  // Asking for confirmation in capitals must not quietly turn it off.
+  withFixture({}, ({ otherDir }) => {
+    process.env.OPENVIKING_SECRET_EXEC_APPROVAL = "ASK";
+    assert.equal(buildPluginConfig("claude-code", { cwd: otherDir }).secretExecApproval, "ask");
+  });
 });
 
 for (const [name, loader] of Object.entries(LOADERS)) {

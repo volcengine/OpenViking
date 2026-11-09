@@ -9,7 +9,6 @@ import {
   createMasker,
   credentialName,
   hasReference,
-  isWrapped,
   posixShell,
   privacyResolver,
   rewriteCommand,
@@ -102,6 +101,13 @@ test("the scanner follows escapes, comments, nesting and here-document variants"
       `cat <<A <<B; echo ''"\${OV_SECRET_0}"''\na \${OV_SECRET_0}\nA\nb \${OV_SECRET_0}\nB`],
     [`x=$(cat <<EOF\n'${REF}'\nEOF\n)`, "x=$(cat <<EOF\n'${OV_SECRET_0}'\nEOF\n)"],
     [`cat <<'EOF'\nno reference here\nEOF\necho ${REF}`, `cat <<'EOF'\nno reference here\nEOF\necho "\${OV_SECRET_0}"`],
+    // A substitution inside a here-document body is unquoted shell again.
+    [`cat <<EOF\n"${REF}" $(echo ${REF}) \`echo ${REF}\`\nEOF`,
+      'cat <<EOF\n"${OV_SECRET_0}" $(echo "${OV_SECRET_0}") `echo "${OV_SECRET_0}"`\nEOF'],
+    // A shift is not a here-document, so the lines after it are not its body.
+    [`n=$((1<<4))\nprintf %s ${REF}`, 'n=$((1<<4))\nprintf %s "${OV_SECRET_0}"'],
+    [`(( n = 1 << 4 ))\nprintf %s ${REF}`, '(( n = 1 << 4 ))\nprintf %s "${OV_SECRET_0}"'],
+    [`echo "$(( (1<<2) + 1 ))" ${REF}`, 'echo "$(( (1<<2) + 1 ))" "${OV_SECRET_0}"'],
   ];
   for (const [command, script] of cases) {
     assert.equal(rewriteCommand(command).script, script, command);
@@ -125,6 +131,7 @@ test("a value full of shell syntax arrives verbatim and runs nothing, in every c
     [`printf '[%s]' '${REF}'`],
     [`printf '[%s]' "$(printf '%s' '${REF}')"`, substituted],
     [`printf '[%s]' "\`printf '%s' ${REF}\`"`, substituted],
+    [`n=$((1<<4))\nprintf '[%s]' ${REF}`],
   ];
   for (const shell of SHELLS) {
     // dash has no $'...' quoting at all.
@@ -139,6 +146,8 @@ test("a value full of shell syntax arrives verbatim and runs nothing, in every c
       }
       const doc = run(shell, rewriteCommand(`cat <<EOF\n[${REF}]\nEOF`).script, { OV_SECRET_0: value });
       assert.equal(doc.stdout, `[${value}]\n`, `${shell}: here-document`);
+      const inner = run(shell, rewriteCommand(`cat <<EOF\n[$(printf '%s' ${REF})]\nEOF`).script, { OV_SECRET_0: value });
+      assert.equal(inner.stdout, `[${substituted(value)}]\n`, `${shell}: substitution in a here-document`);
     }
   }
 });
@@ -160,13 +169,24 @@ test("shellQuote round-trips through the shell and the wrapper keeps the command
   }
 });
 
-test("a wrapped command is recognized from any install, and nothing else is", () => {
-  const command = `echo ${REF}`;
-  assert.ok(isWrapped(wrapCommand(command, WRAPPER), WRAPPER));
-  assert.ok(isWrapped(wrapCommand(command, { node: "/opt/node", runner: "/old/0.9.0/scripts/secret-run.mjs" }), WRAPPER));
-  assert.ok(!isWrapped(command, WRAPPER));
-  assert.ok(!isWrapped(`node secret-run.mjs '${command}'`, WRAPPER));
-  assert.ok(!isWrapped(wrapCommand(command, { node: "/n", runner: "/x/not-the-runner.mjs" }), WRAPPER));
+test("a command that starts any install's runner is not wrapped again, and ask still confirms it", () => {
+  const commands = [
+    wrapCommand(`curl https://x/?k=${REF}`, WRAPPER),
+    wrapCommand(`echo ${REF}`, { node: "/opt/node", runner: "/old/0.9.0/scripts/secret-run.mjs" }),
+    // The reference is put together at run time, so only the runner shows.
+    `P='{{ov_privacy:alice:viking:'; node /x/scripts/secret-run.mjs "printf %s \${P}//~/privacy/credential/github#/values/pat}}"`,
+  ];
+  for (const command of commands) {
+    const event = { tool_name: "Bash", tool_input: { command } };
+    assert.equal(secretExecPreToolUse(event, { secretExec: true }, WRAPPER), null, command);
+    const out = secretExecPreToolUse(event, ON, WRAPPER).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "ask", command);
+    assert.match(out.permissionDecisionReason, /starts the secret-exec runner itself/);
+    assert.equal(out.updatedInput, undefined, command);
+  }
+  const other = wrapCommand(`echo ${REF}`, { node: "/n", runner: "/x/not-the-runner.mjs" });
+  const out = secretExecPreToolUse({ tool_name: "Bash", tool_input: { command: other } }, ON, WRAPPER).hookSpecificOutput;
+  assert.equal(out.updatedInput.command, wrapCommand(other, WRAPPER));
 });
 
 test("the hook does nothing while secret exec is off", () => {
@@ -211,7 +231,6 @@ test("the user's own permission flow decides unless approval is ask, and nothing
 test("the hook leaves alone what it has no business wrapping", () => {
   for (const event of [
     { tool_name: "Bash", tool_input: { command: "curl https://example.com" } },
-    { tool_name: "Bash", tool_input: { command: wrapCommand(`echo ${REF}`, WRAPPER) } },
     { tool_name: "Bash", tool_input: { command: `true # ${REF}` } },
     { tool_name: "Bash", tool_input: { command: [REF] } },
     { tool_name: "Bash" },
@@ -294,6 +313,15 @@ test("output with no near-miss passes at once; only a possible start of a value 
   assert.equal(masker.write(Buffer.from("x s")).toString(), "x ");
   assert.equal(masker.end().toString(), "s");
   assert.equal(createMasker([]).write(Buffer.from("anything")).toString(), "anything");
+});
+
+test("a value saved under two fields masks to the smaller reference, whichever the command named first", () => {
+  const zeta = REF.replace("/github#", "/zeta#");
+  const alpha = REF.replace("/github#", "/alpha#");
+  for (const order of [[zeta, alpha], [alpha, zeta]]) {
+    const secrets = order.map((reference) => ({ value: "samevalue123", reference }));
+    assert.equal(maskAll(secrets, ["a samevalue123 b"]), `a ${alpha} b`);
+  }
 });
 
 test("a value is also masked as it reads inside a JSON string", () => {
@@ -383,6 +411,21 @@ test("the runner hands the values over through the environment and masks them on
   assert.equal(signals.listenerCount("SIGTERM"), 0, "the forwarders are removed");
 });
 
+test("a value the environment cannot carry stops the runner without naming the value", async () => {
+  const io = sinks();
+  const code = await runSecretExec(`echo ${REF}`, {
+    env: { PATH: process.env.PATH },
+    resolve: async () => ({ ok: true, value: "s3cr3t-T0KEN\u0000tail" }),
+    spawn,
+    shell: SH,
+    ...io,
+    signals: new EventEmitter(),
+  });
+  assert.equal(code, 1);
+  assert.match(io.err(), /cannot start .* \(ERR_INVALID_ARG_VALUE\)/);
+  assert.ok(!io.err().includes("s3cr3t"), io.err());
+});
+
 test("privacyResolver posts the reference as a selector and accepts only a stored text value", async () => {
   const calls = [];
   const fetchWith = (res) => async (path, init) => {
@@ -399,17 +442,25 @@ test("privacyResolver posts the reference as a selector and accepts only a store
     [{ ok: false, status: 403, error: {} }, "HTTP 403"],
     [{ ok: false, status: 0, error: { message: "ECONNREFUSED" } }, "OpenViking is unreachable"],
     [{ ok: true, result: { value: "" } }, "no value is stored"],
-    [{ ok: true, result: { value: { nested: true } } }, "no value is stored"],
+    [{ ok: true, result: {} }, "no value is stored"],
+    [{ ok: true, result: { value: { nested: true } } }, "the stored value is not text"],
+    [{ ok: true, result: { value: 123456 } }, "the stored value is not text"],
+    [{ ok: true, result: { value: "tok\u0000en" } }, "the stored value is not text"],
   ]) {
     assert.deepEqual(await privacyResolver(fetchWith(res))(REF), { ok: false, reason });
   }
 });
 
-test("the runner's shell is the user's POSIX shell, else bash, else /bin/sh", () => {
-  assert.equal(posixShell({ SHELL: "/bin/zsh" }), "/bin/zsh");
-  assert.equal(posixShell({ SHELL: "/usr/local/bin/bash" }), "/usr/local/bin/bash");
-  const exists = (path) => path === "/opt/bin/bash";
-  assert.equal(posixShell({ SHELL: "/usr/bin/fish", PATH: "/usr/bin:/opt/bin" }, exists), "/opt/bin/bash");
-  assert.equal(posixShell({ SHELL: "/usr/bin/fish", PATH: "/usr/bin" }, exists), "/bin/sh");
+test("the runner's shell is the one Claude Code's Bash tool picks", () => {
+  const installed = (...paths) => (path) => paths.includes(path);
+  const all = installed("/bin/zsh", "/usr/local/bin/bash", "/opt/bin/bash", "/usr/bin/zsh", "/bin/sh");
+  assert.equal(posixShell({ SHELL: "/bin/zsh" }, all), "/bin/zsh");
+  assert.equal(posixShell({ SHELL: "/usr/local/bin/bash" }, all), "/usr/local/bin/bash");
+  assert.equal(posixShell({ CLAUDE_CODE_SHELL: "/usr/local/bin/bash", SHELL: "/bin/zsh" }, all), "/usr/local/bin/bash");
+  // sh is dash on Debian, where `<<<` and `$'…'` fail although Claude Code would run them in bash.
+  assert.equal(posixShell({ SHELL: "/bin/sh", PATH: "/usr/bin:/opt/bin" }, all), "/usr/bin/zsh");
+  assert.equal(posixShell({ SHELL: "/usr/bin/fish", PATH: "/usr/bin:/opt/bin" }, installed("/opt/bin/bash")), "/opt/bin/bash");
+  assert.equal(posixShell({ SHELL: "/usr/bin/bash", PATH: "/opt/bin" }, installed("/opt/bin/bash")), "/opt/bin/bash");
+  assert.equal(posixShell({ SHELL: "/usr/bin/fish", PATH: "/usr/bin" }, installed()), "/bin/sh");
   assert.equal(posixShell({}), "/bin/sh");
 });

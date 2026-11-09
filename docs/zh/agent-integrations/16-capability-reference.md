@@ -600,7 +600,7 @@ Claude Code 还提供 **secret exec**，默认关闭（`OPENVIKING_SECRET_EXEC`�
 
 ### Claude Code
 
-[Claude Code](./02-claude-code.md)。插件市场插件，包含 9 个 hook、一个 MCP 代理、一个斜杠命令、状态栏和 4 个 skill。
+[Claude Code](./02-claude-code.md)。插件市场插件，包含 10 个 hook、一个 MCP 代理、一个斜杠命令、状态栏和 4 个 skill。
 
 - 注册的 hook 比其他集成都多：`SessionStart`、`UserPromptSubmit`、`PostToolUse:Read`（skill 经验 hook，默认关闭）、作用于 Read、Glob、Grep、Edit、Write 和 Bash 的 `PreToolUse`（URI guard）、作用于 Bash 和 `privacy_resolve` 的第二个 `PreToolUse`（secret exec，默认关闭）、`Stop`、`PreCompact`、`SessionEnd`、`SubagentStart` 和 `SubagentStop`。
 - 召回摘要默认通过本地 `claude -p` 生成，服务端摘要作为回退。

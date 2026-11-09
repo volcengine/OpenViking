@@ -67,7 +67,7 @@ curl -fsSL https://openviking.ai/install | bash
 - **上下文压缩（compact）前及会话结束时** — 提交所有待处理的消息记录。
 - **启动子代理（subagent）时** — 为其分配相互隔离的记忆会话。
 - **原生文件工具访问 `viking://` 路径前** — 拦截该调用，并提示改用对应的 OpenViking MCP 工具；对 skill 路径的 `Write` 或 `Edit` 会被引导到 `add_skill`。
-- **执行使用已登记凭据的 Bash 命令前** — 开启 [secret exec](#secret-exec) 时，让命令经 runner 执行，值不进入对话。
+- **执行使用已登记凭据的 Bash 命令前** — 开启 [secret exec](#secret-exec) 时，让命令经 runner 执行：值交给命令，输出里的值被遮罩。
 
 捕获在独立后台进程中执行，不阻塞当前对话轮次。PreCompact 和 SessionEnd 会在 hook 超时范围内等待会话提交完成。
 
@@ -95,7 +95,7 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，作用于每个被捕获的回合（同一套语法） |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | 强制开启或关闭插件 |
 | `OPENVIKING_SECRET_EXEC` | `false` | 开启 [secret exec](#secret-exec) |
-| `OPENVIKING_SECRET_EXEC_APPROVAL` | `inherit` | `inherit` 让包裹后的命令走你的权限模式与规则；`ask` 每次使用都确认 |
+| `OPENVIKING_SECRET_EXEC_APPROVAL` | `inherit` | `inherit` 让包裹后的命令走你的权限模式与规则；`ask` 在每条使用凭据的命令执行前确认 |
 | `OPENVIKING_DEBUG` | `false` | 将调试日志输出至 `~/.openviking/logs/cc-hooks.log` |
 
 这些配置大多也可以写在 `ovcli.conf` 的 `plugin` 段下——见[插件配置](../configuration/02-client.md#插件配置)。两个过滤器建议使用 JSON 数组，避免环境变量中的逗号被当作分隔符。
@@ -124,7 +124,7 @@ curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/
 
 一个 `PreToolUse` hook 不联网地把命令包进插件的 runner。命令执行时，runner 用你的 OpenViking key 逐个取值，经环境变量交给命令，并把命令输出里出现的值换回引用。任何引用取不到值，命令都不会执行。开启后 hook 还会拒绝 `privacy_resolve`，会话开始时的上下文也会告诉 Claude 如何使用引用。
 
-包裹后的命令走你自己的权限模式与规则；Claude Code 按包裹后的命令而不是原命令匹配规则，所以 `Bash(curl:*)` 这类规则不作用于它。想逐次确认时设 `OPENVIKING_SECRET_EXEC_APPROVAL=ask`。Secret exec 只覆盖使用引用的命令：粘贴的 key、`cat .env` 的输出仍会发给模型，除非经过 [Gateway](../guides/15-gateway.md) 封存。包裹后的命令在独立的 POSIX Shell 里运行，`cd` 不会延续；runner 需要能访问 OpenViking 服务器。细节见插件 README 的 [Secret exec](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#secret-exec)。
+包裹后的命令走你自己的权限模式与规则；Claude Code 按包裹后的命令而不是原命令匹配规则，所以 `Bash(curl:*)` 这类规则不作用于它。想在每条使用凭据的命令执行前确认时设 `OPENVIKING_SECRET_EXEC_APPROVAL=ask`；它防的是失误，不防存心要把值弄出去的模型。Secret exec 只覆盖使用引用的命令：粘贴的 key、`cat .env` 的输出仍会发给模型，除非经过 [Gateway](../guides/15-gateway.md) 封存。遮罩只匹配值的原文和 JSON 转义形式，以编码或截取形式输出的值（例如 `curl -v -u` 打印的 Basic 头）不会被遮罩。包裹后的命令在独立的 POSIX Shell 里运行，`cd` 不会延续；runner 需要能访问 OpenViking 服务器。细节见插件 README 的 [Secret exec](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#secret-exec)。
 
 ## 状态行
 
