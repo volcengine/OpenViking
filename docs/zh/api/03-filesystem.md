@@ -38,7 +38,7 @@ API 不允许写入、追加、删除、移动或覆盖复制，也不能通过�
 | limit | int | 否 | None | `node_limit` 的别名 |
 | sort_by | str | 否 | None | 在分页前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
 | sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
-| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count`、`l2_count` |
+| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
 
@@ -181,9 +181,9 @@ ov ls viking://resources/ --fields name,tags
 ov ls viking://resources/ --simple --fields uri,tags
 ```
 
-`-f` / `--fields` 接受逗号分隔的列名。在默认的 table 输出模式下，结果为带表头、按列对齐的表格。支持的字段为 `name`、`uri`、`path`、`type`、`size`、`mode`、`mtime`、`locked`、`id`、`count`、`l2_count`、`abstract`、`overview`、`tags`。同时指定 `--simple` 和 `-f` 时，每行输出逗号分隔的字段值，不带表头或树缩进；仅使用 `--simple` 时仍每行输出一个 URI。若未选择 `name`、`uri` 或 `path`，列表会自动补充 `name` 列，树会补充 `path` 列。
+`-f` / `--fields` 接受逗号分隔的列名。在默认的 table 输出模式下，结果为带表头、按列对齐的表格。支持的字段为 `name`、`uri`、`path`、`type`、`size`、`mode`、`mtime`、`locked`、`id`、`count`、`abstract`、`overview`、`tags`。同时指定 `--simple` 和 `-f` 时，每行输出逗号分隔的字段值，不带表头或树缩进；仅使用 `--simple` 时仍每行输出一个 URI。若未选择 `name`、`uri` 或 `path`，列表会自动补充 `name` 列，树会补充 `path` 列。
 
-CLI 会按所选列请求 `extra_fields`（`locked`、`id`、`count`、`l2_count`）；选择 `tags` 列时会请求 `include_tags=true`。这些列选择不改变 `tags` 的 AND 过滤语义。
+CLI 会按所选列请求 `extra_fields`（`locked`、`id`、`count`）；选择 `tags` 列时会请求 `include_tags=true`。这些列选择不改变 `tags` 的 AND 过滤语义。
 
 HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应用可见性、tags、offset 和 limit 后仍有后续匹配节点；Python、TypeScript 和 Go SDK 继续返回 `result` 数组。CLI 检测到后续节点时会在输出末尾显示翻页提示。
 
@@ -229,7 +229,7 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 | offset | int | 否 | 0 | 跳过的可见节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
-| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count`、`l2_count` |
+| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
@@ -440,8 +440,7 @@ ov stat viking://resources/my-project/docs
     "isDir": true,
     "isLocked": false,
     "uri": "viking://resources/docs",
-    "count": 58,
-    "l2_count": 42
+    "count": 42
   }
 }
 ```
@@ -450,7 +449,9 @@ ov stat viking://resources/my-project/docs
 
 `id` 字段（仅文件）是 VikingDB 中向量记录的确定性主键，对 level 2（常规文件）记录按 `md5(f"{account_id}:{uri}")` 计算。该值与向量集合 schema 中的 `id` 字段一致，可用于直接交叉引用向量记录而无需额外查询。目录不返回此字段，因为一个目录在多个语义层（L0 abstract、L1 overview）下可能对应多条向量记录，id 不唯一。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，`stat(id)` 都会返回 `NOT_FOUND`，并在原因中提示数据可能尚未索引或已经删除。
 
-`count` 和 `l2_count` 仅在目录上返回，且都来自当前调用方可见的向量索引。`count` 是目录 URI 子树下所有层级的向量记录数；`l2_count` 只统计 `level=2` 的记录。两者受异步索引进度和孤儿记录影响，不是物理文件系统条目数。`ls`/`tree` 可分别通过 `extra_fields=count` 和 `extra_fields=l2_count` 按需返回；同时请求时只执行一次按 level 分组的聚合。
+`count` 字段（仅目录）统计目录 URI 子树下当前调用方可见的 `level=2` 向量记录数。它受异步索引进度和孤儿记录清理影响，不是物理文件系统条目数；`ls`、`tree` 和 `glob` 通过 `extra_fields=count` 按需返回该字段。
+
+**破坏性变更：** `count` 以前包含所有已索引的向量层级；现在只统计当前调用方可见的 `level=2` 记录。
 
 在大小写不敏感的 `localfs` 上，`stat` 也可能通过大小写别名返回真实文件或目录的元数据。例如 `viking://resources/docs/REPORT.md` 可能命中真实的 `viking://resources/docs/report.md`；大小写敏感系统上，别名目标不存在时返回 `NOT_FOUND`。
 

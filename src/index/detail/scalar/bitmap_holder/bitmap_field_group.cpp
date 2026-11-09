@@ -153,7 +153,7 @@ int BitmapGroupBase::count_field_enums(
         enum_bitmaps.insert({kv.first, key_bitmap});
       }
     }
-    if (rangedmap_ptr_ && bitmap_group_.empty()) {
+    if (rangedmap_ptr_) {
       enum_count[group_name_] = valid_bitmap->get_cached_nbit();
     }
   } else {
@@ -168,7 +168,7 @@ int BitmapGroupBase::count_field_enums(
         }
       }
     }
-    if (rangedmap_ptr_ && bitmap_group_.empty()) {
+    if (rangedmap_ptr_) {
       enum_count[group_name_] = rangedmap_ptr_->size();
     }
   }

@@ -1786,33 +1786,6 @@ async def test_system_tree_allows_agent_output_without_semantic_enrichment(reque
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["ls", "tree", "glob"])
-async def test_system_file_enumeration_rejects_l2_count(request_context, operation):
-    uri = "viking://system/memory/memory_templates/custom"
-    viking_fs = SimpleNamespace(
-        _ensure_access=AsyncMock(),
-        ls=AsyncMock(return_value=[]),
-        tree=AsyncMock(return_value=[]),
-        glob=AsyncMock(return_value={"matches": []}),
-        _finalize_listing_entries=AsyncMock(return_value=[]),
-    )
-    service = FSService(viking_fs=viking_fs)
-
-    with pytest.raises(InvalidArgumentError, match="not supported"):
-        if operation == "glob":
-            await service.glob("*.md", uri=uri, ctx=request_context, extra_fields=["l2_count"])
-        else:
-            await getattr(service, operation)(
-                uri,
-                ctx=request_context,
-                output="original",
-                extra_fields=["l2_count"],
-            )
-
-    getattr(viking_fs, operation).assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_copy_to_system_uses_physical_file_strategy(request_context):
     source = "viking://resources/project/demo.md"
     target = "viking://system/memory/memory_templates/custom/demo.md"

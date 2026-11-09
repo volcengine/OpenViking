@@ -9,6 +9,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
+from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -69,11 +70,10 @@ async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_stat_returns_total_and_l2_vector_counts(monkeypatch, fs):
+async def test_stat_returns_l2_vector_count_as_count(monkeypatch, fs):
     path = "/local/default/resources/docs"
     vector_store = SimpleNamespace(
-        count_by_level=AsyncMock(return_value=(7, 4)),
-        count=AsyncMock(),
+        count=AsyncMock(return_value=4),
     )
 
     async def resolve_uri(uri, _ctx):
@@ -89,59 +89,37 @@ async def test_stat_returns_total_and_l2_vector_counts(monkeypatch, fs):
 
     result = await fs.stat("viking://resources/docs", ctx=_default_ctx())
 
-    assert result["count"] == 7
-    assert result["l2_count"] == 4
-    vector_store.count_by_level.assert_awaited_once()
-    vector_store.count.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_stat_preserves_total_count_when_level_grouping_fails(monkeypatch, fs):
-    path = "/local/default/resources/docs"
-    vector_store = SimpleNamespace(
-        count_by_level=AsyncMock(side_effect=RuntimeError("grouping unavailable")),
-        count=AsyncMock(return_value=7),
-    )
-
-    async def resolve_uri(uri, _ctx):
-        return uri
-
-    async def stat_path(_path):
-        return {"name": "docs", "isDir": True}
-
-    monkeypatch.setattr(fs, "resolve_uri", resolve_uri)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: path)
-    monkeypatch.setattr(fs._async_agfs, "stat", stat_path)
-    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
-
-    result = await fs.stat("viking://resources/docs", ctx=_default_ctx())
-
-    assert result["count"] == 7
+    assert result["count"] == 4
     assert "l2_count" not in result
-    vector_store.count_by_level.assert_awaited_once()
-    vector_store.count.assert_awaited_once()
+    vector_store.count.assert_awaited_once_with(
+        filter=And(
+            [
+                PathScope("uri", "viking://resources/docs", depth=-1),
+                Eq("level", 2),
+            ]
+        ),
+        ctx=_default_ctx(),
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("extra_fields", "expected", "grouped_calls", "count_calls"),
+    ("extra_fields", "expected", "count_calls"),
     [
-        (["count"], {"count": 7}, 0, 1),
-        (["l2_count"], {"l2_count": 4}, 1, 0),
-        (["count", "l2_count"], {"count": 7, "l2_count": 4}, 1, 0),
+        (["count"], {"count": 4}, 1),
+        (["l2_count"], {}, 0),
+        (["count", "l2_count"], {"count": 4}, 1),
     ],
 )
-async def test_directory_count_extra_fields_are_independent(
+async def test_directory_count_is_l2_only_and_legacy_l2_count_is_ignored(
     monkeypatch,
     fs,
     extra_fields,
     expected,
-    grouped_calls,
     count_calls,
 ):
     vector_store = SimpleNamespace(
-        count_by_level=AsyncMock(return_value=(7, 4)),
-        count=AsyncMock(return_value=7),
+        count=AsyncMock(return_value=4),
     )
     monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
     entry = {
@@ -153,8 +131,18 @@ async def test_directory_count_extra_fields_are_independent(
     await fs._augment_entries_extra_fields([entry], extra_fields, ctx=_default_ctx())
 
     assert {key: entry[key] for key in expected} == expected
-    assert vector_store.count_by_level.await_count == grouped_calls
+    assert "l2_count" not in entry
     assert vector_store.count.await_count == count_calls
+    if count_calls:
+        vector_store.count.assert_awaited_once_with(
+            filter=And(
+                [
+                    PathScope("uri", "viking://resources/docs", depth=-1),
+                    Eq("level", 2),
+                ]
+            ),
+            ctx=_default_ctx(),
+        )
 
 
 def test_viking_fs_no_longer_exposes_python_encryption_api(fs: VikingFS):

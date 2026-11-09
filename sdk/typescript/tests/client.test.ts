@@ -680,7 +680,7 @@ describe("OpenVikingClient", () => {
       includeAbstract: false,
       includeOverview: true,
       overviewLimit: 512,
-      extraFields: ["count", "l2_count"],
+      extraFields: ["count"],
     });
     expect(treePage).toEqual({ result: entries, hasMore: false });
     await expect(
@@ -717,10 +717,7 @@ describe("OpenVikingClient", () => {
     expect(treeUrls[0]!.searchParams.get("include_abstract")).toBe("false");
     expect(treeUrls[0]!.searchParams.get("include_overview")).toBe("true");
     expect(treeUrls[0]!.searchParams.get("overview_limit")).toBe("512");
-    expect(treeUrls[0]!.searchParams.getAll("extra_fields")).toEqual([
-      "count",
-      "l2_count",
-    ]);
+    expect(treeUrls[0]!.searchParams.getAll("extra_fields")).toEqual(["count"]);
     expect(treeUrls[2]!.searchParams.has("include_abstract")).toBe(false);
     expect(treeUrls[2]!.searchParams.has("include_overview")).toBe(false);
     expect(treeUrls[2]!.searchParams.get("overview_limit")).toBe("4000");

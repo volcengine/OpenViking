@@ -727,7 +727,7 @@ RecallResultPtr CounterOp::_calc_topk_result(
     JsonDoc::AllocatorType& allo = json_ptr->GetAllocator();
     int entry_num = 0;
     for (const auto& kv : enum_count) {
-      if (kv.second > 0 && (int)kv.second > gt_) {
+      if ((int)kv.second > gt_) {
         JsonValue key;
         JsonValue value;
         key.SetString(kv.first.c_str(), kv.first.size(), allo);

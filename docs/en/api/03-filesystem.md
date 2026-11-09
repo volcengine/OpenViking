@@ -39,7 +39,7 @@ List directory contents.
 | limit | int | No | None | Alias for `node_limit` |
 | sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before pagination; directories remain first |
 | sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
-| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count`, `l2_count` |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
 
@@ -162,7 +162,7 @@ ov tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] 
 ov glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 ```
 
-`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `l2_count`, `abstract`, `overview`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
+`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `overview`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
 
 The HTTP `result` remains an entry array. `has_more=true` means more matching nodes remain after visibility, tags, offset, and limit are applied. The Python, TypeScript, and Go SDKs continue to return the `result` array. When more nodes are available, the CLI appends a pagination hint to its output.
 
@@ -207,7 +207,7 @@ Get directory tree structure.
 | offset | int | No | 0 | Number of visible results to skip |
 | limit | int | No | None | Alias for `node_limit` |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
-| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count`, `l2_count` |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
 
@@ -403,8 +403,7 @@ ov stat viking://resources/my-project/docs
     "isDir": true,
     "isLocked": false,
     "uri": "viking://resources/docs",
-    "count": 58,
-    "l2_count": 42
+    "count": 42
   }
 }
 ```
@@ -413,7 +412,9 @@ The `isLocked` field reports whether the path is currently held by a path lock: 
 
 The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
 
-The `count` and `l2_count` fields are directory-only values derived from vector records visible to the caller. `count` includes every indexed level below the directory URI, while `l2_count` includes only `level=2` records. Both depend on asynchronous indexing and orphan cleanup; neither is a physical filesystem entry count. `ls` and `tree` expose them independently through `extra_fields=count` and `extra_fields=l2_count`; requesting both uses one level-grouped aggregation.
+The `count` field (directories only) is the number of visible `level=2` vector records under the directory URI subtree. It depends on asynchronous indexing and orphan cleanup, so it is not a physical filesystem entry count. `ls`, `tree`, and `glob` expose it through `extra_fields=count`.
+
+**Breaking change:** `count` previously included all indexed vector levels. It now counts only caller-visible `level=2` records.
 
 On case-insensitive `localfs`, `stat` may also return metadata for a real file or directory through a case-only alias. For example, `viking://resources/docs/REPORT.md` may hit the real `viking://resources/docs/report.md`; on case-sensitive systems, the alias target returns `NOT_FOUND` when it does not exist.
 
