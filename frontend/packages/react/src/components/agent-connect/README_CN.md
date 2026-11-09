@@ -13,6 +13,11 @@ import '@openviking/react/components/agent-connect/style.css';
 
 ## 设计与交互约定
 
+- 安装器命令显式指定当前 Agent 的 `--harness`，并包含接入引导需要的 `cli`；Claude Code 对应 `claude`、Kimi Code 对应 `kimicode`、DeepSeek Harness 对应 `dsh`，TRAE 对应国际版 `trae`。
+- 安装器命令中的服务地址和密钥使用 Shell 单引号转义，执行后参数保持调用方字面值；不将 Shell 转义应用到 JSON、Python 或纯文本指南。自定义 Hermes 地址使用 **Custom** 连接步骤，并填写该地址。
+- 指南、凭据或地址变化会创建新的复制交互实例：清空反馈和 pending 状态，返回旧指南也不会恢复旧反馈。已发起的 Clipboard API 写入无法取消，但过期完成结果不更新界面或调用 `onCopy`。
+- 宿主可提供 `agreementUrl`，协议引用渲染为可用鼠标和键盘访问的链接；未提供时仅显示数据访问提示，不显示无目标的协议引用。
+
 - 语言仅由调用方通过 `locale` 参数指定，组件和示例不提供语言选择 UI。
 - 默认 1000px 宽、949px 最小高度，左侧列表 200px，列间距 40px，详情宽 660px；标题、胶囊页签、行高、图标尺寸、指令排版和光晕以设计截图为准。
 - 默认选中「接入主流 Agent」与 Codex。页签和条目使用实例内状态，也可通过 `activeTabId`、`selectedId` 控制，并通过可选回调通知宿主。页签支持方向键、Home、End。

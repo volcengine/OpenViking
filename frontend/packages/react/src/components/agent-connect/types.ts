@@ -20,6 +20,8 @@ export interface AgentConnectProps extends Omit<
   locale: AgentConnectLocale;
   /** 服务地址，默认 OpenViking 云服务。Optional service endpoint. */
   baseUrl?: string;
+  /** 宿主提供的用户协议链接；未传时不显示协议引用。Host agreement URL. */
+  agreementUrl?: string;
   /** 受控页签；默认 mainstream。Controlled tab; defaults to mainstream. */
   activeTabId?: AgentConnectTabId;
   /** 受控 Agent；默认 codex。Controlled agent; defaults to codex. */

@@ -110,7 +110,8 @@
   font: inherit;
   cursor: pointer;
 }
-.ov-agent-connect button:focus-visible {
+.ov-agent-connect button:focus-visible,
+.ov-agent-connect a:focus-visible {
   outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline-offset: 2px;
 }
@@ -338,6 +339,7 @@
   line-height: 20px;
 }
 .ov-agent-connect__agreement {
+  color: inherit;
   text-decoration: underline dotted;
   text-decoration-color: var(
     --ov-ui-color-connect-notice,

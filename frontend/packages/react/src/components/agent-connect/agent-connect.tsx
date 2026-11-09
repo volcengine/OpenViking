@@ -22,6 +22,7 @@ export function AgentConnect({
   apiKey,
   locale,
   baseUrl = DEFAULT_BASE_URL,
+  agreementUrl,
   activeTabId: controlledTabId,
   selectedId: controlledSelectedId,
   onTabChange,
@@ -145,6 +146,7 @@ export function AgentConnect({
             apiKey={apiKey}
             locale={locale}
             baseUrl={baseUrl}
+            agreementUrl={agreementUrl}
             onCopy={onCopy}
           />
         </div>

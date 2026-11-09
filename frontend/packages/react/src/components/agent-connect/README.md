@@ -13,6 +13,11 @@ import '@openviking/react/components/agent-connect/style.css';
 
 ## Design and interaction contract
 
+- Installer commands explicitly select the current agent via `--harness` and include `cli` for onboarding. Claude Code maps to `claude`, Kimi Code to `kimicode`, DeepSeek Harness to `dsh`, and TRAE to the international `trae` client.
+- Installer URLs and keys use shell single-quote escaping to preserve literal argument values. Shell escaping is not applied to JSON, Python or plain-text guides. Custom Hermes endpoints use the **Custom** connection steps with the supplied URL.
+- Changing guides, credentials or endpoints creates a fresh clipboard interaction: feedback and pending state reset, including when returning to a previous guide. Clipboard writes already started cannot be cancelled, but stale completions neither update feedback nor invoke `onCopy`.
+- Hosts may provide `agreementUrl` to render a mouse- and keyboard-accessible agreement link. Without it, only the data access notice is shown, with no reference to an unavailable agreement.
+
 - Language is supplied by the host through `locale`; the component and demo provide no language selection UI.
 - The default width is 1000px and minimum height is 949px, with a 200px list, 40px column gap and 660px detail. Typography, pill tabs, row heights, icons, instructions and background glows follow the design screenshot.
 - The first tab and Codex are selected initially. Selection is local by default; `activeTabId` and `selectedId` support controlled use, with optional notification callbacks. Tabs support arrow keys, Home and End.
