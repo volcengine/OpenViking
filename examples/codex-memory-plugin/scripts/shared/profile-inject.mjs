@@ -160,24 +160,30 @@ async function lsDir(fetchJSON, dirUri, actorPeerId = "") {
  * Falls back to head-only truncate when the file is too short to elide
  * meaningfully (<HEAD_LINES + 4 lines) or the budget is too tight to fit
  * both head and a useful tail.
+ * Complete authored lines are kept separately for cross-profile deduplication.
  */
 function elideProfile(content, maxTokens) {
   // Compute char budget from token budget using *this* content's CJK density,
   // not chars/4 — otherwise the truncated string can still blow the token cap
   // for CJK-heavy profiles (Copilot review point).
   const maxChars = Math.max(400, tokensToCharsBudget(content, maxTokens));
-  if (estimateTokens(content) <= maxTokens) return content;
+  if (estimateTokens(content) <= maxTokens) return { text: content, completeLines: content.split("\n") };
 
   const HEAD_LINES = 8;
   const ELLIPSIS = "\n... [profile middle elided] ...\n";
   const lines = content.split("\n");
 
-  const fallbackHeadTruncate = () =>
-    content.slice(0, maxChars).trimEnd() + "\n... [profile truncated]";
+  const fallbackHeadTruncate = () => {
+    const truncated = content.slice(0, maxChars);
+    const completeLines = truncated.split("\n");
+    if (maxChars < content.length && content[maxChars] !== "\n") completeLines.pop();
+    return { text: truncated.trimEnd() + "\n... [profile truncated]", completeLines };
+  };
 
   if (lines.length <= HEAD_LINES + 4) return fallbackHeadTruncate();
 
-  const head = lines.slice(0, HEAD_LINES).join("\n");
+  const headLines = lines.slice(0, HEAD_LINES);
+  const head = headLines.join("\n");
   const reserveForTail = maxChars - head.length - ELLIPSIS.length;
   if (reserveForTail < 200) return fallbackHeadTruncate();
 
@@ -191,7 +197,11 @@ function elideProfile(content, maxTokens) {
   }
   if (tailStart >= lines.length - 1) return fallbackHeadTruncate();
 
-  return `${head}${ELLIPSIS}${lines.slice(tailStart).join("\n")}`;
+  const tailLines = lines.slice(tailStart);
+  return {
+    text: `${head}${ELLIPSIS}${tailLines.join("\n")}`,
+    completeLines: headLines.concat(tailLines),
+  };
 }
 
 const MEMORY_MORE_HINT = "use `memory_recall`";
@@ -274,13 +284,13 @@ const PEER_PROFILE_MIN_TOKENS = 200;
 const PEER_PROFILE_POINTER = "Omitted for length; read this uri with the read tool.";
 
 /**
- * Drop peer-profile lines that already appear in the user profile, so the
+ * Drop peer-profile lines already delivered as complete authored user lines, so the
  * shared budget is not spent twice on the same fact. Returns null when no
  * non-empty line is left.
  */
-function dedupeProfileLines(peerProfile, userProfile) {
+function dedupeProfileLines(peerProfile, userLines) {
   const seen = new Set(
-    String(userProfile || "").split("\n").map((l) => l.trim()).filter(Boolean),
+    userLines.map((l) => l.trim()).filter(Boolean),
   );
   const kept = [];
   for (const line of peerProfile.split("\n")) {
@@ -466,7 +476,14 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   const [user, peer] = scopes;
   const skills = formatSkillCatalog(skillGroups, skillBudget);
 
-  const peerProfile = peer?.profile ? dedupeProfileLines(peer.profile, user.profile) : null;
+  const memoryBudget = Math.min(totalBudgetTokens, Math.max(0, capTokens - skills.used));
+  // The profiles get up to half the total budget; listings split the rest.
+  // Sub-cap protects against a runaway profile blowing the listing budget.
+  // The user profile comes first; the peer profile only gets what it leaves.
+  const profileBudget = Math.floor(memoryBudget / 2);
+  const profileTrunc = user.profile ? elideProfile(user.profile, profileBudget) : null;
+  const profileTokens = estimateTokens(profileTrunc?.text || "");
+  const peerProfile = peer?.profile ? dedupeProfileLines(peer.profile, profileTrunc?.completeLines || []) : null;
   if (
     !user.profile && !peerProfile
     && scopes.every((s) => s.prefs.length === 0 && s.ents.length === 0)
@@ -474,16 +491,8 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   ) {
     return null;
   }
-
-  const memoryBudget = Math.min(totalBudgetTokens, Math.max(0, capTokens - skills.used));
-  // The profiles get up to half the total budget; listings split the rest.
-  // Sub-cap protects against a runaway profile blowing the listing budget.
-  // The user profile comes first; the peer profile only gets what it leaves.
-  const profileBudget = Math.floor(memoryBudget / 2);
-  const profileTrunc = user.profile ? elideProfile(user.profile, profileBudget) : null;
-  const profileTokens = estimateTokens(profileTrunc || "");
   const profileLines = profileTrunc
-    ? [`<user-profile uri="${user.profileUri}">`, profileTrunc, `</user-profile>`]
+    ? [`<user-profile uri="${user.profileUri}">`, profileTrunc.text, `</user-profile>`]
     : [];
   let peerProfileTokens = 0;
   if (peerProfile) {
@@ -491,7 +500,7 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     // elideProfile keeps at least 400 chars (~600 tokens of CJK), so a trim
     // that still overruns the peer's share falls back to the pointer.
     const peerTrunc = estimateTokens(peerProfile) <= peerBudget || peerBudget >= PEER_PROFILE_MIN_TOKENS
-      ? elideProfile(peerProfile, peerBudget)
+      ? elideProfile(peerProfile, peerBudget).text
       : null;
     if (peerTrunc !== null && estimateTokens(peerTrunc) <= peerBudget) {
       profileLines.push(`<user-profile uri="${peer.profileUri}">`, peerTrunc, `</user-profile>`);

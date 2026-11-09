@@ -226,6 +226,19 @@ const memoryUris = (calls) => calls
   .map((path) => new URL(path, "http://localhost").searchParams.get("uri"))
   .filter((uri) => uri.includes("/memories/"));
 
+const profileBody = (block, root) => [...block.matchAll(/<user-profile uri="([^"]+)">\n?([\s\S]*?)<\/user-profile>/g)]
+  .find((match) => match[1] === `${root}/profile.md`)?.[2].trim() ?? null;
+const PEER_POINTER = "Omitted for length; read this uri with the read tool.";
+const SHARED_PROFILE_FACT = "- SHARED_PROFILE_FACT_152";
+const ELIDED_USER_LINES = [
+  "# User",
+  ...Array.from({ length: 7 }, (_, i) => `- identity ${i} ${"x".repeat(28)}`),
+  SHARED_PROFILE_FACT,
+  ...Array.from({ length: 30 }, (_, i) => `- middle ${String(i).padStart(2, "0")} ${"y".repeat(80)}`),
+  `- recent A ${"z".repeat(200)}`,
+  `- recent B ${"z".repeat(200)}`,
+];
+
 test("without an actor peer only the user root is read and the block keeps its shape", async () => {
   const { calls, fetchJSON } = fakeServer({
     profilesByUri: { [`${USER_ROOT}/profile.md`]: "# Alice\n- prefers small PRs" },
@@ -347,10 +360,10 @@ test("a byte cap keeps the user profile whole and trims or points at the peer pr
   }
 });
 
-test("a CJK peer profile never renders past what the user profile leaves it", async () => {
+test("CJK peer profiles deduplicate delivered lines without losing omitted facts or exceeding their share", async () => {
   const cjkLine = (i) => `- 第${i}条：喜欢在提交前运行全部测试并检查格式`;
   const userProfile = Array.from({ length: 5 }, (_, i) => cjkLine(`甲${i}`)).join("\n");
-  const peerProfile = Array.from({ length: 400 }, (_, i) => cjkLine(i)).join("\n");
+  const peerProfile = [userProfile, ...Array.from({ length: 400 }, (_, i) => cjkLine(i))].join("\n");
   for (const total of [800, 1000, 1200]) {
     const { fetchJSON } = fakeServer({
       profilesByUri: { [`${USER_ROOT}/profile.md`]: userProfile, [`${PEER_ROOT}/profile.md`]: peerProfile },
@@ -362,31 +375,127 @@ test("a CJK peer profile never renders past what the user profile leaves it", as
     const start = result.block.indexOf(`<user-profile uri="${PEER_ROOT}/profile.md">`);
     const peerElement = result.block.slice(start, result.block.indexOf("</user-profile>", start) + "</user-profile>".length);
     const body = peerElement.replace(/^<user-profile uri="[^"]+">\n?/, "").replace(/\n?<\/user-profile>$/, "");
+    assert.ok(!body.includes(cjkLine("甲0")), "a delivered CJK fact is not repeated");
     assert.ok(
       estimateTokens(body) <= peerBudget || /Omitted for length/.test(peerElement),
       `${total}: peer body ${estimateTokens(body)} tokens over ${peerBudget}`,
     );
   }
+  const hiddenFact = HEAVY_PROFILE.split("\n")[20];
+  const { fetchJSON } = fakeServer({
+    profilesByUri: { [`${USER_ROOT}/profile.md`]: HEAVY_PROFILE, [`${PEER_ROOT}/profile.md`]: hiddenFact },
+  });
+  const result = await buildProfileBlock(fetchJSON, 1000, PEER);
+  const userBody = profileBody(result.block, USER_ROOT);
+  assert.ok(!userBody.includes(hiddenFact), "the CJK duplicate was not delivered");
+  assert.ok(estimateTokens(hiddenFact) <= 500 - estimateTokens(userBody), "the omitted CJK fact fits the peer budget");
+  assert.equal(profileBody(result.block, PEER_ROOT), hiddenFact);
 });
 
-test("peer profile lines already in the user profile are not repeated", async () => {
-  const { fetchJSON } = fakeServer({
-    profilesByUri: {
-      [`${USER_ROOT}/profile.md`]: "# Alice\n- prefers small PRs\n- writes Go",
-      [`${PEER_ROOT}/profile.md`]: "# Alice\n\n  - prefers small PRs\n\n- owns the billing service",
-    },
-  });
-  const result = await buildProfileBlock(fetchJSON, 2000, PEER);
-  assert.ok(result.block.endsWith(`<user-profile uri="${PEER_ROOT}/profile.md">\n- owns the billing service\n</user-profile>`), result.block);
+test("peer profile lines already delivered in the user profile are not repeated", async () => {
+  const userProfile = "# Alice\n- prefers small PRs\n- writes Go";
+  for (const total of [2000, 2 * estimateTokens(userProfile)]) {
+    const { fetchJSON } = fakeServer({
+      profilesByUri: {
+        [`${USER_ROOT}/profile.md`]: userProfile,
+        [`${PEER_ROOT}/profile.md`]: "# Alice\n\n  - prefers small PRs\n\n- owns the billing service",
+      },
+    });
+    const result = await buildProfileBlock(fetchJSON, total, PEER);
+    assert.equal(profileBody(result.block, USER_ROOT), userProfile);
+    assert.equal(profileBody(result.block, PEER_ROOT), total === 2000 ? "- owns the billing service" : PEER_POINTER);
 
-  const duplicate = fakeServer({
-    profilesByUri: {
-      [`${USER_ROOT}/profile.md`]: "# Alice\n- prefers small PRs",
-      [`${PEER_ROOT}/profile.md`]: "# Alice\n\n- prefers small PRs\n",
-    },
-  });
-  const only = await buildProfileBlock(duplicate.fetchJSON, 2000, PEER);
-  assert.doesNotMatch(only.block, /peers\//);
+    const duplicate = fakeServer({
+      profilesByUri: {
+        [`${USER_ROOT}/profile.md`]: userProfile,
+        [`${PEER_ROOT}/profile.md`]: "# Alice\n\n- prefers small PRs\n- writes Go\n",
+      },
+    });
+    const only = await buildProfileBlock(duplicate.fetchJSON, total, PEER);
+    assert.equal(profileBody(only.block, PEER_ROOT), null, "all-delivered duplicates need no pointer");
+  }
+});
+
+test("a peer fact in the elided user middle still renders when it fits", async () => {
+  const userProfile = ELIDED_USER_LINES.join("\n");
+  const controlProfile = userProfile.replace("SHARED", "USERXX");
+  const render = async (user, total = 1000, peer = SHARED_PROFILE_FACT) => buildProfileBlock(fakeServer({
+    profilesByUri: { [`${USER_ROOT}/profile.md`]: user, [`${PEER_ROOT}/profile.md`]: peer },
+  }).fetchJSON, total, PEER);
+  const result = await render(userProfile);
+  const control = await render(controlProfile);
+  const untruncated = await render(userProfile, 10000);
+  const mixed = await render(userProfile, 1000, `${SHARED_PROFILE_FACT}\n- UNIQUE_PEER_FACT_152`);
+  const userBody = profileBody(result.block, USER_ROOT);
+
+  assert.equal(controlProfile.length, userProfile.length);
+  assert.match(userBody, /\[profile middle elided\]/);
+  assert.ok(!userBody.includes(SHARED_PROFILE_FACT));
+  assert.ok(estimateTokens(SHARED_PROFILE_FACT) <= 500 - estimateTokens(userBody), "the 7-token fact fits");
+  assert.equal(profileBody(control.block, USER_ROOT), userBody, "changing hidden input leaves delivered user text identical");
+  assert.equal(profileBody(control.block, PEER_ROOT), SHARED_PROFILE_FACT);
+  assert.ok(profileBody(untruncated.block, USER_ROOT).includes(SHARED_PROFILE_FACT));
+  assert.equal(profileBody(untruncated.block, PEER_ROOT), null, "a delivered duplicate is removed");
+  assert.equal(profileBody(result.block, PEER_ROOT), SHARED_PROFILE_FACT);
+  assert.equal(profileBody(mixed.block, USER_ROOT), userBody);
+  assert.equal(profileBody(mixed.block, PEER_ROOT), PEER_POINTER, "the mixed peer no longer fits once its hidden duplicate is preserved");
+});
+
+test("complete retained head and tail lines still deduplicate after middle elision", async () => {
+  const head = ELIDED_USER_LINES[1];
+  const tail = ELIDED_USER_LINES.at(-1);
+  for (const unique of ["", "\n- peer-only"]) {
+    const { fetchJSON } = fakeServer({
+      profilesByUri: {
+        [`${USER_ROOT}/profile.md`]: ELIDED_USER_LINES.join("\n"),
+        [`${PEER_ROOT}/profile.md`]: `  ${head}\n\n${tail}${unique}`,
+      },
+    });
+    const result = await buildProfileBlock(fetchJSON, 1000, PEER);
+    const userBody = profileBody(result.block, USER_ROOT);
+    assert.match(userBody, /\[profile middle elided\]/);
+    assert.ok(userBody.split("\n").includes(head) && userBody.split("\n").includes(tail));
+    assert.equal(profileBody(result.block, PEER_ROOT), unique.trim() || null);
+  }
+});
+
+test("head-only truncation deduplicates complete lines but not hidden lines or the partial boundary", async () => {
+  const retained = "- retained";
+  const longLine = `- boundary ${"x".repeat(2200)}`;
+  const userProfile = [retained, longLine, "- hidden"].join("\n");
+  const profilesByUri = { [`${USER_ROOT}/profile.md`]: userProfile };
+  const baseline = await buildProfileBlock(fakeServer({ profilesByUri }).fetchJSON, 1000, PEER);
+  const userBody = profileBody(baseline.block, USER_ROOT);
+  const boundary = userBody.split("\n").at(-2);
+  assert.match(userBody, /\n\.\.\. \[profile truncated\]$/);
+  assert.ok(longLine.startsWith(boundary) && boundary !== longLine, "the boundary is only part of an authored line");
+
+  for (const [peer, expected] of [[retained, null], ["- hidden", PEER_POINTER], [boundary, PEER_POINTER]]) {
+    const { fetchJSON } = fakeServer({ profilesByUri: { ...profilesByUri, [`${PEER_ROOT}/profile.md`]: peer } });
+    const result = await buildProfileBlock(fetchJSON, 1000, PEER);
+    assert.equal(profileBody(result.block, USER_ROOT), userBody);
+    assert.equal(profileBody(result.block, PEER_ROOT), expected, peer);
+  }
+});
+
+test("synthetic elision and truncation markers do not deduplicate authored peer lines", async () => {
+  const elision = "... [profile middle elided] ...";
+  const truncation = "... [profile truncated]";
+  for (const [marker, userProfile, expected] of [
+    [elision, ELIDED_USER_LINES.map((line, i) => i === 8 ? elision : line).join("\n"), elision],
+    [truncation, `- retained\n${"x".repeat(2200)}\n${truncation}`, PEER_POINTER],
+  ]) {
+    const { fetchJSON } = fakeServer({
+      profilesByUri: { [`${USER_ROOT}/profile.md`]: userProfile, [`${PEER_ROOT}/profile.md`]: marker },
+    });
+    const result = await buildProfileBlock(fetchJSON, 1000, PEER);
+    const authored = await buildProfileBlock(fakeServer({
+      profilesByUri: { [`${USER_ROOT}/profile.md`]: marker, [`${PEER_ROOT}/profile.md`]: marker },
+    }).fetchJSON, 1000, PEER);
+    assert.equal(profileBody(authored.block, PEER_ROOT), null, "a complete authored marker still deduplicates");
+    assert.ok(profileBody(result.block, USER_ROOT).split("\n").includes(marker), "the user marker is synthetic");
+    assert.equal(profileBody(result.block, PEER_ROOT), expected, marker);
+  }
 });
 
 test("listings put the user root before the peer root under one shared budget", async () => {
