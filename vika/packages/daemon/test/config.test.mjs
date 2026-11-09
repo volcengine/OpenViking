@@ -27,11 +27,14 @@ afterEach(() => {
 
 describe('configuration safety', { concurrency: false }, () => {
   it('resolves relative CLI overrides against the connector cwd while preserving names and absolute paths', () => {
+    const absolute = path.resolve(projectDir, '/opt/custom tools/renamed-cli');
     for (const [envKey, configKey] of [['LARK_CLI_BIN', 'larkCliBin'], ['SLACK_CLI_BIN', 'slackCliBin']]) {
       for (const [value, expected] of [
         ['custom-cli', 'custom-cli'],
-        ['/opt/custom tools/renamed-cli', '/opt/custom tools/renamed-cli'],
+        [absolute, absolute],
         ['./custom tools/renamed-cli', path.join(projectDir, 'custom tools', 'renamed-cli')],
+        ['custom tools/renamed-cli', path.join(projectDir, 'custom tools', 'renamed-cli')],
+        [path.join('custom tools', 'renamed-cli'), path.join(projectDir, 'custom tools', 'renamed-cli')],
       ]) {
         setEnv(envKey, value);
         assert.equal(getConfig()[configKey], expected);
